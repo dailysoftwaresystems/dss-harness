@@ -557,17 +557,41 @@ on is exit 21, naming what is in and how running it again finishes.
 `--apply`, given the same arguments, would exit with at that moment: 0 only where that `--apply` would go through.
 `DryRuns.Outcome` is the one place that decides it: each verb composes its dry run's outcome - its summary and its
 lines, or the refusal or failure it met - and hands it over with how the request stands (`RequestStanding`: sound, a
-consent nobody gave, or refused; none where what it weighs could not be read). Read downwards, the first case that
+consent nobody gave, or refused; none where what it weighs could not be read) and with who holds what its `--apply`
+takes (`TreeHolders.Held`). Read downwards, the first case that
 applies gives the code: delete-agent run from inside the worktree it removes is refused (13), nothing read; what the
 command weighs that cannot be read - for a live agent's deletion, which git worktree it is (`StampOf`, the one read
 both make) - fails it (20); a path, a row or an option that is refused, 13; cells of the rows that need a consent
 nobody gave (`--accept-lost`, `--accept-over`), 13 - the same summary and lines, the line 'to write them:' among them,
 since a plan of rows still shows every such cell (`AnchorBatchMode.Plan`) and the rule is the command's, not the
-anchors' service's; a closed agent whose directory is no longer a git worktree, 21, as every `--apply` of it is
-(`Husk`, the one sentence both say); otherwise 0. Every line a dry run prints stays: only its code, and with it where
+anchors' service's; a run holding a tree the `--apply` takes, or a lock file that cannot be read, 13 - the summary of
+a sound request ending in `TreeHolders.Blocked`, one sentence that says waiting is all there is to do, and any other
+ending in the one clause that says a run also holds what the `--apply` needs; a closed agent whose directory is no
+longer a git worktree, 21, as every `--apply` of it is (`Husk`, the one sentence both say); a sound dry run of a
+deletion that only a copy of the worktree keeps, 21 (`TreeHolders.RemovalHeld`), since its `--apply` would fold and
+close the agent and leave the removal; otherwise 0. Every line a dry run prints stays: only its code, and with it where
 its summary is printed, follows the rule. What an `--apply` learns only by doing its work - a file changed after it
 was weighed, a write or a copy that fails, transcripts or evidence that cannot be kept - is not in a dry run, so 0
 says that nothing known now stops the `--apply`, never that it will finish.
+
+**Who holds the tree.** Each dry run asks the run lock, last, the question its `--apply` asks first, with the very
+requests the apply takes (`AgentService.Holds`, the one spelling of them, shared with the hold the apply takes): the
+main tree and the agent's worktree for a fold, a refresh and a deletion, the worktree alone for a rebase. Every live
+holder in the way is printed on a `held now:` line (`RunLock.Holders`, read as `HeldBy` reads: nothing reclaimed,
+nothing written), said with where that run's leg stands, from this machine's record of heavy legs (`HeavyLegSlots.Line`,
+joined by `TreeHolders`, the one sentence: it runs with no slot asked, it waits in line with how many are ahead, or it
+holds a slot; a leg on an ssh host's own record says). A run holding a leg copy or a host's copy of the worktree is
+not named by a fold's, a refresh's or a rebase's dry run, and their `--apply` is not refused for it: a copy is not the
+worktree. delete-agent, which removes every copy with the worktree, names a copy a run holds - a host's through the
+lock (`IHostCopyRemover.HeldNow`, the same `RemovalLock` the removal takes), a leg copy's or a mutation worker's
+through the measure-only question its removal asks (`WorktreeService.CopiesHeldAsync`), each in its family's own
+words; its dry run asks that host's `.legs` nothing, as its removal asks nothing of them. The refusal an `--apply`
+gives where a run holds what it needs ends with the same words the `held now:` lines say, and seed-agent's, which has
+no dry run and so takes the trees at once, does too. `--json` on the four verbs answers with one document
+(`OrchestrationReports.Document`), the whole of standard output: the outcome as data - `exitCode`, `summary`,
+`applied`, `lines` - with `request`, which tells the three meanings of 13 apart, and `heldNow`, every holder with
+`holds` tree or copy, and `heldUnread`, why the lock file could not be read. A command line refused before anything
+is weighed answers with the stopped document, which has no `request`.
 
 An agent's worktree is `<worktrees.root>/<orchestrator>/<agent>`, addressed `orchestrator/agent` by list-worktree
 and delete-worktree, its host copies named `orchestrator--agent` (`WorktreeAddress`). The directory named for an

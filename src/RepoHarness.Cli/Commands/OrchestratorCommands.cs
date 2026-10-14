@@ -17,6 +17,16 @@ internal static class OrchestrationArguments
 
     internal static Option<bool> Apply(string description) => new("--apply") { Description = description };
 
+    /// <summary>
+    /// The option that answers with one JSON document - the whole of standard output - on the commands that take it: the
+    /// outcome as data, with what is wanted of the caller and who holds what its --apply needs.
+    /// </summary>
+    internal static readonly Option<bool> Json = new("--json")
+    {
+        Description = "Print the outcome as one JSON document, the whole of standard output: its exit code, its summary and its lines, what is wanted "
+            + "of you before --apply would go through, and who holds what it needs.",
+    };
+
     /// <summary>The option that takes a clean three-way merge of a path both trees changed: one name, whichever command takes it.</summary>
     internal static Option<string[]> Merge(string description) => new(FoldAllowances.MergeOption) { HelpName = "path", Description = description };
 }
@@ -160,23 +170,18 @@ internal static class ListOrchestratorCommand
         Arity = ArgumentArity.ZeroOrOne,
     };
 
-    private static readonly Option<bool> JsonOption = new("--json")
-    {
-        Description = "Print the listing as one JSON document.",
-    };
-
     internal static Command Create()
     {
         var command = new Command(Name, "List orchestrators, their agents and where each stands, and worktrees below an orchestrator's directory that no agent records.");
         command.Arguments.Add(NameArgument);
-        command.Options.Add(JsonOption);
+        command.Options.Add(OrchestrationArguments.Json);
         GlobalOptions.AddTo(command);
 
         command.SetAction(CommandRunner.Wrap(
             Name,
             (context, cancellationToken) => context.Get<IOrchestratorService>()
-                .ListAsync(context.Directory, context.ParseResult.GetValue(NameArgument), context.ParseResult.GetValue(JsonOption), cancellationToken),
-            JsonOption));
+                .ListAsync(context.Directory, context.ParseResult.GetValue(NameArgument), context.ParseResult.GetValue(OrchestrationArguments.Json), cancellationToken),
+            OrchestrationArguments.Json));
 
         return command;
     }

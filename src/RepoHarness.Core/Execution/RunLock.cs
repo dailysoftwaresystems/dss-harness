@@ -164,19 +164,50 @@ public sealed class RunLock(IFileSystem fileSystem, IHarnessOutput output, IProc
 
         var entry = Entry(request);
 
-        var heldBy = File(layout).Update<string?>((entries, afterwards) =>
+        var heldBy = File(layout).Update<(string? Said, LockEntry? Holder)?>((entries, afterwards) =>
         {
             var kept = Live(entries, entry, request.Force, afterwards);
 
             // A request that was refused writes nothing: the file is left as it was found.
             return kept.FirstOrDefault(existing => Conflicts(existing, entry)) is { } holder
-                ? (null, $"{Describe(entry)} is held by {holder.Describe(_identity)}{_identity.ElsewhereNote(holder.Holder.Machine)}.")
+                ? (null, ($"{Describe(entry)} is held by {holder.Describe(_identity)}{_identity.ElsewhereNote(holder.Holder.Machine)}.", holder))
                 : ([.. kept, entry], null);
         });
 
         return Task.FromResult(heldBy is null
             ? new LockAttempt(new RunLockHandle(this, layout, entry), null)
-            : new LockAttempt(null, heldBy));
+            : new LockAttempt(null, heldBy.Value.Said, heldBy.Value.Holder));
+    }
+
+    /// <summary>
+    /// Every live entry in the way of any of <paramref name="requests"/>, without taking anything: all of them, each
+    /// once, in the file's order. The lock file is only read, and nothing is reclaimed and nothing written: a holder
+    /// whose process has ended is passed over and stays.
+    /// </summary>
+    /// <param name="layout">The repository, whose main checkout holds the lock file.</param>
+    /// <param name="requests">What would be taken. Never forced: nothing is taken, so there is nothing to take over.</param>
+    /// <exception cref="HarnessException">The lock file could not be read, or another process kept it for too long.</exception>
+    public IReadOnlyList<LockEntry> Holders(HarnessLayout layout, IEnumerable<LockRequest> requests)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+        ArgumentNullException.ThrowIfNull(requests);
+
+        var wanted = requests.Select(Entry).ToList();
+
+        if (wanted.Count == 0)
+        {
+            return [];
+        }
+
+        return File(layout).Update<IReadOnlyList<LockEntry>>((entries, _) =>
+        {
+            var inTheWay = Live(entries, wanted[0], force: false, afterwards: null)
+                .Where(existing => wanted.Any(one => Conflicts(existing, one)))
+                .Distinct()
+                .ToList();
+
+            return (null, (IReadOnlyList<LockEntry>)inTheWay);
+        });
     }
 
     /// <summary>
@@ -359,7 +390,12 @@ public sealed class RunLock(IFileSystem fileSystem, IHarnessOutput output, IProc
 /// <summary>What asking for a lock came to: the lock, or the run that holds it. Exactly one is set.</summary>
 /// <param name="Handle">The lock, when it was taken.</param>
 /// <param name="HeldBy">Which run holds it, said as a refusal says it, when it was not.</param>
-public sealed record LockAttempt(RunLockHandle? Handle, string? HeldBy);
+/// <param name="Holder">The entry of the run that holds it, with what it holds; <see langword="null"/> where the lock was taken.</param>
+public sealed record LockAttempt(RunLockHandle? Handle, string? HeldBy, LockEntry? Holder = null)
+{
+    /// <summary>Whether the lock was taken.</summary>
+    public bool Taken => Handle is not null;
+}
 
 /// <summary>
 /// What a run holds, and the only thing that can give it up. Released by the run that took it, and

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using NSubstitute;
 using RepoHarness.Core.Configuration;
+using RepoHarness.Core.Execution;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Processes;
@@ -358,6 +359,9 @@ internal sealed class NoHostCopies : IHostCopyRemover
 {
     public Task<HostCopyRemoval> RemoveAsync(HarnessContext context, string worktree, string tree, HarnessConfig? treeConfig, CancellationToken cancellationToken = default)
         => Task.FromResult(HostCopyRemoval.None);
+
+    public Task<IReadOnlyList<LockEntry>> HeldNowAsync(HarnessContext context, string worktree, string tree, RunId runId)
+        => Task.FromResult<IReadOnlyList<LockEntry>>([]);
 }
 
 /// <summary>

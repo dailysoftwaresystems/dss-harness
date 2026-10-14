@@ -2100,7 +2100,7 @@ public sealed partial class HelpTests
             + "refuses the agent until then, naming that same command.",
             text,
             StringComparison.Ordinal);
-        Assert.Contains($"  {ToolPackage.Command} rebase-agent <o> <a> [--apply] [--merge <path>]... [--settled <path>]...", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains($"  {ToolPackage.Command} rebase-agent <o> <a> [--apply] [--json] [--merge <path>]... [--settled <path>]...", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains(
             "Where a three-way merge of the two is clean - git's, from what the old base held, of the new base's version and the agent's - "
             + "--merge <path>, once for each, writes it into the agent's worktree as its own change on the new base, whether it can be run merged "
@@ -2194,7 +2194,7 @@ public sealed partial class HelpTests
 
         foreach (var command in new[] { "fold-agent", "delete-agent" })
         {
-            Assert.Contains($"  {ToolPackage.Command} {command} <o> <a> [--apply] [--merge <path>]... [--settled <path>]...", result.StandardOutput, StringComparison.Ordinal);
+            Assert.Contains($"  {ToolPackage.Command} {command} <o> <a> [--apply] [--json] [--merge <path>]... [--settled <path>]...", result.StandardOutput, StringComparison.Ordinal);
         }
 
         Assert.Contains(
@@ -2275,8 +2275,26 @@ public sealed partial class HelpTests
             + "with the same arguments, would exit with at that moment: 0 only where that --apply would go through. Where a path, "
             + $"a row, or a consent nobody gave would refuse it, the dry run exits {HarnessExit.Refused}, and where it would fail "
             + "before writing anything, with that failure's code - and either way it still prints all it weighed, its summary "
-            + "last, on standard error. What an --apply can only find by writing - a file changed after it was weighed, a write "
-            + "that fails - is not in a dry run, so 0 never promises that the --apply will finish.",
+            + "last, on standard error. A run holding what the --apply takes refuses the dry run too: every holder is named on "
+            + $"a 'held now:' line, said with where its run's leg stands, and it exits {HarnessExit.Refused}; delete-agent, whose "
+            + $"--apply would fold and close the agent and leave the removal, exits {HarnessExit.Incomplete} instead where only a "
+            + "copy of the worktree is held. What an --apply can only find by writing - a file changed after it was weighed, a write "
+            + "that fails - is not in a dry run, so 0 never promises that the --apply will finish. --json answers with one "
+            + "document, the whole of standard output, whose request member says what is wanted of you - 'sound' (nothing; wait, "
+            + "where heldNow names a holder), 'needs-consent' (name the cells the dry run shows) or 'refused' (put right what the "
+            + "last line names) - and whose heldNow holds each holder, with where its leg stands.",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A dry run of the four asks with the very hold its --apply takes, so a run holding what it needs is named and the dry "
+            + $"run refused itself, exit {HarnessExit.Refused}, saying that nothing in the request needs correcting; the refusal an "
+            + "--apply gives ends with the same words. A holder is a fact about one moment, so 0 from a dry run never promises the "
+            + "tree will still be free when the --apply is typed.",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "delete-agent alone names a copy a run holds, since it removes every copy with the worktree: a host's, a leg copy kept "
+            + "in it, and a mutation worker, each in its own words.",
             text,
             StringComparison.Ordinal);
         Assert.Contains(

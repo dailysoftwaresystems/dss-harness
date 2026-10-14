@@ -80,6 +80,18 @@ public interface IWorktreeService
     Task<IReadOnlyList<WorktreeListing>> ListAsync(
         string startDirectory,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// What removing the copies kept in the worktree at <paramref name="path"/> - the mutation workers its sweeps made,
+    /// and the copies of it its legs work in - would leave, each in its family's own words, asked only to measure:
+    /// nothing is removed, written or reclaimed. What its deletion asks before it removes anything, asked by a dry run
+    /// of the deletion.
+    /// </summary>
+    /// <param name="name">The worktree's address, for the command that removes what was left.</param>
+    /// <param name="layout">The repository, whose run lock says whether a run holds a leg copy.</param>
+    /// <param name="path">The worktree's directory.</param>
+    /// <param name="cancellationToken">Stops the asking between copies.</param>
+    Task<IReadOnlyList<string>> CopiesHeldAsync(string name, HarnessLayout layout, string path, CancellationToken cancellationToken = default);
 }
 
 /// <summary>One existing worktree.</summary>
@@ -809,6 +821,19 @@ public sealed class WorktreeService(
                 : Removal is { Kept: not null } ? Verdicts.ExitCodeFor(Removal.Verdict)
                 : null;
     }
+
+    /// <summary>
+    /// What removing the copies kept in the worktree at <paramref name="path"/> - the mutation workers its sweeps made,
+    /// and the copies of it its legs work in - would leave, each in its family's own words, asked only to measure:
+    /// nothing is removed, written or reclaimed. What its deletion asks before it removes anything, asked by a dry run
+    /// of the deletion.
+    /// </summary>
+    /// <param name="name">The worktree's address, for the command that removes what was left.</param>
+    /// <param name="layout">The repository, whose run lock says whether a run holds a leg copy.</param>
+    /// <param name="path">The worktree's directory.</param>
+    /// <param name="cancellationToken">Stops the asking between copies.</param>
+    public async Task<IReadOnlyList<string>> CopiesHeldAsync(string name, HarnessLayout layout, string path, CancellationToken cancellationToken = default)
+        => (await RemoveCopiesAsync(name, layout, path, measureOnly: true, cancellationToken).ConfigureAwait(false)).Lines;
 
     /// <summary>
     /// Removes the copies kept in the worktree at <paramref name="path"/> - the mutation workers its sweeps made, and the

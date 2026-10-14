@@ -389,14 +389,29 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
     }
 
     /// <summary>
+    /// The entries still standing in the order they asked, first in line first, with nothing reclaimed and nothing
+    /// written: what a dry run reads to say where a holder's leg stands, and where in the line it is. An entry whose
+    /// process has ended is passed over without a word, and stays until a leg asks or looks again.
+    /// </summary>
+    /// <exception cref="HarnessException">The record could not be named, read or written.</exception>
+    public IReadOnlyList<SlotEntry> Line()
+        => File.Update<IReadOnlyList<SlotEntry>>((entries, _) =>
+        {
+            var live = Live(entries, entry => entry, "a heavy-leg slot", afterwards: null);
+
+            return ((IReadOnlyList<SlotEntry>?)null, (IReadOnlyList<SlotEntry>)live);
+        });
+
+    /// <summary>
     /// The entries still standing, each whose holder's process has ended reclaimed - as <paramref name="what"/> - and said
-    /// to be once the record is let go.
+    /// to be once the record is let go, where <paramref name="afterwards"/> is given: a reading that reclaims nothing and
+    /// writes nothing passes none, and a dead holder's entry is passed over without a word.
     /// </summary>
     /// <remarks>
     /// Told by the process alone: every entry of these records is this machine's, whatever name it carries, so one whose
     /// id and stamp no process here carries has ended.
     /// </remarks>
-    private List<T> Live<T>(IReadOnlyList<T> entries, Func<T, SlotEntry> holder, string what, Action<Action> afterwards)
+    private List<T> Live<T>(IReadOnlyList<T> entries, Func<T, SlotEntry> holder, string what, Action<Action>? afterwards)
     {
         var kept = new List<T>();
 
@@ -410,7 +425,7 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
                 continue;
             }
 
-            afterwards(() => _output.Info(CommandName, ProcessHolders.Reclaimed(what, held.Describe())));
+            afterwards?.Invoke(() => _output.Info(CommandName, ProcessHolders.Reclaimed(what, held.Describe())));
         }
 
         return kept;

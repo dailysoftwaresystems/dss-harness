@@ -151,23 +151,28 @@ internal static class RefreshAgentCommand
         command.Options.Add(StaleOption);
         command.Options.Add(MergeOption);
         command.Options.Add(ApplyOption);
+        command.Options.Add(OrchestrationArguments.Json);
         GlobalOptions.AddTo(command);
 
-        command.SetAction(CommandRunner.Wrap(Name, (context, cancellationToken) => context.Get<IAgentService>()
-            .RefreshAsync(
-                context.Directory,
-                context.ParseResult.GetRequiredValue(OrchestratorArgument),
-                context.ParseResult.GetRequiredValue(AgentArgument),
-                new RefreshRequest
-                {
-                    Paths = context.ParseResult.GetValue(PathsArgument) ?? [],
-                    All = context.ParseResult.GetValue(AllOption),
-                    Except = context.ParseResult.GetValue(ExceptOption) ?? [],
-                    Stale = context.ParseResult.GetValue(StaleOption) ?? [],
-                    Merge = context.ParseResult.GetValue(MergeOption) ?? [],
-                },
-                context.ParseResult.GetValue(ApplyOption),
-                cancellationToken)));
+        command.SetAction(CommandRunner.Wrap(
+            Name,
+            (context, cancellationToken) => context.Get<IAgentService>()
+                .RefreshAsync(
+                    context.Directory,
+                    context.ParseResult.GetRequiredValue(OrchestratorArgument),
+                    context.ParseResult.GetRequiredValue(AgentArgument),
+                    new RefreshRequest
+                    {
+                        Paths = context.ParseResult.GetValue(PathsArgument) ?? [],
+                        All = context.ParseResult.GetValue(AllOption),
+                        Except = context.ParseResult.GetValue(ExceptOption) ?? [],
+                        Stale = context.ParseResult.GetValue(StaleOption) ?? [],
+                        Merge = context.ParseResult.GetValue(MergeOption) ?? [],
+                    },
+                    context.ParseResult.GetValue(ApplyOption),
+                    cancellationToken: cancellationToken,
+                    json: context.ParseResult.GetValue(OrchestrationArguments.Json)),
+            OrchestrationArguments.Json));
 
         return command;
     }
@@ -208,20 +213,25 @@ internal static class RebaseAgentCommand
         command.Options.Add(MergeOption);
         command.Options.Add(SettledOption);
         command.Options.Add(ApplyOption);
+        command.Options.Add(OrchestrationArguments.Json);
         GlobalOptions.AddTo(command);
 
-        command.SetAction(CommandRunner.Wrap(Name, (context, cancellationToken) => context.Get<IAgentService>()
-            .RebaseAsync(
-                context.Directory,
-                context.ParseResult.GetRequiredValue(OrchestratorArgument),
-                context.ParseResult.GetRequiredValue(AgentArgument),
-                new RebaseRequest
-                {
-                    Merge = context.ParseResult.GetValue(MergeOption) ?? [],
-                    Settled = context.ParseResult.GetValue(SettledOption) ?? [],
-                },
-                context.ParseResult.GetValue(ApplyOption),
-                cancellationToken)));
+        command.SetAction(CommandRunner.Wrap(
+            Name,
+            (context, cancellationToken) => context.Get<IAgentService>()
+                .RebaseAsync(
+                    context.Directory,
+                    context.ParseResult.GetRequiredValue(OrchestratorArgument),
+                    context.ParseResult.GetRequiredValue(AgentArgument),
+                    new RebaseRequest
+                    {
+                        Merge = context.ParseResult.GetValue(MergeOption) ?? [],
+                        Settled = context.ParseResult.GetValue(SettledOption) ?? [],
+                    },
+                    context.ParseResult.GetValue(ApplyOption),
+                    cancellationToken: cancellationToken,
+                    json: context.ParseResult.GetValue(OrchestrationArguments.Json)),
+            OrchestrationArguments.Json));
 
         return command;
     }
@@ -249,17 +259,22 @@ internal static class FoldAgentCommand
         command.Arguments.Add(OrchestratorArgument);
         command.Arguments.Add(AgentArgument);
         command.Options.Add(ApplyOption);
+        command.Options.Add(OrchestrationArguments.Json);
         FoldOptions.AddTo(command);
         GlobalOptions.AddTo(command);
 
-        command.SetAction(CommandRunner.Wrap(Name, (context, cancellationToken) => context.Get<IAgentService>()
-            .FoldAsync(
-                context.Directory,
-                context.ParseResult.GetRequiredValue(OrchestratorArgument),
-                context.ParseResult.GetRequiredValue(AgentArgument),
-                FoldOptions.Read(context.ParseResult),
-                context.ParseResult.GetValue(ApplyOption),
-                cancellationToken)));
+        command.SetAction(CommandRunner.Wrap(
+            Name,
+            (context, cancellationToken) => context.Get<IAgentService>()
+                .FoldAsync(
+                    context.Directory,
+                    context.ParseResult.GetRequiredValue(OrchestratorArgument),
+                    context.ParseResult.GetRequiredValue(AgentArgument),
+                    FoldOptions.Read(context.ParseResult),
+                    context.ParseResult.GetValue(ApplyOption),
+                    cancellationToken: cancellationToken,
+                    json: context.ParseResult.GetValue(OrchestrationArguments.Json)),
+            OrchestrationArguments.Json));
 
         return command;
     }
@@ -291,17 +306,22 @@ internal static class DeleteAgentCommand
         command.Options.Add(ApplyOption);
         FoldOptions.AddTo(command);
         command.Options.Add(DiscardUncommittedOption);
+        command.Options.Add(OrchestrationArguments.Json);
         GlobalOptions.AddTo(command);
 
-        command.SetAction(CommandRunner.Wrap(Name, (context, cancellationToken) => context.Get<IAgentService>()
-            .DeleteAsync(
-                context.Directory,
-                context.ParseResult.GetRequiredValue(OrchestratorArgument),
-                context.ParseResult.GetRequiredValue(AgentArgument),
-                FoldOptions.Read(context.ParseResult),
-                context.ParseResult.GetValue(ApplyOption),
-                context.ParseResult.GetValue(DiscardUncommittedOption),
-                cancellationToken)));
+        command.SetAction(CommandRunner.Wrap(
+            Name,
+            (context, cancellationToken) => context.Get<IAgentService>()
+                .DeleteAsync(
+                    context.Directory,
+                    context.ParseResult.GetRequiredValue(OrchestratorArgument),
+                    context.ParseResult.GetRequiredValue(AgentArgument),
+                    FoldOptions.Read(context.ParseResult),
+                    context.ParseResult.GetValue(ApplyOption),
+                    context.ParseResult.GetValue(DiscardUncommittedOption),
+                    cancellationToken: cancellationToken,
+                    json: context.ParseResult.GetValue(OrchestrationArguments.Json)),
+            OrchestrationArguments.Json));
 
         return command;
     }

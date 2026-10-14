@@ -177,6 +177,10 @@ internal static class HarnessServices
             provider.GetRequiredService<IHarnessOutput>(),
             provider.GetRequiredService<IProcessIdentity>(),
             () => HeavyLegSlots.PathFor(provider.GetRequiredService<IHostPlatform>(), provider.GetRequiredService<IHarnessOutput>())));
+        services.AddSingleton(provider => new TreeHolders(
+            provider.GetRequiredService<RunLock>(),
+            provider.GetRequiredService<HeavyLegSlots>(),
+            provider.GetRequiredService<IProcessIdentity>()));
         services.AddSingleton(provider => new LegAdmission(
             provider.GetRequiredService<HeavyLegSlots>(),
             provider.GetRequiredService<IMemoryGauge>()));

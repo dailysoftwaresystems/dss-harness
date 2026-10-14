@@ -68,6 +68,18 @@ public interface IHostCopyRemover
         string tree,
         HarnessConfig? treeConfig,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Which runs hold a copy of the worktree at <paramref name="tree"/>, without asking any host anything: the run lock
+    /// read for each copy the worktree's removal takes, exactly as the removal takes it. Nothing is removed, written or
+    /// reclaimed.
+    /// </summary>
+    /// <param name="context">The repository, from the command that deletes the worktree.</param>
+    /// <param name="worktree">The name the worktree's copies are kept under.</param>
+    /// <param name="tree">The worktree's own directory on this machine.</param>
+    /// <param name="runId">A run the question is asked under, never recorded: it names nothing.</param>
+    /// <exception cref="HarnessException">The record of which hosts hold a copy cannot be read: refused.</exception>
+    Task<IReadOnlyList<LockEntry>> HeldNowAsync(HarnessContext context, string worktree, string tree, RunId runId);
 }
 
 /// <inheritdoc cref="IHostCopyRemover"/>
@@ -105,6 +117,56 @@ public sealed class HostCopyRemover(
     private readonly ISyncTransportFactory _transports = transports;
     private readonly RunLock _runLock = runLock;
     private readonly HostCopyRecord _record = new(fileSystem, platform.PathComparison);
+
+    /// <summary>
+    /// The lock a copy's removal takes: the copy whole, on the host that holds it - which a run holding it, building in it
+    /// or replacing it, is named by, and which the removal and the question a dry run asks of it both spell.
+    /// </summary>
+    /// <param name="host">The host holding the copy.</param>
+    /// <param name="path">The copy's path on that host.</param>
+    /// <param name="runId">The run taking it.</param>
+    public static LockRequest RemovalLock(HostId host, string path, RunId runId)
+    {
+        ArgumentNullException.ThrowIfNull(host);
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentNullException.ThrowIfNull(runId);
+
+        return new LockRequest
+        {
+            Host = host.ToString(),
+            Tree = path,
+            Scope = LockScope.TreeExclusive,
+            RunId = runId,
+            Command = WorktreeService.DeleteCommand,
+        };
+    }
+
+    public Task<IReadOnlyList<LockEntry>> HeldNowAsync(HarnessContext context, string worktree, string tree, RunId runId)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(worktree);
+        ArgumentException.ThrowIfNullOrWhiteSpace(tree);
+        ArgumentNullException.ThrowIfNull(runId);
+
+        var holders = new List<LockEntry>();
+
+        foreach (var entry in _record.Of(context.Layout, worktree))
+        {
+            // The same copies the removal deals with, no more: another worktree's, still there under the same name, is
+            // not this one's to remove, and one that is gone is, as the last thing that knows its copies are there.
+            if (!_record.SameTree(entry.Tree, tree) && _record.Exists(entry.Tree))
+            {
+                continue;
+            }
+
+            if (HostId.TryParse(entry.Host, out var host) && host.Kind != HostKind.Local)
+            {
+                holders.AddRange(_runLock.Holders(context.Layout, [RemovalLock(host, entry.Path, runId)]));
+            }
+        }
+
+        return Task.FromResult<IReadOnlyList<LockEntry>>(holders);
+    }
 
     public async Task<HostCopyRemoval> RemoveAsync(
         HarnessContext context,
@@ -201,17 +263,7 @@ public sealed class HostCopyRemover(
             var through = ReferenceEquals(declaring, context.Config) ? context : new HarnessContext(layout, declaring);
 
             var attempt = await _runLock
-                .TryAcquireAsync(
-                    layout,
-                    new LockRequest
-                    {
-                        Host = host.ToString(),
-                        Tree = entry.Path,
-                        Scope = LockScope.TreeExclusive,
-                        RunId = runId,
-                        Command = WorktreeService.DeleteCommand,
-                    },
-                    cancellationToken)
+                .TryAcquireAsync(layout, RemovalLock(host, entry.Path, runId), cancellationToken)
                 .ConfigureAwait(false);
 
             if (attempt.Handle is not { } handle)

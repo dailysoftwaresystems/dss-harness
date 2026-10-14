@@ -61,6 +61,7 @@ public sealed class HarnessFactory
             new SyncedCopyToolCheck(PublishedVersions, RunningTool, CommandOrigin.Typed, Output));
         LocalTransport = Local(FileSystem);
         RunLock = new RunLock(FileSystem, Output, Identity);
+        Slots = new HeavyLegSlots(FileSystem, Output, Identity, ScratchSlotsRecord());
         WorktreeService = new WorktreeService(ContextLoader, GitClient, FileSystem, PathBudget, Platform, Output, HostCopies, LocalTransport, RunLock);
 
         AnchorRegistryLocator = new AnchorRegistryLocator(GitClient);
@@ -107,15 +108,20 @@ public sealed class HarnessFactory
     /// <param name="anchors">Applies an agent's rows.</param>
     /// <param name="gitClient">Asks git, for the service and the worktrees it makes and removes; the real one where null.</param>
     public AgentService Agents(IFileSystem fileSystem, IAnchorRegistryService anchors, IGitClient? gitClient = null)
-        => new(
+    {
+        var runLock = new RunLock(fileSystem, Output, Identity);
+
+        return new(
             ContextLoader,
             gitClient ?? GitClient,
             fileSystem,
             Platform,
             Output,
             FilePermissions,
-            new WorktreeService(ContextLoader, gitClient ?? GitClient, fileSystem, PathBudget, Platform, Output, HostCopies, Local(fileSystem), new RunLock(fileSystem, Output, Identity)),
-            new RunLock(fileSystem, Output, Identity),
+            new WorktreeService(ContextLoader, gitClient ?? GitClient, fileSystem, PathBudget, Platform, Output, HostCopies, Local(fileSystem), runLock),
+            HostCopies,
+            runLock,
+            new TreeHolders(runLock, Slots, Identity),
             AnchorRegistryLocator,
             anchors,
             SyncKit.Service(this, fileSystem: fileSystem, git: gitClient),
@@ -124,6 +130,16 @@ public sealed class HarnessFactory
             new OrchestrationLog(fileSystem, TimeProvider.System),
             TimeProvider.System,
             () => CurrentDirectory ?? Directory.GetCurrentDirectory());
+    }
+
+    /// <summary>
+    /// The record of heavy legs a test's agents read, kept under a scratch directory of its own so no test ever reads
+    /// the machine's real record: a dry run only reads it, and what it holds is the test's to say.
+    /// </summary>
+    public HeavyLegSlots Slots { get; }
+
+    private static string ScratchSlotsRecord()
+        => Path.Combine(Path.GetTempPath(), "rh-test-" + Guid.NewGuid().ToString("N"), HeavyLegSlots.FileNameFor("tests"));
 
     /// <summary>Claude Code's transcripts over <paramref name="fileSystem"/>, in <see cref="ClaudeConfigDirectory"/> where a test sets it.</summary>
     private ClaudeTranscripts TranscriptsOver(IFileSystem fileSystem)

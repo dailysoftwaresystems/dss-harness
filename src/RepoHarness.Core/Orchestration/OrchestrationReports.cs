@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
 using RepoHarness.Core.Anchors;
+using RepoHarness.Core.Execution;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Results;
@@ -463,6 +464,77 @@ public static class OrchestrationReports
     /// <param name="arguments">Its arguments, each already spelt as the line reads.</param>
     internal static string Line(string command, params string[] arguments)
         => $"'{string.Join(' ', [ToolPackage.Command, command, .. arguments.Where(argument => argument.Length > 0)])}'";
+
+    /// <summary>
+    /// The outcome of fold-agent, delete-agent, refresh-agent or rebase-agent as one JSON document, the whole of standard
+    /// output: what <see cref="CommandOutcome"/> already is - its code, its last line, its lines - with the two things the
+    /// code cannot say: what is wanted of the caller, and who holds what its --apply needs.
+    /// </summary>
+    /// <param name="outcome">The outcome as the command answered it.</param>
+    /// <param name="applied">Whether --apply was given.</param>
+    /// <param name="standing">What is wanted of the caller; null where what the command weighs could not be read.</param>
+    /// <param name="holders">Who holds what the --apply takes, where the command asked; null where it asked nobody.</param>
+    /// <returns>The same outcome, answering with the document; its exit code and its failure line are unchanged.</returns>
+    public static CommandOutcome Document(CommandOutcome outcome, bool applied, RequestStanding? standing, TreeHeld? holders)
+    {
+        ArgumentNullException.ThrowIfNull(outcome);
+
+        var heldNow = new JsonArray();
+
+        foreach (var holder in holders?.Holders ?? [])
+        {
+            heldNow.Add(new JsonObject
+            {
+                ["holds"] = holder.Copy ? "copy" : "tree",
+                ["path"] = holder.Entry.Tree,
+                ["host"] = holder.Entry.Host,
+                ["variant"] = holder.Entry.Variant,
+                ["processId"] = holder.Entry.Holder.ProcessId,
+                ["run"] = holder.Entry.Holder.RunId,
+                ["since"] = Moment(holder.Entry.Holder.TakenUtc),
+                ["command"] = holder.Entry.Holder.Command,
+                ["standing"] = holder.Standing switch
+                {
+                    HolderStanding.NoSlot => "no-slot",
+                    HolderStanding.Waiting => "waiting",
+                    HolderStanding.HoldsSlot => "holds-slot",
+                    HolderStanding.OnHost => "on-host",
+                    _ => null,
+                },
+                ["ahead"] = holder.Ahead,
+                ["said"] = holder.Said,
+            });
+        }
+
+        var lines = new JsonArray();
+
+        foreach (var line in outcome.Details ?? [])
+        {
+            lines.Add(line);
+        }
+
+        var document = new JsonObject
+        {
+            ["exitCode"] = outcome.ExitCode,
+            ["summary"] = outcome.Message,
+            ["applied"] = applied,
+            ["request"] = standing switch
+            {
+                RequestStanding.Sound => "sound",
+                RequestStanding.NeedsConsent => "needs-consent",
+                RequestStanding.Refused => "refused",
+                _ => null,
+            },
+
+            // Null where the lock file could not be read - nobody was named, and heldUnread says why - and an empty array
+            // where it was read and nobody held.
+            ["heldNow"] = holders is { Unread: not null } ? null : heldNow,
+            ["heldUnread"] = holders?.Unread,
+            ["lines"] = lines,
+        };
+
+        return outcome with { Data = [document.ToJsonString(ReportJson.Options)], Quiet = true };
+    }
 
     /// <summary>An agent's base as reports name it, where none may be recorded.</summary>
     /// <param name="commit">The commit, or null where none is recorded.</param>

@@ -2336,14 +2336,14 @@ internal static class HelpCommand
         builder.AppendLine($"  {command} {AgentService.CreateCommand} <o> <a> --model <id> [--empty] [--session <id>]");
         builder.AppendLine($"  {command} {AgentService.SeedCommand} <o> <a> [--empty] [--force]");
         builder.AppendLine($"  {command} {AgentService.RefreshCommand} <o> <a> [<path>... | {RefreshRequest.AllOption}] [{RefreshRequest.ExceptOption} <path>]...");
-        builder.AppendLine($"      [{RefreshRequest.StaleOption} <path>]... [{FoldAllowances.MergeOption} <path>]... [--apply]");
+        builder.AppendLine($"      [{RefreshRequest.StaleOption} <path>]... [{FoldAllowances.MergeOption} <path>]... [--apply] [--json]");
         var paths = $"[{FoldAllowances.MergeOption} <path>]... [{FoldAllowances.SettledOption} <path>]...";
-        builder.AppendLine($"  {command} {AgentService.RebaseCommand} <o> <a> [--apply] {paths}");
+        builder.AppendLine($"  {command} {AgentService.RebaseCommand} <o> <a> [--apply] [--json] {paths}");
         var rows = $"[{AnchorBatchRequest.NewOption} <ID>]... [{AnchorBatchRequest.AcceptLostOption} {AnchorRowCell.Form}]...";
         var over = $"[{AnchorBatchRequest.AcceptOverOption} {AnchorRowCell.Form}]...";
-        builder.AppendLine($"  {command} {AgentService.FoldCommand} <o> <a> [--apply] {paths}");
+        builder.AppendLine($"  {command} {AgentService.FoldCommand} <o> <a> [--apply] [--json] {paths}");
         builder.AppendLine($"      {rows} {over}");
-        builder.AppendLine($"  {command} {AgentService.DeleteCommand} <o> <a> [--apply] {paths}");
+        builder.AppendLine($"  {command} {AgentService.DeleteCommand} <o> <a> [--apply] [--json] {paths}");
         builder.AppendLine($"      {rows} {over}");
         builder.AppendLine("      [--discard-uncommitted]");
         builder.AppendLine($"  {command} {OrchestratorService.ListCommand} [<o>] [--json]");
@@ -2448,8 +2448,14 @@ internal static class HelpCommand
             + "with the same arguments, would exit with at that moment: 0 only where that --apply would go through. Where a path, "
             + $"a row, or a consent nobody gave would refuse it, the dry run exits {HarnessExit.Refused}, and where it would fail "
             + "before writing anything, with that failure's code - and either way it still prints all it weighed, its summary "
-            + "last, on standard error. What an --apply can only find by writing - a file changed after it was weighed, a write "
-            + "that fails - is not in a dry run, so 0 never promises that the --apply will finish.");
+            + "last, on standard error. A run holding what the --apply takes refuses the dry run too: every holder is named on "
+            + $"a 'held now:' line, said with where its run's leg stands, and it exits {HarnessExit.Refused}; delete-agent, whose "
+            + $"--apply would fold and close the agent and leave the removal, exits {HarnessExit.Incomplete} instead where only a "
+            + "copy of the worktree is held. What an --apply can only find by writing - a file changed after it was weighed, a write "
+            + "that fails - is not in a dry run, so 0 never promises that the --apply will finish. --json answers with one "
+            + "document, the whole of standard output, whose request member says what is wanted of you - 'sound' (nothing; wait, "
+            + "where heldNow names a holder), 'needs-consent' (name the cells the dry run shows) or 'refused' (put right what the "
+            + "last line names) - and whose heldNow holds each holder, with where its leg stands.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -2555,10 +2561,15 @@ internal static class HelpCommand
             "Every command that writes the main tree or an agent's worktree holds it, as a sync holds a copy - fold-agent, "
             + "seed-agent, refresh-agent and delete-agent hold the agent's worktree as well as the main tree, and rebase-agent "
             + "holds its worktree - so no leg builds in either meanwhile, and once one has written, an interruption waits for it "
-            + "to finish. A leg that works in a copy of the tree holds only the copy ('help legs'): a fold and such a leg never "
+            + "to finish. A dry run of the four asks with the very hold its --apply takes, so a run holding what it needs is "
+            + $"named and the dry run refused itself, exit {HarnessExit.Refused}, saying that nothing in the request needs "
+            + "correcting; the refusal an --apply gives ends with the same words. A holder is a fact about one moment, so 0 "
+            + "from a dry run never promises the tree will still be free when the --apply is typed. A leg that works in a copy "
+            + "of the tree holds only the copy ('help legs'): a fold and such a leg never "
             + "refuse each other, and a fold that lands while the run is still reading the tree ends its legs inputs-moved with "
             + "nothing run - seconds, at the run's start - while the same run started again reads the folded tree. "
-            + "delete-agent refuses to run from "
+            + "delete-agent alone names a copy a run holds, since it removes every copy with the worktree: a host's, a leg copy "
+            + "kept in it, and a mutation worker, each in its own words. delete-agent refuses to run from "
             + "inside the worktree it removes, and so does its dry run, "
             + "and an agent made under a worktrees root the configuration no longer names is refused with nothing touched. "
             + "delete-orchestrator deletes the orchestrator once every agent of it is deleted and no worktree is left below its "
