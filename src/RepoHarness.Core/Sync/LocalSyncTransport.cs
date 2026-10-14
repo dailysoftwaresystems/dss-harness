@@ -605,7 +605,7 @@ public sealed class LocalSyncTransport(
 
                 if (claims.HeldBy(kept) is { } holder)
                 {
-                    left.Add(new WorkerLeft(copy.Path, claims.SaidHeld(holder), WorkerLeftAs.Held));
+                    left.Add(new WorkerLeft(copy.Path, claims.SaidHeld(holder.Said), WorkerLeftAs.Held, holder.Claim));
                     continue;
                 }
 

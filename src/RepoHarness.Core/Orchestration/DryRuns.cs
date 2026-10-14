@@ -1,5 +1,6 @@
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.Results;
+using RepoHarness.Core.Worktrees;
 
 namespace RepoHarness.Core.Orchestration;
 
@@ -15,6 +16,15 @@ public enum RequestStanding
     /// <summary>Something of it must be put right: a path, a row or an option is refused.</summary>
     Refused,
 }
+
+/// <summary>What a dry run answers: the outcome the one rule gives it, and how its request stands as that outcome says it.</summary>
+/// <param name="Outcome">Its code, its summary and its lines.</param>
+/// <param name="Standing">
+/// What is wanted of the caller: the request as its verb weighed it, save where what is kept in a worktree that a
+/// deletion's removal cannot take as it stands decides the code - refused then, since it must be put right; null where
+/// what the command weighs could not be read.
+/// </param>
+public sealed record DryAnswer(CommandOutcome Outcome, RequestStanding? Standing);
 
 /// <summary>
 /// The one rule of what a dry run of fold-agent, delete-agent, refresh-agent or rebase-agent exits with: what its --apply,
@@ -33,20 +43,23 @@ public enum RequestStanding
 public static class DryRuns
 {
     /// <summary>
-    /// What a dry run answers: <paramref name="planned"/> as its --apply would meet the request now. Where what the
-    /// command weighs could not be read, or the request is refused, that is the answer as it is; where it needs a consent
-    /// nobody gave, the same words and the same lines refused, since the --apply refuses it, writing nothing, until each is
-    /// named. A run holding a tree the --apply takes refuses it, whatever else the request needs - save where what the
-    /// command weighs could not be read, which stands above a holder in the plan's order and keeps its own code, the holder
-    /// named on the dry run's lines as ever - and a lock file that cannot be read does too, since the --apply could not
-    /// take its trees either; a run or a sweep holding only a copy a deletion removes - a holder, never a line that only
-    /// says what is kept in the worktree - leaves it saying that, unfinished. Otherwise
-    /// <paramref name="planned"/> itself.
+    /// What a dry run answers: <paramref name="planned"/> as its --apply would meet the request now, read downwards, the
+    /// first row that applies deciding. A lock file that cannot be read refuses it, since the --apply could not take its
+    /// trees either, and a run holding a tree the --apply takes refuses it, whatever else the request needs - save, for
+    /// both, where what the command weighs could not be read, which stands above them in the plan's order and keeps its own
+    /// code, the holder named on the dry run's lines as ever. Below them, where what the command weighs could not be read,
+    /// or the request is refused, that is the answer as it is; where it needs a consent nobody gave, the same words and the
+    /// same lines refused, since the --apply refuses it, writing nothing, until each is named. Only a sound request goes
+    /// further: what is kept in a deletion's worktree that its removal cannot take as it stands - a line of
+    /// <see cref="TreeHeld.KeptCopies"/> that <see cref="KeptCopyLine.Stops"/> - leaves it unfinished, its request refused
+    /// until that is put right, which no waiting does; and a run or a sweep holding only a copy a deletion removes - a
+    /// holder, never a line that only says what is kept in the worktree - leaves it unfinished, saying that. Otherwise
+    /// <paramref name="planned"/> itself, as the verb weighed it.
     /// </summary>
     /// <param name="planned">What the verb composed: its summary and its lines, or the failure or refusal it met.</param>
     /// <param name="standing">How the request stands; null where what it weighs could not be read.</param>
     /// <param name="holders">Who holds what the --apply takes, where the verb asked; null where it asked nobody.</param>
-    public static CommandOutcome Outcome(CommandOutcome planned, RequestStanding? standing, TreeHeld? holders = null)
+    public static DryAnswer Answer(CommandOutcome planned, RequestStanding? standing, TreeHeld? holders = null)
     {
         ArgumentNullException.ThrowIfNull(planned);
 
@@ -56,10 +69,10 @@ public static class DryRuns
 
             if (standing is null)
             {
-                return planned with { Details = [.. planned.Details ?? [], said] };
+                return new(planned with { Details = [.. planned.Details ?? [], said] }, standing);
             }
 
-            return CommandOutcome.Refused($"{planned.Message}; {said}", planned.Details);
+            return new(CommandOutcome.Refused($"{planned.Message}; {said}", planned.Details), standing);
         }
 
         if (holders?.HoldsATree == true)
@@ -68,25 +81,38 @@ public static class DryRuns
             // and its lines name the holder as any dry run's do.
             if (standing is null)
             {
-                return planned;
+                return new(planned, standing);
             }
 
-            return CommandOutcome.Refused(
-                standing == RequestStanding.Sound ? $"{planned.Message}, {TreeHolders.Blocked}" : $"{planned.Message}{TreeHolders.AlsoHeld}",
-                planned.Details);
+            return new(
+                CommandOutcome.Refused(
+                    standing == RequestStanding.Sound ? $"{planned.Message}, {TreeHolders.Blocked}" : $"{planned.Message}{TreeHolders.AlsoHeld}",
+                    planned.Details),
+                standing);
         }
 
         return standing switch
         {
-            RequestStanding.NeedsConsent => CommandOutcome.Refused(planned.Message, planned.Details),
-            RequestStanding.Refused or null => planned,
-            RequestStanding.Sound when holders?.HoldsOnlyCopies == true => CommandOutcome.Failed(
-                HarnessExit.Incomplete,
-                $"{planned.Message}, {TreeHolders.RemovalHeld}",
-                planned.Details),
-            _ => planned,
+            RequestStanding.NeedsConsent => new(CommandOutcome.Refused(planned.Message, planned.Details), standing),
+            RequestStanding.Refused or null => new(planned, standing),
+            RequestStanding.Sound when holders?.KeptCopies.Any(line => line.Stops) == true => new(
+                CommandOutcome.Failed(HarnessExit.Incomplete, $"{planned.Message}{Unremovable}", planned.Details),
+                RequestStanding.Refused),
+            RequestStanding.Sound when holders?.HoldsOnlyCopies == true => new(
+                CommandOutcome.Failed(HarnessExit.Incomplete, $"{planned.Message}, {TreeHolders.RemovalHeld}", planned.Details),
+                standing),
+            _ => new(planned, standing),
         };
     }
+
+    /// <summary>
+    /// What a sound dry run of a deletion ends with where what is kept in the worktree cannot be removed as it stands - a
+    /// copy that could not be told or removed, or copies that could not be looked for, said on the lines above: its
+    /// --apply would do what it does before the removal and could not finish it, as every --apply would until that is
+    /// put right.
+    /// </summary>
+    public const string Unremovable = "; --apply would go as far as its removal now and could not finish it, because the copies kept in its worktree cannot "
+        + "be removed as they stand, said above: put that right, then run it - or run it now and run delete-agent again once that is done";
 
     /// <summary>
     /// How a request stands whose measure met <paramref name="met"/> rather than a plan: refused where something of it

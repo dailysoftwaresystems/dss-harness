@@ -697,23 +697,14 @@ public sealed record WorkersRemoval(IReadOnlyList<WorkerRemoved> Removed, IReadO
     /// fundamental of them where several are. A command's own code for the first two is the verdict's.
     /// </summary>
     [JsonIgnore]
-    public LegVerdict Verdict => Verdicts.Worst([.. Left.Select(worker => Of(worker.As)), Interrupted ? LegVerdict.Stopped : LegVerdict.Passed]);
+    public LegVerdict Verdict => Verdicts.Worst([.. Left.Select(worker => worker.Verdict), Interrupted ? LegVerdict.Stopped : LegVerdict.Passed]);
 
     /// <summary>
     /// The worker that keeps its tree from being removed with the others, or <see langword="null"/> where none does:
     /// the first of the kind <see cref="Verdict"/> ranks first, so what is said of it is what the verdict says.
     /// </summary>
     [JsonIgnore]
-    public WorkerLeft? Kept => Left.Where(worker => Of(worker.As) != LegVerdict.Passed).MinBy(worker => Verdicts.Rank(Of(worker.As)));
-
-    // What one worker left says of its tree: held, it is in use; not removed, its removal failed; somebody's, nothing.
-    private static LegVerdict Of(WorkerLeftAs left)
-        => left switch
-        {
-            WorkerLeftAs.Held => LegVerdict.RefusedLocked,
-            WorkerLeftAs.NotRemoved => LegVerdict.Failed,
-            _ => LegVerdict.Passed,
-        };
+    public WorkerLeft? Kept => Left.Where(worker => worker.Verdict != LegVerdict.Passed).MinBy(worker => Verdicts.Rank(worker.Verdict));
 }
 
 /// <summary>One mutation worker removed, or that would be.</summary>
@@ -725,8 +716,27 @@ public sealed record WorkerRemoved(string Path, long Bytes);
 /// <param name="Path">Where it is.</param>
 /// <param name="Why">Why it was left, as a line says it.</param>
 /// <param name="As">What it was left as, which says what would have it go.</param>
-public sealed record WorkerLeft(string Path, string Why, WorkerLeftAs As)
+/// <param name="Claim">
+/// What the claim of its family's own that holds it records of the run holding it - its machine, its process, its run and
+/// when it claimed it - where it was left held and such a claim, read, names that run; <see langword="null"/> otherwise.
+/// </param>
+public sealed record WorkerLeft(string Path, string Why, WorkerLeftAs As, LogOwner? Claim = null)
 {
+    /// <summary>
+    /// What it says of its tree, as the one verdict every command that removes such copies reads, and every line that
+    /// says one weighs: held, refused-locked, which ends by waiting; not removed, failed, which waiting never ends;
+    /// somebody's, passed - nothing that keeps its tree. The one place that maps what a copy was left as.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">It was left as something this build cannot weigh.</exception>
+    [JsonIgnore]
+    public LegVerdict Verdict => As switch
+    {
+        WorkerLeftAs.Held => LegVerdict.RefusedLocked,
+        WorkerLeftAs.NotRemoved => LegVerdict.Failed,
+        WorkerLeftAs.Somebodys => LegVerdict.Passed,
+        _ => throw new ArgumentOutOfRangeException(nameof(As), As, "This build cannot weigh what a copy was left as."),
+    };
+
     /// <summary>Why it was left, naming it: its path first, where what is said of it does not name it already.</summary>
     public string Told() => Why.Contains(Path, StringComparison.Ordinal) ? Why : $"'{Path}': {Why}";
 }

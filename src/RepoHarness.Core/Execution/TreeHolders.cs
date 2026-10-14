@@ -31,12 +31,13 @@ public enum HolderStanding
 /// </summary>
 public sealed record TreeHolder
 {
-    private TreeHolder(bool copy, string path, string host, LockEntry? entry, HolderStanding? standing, int? ahead, string said, bool holdsKeptCopy)
+    private TreeHolder(bool copy, string path, string host, LockEntry? entry, LogOwner? claim, HolderStanding? standing, int? ahead, string said, bool holdsKeptCopy)
     {
         Copy = copy;
         Path = path;
         Host = host;
         Entry = entry;
+        Claim = claim;
         Standing = standing;
         Ahead = ahead;
         Said = said;
@@ -60,6 +61,13 @@ public sealed record TreeHolder
     /// family's own names the holder of, as a sweep's claim names a mutation worker's.
     /// </summary>
     public LockEntry? Entry { get; }
+
+    /// <summary>
+    /// What the claim of its family's own records of it - its machine, its process, its run and when it claimed the copy -
+    /// for the holder of a copy kept in the worktree that such a claim names, rather than the lock; <see langword="null"/>
+    /// where an entry of the lock names it, and where that claim could not be read.
+    /// </summary>
+    public LogOwner? Claim { get; }
 
     /// <summary>
     /// Where its leg stands; <see langword="null"/> where the record of heavy legs could not be read, and where no entry of
@@ -93,12 +101,13 @@ public sealed record TreeHolder
         ArgumentNullException.ThrowIfNull(entry);
         ArgumentException.ThrowIfNullOrWhiteSpace(said);
 
-        return new(copy, entry.Tree, entry.Host, entry, standing, ahead, said, holdsKeptCopy: false);
+        return new(copy, entry.Tree, entry.Host, entry, claim: null, standing, ahead, said, holdsKeptCopy: false);
     }
 
     /// <summary>
     /// The holder of a copy kept in the worktree, which a deletion removes: said on the line its family says of the copy,
-    /// with the lock's entry for it where the lock holds a copy of that family.
+    /// with the lock's entry for it where the lock holds a copy of that family, and otherwise with what the family's claim
+    /// on the copy records of it (<see cref="KeptCopyLine.Claim"/>).
     /// </summary>
     /// <param name="line">The line its family says of the copy held.</param>
     /// <param name="entry">The lock's entry for the copy, where the lock names its holder; <see langword="null"/> where a claim does.</param>
@@ -110,7 +119,16 @@ public sealed record TreeHolder
 
         var path = line.HeldPath ?? throw new ArgumentException("A line that names no copy held names no holder.", nameof(line));
 
-        return new(copy: true, entry?.Tree ?? path, entry?.Host ?? HostId.Local.ToString(), entry, standing, ahead, line.Line, holdsKeptCopy: true);
+        return new(
+            copy: true,
+            entry?.Tree ?? path,
+            entry?.Host ?? HostId.Local.ToString(),
+            entry,
+            entry is null ? line.Claim : null,
+            standing,
+            ahead,
+            line.Line,
+            holdsKeptCopy: true);
     }
 }
 
@@ -238,18 +256,7 @@ public sealed class TreeHolders(RunLock runLock, HeavyLegSlots slots, IProcessId
     {
         ArgumentNullException.ThrowIfNull(layout);
 
-        IReadOnlyList<SlotInLine> line;
-        string? standingUnread = null;
-
-        try
-        {
-            line = _slots.Line();
-        }
-        catch (HarnessException ex)
-        {
-            line = [];
-            standingUnread = ex.Message.TrimEnd('.');
-        }
+        var (line, standingUnread) = ReadLine();
 
         return new TreeHeld(
             [
@@ -272,47 +279,49 @@ public sealed class TreeHolders(RunLock runLock, HeavyLegSlots slots, IProcessId
         ArgumentNullException.ThrowIfNull(wanted);
         ArgumentNullException.ThrowIfNull(holder);
 
-        IReadOnlyList<SlotInLine> line;
+        return $"{RunLock.TreeNamed(wanted.Host, wanted.Tree, wanted.Variant)} is held by {Held(holder, Tail(Stands(holder, ReadLine().Line)))}.";
+    }
 
+    /// <summary>
+    /// This machine's record of heavy legs, in line order; <see langword="null"/>, with why, where it could not be read.
+    /// </summary>
+    private (IReadOnlyList<SlotInLine>? Line, string? Unread) ReadLine()
+    {
         try
         {
-            line = _slots.Line();
+            return (_slots.Line(), null);
         }
-        catch (HarnessException)
+        catch (HarnessException ex)
         {
-            line = [];
+            return (null, ex.Message.TrimEnd('.'));
         }
-
-        var standing = Standing(holder, line, out var ahead);
-
-        return $"{RunLock.TreeNamed(wanted.Host, wanted.Tree, wanted.Variant)} is held by {Held(holder, Tail(standing, ahead))}.";
     }
 
     /// <summary>One holder: the lock's entry, joined with the line, and the sentence of it.</summary>
-    private TreeHolder Holder(LockEntry entry, IReadOnlyList<SlotInLine> line, bool copy)
+    private TreeHolder Holder(LockEntry entry, IReadOnlyList<SlotInLine>? line, bool copy)
     {
-        var standing = Standing(entry, line, out var ahead);
+        var stands = Stands(entry, line);
 
         return TreeHolder.Named(
             copy,
             entry,
-            standing,
-            standing == HolderStanding.Waiting ? ahead : null,
-            $"{RunLock.TreeNamed(entry.Host, entry.Tree, entry.Variant)} is held by {Held(entry, Tail(standing, ahead))}.");
+            stands.Standing,
+            stands.Ahead,
+            $"{RunLock.TreeNamed(entry.Host, entry.Tree, entry.Variant)} is held by {Held(entry, Tail(stands))}.");
     }
 
     /// <summary>
     /// Who holds the copy kept in the worktree that <paramref name="said"/> names, each said on that line: every entry of
     /// the lock for it, joined with the line; or, where no entry names one, the holder its family's claim named.
     /// </summary>
-    private IEnumerable<TreeHolder> KeptHolders(KeptCopyLine said, IReadOnlyList<LockEntry> entries, IReadOnlyList<SlotInLine> line)
+    private static IEnumerable<TreeHolder> KeptHolders(KeptCopyLine said, IReadOnlyList<LockEntry> entries, IReadOnlyList<SlotInLine>? line)
         => entries.Count == 0
             ? [TreeHolder.OfKeptCopy(said, entry: null, standing: null, ahead: null)]
             : entries.Select(entry =>
             {
-                var standing = Standing(entry, line, out var ahead);
+                var stands = Stands(entry, line);
 
-                return TreeHolder.OfKeptCopy(said, entry, standing, standing == HolderStanding.Waiting ? ahead : null);
+                return TreeHolder.OfKeptCopy(said, entry, stands.Standing, stands.Ahead);
             });
 
     /// <summary>
@@ -326,12 +335,20 @@ public sealed class TreeHolders(RunLock runLock, HeavyLegSlots slots, IProcessId
             + tail;
 
     /// <summary>
-    /// Where the leg of <paramref name="entry"/>'s run stands: it holds a slot where any of its places in the line does,
-    /// it waits where the line holds it further back, and where the lock names an ssh host, that host's own record says.
+    /// Where the leg of <paramref name="entry"/>'s run stands, and how many legs are ahead of it where it waits - the one
+    /// answer every holder and every refusal is said with: it holds a slot where any of its places in the line does, it
+    /// waits where the line holds it further back, where the lock names an ssh host, that host's own record says, and
+    /// otherwise it asked for no slot. Nothing where the record of heavy legs could not be read: where the leg stands is
+    /// not known then, and is never said to be a leg that asked for no slot.
     /// </summary>
-    private HolderStanding? Standing(LockEntry entry, IReadOnlyList<SlotInLine> line, out int ahead)
+    /// <param name="entry">The lock's entry for what the run holds.</param>
+    /// <param name="line">The record of heavy legs, in line order; <see langword="null"/> where it could not be read.</param>
+    private static (HolderStanding? Standing, int? Ahead) Stands(LockEntry entry, IReadOnlyList<SlotInLine>? line)
     {
-        ahead = 0;
+        if (line is null)
+        {
+            return (null, null);
+        }
 
         var places = line
             .Select((slot, at) => (slot, at))
@@ -344,12 +361,10 @@ public sealed class TreeHolders(RunLock runLock, HeavyLegSlots slots, IProcessId
 
         if (places.Count == 0)
         {
-            return HostId.TryParse(entry.Host, out var host) && host.Kind == HostKind.Ssh ? HolderStanding.OnHost : HolderStanding.NoSlot;
+            return (HostId.TryParse(entry.Host, out var host) && host.Kind == HostKind.Ssh ? HolderStanding.OnHost : HolderStanding.NoSlot, null);
         }
 
-        ahead = places.Min(place => place.at);
-
-        return places.Any(place => place.slot.HoldsSlot) ? HolderStanding.HoldsSlot : HolderStanding.Waiting;
+        return places.Any(place => place.slot.HoldsSlot) ? (HolderStanding.HoldsSlot, null) : (HolderStanding.Waiting, places.Min(place => place.at));
     }
 
     private static bool RunLockMatches(LockEntry entry, LockRequest request)
@@ -358,14 +373,14 @@ public sealed class TreeHolders(RunLock runLock, HeavyLegSlots slots, IProcessId
 
     /// <summary>
     /// What the sentence says of where a holder's leg stands - the endings a dry run's line may take, a closed list
-    /// this type owns; nothing where it asked for no slot.
+    /// this type owns; nothing where it asked for no slot, or where that is not known.
     /// </summary>
-    private static string Tail(HolderStanding? standing, int ahead)
-        => standing switch
+    private static string Tail((HolderStanding? Standing, int? Ahead) stands)
+        => stands switch
         {
-            HolderStanding.Waiting => $", whose leg has not started: it waits for a heavy-leg slot, {ReportText.Counted(ahead, "leg")} ahead of it",
-            HolderStanding.HoldsSlot => ", whose leg holds a heavy-leg slot: it runs, or starts as soon as the memory and the room allow",
-            HolderStanding.OnHost => ", whose leg asks that host for its slot: whether it runs or waits is recorded there",
+            (HolderStanding.Waiting, { } ahead) => $", whose leg has not started: it waits for a heavy-leg slot, {ReportText.Counted(ahead, "leg")} ahead of it",
+            (HolderStanding.HoldsSlot, _) => ", whose leg holds a heavy-leg slot: it runs, or starts as soon as the memory and the room allow",
+            (HolderStanding.OnHost, _) => ", whose leg asks that host for its slot: whether it runs or waits is recorded there",
             _ => string.Empty,
         };
 

@@ -1,3 +1,5 @@
+using RepoHarness.Core.Execution;
+
 namespace RepoHarness.Core.Sync;
 
 /// <summary>
@@ -19,15 +21,16 @@ public interface ICopyClaims
     string Member { get; }
 
     /// <summary>How a line says a run still running holds a copy of the family: <c>a sweep still running holds it: ...</c>.</summary>
-    /// <param name="holder">The run, as <see cref="HeldBy"/> names it.</param>
+    /// <param name="holder">The run, as <see cref="CopyHolder.Said"/> names it.</param>
     string SaidHeld(string holder);
 
     /// <summary>
-    /// The run that holds <paramref name="copy"/> and still runs, as a line names it; <see langword="null"/> where none
-    /// does. A claim that cannot be read holds its copy, and is said as that: never read as no claim.
+    /// The run that holds <paramref name="copy"/> and still runs, as a line names it and as the family's own claim records
+    /// it; <see langword="null"/> where none does. A claim that cannot be read holds its copy, and is said as that: never
+    /// read as no claim.
     /// </summary>
     /// <param name="copy">The copy.</param>
-    string? HeldBy(string copy);
+    CopyHolder? HeldBy(string copy);
 
     /// <summary>
     /// Forgets the claim recorded on <paramref name="copy"/>, once the copy is gone - unless a run still running holds
@@ -36,3 +39,12 @@ public interface ICopyClaims
     /// <param name="copy">The copy that was removed.</param>
     void Forget(string copy);
 }
+
+/// <summary>The run that holds a copy kept in a tree and still runs, as the family that keeps the copy answers for it.</summary>
+/// <param name="Said">The run, as a line names it.</param>
+/// <param name="Claim">
+/// What the family's own claim on the copy records of the run - its machine, its process, its run and when it claimed the
+/// copy - where such a claim names it; <see langword="null"/> where the run lock is what holds a copy of the family, whose
+/// entry says the same of its holder, and where the claim cannot be read.
+/// </param>
+public sealed record CopyHolder(string Said, LogOwner? Claim);

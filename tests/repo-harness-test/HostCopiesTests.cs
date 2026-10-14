@@ -2469,11 +2469,11 @@ public sealed class HostCopiesTests
         /// <summary>What happens as a copy is asked about, where a test says: between its listing and its removal.</summary>
         public Action<string>? Asked { get; init; }
 
-        public string? HeldBy(string copy)
+        public CopyHolder? HeldBy(string copy)
         {
             Asked?.Invoke(copy);
 
-            return Held.GetValueOrDefault(Path.GetFullPath(copy));
+            return Held.GetValueOrDefault(Path.GetFullPath(copy)) is { } said ? new CopyHolder(said, Claim: null) : null;
         }
 
         public void Forget(string copy) => Forgotten.Add(Path.GetFullPath(copy));
@@ -2495,7 +2495,7 @@ public sealed class HostCopiesTests
 
         public List<string> Forgotten { get; } = [];
 
-        public string? HeldBy(string copy) => Held.GetValueOrDefault(Path.GetFullPath(copy));
+        public CopyHolder? HeldBy(string copy) => Held.GetValueOrDefault(Path.GetFullPath(copy)) is { } said ? new CopyHolder(said, Claim: null) : null;
 
         public void Forget(string copy) => Forgotten.Add(Path.GetFullPath(copy));
 

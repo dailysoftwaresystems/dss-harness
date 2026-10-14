@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json.Nodes;
 using RepoHarness.Core.Build;
 using RepoHarness.Core.Execution;
@@ -28,6 +29,10 @@ public sealed class AgentDeletionTests
     };
 
     private static CancellationToken Token => TestContext.Current.CancellationToken;
+
+    /// <summary>What a sound dry run of a deletion ends with where what is kept in the worktree cannot be removed as it stands.</summary>
+    private const string Unremovable = "; --apply would go as far as its removal now and could not finish it, because the copies kept in its worktree cannot be "
+        + "removed as they stand, said above: put that right, then run it - or run it now and run delete-agent again once that is done";
 
     /// <summary>
     /// Deleting an agent folds it and applies its rows, keeps its evidence and its Claude transcripts in its directory,
@@ -400,8 +405,9 @@ public sealed class AgentDeletionTests
     /// A mutation worker a sweep still running holds is named by a dry run of the deletion, in its family's own words,
     /// and the dry run is unfinished - exit 21 - as its --apply is, which folds and closes and cannot finish the
     /// removal. With <c>--json</c> the sweep is in <c>heldNow</c>, as every holder that decides the code is:
-    /// <c>holds</c> <c>copy</c>, the worker's path on this machine, and <c>said</c> the line its family says of it - its
-    /// claim names it, not the run lock, so what only a lock entry says is null.
+    /// <c>holds</c> <c>copy</c>, the worker's path on this machine, its process, its run and since when as its claim
+    /// records them, and <c>said</c> the line its family says of it - its claim names it, not the run lock, so only what
+    /// a claim does not record, the command, the variant and where a leg stands, is null.
     /// </summary>
     [Fact]
     public async Task ADryRunOfADeletionNamesAMutationWorkerASweepHolds_AndIsUnfinished()
@@ -412,8 +418,10 @@ public sealed class AgentDeletionTests
         OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
         var worker = MutationWorkers.PathOf(worktree, new VariantKey("x86_64", "gcc", "debug", null), 1);
         await kit.Harness.LocalTransport.CreateRootAsync(worker, CopyMark.Complete, Token);
-        new DirectoryClaims(kit.Harness.FileSystem, kit.Harness.Output, kit.Harness.Identity, MutationWorkers.Claims("check-mutations"))
-            .Claim(worker, RunId.New(), force: false);
+        var sweep = RunId.New();
+        var claims = new DirectoryClaims(kit.Harness.FileSystem, kit.Harness.Output, kit.Harness.Identity, MutationWorkers.Claims("check-mutations"));
+        claims.Claim(worker, sweep, force: false);
+        var claim = claims.Owner(worker)!;
 
         var dry = await kit.DeleteAsync("ag", apply: false);
 
@@ -430,13 +438,16 @@ public sealed class AgentDeletionTests
         Assert.Equal("copy", holder["holds"]!.GetValue<string>());
         Assert.Equal(worker, holder["path"]!.GetValue<string>());
         Assert.Equal("local", holder["host"]!.GetValue<string>());
-        Assert.Null(holder["processId"]);
-        Assert.Null(holder["run"]);
-        Assert.Null(holder["since"]);
+        Assert.Equal(kit.Harness.Identity.CurrentId, holder["processId"]!.GetValue<int>());
+        Assert.Equal(sweep.Value, holder["run"]!.GetValue<string>());
+        Assert.Equal(claim.TakenUtc.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture), holder["since"]!.GetValue<string>());
+        Assert.Null(holder["variant"]);
         Assert.Null(holder["command"]);
         Assert.Null(holder["standing"]);
+        Assert.Null(holder["ahead"]);
         var said = holder["said"]!.GetValue<string>();
         Assert.StartsWith($"left the mutation worker '{worker}' kept in it: a sweep still running holds it: ", said, StringComparison.Ordinal);
+        Assert.Contains($"run {sweep.Value}", said, StringComparison.Ordinal);
         Assert.Contains(said, document["lines"]!.AsArray().Select(line => line!.GetValue<string>()));
 
         var applied = await kit.DeleteAsync("ag", apply: true);
@@ -484,32 +495,33 @@ public sealed class AgentDeletionTests
     }
 
     /// <summary>
-    /// Copies kept in the worktree that cannot be looked for keep every --apply's removal from finishing until that is put
-    /// right: the --apply folds and closes the agent and leaves the removal, exit 21. Its dry run answers as that --apply
-    /// does - exit 21, its request refused, its last line saying the removal could not be finished over what is said above
-    /// - and names no holder, since none holds anything: never the words that a run or a sweep holds a copy.
+    /// Copies kept in the worktree that cannot be looked for - its leg copies, or its mutation workers - keep every
+    /// --apply's removal from finishing until that is put right: the --apply folds and closes the agent and leaves the
+    /// removal, exit 21. Its dry run answers as that --apply does - exit 21, its request refused, its last line saying the
+    /// removal could not be finished over what is said above - and names no holder, since none holds anything: never the
+    /// words that a run or a sweep holds a copy.
     /// </summary>
-    [Fact]
-    public async Task CopiesKeptInTheWorktreeThatCannotBeLookedFor_LeaveTheRemovalUnfinished_InTheDryRunAsInTheApply()
+    /// <param name="slotName">The slot that cannot be listed.</param>
+    /// <param name="said">How the dry run's line about it starts.</param>
+    [Theory]
+    [InlineData(HarnessLayout.LegsDirectoryName, "the leg copies kept in it could not be removed: ")]
+    [InlineData(HarnessLayout.MutationsDirectoryName, "the mutation workers kept in it could not be removed: ")]
+    public async Task CopiesKeptInTheWorktreeThatCannotBeLookedFor_LeaveTheRemovalUnfinished_InTheDryRunAsInTheApply(string slotName, string said)
     {
         using var temp = new TempDirectory();
         var kit = await OrchestrationKit.PrepareAsync(temp);
         var worktree = await kit.CreateAgentAsync("ag");
         OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
-        var slot = Directory.CreateDirectory(Path.Combine(worktree, HarnessLayout.LegsDirectoryName)).FullName;
+        var slot = Directory.CreateDirectory(Path.Combine(worktree, slotName)).FullName;
         var agents = kit.Harness.Agents(new CannotList(kit.Harness.FileSystem, slot, denied: false), kit.Harness.AnchorRegistryService);
 
         var dry = await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: false, discardUncommitted: false, Token);
 
         Assert.Equal(HarnessExit.Incomplete, dry.ExitCode);
         Assert.StartsWith("dry run: deleting agent 'ag' of 'o1' folds 1 path(s)", dry.Message, StringComparison.Ordinal);
-        Assert.EndsWith(
-            "; --apply would go as far as its removal now and could not finish it, because the copies kept in its worktree cannot be removed as they "
-                + "stand, said above: put that right, then run it - or run it now and run delete-agent again once that is done",
-            dry.Message,
-            StringComparison.Ordinal);
+        Assert.EndsWith(Unremovable, dry.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("holds a copy", dry.Message, StringComparison.Ordinal);
-        Assert.Contains(dry.Details!, line => line.StartsWith("the leg copies kept in it could not be removed: ", StringComparison.Ordinal));
+        Assert.Contains(dry.Details!, line => line.StartsWith(said, StringComparison.Ordinal));
         Assert.DoesNotContain(dry.Details!, line => line.StartsWith("held now:", StringComparison.Ordinal));
 
         var document = JsonNode.Parse((await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: false, discardUncommitted: false, Token, json: true)).Data[0])!;
@@ -524,6 +536,82 @@ public sealed class AgentDeletionTests
         Assert.StartsWith("Agent 'ag' of 'o1' is closed and not deleted yet: ", applied.Message, StringComparison.Ordinal);
         Assert.Equal(AgentStates.Closed, kit.Record("ag").State);
         Assert.True(Directory.Exists(worktree));
+    }
+
+    /// <summary>
+    /// A mutation worker whose marker cannot be read is not told from one a sync made, so no removal takes it until it
+    /// can be told: the --apply folds and closes the agent and leaves the removal, exit 21. Its dry run answers as that
+    /// --apply does - exit 21, its request refused, its last line saying the removal could not be finished over what is
+    /// said above - and names no holder: nothing holds the worker that waiting would end.
+    /// </summary>
+    [Fact]
+    public async Task AMutationWorkerWhoseMarkerCannotBeRead_LeavesTheRemovalUnfinished_InTheDryRunAsInTheApply()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        var worker = MutationWorkers.PathOf(worktree, new VariantKey("x86_64", "gcc", "debug", null), 1);
+        await kit.Harness.LocalTransport.CreateRootAsync(worker, CopyMark.Complete, Token);
+        File.WriteAllText(Path.Combine(worker, HarnessLayout.DirectoryName, LocalSyncTransport.MarkerFileName), "{}");
+
+        var dry = await kit.DeleteAsync("ag", apply: false);
+
+        Assert.Equal(HarnessExit.Incomplete, dry.ExitCode);
+        Assert.EndsWith(Unremovable, dry.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            dry.Details!,
+            line => line.StartsWith($"left the mutation worker '{worker}' kept in it: ", StringComparison.Ordinal)
+                && line.EndsWith("removes it once nothing stops it", StringComparison.Ordinal));
+        Assert.DoesNotContain(dry.Details!, line => line.StartsWith("held now:", StringComparison.Ordinal));
+
+        var answered = await CliRunner.RunAsync(["delete-agent", "o1", "ag", "--json"], Token, workingDirectory: kit.Main);
+
+        Assert.Equal(HarnessExit.Incomplete, answered.ExitCode);
+        var document = JsonNode.Parse(answered.StandardOutput.TrimEnd())!;
+        Assert.Equal("refused", document["request"]!.GetValue<string>());
+        Assert.Empty(document["heldNow"]!.AsArray());
+
+        var applied = await kit.DeleteAsync("ag", apply: true);
+
+        Assert.Equal(HarnessExit.Incomplete, applied.ExitCode);
+        Assert.Equal(AgentStates.Closed, kit.Record("ag").State);
+        Assert.True(Directory.Exists(worker));
+    }
+
+    /// <summary>
+    /// A dry run of a deletion whose rows need a consent nobody gave is refused for that consent, exit 13, request
+    /// needs-consent, whatever is kept in the worktree that the removal could not take: its --apply is refused before it
+    /// goes anywhere near the removal, so the dry run never says it would go as far as that.
+    /// </summary>
+    [Fact]
+    public async Task ADryRunOfADeletionThatNeedsAConsent_AndKeepsCopiesItCannotRemove_IsRefusedForTheConsent()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.Harness.AnchorRegistryService.WriteAsync(
+            kit.Main,
+            new Core.Anchors.AnchorWriteRequest("D-TEST-AGENT-ROW", "P2", "something the agent found") { ClosingWork = "the plan we agreed", CrossRefs = "b.txt" },
+            dryRun: false,
+            Token);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        kit.FileRow("ag", "D-TEST-AGENT-ROW", new Dictionary<string, string>(Row) { ["closing"] = "another plan" });
+        var slot = Directory.CreateDirectory(Path.Combine(worktree, HarnessLayout.LegsDirectoryName)).FullName;
+        var agents = kit.Harness.Agents(new CannotList(kit.Harness.FileSystem, slot, denied: false), kit.Harness.AnchorRegistryService);
+
+        var dry = await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: false, discardUncommitted: false, Token);
+
+        Assert.Equal(HarnessExit.Refused, dry.ExitCode);
+        Assert.EndsWith("the line 'to do it:' above is the command that does it", dry.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("could not finish it", dry.Message, StringComparison.Ordinal);
+        Assert.Contains(dry.Details!, line => line.StartsWith("the leg copies kept in it could not be removed: ", StringComparison.Ordinal));
+
+        var document = JsonNode.Parse((await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: false, discardUncommitted: false, Token, json: true)).Data[0])!;
+
+        Assert.Equal(HarnessExit.Refused, document["exitCode"]!.GetValue<int>());
+        Assert.Equal("needs-consent", document["request"]!.GetValue<string>());
+        Assert.Equal(AgentStates.Live, kit.Record("ag").State);
     }
 
     /// <summary>

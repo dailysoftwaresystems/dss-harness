@@ -139,18 +139,18 @@ internal sealed class WorkerClaims(IFileSystem fileSystem, IHarnessOutput output
     public string SaidHeld(string holder) => MutationWorkers.SaidHeld(holder);
 
     /// <inheritdoc/>
-    public string? HeldBy(string copy)
+    public CopyHolder? HeldBy(string copy)
     {
         try
         {
-            return Standing(copy)?.Describe(_identity);
+            return Standing(copy) is { } owner ? new CopyHolder(owner.Describe(_identity), owner) : null;
         }
         catch (HarnessException ex) when (ex.ExitCode == HarnessExit.Refused)
         {
             // A claim that cannot be read says a sweep claimed this worker and nothing more: it holds the worker, naming
             // its file, and is never the end of whatever asked - a clean of the leg, or a sweep removing a worker it no
             // longer runs.
-            return ex.Message;
+            return new CopyHolder(ex.Message, Claim: null);
         }
     }
 
@@ -257,7 +257,7 @@ internal sealed class WorkerCopies(
     public void Release(string worker, RunId runId) => _claims.Claims.Release(worker, runId);
 
     /// <inheritdoc/>
-    public string? HeldBy(string worker) => _claims.HeldBy(worker);
+    public string? HeldBy(string worker) => _claims.HeldBy(worker)?.Said;
 
     /// <inheritdoc/>
     public Task SyncAsync(SyncSource source, string worker, CancellationToken cancellationToken)

@@ -438,6 +438,103 @@ public sealed class TreeHoldersTests
         Assert.Contains(barely.Details!, line => line.EndsWith(", running 'test'.", StringComparison.Ordinal));
         Assert.DoesNotContain("whose leg", barely.Details![^1], StringComparison.Ordinal);
         Assert.StartsWith("where each run's leg stands cannot be told: ", barely.Details![^1], StringComparison.Ordinal);
+
+        // Where the record could not be read, where the holder's leg stands is not known: never said to be a leg that
+        // asked for no slot.
+        var unknown = JsonNode.Parse((await kit.Harness.AgentService.FoldAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: false, Token, json: true)).Data[0])!;
+        var holder = unknown["heldNow"]!.AsArray().Single()!;
+
+        Assert.Equal(worktree, holder["path"]!.GetValue<string>());
+        Assert.Null(holder["standing"]);
+        Assert.Null(holder["ahead"]);
+    }
+
+    /// <summary>
+    /// A lock file that cannot be read refuses a deletion's dry run alike whether a leg copy is kept in the worktree or
+    /// not - exit 13, request sound, its summary ending in why its --apply could not take its trees - though the leg
+    /// copies' own question, which asks that same lock, cannot be answered either: the --apply is refused at its hold
+    /// before it goes anywhere near the removal, so the dry run never says it would go as far as that.
+    /// </summary>
+    [Fact]
+    public async Task ALockThatCannotBeRead_RefusesADeletionsDryRunAlike_WithALegCopyKeptInTheWorktreeOrWithout()
+    {
+        using var temp = new TempDirectory();
+        var (kit, worktree) = await AFoldToMakeAsync(temp);
+        File.WriteAllText(new HarnessLayout(kit.Main, kit.Main).LockFile, "not the lock");
+
+        var without = JsonNode.Parse((await kit.Harness.AgentService.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: false, discardUncommitted: false, Token, json: true)).Data[0])!;
+
+        await LegCopyAsync(kit, Path.Combine(worktree, HarnessLayout.LegsDirectoryName, "357e24c"));
+
+        var with = JsonNode.Parse((await kit.Harness.AgentService.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: false, discardUncommitted: false, Token, json: true)).Data[0])!;
+
+        foreach (var document in new[] { without, with })
+        {
+            Assert.Equal(HarnessExit.Refused, document["exitCode"]!.GetValue<int>());
+            Assert.Equal("sound", document["request"]!.GetValue<string>());
+            Assert.EndsWith("; --apply is refused until the lock file can be read", document["summary"]!.GetValue<string>(), StringComparison.Ordinal);
+            Assert.DoesNotContain("could not finish it", document["summary"]!.GetValue<string>(), StringComparison.Ordinal);
+        }
+
+        Assert.Contains(
+            with["lines"]!.AsArray().Select(line => line!.GetValue<string>()),
+            line => line.StartsWith("the leg copies kept in it could not be removed: ", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// README and the architecture say what a deletion's dry run answers as the code decides it: 21 where its --apply
+    /// would go as far as the removal and leave it unfinished, over a copy a run or a sweep holds or copies kept in the
+    /// worktree it cannot remove as they stand, only below the rows that refuse that --apply at its hold; what each line
+    /// the families of copies say is to it, a leg copy's holder asked of the lock as its removal asks it; and the members
+    /// of <c>heldNow</c> for each holder, a claim's as that claim records them.
+    /// </summary>
+    [Fact]
+    public void TheDocumentsSayWhatADeletionsDryRunAnswers_AsTheCodeDecidesIt()
+    {
+        var readme = Prose.Document("README.md");
+        var architecture = Prose.Document("docs", "architecture.md");
+
+        Assert.Contains(
+            "and `21` where a deletion's `--apply` would go as far as the removal and leave it unfinished, over a copy a run or a "
+                + "sweep holds or copies kept in the worktree it cannot remove as they stand.",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "and whose `heldNow` holds each holder, those copies' among them.",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"`{nameof(DryRuns)}.{nameof(DryRuns.Answer)}` is the one place that decides it",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "a sound dry run of a deletion whose copies kept in the worktree the removal cannot take as they stand - a copy that "
+                + "cannot be told or removed, or copies that cannot be looked for - 21, its request refused, since every `--apply` "
+                + "leaves the removal there until that is put right, which no waiting does "
+                + $"(`{nameof(KeptCopyLine)}.{nameof(KeptCopyLine.Stops)}`, the summary ending in `{nameof(DryRuns)}.{nameof(DryRuns.Unremovable)}`), "
+                + "over a copy a run or a sweep holds as well, while a directory there that no sync made goes with the worktree and "
+                + "is only said; one that only a run or a sweep holding a copy of the worktree keeps, 21 "
+                + $"(`{nameof(TreeHolders)}.{nameof(TreeHolders.RemovalHeld)}`), since its `--apply` would go as far as the removal and "
+                + "leave it unfinished; otherwise 0. Neither of those two is reached where a lock file cannot be read or a run holds "
+                + "a tree the `--apply` takes, which refuse that `--apply` at its hold, so a dry run never says the `--apply` would go "
+                + "as far as the removal where it would not.",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"Each line the two families say is one of three (`{nameof(KeptCopyLine)}`): a copy a run or a sweep holds, whose "
+                + "holder that line names - a leg copy's asked of the lock as its removal asks it "
+                + $"(`{nameof(Core.Legs.LegCopies)}.{nameof(Core.Legs.LegCopies.Whole)}`), a worker's named by its sweep's claim - and no "
+                + "`held now:` line names again; what the removal cannot take as it stands; or what is only said.",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "each holding a copy kept in the worktree, its `said` the line its family says of it - its `processId`, `run` and "
+                + "`since` as the lock's entry records them or, where a claim of the copy's family rather than the lock names its "
+                + $"holder, as that claim records them (`{nameof(CopyHolder)}`), and what only a lock entry says, `command`, "
+                + "`variant` and `standing`, null for such a holder; `standing` is null too where the record of heavy legs cannot "
+                + "be read - and `heldUnread`, why the lock file could not be read.",
+            architecture,
+            StringComparison.Ordinal);
     }
 
     /// <summary>

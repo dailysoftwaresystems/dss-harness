@@ -13,11 +13,12 @@ namespace RepoHarness.Core.Worktrees;
 /// </summary>
 public sealed record KeptCopyLine
 {
-    private KeptCopyLine(string line, string? heldPath, LockRequest? asked, bool stops)
+    private KeptCopyLine(string line, string? heldPath, LockRequest? asked, LogOwner? claim, bool stops)
     {
         Line = line;
         HeldPath = heldPath;
         Asked = asked;
+        Claim = claim;
         Stops = stops;
     }
 
@@ -34,6 +35,13 @@ public sealed record KeptCopyLine
     /// </summary>
     public LockRequest? Asked { get; }
 
+    /// <summary>
+    /// What the claim of the family's own that holds the copy records of its holder - its machine, its process, its run
+    /// and when it claimed the copy - where such a claim names the holder and could be read; <see langword="null"/> where
+    /// the lock holds the copy (<see cref="Asked"/>), where the claim could not be read, and where the line names no holder.
+    /// </summary>
+    public LogOwner? Claim { get; }
+
     /// <summary>Whether it keeps the removal from finishing until it is put right, as no waiting does.</summary>
     public bool Stops { get; }
 
@@ -43,19 +51,26 @@ public sealed record KeptCopyLine
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(line);
 
-        return new(line, null, null, stops: false);
+        return new(line, null, null, null, stops: false);
     }
 
     /// <summary>A line naming a copy a run or a sweep holds, with what holds it.</summary>
     /// <param name="path">Where the copy is.</param>
     /// <param name="line">The line.</param>
     /// <param name="asked">What the run lock is asked for its holder, where the lock holds a copy of its family; <see langword="null"/> where a claim does.</param>
-    public static KeptCopyLine Held(string path, string line, LockRequest? asked = null)
+    /// <param name="claim">What the claim that holds it records of its holder, where a claim holds it and could be read.</param>
+    /// <exception cref="ArgumentException">Both the lock and a claim are said to hold it: a family's copy is held by one of them.</exception>
+    public static KeptCopyLine Held(string path, string line, LockRequest? asked = null, LogOwner? claim = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         ArgumentException.ThrowIfNullOrWhiteSpace(line);
 
-        return new(line, path, asked, stops: false);
+        if (asked is not null && claim is not null)
+        {
+            throw new ArgumentException("A copy is held by the run lock or by a claim of its family's own, never both.", nameof(claim));
+        }
+
+        return new(line, path, asked, claim, stops: false);
     }
 
     /// <summary>A line naming what the removal cannot take as it stands: a copy that could not be told or removed, or copies that could not be looked for.</summary>
@@ -64,26 +79,29 @@ public sealed record KeptCopyLine
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(line);
 
-        return new(line, null, null, stops: true);
+        return new(line, null, null, null, stops: true);
     }
 
     /// <summary>
-    /// The line its family says of <paramref name="left"/>, as what it was left as makes it: held, a copy a run or a sweep
-    /// holds; not removed, what the removal cannot take as it stands; somebody's, only said - as the removal's verdict
-    /// weighs each (<see cref="WorkersRemoval.Verdict"/>).
+    /// The line its family says of <paramref name="left"/>, as the removal's verdict on it makes it
+    /// (<see cref="WorkerLeft.Verdict"/>, the one place that weighs what a copy was left as): refused-locked, a copy a run or
+    /// a sweep holds, with what its claim records of the holder where a claim holds it; failed, what the removal cannot
+    /// take as it stands; passed, only said.
     /// </summary>
     /// <param name="left">The copy left.</param>
     /// <param name="line">The line its family says of it.</param>
     /// <param name="asked">What the run lock is asked for its holder, where the lock holds a copy of its family; <see langword="null"/> where a claim does.</param>
+    /// <exception cref="ArgumentOutOfRangeException">The verdict on it is none a copy left can have.</exception>
     public static KeptCopyLine Of(WorkerLeft left, string line, LockRequest? asked = null)
     {
         ArgumentNullException.ThrowIfNull(left);
 
-        return left.As switch
+        return left.Verdict switch
         {
-            WorkerLeftAs.Held => Held(left.Path, line, asked),
-            WorkerLeftAs.NotRemoved => Stopping(line),
-            _ => Said(line),
+            LegVerdict.RefusedLocked => Held(left.Path, line, asked, left.Claim),
+            LegVerdict.Failed => Stopping(line),
+            LegVerdict.Passed => Said(line),
+            var verdict => throw new ArgumentOutOfRangeException(nameof(left), verdict, "A copy left is held, in the removal's way, or only said; this build cannot tell which this one is."),
         };
     }
 }

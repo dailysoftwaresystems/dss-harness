@@ -46,7 +46,7 @@ public static class LegCopies
     public const string Member = "leg copy";
 
     /// <summary>How a line says a run still running holds a copy of the family (<see cref="ICopyClaims.SaidHeld"/>).</summary>
-    /// <param name="holder">The run, as <see cref="ICopyClaims.HeldBy"/> names it.</param>
+    /// <param name="holder">The run, as <see cref="CopyHolder.Said"/> names it.</param>
     public static string SaidHeld(string holder) => $"a run still running holds it: {holder}";
 
     /// <summary>
@@ -92,7 +92,7 @@ public static class LegCopies
 
         public string SaidHeld(string holder) => LegCopies.SaidHeld(holder);
 
-        public string? HeldBy(string copy) => runLock.HeldBy(layout, Whole(copy));
+        public CopyHolder? HeldBy(string copy) => runLock.HeldBy(layout, Whole(copy)) is { } said ? new CopyHolder(said, Claim: null) : null;
 
         public void Forget(string copy)
         {

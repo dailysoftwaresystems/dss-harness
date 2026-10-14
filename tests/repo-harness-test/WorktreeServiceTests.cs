@@ -506,7 +506,7 @@ public sealed class WorktreeServiceTests
     /// <summary>The claims on a tree's workers, one of which a sweep holds - and asking about it interrupts the command.</summary>
     private sealed class HeldAndInterrupting(string worker, CancellationTokenSource interruption) : ICopyClaims
     {
-        public string? HeldBy(string copy)
+        public CopyHolder? HeldBy(string copy)
         {
             if (!string.Equals(Path.GetFullPath(copy), Path.GetFullPath(worker), StringComparison.OrdinalIgnoreCase))
             {
@@ -514,7 +514,7 @@ public sealed class WorktreeServiceTests
             }
 
             interruption.Cancel();
-            return "run r, process 7 on this machine";
+            return new CopyHolder("run r, process 7 on this machine", Claim: null);
         }
 
         public void Forget(string copy)
@@ -1000,8 +1000,8 @@ public sealed class WorktreeServiceTests
     {
         private int _asked;
 
-        public string? HeldBy(string copy)
-            => string.Equals(Path.GetFullPath(copy), Path.GetFullPath(worker), StringComparison.OrdinalIgnoreCase) && _asked++ > 0 ? holder : null;
+        public CopyHolder? HeldBy(string copy)
+            => string.Equals(Path.GetFullPath(copy), Path.GetFullPath(worker), StringComparison.OrdinalIgnoreCase) && _asked++ > 0 ? new CopyHolder(holder, Claim: null) : null;
 
         public void Forget(string copy)
         {

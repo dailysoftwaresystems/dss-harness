@@ -2337,15 +2337,6 @@ public sealed class AgentService(
             + $"{OrchestrationReports.DeleteAgentLine(target.Record.Orchestrator, target.Record.Name)} then finishes this agent.";
 
     /// <summary>
-    /// What a sound dry run of a deletion ends with where what is kept in the worktree cannot be removed as it stands - a
-    /// copy that could not be told or removed, or copies that could not be looked for, said on the lines above: its
-    /// --apply would do what it does before the removal and could not finish it, as every --apply would until that is
-    /// put right.
-    /// </summary>
-    private const string Unremovable = "; --apply would go as far as its removal now and could not finish it, because the copies kept in its worktree cannot "
-        + "be removed as they stand, said above: put that right, then run it - or run it now and run delete-agent again once that is done";
-
-    /// <summary>
     /// Writes a measured fold into the main tree, records what it wrote as shared, then applies the rows the agent declared
     /// anew and records them as applied, never interrupted: the rows as written and the seed as recorded, or - once anything
     /// is written - what stopped it, as a change begun and not finished.
@@ -2682,12 +2673,12 @@ public sealed class AgentService(
     /// <param name="holders">Who holds what its --apply takes.</param>
     private static CommandOutcome Dry(bool json, CommandOutcome planned, RequestStanding? standing, TreeHeld holders)
     {
-        var outcome = DryRuns.Outcome(
+        var answer = DryRuns.Answer(
             planned with { Details = [.. planned.Details ?? [], .. HolderLines(holders)] },
             standing,
             holders);
 
-        return json ? OrchestrationReports.Document(outcome, applied: false, standing, holders) : outcome;
+        return json ? OrchestrationReports.Document(answer.Outcome, applied: false, answer.Standing, holders) : answer.Outcome;
     }
 
     /// <summary>
@@ -2722,17 +2713,10 @@ public sealed class AgentService(
             return CommandOutcome.Refused($"{Agent(target.Record)} was not deleted: {ex.Message.TrimEnd('.')} Nothing was removed.");
         }
 
-        var holders = _treeHolders.Read(target.Context.Layout, Holds(DeleteCommand, RunId.New(), trees), copies, leftInIt);
-
-        // What is kept in the worktree that the removal cannot take as it stands - a copy that could not be told or removed,
-        // or copies that could not be looked for - leaves every --apply's removal unfinished until it is put right, which
-        // no waiting does: a sound request's dry run answers as that --apply does, its request refused until then.
-        if (standing == RequestStanding.Sound && leftInIt.Any(line => line.Stops))
-        {
-            return Dry(json, CommandOutcome.Failed(HarnessExit.Incomplete, $"{planned.Message}{Unremovable}", planned.Details), RequestStanding.Refused, holders);
-        }
-
-        return Dry(json, planned, standing, holders);
+        // What is kept in the worktree that the removal cannot take as it stands is weighed by the one rule, in its order,
+        // with every holder: below a lock that cannot be read and a tree a run holds, either of which refuses the --apply
+        // before it goes anywhere near the removal.
+        return Dry(json, planned, standing, _treeHolders.Read(target.Context.Layout, Holds(DeleteCommand, RunId.New(), trees), copies, leftInIt));
     }
 
     /// <summary>

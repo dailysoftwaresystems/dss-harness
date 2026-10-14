@@ -544,7 +544,7 @@ public sealed class CleanService(
             try
             {
                 var held = made
-                    .Select(copy => (Copy: copy, Holder: _runLock.HeldBy(context.Layout, CopyLock(copy.Path))))
+                    .Select(copy => (Copy: copy, Holder: _runLock.HeldBy(context.Layout, LegCopies.Whole(copy.Path))))
                     .Where(held => held.Holder is not null)
                     .ToList();
 
@@ -583,7 +583,7 @@ public sealed class CleanService(
             // Each copy under the lock a run takes on it: one a run holds is kept, saying who.
             foreach (var copy in made)
             {
-                var holder = _runLock.HeldBy(context.Layout, CopyLock(copy.Path), () =>
+                var holder = _runLock.HeldBy(context.Layout, LegCopies.Whole(copy.Path), () =>
                 {
                     if (_fileSystem.DirectoryExists(copy.Path))
                     {
@@ -643,16 +643,6 @@ public sealed class CleanService(
                 string.Join("; ", said)),
             removed);
     }
-
-    /// <summary>The lock a run working in the copy at <paramref name="copy"/> takes on it, as a clean asks it: whole.</summary>
-    private LockRequest CopyLock(string copy) => new()
-    {
-        Host = HostId.Local.ToString(),
-        Tree = copy,
-        Scope = LockScope.TreeExclusive,
-        RunId = RunId.New(),
-        Command = CommandName,
-    };
 
     /// <summary>What a dry run says of the leg's copies: what each holds, and what an earlier removal left aside.</summary>
     private string MeasuredCopies(IReadOnlyList<HostCopyFound> made, IReadOnlyList<string> asides, IReadOnlyList<HostCopyFound> somebodys)

@@ -567,10 +567,11 @@ on is exit 21, naming what is in and how running it again finishes.
 
 **What a dry run answers.** A dry run of refresh-agent, rebase-agent, fold-agent or delete-agent exits with what its
 `--apply`, given the same arguments, would exit with at that moment: 0 only where that `--apply` would go through.
-`DryRuns.Outcome` is the one place that decides it: each verb composes its dry run's outcome - its summary and its
+`DryRuns.Answer` is the one place that decides it: each verb composes its dry run's outcome - its summary and its
 lines, or the refusal or failure it met - and hands it over with how the request stands (`RequestStanding`: sound, a
 consent nobody gave, or refused; none where what it weighs could not be read) and with who holds what its `--apply`
-takes (`TreeHeld`, as `TreeHolders.Read` reads it). Read downwards, the first case that
+takes (`TreeHeld`, as `TreeHolders.Read` reads it), and it answers the code and how the request stands as that code
+says it (`DryAnswer`), which `--json` reports. Read downwards, the first case that
 applies gives the code: delete-agent run from inside the worktree it removes is refused (13), nothing read; what the
 command weighs that cannot be read - for a live agent's deletion, which git worktree it is (`StampOf`, the one read
 both make) - fails it (20); a path, a row or an option that is refused, 13; cells of the rows that need a consent
@@ -583,11 +584,14 @@ the summary of a sound request ending in `TreeHolders.Blocked`, one sentence tha
 and a refused request or a consent ending in the one clause that says a run also holds what the `--apply` needs; a
 closed agent whose directory is no
 longer a git worktree, 21, as every `--apply` of it is (`Husk`, the one sentence both say); a sound dry run of a
-deletion that only a run or a sweep holding a copy of the worktree keeps, 21 (`TreeHolders.RemovalHeld`), since its
-`--apply` would go as far as the removal and leave it unfinished; one whose copies kept in the worktree the removal
-cannot take as they stand - a copy that cannot be told or removed, or copies that cannot be looked for - 21 as well,
-its request refused, since every `--apply` leaves the removal there until that is put right (`KeptCopyLine.Stops`),
-while a directory there that no sync made goes with the worktree and is only said; otherwise 0. Every line a dry run
+deletion whose copies kept in the worktree the removal cannot take as they stand - a copy that cannot be told or
+removed, or copies that cannot be looked for - 21, its request refused, since every `--apply` leaves the removal there
+until that is put right, which no waiting does (`KeptCopyLine.Stops`, the summary ending in `DryRuns.Unremovable`),
+over a copy a run or a sweep holds as well, while a directory there that no sync made goes with the worktree and is
+only said; one that only a run or a sweep holding a copy of the worktree keeps, 21 (`TreeHolders.RemovalHeld`), since
+its `--apply` would go as far as the removal and leave it unfinished; otherwise 0. Neither of those two is reached
+where a lock file cannot be read or a run holds a tree the `--apply` takes, which refuse that `--apply` at its hold, so
+a dry run never says the `--apply` would go as far as the removal where it would not. Every line a dry run
 prints stays: only its code, and with it where its summary is printed, follows the rule. What an `--apply` learns only
 by doing its work - a file changed after it was weighed, a write or a copy that fails, transcripts or evidence that
 cannot be kept - is not in a dry run, so 0 says that nothing known now stops the `--apply`, never that it will finish.
@@ -600,7 +604,7 @@ holder in the way is printed on a `held now:` line (`RunLock.Holders`, read as `
 nothing written), said with where that run's leg stands, from this machine's record of heavy legs (`HeavyLegSlots.Line`,
 joined by `TreeHolders`, the one sentence: it waits in line with how many are ahead, or it holds a slot, or a leg on
 an ssh host's own record says; a run that asked for no slot is said by the lock's own words alone, `running
-'<command>'`). A run holding a leg copy or a host's copy of the worktree is
+'<command>'`, and so is every run where that record cannot be read, which one line then says). A run holding a leg copy or a host's copy of the worktree is
 not named by a fold's, a refresh's or a rebase's dry run, and their `--apply` is not refused for it: a copy is not the
 worktree. delete-agent, which removes every copy with the worktree, names a copy a run holds - a host's through the
 lock (`IHostCopyRemover.HeldNowAsync`, the same `RemovalLock` the removal takes), a leg copy's or a mutation worker's
@@ -615,8 +619,11 @@ no dry run and so takes the trees at once, does too. `--json` on the four verbs 
 (`OrchestrationReports.Document`), the whole of standard output: the outcome as data - `exitCode`, `summary`,
 `applied`, `lines` - with `request`, which tells the three meanings of 13 apart, and `heldNow`, every holder that
 decides the code, with `holds` tree or copy - each a `held now:` line names, and each holding a copy kept in the
-worktree, its `said` the line its family says of it and, where a claim rather than the lock names its holder, what
-only the lock's entry says null - and `heldUnread`, why the lock file could not be read. A command stopped before
+worktree, its `said` the line its family says of it - its `processId`, `run` and `since` as the lock's entry records
+them or, where a claim of the copy's family rather than the lock names its holder, as that claim records them
+(`CopyHolder`), and what only a lock entry says, `command`, `variant` and `standing`, null for such a holder;
+`standing` is null too where the record of heavy legs cannot be read - and `heldUnread`, why the lock file could not be
+read. A command stopped before
 anything is weighed - a `--directory` that is not there, a repository not initialised, a usage error - answers with the
 same document, empty (`OrchestrationReports.Stopped`): `applied` false, `request`, `heldNow` and `heldUnread` null, no
 `lines`, its `exitCode` and `summary` the code it exits with and the line it ends on.

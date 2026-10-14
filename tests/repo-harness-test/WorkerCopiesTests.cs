@@ -365,7 +365,8 @@ public sealed class WorkerCopiesTests
         }
 
         Assert.True(File.Exists(taken + MutationWorkers.ClaimSuffix));
-        Assert.Contains(sweep.Value, claims.HeldBy(taken), StringComparison.Ordinal);
+        Assert.Contains(sweep.Value, claims.HeldBy(taken)!.Said, StringComparison.Ordinal);
+        Assert.Equal(sweep.Value, claims.HeldBy(taken)!.Claim!.RunId);
         Assert.False(File.Exists(abandoned + MutationWorkers.ClaimSuffix));
         Assert.False(File.Exists(unread + MutationWorkers.ClaimSuffix));
     }
