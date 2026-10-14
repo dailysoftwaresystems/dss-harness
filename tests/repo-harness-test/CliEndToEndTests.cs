@@ -53,7 +53,7 @@ public sealed partial class CliEndToEndTests
     public async Task UpdateTool_OffersItsWaitAndItsToolPath_AndSaysTheLineThatUpdatesFromBeside()
     {
         var result = await CliRunner.RunAsync(["update-tool", "--help"], TestContext.Current.CancellationToken);
-        var said = string.Join(' ', result.StandardOutput.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        var said = Prose.Words(result.StandardOutput);
 
         Assert.Equal(0, result.ExitCode);
         Assert.Contains("--wait", said, StringComparison.Ordinal);

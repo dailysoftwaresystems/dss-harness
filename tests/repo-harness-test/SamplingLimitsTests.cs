@@ -77,7 +77,7 @@ public sealed class SamplingLimitsTests
     [Fact]
     public void TheArchitecture_NamesTheFourLimits_InTheirOwnWords()
     {
-        var architecture = Words(File.ReadAllText(Path.Combine(RepositoryRoot(), "docs", "architecture.md")));
+        var architecture = Prose.Document("docs", "architecture.md");
 
         foreach (var limit in new[]
         {
@@ -92,20 +92,4 @@ public sealed class SamplingLimitsTests
 
         Assert.Contains($"`{SamplingLimits.Said(string.Empty).TrimEnd()}`", architecture, StringComparison.Ordinal);
     }
-
-    /// <summary>The repository this test was built from: the first directory above it holding the solution.</summary>
-    private static string RepositoryRoot()
-    {
-        for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
-        {
-            if (File.Exists(Path.Combine(directory.FullName, "RepoHarness.slnx")))
-            {
-                return directory.FullName;
-            }
-        }
-
-        throw new InvalidOperationException($"No directory above '{AppContext.BaseDirectory}' holds RepoHarness.slnx.");
-    }
-
-    private static string Words(string text) => string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 }
