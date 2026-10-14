@@ -428,6 +428,137 @@ public sealed class AgentFoldTests
     }
 
     /// <summary>
+    /// A file of a repository nested in the main tree, untracked, is said made since the agent's base by an uncommitted
+    /// edit, never ignored: git status folds the repository into one entry above the file and looks no further inside, so
+    /// a rule of the main tree's that matches the file says nothing of it.
+    /// </summary>
+    /// <param name="ruleMatches">Whether a rule of the main tree's .gitignore matches the file.</param>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AFileOfARepositoryNestedInTheMainTree_IsSaidMadeByAnUncommittedEdit_NeverIgnored(bool ruleMatches)
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        var at = ReportText.Commit(kit.Record("ag").Base!);
+
+        if (ruleMatches)
+        {
+            File.AppendAllText(Path.Combine(kit.Main, ".gitignore"), "*.c\n");
+            await kit.Harness.CommitAllAsync(kit.Main, "a sibling's fold ignores objects' sources", TestContext.Current.CancellationToken);
+        }
+
+        Directory.CreateDirectory(Path.Combine(kit.Main, "vendor", "lib"));
+        await kit.GitAsync(Path.Combine(kit.Main, "vendor", "lib"), "init", "--quiet");
+        OrchestrationKit.Write(kit.Main, "vendor/lib/lib.c", "the clone's\n");
+        OrchestrationKit.Write(worktree, "vendor/lib/lib.c", "the agent's\n");
+
+        var refused = await kit.FoldAsync("ag", apply: true);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(
+            refused.Details!,
+            line => line.StartsWith(
+                $"  'vendor/lib/lib.c' is not at the agent's base {at}, and the main tree made it since, by an uncommitted edit, so writing the agent's "
+                    + "copy would lose that change",
+                StringComparison.Ordinal));
+        Assert.DoesNotContain(refused.Details!, line => line.Contains("ignore", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// The files of a repository nested in a directory of the main tree's that a file of the agent's replaces - its .git
+    /// among them - are each said made since the agent's base by an uncommitted edit, the base named once, and none
+    /// ignored: git status folds the repository into one entry above them.
+    /// </summary>
+    [Fact]
+    public async Task FilesOfARepositoryNestedInADirectoryInTheWay_AreSaidMadeByAnUncommittedEdit_NoneIgnored()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        var at = ReportText.Commit(kit.Record("ag").Base!);
+        Directory.CreateDirectory(Path.Combine(kit.Main, "notes", "sub"));
+        await kit.GitAsync(Path.Combine(kit.Main, "notes", "sub"), "init", "--quiet");
+        OrchestrationKit.Write(kit.Main, "notes/sub/lib.c", "the clone's\n");
+        OrchestrationKit.Write(worktree, "notes", "the agent's\n");
+
+        var refused = await kit.FoldAsync("ag", apply: true);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        var line = Assert.Single(
+            refused.Details!,
+            line => line.StartsWith("  'notes': the main tree holds a directory there with files the fold does not remove - ", StringComparison.Ordinal));
+        Assert.DoesNotContain("ignore", line, StringComparison.Ordinal);
+        Assert.StartsWith(
+            "  'notes': the main tree holds a directory there with files the fold does not remove - notes/sub/.git/",
+            line,
+            StringComparison.Ordinal);
+        Assert.Matches(
+            $@" - notes/sub/\.git/\S+ \(made since the agent's base {at} by an uncommitted edit\), notes/sub/\.git/\S+ \(made since then by an uncommitted edit\), ",
+            line);
+        Assert.Equal(2, line.Split($"since the agent's base {at}").Length);
+    }
+
+    /// <summary>
+    /// What the main tree holds where git status lists nothing, and HEAD holds nothing, is said ignored only where git
+    /// says it ignores it: an empty directory made where a commit removed the base's file is listed by nothing, and is no
+    /// file git ignores - said made by an uncommitted edit after that commit.
+    /// </summary>
+    [Fact]
+    public async Task AnEmptyDirectoryMadeWhereACommitRemovedTheBasesFile_IsSaidMadeByAnUncommittedEdit_NotIgnored()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        var at = ReportText.Commit(kit.Record("ag").Base!);
+        OrchestrationKit.Write(worktree, "a.txt", "one\nthe agent's\n");
+        File.Delete(Path.Combine(kit.Main, "a.txt"));
+        await kit.Harness.CommitAllAsync(kit.Main, "a sibling's removal", TestContext.Current.CancellationToken);
+        Directory.CreateDirectory(Path.Combine(kit.Main, "a.txt"));
+
+        var refused = await kit.FoldAsync("ag", apply: true);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(
+            refused.Details!,
+            line => line.StartsWith(
+                $"  'a.txt' is at the agent's base {at}, and the main tree holds a directory there now, made by an uncommitted edit, after a commit "
+                    + "removed it, so writing the agent's copy would lose that change",
+                StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A directory a commit made where the base holds a file, spelled in another case, is that commit's, where the
+    /// repository ignores case: HEAD's entry is found as HEAD spells the directory.
+    /// </summary>
+    [Fact]
+    public async Task ADirectoryACommitMadeInAnotherCaseWhereTheBaseHeldAFile_IsSaidMadeByThatCommit()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var ignoresCase = (await kit.Harness.GitClient.RunAsync(kit.Main, ["config", "--type=bool", "--default=false", "core.ignorecase"], cancellationToken: TestContext.Current.CancellationToken))
+            .StandardOutput.Trim() == "true";
+        Assert.SkipUnless(ignoresCase, "Only a repository that ignores case holds a directory spelled in another case at the same path.");
+        var worktree = await kit.CreateAgentAsync("ag");
+        var at = ReportText.Commit(kit.Record("ag").Base!);
+        OrchestrationKit.Write(worktree, "a.txt", "one\nthe agent's\n");
+        File.Delete(Path.Combine(kit.Main, "a.txt"));
+        OrchestrationKit.Write(kit.Main, "A.TXT/inner.txt", "the sibling's\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "a sibling's directory", TestContext.Current.CancellationToken);
+
+        var refused = await kit.FoldAsync("ag", apply: true);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(
+            refused.Details!,
+            line => line.StartsWith(
+                $"  'a.txt' is at the agent's base {at}, and the main tree holds a directory there now, made by a commit, so writing the agent's copy "
+                    + "would lose that change",
+                StringComparison.Ordinal));
+    }
+
+    /// <summary>
     /// What the main tree holds in the way of the agent's files is said made since the agent's base by a commit or by an
     /// uncommitted edit, as any other path the main tree moved since is: a file where one of the agent's files needs a
     /// directory, and each file of a directory one of them replaces - each a file the fold does not remove.
@@ -600,8 +731,9 @@ public sealed class AgentFoldTests
                 + "agent's base, says whether a commit, an uncommitted edit or a commit and then an edit did it, since each is "
                 + "reconciled differently: a commit alone where the main tree's HEAD already holds what the main tree holds there now, "
                 + "which `git status` - untracked files listed, its paths compared as `core.ignorecase` says, so a rename of case alone "
-                + "is the commit's - answers by listing nothing at the path (one process a fold, asked only where a commit moved a path "
-                + "or neither HEAD nor the base holds one); an uncommitted edit alone where HEAD holds what the base holds, each entry "
+                + "is the commit's - answers by listing nothing at the path, below it, or in a directory above it that it folds into one "
+                + "entry, as it folds an untracked repository nested in the tree (one process a fold, asked only where a commit moved a "
+                + "path or neither HEAD nor the base holds one); an uncommitted edit alone where HEAD holds what the base holds, each entry "
                 + "compared as git compares a commit, so a commit of a mode alone is a commit; and both otherwise, "
                 + "each said with what it did - the edit after what the commit did where the edit made what the main tree holds of "
                 + "another kind than HEAD's, and the commit then the edit's change where the commit already made it of that kind.",
@@ -610,7 +742,9 @@ public sealed class AgentFoldTests
         Assert.Contains(
             "A file of the main tree in the way of the agent's - where one of its files needs a directory, or in a directory one "
                 + "replaces - is a file the fold does not remove, said made or changed since the base where the main tree did "
-                + "either, the same way, and a file git ignores where neither HEAD nor the base holds one is said ignored by git, with no word of when it came "
+                + "either, the same way, and a file git ignores where neither HEAD nor the base holds one - as `git check-ignore` says, "
+                + "asked only of what status lists nothing at where HEAD holds nothing, never read from what status leaves out - is "
+                + "said ignored by git, with no word of when it came "
                 + "(`Came`, the one wording of how a path came to be held, and `Since`, of what the main tree did, both decided once).",
             architecture,
             StringComparison.Ordinal);

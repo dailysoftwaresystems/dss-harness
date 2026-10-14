@@ -2713,7 +2713,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         /// <summary>Made of it something of another kind than its HEAD holds there: a file, a directory, or nothing.</summary>
         Replaced,
 
-        /// <summary>Made something its HEAD holds nothing of, which git ignores, so its status lists nothing there.</summary>
+        /// <summary>Made something its HEAD holds nothing of, which git says it ignores, so its status lists nothing there.</summary>
         Ignored,
     }
 
@@ -2727,9 +2727,15 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     /// <param name="HeadSpelledOtherwise">Whether its HEAD spells the path otherwise than the agent does: a rename of case alone.</param>
     /// <param name="Listed">
     /// Whether git status, untracked files listed and its paths compared as the repository's <c>core.ignorecase</c> says,
-    /// lists the path or anything below it: false where the main tree holds there what its HEAD holds, or what git ignores.
+    /// lists the path, anything below it, or a directory above it that it folds into one entry - an untracked repository
+    /// nested in the tree, which it does not look into: false where the main tree holds there what its HEAD holds, what
+    /// git ignores, or an empty directory.
     /// </param>
-    internal sealed record Came(Holds Now, GitEntry? Based, GitEntry? Head, bool HeadSpelledOtherwise, bool Listed)
+    /// <param name="GitIgnores">
+    /// Whether git says it ignores the path, as <c>git add</c> judges it: asked only where its status lists nothing at the
+    /// path, below it or above it, and HEAD holds nothing there.
+    /// </param>
+    internal sealed record Came(Holds Now, GitEntry? Based, GitEntry? Head, bool HeadSpelledOtherwise, bool Listed, bool GitIgnores)
     {
         /// <summary>
         /// Whether the main tree holds there something git ignores where neither its HEAD nor the base holds anything: git
@@ -2771,9 +2777,9 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             (true, false) => Edit.Replaced,
             (false, true) => Edit.None,
 
-            // Unlisted, yet of another kind than HEAD holds: what git ignores where HEAD holds nothing, and otherwise git's
-            // two answers read at different moments.
-            (false, false) => Head is null ? Edit.Ignored : Edit.Replaced,
+            // Unlisted, yet of another kind than HEAD holds: what git says it ignores, and otherwise an edit all the same -
+            // an empty directory, of which git lists nothing, or git's two answers read at different moments.
+            (false, false) => GitIgnores ? Edit.Ignored : Edit.Replaced,
         };
 
         /// <summary>What the commit did there, from the base's entry to its HEAD's, where an edit made of it another kind since.</summary>
@@ -2793,8 +2799,8 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
 
     /// <summary>
     /// What git answers of the main tree in one measuring of a fold, each question asked once, and only where something
-    /// asks it: whether it moved from the agent's base, what its status lists, whether it ignores case, and what its HEAD
-    /// holds.
+    /// asks it: whether it moved from the agent's base, what its status lists, whether it ignores case, what its HEAD
+    /// holds, and which paths it ignores.
     /// </summary>
     /// <param name="git">Asks git.</param>
     /// <param name="main">The main tree.</param>
@@ -2803,17 +2809,19 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     private sealed class MainTreeAnswers(IGitClient git, string main, string baseCommit, CancellationToken cancellationToken)
     {
         private IReadOnlySet<string>? _movedFromBase;
-        private IReadOnlyList<string>? _listed;
+        private IReadOnlyList<(string Path, bool Folded)>? _listed;
         private bool? _ignoresCase;
         private IReadOnlyList<string>? _headFiles;
+        private readonly Dictionary<string, bool> _ignored = new(StringComparer.Ordinal);
 
         /// <summary>Every path where the main tree holds otherwise than the base, as git status compares.</summary>
         public async Task<IReadOnlySet<string>> MovedFromBaseAsync()
             => _movedFromBase ??= await git.ListChangedSinceAsync(main, baseCommit, cancellationToken).ConfigureAwait(false);
 
         /// <summary>
-        /// Whether git status, untracked files listed one by one and ignored ones not, lists <paramref name="path"/> or
-        /// anything below it: the main tree holds there otherwise than its HEAD, or something untracked.
+        /// Whether git status, untracked files listed one by one and ignored ones not, lists <paramref name="path"/>,
+        /// anything below it, or a directory above it that it folds into one entry - an untracked repository nested in the
+        /// tree, which git does not look into: the main tree holds there otherwise than its HEAD, or something untracked.
         /// </summary>
         /// <param name="path">The path, as the agent spells it.</param>
         public async Task<bool> ListsAsync(string path)
@@ -2821,11 +2829,35 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             _listed ??= [.. (await git.ReadStatusAsync(main, cancellationToken).ConfigureAwait(false))
                 .SelectMany(entry => entry.Paths)
                 .Where(name => name.IsUtf8)
-                .Select(name => name.Text.TrimEnd('/'))];
+                .Select(name => (name.Text.TrimEnd('/'), name.Text.EndsWith('/')))];
 
             var comparison = await IgnoresCaseAsync().ConfigureAwait(false) ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
-            return _listed.Any(listed => string.Equals(listed, path, comparison) || Below(listed, path, comparison));
+            return _listed.Any(listed => string.Equals(listed.Path, path, comparison)
+                || Below(listed.Path, path, comparison)
+                || (listed.Folded && Below(path, listed.Path, comparison)));
+        }
+
+        /// <summary>
+        /// Which of <paramref name="paths"/> git says it ignores, as <c>git add</c> judges them: one process for the paths
+        /// not asked of before, none where there are none.
+        /// </summary>
+        /// <param name="paths">The paths, as the agent spells them.</param>
+        public async Task<IReadOnlySet<string>> IgnoredAsync(IReadOnlyList<string> paths)
+        {
+            var unasked = paths.Where(path => !_ignored.ContainsKey(path)).Distinct(StringComparer.Ordinal).ToList();
+
+            if (unasked.Count > 0)
+            {
+                var ignored = await git.FindIgnoredAsync(main, unasked, cancellationToken).ConfigureAwait(false);
+
+                foreach (var path in unasked)
+                {
+                    _ignored[path] = ignored.Contains(path);
+                }
+            }
+
+            return paths.Where(path => _ignored[path]).ToHashSet(StringComparer.Ordinal);
         }
 
         /// <summary>
@@ -2888,8 +2920,9 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
 
     /// <summary>
     /// How the main tree came to hold what it holds at each of <paramref name="paths"/> since the agent's base: the base
-    /// asked for its entries there, and the main tree, through <paramref name="answers"/>, for its HEAD's and - where a commit
-    /// moved a path, or neither HEAD nor the base holds one - what its status lists. Nothing is written.
+    /// asked for its entries there, and the main tree, through <paramref name="answers"/>, for its HEAD's, what its status
+    /// lists where a commit moved a path or neither HEAD nor the base holds one, and which paths git ignores where its
+    /// status lists nothing and HEAD holds nothing. Nothing is written.
     /// </summary>
     /// <param name="answers">What git answers of the main tree in this measuring.</param>
     /// <param name="worktree">The agent's worktree, where its base is read.</param>
@@ -2907,7 +2940,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         IReadOnlyList<string> names = [.. asked.Select(path => path.Path)];
         var based = await _gitClient.ListEntriesAtAsync(worktree, baseCommit, names, cancellationToken).ConfigureAwait(false);
         var head = await answers.HeadAsync(names).ConfigureAwait(false);
-        var came = new Dictionary<string, Came>(StringComparer.Ordinal);
+        var read = new List<(string Path, Holds Now, GitEntry? AtBase, GitEntry? AtHead, bool SpelledOtherwise, bool Listed)>();
 
         foreach (var (path, now) in asked)
         {
@@ -2921,10 +2954,17 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             var asks = atHead != atBase || spelledOtherwise || (atHead is null && atBase is null);
             var listed = asks && await answers.ListsAsync(path).ConfigureAwait(false);
 
-            came[path] = new Came(now, atBase, atHead, spelledOtherwise, listed);
+            read.Add((path, now, atBase, atHead, spelledOtherwise, listed));
         }
 
-        return came;
+        // Only git says what it ignores: asked once, of what its status lists nothing at and HEAD holds nothing at.
+        var ignored = await answers.IgnoredAsync([.. read.Where(path => !path.Listed && path.AtHead is null && path.Now != Holds.Nothing).Select(path => path.Path)])
+            .ConfigureAwait(false);
+
+        return read.ToDictionary(
+            path => path.Path,
+            path => new Came(path.Now, path.AtBase, path.AtHead, path.SpelledOtherwise, path.Listed, ignored.Contains(path.Path)),
+            StringComparer.Ordinal);
     }
 
     /// <summary>

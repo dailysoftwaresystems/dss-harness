@@ -6,8 +6,9 @@ namespace RepoHarness.Tests;
 /// <summary>
 /// The words a fold's refusal says of how the main tree came to hold a path since the agent's base, for every way it can:
 /// what the base holds there - nothing, a file or a directory - by what its HEAD holds - what the base holds, nothing, a
-/// file or a directory - by what the main tree holds against its HEAD - the same, otherwise, something git ignores, or the
-/// same under a spelling that differs in case alone, as a commit's rename of case alone leaves it - each said whole, as a
+/// file or a directory - by what the main tree holds against its HEAD - the same, otherwise, something git ignores,
+/// something git lists nothing of and does not ignore, as an empty directory, or the same under a spelling that differs in
+/// case alone, as a commit's rename of case alone leaves it - each said whole, as a
 /// path the main tree made, changed, made a directory of or removed is refused, and short, as a file in the way of the
 /// agent's is listed. A way the main tree cannot hold a path - holding what its HEAD holds of another kind, say - is none.
 /// </summary>
@@ -27,6 +28,7 @@ public sealed class AgentFoldWordsTests
     [Theory]
     [InlineData("made", "nothing", "same as base", "differs", "'p' is not at the agent's base X, and the main tree made it since, by an uncommitted edit, so writing the agent's copy would lose that change")]
     [InlineData("made", "nothing", "same as base", "ignored", "'p' is not at the agent's base X, and the main tree holds a file there that git ignores, so writing the agent's copy would lose that file")]
+    [InlineData("made", "nothing", "same as base", "unlisted, not ignored", "'p' is not at the agent's base X, and the main tree made it since, by an uncommitted edit, so writing the agent's copy would lose that change")]
     [InlineData("made", "nothing", "file", "matches HEAD", "'p' is not at the agent's base X, and the main tree made it since, by a commit, so writing the agent's copy would lose that change")]
     [InlineData("made", "nothing", "file", "differs", "'p' is not at the agent's base X, and the main tree made it since, by a commit, then changed by an uncommitted edit, so writing the agent's copy would lose that change")]
     [InlineData("made", "nothing", "directory", "differs", "'p' is not at the agent's base X, and the main tree made it since, by an uncommitted edit, after a commit made a directory there, so writing the agent's copy would lose that change")]
@@ -49,6 +51,7 @@ public sealed class AgentFoldWordsTests
     [InlineData("directory", "file", "same as base", "case-only rename, differs", "'p' is at the agent's base X, and the main tree holds a directory there now, made by an uncommitted edit, after a commit renamed it, so writing the agent's copy would lose that change")]
     [InlineData("directory", "file", "nothing", "differs", "'p' is at the agent's base X, and the main tree holds a directory there now, made by an uncommitted edit, after a commit removed it, so writing the agent's copy would lose that change")]
     [InlineData("directory", "file", "nothing", "ignored", "'p' is at the agent's base X, and the main tree holds a directory there now, made by an uncommitted edit git ignores, after a commit removed it, so writing the agent's copy would lose that change")]
+    [InlineData("directory", "file", "nothing", "unlisted, not ignored", "'p' is at the agent's base X, and the main tree holds a directory there now, made by an uncommitted edit, after a commit removed it, so writing the agent's copy would lose that change")]
     [InlineData("directory", "file", "file", "differs", "'p' is at the agent's base X, and the main tree holds a directory there now, made by an uncommitted edit, after a commit changed it, so writing the agent's copy would lose that change")]
     [InlineData("directory", "file", "directory", "matches HEAD", "'p' is at the agent's base X, and the main tree holds a directory there now, made by a commit, so writing the agent's copy would lose that change")]
     [InlineData("directory", "file", "directory", "differs", "'p' is at the agent's base X, and the main tree holds a directory there now, made by a commit, then changed by an uncommitted edit, so writing the agent's copy would lose that change")]
@@ -60,6 +63,7 @@ public sealed class AgentFoldWordsTests
     [InlineData("removed", "file", "directory", "differs", "'p' is at the agent's base X, and missing from the main tree, removed by an uncommitted edit, after a commit made a directory of it, so writing the agent's copy would lose that change")]
     [InlineData("way-made", "nothing", "same as base", "differs", "made since the agent's base X by an uncommitted edit")]
     [InlineData("way-made", "nothing", "same as base", "ignored", "ignored by git")]
+    [InlineData("way-made", "nothing", "same as base", "unlisted, not ignored", "made since the agent's base X by an uncommitted edit")]
     [InlineData("way-made", "nothing", "file", "matches HEAD", "made since the agent's base X by a commit")]
     [InlineData("way-made", "nothing", "file", "differs", "made since the agent's base X by a commit, then changed by an uncommitted edit")]
     [InlineData("way-made", "nothing", "directory", "differs", "made since the agent's base X by an uncommitted edit, after a commit made a directory there")]
@@ -105,7 +109,8 @@ public sealed class AgentFoldWordsTests
             based,
             head,
             HeadSpelledOtherwise: main.StartsWith("case-only rename", StringComparison.Ordinal),
-            Listed: main.EndsWith("differs", StringComparison.Ordinal));
+            Listed: main.EndsWith("differs", StringComparison.Ordinal),
+            GitIgnores: main == "ignored");
 
         Assert.Equal(
             said,
@@ -134,14 +139,17 @@ public sealed class AgentFoldWordsTests
 
     /// <summary>
     /// Nothing says how a file git ignores came to be where neither HEAD nor the base holds one, so asking is refused rather
-    /// than answered with a claim of when it came.
+    /// than answered with a claim of when it came; one git lists nothing of is ignored only where git says it ignores it.
     /// </summary>
     [Fact]
     public void HowAFileGitIgnoresCame_WhereNothingRecordedIt_IsNotSaid()
     {
-        var came = new AgentFold.Came(AgentFold.Holds.File, Based: null, Head: null, HeadSpelledOtherwise: false, Listed: false);
+        var came = new AgentFold.Came(AgentFold.Holds.File, Based: null, Head: null, HeadSpelledOtherwise: false, Listed: false, GitIgnores: true);
+        var unlisted = came with { GitIgnores = false };
 
         Assert.True(came.Ignored);
         Assert.Throws<InvalidOperationException>(() => came.How);
+        Assert.False(unlisted.Ignored);
+        Assert.Equal("by an uncommitted edit", unlisted.How);
     }
 }

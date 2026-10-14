@@ -843,14 +843,17 @@ to fold. A refusal of a main-tree path the agent shares nothing for, made, chang
 the agent's base, says whether a commit, an uncommitted edit or a commit and then an edit did it, since each is
 reconciled differently: a commit alone where the main tree's HEAD already holds what the main tree holds there now,
 which `git status` - untracked files listed, its paths compared as `core.ignorecase` says, so a rename of case alone is
-the commit's - answers by listing nothing at the path (one process a fold, asked only where a commit moved a path or
-neither HEAD nor the base holds one); an uncommitted edit alone where HEAD holds what the base holds, each entry
+the commit's - answers by listing nothing at the path, below it, or in a directory above it that it folds into one
+entry, as it folds an untracked repository nested in the tree (one process a fold, asked only where a commit moved a
+path or neither HEAD nor the base holds one); an uncommitted edit alone where HEAD holds what the base holds, each entry
 compared as git compares a commit, so a commit of a mode alone is a commit; and both otherwise, each said with what it
 did - the edit after what the commit did where the edit made what the main tree holds of another kind than HEAD's, and
 the commit then the edit's change where the commit already made it of that kind. A file of the main tree in the way of
 the agent's - where one of its files needs a directory, or in a directory one replaces - is a file the fold does not
 remove, said made or changed since the base where the main tree did either, the same way, and a file git ignores
-where neither HEAD nor the base holds one is said ignored by git, with no word of when it came (`Came`, the one
+where neither HEAD nor the base holds one - as `git check-ignore` says, asked only of what status lists nothing at
+where HEAD holds nothing, never read from what status leaves out - is said ignored by git, with no word of when it
+came (`Came`, the one
 wording of how a path came to be held, and `Since`, of what the main tree did, both decided once). A shared path's
 refusal says the main tree changed it after the agent was last handed it or folded, which the seed records alike. A deletion needs the same baseline proof a copy does. A directory with no `.git` of its own
 holds no file at its path, so a file the agent turned into a directory folds as the file's deletion and the directory's
