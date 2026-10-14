@@ -664,10 +664,11 @@ to ignore rules a repository can edit away - each changed file copied into its w
 where the platform has one, its execute bit, and each deletion made there too and recorded as absent. `seed.json` is
 then what the agent shares with the main tree, path by path. An untracked directory git will not look into - a
 repository of its own - is named and not handed, since a fold never moves one, and a path in a submodule the agent's
-worktree records - at or below a gitlink its index holds, where the main tree turned one into files of its own -
-refuses seed-agent and refresh-agent before anything is written (`AgentFold.InSubmodulesAsync`): a hand-over never
-writes into another repository, and rebase-agent, whose move takes the index along, brings in what the main tree
-committed there. A symbolic link is refused rather than
+worktree records - at or below a gitlink its index holds, or for a worktree not made yet the main tree's HEAD, where
+the main tree turned one into files of its own - refuses create-agent before the worktree is made, and seed-agent and
+refresh-agent before anything is written (`AgentFold.InSubmodulesAsync`): a hand-over never writes into another
+repository, and rebase-agent, whose move takes the index along, brings in what the main tree committed there. A
+symbolic link is refused rather than
 handed over as the file it leads to, before the worktree is made, so the refusal leaves nothing behind. seed-agent
 counts as the agent's own only a change of what it shares that it made itself. What the main tree holds later is
 weighed against what the agent shares (`AgentFold.MovedAsync`), never against git status alone, which forgets a path

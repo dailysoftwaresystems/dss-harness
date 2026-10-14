@@ -989,6 +989,33 @@ public sealed class AgentServiceTests
         Assert.False(File.Exists(Path.Combine(worktree, "vendor", "lib", "x.c")));
     }
 
+    /// <summary>
+    /// Creating an agent never hands a path into a submodule its worktree would record: where the main tree's HEAD records a
+    /// submodule that the main tree turned into files of its own, uncommitted, the creation is refused before its worktree
+    /// is made, exit 13, naming each path - no worktree, no branch and no record of the agent are left behind.
+    /// </summary>
+    [Fact]
+    public async Task Creating_NeverHandsAPathIntoASubmoduleItsWorktreeWouldRecord_AndMakesNothing()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var nested = Path.Combine(kit.Main, "vendor", "lib");
+        await AgentFoldTests.MakeSubmoduleAsync(kit, nested, file: null, committed: true);
+        await TurnTheSubmoduleIntoFilesAsync(kit, nested, committed: false);
+        var branches = (await kit.Harness.GitClient.RunAsync(kit.Main, ["for-each-ref", "--format=%(refname)", "refs/heads"], cancellationToken: Token)).StandardOutput;
+
+        var refused = await kit.Harness.AgentService.CreateAsync(kit.Main, "o1", "ag", "model-b", empty: false, session: null, Token);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.StartsWith("Creating agent 'ag' of 'o1' would write into or remove from ", refused.Message, StringComparison.Ordinal);
+        Assert.Contains("'vendor/lib/x.c' in 'vendor/lib'", refused.Message, StringComparison.Ordinal);
+        Assert.EndsWith("Nothing was created.", refused.Message, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(kit.Worktree("ag")));
+        Assert.False(Directory.Exists(kit.Layout.AgentDirectory("ag")));
+        Assert.Null(kit.Harness.OrchestrationStore.ReadAgent(kit.Layout, "ag"));
+        Assert.Equal(branches, (await kit.Harness.GitClient.RunAsync(kit.Main, ["for-each-ref", "--format=%(refname)", "refs/heads"], cancellationToken: Token)).StandardOutput);
+    }
+
     /// <summary>The main tree's submodule at <paramref name="nested"/> made files of the main tree's own, x.c among them: committed where asked.</summary>
     private static async Task TurnTheSubmoduleIntoFilesAsync(OrchestrationKit kit, string nested, bool committed)
     {

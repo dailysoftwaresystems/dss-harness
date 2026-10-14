@@ -257,15 +257,30 @@ public sealed class AgentService(
                 return _log.Record(layout, orchestrator, CreateCommand, GiveBack(layout, agent, held));
             }
 
+            IReadOnlyList<SubmodulePath> inSubmodules;
+
             try
             {
-                // What it is to be handed is checked before its worktree is made: a hand-over refused leaves nothing behind.
+                // What it is to be handed is checked before its worktree is made: a hand-over refused leaves nothing behind -
+                // one into a submodule the worktree made from the main tree's HEAD would record among it.
                 handable = empty ? Handable.None : await _fold.HandableAsync(main, Floor(context), within: null, cancellationToken).ConfigureAwait(false);
+                inSubmodules = await _fold.InSubmodulesAsync(main, [.. handable.Deletions, .. handable.Files], "HEAD", cancellationToken).ConfigureAwait(false);
             }
             catch
             {
                 await hold.Handles.DisposeAsync().ConfigureAwait(false);
                 throw;
+            }
+
+            if (inSubmodules.Count > 0)
+            {
+                await hold.Handles.DisposeAsync().ConfigureAwait(false);
+
+                return _log.Record(
+                    layout,
+                    orchestrator,
+                    CreateCommand,
+                    GiveBack(layout, agent, InSubmodules("Creating", agent, orchestrator, inSubmodules, "commit them in the main tree first, or create it with --empty", "Nothing was created.")));
             }
         }
         catch
@@ -490,9 +505,9 @@ public sealed class AgentService(
                 return InTheWay("Seeding", record, inTheWay);
             }
 
-            if (await _fold.InSubmodulesAsync(path, [.. handable.Deletions, .. handable.Files], cancellationToken).ConfigureAwait(false) is { Count: > 0 } inSubmodules)
+            if (await _fold.InSubmodulesAsync(path, [.. handable.Deletions, .. handable.Files], commit: null, cancellationToken).ConfigureAwait(false) is { Count: > 0 } inSubmodules)
             {
-                return InSubmodules("Seeding", record, inSubmodules);
+                return InSubmodules("Seeding", record.Name, record.Orchestrator, inSubmodules, ByRebasing, NothingWritten);
             }
 
             // Forced or not, what it is written over is what was weighed here: a file its session writes meanwhile stops it.
@@ -779,7 +794,7 @@ public sealed class AgentService(
 
         if (plan.InSubmodules.Count > 0)
         {
-            return RefusedInDry(InSubmodules("Refreshing", record, plan.InSubmodules));
+            return RefusedInDry(InSubmodules("Refreshing", record.Name, record.Orchestrator, plan.InSubmodules, ByRebasing, NothingWritten));
         }
 
         var all = moved.Files.Concat(moved.Deletions).Order(StringComparer.Ordinal).ToList();
@@ -2850,16 +2865,27 @@ public sealed class AgentService(
             $"{doing} {Lower(Agent(record))} would write over or through {ReportText.Counted(own.Count, "path")} of its own - {ReportText.Listed(own)} - where the main tree "
             + "holds a directory, or a file in place of the directory they are in: move them aside, and run again. Nothing was written.");
 
+    /// <summary>What brings in what a live agent is refused for in a submodule of its worktree, where the main tree committed it.</summary>
+    private const string ByRebasing = "where the main tree committed them, rebase-agent brings them in as git holds them";
+
+    /// <summary>What a hand-over refused before anything was written leaves.</summary>
+    private const string NothingWritten = "Nothing was written.";
+
     /// <summary>
     /// A hand-over refused for what it would write into or remove from a submodule of the agent's worktree,
     /// <paramref name="paths"/>: another repository, which no hand-over writes into.
     /// </summary>
-    private static CommandOutcome InSubmodules(string doing, AgentRecord record, IReadOnlyList<SubmodulePath> paths)
+    /// <param name="doing">What would hand them over, to open the sentence.</param>
+    /// <param name="agent">The agent's name.</param>
+    /// <param name="orchestrator">Its orchestrator's name.</param>
+    /// <param name="paths">Each path, with the submodule it is or lies in.</param>
+    /// <param name="remedy">What brings them in instead.</param>
+    /// <param name="nothing">What was left as it was, as a sentence.</param>
+    private static CommandOutcome InSubmodules(string doing, string agent, string orchestrator, IReadOnlyList<SubmodulePath> paths, string remedy, string nothing)
         => CommandOutcome.Refused(
-            $"{doing} {Lower(Agent(record))} would write into or remove from {ReportText.Counted(paths.Count, "path")} of a submodule of its worktree - "
+            $"{doing} agent '{agent}' of '{orchestrator}' would write into or remove from {ReportText.Counted(paths.Count, "path")} of a submodule of its worktree - "
             + $"{ReportText.Listed([.. paths.Select(path => path.Path == path.Submodule ? $"'{path.Path}'" : $"'{path.Path}' in '{path.Submodule}'")])} - a "
-            + "repository of its own, which a hand-over never writes into or removes from: where the main tree committed them, rebase-agent brings them in "
-            + "as git holds them. Nothing was written.");
+            + $"repository of its own, which a hand-over never writes into or removes from: {remedy}. {nothing}");
 
     /// <summary>Where the agent's records are, as every exit after one is written names them: each that is there.</summary>
     private string[] Records(OrchestratorLayout layout, AgentRecord record)

@@ -848,8 +848,8 @@ public sealed class AgentFoldTests
             StringComparison.Ordinal);
         Assert.Contains(
             "A path in a submodule the agent's worktree records - where the main tree turned one into files of its own - refuses "
-                + "seed-agent and refresh-agent, writing nothing: a hand-over never writes into another repository, and rebase-agent brings "
-                + "in what the main tree committed there.",
+                + "create-agent before its worktree is made, and seed-agent and refresh-agent, writing nothing: a hand-over never writes "
+                + "into another repository, and rebase-agent brings in what the main tree committed there.",
             help,
             StringComparison.Ordinal);
 
@@ -861,10 +861,11 @@ public sealed class AgentFoldTests
             architecture,
             StringComparison.Ordinal);
         Assert.Contains(
-            "a path in a submodule the agent's worktree records - at or below a gitlink its index holds, where the main tree turned one "
-                + "into files of its own - refuses seed-agent and refresh-agent before anything is written (`AgentFold.InSubmodulesAsync`): a "
-                + "hand-over never writes into another repository, and rebase-agent, whose move takes the index along, brings in what the "
-                + "main tree committed there.",
+            "a path in a submodule the agent's worktree records - at or below a gitlink its index holds, or for a worktree not made yet "
+                + "the main tree's HEAD, where the main tree turned one into files of its own - refuses create-agent before the worktree is "
+                + "made, and seed-agent and refresh-agent before anything is written (`AgentFold.InSubmodulesAsync`): a hand-over never "
+                + "writes into another repository, and rebase-agent, whose move takes the index along, brings in what the main tree "
+                + "committed there.",
             architecture,
             StringComparison.Ordinal);
 
