@@ -357,9 +357,10 @@ the rule re-including the nearest of them, at the line the tree's file has it on
 is in one of them; were none named even there, init says git does not ignore the path and names no
 rule, never where one might be. A path git will not answer about - one beyond a symbolic link, which
 git never looks past, ends a whole `check-ignore` with exit 128 - is asked again on its own, named
-with git's reason, and every other path is still answered. A scratch repository that cannot be
-written is a note that git could not be asked; one that cannot be removed afterwards is a warning,
-and the answer stands.
+with git's reason, and every other path is still answered; asked alone, it is named so where git
+answers about the tree's root, and only where it cannot is the question refused. A scratch
+repository that cannot be written is a note that git could not be asked; one that cannot be removed
+afterwards is a warning, and the answer stands.
 
 `init` writes the tree it runs in, a worktree's own included: its configuration, its `.gitignore`
 and the placeholders that keep each directory in git. A worktree adopting the harness adopts it on
@@ -852,9 +853,12 @@ the commit then the edit's change where the commit already made it of that kind.
 the agent's - where one of its files needs a directory, or in a directory one replaces - is a file the fold does not
 remove, said made or changed since the base where the main tree did either, the same way, and a file git ignores
 where neither HEAD nor the base holds one - as `git check-ignore` says, asked only of what status lists nothing at
-where HEAD holds nothing, never read from what status leaves out - is said ignored by git, with no word of when it
-came (`Came`, the one
-wording of how a path came to be held, and `Since`, of what the main tree did, both decided once). A shared path's
+where HEAD holds nothing and no submodule holds the path, never read from what status leaves out - is said ignored by
+git, with no word of when it came. A path in a submodule of the main tree's - below a gitlink its index holds, where
+git looks at nothing and `check-ignore` answers nothing - came as that record did: by a commit where HEAD holds it,
+then changed by an uncommitted edit where status lists the record, and by an uncommitted edit where only the index
+holds it (`Came`, the one wording of how a path came to be held, and `Since`, of what the main tree did, both decided
+once). A shared path's
 refusal says the main tree changed it after the agent was last handed it or folded, which the seed records alike. A deletion needs the same baseline proof a copy does. A directory with no `.git` of its own
 holds no file at its path, so a file the agent turned into a directory folds as the file's deletion and the directory's
 files, and a directory it turned into a file as the files' deletions and the file: every removal is made first, with

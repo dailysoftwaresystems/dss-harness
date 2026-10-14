@@ -501,6 +501,77 @@ public sealed class AgentFoldTests
     }
 
     /// <summary>
+    /// A file of a repository the main tree records as a submodule is said made since the agent's base as that record
+    /// came: by a commit where HEAD holds it, by an uncommitted edit where only the index does - and the fold is refused,
+    /// never failed: git answers nothing of what it ignores below a submodule, so nothing below one is asked.
+    /// </summary>
+    /// <param name="committed">Whether the main tree committed the submodule, rather than only staged it.</param>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AFileOfASubmoduleOfTheMainTree_IsSaidMadeAsItsRecordCame_AndTheFoldIsRefused(bool committed)
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        var at = ReportText.Commit(kit.Record("ag").Base!);
+        var nested = Path.Combine(kit.Main, "vendor", "lib");
+        Directory.CreateDirectory(nested);
+        await kit.Harness.InitializeGitRepositoryAsync(nested, TestContext.Current.CancellationToken);
+        OrchestrationKit.Write(kit.Main, "vendor/lib/lib.c", "the clone's\n");
+        await kit.Harness.CommitAllAsync(nested, "the clone's", TestContext.Current.CancellationToken);
+        await kit.GitAsync(kit.Main, "add", "vendor/lib");
+
+        if (committed)
+        {
+            await kit.Harness.CommitAllAsync(kit.Main, "a sibling's submodule", TestContext.Current.CancellationToken);
+        }
+
+        OrchestrationKit.Write(worktree, "vendor/lib/lib.c", "the agent's\n");
+
+        var refused = await kit.FoldAsync("ag", apply: true);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(
+            refused.Details!,
+            line => line.StartsWith(
+                $"  'vendor/lib/lib.c' is not at the agent's base {at}, and the main tree made it since, {(committed ? "by a commit" : "by an uncommitted edit")}, "
+                    + "so writing the agent's copy would lose that change",
+                StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// The files of a repository the main tree staged as a submodule, in a directory a file of the agent's replaces, are
+    /// each said made since the agent's base by an uncommitted edit, as the staging was, the base named once - and the
+    /// fold is refused, never failed.
+    /// </summary>
+    [Fact]
+    public async Task FilesOfASubmoduleInADirectoryInTheWay_AreSaidMadeByAnUncommittedEdit_AndTheFoldIsRefused()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        var at = ReportText.Commit(kit.Record("ag").Base!);
+        var nested = Path.Combine(kit.Main, "notes", "sub");
+        Directory.CreateDirectory(nested);
+        await kit.Harness.InitializeGitRepositoryAsync(nested, TestContext.Current.CancellationToken);
+        await kit.GitAsync(kit.Main, "add", "notes/sub");
+        OrchestrationKit.Write(worktree, "notes", "the agent's\n");
+
+        var refused = await kit.FoldAsync("ag", apply: true);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        var line = Assert.Single(
+            refused.Details!,
+            line => line.StartsWith("  'notes': the main tree holds a directory there with files the fold does not remove - ", StringComparison.Ordinal));
+        Assert.DoesNotContain("ignore", line, StringComparison.Ordinal);
+        Assert.Matches(
+            $@" - notes/sub/\S+ \(made since the agent's base {at} by an uncommitted edit\), notes/sub/\S+ \(made since then by an uncommitted edit\), ",
+            line);
+        Assert.Equal(2, line.Split($"since the agent's base {at}").Length);
+    }
+
+    /// <summary>
     /// What the main tree holds where git status lists nothing, and HEAD holds nothing, is said ignored only where git
     /// says it ignores it: an empty directory made where a commit removed the base's file is listed by nothing, and is no
     /// file git ignores - said made by an uncommitted edit after that commit.
@@ -743,8 +814,11 @@ public sealed class AgentFoldTests
             "A file of the main tree in the way of the agent's - where one of its files needs a directory, or in a directory one "
                 + "replaces - is a file the fold does not remove, said made or changed since the base where the main tree did "
                 + "either, the same way, and a file git ignores where neither HEAD nor the base holds one - as `git check-ignore` says, "
-                + "asked only of what status lists nothing at where HEAD holds nothing, never read from what status leaves out - is "
-                + "said ignored by git, with no word of when it came "
+                + "asked only of what status lists nothing at where HEAD holds nothing and no submodule holds the path, never read from "
+                + "what status leaves out - is said ignored by git, with no word of when it came. A path in a submodule of the main "
+                + "tree's - below a gitlink its index holds, where git looks at nothing and `check-ignore` answers nothing - came as "
+                + "that record did: by a commit where HEAD holds it, then changed by an uncommitted edit where status lists the "
+                + "record, and by an uncommitted edit where only the index holds it "
                 + "(`Came`, the one wording of how a path came to be held, and `Since`, of what the main tree did, both decided once).",
             architecture,
             StringComparison.Ordinal);

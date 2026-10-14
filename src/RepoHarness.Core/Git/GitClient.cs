@@ -984,38 +984,13 @@ public sealed partial class GitClient(
             return [];
         }
 
-        var result = await CheckIgnoreAsync(directory, paths, cancellationToken).ConfigureAwait(false);
-
-        if (Answered(result))
-        {
-            return ReadDecisions(result.StandardOutput, paths);
-        }
-
-        // One path git will not answer about - one beyond a symbolic link, which git never looks past -
-        // ends the whole question. Asked one at a time, every other path is still answered, and that one
-        // says why it was not; where none is, git cannot answer at all.
-        if (paths.Count > 1 && !result.TimedOut)
-        {
-            var decisions = new List<IgnoreDecision>(paths.Count);
-
-            foreach (var path in paths)
-            {
-                var alone = await CheckIgnoreAsync(directory, [path], cancellationToken).ConfigureAwait(false);
-
-                decisions.Add(Answered(alone)
-                    ? ReadDecisions(alone.StandardOutput, [path])[0]
-                    : new IgnoreDecision(path, null, 0, null) { Unanswered = alone.FailureMessage });
-            }
-
-            if (decisions.Any(decision => decision.Unanswered is null))
-            {
-                return decisions;
-            }
-        }
-
-        throw new HarnessException(
-            HarnessExit.CommandFailed,
-            $"Could not ask git which rules decide {ReportText.Counted(paths.Count, "path")} in '{directory}': {result.FailureMessage}");
+        return await DecideEachAsync(
+                directory,
+                paths,
+                consultIndex: false,
+                $"which rules decide {ReportText.Counted(paths.Count, "path")} in '{directory}'",
+                cancellationToken)
+            .ConfigureAwait(false);
     }
 
     public async Task<IReadOnlySet<string>> FindIgnoredAsync(
@@ -1030,19 +1005,68 @@ public sealed partial class GitClient(
             return new HashSet<string>(StringComparer.Ordinal);
         }
 
-        var result = await CheckIgnoreAsync(directory, paths, cancellationToken, consultIndex: true).ConfigureAwait(false);
-
-        if (!Answered(result))
-        {
-            throw new HarnessException(
-                HarnessExit.CommandFailed,
-                $"Could not ask git which of {ReportText.Counted(paths.Count, "path")} it ignores in '{directory}': {result.FailureMessage}");
-        }
-
-        return ReadDecisions(result.StandardOutput, paths)
+        // A path git will not answer about is one git add refuses as well, and no rule ignores it.
+        return (await DecideEachAsync(
+                    directory,
+                    paths,
+                    consultIndex: true,
+                    $"which of {ReportText.Counted(paths.Count, "path")} it ignores in '{directory}'",
+                    cancellationToken)
+                .ConfigureAwait(false))
             .Where(decision => decision.Source is not null)
             .Select(decision => decision.Path)
             .ToHashSet(StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// Asks git which rule decides each of <paramref name="paths"/>, every path answered that git answers about. One path
+    /// git will not answer about - one beyond a symbolic link, which git never looks past, or one below a submodule where
+    /// the index is consulted - ends the whole question; asked again one at a time, every other path is still answered,
+    /// and that one says why it was not.
+    /// Where git answers about none of them, it is asked about the work tree's root, which it always answers about where it
+    /// can answer at all: only where it cannot is the question refused.
+    /// </summary>
+    /// <param name="directory">The work tree's root.</param>
+    /// <param name="paths">Paths relative to that root, with forward separators; at least one.</param>
+    /// <param name="consultIndex">Whether a tracked file matches nothing, as <c>git add</c> judges it, rather than the rules alone.</param>
+    /// <param name="asked">What was asked, as a refusal names it.</param>
+    /// <param name="cancellationToken">Stops the question.</param>
+    /// <exception cref="HarnessException">git could not answer in <paramref name="directory"/> at all, or answered in another form.</exception>
+    private async Task<IReadOnlyList<IgnoreDecision>> DecideEachAsync(
+        string directory,
+        IReadOnlyList<string> paths,
+        bool consultIndex,
+        string asked,
+        CancellationToken cancellationToken)
+    {
+        var result = await CheckIgnoreAsync(directory, paths, cancellationToken, consultIndex).ConfigureAwait(false);
+
+        if (Answered(result))
+        {
+            return ReadDecisions(result.StandardOutput, paths);
+        }
+
+        if (!result.TimedOut)
+        {
+            var decisions = new List<IgnoreDecision>(paths.Count);
+
+            foreach (var path in paths)
+            {
+                var alone = paths.Count == 1 ? result : await CheckIgnoreAsync(directory, [path], cancellationToken, consultIndex).ConfigureAwait(false);
+
+                decisions.Add(Answered(alone)
+                    ? ReadDecisions(alone.StandardOutput, [path])[0]
+                    : new IgnoreDecision(path, null, 0, null) { Unanswered = alone.FailureMessage });
+            }
+
+            if (decisions.Any(decision => decision.Unanswered is null)
+                || Answered(await CheckIgnoreAsync(directory, ["."], cancellationToken, consultIndex).ConfigureAwait(false)))
+            {
+                return decisions;
+            }
+        }
+
+        throw new HarnessException(HarnessExit.CommandFailed, $"Could not ask git {asked}: {result.FailureMessage}");
     }
 
     /// <summary>Asks git which rule decides each of <paramref name="paths"/>, as <c>check-ignore</c> answers.</summary>

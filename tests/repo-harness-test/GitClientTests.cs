@@ -1378,6 +1378,27 @@ public sealed class GitClientTests
         Assert.Equal(new IgnoreDecision("src/main.c", null, 0, null), decisions[2]);
     }
 
+    /// <summary>
+    /// A path beyond a symbolic link, asked about alone, says why git did not answer, where git answers about the work
+    /// tree's root: git can answer there, and refused that path only.
+    /// </summary>
+    [Fact]
+    public async Task ExplainIgnoredAsync_SaysWhyALonePathBeyondALinkIsUnanswered_WhereGitAnswersAboutTheTree()
+    {
+        using var temp = new TempDirectory();
+        using var elsewhere = new TempDirectory();
+        var harness = new HarnessFactory();
+        var token = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, token);
+
+        TestLinks.OrSkip(() => Directory.CreateSymbolicLink(temp.Combine("linked"), elsewhere.Path));
+
+        var decision = Assert.Single(await harness.GitClient.ExplainIgnoredAsync(temp.Path, ["linked/a.log"], token));
+
+        Assert.Null(decision.Source);
+        Assert.Contains("symbolic link", decision.Unanswered, StringComparison.Ordinal);
+    }
+
     /// <summary>Where git answers about none of the paths, one at a time either, the question is refused as before.</summary>
     [Fact]
     public async Task ExplainIgnoredAsync_Throws_WhenGitAnswersAboutNoneOfThePaths()
@@ -1389,6 +1410,34 @@ public sealed class GitClientTests
 
         Assert.Equal(HarnessExit.CommandFailed, refusal.ExitCode);
         Assert.StartsWith("Could not ask git which rules decide 2 path(s)", refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A path git refuses to answer for - one below a submodule, which git add refuses too - is not one it ignores, asked
+    /// with others or alone, and every other path is still answered; a work tree git cannot answer about at all is refused.
+    /// </summary>
+    [Fact]
+    public async Task FindIgnoredAsync_AnswersAPathGitRefuses_AsNotIgnored_AndRefusesOnlyWhereGitCannotAnswer()
+    {
+        using var temp = new TempDirectory();
+        using var outside = new TempDirectory();
+        var harness = new HarnessFactory();
+        var token = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, token);
+        temp.WriteFile(".gitignore", "*.log\n");
+        var nested = temp.Combine("vendor/lib");
+        Directory.CreateDirectory(nested);
+        await harness.InitializeGitRepositoryAsync(nested, token);
+        await harness.RunGitAsync(temp.Path, ["add", "vendor/lib"], token);
+
+        var together = await harness.GitClient.FindIgnoredAsync(temp.Path, ["vendor/lib/README.md", "a.log", "b.txt"], token);
+        var alone = await harness.GitClient.FindIgnoredAsync(temp.Path, ["vendor/lib/README.md"], token);
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => harness.GitClient.FindIgnoredAsync(outside.Path, ["a.log"], token));
+
+        Assert.Equal(["a.log"], together);
+        Assert.Empty(alone);
+        Assert.Equal(HarnessExit.CommandFailed, refusal.ExitCode);
+        Assert.StartsWith("Could not ask git which of 1 path(s) it ignores", refusal.Message, StringComparison.Ordinal);
     }
 
     /// <summary>

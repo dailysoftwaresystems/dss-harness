@@ -7,8 +7,9 @@ namespace RepoHarness.Tests;
 /// The words a fold's refusal says of how the main tree came to hold a path since the agent's base, for every way it can:
 /// what the base holds there - nothing, a file or a directory - by what its HEAD holds - what the base holds, nothing, a
 /// file or a directory - by what the main tree holds against its HEAD - the same, otherwise, something git ignores,
-/// something git lists nothing of and does not ignore, as an empty directory, or the same under a spelling that differs in
-/// case alone, as a commit's rename of case alone leaves it - each said whole, as a
+/// something git lists nothing of and does not ignore, as an empty directory, what lies in a submodule HEAD holds or only
+/// the index does, or the same under a spelling that differs in case alone, as a commit's rename of case alone leaves
+/// it - each said whole, as a
 /// path the main tree made, changed, made a directory of or removed is refused, and short, as a file in the way of the
 /// agent's is listed. A way the main tree cannot hold a path - holding what its HEAD holds of another kind, say - is none.
 /// </summary>
@@ -29,6 +30,9 @@ public sealed class AgentFoldWordsTests
     [InlineData("made", "nothing", "same as base", "differs", "'p' is not at the agent's base X, and the main tree made it since, by an uncommitted edit, so writing the agent's copy would lose that change")]
     [InlineData("made", "nothing", "same as base", "ignored", "'p' is not at the agent's base X, and the main tree holds a file there that git ignores, so writing the agent's copy would lose that file")]
     [InlineData("made", "nothing", "same as base", "unlisted, not ignored", "'p' is not at the agent's base X, and the main tree made it since, by an uncommitted edit, so writing the agent's copy would lose that change")]
+    [InlineData("made", "nothing", "same as base", "below a committed submodule", "'p' is not at the agent's base X, and the main tree made it since, by a commit, so writing the agent's copy would lose that change")]
+    [InlineData("made", "nothing", "same as base", "below a committed submodule, differs", "'p' is not at the agent's base X, and the main tree made it since, by a commit, then changed by an uncommitted edit, so writing the agent's copy would lose that change")]
+    [InlineData("made", "nothing", "same as base", "below a staged submodule, differs", "'p' is not at the agent's base X, and the main tree made it since, by an uncommitted edit, so writing the agent's copy would lose that change")]
     [InlineData("made", "nothing", "file", "matches HEAD", "'p' is not at the agent's base X, and the main tree made it since, by a commit, so writing the agent's copy would lose that change")]
     [InlineData("made", "nothing", "file", "differs", "'p' is not at the agent's base X, and the main tree made it since, by a commit, then changed by an uncommitted edit, so writing the agent's copy would lose that change")]
     [InlineData("made", "nothing", "directory", "differs", "'p' is not at the agent's base X, and the main tree made it since, by an uncommitted edit, after a commit made a directory there, so writing the agent's copy would lose that change")]
@@ -64,6 +68,9 @@ public sealed class AgentFoldWordsTests
     [InlineData("way-made", "nothing", "same as base", "differs", "made since the agent's base X by an uncommitted edit")]
     [InlineData("way-made", "nothing", "same as base", "ignored", "ignored by git")]
     [InlineData("way-made", "nothing", "same as base", "unlisted, not ignored", "made since the agent's base X by an uncommitted edit")]
+    [InlineData("way-made", "nothing", "same as base", "below a committed submodule", "made since the agent's base X by a commit")]
+    [InlineData("way-made", "nothing", "same as base", "below a committed submodule, differs", "made since the agent's base X by a commit, then changed by an uncommitted edit")]
+    [InlineData("way-made", "nothing", "same as base", "below a staged submodule, differs", "made since the agent's base X by an uncommitted edit")]
     [InlineData("way-made", "nothing", "file", "matches HEAD", "made since the agent's base X by a commit")]
     [InlineData("way-made", "nothing", "file", "differs", "made since the agent's base X by a commit, then changed by an uncommitted edit")]
     [InlineData("way-made", "nothing", "directory", "differs", "made since the agent's base X by an uncommitted edit, after a commit made a directory there")]
@@ -110,7 +117,10 @@ public sealed class AgentFoldWordsTests
             head,
             HeadSpelledOtherwise: main.StartsWith("case-only rename", StringComparison.Ordinal),
             Listed: main.EndsWith("differs", StringComparison.Ordinal),
-            GitIgnores: main == "ignored");
+            GitIgnores: main == "ignored",
+            InSubmodule: main.Contains("committed submodule", StringComparison.Ordinal) ? AgentFold.Submodule.Committed
+                : main.Contains("staged submodule", StringComparison.Ordinal) ? AgentFold.Submodule.Staged
+                : AgentFold.Submodule.None);
 
         Assert.Equal(
             said,
@@ -144,7 +154,7 @@ public sealed class AgentFoldWordsTests
     [Fact]
     public void HowAFileGitIgnoresCame_WhereNothingRecordedIt_IsNotSaid()
     {
-        var came = new AgentFold.Came(AgentFold.Holds.File, Based: null, Head: null, HeadSpelledOtherwise: false, Listed: false, GitIgnores: true);
+        var came = new AgentFold.Came(AgentFold.Holds.File, Based: null, Head: null, HeadSpelledOtherwise: false, Listed: false, GitIgnores: true, AgentFold.Submodule.None);
         var unlisted = came with { GitIgnores = false };
 
         Assert.True(came.Ignored);

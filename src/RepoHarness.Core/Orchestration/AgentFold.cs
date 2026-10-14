@@ -2701,6 +2701,22 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         }
     }
 
+    /// <summary>
+    /// Whether a path lies in a repository the main tree records as a submodule - a gitlink in its index above the path -
+    /// and whether its HEAD holds that record too. git looks at nothing below one.
+    /// </summary>
+    internal enum Submodule
+    {
+        /// <summary>In none: git looks at the path itself.</summary>
+        None,
+
+        /// <summary>In one the index holds and HEAD does not: staged, uncommitted.</summary>
+        Staged,
+
+        /// <summary>In one HEAD holds.</summary>
+        Committed,
+    }
+
     /// <summary>What an uncommitted edit did at a path, from what the main tree's HEAD holds there to what the main tree holds.</summary>
     private enum Edit
     {
@@ -2733,9 +2749,13 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     /// </param>
     /// <param name="GitIgnores">
     /// Whether git says it ignores the path, as <c>git add</c> judges it: asked only where its status lists nothing at the
-    /// path, below it or above it, and HEAD holds nothing there.
+    /// path, below it or above it, HEAD holds nothing there, and it lies in no submodule.
     /// </param>
-    internal sealed record Came(Holds Now, GitEntry? Based, GitEntry? Head, bool HeadSpelledOtherwise, bool Listed, bool GitIgnores)
+    /// <param name="InSubmodule">
+    /// Whether the path lies in a submodule of the main tree's, staged or committed: what is there came as that record
+    /// did - and <paramref name="Listed"/> then says whether git status lists the record.
+    /// </param>
+    internal sealed record Came(Holds Now, GitEntry? Based, GitEntry? Head, bool HeadSpelledOtherwise, bool Listed, bool GitIgnores, Submodule InSubmodule)
     {
         /// <summary>
         /// Whether the main tree holds there something git ignores where neither its HEAD nor the base holds anything: git
@@ -2766,20 +2786,34 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         };
 
         /// <summary>Whether a commit moved the path: its HEAD's entry there not the base's, or spelled otherwise.</summary>
-        private bool Committed => Head != Based || HeadSpelledOtherwise;
+        private bool Committed => InSubmodule switch
+        {
+            Submodule.None => Head != Based || HeadSpelledOtherwise,
+
+            // Below a submodule, what is there came as its record did: by the commit that holds it, or staged.
+            Submodule.Staged => false,
+            Submodule.Committed => true,
+            var unknown => throw new ArgumentOutOfRangeException(nameof(InSubmodule), unknown, "Not where a path lies."),
+        };
 
         /// <summary>What an uncommitted edit did there, from its HEAD's entry to what the main tree holds.</summary>
-        private Edit Edited => (Listed, HoldsOf(Head) == Now) switch
+        private Edit Edited => (InSubmodule, Listed, HoldsOf(Head) == Now) switch
         {
+            // Below a submodule HEAD holds, an edit changed it where git status lists the record; below one only staged,
+            // the staging is the edit.
+            (Submodule.Committed, true, _) => Edit.Changed,
+            (Submodule.Committed or Submodule.Staged, _, _) => Edit.None,
+
             // Nothing there, as HEAD holds nothing: nothing in the tree an edit changed, whatever the index stages.
-            (_, true) when Now == Holds.Nothing => Edit.None,
-            (true, true) => Edit.Changed,
-            (true, false) => Edit.Replaced,
-            (false, true) => Edit.None,
+            (Submodule.None, _, true) when Now == Holds.Nothing => Edit.None,
+            (Submodule.None, true, true) => Edit.Changed,
+            (Submodule.None, true, false) => Edit.Replaced,
+            (Submodule.None, false, true) => Edit.None,
 
             // Unlisted, yet of another kind than HEAD holds: what git says it ignores, and otherwise an edit all the same -
             // an empty directory, of which git lists nothing, or git's two answers read at different moments.
-            (false, false) => GitIgnores ? Edit.Ignored : Edit.Replaced,
+            (Submodule.None, false, false) => GitIgnores ? Edit.Ignored : Edit.Replaced,
+            var unknown => throw new ArgumentOutOfRangeException(nameof(InSubmodule), unknown.Item1, "Not where a path lies."),
         };
 
         /// <summary>What the commit did there, from the base's entry to its HEAD's, where an edit made of it another kind since.</summary>
@@ -2800,7 +2834,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     /// <summary>
     /// What git answers of the main tree in one measuring of a fold, each question asked once, and only where something
     /// asks it: whether it moved from the agent's base, what its status lists, whether it ignores case, what its HEAD
-    /// holds, and which paths it ignores.
+    /// holds, which submodules its index records, and which paths it ignores.
     /// </summary>
     /// <param name="git">Asks git.</param>
     /// <param name="main">The main tree.</param>
@@ -2813,6 +2847,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         private bool? _ignoresCase;
         private IReadOnlyList<string>? _headFiles;
         private readonly Dictionary<string, bool> _ignored = new(StringComparer.Ordinal);
+        private IReadOnlyList<string>? _submodules;
 
         /// <summary>Every path where the main tree holds otherwise than the base, as git status compares.</summary>
         public async Task<IReadOnlySet<string>> MovedFromBaseAsync()
@@ -2836,6 +2871,44 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             return _listed.Any(listed => string.Equals(listed.Path, path, comparison)
                 || Below(listed.Path, path, comparison)
                 || (listed.Folded && Below(path, listed.Path, comparison)));
+        }
+
+        /// <summary>
+        /// The submodule each of <paramref name="paths"/> lies in, where one does - a gitlink the index holds above it,
+        /// compared as the repository's <c>core.ignorecase</c> says - with whether HEAD holds that gitlink too.
+        /// </summary>
+        /// <param name="paths">The paths, as the agent spells them.</param>
+        public async Task<IReadOnlyDictionary<string, (string Gitlink, Submodule In)>> SubmodulesAboveAsync(IReadOnlyList<string> paths)
+        {
+            if (paths.Count == 0)
+            {
+                return new Dictionary<string, (string, Submodule)>(StringComparer.Ordinal);
+            }
+
+            _submodules ??= [.. (await git.ListIndexAsync(main, cancellationToken).ConfigureAwait(false))
+                .Where(entry => entry.IsSubmodule)
+                .Select(entry => entry.Path)
+                .Distinct(StringComparer.Ordinal)];
+
+            if (_submodules.Count == 0)
+            {
+                return new Dictionary<string, (string, Submodule)>(StringComparer.Ordinal);
+            }
+
+            var comparison = await IgnoresCaseAsync().ConfigureAwait(false) ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+            var above = paths
+                .Select(path => (Path: path, Gitlink: _submodules.FirstOrDefault(gitlink => Below(path, gitlink, comparison))))
+                .Where(path => path.Gitlink is not null)
+                .ToList();
+            var held = above.Count == 0
+                ? new Dictionary<string, GitEntry>(StringComparer.Ordinal)
+                : await git.ListEntriesAtAsync(main, "HEAD", [.. above.Select(path => path.Gitlink!).Distinct(StringComparer.Ordinal)], cancellationToken)
+                    .ConfigureAwait(false);
+
+            return above.ToDictionary(
+                path => path.Path,
+                path => (path.Gitlink!, held.TryGetValue(path.Gitlink!, out var entry) && entry.Type == "commit" ? Submodule.Committed : Submodule.Staged),
+                StringComparer.Ordinal);
         }
 
         /// <summary>
@@ -2920,9 +2993,10 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
 
     /// <summary>
     /// How the main tree came to hold what it holds at each of <paramref name="paths"/> since the agent's base: the base
-    /// asked for its entries there, and the main tree, through <paramref name="answers"/>, for its HEAD's, what its status
-    /// lists where a commit moved a path or neither HEAD nor the base holds one, and which paths git ignores where its
-    /// status lists nothing and HEAD holds nothing. Nothing is written.
+    /// asked for its entries there, and the main tree, through <paramref name="answers"/>, for its HEAD's, the submodule a
+    /// path HEAD holds nothing at lies in, what its status lists where a commit moved a path or neither HEAD nor the base
+    /// holds one - of the submodule's record, for a path in one - and which paths git ignores where its status lists
+    /// nothing, HEAD holds nothing and no submodule holds the path. Nothing is written.
     /// </summary>
     /// <param name="answers">What git answers of the main tree in this measuring.</param>
     /// <param name="worktree">The agent's worktree, where its base is read.</param>
@@ -2940,7 +3014,11 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         IReadOnlyList<string> names = [.. asked.Select(path => path.Path)];
         var based = await _gitClient.ListEntriesAtAsync(worktree, baseCommit, names, cancellationToken).ConfigureAwait(false);
         var head = await answers.HeadAsync(names).ConfigureAwait(false);
-        var read = new List<(string Path, Holds Now, GitEntry? AtBase, GitEntry? AtHead, bool SpelledOtherwise, bool Listed)>();
+        var unrecorded = asked.Where(path => path.Now != Holds.Nothing && !head.ContainsKey(path.Path)).Select(path => path.Path).ToList();
+
+        // git looks at nothing below a submodule, and check-ignore refuses such a path: it came as the record above it did.
+        var submodules = await answers.SubmodulesAboveAsync(unrecorded).ConfigureAwait(false);
+        var read = new List<(string Path, Holds Now, GitEntry? AtBase, GitEntry? AtHead, bool SpelledOtherwise, bool Listed, Submodule In)>();
 
         foreach (var (path, now) in asked)
         {
@@ -2949,21 +3027,30 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             var atHead = found ? held.Entry : null;
             var spelledOtherwise = found && held.SpelledOtherwise;
 
+            if (submodules.TryGetValue(path, out var submodule))
+            {
+                read.Add((path, now, atBase, atHead, spelledOtherwise, await answers.ListsAsync(submodule.Gitlink).ConfigureAwait(false), submodule.In));
+                continue;
+            }
+
             // Whether git lists it decides how only where a commit moved it, or where neither HEAD nor the base holds
             // anything there and what the main tree holds may be what git ignores; otherwise it was an uncommitted edit.
             var asks = atHead != atBase || spelledOtherwise || (atHead is null && atBase is null);
             var listed = asks && await answers.ListsAsync(path).ConfigureAwait(false);
 
-            read.Add((path, now, atBase, atHead, spelledOtherwise, listed));
+            read.Add((path, now, atBase, atHead, spelledOtherwise, listed, Submodule.None));
         }
 
-        // Only git says what it ignores: asked once, of what its status lists nothing at and HEAD holds nothing at.
-        var ignored = await answers.IgnoredAsync([.. read.Where(path => !path.Listed && path.AtHead is null && path.Now != Holds.Nothing).Select(path => path.Path)])
+        // Only git says what it ignores: asked once, of what its status lists nothing at, HEAD holds nothing at and no
+        // submodule holds.
+        var ignored = await answers.IgnoredAsync([.. read
+                .Where(path => !path.Listed && path.AtHead is null && path.Now != Holds.Nothing && path.In == Submodule.None)
+                .Select(path => path.Path)])
             .ConfigureAwait(false);
 
         return read.ToDictionary(
             path => path.Path,
-            path => new Came(path.Now, path.AtBase, path.AtHead, path.SpelledOtherwise, path.Listed, ignored.Contains(path.Path)),
+            path => new Came(path.Now, path.AtBase, path.AtHead, path.SpelledOtherwise, path.Listed, ignored.Contains(path.Path), path.In),
             StringComparer.Ordinal);
     }
 

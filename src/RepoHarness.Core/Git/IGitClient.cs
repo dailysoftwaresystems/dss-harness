@@ -353,10 +353,10 @@ public interface IGitClient
     /// <param name="paths">Paths relative to that root, with forward separators.</param>
     /// <param name="cancellationToken">Stops the question.</param>
     /// <returns>
-    /// One decision per path, in the order asked. A path git would not answer about, where it answered
-    /// about others, says why in <see cref="IgnoreDecision.Unanswered"/>.
+    /// One decision per path, in the order asked. A path git would not answer about - one beyond a symbolic
+    /// link - where it can answer about the work tree at all, says why in <see cref="IgnoreDecision.Unanswered"/>.
     /// </returns>
-    /// <exception cref="HarnessException">git could answer about none of them, or answered in another form or about other paths.</exception>
+    /// <exception cref="HarnessException">git could not answer about the work tree at all, or answered in another form or about other paths.</exception>
     /// <remarks>
     /// git's own answer rather than a reading of the rules: what a rule matches depends on its file's
     /// directory, on every rule before and after it, and on whether a directory above the path is
@@ -372,12 +372,14 @@ public interface IGitClient
 
     /// <summary>
     /// Which of <paramref name="paths"/> git ignores in the work tree at <paramref name="directory"/>, as <c>git add</c>
-    /// judges them, whether or not a file is there: a file git tracks is never ignored, whatever the rules say.
+    /// judges them, whether or not a file is there: a file git tracks is never ignored, whatever the rules say, and a path
+    /// git will not answer about - one below a submodule, or beyond a symbolic link - is one <c>git add</c> refuses too,
+    /// and none it ignores.
     /// </summary>
     /// <param name="directory">The work tree's root.</param>
     /// <param name="paths">Paths relative to that root, with forward separators.</param>
     /// <param name="cancellationToken">Stops the question.</param>
-    /// <exception cref="HarnessException">git could not answer for every path: an unknown answer is never "nothing ignored".</exception>
+    /// <exception cref="HarnessException">git could not answer about the work tree at all: an unknown answer is never "nothing ignored".</exception>
     Task<IReadOnlySet<string>> FindIgnoredAsync(
         string directory,
         IReadOnlyList<string> paths,
