@@ -39,7 +39,8 @@ public static class DryRuns
     /// named. A run holding a tree the --apply takes refuses it, whatever else the request needs - save where what the
     /// command weighs could not be read, which stands above a holder in the plan's order and keeps its own code, the holder
     /// named on the dry run's lines as ever - and a lock file that cannot be read does too, since the --apply could not
-    /// take its trees either; a run holding only a copy a deletion removes leaves it saying that, unfinished. Otherwise
+    /// take its trees either; a run or a sweep holding only a copy a deletion removes - a holder, never a line that only
+    /// says what is kept in the worktree - leaves it saying that, unfinished. Otherwise
     /// <paramref name="planned"/> itself.
     /// </summary>
     /// <param name="planned">What the verb composed: its summary and its lines, or the failure or refusal it met.</param>

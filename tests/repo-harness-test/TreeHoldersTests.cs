@@ -229,8 +229,9 @@ public sealed class TreeHoldersTests
 
     /// <summary>
     /// A dry run of a deletion that only a leg copy of the worktree keeps is unfinished as its --apply would be - exit
-    /// 21, saying the apply would fold and close it and could not finish the removal - and the copy is named in its
-    /// family's own words. With the worktree held as well, the dry run is refused, exit 13.
+    /// 21, saying the apply would go as far as the removal and could not finish it - and the copy is named in its
+    /// family's own words, on its own line, which the ending points at: no <c>held now:</c> line names it. With the
+    /// worktree held as well, the dry run is refused, exit 13.
     /// </summary>
     [Fact]
     public async Task ADryRunOfADeletionThatOnlyACopyHolds_IsUnfinishedAsItsApplyWouldBe()
@@ -246,12 +247,14 @@ public sealed class TreeHoldersTests
 
         Assert.Equal(HarnessExit.Incomplete, dry.ExitCode);
         Assert.EndsWith(
-            "and nothing in this request needs correcting; --apply would fold and close it now and could not finish its removal, because a run holds a copy of its "
-                + "worktree, named on the line(s) 'held now:' above: run it once that run has ended or is stopped, or run it now and run delete-agent again afterwards",
+            "and nothing in this request needs correcting; --apply would go as far as its removal now and could not finish it, because a run or a sweep holds a "
+                + "copy of its worktree, named above with what holds it: run it once that has ended or is stopped, or run it now and run delete-agent again "
+                + "afterwards",
             dry.Message,
             StringComparison.Ordinal);
         Assert.Contains(dry.Details!, line => line.StartsWith($"left the leg copy '{copy}' kept in it: a run still running holds it: ", StringComparison.Ordinal));
         Assert.Contains(dry.Details!, line => line.Contains($"run {copyRun.Value}", StringComparison.Ordinal));
+        Assert.DoesNotContain(dry.Details!, line => line.StartsWith("held now:", StringComparison.Ordinal));
 
         await using var held = await HoldAsync(kit, worktree);
 
@@ -259,6 +262,41 @@ public sealed class TreeHoldersTests
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.EndsWith(TreeHolders.Blocked, refused.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// With <c>--json</c>, the run holding a leg copy kept in the worktree - all that leaves a deletion's dry run
+    /// unfinished - is in <c>heldNow</c>, as every holder that decides the code is: <c>holds</c> <c>copy</c>, named
+    /// from its entry in the lock, with where its leg stands, and <c>said</c> the line its family says of the copy, which
+    /// is among the lines. The lines, <c>heldNow</c> and the exit code agree.
+    /// </summary>
+    [Fact]
+    public async Task WithJson_ARunHoldingALegCopyKeptInTheWorktree_IsInHeldNow_SaidAsItsLineSaysIt()
+    {
+        using var temp = new TempDirectory();
+        var (kit, worktree) = await AFoldToMakeAsync(temp);
+        var copy = await LegCopyAsync(kit, Path.Combine(worktree, ".legs", "357e24c"));
+        var copyRun = RunId.New();
+
+        await using var holdingTheCopy = await HoldSharedAsync(kit, copy, copyRun, variant: "debug", command: "test");
+
+        var answered = await CliRunner.RunAsync(["delete-agent", "o1", "ag", "--json"], Token, workingDirectory: kit.Main);
+
+        Assert.Equal(HarnessExit.Incomplete, answered.ExitCode);
+        var document = JsonNode.Parse(answered.StandardOutput.TrimEnd())!;
+        Assert.Equal(HarnessExit.Incomplete, document["exitCode"]!.GetValue<int>());
+        Assert.Equal("sound", document["request"]!.GetValue<string>());
+        var holder = document["heldNow"]!.AsArray().Single()!;
+        Assert.Equal("copy", holder["holds"]!.GetValue<string>());
+        Assert.Equal(copy, holder["path"]!.GetValue<string>());
+        Assert.Equal("local", holder["host"]!.GetValue<string>());
+        Assert.Equal("debug", holder["variant"]!.GetValue<string>());
+        Assert.Equal(copyRun.Value, holder["run"]!.GetValue<string>());
+        Assert.Equal("test", holder["command"]!.GetValue<string>());
+        Assert.Equal("no-slot", holder["standing"]!.GetValue<string>());
+        var said = holder["said"]!.GetValue<string>();
+        Assert.StartsWith($"left the leg copy '{copy}' kept in it: a run still running holds it: ", said, StringComparison.Ordinal);
+        Assert.Contains(said, document["lines"]!.AsArray().Select(line => line!.GetValue<string>()));
     }
 
     /// <summary>

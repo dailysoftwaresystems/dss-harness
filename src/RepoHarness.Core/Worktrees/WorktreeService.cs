@@ -83,15 +83,16 @@ public interface IWorktreeService
 
     /// <summary>
     /// What removing the copies kept in the worktree at <paramref name="path"/> - the mutation workers its sweeps made,
-    /// and the copies of it its legs work in - would leave, each in its family's own words, asked only to measure:
-    /// nothing is removed, written or reclaimed. What its deletion asks before it removes anything, asked by a dry run
-    /// of the deletion.
+    /// and the copies of it its legs work in - would leave, each line in its family's own words and with what it is to
+    /// the removal - a copy a run or a sweep holds, what the removal cannot take as it stands, or what is only said -
+    /// asked only to measure: nothing is removed, written or reclaimed. What its deletion asks before it removes anything,
+    /// asked by a dry run of the deletion.
     /// </summary>
     /// <param name="name">The worktree's address, for the command that removes what was left.</param>
     /// <param name="layout">The repository, whose run lock says whether a run holds a leg copy.</param>
     /// <param name="path">The worktree's directory.</param>
     /// <param name="cancellationToken">Stops the asking between copies.</param>
-    Task<IReadOnlyList<string>> CopiesHeldAsync(string name, HarnessLayout layout, string path, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<KeptCopyLine>> CopiesHeldAsync(string name, HarnessLayout layout, string path, CancellationToken cancellationToken = default);
 }
 
 /// <summary>One existing worktree.</summary>
@@ -793,15 +794,21 @@ public sealed class WorktreeService(
     }
 
     /// <summary>What removing the copies kept in a worktree did, as its deletion says it.</summary>
-    /// <param name="Lines">What was removed, and each copy left, with why: said where the worktree is still there.</param>
+    /// <param name="Told">
+    /// What was removed, and each copy left, with why, each line with what it is to the removal: said where the worktree
+    /// is still there.
+    /// </param>
     /// <param name="WentWithIt">
     /// The same, said once the worktree is gone: each copy left in it - held, not removed, nobody's the harness made,
     /// or not looked for at all - went with it.
     /// </param>
     /// <param name="Removal">What became of them, or <see langword="null"/> where they could not be looked for.</param>
     /// <param name="Failure">Why they could not be looked for at all, or <see langword="null"/>.</param>
-    private sealed record WorkersGone(IReadOnlyList<string> Lines, IReadOnlyList<string> WentWithIt, WorkersRemoval? Removal, string? Failure)
+    private sealed record WorkersGone(IReadOnlyList<KeptCopyLine> Told, IReadOnlyList<string> WentWithIt, WorkersRemoval? Removal, string? Failure)
     {
+        /// <summary>The lines of <see cref="Told"/>, as the deletion says them.</summary>
+        public IReadOnlyList<string> Lines => [.. Told.Select(told => told.Line)];
+
         /// <summary>The copy that keeps the worktree, or <see langword="null"/> where none does (<see cref="WorkersRemoval.Kept"/>).</summary>
         public WorkerLeft? Kept => Removal?.Kept;
 
@@ -824,16 +831,17 @@ public sealed class WorktreeService(
 
     /// <summary>
     /// What removing the copies kept in the worktree at <paramref name="path"/> - the mutation workers its sweeps made,
-    /// and the copies of it its legs work in - would leave, each in its family's own words, asked only to measure:
-    /// nothing is removed, written or reclaimed. What its deletion asks before it removes anything, asked by a dry run
-    /// of the deletion.
+    /// and the copies of it its legs work in - would leave, each line in its family's own words and with what it is to
+    /// the removal - a copy a run or a sweep holds, what the removal cannot take as it stands, or what is only said -
+    /// asked only to measure: nothing is removed, written or reclaimed. What its deletion asks before it removes anything,
+    /// asked by a dry run of the deletion.
     /// </summary>
     /// <param name="name">The worktree's address, for the command that removes what was left.</param>
     /// <param name="layout">The repository, whose run lock says whether a run holds a leg copy.</param>
     /// <param name="path">The worktree's directory.</param>
     /// <param name="cancellationToken">Stops the asking between copies.</param>
-    public async Task<IReadOnlyList<string>> CopiesHeldAsync(string name, HarnessLayout layout, string path, CancellationToken cancellationToken = default)
-        => (await RemoveCopiesAsync(name, layout, path, measureOnly: true, cancellationToken).ConfigureAwait(false)).Lines;
+    public async Task<IReadOnlyList<KeptCopyLine>> CopiesHeldAsync(string name, HarnessLayout layout, string path, CancellationToken cancellationToken = default)
+        => (await RemoveCopiesAsync(name, layout, path, measureOnly: true, cancellationToken).ConfigureAwait(false)).Told;
 
     /// <summary>
     /// Removes the copies kept in the worktree at <paramref name="path"/> - the mutation workers its sweeps made, and the
@@ -867,7 +875,7 @@ public sealed class WorktreeService(
         {
             return workers with
             {
-                Lines = [.. workers.Lines, $"the leg copies kept in it could not be removed: {ex.Message.TrimEnd('.')}"],
+                Told = [.. workers.Told, KeptCopyLine.Stopping($"the leg copies kept in it could not be removed: {ex.Message.TrimEnd('.')}")],
                 WentWithIt = [.. workers.WentWithIt, $"the leg copies kept in it could not be looked for, and went with it: {ex.Message.TrimEnd('.')}"],
                 Failure = ex.Message,
             };
@@ -880,19 +888,23 @@ public sealed class WorktreeService(
         }
 
         var again = $"'{ToolPackage.Command} {DeleteCommand} {name}'";
-        IReadOnlyList<string> went = !measureOnly && copies.Removed.Count > 0
-            ? [$"removed {ReportText.Counted(copies.Removed.Count, LegCopies.Member)} kept in it, {DiskSpace.Size(copies.Bytes)}: "
-                + string.Join(", ", copies.Removed.Select(copy => $"'{copy.Path}'"))]
+        IReadOnlyList<KeptCopyLine> went = !measureOnly && copies.Removed.Count > 0
+            ? [KeptCopyLine.Said($"removed {ReportText.Counted(copies.Removed.Count, LegCopies.Member)} kept in it, {DiskSpace.Size(copies.Bytes)}: "
+                + string.Join(", ", copies.Removed.Select(copy => $"'{copy.Path}'")))]
             : [];
 
+        // A leg copy a run holds is held by the lock, which is asked for its holder as its removal asks it.
         var said = new WorkersGone(
-            [.. went, .. copies.Left.Select(copy => copy.As switch
-            {
-                WorkerLeftAs.Held => $"left the leg copy '{copy.Path}' kept in it: {copy.Why.TrimEnd('.')}; {again} removes it once nothing holds it",
-                WorkerLeftAs.NotRemoved => $"left the leg copy '{copy.Path}' kept in it: {copy.Why.TrimEnd('.')}; {again} removes it once nothing stops it",
-                _ => $"left '{copy.Path}', named as a leg copy kept in it: {copy.Why.TrimEnd('.')}",
-            })],
-            [.. went, .. copies.Left.Select(copy => copy.As == WorkerLeftAs.Somebodys
+            [.. went, .. copies.Left.Select(copy => KeptCopyLine.Of(
+                copy,
+                copy.As switch
+                {
+                    WorkerLeftAs.Held => $"left the leg copy '{copy.Path}' kept in it: {copy.Why.TrimEnd('.')}; {again} removes it once nothing holds it",
+                    WorkerLeftAs.NotRemoved => $"left the leg copy '{copy.Path}' kept in it: {copy.Why.TrimEnd('.')}; {again} removes it once nothing stops it",
+                    _ => $"left '{copy.Path}', named as a leg copy kept in it: {copy.Why.TrimEnd('.')}",
+                },
+                LegCopies.Whole(copy.Path)))],
+            [.. went.Select(line => line.Line), .. copies.Left.Select(copy => copy.As == WorkerLeftAs.Somebodys
                 ? WorktreeReports.WentWithItsTree(copy.Path)
                 : $"the leg copy '{copy.Path}' kept in it went with it, forced: {copy.Why.TrimEnd('.')}")],
             copies,
@@ -900,7 +912,7 @@ public sealed class WorktreeService(
 
         return workers with
         {
-            Lines = [.. workers.Lines, .. said.Lines],
+            Told = [.. workers.Told, .. said.Told],
             WentWithIt = [.. workers.WentWithIt, .. said.WentWithIt],
 
             // Whichever copy keeps the worktree keeps it: one a run holds ends by waiting, as one a sweep holds does.
@@ -945,7 +957,7 @@ public sealed class WorktreeService(
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or HarnessException)
         {
             return new WorkersGone(
-                [$"the mutation workers kept in it could not be removed: {ex.Message.TrimEnd('.')}; {again} removes them once that is put right"],
+                [KeptCopyLine.Stopping($"the mutation workers kept in it could not be removed: {ex.Message.TrimEnd('.')}; {again} removes them once that is put right")],
                 [$"the mutation workers kept in it could not be looked for, and went with it: {ex.Message.TrimEnd('.')}"],
                 Removal: null,
                 ex.Message);
@@ -957,19 +969,22 @@ public sealed class WorktreeService(
             throw new OperationCanceledException(cancellationToken);
         }
 
-        IReadOnlyList<string> went = !measureOnly && removal.Removed.Count > 0
-            ? [$"removed {ReportText.Counted(removal.Removed.Count, "mutation worker")} kept in it, {DiskSpace.Size(removal.Bytes)}: "
-                + string.Join(", ", removal.Removed.Select(worker => $"'{worker.Path}'"))]
+        IReadOnlyList<KeptCopyLine> went = !measureOnly && removal.Removed.Count > 0
+            ? [KeptCopyLine.Said($"removed {ReportText.Counted(removal.Removed.Count, "mutation worker")} kept in it, {DiskSpace.Size(removal.Bytes)}: "
+                + string.Join(", ", removal.Removed.Select(worker => $"'{worker.Path}'")))]
             : [];
 
+        // A worker a sweep holds is held by that sweep's claim, which names its holder on the line.
         return new WorkersGone(
-            [.. went, .. removal.Left.Select(worker => worker.As switch
-            {
-                WorkerLeftAs.Held => $"left the mutation worker '{worker.Path}' kept in it: {worker.Why.TrimEnd('.')}; {again} removes it once nothing holds it",
-                WorkerLeftAs.NotRemoved => $"left the mutation worker '{worker.Path}' kept in it: {worker.Why.TrimEnd('.')}; {again} removes it once nothing stops it",
-                _ => $"left '{worker.Path}', named as a mutation worker kept in it: {worker.Why.TrimEnd('.')}",
-            })],
-            [.. went, .. removal.Left.Select(worker => worker.As == WorkerLeftAs.Somebodys
+            [.. went, .. removal.Left.Select(worker => KeptCopyLine.Of(
+                worker,
+                worker.As switch
+                {
+                    WorkerLeftAs.Held => $"left the mutation worker '{worker.Path}' kept in it: {worker.Why.TrimEnd('.')}; {again} removes it once nothing holds it",
+                    WorkerLeftAs.NotRemoved => $"left the mutation worker '{worker.Path}' kept in it: {worker.Why.TrimEnd('.')}; {again} removes it once nothing stops it",
+                    _ => $"left '{worker.Path}', named as a mutation worker kept in it: {worker.Why.TrimEnd('.')}",
+                }))],
+            [.. went.Select(line => line.Line), .. removal.Left.Select(worker => worker.As == WorkerLeftAs.Somebodys
                 ? WorktreeReports.WentWithItsTree(worker.Path)
                 : $"the mutation worker '{worker.Path}' kept in it went with it, forced: {worker.Why.TrimEnd('.')}")],
             removal,

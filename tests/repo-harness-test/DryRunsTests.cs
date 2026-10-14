@@ -1,6 +1,7 @@
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.Orchestration;
 using RepoHarness.Core.Results;
+using RepoHarness.Core.Worktrees;
 
 namespace RepoHarness.Tests;
 
@@ -75,7 +76,7 @@ public sealed class DryRunsTests
     {
         var entry = new LockEntry("local", @"C:\src\repo\.worktrees\o\a", LockScope.TreeExclusive, new LockHolder("this-machine", 4242, "20261012-151500-ab12cd34", DateTimeOffset.Parse("2026-10-12T15:15:00Z", System.Globalization.CultureInfo.InvariantCulture), "test"));
 
-        return new([new TreeHolder(Copy: false, entry, HolderStanding.NoSlot, Ahead: null, Said: "said")], null, null, []);
+        return new([TreeHolder.Named(copy: false, entry, HolderStanding.NoSlot, ahead: null, said: "said")], null, null, []);
     }
 
     /// <summary>A run holding only a copy a deletion removes, as the lock names it.</summary>
@@ -83,7 +84,39 @@ public sealed class DryRunsTests
     {
         var entry = new LockEntry("wsl:Ubuntu", "/home/u/repo--wt/o--a", LockScope.TreeExclusive, new LockHolder("this-machine", 4242, "20261012-151500-ab12cd34", DateTimeOffset.Parse("2026-10-12T15:15:00Z", System.Globalization.CultureInfo.InvariantCulture), "test"));
 
-        return new([new TreeHolder(Copy: true, entry, HolderStanding.OnHost, Ahead: null, "said")], null, null, []);
+        return new([TreeHolder.Named(copy: true, entry, HolderStanding.OnHost, ahead: null, said: "said")], null, null, []);
+    }
+
+    /// <summary>
+    /// The lines the copies kept in a worktree say decide the code by what each is, never by being said: a directory no
+    /// sync made, which goes with the worktree, and copies that could not be looked for hold nothing - the dry run is
+    /// the outcome its verb composed - while a copy a run or a sweep holds, named on its family's own line, leaves the
+    /// removal unfinished, exit 21, whose ending points at that line and at no <c>held now:</c> line.
+    /// </summary>
+    [Fact]
+    public void KeptCopyLinesHoldNothingButACopyARunOrASweepHolds()
+    {
+        var planned = CommandOutcome.Ok("dry run: deleting agent 'a' of 'o' folds 12 path(s), removes 0 and applies 3 row(s)", ["  a line"]);
+        var somebodys = KeptCopyLine.Said(@"left 'C:\src\repo\.worktrees\o\a\.legs\357e24c', named as a leg copy kept in it: nothing says the harness made it");
+        var unlooked = KeptCopyLine.Stopping("the leg copies kept in it could not be removed: the disk would not say");
+        var held = KeptCopyLine.Held(
+            @"C:\src\repo\.worktrees\o\a\.mutations\x86_64-gcc-debug-1",
+            @"left the mutation worker 'C:\src\repo\.worktrees\o\a\.mutations\x86_64-gcc-debug-1' kept in it: a sweep still running holds it: pid 4242");
+
+        var said = new TreeHeld([], null, null, [somebodys, unlooked]);
+        var holding = new TreeHeld([TreeHolder.OfKeptCopy(held, entry: null, standing: null, ahead: null)], null, null, [somebodys, held]);
+
+        Assert.False(said.HoldsCopies);
+        Assert.False(said.HoldsOnlyCopies);
+        Assert.Same(planned, DryRuns.Outcome(planned, RequestStanding.Sound, said));
+        Assert.True(holding.HoldsOnlyCopies);
+
+        var unfinished = DryRuns.Outcome(planned, RequestStanding.Sound, holding);
+
+        Assert.Equal(HarnessExit.Incomplete, unfinished.ExitCode);
+        Assert.Equal($"{planned.Message}, {TreeHolders.RemovalHeld}", unfinished.Message);
+        Assert.DoesNotContain("held now:", TreeHolders.RemovalHeld, StringComparison.Ordinal);
+        Assert.Contains("named above with what holds it", TreeHolders.RemovalHeld, StringComparison.Ordinal);
     }
 
     /// <summary>

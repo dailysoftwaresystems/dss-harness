@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using RepoHarness.Core.Build;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Legs;
 using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Orchestration;
 using RepoHarness.Core.Repository;
@@ -398,7 +399,9 @@ public sealed class AgentDeletionTests
     /// <summary>
     /// A mutation worker a sweep still running holds is named by a dry run of the deletion, in its family's own words,
     /// and the dry run is unfinished - exit 21 - as its --apply is, which folds and closes and cannot finish the
-    /// removal.
+    /// removal. With <c>--json</c> the sweep is in <c>heldNow</c>, as every holder that decides the code is:
+    /// <c>holds</c> <c>copy</c>, the worker's path on this machine, and <c>said</c> the line its family says of it - its
+    /// claim names it, not the run lock, so what only a lock entry says is null.
     /// </summary>
     [Fact]
     public async Task ADryRunOfADeletionNamesAMutationWorkerASweepHolds_AndIsUnfinished()
@@ -417,6 +420,110 @@ public sealed class AgentDeletionTests
         Assert.Equal(HarnessExit.Incomplete, dry.ExitCode);
         Assert.EndsWith(TreeHolders.RemovalHeld, dry.Message, StringComparison.Ordinal);
         Assert.Contains(dry.Details!, line => line.StartsWith($"left the mutation worker '{worker}' kept in it: a sweep still running holds it: ", StringComparison.Ordinal));
+
+        var answered = await CliRunner.RunAsync(["delete-agent", "o1", "ag", "--json"], Token, workingDirectory: kit.Main);
+
+        Assert.Equal(HarnessExit.Incomplete, answered.ExitCode);
+        var document = JsonNode.Parse(answered.StandardOutput.TrimEnd())!;
+        Assert.Equal("sound", document["request"]!.GetValue<string>());
+        var holder = document["heldNow"]!.AsArray().Single()!;
+        Assert.Equal("copy", holder["holds"]!.GetValue<string>());
+        Assert.Equal(worker, holder["path"]!.GetValue<string>());
+        Assert.Equal("local", holder["host"]!.GetValue<string>());
+        Assert.Null(holder["processId"]);
+        Assert.Null(holder["run"]);
+        Assert.Null(holder["since"]);
+        Assert.Null(holder["command"]);
+        Assert.Null(holder["standing"]);
+        var said = holder["said"]!.GetValue<string>();
+        Assert.StartsWith($"left the mutation worker '{worker}' kept in it: a sweep still running holds it: ", said, StringComparison.Ordinal);
+        Assert.Contains(said, document["lines"]!.AsArray().Select(line => line!.GetValue<string>()));
+
+        var applied = await kit.DeleteAsync("ag", apply: true);
+
+        Assert.Equal(HarnessExit.Incomplete, applied.ExitCode);
+        Assert.Equal(AgentStates.Closed, kit.Record("ag").State);
+        Assert.True(Directory.Exists(worker));
+    }
+
+    /// <summary>
+    /// A directory in the worktree's slot for leg copies, or for mutation workers, that no sync made is nobody's the
+    /// harness may remove and keeps nothing: the --apply deletes it with the worktree. So the dry run says it in its
+    /// family's words and holds nothing over it - exit 0, as its --apply's is, which then deletes the agent and the
+    /// worktree with both directories in it.
+    /// </summary>
+    [Fact]
+    public async Task DirectoriesNoSyncMadeInTheWorktreesSlots_AreOnlySaid_AndItsDryRunExitsAsItsApplyDoes()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        var variant = new VariantKey("x86_64", "gcc", "debug", null);
+        var legCopy = LegCopies.PathOf(worktree, variant);
+        var worker = MutationWorkers.PathOf(worktree, variant, 1);
+        File.WriteAllText(Path.Combine(Directory.CreateDirectory(legCopy).FullName, "main.c"), "int main;");
+        File.WriteAllText(Path.Combine(Directory.CreateDirectory(worker).FullName, "main.c"), "int main;");
+
+        var dry = await kit.DeleteAsync("ag", apply: false);
+
+        Assert.True(dry.Succeeded, OrchestrationKit.Describe(dry));
+        Assert.Contains(dry.Details!, line => line.StartsWith($"left '{legCopy}', named as a leg copy kept in it: ", StringComparison.Ordinal));
+        Assert.Contains(dry.Details!, line => line.StartsWith($"left '{worker}', named as a mutation worker kept in it: ", StringComparison.Ordinal));
+
+        var answered = await CliRunner.RunAsync(["delete-agent", "o1", "ag", "--json"], Token, workingDirectory: kit.Main);
+
+        Assert.Equal(0, answered.ExitCode);
+        Assert.Empty(JsonNode.Parse(answered.StandardOutput.TrimEnd())!["heldNow"]!.AsArray());
+
+        var deleted = await kit.DeleteAsync("ag", apply: true);
+
+        Assert.True(deleted.Succeeded, OrchestrationKit.Describe(deleted));
+        Assert.Equal(AgentStates.Deleted, kit.Record("ag").State);
+        Assert.False(Directory.Exists(worktree));
+    }
+
+    /// <summary>
+    /// Copies kept in the worktree that cannot be looked for keep every --apply's removal from finishing until that is put
+    /// right: the --apply folds and closes the agent and leaves the removal, exit 21. Its dry run answers as that --apply
+    /// does - exit 21, its request refused, its last line saying the removal could not be finished over what is said above
+    /// - and names no holder, since none holds anything: never the words that a run or a sweep holds a copy.
+    /// </summary>
+    [Fact]
+    public async Task CopiesKeptInTheWorktreeThatCannotBeLookedFor_LeaveTheRemovalUnfinished_InTheDryRunAsInTheApply()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        var slot = Directory.CreateDirectory(Path.Combine(worktree, HarnessLayout.LegsDirectoryName)).FullName;
+        var agents = kit.Harness.Agents(new CannotList(kit.Harness.FileSystem, slot, denied: false), kit.Harness.AnchorRegistryService);
+
+        var dry = await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: false, discardUncommitted: false, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, dry.ExitCode);
+        Assert.StartsWith("dry run: deleting agent 'ag' of 'o1' folds 1 path(s)", dry.Message, StringComparison.Ordinal);
+        Assert.EndsWith(
+            "; --apply would go as far as its removal now and could not finish it, because the copies kept in its worktree cannot be removed as they "
+                + "stand, said above: put that right, then run it - or run it now and run delete-agent again once that is done",
+            dry.Message,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("holds a copy", dry.Message, StringComparison.Ordinal);
+        Assert.Contains(dry.Details!, line => line.StartsWith("the leg copies kept in it could not be removed: ", StringComparison.Ordinal));
+        Assert.DoesNotContain(dry.Details!, line => line.StartsWith("held now:", StringComparison.Ordinal));
+
+        var document = JsonNode.Parse((await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: false, discardUncommitted: false, Token, json: true)).Data[0])!;
+
+        Assert.Equal(HarnessExit.Incomplete, document["exitCode"]!.GetValue<int>());
+        Assert.Equal("refused", document["request"]!.GetValue<string>());
+        Assert.Empty(document["heldNow"]!.AsArray());
+
+        var applied = await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: true, discardUncommitted: false, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, applied.ExitCode);
+        Assert.StartsWith("Agent 'ag' of 'o1' is closed and not deleted yet: ", applied.Message, StringComparison.Ordinal);
+        Assert.Equal(AgentStates.Closed, kit.Record("ag").State);
+        Assert.True(Directory.Exists(worktree));
     }
 
     /// <summary>

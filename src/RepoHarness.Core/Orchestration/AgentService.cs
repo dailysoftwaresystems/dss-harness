@@ -2338,6 +2338,15 @@ public sealed class AgentService(
             + $"{OrchestrationReports.DeleteAgentLine(target.Record.Orchestrator, target.Record.Name)} then finishes this agent.";
 
     /// <summary>
+    /// What a sound dry run of a deletion ends with where what is kept in the worktree cannot be removed as it stands - a
+    /// copy that could not be told or removed, or copies that could not be looked for, said on the lines above: its
+    /// --apply would do what it does before the removal and could not finish it, as every --apply would until that is
+    /// put right.
+    /// </summary>
+    private const string Unremovable = "; --apply would go as far as its removal now and could not finish it, because the copies kept in its worktree cannot "
+        + "be removed as they stand, said above: put that right, then run it - or run it now and run delete-agent again once that is done";
+
+    /// <summary>
     /// Writes a measured fold into the main tree, records what it wrote as shared, then applies the rows the agent declared
     /// anew and records them as applied, never interrupted: the rows as written and the seed as recorded, or - once anything
     /// is written - what stopped it, as a change begun and not finished.
@@ -2685,10 +2694,11 @@ public sealed class AgentService(
     /// <summary>
     /// The answer a dry run of a deletion gives, asked with the removal's own questions whatever the agent's state: the
     /// copies hosts keep of its worktree - asked for by their own requests, as the removal asks it - what would be left
-    /// of the copies kept in the worktree itself, a leg copy or a mutation worker a run or a sweep holds, each in its
-    /// family's own words, and who holds the trees its <c>--apply</c> takes, spelled as that --apply spells them. A copy
-    /// held does not refuse the --apply, which folds and closes and leaves the removal unfinished; a record that cannot
-    /// be read refuses it, as the removal is refused.
+    /// of the copies kept in the worktree itself, each line in its family's own words, and who holds the trees its
+    /// <c>--apply</c> takes, spelled as that --apply spells them. A copy a run or a sweep holds does not refuse the
+    /// --apply, which goes as far as the removal and leaves it unfinished; what is kept in the worktree that the removal
+    /// cannot take as it stands leaves it unfinished too, until that is put right; a directory there no sync made goes
+    /// with the worktree, and is only said. A record that cannot be read refuses it, as the removal is refused.
     /// </summary>
     /// <param name="json">Whether to answer with one JSON document.</param>
     /// <param name="target">The agent whose deletion is asked about.</param>
@@ -2701,7 +2711,7 @@ public sealed class AgentService(
         ArgumentNullException.ThrowIfNull(planned);
 
         LockEntry[] copies;
-        IReadOnlyList<string> leftInIt;
+        IReadOnlyList<KeptCopyLine> leftInIt;
 
         try
         {
@@ -2713,16 +2723,31 @@ public sealed class AgentService(
             return CommandOutcome.Refused($"{Agent(target.Record)} was not deleted: {ex.Message.TrimEnd('.')} Nothing was removed.");
         }
 
-        var holders = _treeHolders.Read(target.Context.Layout, Holds(DeleteCommand, RunId.New(), trees), copies) with { CopyLines = leftInIt };
+        var holders = _treeHolders.Read(target.Context.Layout, Holds(DeleteCommand, RunId.New(), trees), copies, leftInIt);
+
+        // What is kept in the worktree that the removal cannot take as it stands - a copy that could not be told or removed,
+        // or copies that could not be looked for - leaves every --apply's removal unfinished until it is put right, which
+        // no waiting does: a sound request's dry run answers as that --apply does, its request refused until then.
+        if (standing == RequestStanding.Sound && leftInIt.Any(line => line.Stops))
+        {
+            return Dry(json, CommandOutcome.Failed(HarnessExit.Incomplete, $"{planned.Message}{Unremovable}", planned.Details), RequestStanding.Refused, holders);
+        }
 
         return Dry(json, planned, standing, holders);
     }
 
-    /// <summary>Every holder, as the dry runs' lines say them, and what the families of copies say would be left.</summary>
+    /// <summary>
+    /// Every holder, as the dry runs' lines say them, and what the families of copies say would be left: a holder of a copy
+    /// kept in the worktree is named on its family's line, never on a <c>held now:</c> line besides.
+    /// </summary>
     /// <param name="holders">Who holds what the --apply takes.</param>
     private static IReadOnlyList<string> HolderLines(TreeHeld holders)
     {
-        List<string> lines = [.. holders.Holders.Select(holder => $"held now: {holder.Said}"), .. holders.CopyLines];
+        List<string> lines =
+        [
+            .. holders.Holders.Where(holder => !holder.HoldsKeptCopy).Select(holder => $"held now: {holder.Said}"),
+            .. holders.KeptCopies.Select(line => line.Line),
+        ];
 
         if (holders.StandingUnread is { } unread)
         {

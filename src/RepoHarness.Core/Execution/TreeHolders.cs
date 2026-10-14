@@ -3,6 +3,7 @@ using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
+using RepoHarness.Core.Worktrees;
 
 namespace RepoHarness.Core.Execution;
 
@@ -23,43 +24,127 @@ public enum HolderStanding
 }
 
 /// <summary>
-/// One run in the way of a dry run's <c>--apply</c>: a tree the apply takes, or a copy of the worktree a deletion
-/// removes - the lock's entry for it, where its leg stands, and the one sentence that says it.
+/// One run - or sweep - in the way of a dry run's <c>--apply</c>: a tree the apply takes, or a copy of the worktree a
+/// deletion removes - the lock's entry for it where the lock names it, where its leg stands, and the one sentence that
+/// says it. It is exactly one of two: a holder the run lock names, said on a <c>held now:</c> line; or the holder of a
+/// copy kept in the worktree, said on the line its family says of that copy.
 /// </summary>
-/// <param name="Copy">
-/// Whether what it holds is a copy of the worktree a deletion removes, which leaves that removal unfinished (exit 21),
-/// rather than a tree the apply takes, which refuses it (exit 13).
-/// </param>
-/// <param name="Entry">The lock's entry for what it holds.</param>
-/// <param name="Standing">Where its leg stands; <see langword="null"/> where the record of heavy legs could not be read.</param>
-/// <param name="Ahead">How many legs are ahead of it in line, where it waits.</param>
-/// <param name="Said">The one sentence of it, as a <c>held now:</c> line and a hold's refusal say it.</param>
-public sealed record TreeHolder(bool Copy, LockEntry Entry, HolderStanding? Standing, int? Ahead, string Said);
+public sealed record TreeHolder
+{
+    private TreeHolder(bool copy, string path, string host, LockEntry? entry, HolderStanding? standing, int? ahead, string said, bool holdsKeptCopy)
+    {
+        Copy = copy;
+        Path = path;
+        Host = host;
+        Entry = entry;
+        Standing = standing;
+        Ahead = ahead;
+        Said = said;
+        HoldsKeptCopy = holdsKeptCopy;
+    }
+
+    /// <summary>
+    /// Whether what it holds is a copy of the worktree a deletion removes, which leaves that removal unfinished (exit 21),
+    /// rather than a tree the apply takes, which refuses it (exit 13).
+    /// </summary>
+    public bool Copy { get; }
+
+    /// <summary>The tree or the copy it holds: as the lock's entry spells it, or the copy's family where no entry names it.</summary>
+    public string Path { get; }
+
+    /// <summary>The host what it holds is on.</summary>
+    public string Host { get; }
+
+    /// <summary>
+    /// The lock's entry for what it holds; <see langword="null"/> for a copy kept in the worktree that a claim of its
+    /// family's own names the holder of, as a sweep's claim names a mutation worker's.
+    /// </summary>
+    public LockEntry? Entry { get; }
+
+    /// <summary>
+    /// Where its leg stands; <see langword="null"/> where the record of heavy legs could not be read, and where no entry of
+    /// the lock names it.
+    /// </summary>
+    public HolderStanding? Standing { get; }
+
+    /// <summary>How many legs are ahead of it in line, where it waits.</summary>
+    public int? Ahead { get; }
+
+    /// <summary>
+    /// The one sentence of it: as a <c>held now:</c> line and a hold's refusal say it, or, for a copy kept in the
+    /// worktree, the line its family says of that copy.
+    /// </summary>
+    public string Said { get; }
+
+    /// <summary>
+    /// Whether it holds a copy kept in the worktree, which the line its family says of the copy names, rather than a
+    /// <c>held now:</c> line.
+    /// </summary>
+    public bool HoldsKeptCopy { get; }
+
+    /// <summary>A holder the run lock names: said on a <c>held now:</c> line, as a hold's refusal says it.</summary>
+    /// <param name="copy">Whether what it holds is a copy a deletion removes, rather than a tree the apply takes.</param>
+    /// <param name="entry">The lock's entry for what it holds.</param>
+    /// <param name="standing">Where its leg stands; <see langword="null"/> where the record of heavy legs could not be read.</param>
+    /// <param name="ahead">How many legs are ahead of it in line, where it waits.</param>
+    /// <param name="said">The one sentence of it.</param>
+    public static TreeHolder Named(bool copy, LockEntry entry, HolderStanding? standing, int? ahead, string said)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        ArgumentException.ThrowIfNullOrWhiteSpace(said);
+
+        return new(copy, entry.Tree, entry.Host, entry, standing, ahead, said, holdsKeptCopy: false);
+    }
+
+    /// <summary>
+    /// The holder of a copy kept in the worktree, which a deletion removes: said on the line its family says of the copy,
+    /// with the lock's entry for it where the lock holds a copy of that family.
+    /// </summary>
+    /// <param name="line">The line its family says of the copy held.</param>
+    /// <param name="entry">The lock's entry for the copy, where the lock names its holder; <see langword="null"/> where a claim does.</param>
+    /// <param name="standing">Where its leg stands, where an entry of the lock names it.</param>
+    /// <param name="ahead">How many legs are ahead of it in line, where it waits.</param>
+    public static TreeHolder OfKeptCopy(KeptCopyLine line, LockEntry? entry, HolderStanding? standing, int? ahead)
+    {
+        ArgumentNullException.ThrowIfNull(line);
+
+        var path = line.HeldPath ?? throw new ArgumentException("A line that names no copy held names no holder.", nameof(line));
+
+        return new(copy: true, entry?.Tree ?? path, entry?.Host ?? HostId.Local.ToString(), entry, standing, ahead, line.Line, holdsKeptCopy: true);
+    }
+}
 
 /// <summary>What a dry run read of who holds what its <c>--apply</c> takes.</summary>
-/// <param name="Holders">Every holder named from the run lock, in the lock file's order.</param>
+/// <param name="Holders">
+/// Every holder: each the run lock names, in the lock file's order, then each that holds a copy kept in the worktree, in
+/// the order its family says them.
+/// </param>
 /// <param name="Unread">Why the lock file could not be read, where it could not; the holders are none then.</param>
 /// <param name="StandingUnread">
 /// Why the record of heavy legs could not be read, where it could not: each holder is still named, without the words
 /// that say where its leg stands.
 /// </param>
-/// <param name="CopyLines">
-/// What the families of copies kept in the worktree say would be left - a leg copy or a mutation worker a run or a
-/// sweep holds, each in its family's own words - where a deletion's dry run asked them; empty where it asked nobody.
+/// <param name="KeptCopies">
+/// What the families of copies kept in the worktree say removing them would leave, each line in its family's own words
+/// and with what it is to the removal, where a deletion's dry run asked them; empty where it asked nobody. A copy a run
+/// or a sweep holds that a line names is held by one of <see cref="Holders"/>.
 /// </param>
-public sealed record TreeHeld(IReadOnlyList<TreeHolder> Holders, string? Unread, string? StandingUnread, IReadOnlyList<string> CopyLines)
+public sealed record TreeHeld(IReadOnlyList<TreeHolder> Holders, string? Unread, string? StandingUnread, IReadOnlyList<KeptCopyLine> KeptCopies)
 {
     /// <summary>No holder was named.</summary>
     public static TreeHeld None { get; } = new([], null, null, []);
 
-    /// <summary>Whether a run holds a copy the deletion removes, from the lock or from the families' own words.</summary>
-    public bool HoldsCopies => Holders.Any(holder => holder.Copy) || CopyLines.Count > 0;
+    /// <summary>
+    /// Whether a run or a sweep holds a copy the deletion removes: a holder, and nothing else a family says - a directory
+    /// no sync made goes with the worktree, and copies that could not be looked for are held by nobody.
+    /// </summary>
+    public bool HoldsCopies => Holders.Any(holder => holder.Copy);
 
     /// <summary>Whether a run holds a tree the apply takes, which refuses it.</summary>
     public bool HoldsATree => Holders.Any(holder => !holder.Copy);
 
-    /// <summary>Whether a run holds only copies, which a deletion leaves unfinished.</summary>
-    public bool HoldsOnlyCopies => (Holders.Count > 0 || CopyLines.Count > 0) && !HoldsATree;
+    /// <summary>Whether a run or a sweep holds only copies, which a deletion leaves unfinished.</summary>
+    public bool HoldsOnlyCopies => HoldsCopies && !HoldsATree;
 }
 
 /// <summary>
@@ -102,33 +187,54 @@ public sealed class TreeHolders(RunLock runLock, HeavyLegSlots slots, IProcessId
 
     /// <summary>
     /// Who holds what <paramref name="takes"/> names, beside the copies of the worktree <paramref name="copies"/> were
-    /// read holding - the lock asked for those by their own requests, as their removal asks it: every holder with where
-    /// its leg stands, each copy marked as the copy it is. Nothing is taken, written or reclaimed.
+    /// read holding - the lock asked for those by their own requests, as their removal asks it - and beside the copies
+    /// kept in the worktree that <paramref name="kept"/> names held: every holder with where its leg stands, each copy
+    /// marked as the copy it is. Nothing is taken, written or reclaimed.
     /// </summary>
     /// <param name="layout">The repository, whose main checkout holds the lock file.</param>
     /// <param name="takes">The trees the apply takes, which a run holding refuses it.</param>
     /// <param name="copies">Who holds a copy the deletion removes, as the lock answered for each copy's path.</param>
+    /// <param name="kept">What the families of copies kept in the worktree say removing them would leave.</param>
     /// <returns>What was read; <see cref="TreeHeld.Unread"/> where the lock file could not be read.</returns>
-    public TreeHeld Read(HarnessLayout layout, IReadOnlyList<LockRequest> takes, IReadOnlyList<LockEntry> copies)
+    public TreeHeld Read(HarnessLayout layout, IReadOnlyList<LockRequest> takes, IReadOnlyList<LockEntry> copies, IReadOnlyList<KeptCopyLine> kept)
     {
         ArgumentNullException.ThrowIfNull(layout);
         ArgumentNullException.ThrowIfNull(takes);
         ArgumentNullException.ThrowIfNull(copies);
+        ArgumentNullException.ThrowIfNull(kept);
 
         try
         {
             var trees = _runLock.Holders(layout, takes);
 
-            return Joined(layout, takes, [.. trees.Select(entry => (Entry: entry, Copy: false)), .. copies.Select(entry => (Entry: entry, Copy: true))]);
+            // A copy kept in the worktree that a run holds is asked of the lock as its removal asks it, so its holder is
+            // named with its entry; one a claim of its family's own holds - a sweep's, on a mutation worker - is named by
+            // that claim alone, on its family's line.
+            var held = kept
+                .Where(said => said.HeldPath is not null)
+                .Select(said => (Line: said, Entries: said.Asked is { } asked ? _runLock.Holders(layout, [asked]) : (IReadOnlyList<LockEntry>)[]))
+                .ToList();
+
+            return Joined(layout, takes, [.. trees.Select(entry => (Entry: entry, Copy: false)), .. copies.Select(entry => (Entry: entry, Copy: true))], held) with
+            {
+                KeptCopies = kept,
+            };
         }
         catch (HarnessException ex)
         {
-            return new TreeHeld([], ex.Message.TrimEnd('.'), null, []);
+            return new TreeHeld([], ex.Message.TrimEnd('.'), null, kept);
         }
     }
 
-    /// <summary>Every holder joined with the line: each with where its leg stands and the sentence of it.</summary>
-    private TreeHeld Joined(HarnessLayout layout, IReadOnlyList<LockRequest> takes, IReadOnlyList<(LockEntry Entry, bool Copy)> entries)
+    /// <summary>
+    /// Every holder joined with the line: each with where its leg stands and the sentence of it - and each holding a copy
+    /// kept in the worktree, said on its family's line, with where its leg stands where the lock names it.
+    /// </summary>
+    private TreeHeld Joined(
+        HarnessLayout layout,
+        IReadOnlyList<LockRequest> takes,
+        IReadOnlyList<(LockEntry Entry, bool Copy)> entries,
+        IReadOnlyList<(KeptCopyLine Line, IReadOnlyList<LockEntry> Entries)>? kept = null)
     {
         ArgumentNullException.ThrowIfNull(layout);
 
@@ -145,7 +251,14 @@ public sealed class TreeHolders(RunLock runLock, HeavyLegSlots slots, IProcessId
             standingUnread = ex.Message.TrimEnd('.');
         }
 
-        return new TreeHeld([.. entries.Select(entry => Holder(entry.Entry, line, entry.Copy))], null, standingUnread, []);
+        return new TreeHeld(
+            [
+                .. entries.Select(entry => Holder(entry.Entry, line, entry.Copy)),
+                .. (kept ?? []).SelectMany(copy => KeptHolders(copy.Line, copy.Entries, line)),
+            ],
+            null,
+            standingUnread,
+            []);
     }
 
     /// <summary>
@@ -180,13 +293,27 @@ public sealed class TreeHolders(RunLock runLock, HeavyLegSlots slots, IProcessId
     {
         var standing = Standing(entry, line, out var ahead);
 
-        return new TreeHolder(
+        return TreeHolder.Named(
             copy,
             entry,
             standing,
             standing == HolderStanding.Waiting ? ahead : null,
             $"{RunLock.TreeNamed(entry.Host, entry.Tree, entry.Variant)} is held by {Held(entry, Tail(standing, ahead))}.");
     }
+
+    /// <summary>
+    /// Who holds the copy kept in the worktree that <paramref name="said"/> names, each said on that line: every entry of
+    /// the lock for it, joined with the line; or, where no entry names one, the holder its family's claim named.
+    /// </summary>
+    private IEnumerable<TreeHolder> KeptHolders(KeptCopyLine said, IReadOnlyList<LockEntry> entries, IReadOnlyList<SlotInLine> line)
+        => entries.Count == 0
+            ? [TreeHolder.OfKeptCopy(said, entry: null, standing: null, ahead: null)]
+            : entries.Select(entry =>
+            {
+                var standing = Standing(entry, line, out var ahead);
+
+                return TreeHolder.OfKeptCopy(said, entry, standing, standing == HolderStanding.Waiting ? ahead : null);
+            });
 
     /// <summary>
     /// The lock's own part of the sentence, unchanged: who holds it, since when, running what - on the tail of where its
@@ -254,11 +381,13 @@ public sealed class TreeHolders(RunLock runLock, HeavyLegSlots slots, IProcessId
         + "the line(s) 'held now:' above: run the same command again once that run has ended or is stopped";
 
     /// <summary>
-    /// The words a sound dry run of a deletion ends with where a run holds only a copy of the worktree: its
-    /// <c>--apply</c> would fold and close the agent and could not finish the removal.
+    /// The words a sound dry run of a deletion ends with where a run or a sweep holds only a copy of the worktree: its
+    /// <c>--apply</c> would do what it does before the removal - fold and close a live agent, keep a closed one's
+    /// evidence again - and could not finish the removal. Each such holder is named above with what holds it: a host's
+    /// copy on a <c>held now:</c> line, a copy kept in the worktree on the line its family says of it.
     /// </summary>
-    public const string RemovalHeld = "and nothing in this request needs correcting; --apply would fold and close it now and could not finish its removal, "
-        + "because a run holds a copy of its worktree, named on the line(s) 'held now:' above: run it once that run has ended or is stopped, or run it now "
+    public const string RemovalHeld = "and nothing in this request needs correcting; --apply would go as far as its removal now and could not finish it, "
+        + "because a run or a sweep holds a copy of its worktree, named above with what holds it: run it once that has ended or is stopped, or run it now "
         + "and run delete-agent again afterwards";
 
     /// <summary>What a dry run that is refused for its own paths, rows or consents ends with where a run also holds what its <c>--apply</c> needs.</summary>

@@ -2278,12 +2278,16 @@ public sealed partial class HelpTests
             + "last, on standard error. A run holding what the --apply takes refuses the dry run too: every holder is named on "
             + $"a 'held now:' line, said with where its run's leg stands, and it exits {HarnessExit.Refused} - save where the dry "
             + "run already failed before writing anything, which keeps its failure's code and names the holder still; "
-            + $"delete-agent, whose --apply would fold and close the agent and leave the removal, exits {HarnessExit.Incomplete} "
-            + "instead where only a copy of the worktree is held. What an --apply can only find by writing - a file changed after it was weighed, a write "
+            + $"delete-agent, whose --apply would go as far as the removal and leave it unfinished, exits {HarnessExit.Incomplete} "
+            + "instead where only a copy of the worktree is held, by a run or a sweep, and where the copies kept in the worktree "
+            + "cannot be removed as they stand - one cannot be told or removed, or none can be looked for - its request then "
+            + "refused; a directory there that no sync made goes with the worktree, and is only said. What an --apply can only find by "
+            + "writing - a file changed after it was weighed, a write "
             + "that fails - is not in a dry run, so 0 never promises that the --apply will finish. --json answers with one "
             + "document, the whole of standard output, whose request member says what is wanted of you - 'sound' (nothing; wait, "
             + "where heldNow names a holder), 'needs-consent' (name the cells the dry run shows) or 'refused' (put right what the "
-            + "last line names) - and whose heldNow holds each holder, with where its leg stands.",
+            + "last line names) - and whose heldNow holds each holder that decides its code, with where its leg stands: each a "
+            + "'held now:' line names, and each holding a copy kept in the worktree, said as its own line says it.",
             text,
             StringComparison.Ordinal);
         Assert.Contains(

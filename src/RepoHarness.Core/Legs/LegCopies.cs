@@ -50,8 +50,28 @@ public static class LegCopies
     public static string SaidHeld(string holder) => $"a run still running holds it: {holder}";
 
     /// <summary>
+    /// What whatever would remove a copy of the family asks the run lock first: the copy taken whole on this machine, so
+    /// a run holding it any way - building in it, or replacing it - is named. The run and command it names are the
+    /// asking's own, and asking writes no entry.
+    /// </summary>
+    /// <param name="copy">The copy.</param>
+    public static LockRequest Whole(string copy)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(copy);
+
+        return new LockRequest
+        {
+            Host = HostId.Local.ToString(),
+            Tree = copy,
+            Scope = LockScope.TreeExclusive,
+            RunId = RunId.New(),
+            Command = "clean",
+        };
+    }
+
+    /// <summary>
     /// Which run holds a copy of the family, as whatever would remove it asks first: the run lock's answer for the copy
-    /// taken whole, so a run building in one, or replacing it, keeps it.
+    /// taken whole (<see cref="Whole"/>), so a run building in one, or replacing it, keeps it.
     /// </summary>
     /// <param name="runLock">Reads the run lock of the repository the tree belongs to.</param>
     /// <param name="layout">The repository, whose main checkout holds the lock file.</param>
@@ -72,21 +92,7 @@ public static class LegCopies
 
         public string SaidHeld(string holder) => LegCopies.SaidHeld(holder);
 
-        public string? HeldBy(string copy)
-        {
-            // Asked as the sync replaces the copy: whole, so a run holding it any way - building in it, or replacing it -
-            // is named. The run and command the probe names are this asking's own, and no entry is written.
-            return runLock.HeldBy(
-                layout,
-                new LockRequest
-                {
-                    Host = HostId.Local.ToString(),
-                    Tree = copy,
-                    Scope = LockScope.TreeExclusive,
-                    RunId = RunId.New(),
-                    Command = "clean",
-                });
-        }
+        public string? HeldBy(string copy) => runLock.HeldBy(layout, Whole(copy));
 
         public void Forget(string copy)
         {

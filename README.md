@@ -109,9 +109,11 @@ orchestrator half deleted; run again, it finishes. Without `--apply`, `refresh-a
 `rebase-agent`, `fold-agent` and `delete-agent` are dry runs, and a dry run exits as its `--apply`
 would: `0` only when that `--apply` would go through, `13` where it would be refused - a consent
 nobody gave, or a run holding what the `--apply` needs, included - and `21` where a deletion's
-`--apply` would fold, close the agent and leave the removal over a copy a run holds; every holder
-is named on a `held now:` line, and `--json` answers with one document whose `request` member
-says which of the three is wanted of you and whose `heldNow` holds each holder. Still printing all
+`--apply` would go as far as the removal and leave it unfinished, over a copy a run or a sweep
+holds or copies kept in the worktree it cannot remove as they stand; every holder is named - on a
+`held now:` line, or, holding a leg copy or a mutation worker kept in the worktree, in that copy's
+own words - and `--json` answers with one document whose `request` member says which of the three
+is wanted of you and whose `heldNow` holds each holder, those copies' among them. Still printing all
 it weighed.
 `dssharness help orchestrators` explains seeding, rebasing, folding and deleting agents.
 

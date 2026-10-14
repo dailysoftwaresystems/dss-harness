@@ -483,16 +483,18 @@ public static class OrchestrationReports
 
         foreach (var holder in holders?.Holders ?? [])
         {
+            // A copy kept in the worktree that a claim alone names the holder of has no entry of the lock: what only an entry
+            // says of its holder is null, and what the claim says is in said.
             heldNow.Add(new JsonObject
             {
                 ["holds"] = holder.Copy ? "copy" : "tree",
-                ["path"] = holder.Entry.Tree,
-                ["host"] = holder.Entry.Host,
-                ["variant"] = holder.Entry.Variant,
-                ["processId"] = holder.Entry.Holder.ProcessId,
-                ["run"] = holder.Entry.Holder.RunId,
-                ["since"] = Moment(holder.Entry.Holder.TakenUtc),
-                ["command"] = holder.Entry.Holder.Command,
+                ["path"] = holder.Path,
+                ["host"] = holder.Host,
+                ["variant"] = holder.Entry?.Variant,
+                ["processId"] = holder.Entry?.Holder.ProcessId,
+                ["run"] = holder.Entry?.Holder.RunId,
+                ["since"] = holder.Entry is { } entry ? Moment(entry.Holder.TakenUtc) : null,
+                ["command"] = holder.Entry?.Holder.Command,
                 ["standing"] = holder.Standing switch
                 {
                     HolderStanding.NoSlot => "no-slot",
