@@ -880,11 +880,15 @@ public sealed class CleanServiceTests
         var own = Copy(temp, variant, 100);
         var orphan = Copy(temp, variant with { Config = "relwithdebinfo" }, 40);
 
+        // Listed by the name each copy is kept under, as the disk sorts them: the keys, which hash the processor too,
+        // put either first.
+        var holds = new Dictionary<string, int> { [own] = 100, [orphan] = 40 };
         var (measured, dry) = await CleanAsync(temp, harness, config, dryRun: true);
 
         Assert.Equal(HarnessExit.Success, measured.ExitCode);
         Assert.EndsWith(
-            $"; 2 leg copy(ies): {DiskSpace.Size(Workers.Holding(100))} in '{own}', {DiskSpace.Size(Workers.Holding(40))} in '{orphan}'",
+            "; 2 leg copy(ies): "
+            + string.Join(", ", new[] { own, orphan }.OrderBy(Path.GetFileName, StringComparer.Ordinal).Select(path => $"{DiskSpace.Size(Workers.Holding(holds[path]))} in '{path}'")),
             dry.GetProperty("detail").GetString(),
             StringComparison.Ordinal);
         Assert.Equal(Workers.Holding(100) + Workers.Holding(40), dry.GetProperty("space").GetProperty("copyBytes").GetInt64());
