@@ -79,6 +79,11 @@ public sealed record FoldPlan
 /// <param name="Why">What it is that a fold never reads or writes, to stand in brackets.</param>
 public sealed record SettledOut(string Path, string Why);
 
+/// <summary>A path a hand-over would write into or remove from a submodule of the agent's worktree, and that submodule.</summary>
+/// <param name="Path">The path, as git names it.</param>
+/// <param name="Submodule">The submodule's path: the path itself, or the one it lies in.</param>
+public sealed record SubmodulePath(string Path, string Submodule);
+
 /// <summary>A path handed to an agent, and the file it was handed.</summary>
 /// <param name="Path">The path, as git names it.</param>
 /// <param name="Digest">The SHA-256 of the file copied; null for a deletion.</param>
@@ -221,6 +226,12 @@ public sealed record RefreshPlan
 
     /// <summary>What of the agent's own handing <see cref="Handed"/> would write over or through, which refuses the refresh.</summary>
     public required IReadOnlyList<string> InTheWay { get; init; }
+
+    /// <summary>
+    /// Each path handed, or already alike and to be recorded, that is or lies in a submodule the agent's worktree records -
+    /// another repository, which a hand-over never writes into or removes from - which refuses the refresh.
+    /// </summary>
+    public required IReadOnlyList<SubmodulePath> InSubmodules { get; init; }
 
     /// <summary>
     /// What the agent's worktree held at each path handed, and at each it already holds as the main tree does, when it was
@@ -426,6 +437,10 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         var atBase = await _gitClient.HeldAtAsync(worktree, baseCommit, [.. unseeded.Select(look => look.Path)], cancellationToken).ConfigureAwait(false);
         var baseBlobs = atBase.ToDictionary(held => held.Key, held => held.Value.Blob, StringComparer.Ordinal);
         var answers = new MainTreeAnswers(_gitClient, main, baseCommit, cancellationToken);
+
+        // A submodule of the main tree's is another repository: nothing a fold writes there, or removes, can be committed in
+        // the main tree, and the submodule's own commands lose it. Asked of git once, for every path the fold weighs.
+        var inSubmodules = await answers.SubmodulesAsync([.. looks.Select(look => look.Path)]).ConfigureAwait(false);
         IReadOnlySet<string> mainMoved = unseeded.Any(look => baseBlobs[look.Path] is not null)
             ? await answers.MovedFromBaseAsync().ConfigureAwait(false)
             : new HashSet<string>(StringComparer.Ordinal);
@@ -483,6 +498,23 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             if (baseline is { } kept && look.Agent == kept && (!isSettled || look.Main == kept))
             {
                 inherited.Add(path);
+                continue;
+            }
+
+            // Anything else of a submodule's is never written, removed or recorded: refused, or left out where settled by hand.
+            if (inSubmodules.TryGetValue(path, out var inSubmodule))
+            {
+                if (isSettled)
+                {
+                    leftOut.Add(new SettledOut(path, InMainSubmodule(path, inSubmodule.Gitlink)));
+                }
+                else
+                {
+                    refused.Add((path, $"'{path}' {(path == inSubmodule.Gitlink ? "is" : $"lies in '{inSubmodule.Gitlink}',")} a submodule of the main tree's "
+                        + $"{(inSubmodule.In == Submodule.Committed ? "made by a commit" : "staged by an uncommitted edit")} - a repository of its own, which a fold "
+                        + "never writes into or removes from"));
+                }
+
                 continue;
             }
 
@@ -1426,6 +1458,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             StaleStray = strays,
             Capped = proved.Capped,
             InTheWay = InTheWayOfHanding(worktree, handed),
+            InSubmodules = await InSubmodulesAsync(worktree, [.. handed.Deletions, .. handed.Files, .. alike], cancellationToken).ConfigureAwait(false),
             Held = await HoldingAsync(worktree, [.. handed.Deletions, .. handed.Files, .. alike], cancellationToken).ConfigureAwait(false),
         };
     }
@@ -1583,6 +1616,26 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
                 ledger.Absent(path);
             }
         }
+    }
+
+    /// <summary>
+    /// Each of <paramref name="paths"/> that is or lies in a submodule the agent's worktree records - a gitlink in its index
+    /// at or above the path, compared as its <c>core.ignorecase</c> says - with that submodule: another repository, which a
+    /// hand-over never writes into or removes from. One git process for them all, none where there are none.
+    /// </summary>
+    /// <param name="worktree">The agent's worktree.</param>
+    /// <param name="paths">The paths it is to be handed, or recorded as sharing.</param>
+    /// <param name="cancellationToken">Stops the question.</param>
+    /// <exception cref="HarnessException">git could not answer.</exception>
+    public async Task<IReadOnlyList<SubmodulePath>> InSubmodulesAsync(string worktree, IReadOnlyList<string> paths, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+
+        var found = await new Submodules(_gitClient, worktree, () => _gitClient.IgnoresCaseAsync(worktree, cancellationToken), cancellationToken)
+            .OfAsync(paths)
+            .ConfigureAwait(false);
+
+        return [.. found.OrderBy(path => path.Key, StringComparer.Ordinal).Select(path => new SubmodulePath(path.Key, path.Value.Gitlink))];
     }
 
     /// <summary>
@@ -2375,6 +2428,15 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     private static bool BothHoldAFile(Look look) => look is { Main.Kind: Kind.File, Agent.Kind: Kind.File };
 
     /// <summary>
+    /// What a path that is or lies in a submodule of the main tree's is, to stand in brackets as one a fold never writes:
+    /// the submodule's own path is a directory in the main tree, as any directory git will not look into is named.
+    /// </summary>
+    /// <param name="path">The path.</param>
+    /// <param name="gitlink">The submodule's path.</param>
+    private static string InMainSubmodule(string path, string gitlink)
+        => path == gitlink ? MainDirectory : $"in '{gitlink}', a submodule of the main tree's - a repository of its own";
+
+    /// <summary>
     /// What the path looked at is that a fold never reads or writes - reached through a link, or a directory git will not
     /// look into, in either tree - to stand in brackets; null where it is neither.
     /// </summary>
@@ -2847,7 +2909,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         private bool? _ignoresCase;
         private IReadOnlyList<string>? _headFiles;
         private readonly Dictionary<string, bool> _ignored = new(StringComparer.Ordinal);
-        private IReadOnlyList<string>? _submodules;
+        private Submodules? _submodules;
 
         /// <summary>Every path where the main tree holds otherwise than the base, as git status compares.</summary>
         public async Task<IReadOnlySet<string>> MovedFromBaseAsync()
@@ -2873,43 +2935,10 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
                 || (listed.Folded && Below(path, listed.Path, comparison)));
         }
 
-        /// <summary>
-        /// The submodule each of <paramref name="paths"/> lies in, where one does - a gitlink the index holds above it,
-        /// compared as the repository's <c>core.ignorecase</c> says - with whether HEAD holds that gitlink too.
-        /// </summary>
+        /// <summary>The submodule of the main tree's each of <paramref name="paths"/> is or lies in, where one does (<see cref="Submodules"/>).</summary>
         /// <param name="paths">The paths, as the agent spells them.</param>
-        public async Task<IReadOnlyDictionary<string, (string Gitlink, Submodule In)>> SubmodulesAboveAsync(IReadOnlyList<string> paths)
-        {
-            if (paths.Count == 0)
-            {
-                return new Dictionary<string, (string, Submodule)>(StringComparer.Ordinal);
-            }
-
-            _submodules ??= [.. (await git.ListIndexAsync(main, cancellationToken).ConfigureAwait(false))
-                .Where(entry => entry.IsSubmodule)
-                .Select(entry => entry.Path)
-                .Distinct(StringComparer.Ordinal)];
-
-            if (_submodules.Count == 0)
-            {
-                return new Dictionary<string, (string, Submodule)>(StringComparer.Ordinal);
-            }
-
-            var comparison = await IgnoresCaseAsync().ConfigureAwait(false) ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-            var above = paths
-                .Select(path => (Path: path, Gitlink: _submodules.FirstOrDefault(gitlink => Below(path, gitlink, comparison))))
-                .Where(path => path.Gitlink is not null)
-                .ToList();
-            var held = above.Count == 0
-                ? new Dictionary<string, GitEntry>(StringComparer.Ordinal)
-                : await git.ListEntriesAtAsync(main, "HEAD", [.. above.Select(path => path.Gitlink!).Distinct(StringComparer.Ordinal)], cancellationToken)
-                    .ConfigureAwait(false);
-
-            return above.ToDictionary(
-                path => path.Path,
-                path => (path.Gitlink!, held.TryGetValue(path.Gitlink!, out var entry) && entry.Type == "commit" ? Submodule.Committed : Submodule.Staged),
-                StringComparer.Ordinal);
-        }
+        public Task<IReadOnlyDictionary<string, (string Gitlink, Submodule In)>> SubmodulesAsync(IReadOnlyList<string> paths)
+            => (_submodules ??= new Submodules(git, main, IgnoresCaseAsync, cancellationToken)).OfAsync(paths);
 
         /// <summary>
         /// Which of <paramref name="paths"/> git says it ignores, as <c>git add</c> judges them: one process for the paths
@@ -2992,6 +3021,61 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     }
 
     /// <summary>
+    /// The submodules a tree records - the gitlinks its index holds, read once and only where a path is asked about - and
+    /// the one each path asked about is or lies in, compared as the repository's <c>core.ignorecase</c> says, with whether
+    /// the tree's HEAD holds that gitlink too. The one reading of it, for the main tree a fold writes into and the agent's
+    /// worktree a hand-over writes into.
+    /// </summary>
+    /// <param name="git">Asks git.</param>
+    /// <param name="tree">The tree.</param>
+    /// <param name="ignoresCase">Whether the repository ignores case in the names of its paths.</param>
+    /// <param name="cancellationToken">Cancels the git processes.</param>
+    private sealed class Submodules(IGitClient git, string tree, Func<Task<bool>> ignoresCase, CancellationToken cancellationToken)
+    {
+        private IReadOnlyList<string>? _gitlinks;
+
+        /// <summary>The submodule each of <paramref name="paths"/> is or lies in, where one does, and where its record is.</summary>
+        /// <param name="paths">The paths.</param>
+        public async Task<IReadOnlyDictionary<string, (string Gitlink, Submodule In)>> OfAsync(IReadOnlyList<string> paths)
+        {
+            if (paths.Count == 0)
+            {
+                return new Dictionary<string, (string, Submodule)>(StringComparer.Ordinal);
+            }
+
+            _gitlinks ??= [.. (await git.ListIndexAsync(tree, cancellationToken).ConfigureAwait(false))
+                .Where(entry => entry.IsSubmodule)
+                .Select(entry => entry.Path)
+                .Distinct(StringComparer.Ordinal)];
+
+            if (_gitlinks.Count == 0)
+            {
+                return new Dictionary<string, (string, Submodule)>(StringComparer.Ordinal);
+            }
+
+            var comparison = await ignoresCase().ConfigureAwait(false) ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+            var found = paths
+                .Distinct(StringComparer.Ordinal)
+                .Select(path => (Path: path, Gitlink: _gitlinks.FirstOrDefault(gitlink => string.Equals(path, gitlink, comparison) || Below(path, gitlink, comparison))))
+                .Where(path => path.Gitlink is not null)
+                .ToList();
+            var held = found.Count == 0
+                ? new Dictionary<string, GitEntry>(StringComparer.Ordinal)
+                : await git.ListEntriesAtAsync(tree, "HEAD", [.. found.Select(path => path.Gitlink!).Distinct(StringComparer.Ordinal)], cancellationToken)
+                    .ConfigureAwait(false);
+
+            return found.ToDictionary(
+                path => path.Path,
+                path => (path.Gitlink!, held.TryGetValue(path.Gitlink!, out var entry) && entry.Type == "commit" ? Submodule.Committed : Submodule.Staged),
+                StringComparer.Ordinal);
+        }
+
+        /// <summary>Whether <paramref name="name"/> lies below the directory <paramref name="path"/>.</summary>
+        private static bool Below(string name, string path, StringComparison comparison)
+            => name.Length > path.Length && name[path.Length] == '/' && name.StartsWith(path, comparison);
+    }
+
+    /// <summary>
     /// How the main tree came to hold what it holds at each of <paramref name="paths"/> since the agent's base: the base
     /// asked for its entries there, and the main tree, through <paramref name="answers"/>, for its HEAD's, the submodule a
     /// path HEAD holds nothing at lies in, what its status lists where a commit moved a path or neither HEAD nor the base
@@ -3017,7 +3101,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         var unrecorded = asked.Where(path => path.Now != Holds.Nothing && !head.ContainsKey(path.Path)).Select(path => path.Path).ToList();
 
         // git looks at nothing below a submodule, and check-ignore refuses such a path: it came as the record above it did.
-        var submodules = await answers.SubmodulesAboveAsync(unrecorded).ConfigureAwait(false);
+        var submodules = await answers.SubmodulesAsync(unrecorded).ConfigureAwait(false);
         var read = new List<(string Path, Holds Now, GitEntry? AtBase, GitEntry? AtHead, bool SpelledOtherwise, bool Listed, Submodule In)>();
 
         foreach (var (path, now) in asked)

@@ -663,7 +663,11 @@ happens rather than left
 to ignore rules a repository can edit away - each changed file copied into its worktree, with the copy's SHA-256 and,
 where the platform has one, its execute bit, and each deletion made there too and recorded as absent. `seed.json` is
 then what the agent shares with the main tree, path by path. An untracked directory git will not look into - a
-repository of its own - is named and not handed, since a fold never moves one. A symbolic link is refused rather than
+repository of its own - is named and not handed, since a fold never moves one, and a path in a submodule the agent's
+worktree records - at or below a gitlink its index holds, where the main tree turned one into files of its own -
+refuses seed-agent and refresh-agent before anything is written (`AgentFold.InSubmodulesAsync`): a hand-over never
+writes into another repository, and rebase-agent, whose move takes the index along, brings in what the main tree
+committed there. A symbolic link is refused rather than
 handed over as the file it leads to, before the worktree is made, so the refusal leaves nothing behind. seed-agent
 counts as the agent's own only a change of what it shares that it made itself. What the main tree holds later is
 weighed against what the agent shares (`AgentFold.MovedAsync`), never against git status alone, which forgets a path
@@ -857,17 +861,19 @@ the agent's - where one of its files needs a directory, or in a directory one re
 remove, said made or changed since the base where the main tree did either, the same way, and a file git ignores
 where neither HEAD nor the base holds one - as `git check-ignore` says, asked only of what status lists nothing at
 where HEAD holds nothing and no submodule holds the path, never read from what status leaves out - is said ignored by
-git, with no word of when it came. A path in a submodule of the main tree's - below a gitlink its index holds, where
-git looks at nothing and `check-ignore` answers nothing - came as that record did: by a commit where HEAD holds it,
-then changed by an uncommitted edit where status lists the record, and by an uncommitted edit where only the index
-holds it (`Came`, the one wording of how a path came to be held, and `Since`, of what the main tree did, both decided
-once). A shared path's
+git, with no word of when it came. A file of a submodule of the main tree's in the way - below a gitlink its index
+holds, where git looks at nothing and `check-ignore` answers nothing - came as that record did: by a commit where HEAD
+holds it, then changed by an uncommitted edit where status lists the record, and by an uncommitted edit where only the
+index holds it (`Came`, the one wording of how a path came to be held, and `Since`, of what the main tree did, both
+decided once). A shared path's
 refusal says the main tree changed it after the agent was last handed it or folded, which the seed records alike. A deletion needs the same baseline proof a copy does. A directory with no `.git` of its own
 holds no file at its path, so a file the agent turned into a directory folds as the file's deletion and the directory's
 files, and a directory it turned into a file as the files' deletions and the file: every removal is made first, with
 the directories it empties, then every file written. A path reached through a link in either tree, a repository of
-its own - a submodule, or the agent's own - what the main tree holds in the way of the agent's files (a file where one
-needs a directory, or files the fold does not remove in a directory one replaces), a HEAD off the base and a move of
+its own - a submodule, or the agent's own - a path in a submodule of the main tree's - at or below a gitlink its index
+holds, said made by a commit or staged by an uncommitted edit, and left out where settled by hand, since nothing a fold
+wrote there could be committed in the main tree - what the main tree holds in the way of the agent's files (a file
+where one needs a directory, or files the fold does not remove in a directory one replaces), a HEAD off the base and a move of
 the base stopped part way are refused, and so is an anchor registry the agent changed as a file: its rows go in through its rows directory, weighed
 against the registry the fold would otherwise have written over. `--settled` is the way out of any path's refusal -
 `--merge` only of a path whose merge is clean - and a deletion can be settled too; a settled path the fold does not

@@ -940,6 +940,68 @@ public sealed class AgentServiceTests
         Assert.Contains(dry.Details!, line => line.StartsWith($"held now: '{worktree}' on local is held by ", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// A refresh never hands a path into a submodule the agent's worktree records: where the main tree turned a submodule
+    /// into files of its own, committed or not, the refresh is refused, exit 13, naming each path with the submodule it is
+    /// or lies in, and nothing is written.
+    /// </summary>
+    /// <param name="committed">Whether the main tree committed its files in the submodule's place.</param>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ARefresh_NeverHandsAPathIntoASubmoduleOfTheAgentsWorktree(bool committed)
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var nested = Path.Combine(kit.Main, "vendor", "lib");
+        await AgentFoldTests.MakeSubmoduleAsync(kit, nested, file: null, committed: true);
+        var worktree = await kit.CreateAgentAsync("ag");
+        await TurnTheSubmoduleIntoFilesAsync(kit, nested, committed);
+
+        var refused = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", new RefreshRequest { All = true }, apply: true, Token);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.StartsWith("Refreshing agent 'ag' of 'o1' would write into or remove from ", refused.Message, StringComparison.Ordinal);
+        Assert.Contains("'vendor/lib/x.c' in 'vendor/lib'", refused.Message, StringComparison.Ordinal);
+        Assert.False(File.Exists(Path.Combine(worktree, "vendor", "lib", "x.c")));
+    }
+
+    /// <summary>
+    /// Seeding an agent again never hands a path into a submodule its worktree records: where the main tree turned a
+    /// committed submodule into files of its own, uncommitted, the seeding is refused, exit 13, naming each path, and
+    /// nothing is written.
+    /// </summary>
+    [Fact]
+    public async Task Seeding_NeverHandsAPathIntoASubmoduleOfTheAgentsWorktree()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var nested = Path.Combine(kit.Main, "vendor", "lib");
+        await AgentFoldTests.MakeSubmoduleAsync(kit, nested, file: null, committed: true);
+        var worktree = await kit.CreateAgentAsync("ag");
+        await TurnTheSubmoduleIntoFilesAsync(kit, nested, committed: false);
+
+        var refused = await kit.Harness.AgentService.SeedAsync(kit.Main, "o1", "ag", empty: false, force: false, Token);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.StartsWith("Seeding agent 'ag' of 'o1' would write into or remove from ", refused.Message, StringComparison.Ordinal);
+        Assert.Contains("'vendor/lib/x.c' in 'vendor/lib'", refused.Message, StringComparison.Ordinal);
+        Assert.False(File.Exists(Path.Combine(worktree, "vendor", "lib", "x.c")));
+    }
+
+    /// <summary>The main tree's submodule at <paramref name="nested"/> made files of the main tree's own, x.c among them: committed where asked.</summary>
+    private static async Task TurnTheSubmoduleIntoFilesAsync(OrchestrationKit kit, string nested, bool committed)
+    {
+        await kit.GitAsync(kit.Main, "rm", "--cached", "--quiet", "vendor/lib");
+        AgentFoldTests.RemoveTree(Path.Combine(nested, ".git"));
+        OrchestrationKit.Write(kit.Main, "vendor/lib/x.c", "the main tree's\n");
+
+        if (committed)
+        {
+            await kit.Harness.CommitAllAsync(kit.Main, "the submodule's files, in the tree", Token);
+        }
+    }
+
     /// <summary>Takes the worktree at <paramref name="path"/> whole for a run of the test, for as long as the caller holds the attempt.</summary>
     private static async Task<Core.Execution.RunLockHandle> HoldTheWorktreeAsync(OrchestrationKit kit, string path)
     {

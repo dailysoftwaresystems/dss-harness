@@ -501,30 +501,31 @@ public sealed class AgentFoldTests
     }
 
     /// <summary>
-    /// A file of a repository the main tree records as a submodule is said made since the agent's base as that record
-    /// came: by a commit where HEAD holds it, by an uncommitted edit where only the index does - and the fold is refused,
-    /// never failed: git answers nothing of what it ignores below a submodule, so nothing below one is asked.
+    /// A path in a submodule of the main tree's is never written into it, whatever the submodule holds there - nothing, no
+    /// checkout at all, or a file of its own: the fold is refused, exit 13, saying the path lies in a submodule the main
+    /// tree made by a commit or staged by an uncommitted edit, and nothing is written there. git never asks the submodule
+    /// about the path, and check-ignore refuses it.
     /// </summary>
     /// <param name="committed">Whether the main tree committed the submodule, rather than only staged it.</param>
+    /// <param name="there">What the submodule holds at the path: nothing, no checkout at all, or a file.</param>
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task AFileOfASubmoduleOfTheMainTree_IsSaidMadeAsItsRecordCame_AndTheFoldIsRefused(bool committed)
+    [InlineData(false, "nothing")]
+    [InlineData(true, "nothing")]
+    [InlineData(false, "no checkout")]
+    [InlineData(true, "no checkout")]
+    [InlineData(false, "a file")]
+    [InlineData(true, "a file")]
+    public async Task APathInASubmoduleOfTheMainTree_IsRefused_NeverWrittenIntoIt(bool committed, string there)
     {
         using var temp = new TempDirectory();
         var kit = await OrchestrationKit.PrepareAsync(temp);
         var worktree = await kit.CreateAgentAsync("ag");
-        var at = ReportText.Commit(kit.Record("ag").Base!);
         var nested = Path.Combine(kit.Main, "vendor", "lib");
-        Directory.CreateDirectory(nested);
-        await kit.Harness.InitializeGitRepositoryAsync(nested, TestContext.Current.CancellationToken);
-        OrchestrationKit.Write(kit.Main, "vendor/lib/lib.c", "the clone's\n");
-        await kit.Harness.CommitAllAsync(nested, "the clone's", TestContext.Current.CancellationToken);
-        await kit.GitAsync(kit.Main, "add", "vendor/lib");
+        await MakeSubmoduleAsync(kit, nested, there == "a file" ? "the clone's\n" : null, committed);
 
-        if (committed)
+        if (there == "no checkout")
         {
-            await kit.Harness.CommitAllAsync(kit.Main, "a sibling's submodule", TestContext.Current.CancellationToken);
+            RemoveTree(nested);
         }
 
         OrchestrationKit.Write(worktree, "vendor/lib/lib.c", "the agent's\n");
@@ -533,11 +534,56 @@ public sealed class AgentFoldTests
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Contains(
-            refused.Details!,
-            line => line.StartsWith(
-                $"  'vendor/lib/lib.c' is not at the agent's base {at}, and the main tree made it since, {(committed ? "by a commit" : "by an uncommitted edit")}, "
-                    + "so writing the agent's copy would lose that change",
-                StringComparison.Ordinal));
+            $"  'vendor/lib/lib.c' lies in 'vendor/lib', a submodule of the main tree's {(committed ? "made by a commit" : "staged by an uncommitted edit")} - a "
+                + "repository of its own, which a fold never writes into or removes from",
+            refused.Details!);
+        Assert.Equal(there == "a file" ? "the clone's\n" : null, File.Exists(Path.Combine(nested, "lib.c")) ? OrchestrationKit.Read(kit.Main, "vendor/lib/lib.c") : null);
+    }
+
+    /// <summary>
+    /// A file of the agent's where the main tree records a submodule, its checkout gone, is never written there: the fold
+    /// is refused, exit 13, saying the path is a submodule of the main tree's, and nothing is written.
+    /// </summary>
+    [Fact]
+    public async Task AFileWhereTheMainTreeRecordsASubmodule_IsRefused_NeverWritten()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        var nested = Path.Combine(kit.Main, "vendor", "lib");
+        await MakeSubmoduleAsync(kit, nested, file: null, committed: true);
+        RemoveTree(nested);
+        OrchestrationKit.Write(worktree, "vendor/lib", "the agent's\n");
+
+        var refused = await kit.FoldAsync("ag", apply: true);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(
+            "  'vendor/lib' is a submodule of the main tree's made by a commit - a repository of its own, which a fold never writes into or removes from",
+            refused.Details!);
+        Assert.False(File.Exists(nested));
+    }
+
+    /// <summary>
+    /// A path in a submodule of the main tree's settled by hand is left out, never handed nor written: a fold never writes
+    /// into another repository, and --settled is not the way into one.
+    /// </summary>
+    [Fact]
+    public async Task APathInASubmoduleOfTheMainTree_SettledByHand_IsLeftOut_NeverWritten()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        var nested = Path.Combine(kit.Main, "vendor", "lib");
+        await MakeSubmoduleAsync(kit, nested, file: null, committed: true);
+        OrchestrationKit.Write(worktree, "vendor/lib/lib.c", "the agent's\n");
+
+        var folded = await kit.FoldAsync("ag", apply: true, "vendor/lib/lib.c");
+
+        Assert.True(folded.Succeeded, OrchestrationKit.Describe(folded));
+        Assert.Contains("  vendor/lib/lib.c   (in 'vendor/lib', a submodule of the main tree's - a repository of its own)", folded.Details!);
+        Assert.False(File.Exists(Path.Combine(nested, "lib.c")));
+        Assert.Equal("the agent's\n", OrchestrationKit.Read(worktree, "vendor/lib/lib.c"));
     }
 
     /// <summary>
@@ -795,7 +841,32 @@ public sealed class AgentFoldTests
             help,
             StringComparison.Ordinal);
 
+        Assert.Contains(
+            "for a link, a repository of its own, a path in a submodule of the main tree's - which the message says it made by a commit or "
+                + "staged, and which --settled leaves out - or a path leading out of the main tree",
+            help,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A path in a submodule the agent's worktree records - where the main tree turned one into files of its own - refuses "
+                + "seed-agent and refresh-agent, writing nothing: a hand-over never writes into another repository, and rebase-agent brings "
+                + "in what the main tree committed there.",
+            help,
+            StringComparison.Ordinal);
+
         var architecture = Prose.Document("docs", "architecture.md");
+
+        Assert.Contains(
+            "a path in a submodule of the main tree's - at or below a gitlink its index holds, said made by a commit or staged by an "
+                + "uncommitted edit, and left out where settled by hand, since nothing a fold wrote there could be committed in the main tree -",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "a path in a submodule the agent's worktree records - at or below a gitlink its index holds, where the main tree turned one "
+                + "into files of its own - refuses seed-agent and refresh-agent before anything is written (`AgentFold.InSubmodulesAsync`): a "
+                + "hand-over never writes into another repository, and rebase-agent, whose move takes the index along, brings in what the "
+                + "main tree committed there.",
+            architecture,
+            StringComparison.Ordinal);
 
         Assert.Contains(
             "A refusal of a main-tree path the agent shares nothing for, made, changed, made a directory of or removed since the "
@@ -815,8 +886,8 @@ public sealed class AgentFoldTests
                 + "replaces - is a file the fold does not remove, said made or changed since the base where the main tree did "
                 + "either, the same way, and a file git ignores where neither HEAD nor the base holds one - as `git check-ignore` says, "
                 + "asked only of what status lists nothing at where HEAD holds nothing and no submodule holds the path, never read from "
-                + "what status leaves out - is said ignored by git, with no word of when it came. A path in a submodule of the main "
-                + "tree's - below a gitlink its index holds, where git looks at nothing and `check-ignore` answers nothing - came as "
+                + "what status leaves out - is said ignored by git, with no word of when it came. A file of a submodule of the main "
+                + "tree's in the way - below a gitlink its index holds, where git looks at nothing and `check-ignore` answers nothing - came as "
                 + "that record did: by a commit where HEAD holds it, then changed by an uncommitted edit where status lists the "
                 + "record, and by an uncommitted edit where only the index holds it "
                 + "(`Came`, the one wording of how a path came to be held, and `Since`, of what the main tree did, both decided once).",
@@ -1829,6 +1900,40 @@ public sealed class AgentFoldTests
     }
 
     /// <summary>The real file system, except that one file is written anew just before its second read, as by an agent still at work.</summary>
+    /// <summary>
+    /// Makes a repository of its own at <paramref name="nested"/>, holding lib.c where <paramref name="file"/> is given,
+    /// and records it as a submodule of the main tree's: staged, and committed where <paramref name="committed"/>.
+    /// </summary>
+    internal static async Task MakeSubmoduleAsync(OrchestrationKit kit, string nested, string? file, bool committed)
+    {
+        Directory.CreateDirectory(nested);
+        await kit.Harness.InitializeGitRepositoryAsync(nested, TestContext.Current.CancellationToken);
+
+        if (file is not null)
+        {
+            File.WriteAllText(Path.Combine(nested, "lib.c"), file);
+            await kit.Harness.CommitAllAsync(nested, "the clone's", TestContext.Current.CancellationToken);
+        }
+
+        await kit.GitAsync(kit.Main, "add", Path.GetRelativePath(kit.Main, nested).Replace(Path.DirectorySeparatorChar, '/'));
+
+        if (committed)
+        {
+            await kit.Harness.CommitAllAsync(kit.Main, "a sibling's submodule", TestContext.Current.CancellationToken);
+        }
+    }
+
+    /// <summary>Removes <paramref name="directory"/> and everything in it, git's read-only objects among them.</summary>
+    internal static void RemoveTree(string directory)
+    {
+        foreach (var file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
+        {
+            File.SetAttributes(file, FileAttributes.Normal);
+        }
+
+        Directory.Delete(directory, recursive: true);
+    }
+
     private sealed class ShiftingFileSystem(IFileSystem inner, string file, string later) : PassThroughFileSystem(inner)
     {
         private int _reads;
