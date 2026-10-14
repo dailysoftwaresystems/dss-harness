@@ -920,6 +920,118 @@ public sealed partial class CliEndToEndTests
     }
 
     /// <summary>
+    /// A run check whose runner writes the tree is not refused for a leg typed in a copy the harness synced to a host:
+    /// whatever the leg's localCopy key says, it works in the tree itself there, as the placement's own rule places it,
+    /// so the check writes the tree - and the copy whose making the refusal exists to prevent is never made anyway.
+    /// </summary>
+    [Fact]
+    public async Task ARunCheckWhoseRunnerWritesTheTree_IsNotRefusedForALegTypedInASyncedCopy()
+    {
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var harness = new HarnessFactory();
+        var platform = harness.Platform;
+
+        await harness.InitializeHarnessAsync(temp.Path, token, new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Legs =
+            {
+                ["native"] = new LegConfig { Os = platform.PlatformKey, Processor = platform.Processor, Config = "debug", LocalCopy = true },
+            },
+            PredefinedRunners =
+            {
+                ["format"] = new RunnerConfig
+                {
+                    WritesTree = true,
+                    Phases = [new RunnerPhase { Name = "tidy", Command = ["dotnet", "--version"] }],
+                },
+                ["probe"] = new RunnerConfig
+                {
+                    Phases = [new RunnerPhase { Name = "look", Command = ["dotnet", "--version"] }],
+                    ExpectedExceptions =
+                    [
+                        new ExpectedException
+                        {
+                            ExceptionType = "Flake",
+                            Messages = ["it flaked"],
+                            Message = "excused: the device was busy",
+                            EarnedOn = "2026-10-13",
+                            EarnedAt = "local",
+                            Mechanism = "the device is shared",
+                            Anchor = "D-AREA-TOPIC-ONE",
+                            RunChecks = [new RunCheck { PredefinedRunner = "format" }],
+                        },
+                    ],
+                },
+            },
+        });
+
+        temp.WriteFile(Path.Combine(HarnessLayout.DirectoryName, HarnessLayout.SyncedCopyMarkerName), "{}");
+
+        var run = await CliRunner.RunAsync(["run", "probe", "--legs", "native", "-C", temp.Path], token);
+
+        Assert.Equal(HarnessExit.Success, run.ExitCode);
+        Assert.Contains($"native: starting on local, in '{temp.Path}' itself", run.StandardOutput, StringComparison.Ordinal);
+        Assert.Empty(Directory.GetDirectories(Path.Combine(temp.Path, HarnessLayout.LegsDirectoryName)));
+    }
+
+    /// <summary>
+    /// A run check whose runner writes the tree is not refused for a leg no host can run, though its localCopy key says
+    /// a copy: the leg works nowhere, so no copy is ever made for the check's writes to be lost in, and the run says the
+    /// leg cannot run its own way rather than offering --in-place as a remedy for a copy that would never exist.
+    /// </summary>
+    [Fact]
+    public async Task ARunCheckWhoseRunnerWritesTheTree_IsNotRefusedForALegNoHostCanRun_ThoughItsKeySaysACopy()
+    {
+        using var alone = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var harness = new HarnessFactory();
+        var platform = harness.Platform;
+        var elsewhere = platform.PlatformKey == PlatformNames.Linux ? PlatformNames.Windows : PlatformNames.Linux;
+
+        await harness.InitializeHarnessAsync(alone.Path, token, new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Legs =
+            {
+                ["nowhere"] = new LegConfig { Os = elsewhere, Processor = "x86_64", Config = "debug", LocalCopy = true },
+            },
+            PredefinedRunners =
+            {
+                ["format"] = new RunnerConfig
+                {
+                    WritesTree = true,
+                    Phases = [new RunnerPhase { Name = "tidy", Command = ["dotnet", "--version"] }],
+                },
+                ["probe"] = new RunnerConfig
+                {
+                    Phases = [new RunnerPhase { Name = "look", Command = ["dotnet", "--version"] }],
+                    ExpectedExceptions =
+                    [
+                        new ExpectedException
+                        {
+                            ExceptionType = "Flake",
+                            Messages = ["it flaked"],
+                            Message = "excused: the device was busy",
+                            EarnedOn = "2026-10-13",
+                            EarnedAt = "local",
+                            Mechanism = "the device is shared",
+                            Anchor = "D-AREA-TOPIC-ONE",
+                            RunChecks = [new RunCheck { PredefinedRunner = "format" }],
+                        },
+                    ],
+                },
+            },
+        });
+
+        var run = await CliRunner.RunAsync(["run", "probe", "--legs", "nowhere", "-C", alone.Path], token);
+
+        Assert.Equal(LegsExit.Unavailable, run.ExitCode);
+        Assert.DoesNotContain("writes the tree", run.StandardOutput + run.StandardError, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A run check whose runner's steps cannot be read leaves the run to go on, its legs counted heavy and not built for
     /// it, and says so as the run begins: refused here, a run was refused for a check that may never run, and the check
     /// that runs it refuses it as it always did; taken as light, its legs could build with no slot at all.

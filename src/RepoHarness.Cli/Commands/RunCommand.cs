@@ -271,7 +271,15 @@ internal static class RunCommand
                         + "Run it on a leg this machine runs itself.");
                 }
 
-                foreach (var leg in legs.Where(leg => where == LocalTrees.AsConfigured && LegTrees.Configured(harness.Config, leg.Leg)))
+                // The key alone does not decide where a copy would be made: only a leg this machine runs itself works
+                // in one, as the placement places it (LegTrees.For). A leg typed in a synced copy works in the tree
+                // itself whatever its key says, so the check is not refused there; and a leg no host can run works
+                // nowhere, so the copy this refusal exists to keep the check's writes out of is never made - the run
+                // says so its own way, not over its localCopy key.
+                foreach (var leg in legs.Where(leg => where == LocalTrees.AsConfigured
+                        && RunsHere(platform, harness.Config, leg.Leg, here)
+                        && !harness.IsSyncedCopy
+                        && LegTrees.Configured(harness.Config, leg.Leg)))
                 {
                     throw new HarnessException(
                         HarnessExit.Refused,
