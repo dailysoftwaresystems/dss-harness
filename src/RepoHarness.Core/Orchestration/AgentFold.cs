@@ -529,15 +529,16 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             if (baseline is { } before)
             {
                 // A shared path goes in only where the main tree still holds what both trees held: anything else is a change
-                // of the main tree's that writing or removing the agent's would lose.
+                // of the main tree's that writing or removing the agent's would lose. Said of when it was last shared - handed
+                // to the agent or written by a fold - since the seed records either alike.
                 if (look.Main != before)
                 {
                     var why = (before.Kind, look.Main.Kind) switch
                     {
-                        (Kind.File, Kind.Absent) => $"'{path}' was handed to the agent, and the main tree no longer holds it",
+                        (Kind.File, Kind.Absent) => $"'{path}' was in both trees when the agent was last handed it or folded, and the main tree no longer holds it",
                         (Kind.Absent, _) => $"'{path}' was absent from both trees when the agent was last handed it or folded, and the main tree holds it now",
-                        _ when look.Agent.Kind == Kind.Absent => $"'{path}': the main tree changed it after it was handed to the agent, so removing it would lose that change",
-                        _ => $"'{path}': the main tree changed it after it was handed to the agent, so writing the agent's copy would lose that change",
+                        _ when look.Agent.Kind == Kind.Absent => $"'{path}': the main tree changed it after the agent was last handed it or folded, so removing it would lose that change",
+                        _ => $"'{path}': the main tree changed it after the agent was last handed it or folded, so writing the agent's copy would lose that change",
                     };
 
                     // Two changes of one file, where both trees hold one: what a merge of them gives is measured, from what
@@ -600,19 +601,20 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         // an edit while it is not.
         if (drifted.Count > 0)
         {
-            var head = await _gitClient.HeldAtAsync(main, "HEAD", [.. drifted.Select(drift => drift.Look.Path)], cancellationToken).ConfigureAwait(false);
-
-            // What the base held there - a link, which is no file to merge, and whether it could be run, never read where the
-            // platform keeps no such bit - is its entry, asked for the paths a merge is measured for alone.
-            var mergeable = drifted.Where(drift => BothHoldAFile(drift.Look)).Select(drift => drift.Look.Path).ToList();
-            var entries = mergeable.Count > 0
-                ? await _gitClient.ListEntriesAtAsync(worktree, baseCommit, mergeable, cancellationToken).ConfigureAwait(false)
-                : new Dictionary<string, GitEntry>(StringComparer.Ordinal);
+            // Each entry - its blob and its mode, as git compares a commit - at the main tree's HEAD and at the base: a commit
+            // that changed the path's mode alone moved it as surely as one that changed its bytes. What the base held there
+            // is also what a merge is measured from: a link, which is no file to merge, and whether it could be run, never
+            // read where the platform keeps no such bit.
+            IReadOnlyList<string> drifting = [.. drifted.Select(drift => drift.Look.Path)];
+            var head = await _gitClient.ListEntriesAtAsync(main, "HEAD", drifting, cancellationToken).ConfigureAwait(false);
+            var entries = await _gitClient.ListEntriesAtAsync(worktree, baseCommit, drifting, cancellationToken).ConfigureAwait(false);
 
             foreach (var (look, baseBlob, consequence) in drifted)
             {
                 var path = look.Path;
-                var how = head.GetValueOrDefault(path)?.Blob != baseBlob ? "by a commit - its HEAD no longer holds what the base holds -" : "by an uncommitted edit";
+                var how = head.GetValueOrDefault(path) != entries.GetValueOrDefault(path)
+                    ? "by a commit - its HEAD no longer holds what the base holds -"
+                    : "by an uncommitted edit,";
                 var why = $"'{path}': the main tree changed it after the agent's base {at}, {how} {consequence}";
 
                 if (BothHoldAFile(look))

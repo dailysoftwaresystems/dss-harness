@@ -281,7 +281,7 @@ public sealed class AgentArmRegistryTests
         var refused = await kit.FoldAsync(Agent, apply: true);
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
-        Assert.Contains(refused.Details!, line => line.StartsWith($"  '{Registry}': the main tree changed it after it was handed to the agent", StringComparison.Ordinal)
+        Assert.Contains(refused.Details!, line => line.StartsWith($"  '{Registry}': the main tree changed it after the agent was last handed it or folded", StringComparison.Ordinal)
             && line.EndsWith(
                 $"; no three-way merge is offered: the bytes both trees shared (SHA-256 {recorded[..8]}...) were recorded by a build that kept no copy of them, and none of the "
                 + "1 version(s) of the path in the last 512 commit(s) of the main tree that changed it is those bytes",

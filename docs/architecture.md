@@ -811,7 +811,9 @@ the file whole with its bit, so a bit its session changes after the weighing is 
 silently absorbed - so a later fold - after a review sends the agent back - weighs
 those paths against what the fold left, never against the base: the agent putting a path back as it was is its change
 to fold. A refusal of a changed main-tree path says whether a commit or an uncommitted edit changed it, since the two
-are reconciled differently. A deletion needs the same baseline proof a copy does. A directory with no `.git` of its own
+are reconciled differently - the main tree's HEAD compared with the base entry by entry, as git compares a commit, so a
+commit of a mode alone is a commit - and a shared path's says the main tree changed it after the agent was last handed it
+or folded, which the seed records alike. A deletion needs the same baseline proof a copy does. A directory with no `.git` of its own
 holds no file at its path, so a file the agent turned into a directory folds as the file's deletion and the directory's
 files, and a directory it turned into a file as the files' deletions and the file: every removal is made first, with
 the directories it empties, then every file written. A path reached through a link in either tree, a repository of

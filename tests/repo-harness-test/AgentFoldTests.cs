@@ -85,7 +85,7 @@ public sealed class AgentFoldTests
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Contains(
-            "  'a.txt': the main tree changed it after it was handed to the agent, so writing the agent's copy would lose that change; a three-way merge "
+            "  'a.txt': the main tree changed it after the agent was last handed it or folded, so writing the agent's copy would lose that change; a three-way merge "
             + "of the two conflicts in 1 place(s), shown below: reconcile it by hand, then --settled a.txt",
             refused.Details!);
         Assert.Equal("two\n", OrchestrationKit.Read(kit.Main, "b.txt"));
@@ -97,8 +97,8 @@ public sealed class AgentFoldTests
     /// main tree still holds as an edit, or holds committed, is never written over, and the refusal says which it was.
     /// </summary>
     [Theory]
-    [InlineData(false, "by an uncommitted edit")]
-    [InlineData(true, "by a commit")]
+    [InlineData(false, "by an uncommitted edit, so writing the agent's copy would lose that change")]
+    [InlineData(true, "by a commit - its HEAD no longer holds what the base holds - so writing the agent's copy would lose that change")]
     public async Task APathTheMainTreeChangedSinceTheBase_IsRefused_SayingHow(bool committed, string how)
     {
         using var temp = new TempDirectory();
@@ -118,6 +118,75 @@ public sealed class AgentFoldTests
         Assert.Contains(refused.Details!, line => line.StartsWith("  'b.txt': the main tree changed it after the agent's base", StringComparison.Ordinal) && line.Contains(how, StringComparison.Ordinal));
         Assert.Contains(refused.Details!, line => line.Contains("--settled <path>", StringComparison.Ordinal));
         Assert.Equal("two\nsibling edit\n", OrchestrationKit.Read(kit.Main, "b.txt"));
+    }
+
+    /// <summary>
+    /// A path whose mode alone the main tree committed since the agent's base - made runnable, its bytes as the base holds
+    /// them - is said to have changed by a commit, as git compares a commit's entry, its mode among it: never by an
+    /// uncommitted edit.
+    /// </summary>
+    [Fact]
+    public async Task APathWhoseModeAloneTheMainTreeCommitted_IsSaidChangedByACommit()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        var runnable = Path.Combine(kit.Main, "b.txt");
+
+        // The index's mode is what a platform with no execute bit commits; the file's is what one with it does.
+        await kit.GitAsync(kit.Main, "update-index", "--chmod=+x", "b.txt");
+
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(runnable, File.GetUnixFileMode(runnable) | UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute);
+        }
+
+        await kit.Harness.CommitAllAsync(kit.Main, "b.txt runs", TestContext.Current.CancellationToken);
+
+        var refused = await kit.FoldAsync("ag", apply: true);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(
+            refused.Details!,
+            line => line.StartsWith("  'b.txt': the main tree changed it after the agent's base", StringComparison.Ordinal)
+                && line.Contains("by a commit - its HEAD no longer holds what the base holds - so writing the agent's copy would lose that change", StringComparison.Ordinal));
+        Assert.DoesNotContain(refused.Details!, line => line.StartsWith("  'b.txt'", StringComparison.Ordinal) && line.Contains("uncommitted", StringComparison.Ordinal));
+        Assert.Equal("two\n", OrchestrationKit.Read(kit.Main, "b.txt"));
+    }
+
+    /// <summary>
+    /// A path a fold wrote - shared with the main tree by that fold, never handed to the agent - that the main tree changed
+    /// or removed since is refused in words true of every shared path: what the main tree did after the agent was last
+    /// handed it or folded, never that it was handed.
+    /// </summary>
+    [Theory]
+    [InlineData(false, "  'b.txt': the main tree changed it after the agent was last handed it or folded, so writing the agent's copy would lose that change")]
+    [InlineData(true, "  'b.txt' was in both trees when the agent was last handed it or folded, and the main tree no longer holds it")]
+    public async Task AFoldedPathTheMainTreeChangedSince_IsRefused_InWordsTrueOfEverySharedPath(bool removed, string said)
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        Assert.True((await kit.FoldAsync("ag", apply: true)).Succeeded);
+
+        if (removed)
+        {
+            File.Delete(Path.Combine(kit.Main, "b.txt"));
+        }
+        else
+        {
+            OrchestrationKit.Write(kit.Main, "b.txt", "two\nagent edit\nmain edit\n");
+        }
+
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit again\n");
+
+        var refused = await kit.FoldAsync("ag", apply: true);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(refused.Details!, line => line.StartsWith(said, StringComparison.Ordinal));
+        Assert.DoesNotContain(refused.Details!, line => line.Contains("handed to the agent", StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -731,7 +800,7 @@ public sealed class AgentFoldTests
         var refused = await kit.FoldAsync("ag", apply: true);
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
-        Assert.Contains("  'a.txt': the main tree changed it after it was handed to the agent, so removing it would lose that change", refused.Details!);
+        Assert.Contains("  'a.txt': the main tree changed it after the agent was last handed it or folded, so removing it would lose that change", refused.Details!);
         Assert.Equal("one\nmain edit\nand another\n", OrchestrationKit.Read(kit.Main, "a.txt"));
     }
 

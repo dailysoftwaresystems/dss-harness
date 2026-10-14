@@ -52,7 +52,7 @@ public sealed class AgentFoldMergeTests
 
     [Theory]
     [InlineData(false, "the main tree changed it after the agent's base")]
-    [InlineData(true, "the main tree changed it after it was handed to the agent, so writing the agent's copy would lose that change")]
+    [InlineData(true, "the main tree changed it after the agent was last handed it or folded, so writing the agent's copy would lose that change")]
     public async Task APathBothTreesChanged_StillRefusesTheFold_AndItsLineSaysTheMergeIsClean_AndNamesTheOptionForIt(bool handed, string reason)
     {
         using var temp = new TempDirectory();
