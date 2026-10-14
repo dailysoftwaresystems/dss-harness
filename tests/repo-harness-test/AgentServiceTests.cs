@@ -876,6 +876,78 @@ public sealed class AgentServiceTests
     }
 
     /// <summary>
+    /// A path the main tree already holds as the agent does is recorded by the fold with the bit it was measured with, not
+    /// the bit its session gives it meanwhile: nothing is written over an already-in path and no guard runs there, and the
+    /// record then says what both trees held as it was measured - so the agent's later change of the bit stays its own, to
+    /// fold like any other change, instead of being silently absorbed.
+    /// </summary>
+    [Fact]
+    public async Task APathAlreadyInTheMainTree_IsRecordedByTheFoldWithTheBitItWasMeasuredWith()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Windows keeps no execute bit with a file.");
+
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nalike\n");
+        OrchestrationKit.Write(kit.Main, "z.txt", "zed\nalike\n");
+        File.Copy(Path.Combine(kit.Main, "a.txt"), Path.Combine(worktree, "a.txt"), overwrite: true);
+        File.Copy(Path.Combine(kit.Main, "z.txt"), Path.Combine(worktree, "z.txt"), overwrite: true);
+        var alike = Path.Combine(worktree, "a.txt");
+
+        // The second reading of z.txt is the one that follows a.txt's measuring read: the session makes a.txt runnable in
+        // between, after it was weighed and before the fold records it.
+        var agents = kit.Harness.Agents(
+            new AgentFoldMergeTests.MeanwhileFileSystem(kit.Harness.FileSystem, Path.Combine(worktree, "z.txt"), 2, () => kit.Harness.FilePermissions.SetExecutable(alike, executable: true)),
+            kit.Harness.AnchorRegistryService);
+
+        var folded = await agents.FoldAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: true, Token);
+        var seed = kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!;
+
+        Assert.True(folded.Succeeded, OrchestrationKit.Describe(folded));
+        Assert.Equal(await DigestAsync(kit.Main, "a.txt"), seed.Paths["a.txt"]);
+        Assert.DoesNotContain("a.txt", seed.Executable ?? []);
+
+        var again = await kit.Harness.AgentService.FoldAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: true, Token);
+
+        Assert.True(again.Succeeded, OrchestrationKit.Describe(again));
+        Assert.True(kit.Harness.FilePermissions.IsExecutable(Path.Combine(kit.Main, "a.txt")), "The agent's change of the bit was not folded.");
+    }
+
+    /// <summary>
+    /// A dry run that could not read what it weighs keeps its failure's code where a run also holds what its --apply
+    /// takes: what cannot be read stands above a holder in the plan's order, and the dry run's lines name the holder
+    /// either way, never turning the failure into a refusal.
+    /// </summary>
+    [Fact]
+    public async Task ADryRunThatCouldNotReadWhatItWeighs_KeepsItsOwnCode_AndStillNamesTheRunHoldingWhatItsApplyTakes()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit\n");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        await using var held = await HoldTheWorktreeAsync(kit, worktree);
+
+        var agents = kit.Harness.Agents(new UnreadableFileSystem(kit.Harness.FileSystem, Path.Combine(kit.Main, "a.txt")), kit.Harness.AnchorRegistryService);
+        var dry = await agents.RefreshAsync(kit.Main, "o1", "ag", new RefreshRequest { All = true }, apply: false, Token);
+
+        Assert.Equal(HarnessExit.CommandFailed, dry.ExitCode);
+        Assert.StartsWith("Agent 'ag' of 'o1' was not refreshed: what it or the main tree holds cannot be read", dry.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("a run also holds", dry.Message, StringComparison.Ordinal);
+        Assert.Contains(dry.Details!, line => line.StartsWith($"held now: '{worktree}' on local is held by ", StringComparison.Ordinal));
+    }
+
+    /// <summary>Takes the worktree at <paramref name="path"/> whole for a run of the test, for as long as the caller holds the attempt.</summary>
+    private static async Task<Core.Execution.RunLockHandle> HoldTheWorktreeAsync(OrchestrationKit kit, string path)
+    {
+        var attempt = await kit.Harness.RunLock
+            .TryAcquireAsync(new Core.Repository.HarnessLayout(kit.Main, kit.Main), new Core.Execution.LockRequest { Host = "local", Tree = path, Scope = Core.Execution.LockScope.TreeExclusive, RunId = Core.Execution.RunId.New(), Command = "test" }, Token);
+
+        return attempt.Handle ?? throw new InvalidOperationException($"the test could not hold '{path}': {attempt.HeldBy}");
+    }
+
+    /// <summary>
     /// A refresh that stops in its hand-over merges nothing, though every merge is clean and named: each merge is
     /// written only once everything else is handed, so nothing of the agent's is written over while paths it was to be
     /// handed still stand - and what stopped it is said with both counts.
@@ -2037,6 +2109,20 @@ public sealed class AgentServiceTests
             }
 
             base.CopyFile(source, destination, overwrite);
+        }
+    }
+
+    /// <summary>The real file system, except that one file cannot be read, as while another program holds it.</summary>
+    private sealed class UnreadableFileSystem(Core.FileSystem.IFileSystem inner, string held) : PassThroughFileSystem(inner)
+    {
+        public override Stream OpenRead(string path)
+        {
+            if (string.Equals(Path.GetFullPath(path), Path.GetFullPath(held), StringComparison.OrdinalIgnoreCase))
+            {
+                throw new IOException($"The process cannot access the file '{path}' because it is being used by another process.");
+            }
+
+            return base.OpenRead(path);
         }
     }
 }

@@ -118,6 +118,45 @@ public sealed class TreeHoldersTests
         Assert.Contains(dry.Details!, line => line.StartsWith($"held now: '{worktree}' on local is held by ", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// A holder that holds one variant of the tree is named as the one owner of a tree with its host and its variant
+    /// spells it - the same words the --apply's own refusal says, in the same order.
+    /// </summary>
+    [Fact]
+    public async Task AVariantHoldingHolder_IsNamedAsTheOneOwnerSpellsATreeWithItsHostAndVariant()
+    {
+        using var temp = new TempDirectory();
+        var (kit, worktree) = await AFoldToMakeAsync(temp);
+
+        await using var held = await HoldSharedAsync(kit, worktree, RunId.New(), variant: "debug");
+
+        var dry = await kit.FoldAsync("ag", apply: false);
+
+        Assert.Equal(HarnessExit.Refused, dry.ExitCode);
+        Assert.Contains(dry.Details!, line => line.StartsWith($"held now: '{worktree}' variant 'debug' on local is held by ", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Every holder is named, in the lock file's order: two runs each holding one variant of the worktree - which a
+    /// fold's --apply, taking the tree whole, refuses both - give two lines, not one.
+    /// </summary>
+    [Fact]
+    public async Task TwoRunsEachHoldingAVariantOfTheWorktree_AreBothNamed_ByTheDryRunThatTakesTheTree()
+    {
+        using var temp = new TempDirectory();
+        var (kit, worktree) = await AFoldToMakeAsync(temp);
+
+        await using var one = await HoldSharedAsync(kit, worktree, RunId.New(), variant: "debug");
+        await using var two = await HoldSharedAsync(kit, worktree, RunId.New(), variant: "release");
+
+        var dry = await kit.FoldAsync("ag", apply: false);
+
+        Assert.Equal(HarnessExit.Refused, dry.ExitCode);
+        Assert.Equal(2, dry.Details!.Count(line => line.StartsWith("held now: ", StringComparison.Ordinal)));
+        Assert.Contains(dry.Details!, line => line.Contains("variant 'debug'", StringComparison.Ordinal));
+        Assert.Contains(dry.Details!, line => line.Contains("variant 'release'", StringComparison.Ordinal));
+    }
+
     /// <summary>The dry runs of delete-agent, refresh-agent and rebase-agent name the run that holds what their applies take, in the same sentence.</summary>
     [Fact]
     public async Task TheDryRunsOfTheOtherThreeVerbsEndInTheSameSentence()
@@ -256,6 +295,67 @@ public sealed class TreeHoldersTests
 
         Assert.Equal(HarnessExit.Refused, holding.ExitCode);
         Assert.Contains(holding.Details!, line => line.EndsWith(", whose leg holds a heavy-leg slot: it runs, or starts as soon as the memory and the room allow.", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Where a holder's leg stands is joined to the lock's entry by the run and the tree both name: one run on two trees,
+    /// holding a slot on the first and waiting on the second, stands as the tree asked about says - not as its other tree
+    /// does.
+    /// </summary>
+    [Fact]
+    public async Task OneRunOnTwoTrees_StandsWithTheTreeAskedAbout()
+    {
+        using var temp = new TempDirectory();
+        var (kit, worktree) = await AFoldToMakeAsync(temp);
+        var run = RunId.New();
+
+        await using var held = await HoldAsync(kit, worktree, run);
+
+        WriteSlots(
+            kit,
+            InLine(kit, "/src/first", run.Value, "first"),
+            InLine(kit, "/src/second", "run-other", "other"),
+            InLine(kit, worktree, run.Value));
+
+        var dry = await kit.FoldAsync("ag", apply: false);
+
+        Assert.Equal(HarnessExit.Refused, dry.ExitCode);
+        Assert.Contains(
+            dry.Details!,
+            line => line.StartsWith($"held now: '{worktree}' on local is held by ", StringComparison.Ordinal)
+                && line.EndsWith(", whose leg has not started: it waits for a heavy-leg slot, 2 leg(s) ahead of it.", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A dry run of a deletion names the run that holds what its --apply takes whether its own request is refused or not:
+    /// refused over a path --merge names that the fold weighs not, and refused because the agent is not whole, both end
+    /// in the one clause, with the holder on a line of their own.
+    /// </summary>
+    [Fact]
+    public async Task ADryRunOfADeletionRefusedForItsOwnRequest_NamesTheRunToo_HoweverItIsRefused()
+    {
+        using var temp = new TempDirectory();
+        var (kit, worktree) = await AFoldToMakeAsync(temp);
+
+        await using (await HoldAsync(kit, worktree))
+        {
+            var refused = await kit.DeleteAsync("ag", apply: false, new FoldAllowances { Merge = ["src/typo.txt"] });
+
+            Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+            Assert.EndsWith(TreeHolders.AlsoHeld, refused.Message, StringComparison.Ordinal);
+            Assert.Contains(refused.Details!, line => line.StartsWith($"held now: '{worktree}' on local is held by ", StringComparison.Ordinal));
+        }
+
+        File.Delete(kit.Layout.SeedFile("ag"));
+
+        await using (await HoldAsync(kit, worktree))
+        {
+            var notWhole = await kit.DeleteAsync("ag", apply: false);
+
+            Assert.Equal(HarnessExit.Refused, notWhole.ExitCode);
+            Assert.EndsWith(TreeHolders.AlsoHeld, notWhole.Message, StringComparison.Ordinal);
+            Assert.Contains(notWhole.Details!, line => line.StartsWith($"held now: '{worktree}' on local is held by ", StringComparison.Ordinal));
+        }
     }
 
     /// <summary>
@@ -400,5 +500,34 @@ public sealed class TreeHoldersTests
 
         Assert.Equal(before, File.ReadAllText(layout.LockFile));
         Assert.Single(AdmissionKit.Read(kit.Harness.Slots.Location));
+    }
+
+    /// <summary>
+    /// A gone agent's dry run asks the lock for the worktree as its --apply spells it, links resolved: where the worktrees
+    /// root is a link, a run holding the worktree's reached path is named and the dry run is refused as its --apply is,
+    /// never exiting as though the tree were free.
+    /// </summary>
+    [Fact]
+    public async Task AGoneAgentsDryRun_ResolvesTheWorktreesLinks_AsItsApplyDoes()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp, settings: OrchestrationKit.SettingsWith(root: "wt-link"));
+        var reached = temp.Combine("wt-real");
+        Directory.Move(Path.Combine(kit.Main, "wt-link"), reached);
+        TestLinks.DirectoryLink(Path.Combine(kit.Main, "wt-link"), reached);
+        await kit.CreateAgentAsync("ag");
+
+        // Spelled through the link, as the agent's record spells it - which is what makes resolving it matter.
+        var worktree = WorktreeAddress.Nested(OrchestrationKit.Orchestrator, "ag").PathUnder(Path.Combine(kit.Main, "wt-link"));
+        Directory.Delete(worktree, true);
+        var resolved = kit.Harness.FileSystem.ResolveLinks(worktree);
+
+        await using var held = await HoldAsync(kit, resolved);
+
+        var dry = await kit.DeleteAsync("ag", apply: false, discard: true);
+
+        Assert.Equal(HarnessExit.Refused, dry.ExitCode);
+        Assert.EndsWith(TreeHolders.Blocked, dry.Message, StringComparison.Ordinal);
+        Assert.Contains(dry.Details!, line => line.StartsWith($"held now: '{resolved}' on local is held by ", StringComparison.Ordinal));
     }
 }

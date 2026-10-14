@@ -108,6 +108,26 @@ public sealed class DryRunsTests
     }
 
     /// <summary>
+    /// A dry run whose verb could not read what it weighs keeps its failure's code where a run also holds what its --apply
+    /// takes: what cannot be read stands above a holder in the plan's order, and the holder is named on the dry run's
+    /// lines as ever.
+    /// </summary>
+    [Fact]
+    public void AFailingDryRunThatARunAlsoHolds_KeepsItsOwnCode_AndNamesTheHolderOnItsLines()
+    {
+        var failed = CommandOutcome.Failed(
+            HarnessExit.CommandFailed,
+            "the failure",
+            ["  a line", $"held now: 'C:\\src\\repo\\.worktrees\\o\\a' on local is held by pid 4242, run 20261012-151500-ab12cd34, since then, running 'test'."]);
+
+        var outcome = DryRuns.Outcome(failed, null, ATreeHeld());
+
+        Assert.Same(failed, outcome);
+        Assert.Equal(HarnessExit.CommandFailed, outcome.ExitCode);
+        Assert.Equal("the failure", outcome.Message);
+    }
+
+    /// <summary>
     /// A dry run that is refused for its own request, or needs a consent, and that a run also holds, keeps its own words
     /// and ends in the one clause that says so - never the words "nothing in this request needs correcting".
     /// </summary>

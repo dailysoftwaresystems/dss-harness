@@ -132,7 +132,7 @@ public sealed class TreeHolders(RunLock runLock, HeavyLegSlots slots, IProcessId
     {
         ArgumentNullException.ThrowIfNull(layout);
 
-        IReadOnlyList<SlotEntry> line;
+        IReadOnlyList<SlotInLine> line;
         string? standingUnread = null;
 
         try
@@ -159,7 +159,7 @@ public sealed class TreeHolders(RunLock runLock, HeavyLegSlots slots, IProcessId
         ArgumentNullException.ThrowIfNull(wanted);
         ArgumentNullException.ThrowIfNull(holder);
 
-        IReadOnlyList<SlotEntry> line;
+        IReadOnlyList<SlotInLine> line;
 
         try
         {
@@ -176,7 +176,7 @@ public sealed class TreeHolders(RunLock runLock, HeavyLegSlots slots, IProcessId
     }
 
     /// <summary>One holder: the lock's entry, joined with the line, and the sentence of it.</summary>
-    private TreeHolder Holder(LockEntry entry, IReadOnlyList<SlotEntry> line, bool copy)
+    private TreeHolder Holder(LockEntry entry, IReadOnlyList<SlotInLine> line, bool copy)
     {
         var standing = Standing(entry, line, out var ahead);
 
@@ -185,7 +185,7 @@ public sealed class TreeHolders(RunLock runLock, HeavyLegSlots slots, IProcessId
             entry,
             standing,
             standing == HolderStanding.Waiting ? ahead : null,
-            $"'{entry.Tree}' on {entry.Host}{(entry.Variant is { } variant ? $" variant '{variant}'" : string.Empty)} is held by {Held(entry, Tail(standing, ahead))}.");
+            $"{RunLock.TreeNamed(entry.Host, entry.Tree, entry.Variant)} is held by {Held(entry, Tail(standing, ahead))}.");
     }
 
     /// <summary>
@@ -202,17 +202,17 @@ public sealed class TreeHolders(RunLock runLock, HeavyLegSlots slots, IProcessId
     /// Where the leg of <paramref name="entry"/>'s run stands: it holds a slot where any of its places in the line does,
     /// it waits where the line holds it further back, and where the lock names an ssh host, that host's own record says.
     /// </summary>
-    private HolderStanding? Standing(LockEntry entry, IReadOnlyList<SlotEntry> line, out int ahead)
+    private HolderStanding? Standing(LockEntry entry, IReadOnlyList<SlotInLine> line, out int ahead)
     {
         ahead = 0;
 
         var places = line
             .Select((slot, at) => (slot, at))
-            .Where(place => string.Equals(place.slot.RunId, entry.Holder.RunId, StringComparison.Ordinal)
-                && place.slot.ProcessId == entry.Holder.ProcessId
-                && string.Equals(place.slot.Host, entry.Host, StringComparison.OrdinalIgnoreCase)
-                && string.Equals(place.slot.Tree, entry.Tree, StringComparison.OrdinalIgnoreCase)
-                && string.Equals(place.slot.Variant ?? string.Empty, entry.Variant ?? string.Empty, StringComparison.OrdinalIgnoreCase))
+            .Where(place => string.Equals(place.slot.Entry.RunId, entry.Holder.RunId, StringComparison.Ordinal)
+                && place.slot.Entry.ProcessId == entry.Holder.ProcessId
+                && string.Equals(place.slot.Entry.Host, entry.Host, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(place.slot.Entry.Tree, entry.Tree, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(place.slot.Entry.Variant ?? string.Empty, entry.Variant ?? string.Empty, StringComparison.OrdinalIgnoreCase))
             .ToList();
 
         if (places.Count == 0)
@@ -220,34 +220,9 @@ public sealed class TreeHolders(RunLock runLock, HeavyLegSlots slots, IProcessId
             return HostId.TryParse(entry.Host, out var host) && host.Kind == HostKind.Ssh ? HolderStanding.OnHost : HolderStanding.NoSlot;
         }
 
-        var holding = Holding(line);
         ahead = places.Min(place => place.at);
 
-        return places.Any(place => holding.Contains(place.slot)) ? HolderStanding.HoldsSlot : HolderStanding.Waiting;
-    }
-
-    /// <summary>
-    /// The legs holding slots: the front of the line, each fewer legs from the front than the fewest any leg up to it
-    /// allows at once - the rule the record's own reading of a place is weighed by.
-    /// </summary>
-    private static List<SlotEntry> Holding(IReadOnlyList<SlotEntry> line)
-    {
-        var holding = new List<SlotEntry>();
-        var fewest = int.MaxValue;
-
-        foreach (var entry in line)
-        {
-            fewest = Math.Min(fewest, entry.Slots);
-
-            if (holding.Count >= fewest)
-            {
-                break;
-            }
-
-            holding.Add(entry);
-        }
-
-        return holding;
+        return places.Any(place => place.slot.HoldsSlot) ? HolderStanding.HoldsSlot : HolderStanding.Waiting;
     }
 
     private static bool RunLockMatches(LockEntry entry, LockRequest request)

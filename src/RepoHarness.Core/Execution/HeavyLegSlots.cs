@@ -39,6 +39,14 @@ public sealed record SlotEntry(
         => $"{RunLock.TreeNamed(Host, Tree, Variant)} (leg '{Leg}', {Command}, {ProcessHolders.Describe(ProcessId, RunId, AskedUtc)})";
 }
 
+/// <summary>One of the heavy legs in line, and whether it holds a slot: what a dry run reads to say where a holder's leg stands.</summary>
+/// <param name="Entry">The leg's entry in the record, in the order it asked.</param>
+/// <param name="HoldsSlot">
+/// Whether it holds one of the machine's slots - the front of the line, each fewer legs from the front than the fewest
+/// any leg up to it allows at once, as the record's own reading of a place is weighed by.
+/// </param>
+public sealed record SlotInLine(SlotEntry Entry, bool HoldsSlot);
+
 /// <summary>A heavy leg's claim on the room of one filesystem of its machine, held while its work runs.</summary>
 /// <param name="Holder">The leg, as its slot's entry names it: whose process holds the claim, and gives it back.</param>
 /// <param name="Bytes">What its build still needed there as it was placed, claimed whole as it was let start.</param>
@@ -389,17 +397,19 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
     }
 
     /// <summary>
-    /// The entries still standing in the order they asked, first in line first, with nothing reclaimed and nothing
+    /// The entries still standing in the order they asked, first in line first, each with whether it holds a slot - the
+    /// front of the line, as the record's own reading of a place is weighed by - with nothing reclaimed and nothing
     /// written: what a dry run reads to say where a holder's leg stands, and where in the line it is. An entry whose
     /// process has ended is passed over without a word, and stays until a leg asks or looks again.
     /// </summary>
     /// <exception cref="HarnessException">The record could not be named, read or written.</exception>
-    public IReadOnlyList<SlotEntry> Line()
-        => File.Update<IReadOnlyList<SlotEntry>>((entries, _) =>
+    public IReadOnlyList<SlotInLine> Line()
+        => File.Update<IReadOnlyList<SlotInLine>>((entries, _) =>
         {
             var live = Live(entries, entry => entry, "a heavy-leg slot", afterwards: null);
+            var holding = new HashSet<SlotEntry>(Holding(live));
 
-            return ((IReadOnlyList<SlotEntry>?)null, (IReadOnlyList<SlotEntry>)live);
+            return ((IReadOnlyList<SlotEntry>?)null, (IReadOnlyList<SlotInLine>)[.. live.Select(entry => new SlotInLine(entry, holding.Contains(entry)))]);
         });
 
     /// <summary>

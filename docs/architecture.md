@@ -564,9 +564,11 @@ command weighs that cannot be read - for a live agent's deletion, which git work
 both make) - fails it (20); a path, a row or an option that is refused, 13; cells of the rows that need a consent
 nobody gave (`--accept-lost`, `--accept-over`), 13 - the same summary and lines, the line 'to write them:' among them,
 since a plan of rows still shows every such cell (`AnchorBatchMode.Plan`) and the rule is the command's, not the
-anchors' service's; a run holding a tree the `--apply` takes, or a lock file that cannot be read, 13 - the summary of
-a sound request ending in `TreeHolders.Blocked`, one sentence that says waiting is all there is to do, and any other
-ending in the one clause that says a run also holds what the `--apply` needs; a closed agent whose directory is no
+anchors' service's; a run holding a tree the `--apply` takes, or a lock file that cannot be read, 13 - save where what
+the command weighs could not be read, which keeps its own code from above and still names the holder on its lines -
+the summary of a sound request ending in `TreeHolders.Blocked`, one sentence that says waiting is all there is to do,
+and a refused request or a consent ending in the one clause that says a run also holds what the `--apply` needs; a
+closed agent whose directory is no
 longer a git worktree, 21, as every `--apply` of it is (`Husk`, the one sentence both say); a sound dry run of a
 deletion that only a copy of the worktree keeps, 21 (`TreeHolders.RemovalHeld`), since its `--apply` would fold and
 close the agent and leave the removal; otherwise 0. Every line a dry run prints stays: only its code, and with it where
@@ -585,7 +587,8 @@ not named by a fold's, a refresh's or a rebase's dry run, and their `--apply` is
 worktree. delete-agent, which removes every copy with the worktree, names a copy a run holds - a host's through the
 lock (`IHostCopyRemover.HeldNow`, the same `RemovalLock` the removal takes), a leg copy's or a mutation worker's
 through the measure-only question its removal asks (`WorktreeService.CopiesHeldAsync`), each in its family's own
-words; its dry run asks that host's `.legs` nothing, as its removal asks nothing of them. The refusal an `--apply`
+words, and asks them on every state the agent may stand in - live, closed or gone - since the removal that asks them
+is the same; its dry run asks that host's `.legs` nothing, as its removal asks nothing of them. The refusal an `--apply`
 gives where a run holds what it needs ends with the same words the `held now:` lines say, and seed-agent's, which has
 no dry run and so takes the trees at once, does too. `--json` on the four verbs answers with one document
 (`OrchestrationReports.Document`), the whole of standard output: the outcome as data - `exitCode`, `summary`,
@@ -793,7 +796,9 @@ other with the blob at the agent's own base (`cat-file --batch-check`, one proce
 sibling's committed fold moves, and the main tree is asked whether it moved from that base as git status would answer
 (`git diff --name-only` against the base, one process): through the index's line-ending rules, so a file only checked
 out with other line endings is no change, and with its mode, so a sibling's changed execute bit is one. A fold records
-what it wrote, removed and found already in as shared, so a later fold - after a review sends the agent back - weighs
+what it wrote, removed and found already in as shared - each at what the agent's worktree held when it was measured,
+the file whole with its bit, so a bit its session changes after the weighing is the agent's own change to fold, never
+silently absorbed - so a later fold - after a review sends the agent back - weighs
 those paths against what the fold left, never against the base: the agent putting a path back as it was is its change
 to fold. A refusal of a changed main-tree path says whether a commit or an uncommitted edit changed it, since the two
 are reconciled differently. A deletion needs the same baseline proof a copy does. A directory with no `.git` of its own

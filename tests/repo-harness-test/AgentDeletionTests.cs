@@ -1,6 +1,12 @@
+using System.Text.Json.Nodes;
+using RepoHarness.Core.Build;
+using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Orchestration;
+using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
+using RepoHarness.Core.Sync;
 using RepoHarness.Core.Worktrees;
 
 namespace RepoHarness.Tests;
@@ -287,6 +293,32 @@ public sealed class AgentDeletionTests
     }
 
     /// <summary>
+    /// A live agent whose worktree's identity cannot be read, and that a run also holds the worktree of, fails its dry
+    /// run as its deletion does - exit 20, its words unchanged - and names the holder on a line of its own: what cannot
+    /// be read stands above a holder in the plan's order.
+    /// </summary>
+    [Fact]
+    public async Task ALiveAgentWhoseWorktreeCannotBeIdentified_AndIsHeld_FailsItsDryRunNamingTheHolder()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        var commondir = Path.Combine(Directory.GetDirectories(Path.Combine(kit.Main, ".git", "worktrees")).Single(), "commondir");
+        var agents = kit.Harness.Agents(new UnknowableFileSystem(kit.Harness.FileSystem, commondir), kit.Harness.AnchorRegistryService);
+
+        await using var held = await HoldTheWorktreeAsync(kit, worktree);
+
+        var dry = await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: false, discardUncommitted: false, Token);
+
+        Assert.Equal(HarnessExit.CommandFailed, dry.ExitCode);
+        Assert.StartsWith("Agent 'ag' of 'o1' was not deleted: which git worktree", dry.Message);
+        Assert.DoesNotContain("a run also holds", dry.Message, StringComparison.Ordinal);
+        Assert.Contains(dry.Details!, line => line.StartsWith($"held now: '{worktree}' on local is held by ", StringComparison.Ordinal));
+        Assert.Equal(AgentStates.Live, kit.Record("ag").State);
+    }
+
+    /// <summary>
     /// A dry run of a deletion exits 0 exactly where the --apply typed after it, nothing having moved, exits 0; and where
     /// the agent's worktree is gone and nothing is folded, both refuse it until --discard-uncommitted is given, whose dry
     /// run then exits 0 as its apply goes through.
@@ -315,6 +347,137 @@ public sealed class AgentDeletionTests
         Assert.True(abandoning.Succeeded, OrchestrationKit.Describe(abandoning));
         Assert.True(abandoned.Succeeded, OrchestrationKit.Describe(abandoned));
         Assert.Equal(AgentStates.Deleted, kit.Record("ag2").State);
+    }
+
+    /// <summary>
+    /// A closed agent's dry run asks the copy questions its --apply's removal asks, whatever the agent's state: a run
+    /// holding a copy a host keeps of the worktree is named on a <c>held now:</c> line, and the dry run is unfinished -
+    /// exit 21 - as its --apply is, which keeps its evidence again and could not finish the removal. With
+    /// <c>--json</c>, the copy is in <c>heldNow</c> with <c>holds</c> <c>"copy"</c>.
+    /// </summary>
+    [Fact]
+    public async Task AClosedAgentsDryRun_NamesAHostCopyARunHolds_AndIsUnfinished()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "evidence/run.log", "measured\n");
+        var copy = "/home/pi/repo--wt--o1--ag";
+        var agents = kit.Harness.Agents(
+            new LateEvidenceFileSystem(kit.Harness.FileSystem, Path.Combine(worktree, "evidence", "late.log")),
+            kit.Harness.AnchorRegistryService,
+            hostCopies: new HostCopyRemover(new NoHosts(), new NoHosts(), kit.Harness.RunLock, kit.Harness.FileSystem, kit.Harness.Platform));
+        Assert.Equal(HarnessExit.Incomplete, (await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: true, discardUncommitted: false, Token)).ExitCode);
+        Assert.Equal(AgentStates.Closed, kit.Record("ag").State);
+
+        new HostCopyRecord(kit.Harness.FileSystem, kit.Harness.Platform.PathComparison)
+            .Claim(new HarnessLayout(kit.Main, kit.Main), new HostCopyEntry(WorktreeAddress.Nested("o1", "ag").CopyName, "ssh pi", copy, worktree));
+
+        var attempt = await kit.Harness.RunLock.TryAcquireAsync(
+            new HarnessLayout(kit.Main, kit.Main),
+            new LockRequest { Host = "ssh pi", Tree = copy, Scope = LockScope.TreeExclusive, RunId = RunId.New(), Command = "test" },
+            Token);
+
+        await using var held = attempt.Handle ?? throw new InvalidOperationException($"the test could not hold '{copy}': {attempt.HeldBy}");
+
+        var dry = await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: false, discardUncommitted: false, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, dry.ExitCode);
+        Assert.EndsWith(TreeHolders.RemovalHeld, dry.Message, StringComparison.Ordinal);
+        Assert.Contains(dry.Details!, line => line.StartsWith($"held now: '{copy}' on ssh pi is held by ", StringComparison.Ordinal));
+
+        var answered = await CliRunner.RunAsync(["delete-agent", "o1", "ag", "--json"], Token, workingDirectory: kit.Main);
+
+        Assert.Equal(HarnessExit.Incomplete, answered.ExitCode);
+        var holder = JsonNode.Parse(answered.StandardOutput.TrimEnd())!["heldNow"]!.AsArray().Single()!;
+        Assert.Equal("copy", holder["holds"]!.GetValue<string>());
+        Assert.Equal(copy, holder["path"]!.GetValue<string>());
+        Assert.Equal("ssh pi", holder["host"]!.GetValue<string>());
+    }
+
+    /// <summary>
+    /// A mutation worker a sweep still running holds is named by a dry run of the deletion, in its family's own words,
+    /// and the dry run is unfinished - exit 21 - as its --apply is, which folds and closes and cannot finish the
+    /// removal.
+    /// </summary>
+    [Fact]
+    public async Task ADryRunOfADeletionNamesAMutationWorkerASweepHolds_AndIsUnfinished()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        var worker = MutationWorkers.PathOf(worktree, new VariantKey("x86_64", "gcc", "debug", null), 1);
+        await kit.Harness.LocalTransport.CreateRootAsync(worker, CopyMark.Complete, Token);
+        new DirectoryClaims(kit.Harness.FileSystem, kit.Harness.Output, kit.Harness.Identity, MutationWorkers.Claims("check-mutations"))
+            .Claim(worker, RunId.New(), force: false);
+
+        var dry = await kit.DeleteAsync("ag", apply: false);
+
+        Assert.Equal(HarnessExit.Incomplete, dry.ExitCode);
+        Assert.EndsWith(TreeHolders.RemovalHeld, dry.Message, StringComparison.Ordinal);
+        Assert.Contains(dry.Details!, line => line.StartsWith($"left the mutation worker '{worker}' kept in it: a sweep still running holds it: ", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A dry run of a deletion whose rows need a consent nobody gave, and that a run also holds the worktree, is refused
+    /// with both said: the consent's own words and lines, and the one clause that a run also holds what --apply needs -
+    /// never the words that nothing in the request needs correcting.
+    /// </summary>
+    [Fact]
+    public async Task ADryRunOfADeletionThatNeedsAConsentAndIsHeld_SaysBoth()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.Harness.AnchorRegistryService.WriteAsync(
+            kit.Main,
+            new Core.Anchors.AnchorWriteRequest("D-TEST-AGENT-ROW", "P2", "something the agent found") { ClosingWork = "the plan we agreed", CrossRefs = "b.txt" },
+            dryRun: false,
+            Token);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        kit.FileRow("ag", "D-TEST-AGENT-ROW", new Dictionary<string, string>(Row) { ["closing"] = "another plan" });
+
+        await using var held = await HoldTheWorktreeAsync(kit, worktree);
+
+        var dry = await kit.DeleteAsync("ag", apply: false);
+
+        Assert.Equal(HarnessExit.Refused, dry.ExitCode);
+        Assert.EndsWith(TreeHolders.AlsoHeld, dry.Message, StringComparison.Ordinal);
+        Assert.EndsWith("the line 'to do it:' above is the command that does it" + TreeHolders.AlsoHeld, dry.Message, StringComparison.Ordinal);
+        Assert.Contains(dry.Details!, line => line.StartsWith("to do it: ", StringComparison.Ordinal));
+        Assert.Contains(dry.Details!, line => line.StartsWith($"held now: '{worktree}' on local is held by ", StringComparison.Ordinal));
+        Assert.DoesNotContain("nothing in this request needs correcting", dry.Message, StringComparison.Ordinal);
+        Assert.Equal(AgentStates.Live, kit.Record("ag").State);
+    }
+
+    /// <summary>Takes the worktree at <paramref name="path"/> whole for a run of the test, for as long as the caller holds the attempt.</summary>
+    private static async Task<RunLockHandle> HoldTheWorktreeAsync(OrchestrationKit kit, string path)
+    {
+        var attempt = await kit.Harness.RunLock
+            .TryAcquireAsync(new HarnessLayout(kit.Main, kit.Main), new LockRequest { Host = "local", Tree = path, Scope = LockScope.TreeExclusive, RunId = RunId.New(), Command = "test" }, Token);
+
+        return attempt.Handle ?? throw new InvalidOperationException($"the test could not hold '{path}': {attempt.HeldBy}");
+    }
+
+    /// <summary>
+    /// A host reacher that reaches nothing: the question a dry run asks of who holds a copy asks no host, so this stands
+    /// for the reaching and fails the test where anything else is asked of it.
+    /// </summary>
+    private sealed class NoHosts : Core.Hosts.IHostInspector, Core.Sync.ISyncTransportFactory
+    {
+        public Task<Core.Hosts.HostReport> InspectAsync(
+            HarnessContext context,
+            Core.Hosts.HostId host,
+            IReadOnlyDictionary<string, Core.Configuration.EmulatorConfig> emulators,
+            IReadOnlyDictionary<string, Core.Configuration.DeveloperEnvironmentConfig> developerEnvironments,
+            IReadOnlyList<string> programs,
+            Core.Hosts.RoomQuestions? room = null,
+            CancellationToken cancellationToken = default)
+            => throw new InvalidOperationException("the test asks no host.");
+
+        public Core.Sync.ISyncTransport For(Core.Hosts.HostReport host)
+            => throw new InvalidOperationException("the test reaches no host.");
     }
 
     /// <summary>

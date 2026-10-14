@@ -1478,7 +1478,10 @@ public sealed class AgentService(
 
             if (unfoldable is not null)
             {
-                return unfoldable;
+                // Named on every exit a dry run makes, refused or not: who holds what its --apply takes.
+                return !apply
+                    ? Dry(json, context.Layout, DeleteCommand, unfoldable, DryRuns.StandingOf(unfoldable), context.Layout.MainCheckoutRoot, _fileSystem.ResolveLinks(path))
+                    : unfoldable;
             }
 
             seed = found;
@@ -1490,58 +1493,44 @@ public sealed class AgentService(
 
             if (dry.Refusal is { } refusal)
             {
-                return DryRuns.Outcome(refusal, DryRuns.StandingOf(refusal));
+                return Dry(json, context.Layout, DeleteCommand, refusal, DryRuns.StandingOf(refusal), context.Layout.MainCheckoutRoot, _fileSystem.ResolveLinks(path));
             }
 
             // Which git worktree this is, as its --apply reads it before it writes: one that cannot be read fails both alike.
             if (StampOf(target).Failure is { } unread)
             {
-                return DryRuns.Outcome(unread, standing: null);
+                return Dry(json, context.Layout, DeleteCommand, unread, standing: null, context.Layout.MainCheckoutRoot, _fileSystem.ResolveLinks(path));
             }
-
-            // The removal's own questions, asked only to measure: which runs hold a copy hosts keep of the worktree, and
-            // what would be left of the copies kept in it - a leg copy or a mutation worker a run or a sweep holds, each in
-            // its family's own words. A copy held does not refuse the --apply, which folds and closes and leaves the
-            // removal; a record that cannot be read refuses it, as the removal is refused.
-            LockEntry[] copies;
-            IReadOnlyList<string> leftInIt;
-
-            try
-            {
-                copies = [.. await _hostCopies.HeldNowAsync(context, target.Address.CopyName, path, RunId.New()).ConfigureAwait(false)];
-                leftInIt = await _worktrees.CopiesHeldAsync(target.Address.Name, context.Layout, path, cancellationToken).ConfigureAwait(false);
-            }
-            catch (HarnessException ex)
-            {
-                return CommandOutcome.Refused($"{Agent(record)} was not deleted: {ex.Message.TrimEnd('.')} Nothing was removed.");
-            }
-
-            var holders = _treeHolders.Read(context.Layout, Holds(DeleteCommand, RunId.New(), context.Layout.MainCheckoutRoot, _fileSystem.ResolveLinks(path)), copies) with { CopyLines = leftInIt };
 
             var evidence = dry.Evidence.Files.Count == 0
                 ? "its evidence roots hold nothing to keep"
                 : $"{ReportText.Counted(dry.Evidence.Files.Count, "evidence file")}, to be kept in a directory named for the run in '{layout.EvidenceDirectory(record.Name)}'";
             var (tail, line) = Ending(DeleteCommand, record, allowances, dry.Fold?.Rows.Batch, "do it");
 
-            return Dry(
+            var planned = CommandOutcome.Ok(
+                $"dry run: deleting {Lower(Agent(record))} "
+                + (discard
+                    ? $"discards {ReportText.Counted(dry.Discarded.Count, "changed path")}, folding nothing"
+                    : $"folds {ReportText.Counted(dry.Fold!.Plan!.Written.Count, "path")}, {Merging(dry.Fold.Plan, "merges")}{Handing(dry.Fold.Plan, "hands")}removes {dry.Fold.Plan.Deleted.Count} and applies "
+                        + ReportText.Counted(dry.Fold.Rows.Planned, "row"))
+                + $", keeps its transcripts and {ReportText.Counted(dry.Evidence.Files.Count, "evidence file")}, then removes its worktree and its copies on hosts; {tail}",
+                [
+                    .. discard
+                        ? [$"{ReportText.Counted(dry.Discarded.Count, "changed path")} discarded:", .. dry.Discarded.Select(relative => $"  {relative}")]
+                        : OrchestrationReports.FoldAndRowLines(dry.Fold!.Plan, dry.Fold.Rows, layout.RowsDirectory(record.Name), applied: false),
+                    evidence,
+                    TranscriptsPlan(record),
+                    .. line,
+                ]);
+
+            return await DryRemovalAsync(
                 json,
-                CommandOutcome.Ok(
-                    $"dry run: deleting {Lower(Agent(record))} "
-                    + (discard
-                        ? $"discards {ReportText.Counted(dry.Discarded.Count, "changed path")}, folding nothing"
-                        : $"folds {ReportText.Counted(dry.Fold!.Plan!.Written.Count, "path")}, {Merging(dry.Fold.Plan, "merges")}{Handing(dry.Fold.Plan, "hands")}removes {dry.Fold.Plan.Deleted.Count} and applies "
-                            + ReportText.Counted(dry.Fold.Rows.Planned, "row"))
-                    + $", keeps its transcripts and {ReportText.Counted(dry.Evidence.Files.Count, "evidence file")}, then removes its worktree and its copies on hosts; {tail}",
-                    [
-                        .. discard
-                            ? [$"{ReportText.Counted(dry.Discarded.Count, "changed path")} discarded:", .. dry.Discarded.Select(relative => $"  {relative}")]
-                            : OrchestrationReports.FoldAndRowLines(dry.Fold!.Plan, dry.Fold.Rows, layout.RowsDirectory(record.Name), applied: false),
-                        evidence,
-                        TranscriptsPlan(record),
-                        .. line,
-                    ]),
+                target,
+                planned,
                 dry.Fold is { } fold ? Consenting(fold.Rows.Batch) : RequestStanding.Sound,
-                holders);
+                cancellationToken,
+                context.Layout.MainCheckoutRoot,
+                _fileSystem.ResolveLinks(path)).ConfigureAwait(false);
         }
 
         var hold = await HoldAsync(context.Layout, DeleteCommand, cancellationToken, context.Layout.MainCheckoutRoot, _fileSystem.ResolveLinks(path)).ConfigureAwait(false);
@@ -1796,16 +1785,22 @@ public sealed class AgentService(
         if (!apply)
         {
             // A directory that is no longer a git worktree: every --apply keeps its evidence again and leaves the removal
-            // unfinished, so its dry run answers as that --apply does, keeping nothing.
-            return target.Standing.Kind == Standing.Husk
-                ? Dry(json, context.Layout, DeleteCommand, CommandOutcome.Failed(HarnessExit.Incomplete, Husk(target, was, applied: false)), RequestStanding.Refused, _fileSystem.ResolveLinks(path))
-                : Dry(
-                    json,
-                    context.Layout,
-                    DeleteCommand,
-                    CommandOutcome.Ok($"dry run: {Lower(was)}; pass --apply to {(target.Standing.Kind == Standing.Gone ? "finish the removal" : "keep its evidence again and finish the removal")}"),
-                    RequestStanding.Sound,
-                    _fileSystem.ResolveLinks(path));
+            // unfinished, so its dry run answers as that --apply does, keeping nothing - and asks nothing of the removal,
+            // which that --apply stops before it reaches.
+            if (target.Standing.Kind == Standing.Husk)
+            {
+                return Dry(json, context.Layout, DeleteCommand, CommandOutcome.Failed(HarnessExit.Incomplete, Husk(target, was, applied: false)), RequestStanding.Refused, _fileSystem.ResolveLinks(path));
+            }
+
+            // Closed or gone, the removal's questions are the same ones a live agent's dry run asks, unqualified by the
+            // agent's state: a copy a run holds leaves the --apply's removal unfinished, and the dry run says so.
+            return await DryRemovalAsync(
+                json,
+                target,
+                CommandOutcome.Ok($"dry run: {Lower(was)}; pass --apply to {(target.Standing.Kind == Standing.Gone ? "finish the removal" : "keep its evidence again and finish the removal")}"),
+                RequestStanding.Sound,
+                cancellationToken,
+                _fileSystem.ResolveLinks(path)).ConfigureAwait(false);
         }
 
         var hold = await HoldAsync(context.Layout, DeleteCommand, cancellationToken, _fileSystem.ResolveLinks(path)).ConfigureAwait(false);
@@ -1871,16 +1866,18 @@ public sealed class AgentService(
 
         if (!apply)
         {
-            return Dry(
+            // The worktree asked about as its --apply spells it, links resolved, beside the removal's other questions:
+            // a run holding what the removal takes is named, and a copy a run holds leaves it unfinished.
+            return await DryRemovalAsync(
                 json,
-                target.Context.Layout,
-                DeleteCommand,
+                target,
                 CommandOutcome.Ok(
                     $"dry run: {Lower(Agent(record))} has no worktree at '{target.Path}'; pass --apply to delete it with nothing folded, keeping its "
                     + "transcripts, once git's record of its worktree and every copy of it on a host are gone",
                     [TranscriptsPlan(record)]),
                 RequestStanding.Sound,
-                target.Path);
+                cancellationToken,
+                _fileSystem.ResolveLinks(target.Path)).ConfigureAwait(false);
         }
 
         var hold = await HoldAsync(target.Context.Layout, DeleteCommand, cancellationToken, _fileSystem.ResolveLinks(target.Path)).ConfigureAwait(false);
@@ -2683,6 +2680,42 @@ public sealed class AgentService(
             holders);
 
         return json ? OrchestrationReports.Document(outcome, applied: false, standing, holders) : outcome;
+    }
+
+    /// <summary>
+    /// The answer a dry run of a deletion gives, asked with the removal's own questions whatever the agent's state: the
+    /// copies hosts keep of its worktree - asked for by their own requests, as the removal asks it - what would be left
+    /// of the copies kept in the worktree itself, a leg copy or a mutation worker a run or a sweep holds, each in its
+    /// family's own words, and who holds the trees its <c>--apply</c> takes, spelled as that --apply spells them. A copy
+    /// held does not refuse the --apply, which folds and closes and leaves the removal unfinished; a record that cannot
+    /// be read refuses it, as the removal is refused.
+    /// </summary>
+    /// <param name="json">Whether to answer with one JSON document.</param>
+    /// <param name="target">The agent whose deletion is asked about.</param>
+    /// <param name="planned">What the dry run composed: its summary and its lines.</param>
+    /// <param name="standing">How the request stands.</param>
+    /// <param name="cancellationToken">Stops the asking.</param>
+    /// <param name="trees">The trees its --apply takes, by their own paths.</param>
+    private async Task<CommandOutcome> DryRemovalAsync(bool json, Target target, CommandOutcome planned, RequestStanding? standing, CancellationToken cancellationToken, params string[] trees)
+    {
+        ArgumentNullException.ThrowIfNull(planned);
+
+        LockEntry[] copies;
+        IReadOnlyList<string> leftInIt;
+
+        try
+        {
+            copies = [.. await _hostCopies.HeldNowAsync(target.Context, target.Address.CopyName, target.Path, RunId.New()).ConfigureAwait(false)];
+            leftInIt = await _worktrees.CopiesHeldAsync(target.Address.Name, target.Context.Layout, target.Path, cancellationToken).ConfigureAwait(false);
+        }
+        catch (HarnessException ex)
+        {
+            return CommandOutcome.Refused($"{Agent(target.Record)} was not deleted: {ex.Message.TrimEnd('.')} Nothing was removed.");
+        }
+
+        var holders = _treeHolders.Read(target.Context.Layout, Holds(DeleteCommand, RunId.New(), trees), copies) with { CopyLines = leftInIt };
+
+        return Dry(json, planned, standing, holders);
     }
 
     /// <summary>Every holder, as the dry runs' lines say them, and what the families of copies say would be left.</summary>

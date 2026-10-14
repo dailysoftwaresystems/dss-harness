@@ -899,11 +899,11 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
 
     /// <summary>
     /// Records in <paramref name="ledger"/> what the agent shares once a fold is applied, as far as it went: each path it
-    /// wrote, and each the main tree already held as the agent does, shared as the file both trees now hold - or as absent
-    /// from both - each it merged as the merged bytes both now hold, with the bit they were written with, each it
-    /// removed as absent from both, and each settled path it handed as a hand-over records it. A later fold weighs those
-    /// paths against that, never against the agent's base: a review that sends the agent back, and the agent putting a path
-    /// back as it was, is then its change to fold like any other.
+    /// wrote, and each the main tree already held as the agent does, shared as the file both trees now hold, each with the
+    /// bit it was measured with - or as absent from both - each it merged as the merged bytes both now hold, with the bit
+    /// they were written with, each it removed as absent from both, and each settled path it handed as a hand-over records
+    /// it. A later fold weighs those paths against that, never against the agent's base: a review that sends the agent
+    /// back, and the agent putting a path back as it was, is then its change to fold like any other.
     /// </summary>
     /// <param name="ledger">What the agent shares with the main tree, to add them to.</param>
     /// <param name="plan">The fold measured.</param>
@@ -920,7 +920,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         {
             if (plan.AgentContent[path] is { } identity)
             {
-                await ledger.FileAsync(path, identity.Digest, IsExecutable(Path.Combine(worktree, path)), Path.Combine(main, path)).ConfigureAwait(false);
+                await ledger.FileAsync(path, identity.Digest, identity.Executable, Path.Combine(main, path)).ConfigureAwait(false);
             }
             else
             {

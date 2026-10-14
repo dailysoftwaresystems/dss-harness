@@ -107,9 +107,14 @@ public sealed class HarnessFactory
     /// </param>
     /// <param name="anchors">Applies an agent's rows.</param>
     /// <param name="gitClient">Asks git, for the service and the worktrees it makes and removes; the real one where null.</param>
-    public AgentService Agents(IFileSystem fileSystem, IAnchorRegistryService anchors, IGitClient? gitClient = null)
+    /// <param name="hostCopies">
+    /// Removes the copies hosts keep of a worktree; the one that reaches no host where null, for a deletion whose
+    /// questions never leave this machine.
+    /// </param>
+    public AgentService Agents(IFileSystem fileSystem, IAnchorRegistryService anchors, IGitClient? gitClient = null, IHostCopyRemover? hostCopies = null)
     {
         var runLock = new RunLock(fileSystem, Output, Identity);
+        var copies = hostCopies ?? HostCopies;
 
         return new(
             ContextLoader,
@@ -118,8 +123,8 @@ public sealed class HarnessFactory
             Platform,
             Output,
             FilePermissions,
-            new WorktreeService(ContextLoader, gitClient ?? GitClient, fileSystem, PathBudget, Platform, Output, HostCopies, Local(fileSystem), runLock),
-            HostCopies,
+            new WorktreeService(ContextLoader, gitClient ?? GitClient, fileSystem, PathBudget, Platform, Output, copies, Local(fileSystem), runLock),
+            copies,
             runLock,
             new TreeHolders(runLock, Slots, Identity),
             AnchorRegistryLocator,
