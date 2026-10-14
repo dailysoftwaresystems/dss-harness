@@ -723,12 +723,19 @@ public sealed record WorkerRemoved(string Path, long Bytes);
 /// when it claimed it - where it was left held and such a claim, read, names that run; <see langword="null"/> otherwise.
 /// </param>
 /// <exception cref="ArgumentException">A claim is given for a copy left otherwise than held - as made, or as a host's answer is read.</exception>
+/// <remarks>
+/// What it was left as and its claim are set only as it is made, the claim checked against what it was left as there:
+/// neither can be set on a copy of one, so every way one is made - a copy of another among them - holds the check.
+/// </remarks>
 public sealed record WorkerLeft(string Path, string Why, WorkerLeftAs As, LogOwner? Claim = null)
 {
+    /// <inheritdoc cref="WorkerLeft" path="/param[@name='As']"/>
+    public WorkerLeftAs As { get; } = As;
+
     /// <inheritdoc cref="WorkerLeft" path="/param[@name='Claim']"/>
     public LogOwner? Claim { get; } = Claim is null || As == WorkerLeftAs.Held
         ? Claim
-        : throw new ArgumentException($"Only a copy left held is held by a claim, and '{Path}' was left {As}.", nameof(Claim));
+        : throw new ArgumentException($"A claim is carried by '{Path}', which was not left held: only a copy left held is held by a claim.");
 
     /// <summary>
     /// What it says of its tree, as the one verdict every command that removes such copies reads, and every line that

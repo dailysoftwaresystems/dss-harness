@@ -8,7 +8,7 @@ namespace RepoHarness.Cli.Commands;
 /// <summary>Wires <c>DssHarness create-worktree</c>.</summary>
 internal static class CreateWorktreeCommand
 {
-    internal const string Name = "create-worktree";
+    internal const string Name = WorktreeService.CreateCommand;
 
     private static readonly Argument<string?> NameArgument = new("name")
     {
@@ -50,7 +50,7 @@ internal static class CreateWorktreeCommand
 /// <summary>Wires <c>DssHarness delete-worktree</c>.</summary>
 internal static class DeleteWorktreeCommand
 {
-    internal const string Name = "delete-worktree";
+    internal const string Name = WorktreeService.DeleteCommand;
 
     private static readonly Argument<string> NameArgument = new("name")
     {
@@ -103,7 +103,7 @@ internal static class DeleteWorktreeCommand
 /// <summary>Wires <c>DssHarness list-worktree</c>.</summary>
 internal static class ListWorktreeCommand
 {
-    internal const string Name = "list-worktree";
+    internal const string Name = WorktreeService.ListCommand;
 
     private static readonly Option<bool> HostsOption = new("--hosts")
     {

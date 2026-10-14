@@ -2,6 +2,7 @@ using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
+using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Repository;
@@ -376,7 +377,7 @@ public sealed class HostCopyRemover(
             return (workers.Left.Count, removal) switch
             {
                 (0, _) => gone,
-                (_, CopyRemoval.Removed) => $"{gone}; {string.Join("; ", workers.Left.Select(worker => WorktreeReports.WentWithItsTree(worker.Path)))}",
+                (_, CopyRemoval.Removed) => $"{gone}; {string.Join("; ", workers.Left.Select(worker => WorktreeReports.WentWithItsTree(worker.Path, MutationWorkers.Member)))}",
                 _ => $"{gone}; left in it: {string.Join("; ", workers.Left.Select(worker => $"'{worker.Path}', {worker.Why.TrimEnd('.')}"))}",
             };
         }
@@ -386,16 +387,14 @@ public sealed class HostCopyRemover(
 
         // What of the mutation workers kept in a copy keeps the copy, and the code that leaves the command with -
         // their removal's verdict's (WorkersRemoval.Verdict): one a sweep still running holds, which ends by waiting; one
-        // that could not be removed, or told; or a removal of them that was stopped. Null where nothing of them does.
+        // that could not be removed, or told - each worded as a worktree's refusal words it (KeptCopyLine.Keeping); or a
+        // removal of them that was stopped. Null where nothing of them does.
         static (string Why, int Code)? Keeps(WorkersRemoval workers)
             => workers.Verdict == LegVerdict.Passed
                 ? null
-                : (workers.Kept switch
-                    {
-                        { Verdict: LegVerdict.RefusedLocked } busy => $"a mutation worker kept in it is in use - '{busy.Path}': {busy.Why}",
-                        { } stuck => $"a mutation worker kept in it could not be removed - {stuck.Told()}",
-                        _ => "the removal of the mutation workers kept in it was stopped before each had been dealt with",
-                    },
+                : (workers.Kept is { } kept
+                        ? KeptCopyLine.Keeping(kept, MutationWorkers.Member)
+                        : "the removal of the mutation workers kept in it was stopped before each had been dealt with",
                     Verdicts.ExitCodeFor(workers.Verdict));
 
         // Which workers went before whatever keeps the copy was met: said on the copy's own line, as nothing else would.

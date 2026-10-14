@@ -604,8 +604,10 @@ holder in the way is printed on a `held now:` line (`RunLock.Holders`, read as `
 nothing written), said with where that run's leg stands, from this machine's record of heavy legs (`HeavyLegSlots.Line`,
 joined by `TreeHolders`, the one sentence: it waits in line with how many are ahead, or it holds a slot, or a leg on
 an ssh host's own record says; a run that asked for no slot is said by the lock's own words alone, `running
-'<command>'`, and so is every run of a leg of this machine where that record cannot be read, which one line then says,
-while a leg on an ssh host asks that host for its slot whatever this machine's record holds). A run holding a leg copy
+'<command>'`, and so is every run of a leg of this machine - a WSL distribution's among them, whose slot this machine's
+record holds - where that record cannot be read, which one line then says, while a leg on an ssh host asks that host
+for its slot whatever this machine's record holds, and that record is read only where a holder's leg is one of this
+machine's, so no line says it cannot be read where none is). A run holding a leg copy
 or a host's copy of the worktree is
 not named by a fold's, a refresh's or a rebase's dry run, and their `--apply` is not refused for it: a copy is not the
 worktree. delete-agent, which removes every copy with the worktree, names a copy a run holds - a host's through the
@@ -616,8 +618,8 @@ through the measure-only question its removal asks (`WorktreeService.CopiesHeldA
 words, and asks them on every state the agent may stand in - live, closed or gone - since the removal that asks them
 is the same; its dry run asks that host's `.legs` nothing, as its removal asks nothing of them. Each line the two
 families say is one of three (`KeptCopyLine`): a copy a run or a sweep holds, whose holder that line names - a leg
-copy's asked of the lock as its removal asks it (`LegCopies.Whole`), a worker's named by its sweep's claim - and no
-`held now:` line names again; what the removal cannot take as it stands; or what is only said. The refusal an `--apply`
+copy's asked of the lock as its removal asks it (`LegCopies.Whole`), in that same one reading, so every holder is named
+from it, a worker's named by its sweep's claim - and no `held now:` line names again; what the removal cannot take as it stands; or what is only said. The refusal an `--apply`
 gives where a run holds what it needs ends with the same words the `held now:` lines say, and seed-agent's, which has
 no dry run and so takes the trees at once, does too. `--json` on the four verbs answers with one document
 (`OrchestrationReports.Document`), the whole of standard output: the outcome as data - `exitCode`, `summary`,

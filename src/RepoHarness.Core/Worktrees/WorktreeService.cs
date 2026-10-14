@@ -152,14 +152,14 @@ public sealed class WorktreeService(
     LocalSyncTransport local,
     RunLock runLock) : IWorktreeService
 {
-    /// <summary>The command a deletion reports under.</summary>
-    internal const string DeleteCommand = "delete-worktree";
+    /// <summary>The command a deletion reports under, and the one spelling of its name.</summary>
+    public const string DeleteCommand = "delete-worktree";
 
-    /// <summary>The command a creation reports under.</summary>
-    internal const string CreateCommand = "create-worktree";
+    /// <summary>The command a creation reports under, and the one spelling of its name.</summary>
+    public const string CreateCommand = "create-worktree";
 
-    /// <summary>The command a listing reports under.</summary>
-    internal const string ListCommand = "list-worktree";
+    /// <summary>The command a listing reports under, and the one spelling of its name.</summary>
+    public const string ListCommand = "list-worktree";
 
     /// <summary>
     /// Where the commit a worktree was made from is recorded. Under <c>refs/harness/</c> rather than
@@ -718,17 +718,15 @@ public sealed class WorktreeService(
         }
 
         // What keeps the worktree, of what became of the copies kept in it - one a sweep or a run holds, one that could
-        // not be removed or told, or none that could be looked for - or null. Each is said as what it is: only one a run
-        // still holds ends by waiting.
+        // not be removed or told, or none that could be looked for - or null. Each is said as what it is, in the words a
+        // host's copy kept says it in (KeptCopyLine.Keeping): only one a run still holds ends by waiting.
         WorktreeOutcome? Kept(WorkersGone gone, string nothing)
             => gone.Kept is { } kept
                 ? WorktreeOutcome.Failed(CommandOutcome.Failed(
                     gone.ExitCode!.Value,
-                    kept.Verdict == LegVerdict.RefusedLocked
-                        ? $"Worktree '{worktreeName}' was not deleted: {gone.KeptMember} kept in it is in use - '{kept.Path}': {kept.Why.TrimEnd('.')}. "
-                            + $"Wait for it to end, or pass --force to delete the worktree with that copy in it. {nothing}."
-                        : $"Worktree '{worktreeName}' was not deleted: {gone.KeptMember} kept in it could not be removed - {kept.Told().TrimEnd('.')}. "
-                            + $"Put that right and try again, or pass --force to delete the worktree with that copy in it. {nothing}.",
+                    $"Worktree '{worktreeName}' was not deleted: {KeptCopyLine.Keeping(kept, gone.KeptMember)}. "
+                        + (kept.Verdict == LegVerdict.RefusedLocked ? "Wait for it to end" : "Put that right and try again")
+                        + $", or pass --force to delete the worktree with that copy in it. {nothing}.",
                     gone.Lines))
                 : gone.Failure is { } failure
                     ? WorktreeOutcome.Failed(CommandOutcome.Failed(
@@ -812,8 +810,8 @@ public sealed class WorktreeService(
         /// <summary>The copy that keeps the worktree, or <see langword="null"/> where none does (<see cref="WorkersRemoval.Kept"/>).</summary>
         public WorkerLeft? Kept => Removal?.Kept;
 
-        /// <summary>What a line calls the copy that keeps the worktree, in the singular: <c>a mutation worker</c>, <c>a leg copy</c>.</summary>
-        public string KeptMember { get; init; } = "a " + MutationWorkers.Member;
+        /// <summary>What a line calls one copy of the family of the copy that keeps the worktree, in the singular: <c>mutation worker</c>, <c>leg copy</c>.</summary>
+        public string KeptMember { get; init; } = MutationWorkers.Member;
 
         /// <summary>Whether the removal was stopped before every copy had been dealt with.</summary>
         public bool Interrupted => Removal is { Interrupted: true };
@@ -911,7 +909,7 @@ public sealed class WorktreeService(
                 : copies.Kept is not null ? copies
                 : Merge(workers.Removal, copies),
             KeptMember = workers.Kept is not null ? workers.KeptMember
-                : copies.Kept is not null ? "a " + LegCopies.Member
+                : copies.Kept is not null ? LegCopies.Member
                 : workers.KeptMember,
         };
 

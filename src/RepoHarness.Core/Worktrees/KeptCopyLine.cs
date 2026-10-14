@@ -108,8 +108,30 @@ public sealed record KeptCopyLine
         {
             LegVerdict.RefusedLocked => (Held(left.Path, $"left the {member} '{left.Path}' kept in it: {why}; {again} removes it once nothing holds it", asked, left.Claim), forced),
             LegVerdict.Failed => (Stopping($"left the {member} '{left.Path}' kept in it: {why}; {again} removes it once nothing stops it"), forced),
-            LegVerdict.Passed => (Said($"left '{left.Path}', named as a {member} kept in it: {why}"), WorktreeReports.WentWithItsTree(left.Path)),
+            LegVerdict.Passed => (Said($"left '{left.Path}', named as a {member} kept in it: {why}"), WorktreeReports.WentWithItsTree(left.Path, member)),
             var verdict => throw new ArgumentOutOfRangeException(nameof(left), verdict, "A copy left is held, in the removal's way, or only said; this build cannot tell which this one is."),
+        };
+    }
+
+    /// <summary>
+    /// What keeps the tree <paramref name="left"/> was left in from being removed, in its family's own words, as the
+    /// removal's verdict on it says it (<see cref="WorkerLeft.Verdict"/>): refused-locked, in use, named with what holds
+    /// it; failed, what could not be removed. The one wording of it, for every family, whether the tree is a worktree a
+    /// deletion refuses or a host's copy of one that stays.
+    /// </summary>
+    /// <param name="left">The copy that keeps its tree.</param>
+    /// <param name="member">What a line calls one copy of its family, in the singular: <c>leg copy</c>, <c>mutation worker</c>.</param>
+    /// <exception cref="ArgumentOutOfRangeException">The verdict on it is none that keeps a tree: a copy only said keeps nothing.</exception>
+    public static string Keeping(WorkerLeft left, string member)
+    {
+        ArgumentNullException.ThrowIfNull(left);
+        ArgumentException.ThrowIfNullOrWhiteSpace(member);
+
+        return left.Verdict switch
+        {
+            LegVerdict.RefusedLocked => $"a {member} kept in it is in use - '{left.Path}': {left.Why.TrimEnd('.')}",
+            LegVerdict.Failed => $"a {member} kept in it could not be removed - {left.Told().TrimEnd('.')}",
+            var verdict => throw new ArgumentOutOfRangeException(nameof(left), verdict, "Only a copy left held or not removed keeps its tree; this one keeps nothing."),
         };
     }
 }

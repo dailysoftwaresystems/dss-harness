@@ -181,11 +181,13 @@ public static class WorktreeReports
     };
 
     /// <summary>
-    /// What is said of a directory under a mutation worker's name that nothing says the harness made, once the tree it
-    /// was kept in is gone: kept in that tree, it was the tree's, and went with it as everything else the tree held.
+    /// What is said of a directory under the name of a copy of a family - a mutation worker, a leg copy - that nothing
+    /// says the harness made, once the tree it was kept in is gone: kept in that tree, it was the tree's, and went with it
+    /// as everything else the tree held.
     /// </summary>
     /// <param name="path">Where it was.</param>
-    internal static string WentWithItsTree(string path) => $"'{path}', named as a mutation worker though nothing says the harness made it, went with it";
+    /// <param name="member">What a line calls one copy of its family, in the singular: <c>leg copy</c>, <c>mutation worker</c>.</param>
+    internal static string WentWithItsTree(string path, string member) => $"'{path}', named as a {member} though nothing says the harness made it, went with it";
 
     private static JsonObject Document(IReadOnlyList<WorktreeListing> worktrees, HostCopyListing copies)
     {

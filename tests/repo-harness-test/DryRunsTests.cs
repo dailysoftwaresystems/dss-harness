@@ -1,4 +1,6 @@
 using RepoHarness.Core.Execution;
+using RepoHarness.Core.Legs;
+using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Orchestration;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Sync;
@@ -153,7 +155,7 @@ public sealed class DryRunsTests
         Assert.Equal($"left '{path}', named as a mutation worker kept in it: why", said.Told.Line);
         Assert.Equal($"the mutation worker '{path}' kept in it went with it, forced: why", held.WentWithIt);
         Assert.Equal($"the mutation worker '{path}' kept in it went with it, forced: why", stopping.WentWithIt);
-        Assert.Equal(WorktreeReports.WentWithItsTree(path), said.WentWithIt);
+        Assert.Equal($"'{path}', named as a mutation worker though nothing says the harness made it, went with it", said.WentWithIt);
 
         var unknown = new WorkerLeft(path, "why", (WorkerLeftAs)99);
 
@@ -184,6 +186,74 @@ public sealed class DryRunsTests
         var refusal = Assert.Throws<HarnessException>(() => SyncServe.ReadAnswer<SyncWorkersAnswer>(answer.Replace("\"Held\"", "\"NotRemoved\"", StringComparison.Ordinal)));
 
         Assert.StartsWith("The far side answered in a shape this build cannot read: ", refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Every line said of a copy a removal left only to say - now, and once it went with its tree - calls it what its
+    /// family calls one: a leg copy that nothing says the harness made went with its worktree as a leg copy, never as a
+    /// mutation worker.
+    /// </summary>
+    [Fact]
+    public void ACopyOnlySaid_IsCalledWhatItsFamilyCallsOne_OnceItWentWithItsTreeToo()
+    {
+        const string Again = "'dssharness delete-worktree o/a'";
+        var legCopy = @"C:\src\repo\.worktrees\o\a\.legs\357e24c";
+        var worker = @"C:\src\repo\.worktrees\o\a\.mutations\x86_64-gcc-debug-1";
+
+        var leg = KeptCopyLine.Left(new WorkerLeft(legCopy, "nothing says the harness made it.", WorkerLeftAs.Somebodys), LegCopies.Member, Again);
+        var mutation = KeptCopyLine.Left(new WorkerLeft(worker, "nothing says the harness made it.", WorkerLeftAs.Somebodys), MutationWorkers.Member, Again);
+
+        Assert.Equal($"left '{legCopy}', named as a leg copy kept in it: nothing says the harness made it", leg.Told.Line);
+        Assert.Equal($"'{legCopy}', named as a leg copy though nothing says the harness made it, went with it", leg.WentWithIt);
+        Assert.Equal($"left '{worker}', named as a mutation worker kept in it: nothing says the harness made it", mutation.Told.Line);
+        Assert.Equal($"'{worker}', named as a mutation worker though nothing says the harness made it, went with it", mutation.WentWithIt);
+    }
+
+    /// <summary>
+    /// What keeps a tree from going, of a copy left in it, is worded in one place for every family and either tree - a
+    /// worktree's refusal and a host's copy's line alike, by the removal's verdict on the copy: held, in use, naming it and
+    /// why; not removed, what could not be removed, named; and a copy only said keeps nothing, so nothing is worded of it.
+    /// </summary>
+    [Fact]
+    public void WhatKeepsATreeOfACopyLeftInIt_IsWordedInOnePlace_ForEveryFamily()
+    {
+        var legCopy = @"C:\src\repo\.worktrees\o\a\.legs\357e24c";
+        var worker = @"C:\src\repo\.worktrees\o\a\.mutations\x86_64-gcc-debug-1";
+
+        Assert.Equal(
+            $"a leg copy kept in it is in use - '{legCopy}': a run still running holds it: pid 7",
+            KeptCopyLine.Keeping(new WorkerLeft(legCopy, "a run still running holds it: pid 7.", WorkerLeftAs.Held), LegCopies.Member));
+        Assert.Equal(
+            $"a mutation worker kept in it could not be removed - '{worker}': the disk would not let go",
+            KeptCopyLine.Keeping(new WorkerLeft(worker, "the disk would not let go.", WorkerLeftAs.NotRemoved), MutationWorkers.Member));
+        Assert.Equal(
+            $"a mutation worker kept in it could not be removed - '{worker}' could not be removed whole",
+            KeptCopyLine.Keeping(new WorkerLeft(worker, $"'{worker}' could not be removed whole.", WorkerLeftAs.NotRemoved), MutationWorkers.Member));
+        Assert.Throws<ArgumentOutOfRangeException>(() => KeptCopyLine.Keeping(new WorkerLeft(legCopy, "yours", WorkerLeftAs.Somebodys), LegCopies.Member));
+    }
+
+    /// <summary>
+    /// A claim on a copy left otherwise than held is refused however the copy left is made: neither what it was left as nor
+    /// its claim can be set on a copy of one, so none ever carries a claim it was not left held with. The refusal says it
+    /// in the tool's own words, as made and as a host's answer is read - never a member's name or a parameter's.
+    /// </summary>
+    [Fact]
+    public void AClaimOnACopyNotLeftHeld_IsRefusedHoweverOneIsMade_InTheToolsOwnWords()
+    {
+        var path = @"C:\src\repo\.worktrees\o\a\.mutations\x86_64-gcc-debug-1";
+        var claim = new LogOwner("this-machine", 4242, "20261012-151500-ab12cd34", DateTimeOffset.Parse("2026-10-12T15:15:00Z", System.Globalization.CultureInfo.InvariantCulture));
+        var said = $"A claim is carried by '{path}', which was not left held: only a copy left held is held by a claim.";
+
+        Assert.Null(typeof(WorkerLeft).GetProperty(nameof(WorkerLeft.As))!.SetMethod);
+        Assert.Null(typeof(WorkerLeft).GetProperty(nameof(WorkerLeft.Claim))!.SetMethod);
+        Assert.Equal(said, Assert.Throws<ArgumentException>(() => new WorkerLeft(path, "not removed", WorkerLeftAs.NotRemoved, claim)).Message);
+
+        var answer = SyncServe.Answer(new SyncWorkersAnswer(new WorkersRemoval([], [new WorkerLeft(path, "held", WorkerLeftAs.Held, claim)])))
+            .Replace("\"Held\"", "\"Somebodys\"", StringComparison.Ordinal);
+
+        Assert.Equal(
+            $"The far side answered in a shape this build cannot read: {said}",
+            Assert.Throws<HarnessException>(() => SyncServe.ReadAnswer<SyncWorkersAnswer>(answer)).Message);
     }
 
     /// <summary>

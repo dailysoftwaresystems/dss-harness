@@ -461,7 +461,7 @@ public sealed class AgentDeletionTests
     /// A directory in the worktree's slot for leg copies, or for mutation workers, that no sync made is nobody's the
     /// harness may remove and keeps nothing: the --apply deletes it with the worktree. So the dry run says it in its
     /// family's words and holds nothing over it - exit 0, as its --apply's is, which then deletes the agent and the
-    /// worktree with both directories in it.
+    /// worktree with both directories in it, each said to have gone with it as what its family calls one.
     /// </summary>
     [Fact]
     public async Task DirectoriesNoSyncMadeInTheWorktreesSlots_AreOnlySaid_AndItsDryRunExitsAsItsApplyDoes()
@@ -492,6 +492,8 @@ public sealed class AgentDeletionTests
         Assert.True(deleted.Succeeded, OrchestrationKit.Describe(deleted));
         Assert.Equal(AgentStates.Deleted, kit.Record("ag").State);
         Assert.False(Directory.Exists(worktree));
+        Assert.Contains($"  '{legCopy}', named as a leg copy though nothing says the harness made it, went with it", deleted.Details!);
+        Assert.Contains($"  '{worker}', named as a mutation worker though nothing says the harness made it, went with it", deleted.Details!);
     }
 
     /// <summary>

@@ -139,8 +139,9 @@ public sealed record TreeHolder
 /// </param>
 /// <param name="Unread">Why the lock file could not be read, where it could not; the holders are none then.</param>
 /// <param name="StandingUnread">
-/// Why the record of heavy legs could not be read, where it could not: each holder is still named, without the words
-/// that say where its leg stands.
+/// Why this machine's record of heavy legs could not be read, where a holder's leg is one of this machine's and it could
+/// not: each holder is still named, without the words that say where such a leg stands. Nothing where no holder's leg
+/// is one of this machine's, as the record is not read then.
 /// </param>
 /// <param name="KeptCopies">
 /// What the families of copies kept in the worktree say removing them would leave, each line in its family's own words
@@ -149,9 +150,6 @@ public sealed record TreeHolder
 /// </param>
 public sealed record TreeHeld(IReadOnlyList<TreeHolder> Holders, string? Unread, string? StandingUnread, IReadOnlyList<KeptCopyLine> KeptCopies)
 {
-    /// <summary>No holder was named.</summary>
-    public static TreeHeld None { get; } = new([], null, null, []);
-
     /// <summary>
     /// Whether a run or a sweep holds a copy the deletion removes: a holder, and nothing else a family says - a directory
     /// no sync made goes with the worktree, and copies that could not be looked for are held by nobody.
@@ -167,8 +165,8 @@ public sealed record TreeHeld(IReadOnlyList<TreeHolder> Holders, string? Unread,
 
 /// <summary>
 /// Who holds what a command's <c>--apply</c> takes: the run lock asked with the very requests the apply takes, joined
-/// with this machine's record of heavy legs, so each holder is named with where its leg stands. Reads both, writes
-/// neither and reclaims nothing.
+/// with this machine's record of heavy legs, so each holder is named with where its leg stands. Reads both - the record
+/// only where a holder's leg is one of this machine's - writes neither and reclaims nothing.
 /// </summary>
 /// <param name="runLock">The lock, whose live entries in the way name the holders.</param>
 /// <param name="slots">The record of heavy legs, whose line says where a holder's leg stands.</param>
@@ -179,7 +177,8 @@ public sealed class TreeHolders(RunLock runLock, HeavyLegSlots slots, IProcessId
     /// Who holds what <paramref name="takes"/> and <paramref name="removes"/> name - every live entry in the way of any of
     /// them, each copy marked as the copy it is - and who holds the copies kept in the worktree that
     /// <paramref name="kept"/> names held: every holder with where its leg stands. The lock is read here, once, for all of
-    /// them, so one that cannot be read is said as that for all of them alike. Nothing is taken, written or reclaimed.
+    /// them - each entry then told to the requests it is in the way of - so one that cannot be read is said as that for all
+    /// of them alike, and every holder is named from the same reading. Nothing is taken, written or reclaimed.
     /// </summary>
     /// <param name="layout">The repository, whose main checkout holds the lock file.</param>
     /// <param name="takes">The trees the apply takes, which a run holding refuses it.</param>
@@ -195,17 +194,23 @@ public sealed class TreeHolders(RunLock runLock, HeavyLegSlots slots, IProcessId
 
         try
         {
-            var entries = _runLock.Holders(layout, [.. takes, .. removes]);
+            // A copy kept in the worktree that a run holds is asked of the lock as its removal asks it, in the one reading
+            // that asks for the trees, so its holder is named with its entry; one a claim of its family's own holds - a
+            // sweep's, on a mutation worker - is named by that claim alone, on its family's line.
+            var held = kept.Where(said => said.HeldPath is not null).ToList();
+            var entries = _runLock.Holders(layout, [.. takes, .. removes, .. held.Select(said => said.Asked).OfType<LockRequest>()]);
 
-            // A copy kept in the worktree that a run holds is asked of the lock as its removal asks it, so its holder is
-            // named with its entry; one a claim of its family's own holds - a sweep's, on a mutation worker - is named by
-            // that claim alone, on its family's line.
-            var held = kept
-                .Where(said => said.HeldPath is not null)
-                .Select(said => (Line: said, Entries: said.Asked is { } asked ? _runLock.Holders(layout, [asked]) : (IReadOnlyList<LockEntry>)[]))
-                .ToList();
-
-            return Joined([.. entries.Select(entry => (Entry: entry, Copy: removes.Any(request => RunLockMatches(entry, request))))], held) with
+            return Joined(
+                [
+                    .. entries
+                        .Where(entry => takes.Concat(removes).Any(request => RunLockMatches(entry, request)))
+                        .Select(entry => (Entry: entry, Copy: removes.Any(request => RunLockMatches(entry, request)))),
+                ],
+                [
+                    .. held.Select(said => (Line: said, Entries: said.Asked is { } asked
+                        ? [.. entries.Where(entry => RunLockMatches(entry, asked))]
+                        : (IReadOnlyList<LockEntry>)[])),
+                ]) with
             {
                 KeptCopies = kept,
             };
@@ -224,7 +229,7 @@ public sealed class TreeHolders(RunLock runLock, HeavyLegSlots slots, IProcessId
         IReadOnlyList<(LockEntry Entry, bool Copy)> entries,
         IReadOnlyList<(KeptCopyLine Line, IReadOnlyList<LockEntry> Entries)> kept)
     {
-        var (line, standingUnread) = ReadLine();
+        var (line, standingUnread) = LineFor([.. entries.Select(entry => entry.Entry), .. kept.SelectMany(copy => copy.Entries)]);
 
         return new TreeHeld(
             [
@@ -247,14 +252,22 @@ public sealed class TreeHolders(RunLock runLock, HeavyLegSlots slots, IProcessId
         ArgumentNullException.ThrowIfNull(wanted);
         ArgumentNullException.ThrowIfNull(holder);
 
-        return $"{RunLock.TreeNamed(wanted.Host, wanted.Tree, wanted.Variant)} is held by {Held(holder, Tail(Stands(holder, ReadLine().Line)))}.";
+        return $"{RunLock.TreeNamed(wanted.Host, wanted.Tree, wanted.Variant)} is held by {Held(holder, Tail(Stands(holder, LineFor([holder]).Line)))}.";
     }
 
     /// <summary>
-    /// This machine's record of heavy legs, in line order; <see langword="null"/>, with why, where it could not be read.
+    /// This machine's record of heavy legs, in line order, read only where one of <paramref name="entries"/> is a leg of
+    /// this machine (<see cref="AsksThisMachine"/>), whose standing it says: <see langword="null"/>, with why, where it
+    /// could not be read; <see langword="null"/>, with nothing to say, where none of them is such a leg - each stands
+    /// without it then, and a record nobody needed is never said to be unreadable.
     /// </summary>
-    private (IReadOnlyList<SlotInLine>? Line, string? Unread) ReadLine()
+    private (IReadOnlyList<SlotInLine>? Line, string? Unread) LineFor(IReadOnlyList<LockEntry> entries)
     {
+        if (!entries.Any(AsksThisMachine))
+        {
+            return (null, null);
+        }
+
         try
         {
             return (_slots.Line(), null);
@@ -264,6 +277,14 @@ public sealed class TreeHolders(RunLock runLock, HeavyLegSlots slots, IProcessId
             return (null, ex.Message.TrimEnd('.'));
         }
     }
+
+    /// <summary>
+    /// Whether the leg of <paramref name="entry"/>'s run asks this machine's record of heavy legs for its slot: a leg of
+    /// this machine itself, and one in a WSL distribution, which the command that dispatched it asks for here, where it
+    /// runs (<see cref="HeavyLegSlots"/>) - every leg but one on an ssh host, which asks that host's own record.
+    /// </summary>
+    private static bool AsksThisMachine(LockEntry entry)
+        => !(HostId.TryParse(entry.Host, out var host) && host.Kind == HostKind.Ssh);
 
     /// <summary>One holder: the lock's entry, joined with the line, and the sentence of it.</summary>
     private TreeHolder Holder(LockEntry entry, IReadOnlyList<SlotInLine>? line, bool copy)
@@ -305,16 +326,17 @@ public sealed class TreeHolders(RunLock runLock, HeavyLegSlots slots, IProcessId
     /// <summary>
     /// Where the leg of <paramref name="entry"/>'s run stands, and how many legs are ahead of it where it waits - the one
     /// answer every holder and every refusal is said with: where the lock names an ssh host, that host's own record says,
-    /// whatever this machine's holds; otherwise it holds a slot where any of its places in this machine's line does, it
-    /// waits where the line holds it further back, and it asked for no slot where the line holds it nowhere. Nothing for a
-    /// leg of this machine where this machine's record of heavy legs could not be read: where that leg stands is not
-    /// known then, and is never said to be a leg that asked for no slot.
+    /// whatever this machine's holds; otherwise - a leg of this machine (<see cref="AsksThisMachine"/>) - it holds a slot
+    /// where any of its places in this machine's line does, it waits where the line holds it further back, and it asked
+    /// for no slot where the line holds it nowhere. Nothing for a leg of this machine where this machine's record of heavy
+    /// legs could not be read: where that leg stands is not known then, and is never said to be a leg that asked for no
+    /// slot.
     /// </summary>
     /// <param name="entry">The lock's entry for what the run holds.</param>
     /// <param name="line">This machine's record of heavy legs, in line order; <see langword="null"/> where it could not be read.</param>
     private static (HolderStanding? Standing, int? Ahead) Stands(LockEntry entry, IReadOnlyList<SlotInLine>? line)
     {
-        if (HostId.TryParse(entry.Host, out var host) && host.Kind == HostKind.Ssh)
+        if (!AsksThisMachine(entry))
         {
             return (HolderStanding.OnHost, null);
         }
