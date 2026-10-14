@@ -2715,11 +2715,11 @@ public sealed class SyncServiceTests
     }
 
     /// <summary>
-    /// A copy marked unfinished, then complete, carries the mark only while it holds, leaving the marker a build from before
-    /// the mark reads: it refuses a member it does not know.
+    /// A copy marked unfinished, then complete, carries the mark only while it holds: a finished copy's marker never says
+    /// it.
     /// </summary>
     [Fact]
-    public async Task ACopysUnfinishedMark_IsWrittenOnlyWhileItHolds_LeavingTheMarkerAnOlderBuildReads()
+    public async Task ACopysUnfinishedMark_IsWrittenOnlyWhileItHolds()
     {
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -2736,6 +2736,13 @@ public sealed class SyncServiceTests
             Assert.Contains("\"Unfinished\": true", await File.ReadAllTextAsync(marker, cancellationToken), StringComparison.OrdinalIgnoreCase);
 
             await transport.CreateRootAsync(copy, CopyMark.Complete, cancellationToken);
+
+            Assert.Equal(CopyMark.Complete, await transport.ReadMarkAsync(copy, cancellationToken));
+            Assert.DoesNotContain("unfinished", await File.ReadAllTextAsync(marker, cancellationToken), StringComparison.OrdinalIgnoreCase);
+
+            // As a sync finishes one: marked with the reading it holds.
+            await transport.CreateRootAsync(copy, CopyMark.Unfinished, cancellationToken);
+            await transport.MarkFinishedAsync(copy, new CopyReading(RunId.New().Value, null, 0), cancellationToken);
 
             Assert.Equal(CopyMark.Complete, await transport.ReadMarkAsync(copy, cancellationToken));
             Assert.DoesNotContain("unfinished", await File.ReadAllTextAsync(marker, cancellationToken), StringComparison.OrdinalIgnoreCase);

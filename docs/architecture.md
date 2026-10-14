@@ -2808,7 +2808,10 @@ directory here cannot drift apart.
   copy, under its own lock, whose reading it holds: another's ends the leg `inputs-moved`, `'<copy>'
   on <host> was synced again by run <id> after this run made it the tree it read, so it no longer
   holds that tree.`, with nothing of it run. A build from before this one refuses a marker carrying
-  a reading, as it refuses any member it does not know: a downgrade on one machine.
+  a reading as unreadable, as it refuses any member it does not know, so it reads no copy this one
+  finished. Only going back to such a build meets that - a host is brought to the build of the
+  machine that asks it, and one ahead of that machine is refused - and the remedy is to update
+  again, never to delete the marker, which would leave the copy one to take over.
   The run says each reading as it is made - `'<tree>' was read at commit <12> with 2 uncommitted
   change(s)`, or `with no commit yet` - and each leg on a copy says which it tested with its
   verdict, `tree read at <12>`, or under `--use-staged` what the copy records, `tree staged at
@@ -2824,9 +2827,8 @@ directory here cannot drift apart.
   this tool marked - and `sync --artifact` carries nothing into it, until a sync
   finishes it. The next ordinary sync, which plans from what the copy holds, puts it right; marking
   a copy again keeps when, and by which machine, it was made. The mark is written into the marker
-  only while it holds, so a copy every sync finished carries the marker a build from before it
-  reads; such a build refuses an unfinished one as unreadable, and the remedy is to upgrade, never
-  to delete the marker, which would turn the copy into one taken over.
+  only while it holds, so a finished copy's marker never says it; a build from before the mark
+  refuses an unfinished one as unreadable, with the same remedy.
 - **The copy is the tool's.** Sync creates it, records that it did, and refuses to write into a
   directory it did not create. It deletes whatever the source does not have, so taking over a
   checkout somebody made by hand could delete work nothing here knows about, on a machine whose

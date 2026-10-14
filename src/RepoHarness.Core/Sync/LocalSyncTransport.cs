@@ -1073,25 +1073,30 @@ public sealed class LocalSyncTransport(
     /// <param name="Completed">
     /// Whether a takeover of it got to the end: false only for a takeover that stopped part way, which
     /// is neither the checkout somebody had nor a copy of the source. A sync that has not finished is
-    /// said by <c>Unfinished</c>, never here, so the members a build from before that one reads keep
-    /// their meaning.
+    /// said by <c>Unfinished</c>, never here, so this member means one thing to every build that reads it.
     /// </param>
     /// <param name="Unfinished">
     /// Whether a sync began writing it and has not finished: written before a sync's first write, and
-    /// cleared once the copy is verified. Written only where true, so a copy every sync finished carries
-    /// the marker a build from before it reads.
+    /// cleared once the copy is verified. Written only where true, so a finished copy's marker never says it.
     /// </param>
     /// <param name="ReadBy">The run whose reading a finished sync made the copy, where it kept one.</param>
     /// <param name="Commit">The commit that reading's tree was at, where it was at one.</param>
     /// <param name="UncommittedChanges">
     /// How many of the paths that reading carried git called changed: written with every reading a finished sync
     /// records, so its presence says the marker holds one. Each of the three spelt as a leg's <c>tree</c> spells it,
-    /// and written only where set, so a copy marked without a reading carries the marker a build from before it reads.
+    /// and written only where set, so a copy marked without a reading carries none of them.
     /// </param>
     /// <remarks>
     /// Both strings are nullable because deserialising decides that, not this declaration: a file
     /// holding <c>{}</c> parses into a marker with neither, and that is one of the shapes that has
     /// to be told from a marker this tool wrote. Every marker it has ever written carries both.
+    /// <para>
+    /// A build from before this one cannot read the marker of a copy this one finished: the reading it holds is a
+    /// member that build does not know, which it refuses as unreadable, as a build from before <c>Unfinished</c>
+    /// refuses an unfinished copy's. Only going back to such a build meets that - a host is brought to the build of
+    /// the machine that asks it, and one ahead of that machine is refused - and the remedy is to update again, never
+    /// to delete the marker, which would leave the copy one to take over.
+    /// </para>
     /// </remarks>
     private sealed record SyncedCopyMarker(
         string? CreatedUtc,
