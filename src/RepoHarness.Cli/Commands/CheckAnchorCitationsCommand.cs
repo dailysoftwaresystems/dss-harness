@@ -52,7 +52,7 @@ internal static class CheckAnchorCitationsCommand
                 .ConfigureAwait(false);
 
             return AnchorCitationReports.Render(report, arguments.GetValue(JsonOption));
-        }));
+        }, new JsonAnswer(JsonOption, (_, exitCode, summary, _, _) => AnchorCitationReports.Stopped(exitCode, summary))));
 
         return command;
     }

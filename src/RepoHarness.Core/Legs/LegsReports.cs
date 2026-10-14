@@ -41,43 +41,9 @@ public static class LegsReports
 
         if (json)
         {
-            var document = new
-            {
-                Legs = report.Placements.Select(placement => new
-                {
-                    placement.Leg.Name,
-                    placement.Leg.Leg.Os,
-                    placement.Leg.Leg.Processor,
-                    placement.Leg.Leg.Emulator,
-                    placement.Runnable,
-                    Host = placement.Host?.Host.ToString(),
-                    placement.Reason,
-                }),
-                Hosts = report.Hosts.Select(host => new
-                {
-                    Host = host.Host.ToString(),
-                    host.Available,
-                    host.Reason,
-                    host.Os,
-                    host.Processor,
-                    host.ToolVersion,
-                    host.ToolPath,
-                    host.Actions,
-
-                    // The room where its copies are kept - the main checkout, for this machine -
-                    // or why it could not be measured: whole here, where -v adds nothing a script has to ask for.
-                    host.Space,
-                    host.SpaceUnmeasured,
-
-                    // For a WSL distribution, the drive of this machine its disk grows on.
-                    host.DiskImageSpace,
-                    host.DiskImageUnmeasured,
-                }),
-            };
-
             return new CommandOutcome(exitCode, message)
             {
-                Data = [JsonSerializer.Serialize(document, JsonOptions)],
+                Data = [JsonSerializer.Serialize(Document(report), JsonOptions)],
                 Quiet = true,
             };
         }
@@ -114,6 +80,51 @@ public static class LegsReports
 
         return new CommandOutcome(exitCode, message, details);
     }
+
+    /// <summary>
+    /// The document <c>legs</c> answers with where it stops before it measures anything - a <c>--directory</c> that is
+    /// not there, a usage error: its own, placing no leg and measuring no host, after the code it exits with and the
+    /// line it ends on.
+    /// </summary>
+    /// <param name="exitCode">The code the command exits with.</param>
+    /// <param name="summary">The line it ends on.</param>
+    public static string Stopped(int exitCode, string summary)
+        => ReportJson.Stopped(exitCode, summary, JsonSerializer.SerializeToNode(Document(new LegsReport([], [], Named: false)), JsonOptions)!.AsObject());
+
+    /// <summary>The one document of <c>legs --json</c>: where each leg is placed, and what each host is.</summary>
+    private static object Document(LegsReport report) => new
+    {
+        Legs = report.Placements.Select(placement => new
+        {
+            placement.Leg.Name,
+            placement.Leg.Leg.Os,
+            placement.Leg.Leg.Processor,
+            placement.Leg.Leg.Emulator,
+            placement.Runnable,
+            Host = placement.Host?.Host.ToString(),
+            placement.Reason,
+        }),
+        Hosts = report.Hosts.Select(host => new
+        {
+            Host = host.Host.ToString(),
+            host.Available,
+            host.Reason,
+            host.Os,
+            host.Processor,
+            host.ToolVersion,
+            host.ToolPath,
+            host.Actions,
+
+            // The room where its copies are kept - the main checkout, for this machine -
+            // or why it could not be measured: whole here, where -v adds nothing a script has to ask for.
+            host.Space,
+            host.SpaceUnmeasured,
+
+            // For a WSL distribution, the drive of this machine its disk grows on.
+            host.DiskImageSpace,
+            host.DiskImageUnmeasured,
+        }),
+    };
 
     /// <summary>The room on <paramref name="host"/>, or why it could not be measured; <see langword="null"/> where it was not asked.</summary>
     private static string? Room(HostReport host)

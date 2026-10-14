@@ -29,28 +29,9 @@ public static class ToolProvisionReports
 
         if (json)
         {
-            var document = new
-            {
-                report.DryRun,
-                Legs = report.Legs.Select(leg => new
-                {
-                    leg.Leg,
-                    Host = leg.Host.ToString(),
-                    leg.Provisioned,
-                    leg.Unreachable,
-                    Tools = leg.Tools.Select(tool => new
-                    {
-                        tool.Tool,
-                        State = tool.StateName,
-                        tool.Version,
-                        tool.Detail,
-                    }),
-                }),
-            };
-
             return new CommandOutcome(exitCode, message)
             {
-                Data = [JsonSerializer.Serialize(document, JsonOptions)],
+                Data = [JsonSerializer.Serialize(Document(report), JsonOptions)],
                 Quiet = true,
             };
         }
@@ -85,6 +66,37 @@ public static class ToolProvisionReports
 
         return new CommandOutcome(exitCode, message, details);
     }
+
+    /// <summary>
+    /// The document <c>install-missing-tools</c> answers with where it stops before it asks any host - a
+    /// <c>--directory</c> that is not there, a usage error: its own, naming no leg, after the code it exits with and the
+    /// line it ends on.
+    /// </summary>
+    /// <param name="exitCode">The code the command exits with.</param>
+    /// <param name="summary">The line it ends on.</param>
+    /// <param name="dryRun">Whether the command line asked for a dry run.</param>
+    public static string Stopped(int exitCode, string summary, bool dryRun)
+        => ReportJson.Stopped(exitCode, summary, JsonSerializer.SerializeToNode(Document(new ToolProvisionReport([]) { DryRun = dryRun }), JsonOptions)!.AsObject());
+
+    /// <summary>The one document of <c>install-missing-tools --json</c>: whether it was a dry run, and what each leg's host has.</summary>
+    private static object Document(ToolProvisionReport report) => new
+    {
+        report.DryRun,
+        Legs = report.Legs.Select(leg => new
+        {
+            leg.Leg,
+            Host = leg.Host.ToString(),
+            leg.Provisioned,
+            leg.Unreachable,
+            Tools = leg.Tools.Select(tool => new
+            {
+                tool.Tool,
+                State = tool.StateName,
+                tool.Version,
+                tool.Detail,
+            }),
+        }),
+    };
 
     private static string Summary(ToolProvisionReport report)
     {

@@ -59,7 +59,7 @@ internal static class InstallMissingToolsCommand
                 .ConfigureAwait(false);
 
             return ToolProvisionReports.Render(report, json);
-        }));
+        }, new JsonAnswer(JsonOption, (arguments, exitCode, summary, _, _) => ToolProvisionReports.Stopped(exitCode, summary, arguments.GetValue(DryRunOption)))));
 
         return command;
     }

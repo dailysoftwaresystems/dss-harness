@@ -82,15 +82,7 @@ public static class AnchorReports
 
         if (json)
         {
-            var array = new JsonArray([.. entries.Select(entry => (JsonNode)new JsonObject
-            {
-                ["anchor"] = entry.Row.Id,
-                ["priority"] = entry.Row.Priority,
-                ["status"] = entry.Row.Status,
-                ["registry"] = entry.Registry.Name,
-            })]);
-
-            return CommandOutcome.Ok(ReportText.Counted(entries.Count, "anchor")) with { Data = [array.ToJsonString(JsonOptions)], Quiet = true };
+            return CommandOutcome.Ok(ReportText.Counted(entries.Count, "anchor")) with { Data = [ListJson(entries)], Quiet = true };
         }
 
         var lines = entries
@@ -106,6 +98,30 @@ public static class AnchorReports
 
         return CommandOutcome.Ok(ReportText.Counted(entries.Count, "anchor")) with { Data = lines, Quiet = true };
     }
+
+    /// <summary>
+    /// The document read-anchor answers with where it stops before it reads either registry - a <c>--directory</c> that
+    /// is not there, a usage error: its own, an array of anchors, empty. An array has no member to carry the code the
+    /// command exits with, which the process's exit code and the line it ends on say.
+    /// </summary>
+    public static string LookupStopped() => LookupJson([]);
+
+    /// <summary>
+    /// The document read-anchors answers with where it stops before it reads either registry: its own, empty - the
+    /// listing's array of anchors, or with <paramref name="lint"/> the array of findings. An array has no member to carry
+    /// the code the command exits with, which the process's exit code and the line it ends on say.
+    /// </summary>
+    /// <param name="lint">Whether the command line asked for --lint.</param>
+    public static string ListStopped(bool lint) => lint ? FindingsJson([]).ToJsonString(JsonOptions) : ListJson([]);
+
+    /// <summary>
+    /// The document check-anchor-balance answers with where it stops before it reads anything - a <c>--directory</c>
+    /// that is not there, a usage error: its own, naming no base and no commit, counting nothing and passing nothing,
+    /// after the code it exits with and the line it ends on.
+    /// </summary>
+    /// <param name="exitCode">The code the command exits with.</param>
+    /// <param name="summary">The line it ends on.</param>
+    public static string BalanceStopped(int exitCode, string summary) => ReportJson.Stopped(exitCode, summary, BalanceDocument(null));
 
     /// <summary>What read-anchors --lint reports: a finding fails it, and a note does not.</summary>
     public static CommandOutcome Lint(IReadOnlyList<AnchorFinding> findings, bool json)
@@ -128,7 +144,7 @@ public static class AnchorReports
     {
         ArgumentNullException.ThrowIfNull(report);
 
-        IReadOnlyList<string> data = json ? [BalanceJson(report)] : BalanceText(report);
+        IReadOnlyList<string> data = json ? [BalanceDocument(report).ToJsonString(JsonOptions)] : BalanceText(report);
 
         if (report.Passed)
         {
@@ -204,6 +220,17 @@ public static class AnchorReports
         return lines;
     }
 
+    /// <summary>The one document of read-anchors --json: each anchor listed, as an array.</summary>
+    private static string ListJson(IEnumerable<AnchorEntry> entries)
+        => new JsonArray([.. entries.Select(entry => (JsonNode)new JsonObject
+        {
+            ["anchor"] = entry.Row.Id,
+            ["priority"] = entry.Row.Priority,
+            ["status"] = entry.Row.Status,
+            ["registry"] = entry.Registry.Name,
+        })]).ToJsonString(JsonOptions);
+
+    /// <summary>The one document of read-anchor --json: each anchor found, in full, as an array.</summary>
     private static string LookupJson(IEnumerable<AnchorEntry> entries)
     {
         var array = new JsonArray([.. entries.Select(entry => (JsonNode)new JsonObject
@@ -269,40 +296,41 @@ public static class AnchorReports
         return lines;
     }
 
-    private static string BalanceJson(AnchorBalanceReport report)
+    /// <summary>The one document of check-anchor-balance --json: the receipt; of no report, one that counts and passes nothing.</summary>
+    private static JsonObject BalanceDocument(AnchorBalanceReport? report)
     {
         var node = new JsonObject
         {
-            ["base"] = report.Base,
-            ["baseCommit"] = report.BaseCommit,
-            ["commit"] = report.Commit,
-            ["merging"] = Strings(report.Merging),
-            ["openAtBase"] = report.OpenAtBase,
-            ["openNow"] = report.OpenNow,
-            ["netNew"] = report.NetNew,
-            ["passed"] = report.Passed,
-            ["closed"] = new JsonArray([.. report.Closed.Select(closing => (JsonNode)new JsonObject
+            ["base"] = report?.Base,
+            ["baseCommit"] = report?.BaseCommit,
+            ["commit"] = report?.Commit,
+            ["merging"] = Strings(report?.Merging ?? []),
+            ["openAtBase"] = report?.OpenAtBase ?? 0,
+            ["openNow"] = report?.OpenNow ?? 0,
+            ["netNew"] = report?.NetNew ?? 0,
+            ["passed"] = report?.Passed ?? false,
+            ["closed"] = new JsonArray([.. (report?.Closed ?? []).Select(closing => (JsonNode)new JsonObject
             {
                 ["anchor"] = closing.Id,
                 ["bookkeeping"] = closing.Bookkeeping,
             })]),
-            ["lost"] = new JsonArray([.. report.Lost.Select(loss => (JsonNode)new JsonObject
+            ["lost"] = new JsonArray([.. (report?.Lost ?? []).Select(loss => (JsonNode)new JsonObject
             {
                 ["anchor"] = loss.Id,
                 ["alreadyClosed"] = loss.AlreadyClosed,
             })]),
-            ["opened"] = new JsonArray([.. report.Opened.Select(opening => (JsonNode)new JsonObject
+            ["opened"] = new JsonArray([.. (report?.Opened ?? []).Select(opening => (JsonNode)new JsonObject
             {
                 ["anchor"] = opening.Id,
                 ["excerpt"] = opening.Excerpt,
                 ["disclosed"] = opening.Disclosed,
             })]),
-            ["missingAtBase"] = Strings(report.MissingAtBase),
-            ["malformedAtBase"] = Strings(report.MalformedAtBase),
-            ["findings"] = FindingsJson(report.Findings),
+            ["missingAtBase"] = Strings(report?.MissingAtBase ?? []),
+            ["malformedAtBase"] = Strings(report?.MalformedAtBase ?? []),
+            ["findings"] = FindingsJson(report?.Findings ?? []),
         };
 
-        return node.ToJsonString(JsonOptions);
+        return node;
     }
 
     private static JsonArray Strings(IEnumerable<string> values) => new([.. values.Select(value => (JsonNode?)JsonValue.Create(value))]);

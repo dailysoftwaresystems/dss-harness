@@ -66,6 +66,47 @@ public static class CliRunner
         return result;
     }
 
+    /// <summary>The names of the commands the root help lists, in its order.</summary>
+    /// <param name="cancellationToken">Stops the run.</param>
+    public static async Task<IReadOnlyList<string>> CommandsAsync(CancellationToken cancellationToken)
+    {
+        var result = await RunAsync(["--help"], cancellationToken);
+
+        return [.. CommandLines(result.StandardOutput)
+            .Select(line => line.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries)[0])
+            .Where(name => name.Length > 0)];
+    }
+
+    /// <summary>The lines of the root help listing that describe a command.</summary>
+    /// <param name="helpOutput">What the root help printed.</param>
+    public static IEnumerable<string> CommandLines(string helpOutput)
+    {
+        ArgumentNullException.ThrowIfNull(helpOutput);
+
+        var inCommands = false;
+
+        foreach (var line in helpOutput.Split('\n').Select(l => l.TrimEnd('\r')))
+        {
+            if (line.StartsWith("Commands:", StringComparison.Ordinal))
+            {
+                inCommands = true;
+                continue;
+            }
+
+            if (!inCommands)
+            {
+                continue;
+            }
+
+            if (line.Trim().Length == 0)
+            {
+                break;
+            }
+
+            yield return line;
+        }
+    }
+
     /// <summary>
     /// Reads the CLI assembly's path from this assembly's metadata, where the build put it
     /// by asking the CLI project for its own output path. Guessing it from directory names

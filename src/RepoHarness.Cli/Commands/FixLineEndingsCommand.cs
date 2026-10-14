@@ -52,7 +52,7 @@ internal static class FixLineEndingsCommand
                 .ConfigureAwait(false);
 
             return LineEndingReports.Render(report, arguments.GetValue(JsonOption));
-        }));
+        }, new JsonAnswer(JsonOption, (arguments, exitCode, summary, _, _) => LineEndingReports.Stopped(exitCode, summary, arguments.GetValue(CheckOption)))));
 
         return command;
     }

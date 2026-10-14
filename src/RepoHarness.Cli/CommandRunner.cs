@@ -141,7 +141,7 @@ internal static class CommandRunner
                 var context = new CommandContext(services, parseResult, directory);
                 var outcome = await body(context, run, cancellationToken).ConfigureAwait(false);
 
-                Report(output, commandName, outcome);
+                Report(output, commandName, outcome, stopped);
                 return outcome.ExitCode;
             }
             catch (Exception ex)
@@ -268,8 +268,26 @@ internal static class CommandRunner
         return true;
     }
 
-    private static void Report(IHarnessOutput output, string commandName, CommandOutcome outcome)
+    /// <summary>
+    /// Reports what a command's body answered: its document, its lines, and the line it ends on. Asked for its document,
+    /// a body that answered without one - a usage error or a refusal it returned before it weighed anything - answers with
+    /// the document it registered for a stop (<see cref="JsonAnswer"/>), so a command asked for one answers with one on
+    /// every exit.
+    /// </summary>
+    /// <param name="output">Where the command writes.</param>
+    /// <param name="commandName">The command, which prefixes its lines.</param>
+    /// <param name="outcome">What its body answered.</param>
+    /// <param name="stopped">
+    /// The document the command answers with where it stops, given the code it exits with and the line it ends on, where
+    /// it was asked for one; <see langword="null"/> where it was not.
+    /// </param>
+    private static void Report(IHarnessOutput output, string commandName, CommandOutcome outcome, Func<int, string, string>? stopped)
     {
+        if (stopped is not null && outcome.Data.Count == 0)
+        {
+            output.Data(stopped(outcome.ExitCode, outcome.Message));
+        }
+
         foreach (var text in outcome.Data)
         {
             output.Data(text);

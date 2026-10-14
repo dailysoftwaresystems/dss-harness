@@ -61,7 +61,7 @@ internal static class LegsCommand
                 .ConfigureAwait(false);
 
             return LegsReports.Render(report, arguments.GetValue(JsonOption), arguments.GetValue(GlobalOptions.Verbose));
-        }));
+        }, new JsonAnswer(JsonOption, (_, exitCode, summary, _, _) => LegsReports.Stopped(exitCode, summary))));
 
         return command;
     }

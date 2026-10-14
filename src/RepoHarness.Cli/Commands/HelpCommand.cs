@@ -34,6 +34,16 @@ internal static class HelpCommand
     internal const string UnknownTopicPrefix = "Unknown topic";
 
     /// <summary>
+    /// What a command asked for --json answers with where it stops before it has anything of its own to say: one
+    /// sentence, said in the overview for every command and wherever a listing's document is described, since a listing
+    /// carries exitCode and summary only then.
+    /// </summary>
+    private const string StoppedDocument = "Asked for --json, a command answers with one document on every exit: stopped before it has "
+        + "anything of its own to say - a --directory that is not there, a repository not initialised, a usage error, or a "
+        + "refusal met before anything is weighed - it answers with its own document holding nothing, exitCode and summary "
+        + "first, which a listing carries only then, or, where its document is an array, with that array empty.";
+
+    /// <summary>
     /// Every topic, in the order the overview lists them: the one list the overview, the topic argument, the answer to an
     /// unknown topic and the rendering all read, so no topic is ever advertised by one and missing from another.
     /// </summary>
@@ -1172,7 +1182,8 @@ internal static class HelpCommand
             + "be swept is said once, above the rows, and never refused; a record that "
             + $"cannot be read is said as a warning. A listing exits {HarnessExit.Success} whatever is pending - it is no gate - "
             + $"and otherwise as a sweep would: {HarnessExit.CommandFailed} where git could not say what a tree ignores, and "
-            + $"{LegExit.InputsMoved} where a tree changed while it was read.");
+            + $"{LegExit.InputsMoved} where a tree changed while it was read. --json prints the listing as one JSON document. "
+            + StoppedDocument);
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -1466,6 +1477,8 @@ internal static class HelpCommand
         builder.AppendLine("Every command accepts");
         builder.AppendLine("  -C, --directory <dir>              Operate on this directory (default: current)");
         builder.AppendLine("  -v, --verbose                      Show per-phase detail and child process output");
+        builder.AppendLine();
+        AppendWrapped(builder, StoppedDocument);
         builder.AppendLine();
         builder.AppendLine("Topics");
 
@@ -2141,7 +2154,7 @@ internal static class HelpCommand
             + "from another checkout or machine, or forgotten here, which deleting a worktree never reaches - and one "
             + "recorded that is not there. A host that cannot be asked is named, and the command fails with the "
             + $"highest code among them, {HarnessExit.HostUnavailable} where a host cannot be reached. --json prints the "
-            + "listing as one JSON document.");
+            + $"listing as one JSON document. {StoppedDocument}");
 
         return builder.ToString();
     }
@@ -2364,6 +2377,12 @@ internal static class HelpCommand
         builder.AppendLine();
         AppendWrapped(
             builder,
+            $"{OrchestratorService.ListCommand} lists the orchestrators, or the one named, their agents and where each stands, "
+            + "and the worktrees below an orchestrator's directory that no agent records; --json prints the listing as one JSON "
+            + $"document. {StoppedDocument}");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
             $"--parallel, {OrchestratorRecord.DefaultParallel} unless given, is the most open agents at once - every agent not yet "
             + "deleted, and every worktree git lists below the orchestrator's directory: create-agent refuses the next, naming them, "
             + "and list-orchestrator counts them. Run again, create-orchestrator changes only the limit and the session, and "
@@ -2479,8 +2498,9 @@ internal static class HelpCommand
             + "where its leg stands - null where the record of heavy legs cannot be read - and each holding a copy kept in the "
             + "worktree, said as its own line says it, a leg copy's holder with where its leg stands, a mutation worker's with "
             + "the process, the run and since when its sweep's claim records. Stopped before "
-            + "anything is weighed - a --directory that is not there, a repository not initialised, a usage error - it answers "
-            + "with the same document, empty: applied false, request and heldNow null, no lines.");
+            + "anything is weighed - a --directory that is not there, a repository not initialised, a usage error, or a refusal "
+            + "met before then, an agent that is not there among them - it answers with the same document, empty: applied "
+            + "false, request and heldNow null, no lines.");
         builder.AppendLine();
         AppendWrapped(
             builder,

@@ -472,7 +472,7 @@ public static class CiLegsReports
     {
         ArgumentNullException.ThrowIfNull(report);
 
-        IReadOnlyList<string> data = json ? [Json(report)] : Text(report);
+        IReadOnlyList<string> data = json ? [Document(report).ToJsonString(ReportJson.Options)] : Text(report);
 
         if (report.MatrixNeverRan)
         {
@@ -543,12 +543,21 @@ public static class CiLegsReports
 
     private static string Short(string? sha) => sha is { Length: > 8 } ? sha[..8] : sha ?? "-";
 
-    private static string Json(CiLegsReport report)
+    /// <summary>
+    /// The document check-ci-legs answers with where it stops before it reads any run - a <c>--directory</c> that is not
+    /// there, a usage error: its own, naming no branch and no run, after the code it exits with and the line it ends on.
+    /// </summary>
+    /// <param name="exitCode">The code the command exits with.</param>
+    /// <param name="summary">The line it ends on.</param>
+    public static string Stopped(int exitCode, string summary) => ReportJson.Stopped(exitCode, summary, Document(null));
+
+    /// <summary>The one document of check-ci-legs --json: the branch and each run's legs; of no report, none of either.</summary>
+    private static JsonObject Document(CiLegsReport? report)
     {
         var node = new JsonObject
         {
-            ["branch"] = report.Branch,
-            ["runs"] = new JsonArray([.. report.Runs.Select(run => (JsonNode)new JsonObject
+            ["branch"] = report?.Branch,
+            ["runs"] = new JsonArray([.. (report?.Runs ?? []).Select(run => (JsonNode)new JsonObject
             {
                 ["id"] = run.Run.Id,
                 ["workflow"] = run.Workflow,
@@ -572,6 +581,6 @@ public static class CiLegsReports
             })]),
         };
 
-        return node.ToJsonString(ReportJson.Options);
+        return node;
     }
 }

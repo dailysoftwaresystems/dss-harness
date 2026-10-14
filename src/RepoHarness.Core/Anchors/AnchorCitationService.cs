@@ -335,7 +335,7 @@ public static class AnchorCitationReports
         ArgumentNullException.ThrowIfNull(report);
 
         IReadOnlyList<string> data = json
-            ? [Json(report)]
+            ? [Document(report).ToJsonString(ReportJson.Options)]
             : [.. report.Unresolved.Select(citation => citation.Cut
                 ? $"{citation.Path}:{citation.LineNumber}: {citation.Written} (cut at the end of the line)"
                 : $"{citation.Path}:{citation.LineNumber}: {citation.Id}")];
@@ -380,17 +380,27 @@ public static class AnchorCitationReports
         { Data = data };
     }
 
-    private static string Json(AnchorCitationReport report)
+    /// <summary>
+    /// The document check-anchor-citations answers with where it stops before it reads anything - a <c>--directory</c>
+    /// that is not there, a usage error: its own, naming no subject and no root, nothing scanned, found or passed, after
+    /// the code it exits with and the line it ends on.
+    /// </summary>
+    /// <param name="exitCode">The code the command exits with.</param>
+    /// <param name="summary">The line it ends on.</param>
+    public static string Stopped(int exitCode, string summary) => ReportJson.Stopped(exitCode, summary, Document(null));
+
+    /// <summary>The one document of check-anchor-citations --json: what was read and what did not resolve; of no report, nothing.</summary>
+    private static JsonObject Document(AnchorCitationReport? report)
     {
         var node = new JsonObject
         {
-            ["subject"] = report.SubjectDescription,
-            ["roots"] = new JsonArray([.. report.Roots.Select(root => (JsonNode?)JsonValue.Create(root))]),
-            ["filesScanned"] = report.FilesScanned,
-            ["citationsFound"] = report.CitationsFound,
-            ["registryRows"] = report.RegistryRows,
-            ["passed"] = report.Passed,
-            ["unresolved"] = new JsonArray([.. report.Unresolved.Select(citation => (JsonNode)new JsonObject
+            ["subject"] = report?.SubjectDescription,
+            ["roots"] = new JsonArray([.. (report?.Roots ?? []).Select(root => (JsonNode?)JsonValue.Create(root))]),
+            ["filesScanned"] = report?.FilesScanned ?? 0,
+            ["citationsFound"] = report?.CitationsFound ?? 0,
+            ["registryRows"] = report?.RegistryRows ?? 0,
+            ["passed"] = report?.Passed ?? false,
+            ["unresolved"] = new JsonArray([.. (report?.Unresolved ?? []).Select(citation => (JsonNode)new JsonObject
             {
                 ["anchor"] = citation.Id,
                 ["file"] = citation.Path,
@@ -399,6 +409,6 @@ public static class AnchorCitationReports
             })]),
         };
 
-        return node.ToJsonString(ReportJson.Options);
+        return node;
     }
 }

@@ -624,9 +624,10 @@ them or, where a claim of the copy's family rather than the lock names its holde
 (`CopyHolder`), and what only a lock entry says, `command`, `variant` and `standing`, null for such a holder;
 `standing` is null too where the record of heavy legs cannot be read - and `heldUnread`, why the lock file could not be
 read. A command stopped before
-anything is weighed - a `--directory` that is not there, a repository not initialised, a usage error - answers with the
-same document, empty (`OrchestrationReports.Stopped`): `applied` false, `request`, `heldNow` and `heldUnread` null, no
-`lines`, its `exitCode` and `summary` the code it exits with and the line it ends on.
+anything is weighed - a `--directory` that is not there, a repository not initialised, a usage error, or a refusal met
+before then, an agent that is not there among them - answers with the same document, empty
+(`OrchestrationReports.Stopped`): `applied` false, `request`, `heldNow` and `heldUnread` null, no `lines`, its
+`exitCode` and `summary` the code it exits with and the line it ends on.
 
 An agent's worktree is `<worktrees.root>/<orchestrator>/<agent>`, addressed `orchestrator/agent` by list-worktree
 and delete-worktree, its host copies named `orchestrator--agent` (`WorktreeAddress`). The directory named for an
@@ -2101,10 +2102,16 @@ tool replaces, where a green result had quietly stopped meaning anything.
   host's answer this way, so a host's refusal arrives as that refusal, in the host's words.
 - Every other command asked for `--json` that stops before it has anything of its own to say
   answers in its own document's shape, never the ledger's: the agent verbs with the agent
-  document, empty; `list-orchestrator` and `list-worktree` with their listing, listing nothing,
-  after `exitCode` and `summary` (`ReportJson.Stopped`); `check-mutations --list` with its
-  listing, no legs. Each command registers which with `CommandRunner.Wrap` (`JsonAnswer`), so
-  the plumbing that stops a command answers for it without choosing by its name.
+  document, empty; `list-orchestrator`, `list-worktree`, `legs`, `install-missing-tools`,
+  `check-ci-legs`, `check-anchor-citations`, `check-anchor-balance` and `fix-line-endings` with
+  their own document holding nothing, after `exitCode` and `summary` (`ReportJson.Stopped`);
+  `check-mutations --list` with its listing, no legs; and `read-anchor` and `read-anchors`,
+  whose document is an array, with that array empty - the process's exit code and the line it
+  ends on say the rest. Each command registers which with `CommandRunner.Wrap` (`JsonAnswer`), so
+  the plumbing answers for it without choosing by its name, both where it stops the command
+  itself and where the body answers with no document - a usage error or a refusal returned
+  before anything is weighed (`CommandRunner.Report`): a command asked for `--json` answers
+  with one document on every exit.
 - An emulated leg's emulator has passed its witness on that host before the leg starts.
 
 ### Inputs that hold still

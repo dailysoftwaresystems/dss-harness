@@ -318,7 +318,7 @@ internal static class ReadAnchorCommand
                 .ConfigureAwait(false);
 
             return AnchorReports.Lookup(lookup, arguments.GetValue(JsonOption));
-        }));
+        }, new JsonAnswer(JsonOption, (_, _, _, _, _) => AnchorReports.LookupStopped())));
 
         return command;
     }
@@ -401,7 +401,7 @@ internal static class ReadAnchorsCommand
 
             var entries = await service.ListAsync(context.Directory, filter, cancellationToken).ConfigureAwait(false);
             return AnchorReports.List(entries, filter.Scope, json);
-        }));
+        }, new JsonAnswer(JsonOption, (arguments, _, _, _, _) => AnchorReports.ListStopped(arguments.GetValue(LintOption)))));
 
         return command;
     }
@@ -461,7 +461,7 @@ internal static class CheckAnchorBalanceCommand
                 .ConfigureAwait(false);
 
             return AnchorReports.Balance(report, arguments.GetValue(JsonOption));
-        }));
+        }, new JsonAnswer(JsonOption, (_, exitCode, summary, _, _) => AnchorReports.BalanceStopped(exitCode, summary))));
 
         return command;
     }

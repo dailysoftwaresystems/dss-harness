@@ -28,7 +28,7 @@ public sealed partial class HelpTests
     public async Task EveryListedCommand_HasItsOwnWorkingHelp()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        var listed = await ListCommandsAsync(cancellationToken);
+        var listed = await CliRunner.CommandsAsync(cancellationToken);
 
         Assert.NotEmpty(listed);
 
@@ -88,7 +88,7 @@ public sealed partial class HelpTests
     {
         var result = await CliRunner.RunAsync(["--help"], TestContext.Current.CancellationToken);
 
-        var lines = CommandLines(result.StandardOutput).ToList();
+        var lines = CliRunner.CommandLines(result.StandardOutput).ToList();
         Assert.NotEmpty(lines);
 
         foreach (var line in lines)
@@ -2313,8 +2313,9 @@ public sealed partial class HelpTests
             + "where its leg stands - null where the record of heavy legs cannot be read - and each holding a copy kept in the "
             + "worktree, said as its own line says it, a leg copy's holder with where its leg stands, a mutation worker's with "
             + "the process, the run and since when its sweep's claim records. Stopped before "
-            + "anything is weighed - a --directory that is not there, a repository not initialised, a usage error - it answers "
-            + "with the same document, empty: applied false, request and heldNow null, no lines.",
+            + "anything is weighed - a --directory that is not there, a repository not initialised, a usage error, or a refusal "
+            + "met before then, an agent that is not there among them - it answers with the same document, empty: applied "
+            + "false, request and heldNow null, no lines.",
             text,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -2389,43 +2390,6 @@ public sealed partial class HelpTests
 
     private static IEnumerable<(KeyDescription Key, int Depth)> Listed(IReadOnlyList<KeyDescription> keys, int depth)
         => keys.SelectMany(key => Listed(key.Keys, depth + 1).Prepend((key, depth)));
-
-    /// <summary>Reads the command names out of the root help listing.</summary>
-    private static async Task<IReadOnlyList<string>> ListCommandsAsync(CancellationToken cancellationToken)
-    {
-        var result = await CliRunner.RunAsync(["--help"], cancellationToken);
-
-        return [.. CommandLines(result.StandardOutput)
-            .Select(line => line.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries)[0])
-            .Where(name => name.Length > 0)];
-    }
-
-    /// <summary>The lines of the root help listing that describe a command.</summary>
-    private static IEnumerable<string> CommandLines(string helpOutput)
-    {
-        var inCommands = false;
-
-        foreach (var line in helpOutput.Split('\n').Select(l => l.TrimEnd('\r')))
-        {
-            if (line.StartsWith("Commands:", StringComparison.Ordinal))
-            {
-                inCommands = true;
-                continue;
-            }
-
-            if (!inCommands)
-            {
-                continue;
-            }
-
-            if (line.Trim().Length == 0)
-            {
-                break;
-            }
-
-            yield return line;
-        }
-    }
 
     [GeneratedRegex(@"^\s{2}(?<name>\S+)(\s+\[?<\S+)*\s{2,}(?<description>.+)$")]
     private static partial Regex CommandLinePattern();

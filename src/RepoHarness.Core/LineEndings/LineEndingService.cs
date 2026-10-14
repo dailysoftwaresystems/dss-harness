@@ -339,7 +339,7 @@ public static class LineEndingReports
         ArgumentNullException.ThrowIfNull(report);
 
         IReadOnlyList<string> data = json
-            ? [Json(report)]
+            ? [Document(report.Scope, report.CheckOnly, report).ToJsonString(ReportJson.Options)]
             : [.. report.Changed.Select(change => $"{change.Path}   -> {Name(change.Ending)}")];
 
         var looked =
@@ -374,17 +374,34 @@ public static class LineEndingReports
         _ => "undeclared",
     };
 
-    private static string Json(LineEndingReport report)
+    /// <summary>
+    /// The document fix-line-endings answers with where it stops before it reads any file - a <c>--directory</c> that is
+    /// not there, a usage error: its own, nothing considered and nothing changed, its check as the command line asked
+    /// and its scope none, since that may be the very usage error, after the code it exits with and the line it ends on.
+    /// </summary>
+    /// <param name="exitCode">The code the command exits with.</param>
+    /// <param name="summary">The line it ends on.</param>
+    /// <param name="checkOnly">Whether the command line asked only to look.</param>
+    public static string Stopped(int exitCode, string summary, bool checkOnly)
+        => ReportJson.Stopped(exitCode, summary, Document(scope: null, checkOnly, report: null));
+
+    /// <summary>The one document of fix-line-endings --json: what was covered, and what changed; of no report, nothing of either.</summary>
+    private static JsonObject Document(LineEndingScope? scope, bool checkOnly, LineEndingReport? report)
     {
         var node = new JsonObject
         {
-            ["scope"] = report.Scope == LineEndingScope.All ? "all" : "changed",
-            ["check"] = report.CheckOnly,
-            ["considered"] = report.FilesConsidered,
-            ["binary"] = report.Binary,
-            ["undeclared"] = report.Undeclared,
-            ["excluded"] = report.Excluded,
-            ["changed"] = new JsonArray([.. report.Changed.Select(change => (JsonNode)new JsonObject
+            ["scope"] = scope switch
+            {
+                LineEndingScope.All => "all",
+                null => null,
+                _ => "changed",
+            },
+            ["check"] = checkOnly,
+            ["considered"] = report?.FilesConsidered ?? 0,
+            ["binary"] = report?.Binary ?? 0,
+            ["undeclared"] = report?.Undeclared ?? 0,
+            ["excluded"] = report?.Excluded ?? 0,
+            ["changed"] = new JsonArray([.. (report?.Changed ?? []).Select(change => (JsonNode)new JsonObject
             {
                 ["file"] = change.Path,
                 ["ending"] = Name(change.Ending),
@@ -392,6 +409,6 @@ public static class LineEndingReports
             })]),
         };
 
-        return node.ToJsonString(ReportJson.Options);
+        return node;
     }
 }
