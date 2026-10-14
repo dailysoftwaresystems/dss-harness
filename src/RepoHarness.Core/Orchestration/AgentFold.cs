@@ -58,11 +58,11 @@ public sealed record FoldPlan
 
     /// <summary>
     /// What each written path, each merged, each already in the main tree and each handed held in the agent's worktree when
-    /// it was measured - its digest, or null where it held no file: what is written, what a merge or a hand-over is written
-    /// over, and what both trees are recorded as sharing once a written path is. A handed path where the agent holds
-    /// anything else is not in it (<see cref="AgentFold.HoldingAsync"/>).
+    /// it was measured - the file it was, its digest and whether it could be run, or null where it held no file: what is
+    /// written, what a merge or a hand-over is written over or removed, and what both trees are recorded as sharing once a
+    /// written path is. A handed path where the agent holds anything else is not in it (<see cref="AgentFold.HoldingAsync"/>).
     /// </summary>
-    public required IReadOnlyDictionary<string, string?> AgentContent { get; init; }
+    public required IReadOnlyDictionary<string, FileIdentity?> AgentContent { get; init; }
 
     /// <summary>
     /// What each written, each merged and each deleted path held in the main tree when it was measured - its digest, or
@@ -70,8 +70,8 @@ public sealed record FoldPlan
     /// </summary>
     public required IReadOnlyDictionary<string, string?> MainContent { get; init; }
 
-    /// <summary>Whether nothing is left to write, merge, delete or refuse: what deleting an agent requires once its fold is in.</summary>
-    public bool NothingLeft => Written.Count == 0 && Merged.Count == 0 && Deleted.Count == 0 && Refusals.Count == 0;
+    /// <summary>Whether nothing is left to write, merge, delete, hand or refuse: what deleting an agent requires once its fold is in.</summary>
+    public bool NothingLeft => Written.Count == 0 && Merged.Count == 0 && Deleted.Count == 0 && Handed.Count == 0 && Refusals.Count == 0;
 }
 
 /// <summary>A path declared settled by hand that a fold leaves out, and why.</summary>
@@ -224,10 +224,11 @@ public sealed record RefreshPlan
 
     /// <summary>
     /// What the agent's worktree held at each path handed, and at each it already holds as the main tree does, when it was
-    /// measured: what a hand-over may write over or remove, and nothing else (<see cref="AgentFold.HandAsync"/>); and what is
-    /// recorded as shared for a path already alike (<see cref="AgentFold.AlikeAsync"/>).
+    /// measured - the file whole, its digest and its bit, or null where it held none: what a hand-over may write over or
+    /// remove, and nothing else (<see cref="AgentFold.HandAsync"/>); and what is recorded as shared for a path already
+    /// alike (<see cref="AgentFold.AlikeAsync"/>).
     /// </summary>
-    public required IReadOnlyDictionary<string, string?> Held { get; init; }
+    public required IReadOnlyDictionary<string, FileIdentity?> Held { get; init; }
 }
 
 /// <summary>What the main tree hands an agent: each file copied, each deletion made, and what it cannot hand.</summary>
@@ -363,6 +364,12 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     /// <summary>The agent's worktree, as such a stop names it.</summary>
     private const string AgentTreeName = "the agent's worktree";
 
+    /// <summary>A directory in the main tree that a fold never reads or writes, as a refusal and a left-out name it.</summary>
+    private const string MainDirectory = "a directory in the main tree - a submodule, or a repository of its own";
+
+    /// <summary>A directory in the agent's worktree that a fold never reads or writes, as a refusal and a left-out name it.</summary>
+    private const string AgentDirectory = "a directory in the agent's worktree - a submodule, or a repository of its own";
+
     /// <summary>What writes a merged arm registry into the main tree, as a refusal of the merged text names it.</summary>
     private const string FoldWriter = "the fold";
 
@@ -424,7 +431,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
 
         var written = new List<string>();
         var deleted = new List<string>();
-        var agentContent = new Dictionary<string, string?>(StringComparer.Ordinal);
+        var agentContent = new Dictionary<string, FileIdentity?>(StringComparer.Ordinal);
         var mainContent = new Dictionary<string, string?>(StringComparer.Ordinal);
         var inherited = new List<string>();
         var alreadyIn = new List<string>();
@@ -463,7 +470,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
 
             if (look.Agent.Kind == Kind.Directory)
             {
-                refused.Add((path, $"'{path}' is a directory in the agent's worktree - a submodule, or a repository of its own - and a fold moves files only"));
+                refused.Add((path, $"'{path}' is {AgentDirectory} - and a fold moves files only"));
                 continue;
             }
 
@@ -484,7 +491,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             if (look.Main == look.Agent)
             {
                 alreadyIn.Add(path);
-                agentContent[path] = look.Agent.File?.Digest;
+                agentContent[path] = look.Agent.File;
                 continue;
             }
 
@@ -585,7 +592,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             else
             {
                 written.Add(path);
-                agentContent[path] = look.Agent.File!.Value.Digest;
+                agentContent[path] = look.Agent.File;
             }
         }
 
@@ -659,7 +666,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             {
                 merged.Add(new MergedPath(path, offer.Working!, offer.Digest!, offer.Executable, offer.Listed, into));
                 mainContent[path] = into[0].Weighed.Digest;
-                agentContent[path] = into[1].Weighed.Digest;
+                agentContent[path] = into[1].Weighed;
                 continue;
             }
 
@@ -691,7 +698,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         // the agent's own; a directory git will not look into is left out, as one reached through a link is.
         var sorted = await ClassifyAsync(main, settling, uncommitted: null, cancellationToken).ConfigureAwait(false);
         var handed = sorted with { Directories = [], Links = [] };
-        leftOut.AddRange(sorted.Directories.Select(directory => new SettledOut(directory, "a directory in the main tree - a submodule, or a repository of its own")));
+        leftOut.AddRange(sorted.Directories.Select(directory => new SettledOut(directory, MainDirectory)));
 
         var inTheWayOfHanding = WaysOfHanding(worktree, handed);
 
@@ -819,7 +826,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             {
                 var destination = Path.Combine(main, path);
                 await RequireMeasuredAsync(destination, path, plan.MainContent[path], MainTreeName, "written over").ConfigureAwait(false);
-                await VerifiedFileCopy.CopyAsync(_fileSystem, Path.Combine(worktree, path), destination, plan.AgentContent[path], CancellationToken.None).ConfigureAwait(false);
+                await VerifiedFileCopy.CopyAsync(_fileSystem, Path.Combine(worktree, path), destination, plan.AgentContent[path]?.Digest, CancellationToken.None).ConfigureAwait(false);
                 written.Add(path);
             }
 
@@ -867,7 +874,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
 
         foreach (var into in merge.Into)
         {
-            await RequireWeighedAsync(into.File, merge.Path, into.Weighed, into.Tree).ConfigureAwait(false);
+            await RequireWeighedAsync(into.File, merge.Path, into.Weighed, into.Tree, "written over").ConfigureAwait(false);
         }
 
         foreach (var into in merge.Into)
@@ -911,9 +918,9 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
 
         foreach (var path in applied.Written.Concat(plan.AlreadyIn))
         {
-            if (plan.AgentContent[path] is { } digest)
+            if (plan.AgentContent[path] is { } identity)
             {
-                await ledger.FileAsync(path, digest, IsExecutable(Path.Combine(worktree, path)), Path.Combine(main, path)).ConfigureAwait(false);
+                await ledger.FileAsync(path, identity.Digest, IsExecutable(Path.Combine(worktree, path)), Path.Combine(main, path)).ConfigureAwait(false);
             }
             else
             {
@@ -1282,7 +1289,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
 
         foreach (var path in movedPaths.Order(StringComparer.Ordinal))
         {
-            (await SameAsync(Path.Combine(main, path), Path.Combine(worktree, path), cancellationToken).ConfigureAwait(false) ? alike : other).Add(path);
+            (await HoldsAlikeAsync(main, worktree, path, cancellationToken).ConfigureAwait(false) ? alike : other).Add(path);
         }
 
         // A stale copy the main tree did not move is weighed too - one put back by hand to an older version, which the
@@ -1297,7 +1304,13 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             {
                 strays.Add(path);
             }
-            else if (!await SameAsync(Path.Combine(main, path), Path.Combine(worktree, path), cancellationToken).ConfigureAwait(false))
+            else if (_fileSystem.KindOf(Path.Combine(main, path)) is not (PathKind.File or PathKind.None))
+            {
+                // The main tree holds a link or a directory there - never a file to hand, so no copy of the main tree's to
+                // prove stale either: named as itself among what is not handed, and weighed no further, as MovedAsync
+                // keeps links and directories from its own question.
+            }
+            else if (!await HoldsAlikeAsync(main, worktree, path, cancellationToken).ConfigureAwait(false))
             {
                 unmoved.Add(path);
             }
@@ -1531,8 +1544,8 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
 
     /// <summary>
     /// Records in <paramref name="ledger"/> each path of <paramref name="plan"/> the agent already holds as the main tree
-    /// does, as what it held when it was measured - the file both trees held, or absent from both - its bytes kept from the
-    /// agent's copy: nothing is copied, and its record then says what it holds.
+    /// does, as what it was when it was measured - the file both trees held, its digest and its bit, or absent from both -
+    /// its bytes kept from the agent's copy: nothing is copied, and its record then says what it holds.
     /// </summary>
     /// <param name="worktree">The agent's worktree.</param>
     /// <param name="plan">The refresh measured.</param>
@@ -1546,9 +1559,9 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         {
             var copy = Path.Combine(worktree, path);
 
-            if (plan.Held[path] is { } digest)
+            if (plan.Held[path] is { } measured)
             {
-                await ledger.FileAsync(path, digest, IsExecutable(copy), copy).ConfigureAwait(false);
+                await ledger.FileAsync(path, measured.Digest, measured.Executable, copy).ConfigureAwait(false);
             }
             else
             {
@@ -1558,19 +1571,20 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     }
 
     /// <summary>
-    /// What the agent's worktree holds at each of <paramref name="paths"/> - a file's digest, or null where it holds no
-    /// file - measured so a hand-over writes over or removes only what was weighed. A path where it holds anything else - a
-    /// directory, a link - is not in it: a hand-over meets that as it always has.
+    /// What the agent's worktree holds at each of <paramref name="paths"/> - the file it is, its digest and whether it
+    /// could be run, or null where it holds no file - measured so a hand-over writes over or removes only what was weighed,
+    /// the file whole. A path where it holds anything else - a directory, a link - is not in it: a hand-over meets that as
+    /// it always has.
     /// </summary>
     /// <param name="worktree">The agent's worktree.</param>
     /// <param name="paths">The paths it is to be handed.</param>
     /// <param name="cancellationToken">Stops the reading.</param>
     /// <exception cref="IOException">A path could not be looked at.</exception>
-    public async Task<IReadOnlyDictionary<string, string?>> HoldingAsync(string worktree, IEnumerable<string> paths, CancellationToken cancellationToken)
+    public async Task<IReadOnlyDictionary<string, FileIdentity?>> HoldingAsync(string worktree, IEnumerable<string> paths, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(paths);
 
-        var held = new Dictionary<string, string?>(StringComparer.Ordinal);
+        var held = new Dictionary<string, FileIdentity?>(StringComparer.Ordinal);
 
         foreach (var path in paths)
         {
@@ -1579,7 +1593,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             switch (_fileSystem.KindOf(copy))
             {
                 case PathKind.File:
-                    held[path] = (await FileContentHash.OfAsync(_fileSystem, copy, cancellationToken).ConfigureAwait(false)).Content;
+                    held[path] = await IdentityAsync(copy, cancellationToken).ConfigureAwait(false);
                     break;
                 case PathKind.None:
                     held[path] = null;
@@ -1614,7 +1628,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         string worktree,
         Handable handable,
         SharedLedger ledger,
-        IReadOnlyDictionary<string, string?>? held,
+        IReadOnlyDictionary<string, FileIdentity?>? held,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(handable);
@@ -1662,7 +1676,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         string main,
         string worktree,
         Handable handable,
-        IReadOnlyDictionary<string, string?>? held,
+        IReadOnlyDictionary<string, FileIdentity?>? held,
         Func<string, string?, Task> handed,
         CancellationToken cancellationToken)
     {
@@ -1670,7 +1684,14 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         {
             if (held is not null && held.TryGetValue(path, out var measured))
             {
-                await RequireMeasuredAsync(copy, path, measured, AgentTreeName, what).ConfigureAwait(false);
+                if (measured is { } identity)
+                {
+                    await RequireWeighedAsync(copy, path, identity, AgentTreeName, what).ConfigureAwait(false);
+                }
+                else
+                {
+                    await RequireMeasuredAsync(copy, path, null, AgentTreeName, what).ConfigureAwait(false);
+                }
             }
         }
 
@@ -2199,6 +2220,14 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
 
         foreach (var path in paths)
         {
+            // A link the tree holds at the path is neither the file it leads to nor an absence: it differs, as a change of
+            // its own - never read as one, which is what SideAsync raises for.
+            if (_fileSystem.KindOf(Path.Combine(tree, path)) == PathKind.Link)
+            {
+                differs.Add(path);
+                continue;
+            }
+
             var side = await SideAsync(Path.Combine(tree, path), cancellationToken).ConfigureAwait(false);
 
             if (shared.Of(path) is { } baseline)
@@ -2259,7 +2288,10 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
 
         foreach (var path in changed)
         {
-            if (shared.Of(path) is not { } baseline || await SideAsync(Path.Combine(worktree, path), cancellationToken).ConfigureAwait(false) != baseline)
+            // A link the agent holds there is its own change, never the file it leads to read as one.
+            if (shared.Of(path) is not { } baseline
+                || _fileSystem.KindOf(Path.Combine(worktree, path)) == PathKind.Link
+                || await SideAsync(Path.Combine(worktree, path), cancellationToken).ConfigureAwait(false) != baseline)
             {
                 own.Add(path);
             }
@@ -2274,6 +2306,19 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     /// <param name="cancellationToken">Stops the reading.</param>
     public async Task<bool> SameAsync(string main, string agent, CancellationToken cancellationToken)
         => await SideAsync(main, cancellationToken).ConfigureAwait(false) == await SideAsync(agent, cancellationToken).ConfigureAwait(false);
+
+    /// <summary>
+    /// Whether the agent already holds what the main tree does at <paramref name="path"/>, asked of a copy the main tree
+    /// moved or a stale name weighs: as <see cref="SameAsync"/> finds it, but a link the agent holds there never is that -
+    /// a link is no copy of anything, and what it leads to is its own change to name, never a file to read.
+    /// </summary>
+    /// <param name="main">The main checkout's root.</param>
+    /// <param name="worktree">The agent's worktree.</param>
+    /// <param name="path">The path, relative to the tree.</param>
+    /// <param name="cancellationToken">Stops the reading.</param>
+    private async Task<bool> HoldsAlikeAsync(string main, string worktree, string path, CancellationToken cancellationToken)
+        => _fileSystem.KindOf(Path.Combine(worktree, path)) != PathKind.Link
+            && await SameAsync(Path.Combine(main, path), Path.Combine(worktree, path), cancellationToken).ConfigureAwait(false);
 
     /// <summary>Whether the file at <paramref name="path"/> could be run - its execute bit set - on a platform with one; never on Windows, which has none.</summary>
     /// <param name="path">A file.</param>
@@ -2320,8 +2365,8 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     /// </summary>
     private static string? Unread(Look look)
         => look.Link is { } link ? $"reached through a symbolic link or junction in {link}"
-            : look.Agent.Kind == Kind.Directory ? "a directory in the agent's worktree - a submodule, or a repository of its own"
-            : look.Main.Kind == Kind.Directory ? "a directory in the main tree - a submodule, or a repository of its own"
+            : look.Agent.Kind == Kind.Directory ? AgentDirectory
+            : look.Main.Kind == Kind.Directory ? MainDirectory
             : null;
 
     /// <summary>
@@ -2442,23 +2487,24 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     }
 
     /// <summary>
-    /// Stops a write over the file at <paramref name="file"/> where it is no longer the file weighed - its content, or,
-    /// where the platform keeps one, its bit: a file made runnable since is another file, and a merge written over it would
-    /// take that change away unrecorded.
+    /// Stops a write over or a removal of the file at <paramref name="file"/> where it is no longer the file weighed - its
+    /// content, or, where the platform keeps one, its bit: a file made runnable since is another file, and writing over or
+    /// removing it would take that change away unrecorded.
     /// </summary>
-    /// <param name="file">The file about to be written over.</param>
+    /// <param name="file">The file about to be written over or removed.</param>
     /// <param name="path">Its path in the tree, as the stop names it.</param>
     /// <param name="weighed">What it was when it was weighed.</param>
     /// <param name="tree">The tree it is in, as the stop names it.</param>
-    private async Task RequireWeighedAsync(string file, string path, FileIdentity weighed, string tree)
+    /// <param name="what">What was not done to it, to end the sentence.</param>
+    private async Task RequireWeighedAsync(string file, string path, FileIdentity weighed, string tree, string what)
     {
-        await RequireMeasuredAsync(file, path, weighed.Digest, tree, "written over").ConfigureAwait(false);
+        await RequireMeasuredAsync(file, path, weighed.Digest, tree, what).ConfigureAwait(false);
 
         if (IsExecutable(file) != weighed.Executable)
         {
             throw new IOException(weighed.Executable
-                ? $"'{path}' can no longer be run in {tree}, which it could when it was measured, so it was not written over"
-                : $"'{path}' can now be run in {tree}, which it could not when it was measured, so it was not written over");
+                ? $"'{path}' can no longer be run in {tree}, which it could when it was measured, so it was not {what}"
+                : $"'{path}' can now be run in {tree}, which it could not when it was measured, so it was not {what}");
         }
     }
 

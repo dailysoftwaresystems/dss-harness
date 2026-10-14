@@ -89,21 +89,9 @@ public sealed record RefreshRequest
     public string Arguments()
         => string.Join(
             ' ',
-            new[] { All ? AllOption : string.Join(' ', Paths.Select(OrchestrationReports.Argument)), ExceptArguments(Except), StaleArguments(Stale), MergeArguments(Merge) }
+            new[] { All ? AllOption : string.Join(' ', Paths.Select(OrchestrationReports.Argument)) }
+                .Concat(OrchestrationReports.PathArguments(ExceptOption, Except))
+                .Concat(OrchestrationReports.PathArguments(StaleOption, Stale))
+                .Concat(OrchestrationReports.PathArguments(FoldAllowances.MergeOption, Merge))
                 .Where(part => part.Length > 0));
-
-    /// <summary>The arguments that leave <paramref name="paths"/> as the agent changed them, each as a command line takes it.</summary>
-    /// <param name="paths">The paths, as git names them.</param>
-    public static string ExceptArguments(IEnumerable<string> paths)
-        => string.Join(' ', OrchestrationReports.PathArguments(ExceptOption, paths));
-
-    /// <summary>The arguments that hand <paramref name="paths"/> the main tree's copy as stale ones, each as a command line takes it.</summary>
-    /// <param name="paths">The paths, as git names them.</param>
-    public static string StaleArguments(IEnumerable<string> paths)
-        => string.Join(' ', OrchestrationReports.PathArguments(StaleOption, paths));
-
-    /// <summary>The arguments that merge <paramref name="paths"/>, each as a command line takes it.</summary>
-    /// <param name="paths">The paths, as git names them.</param>
-    public static string MergeArguments(IEnumerable<string> paths)
-        => string.Join(' ', OrchestrationReports.PathArguments(FoldAllowances.MergeOption, paths));
 }

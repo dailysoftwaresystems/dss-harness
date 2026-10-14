@@ -1765,17 +1765,17 @@ public sealed class GitClientTests
         Assert.False(whole.Cut);
         Assert.Equal(5, whole.Commits);
 
-        // The commit that changed only the other file holds the first version too, and is no version of its own: the
-        // run is named by its oldest commit, the one that made it.
+        // The commit that changed only the other file holds the first version too, and is no version of its own: each run
+        // is named by its newest commit - for b.txt, the commit that changed a.txt alone and holds its blob as it stood.
         Assert.Equal(
             [
                 new GitHeldAt(again, await BlobAsync(first, "a.txt")),
                 new GitHeldAt(third, await BlobAsync(third, "a.txt")),
                 new GitHeldAt(second, await BlobAsync(second, "a.txt")),
-                new GitHeldAt(first, await BlobAsync(first, "a.txt")),
+                new GitHeldAt(other, await BlobAsync(first, "a.txt")),
             ],
             whole.Held["a.txt"]);
-        Assert.Equal([new GitHeldAt(other, await BlobAsync(other, "b.txt"))], whole.Held["b.txt"]);
+        Assert.Equal([new GitHeldAt(again, await BlobAsync(other, "b.txt"))], whole.Held["b.txt"]);
         Assert.Empty(whole.Held["never.txt"]);
 
         var bounded = await harness.GitClient.ListHeldInHistoryAsync(temp.Path, "HEAD", ["a.txt"], 2, cancellationToken);
@@ -2354,6 +2354,19 @@ public sealed class GitClientProtocolTests
 
         Assert.Equal(HarnessExit.CommandFailed, refused.ExitCode);
         Assert.Equal("git answered 1 line(s) for the 2 it was asked about abc, so which files it holds cannot be told.", refused.Message);
+    }
+
+    /// <summary>Where git itself fails, the refusal names the commit whose files could not be read, as it always did.</summary>
+    [Fact]
+    public async Task HeldAtAsync_WhereGitFails_NamesTheCommitWhoseFilesItCannotRead()
+    {
+        var (git, _) = Scripted(Exited(128, stderr: "fatal: the remote end hung up unexpectedly"));
+
+        var failed = await Assert.ThrowsAsync<HarnessException>(() =>
+            git.HeldAtAsync("/repo", "0123456789abcdef0123456789abcdef01234567", ["a.txt"], TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.CommandFailed, failed.ExitCode);
+        Assert.Equal("Could not read which files 0123456789abcdef0123456789abcdef01234567 holds: fatal: the remote end hung up unexpectedly", failed.Message);
     }
 
     private static (GitClient Client, List<ProcessRequest> Requests) Scripted(params ProcessResult[] results)

@@ -924,6 +924,70 @@ public sealed class AgentFoldTests
         Assert.DoesNotContain("docs/x.md", kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!.Paths.Keys);
     }
 
+    /// <summary>
+    /// A path the agent holds a repository of its own at, declared settled by hand, is left out and not handed as a link
+    /// along it is: --settled stays the one way out of the refusal a directory otherwise meets, and nothing of the
+    /// agent's is written or removed.
+    /// </summary>
+    [Fact]
+    public async Task ASettledPathTheAgentHoldsARepositoryOfItsOwnAt_IsLeftOut_NeverRefused()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        File.Delete(Path.Combine(worktree, "b.txt"));
+        await kit.Harness.InitializeGitRepositoryAsync(Directory.CreateDirectory(Path.Combine(worktree, "b.txt")).FullName, TestContext.Current.CancellationToken);
+
+        var settled = await kit.FoldAsync("ag", apply: true, "b.txt");
+
+        Assert.True(settled.Succeeded, OrchestrationKit.Describe(settled));
+        Assert.Equal(
+            "1 path(s) declared settled by hand that a fold never reads or writes, left out and not handed - the agent's next fold meets it again:",
+            settled.Details![0]);
+        Assert.Equal("  b.txt   (a directory in the agent's worktree - a submodule, or a repository of its own)", settled.Details[1]);
+        Assert.Equal("two\n", OrchestrationKit.Read(kit.Main, "b.txt"));
+        Assert.True(Directory.Exists(Path.Combine(worktree, "b.txt", ".git")));
+        Assert.DoesNotContain("b.txt", kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!.Paths.Keys);
+    }
+
+    /// <summary>
+    /// A settled path the main tree holds a submodule's entry at - an empty directory, which reads as no file there -
+    /// or a repository of its own at is left out and not handed too, said as itself: nothing is reconciled by handing
+    /// either, and the agent's copy stays its own.
+    /// </summary>
+    [Fact]
+    public async Task ASettledPathTheMainTreeHoldsASubmodulesEntryOrARepositoryOfItsOwnAt_IsLeftOut()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, "sub.txt", "one\n");
+        OrchestrationKit.Write(kit.Main, "repo.txt", "two\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "two files the agent will change", TestContext.Current.CancellationToken);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "sub.txt", "one\nagent edit\n");
+        OrchestrationKit.Write(worktree, "repo.txt", "two\nagent edit\n");
+        var link = (await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", TestContext.Current.CancellationToken))!;
+        File.Delete(Path.Combine(kit.Main, "sub.txt"));
+        Directory.CreateDirectory(Path.Combine(kit.Main, "sub.txt"));
+        await kit.GitAsync(kit.Main, "update-index", "--add", "--cacheinfo", $"160000,{link},sub.txt");
+        await kit.GitAsync(kit.Main, "commit", "--quiet", "-m", "a submodule where a file was");
+        File.Delete(Path.Combine(kit.Main, "repo.txt"));
+        await kit.Harness.InitializeGitRepositoryAsync(Directory.CreateDirectory(Path.Combine(kit.Main, "repo.txt")).FullName, TestContext.Current.CancellationToken);
+
+        var settled = await kit.FoldAsync("ag", apply: true, "sub.txt", "repo.txt");
+
+        Assert.True(settled.Succeeded, OrchestrationKit.Describe(settled));
+        Assert.Equal(
+            "2 path(s) declared settled by hand that a fold never reads or writes, left out and not handed - the agent's next fold meets them again:",
+            settled.Details![0]);
+        Assert.Equal("  repo.txt   (a directory in the main tree - a submodule, or a repository of its own)", settled.Details[1]);
+        Assert.Equal("  sub.txt   (a directory in the main tree - a submodule, or a repository of its own)", settled.Details[2]);
+        Assert.True(Directory.Exists(Path.Combine(kit.Main, "sub.txt")));
+        Assert.True(Directory.Exists(Path.Combine(kit.Main, "repo.txt", ".git")));
+        Assert.Equal("one\nagent edit\n", OrchestrationKit.Read(worktree, "sub.txt"));
+        Assert.Equal("two\nagent edit\n", OrchestrationKit.Read(worktree, "repo.txt"));
+    }
+
     /// <summary>A rename the agent staged is folded as what it is: the new path written, and the old one removed.</summary>
     [Fact]
     public async Task ARenameTheAgentStaged_IsFoldedAsAWriteAndARemoval()

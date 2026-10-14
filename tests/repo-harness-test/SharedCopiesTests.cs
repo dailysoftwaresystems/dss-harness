@@ -197,6 +197,37 @@ public sealed class SharedCopiesTests
     }
 
     /// <summary>
+    /// Kept copies the seed no longer names that none of can be removed are said in one line however many: each named,
+    /// the first reason and how many other reasons there were.
+    /// </summary>
+    [Fact]
+    public async Task CopiesThatCannotBePruned_AreSaidInOneLine()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nfirst\n");
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\nfirst\n");
+        await kit.CreateAgentAsync("ag");
+        var digests = new[] { Digest("one\nfirst\n"), Digest("two\nfirst\n") };
+        var (first, second) = string.CompareOrdinal(digests[0], digests[1]) < 0 ? (digests[0], digests[1]) : (digests[1], digests[0]);
+        var agents = kit.Harness.Agents(
+            new HeldFileSystem(kit.Harness.FileSystem, [.. digests.Select(digest => kit.Layout.SharedFile("ag", digest))]),
+            kit.Harness.AnchorRegistryService);
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nsecond\n");
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\nsecond\n");
+
+        var refreshed = await agents.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("a.txt", "b.txt"), apply: true, Token);
+
+        Assert.True(refreshed.Succeeded, OrchestrationKit.Describe(refreshed));
+        Assert.Contains(
+            $"2 kept copy(ies) the seed no longer names, in '{kit.Layout.SharedDirectory("ag")}', could not be removed - {first}, {second}: "
+                + $"The process cannot access the file '{kit.Layout.SharedFile("ag", first)}' because it is being used by another process; and 1 other reason(s); "
+                + "the next write of the seed removes them",
+            refreshed.Details!);
+        Assert.True(digests.All(digest => File.Exists(kit.Layout.SharedFile("ag", digest))));
+    }
+
+    /// <summary>
     /// Deleting an agent removes the copies kept for it once its record says it is deleted, and its directory stays as
     /// its history. They are no evidence: a directory of them left behind is nothing delete-orchestrator asks
     /// --delete-evidence for.
@@ -719,12 +750,12 @@ public sealed class SharedCopiesTests
                 : base.OpenRead(path);
     }
 
-    /// <summary>The real file system, except that one file cannot be deleted, as while another program holds it open.</summary>
-    private sealed class HeldFileSystem(IFileSystem inner, string held) : PassThroughFileSystem(inner)
+    /// <summary>The real file system, except that the files named cannot be deleted, as while other programs hold them open.</summary>
+    private sealed class HeldFileSystem(IFileSystem inner, params string[] held) : PassThroughFileSystem(inner)
     {
         public override void DeleteFile(string path)
         {
-            if (string.Equals(Path.GetFullPath(path), Path.GetFullPath(held), StringComparison.OrdinalIgnoreCase))
+            if (held.Any(file => string.Equals(Path.GetFullPath(path), Path.GetFullPath(file), StringComparison.OrdinalIgnoreCase)))
             {
                 throw new IOException($"The process cannot access the file '{path}' because it is being used by another process.");
             }

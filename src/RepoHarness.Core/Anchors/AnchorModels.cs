@@ -452,9 +452,9 @@ public sealed record AnchorDifference(string Id, string How);
 
 /// <summary>A cell of a row the registries changed since the agent's earlier fold and the agent did not: theirs kept.</summary>
 /// <param name="Cell">One of <see cref="AnchorCellNames.All"/>.</param>
-/// <param name="Agent">What the agent's file holds, as a row stores it.</param>
+/// <param name="Agent">What the agent's file holds, as a row stores it; null where it declares none, as a priority can.</param>
 /// <param name="Registries">What the registries hold, and keep.</param>
-public sealed record AnchorKeptCell(string Cell, string Agent, string Registries);
+public sealed record AnchorKeptCell(string Cell, string? Agent, string Registries);
 
 /// <summary>
 /// A cell of a row the registries and the agent both changed since its earlier fold, each otherwise: the agent's written

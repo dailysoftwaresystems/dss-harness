@@ -373,8 +373,10 @@ public static class OrchestrationReports
             {
                 yield return AnchorCellNames.Text.Contains(kept.Cell, StringComparer.Ordinal)
                     ? $"    its {AnchorCellNames.HeadingOf(kept.Cell)} keeps what the registries took since its earlier fold, which the agent's file does not hold: "
-                        + AnchorCellComparison.WordDiff(kept.Agent, kept.Registries)
-                    : $"    its {AnchorCellNames.HeadingOf(kept.Cell)} keeps what the registries took since its earlier fold: '{kept.Registries}', where the agent's file holds '{kept.Agent}'";
+                        + AnchorCellComparison.WordDiff(kept.Agent!, kept.Registries)
+                    : kept.Agent is null
+                        ? $"    its {AnchorCellNames.HeadingOf(kept.Cell)} keeps what the registries took since its earlier fold: '{kept.Registries}', where the agent's file declares none"
+                        : $"    its {AnchorCellNames.HeadingOf(kept.Cell)} keeps what the registries took since its earlier fold: '{kept.Registries}', where the agent's file holds '{kept.Agent}'";
             }
 
             foreach (var over in row.Over)

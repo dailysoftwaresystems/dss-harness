@@ -485,6 +485,29 @@ public sealed class AgentRowsTests
     }
 
     /// <summary>
+    /// A kept cell whose agent's file declares none - a priority the earlier fold recorded and the agent no longer does -
+    /// is said as that, not as an empty value: the line tells the person which of the two the agent's file holds.
+    /// </summary>
+    [Fact]
+    public async Task AKeptCellWhoseAgentFileDeclaresNone_IsSaidToDeclareNone()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync("ag");
+        kit.FileRow("ag", Id, Row);
+        Assert.True((await kit.FoldAsync("ag", apply: true, OrchestrationKit.Making(Id))).Succeeded);
+        await kit.Harness.AnchorRegistryService.SetAsync(kit.Main, new AnchorSetRequest(Id) { Priority = "P1" }, dryRun: false, Token);
+        kit.FileRow("ag", Id, Row.Where(cell => cell.Key != "priority").ToDictionary(cell => cell.Key, cell => cell.Value));
+        File.Delete(Path.Combine(kit.Layout.RowsDirectory("ag"), Id, "priority" + AgentRows.CellExtension));
+
+        var folded = await kit.FoldAsync("ag", apply: true);
+
+        Assert.True(folded.Succeeded, OrchestrationKit.Describe(folded));
+        Assert.Contains("    its Priority keeps what the registries took since its earlier fold: 'P1', where the agent's file declares none", folded.Details!);
+        Assert.Equal("P1", (await RowAsync(kit)).Priority);
+    }
+
+    /// <summary>
     /// The agent changing a kept cell later is two changes of it - what the registries took since its earlier fold, and its
     /// own change of what it declared then - and is written only where --accept-over names it, the dry run showing the
     /// three values.

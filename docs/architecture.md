@@ -604,36 +604,38 @@ it is given - or anywhere in the tree, off the floor, with `--all` (`RefreshRequ
 no path beside it - refused, copying nothing, where the agent changed or deleted one of them (`EditedAsync`, the same
 comparison asked of the agent's worktree). What it does is measured in one place, beside the fold's and the move's
 (`AgentFold.MeasureRefreshAsync`, a `RefreshPlan`): a path the agent already holds as the main tree does - the same file,
-or absent from both - is recorded as shared at what both held when it was measured, its bytes kept from the agent's
-copy (`AgentFold.AlikeAsync`), listed, and written only with `--apply`, so its record says what it holds and the next
-move of the main tree hands it; dropped unrecorded, as before, the agent's copy read as its change from then on.
-`--stale <path>` hands the main tree's copy over a path the agent changed only where its copy is proved the main
-tree's own at an earlier commit (`AgentFold.StaleAtAsync`, asked once for every path a refusal or a `--stale` names):
-the agent's copy hashed as git would store it in its worktree (`ListStagedIdsAsync`), so a copy that differs from a
-commit's file only by a line-ending conversion is that commit's file, against the blobs the main tree's history held at
-the path (`ListHeldInHistoryAsync` from its HEAD, `rev-list --full-history` so a version a merge dropped is still its
-history's, at most `TwoChanges.MostCommits` commits). Bytes that history holds are the main tree's own there, so
-replacing them loses nothing it does not keep; the bound limits the cost only, and is said where it is reached. A
-proved copy is handed and recorded like the rest (`RefreshPlan.Stale`), listed apart with its commit; one not proved,
-or a deletion, is refused, nothing copied; one the main tree did not move is weighed too, where the agent's copy is not
-the main tree's. The refusal over the agent's changes names each changed path whose copy qualifies
-(`RefreshChange.StaleAt`) with the `--stale` arguments that hand them. A path the agent changed that the main tree moved
-too, each tree holding a file there, is weighed in full as a fold weighs one (`TwoChanges`, from what the seed records or
-the agent's base holds; the main tree's file the side merged into): what a merge gives stands beside the path in the
-refusal (`RefreshChange.Merge`, the offer's clause without the way on a fold names, `TwoChangeOffer.Gives`), the
-conflicts are shown, and the `--merge` arguments that take the clean ones are named. A clean merge `--merge` names - or
-the arm registry's, merged by arm unasked and judged as a registry of the agent's worktree as the refresh leaves it,
-with each path it hands read from the main tree (`TreeAfter.Copied`) - is written into the worktree once everything
-else is handed, over only what was weighed (`AgentFold.MergeRefreshAsync`), and the path recorded as shared at the main
-tree's bytes, kept from its file: the agent's copy differs from that, so it is its change, which its fold writes, and it
-is what that copy descends from, so the next merge starts there. A `--merge` naming no path under the paths refreshed is
-refused as a misspelling; one naming a path with nothing left to merge is let stand, so a line that ran once runs again.
-The refusal names each such path and the arguments that leave them:
-`--except <path>`, once for each, takes that path out of what is handed, so the rest goes over and it stays the agent's
-change, weighed by its fold against what the main tree holds; it is listed in each report of what was handed, would be,
-or needed no handing, and one naming a path the refresh would not have refused is refused as a stray `--settled` is. A
-refresh that stops part way says the line that asks for it again with everything it was asked (`RefreshRequest.Arguments`):
-its paths or `--all`, and each `--except`, `--stale` and `--merge`. What is left out is still weighed as in the way of
+or absent from both - is recorded as shared at what both held when it was measured, the file whole with its bit, its
+bytes kept from the agent's copy (`AgentFold.AlikeAsync`), listed, and written only with `--apply`, so its record says
+what it holds and the next move of the main tree hands it; dropped unrecorded, as before, the agent's copy read as its
+change from then on. `--stale <path>` hands the main tree's copy over a path the agent changed only where its copy is
+proved the main tree's own at an earlier commit (`AgentFold.StaleAtAsync`, asked once for every path a refusal or a
+`--stale` names): the agent's copy hashed as git would store it in its worktree (`ListStagedIdsAsync`), so a copy that
+differs from a commit's file only by a line-ending conversion is that commit's file, against the blobs the main tree's
+history held at the path (`ListHeldInHistoryAsync` from its HEAD, `rev-list --full-history` so a version a merge dropped
+is still its history's, at most `TwoChanges.MostCommits` commits, each run of equal blobs named by its newest commit).
+Bytes that history holds are the main tree's own there, so replacing them loses nothing it does not keep; the bound
+limits the cost only, and is said where it is reached. A proved copy is handed and recorded like the rest
+(`RefreshPlan.Stale`), listed apart with its commit; one not proved, or a deletion, is refused, nothing copied; one the
+main tree did not move is weighed too, where the agent's copy is not the main tree's, and one the main tree holds a link
+or a directory git will not look into at is named as itself among what is not handed, never a copy to prove stale. The
+refusal over the agent's changes names each changed path - with the commit whose bytes a qualifying copy holds beside it
+(`RefreshChange.StaleAt`) - and the arguments that take each out of what is handed: `--stale` for a proved one, and
+`--except <path>`, once for each, which leaves a path as the agent changed it, so the rest goes over and it stays the
+agent's change, weighed by its fold against what the main tree holds; it is listed in each report of what was handed,
+would be, or needed no handing, and one naming a path the refresh would not have refused is refused as a stray
+`--settled` is. A path the agent changed that the main tree moved too, each tree holding a file there, is weighed in
+full as a fold weighs one (`TwoChanges`, from what the seed records or the agent's base holds; the main tree's file the
+side merged into): what a merge gives stands beside the path in the refusal (`RefreshChange.Merge`, the offer's clause
+without the way on a fold names, `TwoChangeOffer.Gives`), the conflicts are shown, and the `--merge` arguments that take
+the clean ones are named. A clean merge `--merge` names - or the arm registry's, merged by arm unasked and judged as a
+registry of the agent's worktree as the refresh leaves it, with each path it hands read from the main tree
+(`TreeAfter.Copied`) - is written into the worktree once everything else is handed, over only what was weighed
+(`AgentFold.MergeRefreshAsync`), and the path recorded as shared at the main tree's bytes, kept from its file: the
+agent's copy differs from that, so it is its change, which its fold writes, and it is what that copy descends from, so
+the next merge starts there. A `--merge` naming no path under the paths refreshed is refused as a misspelling; one
+naming a path with nothing left to merge is let stand, so a line that ran once runs again. A refresh that stops part
+way says the line that asks for it again with everything it was asked (`RefreshRequest.Arguments`): its paths or
+`--all`, and each `--except`, `--stale` and `--merge`. What is left out is still weighed as in the way of
 what is handed. seed-agent hands the same paths besides the main tree's uncommitted state. A
 symbolic link the main tree committed is named and never handed; one it has not committed refuses the hand-over. What a
 commit holds at a path is told apart - a file, a directory, a submodule's entry, or nothing (`IGitClient.HeldAtAsync`,
@@ -647,8 +649,9 @@ made first, with the directories it empties, then every file copied. What the ag
 needs room refuses it, forced or not, before anything is written (`AgentFold.InTheWayOfHanding`): a file or a link at
 a part of a handed file's path, which a copy would stop at or write through, out of its worktree, and anything in a
 directory where a handed file goes that the hand-over does not delete. What the agent's worktree holds at each path
-handed is measured with the rest (`AgentFold.HoldingAsync`), and the hand-over writes over or removes only that
-(`AgentFold.HandAsync`, asked before each path): a file the agent's session wrote since stops it there, exit 21, naming
+handed is measured with the rest (`AgentFold.HoldingAsync`) - the file whole, its digest and whether it could be run -
+and the hand-over writes over or removes only that (`AgentFold.HandAsync`, asked before each path): a file the agent's
+session wrote since - or made runnable, where the platform keeps such a bit - stops it there, exit 21, naming
 it, with what it handed recorded, for a run again to weigh anew - seed-agent's forced hand-over included; create-agent's,
 into a worktree just made, asks nothing. Neither hands anything while a move of the
 agent's base stands stopped part way, or its HEAD is off its base. Both say when the agent's base is not the main

@@ -286,7 +286,7 @@ public sealed class AnchorRegistryService(
 
                         IReadOnlyList<AnchorKeptCell> kept = [.. weighed
                             .Where(cell => cell.Resolution == AnchorCellResolution.Kept)
-                            .Select(cell => new AnchorKeptCell(cell.Cell, cell.Agent!, cell.Registries!))];
+                            .Select(cell => new AnchorKeptCell(cell.Cell, cell.Agent, cell.Registries!))];
                         IReadOnlyList<AnchorOverCell> both = [.. weighed
                             .Where(cell => cell.Resolution == AnchorCellResolution.Both)
                             .Select(cell =>

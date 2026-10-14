@@ -444,7 +444,7 @@ public sealed class AgentService(
         var previous = _store.ReadSeed(layout, record.Name);
         var unseeded = new SeedRecord { SeededAt = _clock.GetUtcNow(), Empty = empty, Paths = [] };
         Handable handable;
-        IReadOnlyDictionary<string, string?> holding;
+        IReadOnlyDictionary<string, FileIdentity?> holding;
 
         // What it is handed is weighed against its base: never while a move of that base stands part way, or with its HEAD
         // elsewhere.
@@ -725,20 +725,20 @@ public sealed class AgentService(
                         : $"  {change.Path}"),
                     .. plan.Shown,
                     $"To hand it every other path and leave these as it changed them, run again with {RefreshRequest.ExceptOption} <path> for each:",
-                    $"  {RefreshRequest.ExceptArguments(left.Concat(changed.Select(change => change.Path)).Order(StringComparer.Ordinal))}",
+                    $"  {string.Join(' ', OrchestrationReports.PathArguments(RefreshRequest.ExceptOption, left.Concat(changed.Select(change => change.Path)).Order(StringComparer.Ordinal)))}",
                     .. staleOnes.Count == 0
                         ? Array.Empty<string>()
                         : [
-                            $"{staleOnes.Count} of them hold bytes the main tree itself held at that path: copies gone stale, where nobody changed them on purpose. "
+                            $"{staleOnes.Count} of them {(staleOnes.Count == 1 ? "holds" : "hold")} bytes the main tree itself held at that path: copies gone stale, where nobody changed them on purpose. "
                                 + "To hand it the main tree's copy of each instead, name them:",
-                            $"  {RefreshRequest.StaleArguments(staleOnes)}",
+                            $"  {string.Join(' ', OrchestrationReports.PathArguments(RefreshRequest.StaleOption, staleOnes))}",
                         ],
                     .. mergeable.Count == 0
                         ? Array.Empty<string>()
                         : [
                             $"{mergeable.Count} of them {(mergeable.Count == 1 ? "merges" : "merge")} clean with the main tree's copy. To write "
                                 + $"{(mergeable.Count == 1 ? "the merge" : "each merge")} into its worktree as its change, name {(mergeable.Count == 1 ? "it" : "them")}:",
-                            $"  {RefreshRequest.MergeArguments(mergeable)}",
+                            $"  {string.Join(' ', OrchestrationReports.PathArguments(FoldAllowances.MergeOption, mergeable))}",
                         ],
                     says.Count == 1 ? $"{says[0]}; it is not a --force." : $"{string.Join("; ", says)}. None is a --force.",
                     .. bound,
@@ -1545,7 +1545,7 @@ public sealed class AgentService(
                         return CommandOutcome.Failed(
                             HarnessExit.Incomplete,
                             $"{Agent(record)} was not deleted: after its fold was written, it still differs from the main tree - "
-                            + $"{ReportText.Listed([.. after.Written, .. after.Merged.Select(merge => merge.Path), .. after.Deleted, .. after.Refusals])}. {what}, and its worktree is kept; nothing was removed.",
+                            + $"{ReportText.Listed([.. after.Written, .. after.Merged.Select(merge => merge.Path), .. after.Deleted, .. after.Handed.Files.Concat(after.Handed.Deletions), .. after.Refusals])}. {what}, and its worktree is kept; nothing was removed.",
                             Live());
                     }
                 }

@@ -776,6 +776,176 @@ public sealed class AgentServiceTests
         Assert.Equal("one\nthe session's edit\n", OrchestrationKit.Read(worktree, "a.txt"));
     }
 
+    /// <summary>
+    /// A file the agent's session makes runnable between the weighing and the copy - its content unchanged - is never
+    /// written over either: the guard asks for the file whole, its digest and its bit, and the refresh stops there
+    /// naming what changed.
+    /// </summary>
+    [Fact]
+    public async Task AFileTheAgentsSessionMadeRunnableAfterItWasWeighed_StopsTheRefresh_AndIsNotWrittenOver()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Windows keeps no execute bit with a file.");
+
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit\n");
+        var copy = Path.Combine(worktree, "a.txt");
+
+        // Its fourth reading is the one that asks, before the copy, whether it is what was weighed: the session flips the bit first.
+        var agents = kit.Harness.Agents(
+            new AgentFoldMergeTests.MeanwhileFileSystem(kit.Harness.FileSystem, copy, 4, () => kit.Harness.FilePermissions.SetExecutable(copy, executable: true)),
+            kit.Harness.AnchorRegistryService);
+
+        var stopped = await agents.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("a.txt"), apply: true, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
+        Assert.Equal(
+            "Refreshing agent 'ag' of 'o1' stopped after 0 of 1 path(s): 'a.txt' can now be run in the agent's worktree, which it could not when it was measured, so it "
+                + "was not written over. Its seed records the 0 handed; run 'dssharness refresh-agent o1 ag a.txt --apply' again once that is dealt with.",
+            stopped.Message);
+        Assert.Equal("one\n", OrchestrationKit.Read(worktree, "a.txt"));
+        Assert.True(kit.Harness.FilePermissions.IsExecutable(copy), "The session's change of the file was written over.");
+    }
+
+    /// <summary>
+    /// A deletion is guarded as a copy is: a file the main tree deleted that the agent's session rewrote after it was
+    /// weighed is not removed, and the refresh stops there naming it.
+    /// </summary>
+    [Fact]
+    public async Task ADeletionTheAgentChangedAfterItWasWeighed_StopsTheRefresh_AndIsNotRemoved()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        File.Delete(Path.Combine(kit.Main, "b.txt"));
+        var copy = Path.Combine(worktree, "b.txt");
+
+        // Its fourth reading is the one that asks, before the removal, whether it is what was weighed: the session writes first.
+        var agents = kit.Harness.Agents(
+            new AgentFoldMergeTests.MeanwhileFileSystem(kit.Harness.FileSystem, copy, 4, () => File.WriteAllText(copy, "two\nthe session's edit\n")),
+            kit.Harness.AnchorRegistryService);
+
+        var stopped = await agents.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("b.txt"), apply: true, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
+        Assert.StartsWith(
+            "Refreshing agent 'ag' of 'o1' stopped after 0 of 1 path(s): 'b.txt' holds other content in the agent's worktree now than when it was measured, so it was not removed.",
+            stopped.Message,
+            StringComparison.Ordinal);
+        Assert.Equal("two\nthe session's edit\n", OrchestrationKit.Read(worktree, "b.txt"));
+    }
+
+    /// <summary>
+    /// A path the agent already holds as the main tree does is recorded as shared with the bit it was measured with, not
+    /// the bit its session gives it meanwhile: the record then says what both trees held, and the next refresh leaves the
+    /// session's change of the bit as the agent's own instead of weighing the path moved and silently undoing it.
+    /// </summary>
+    [Fact]
+    public async Task APathAlreadyAlike_IsRecordedWithTheBitItWasMeasuredWith_AndTheSessionChangeStaysTheAgents()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Windows keeps no execute bit with a file.");
+
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nalike\n");
+        OrchestrationKit.Write(kit.Main, "z.txt", "zed\nalike\n");
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\nmain edit\n");
+        File.Copy(Path.Combine(kit.Main, "a.txt"), Path.Combine(worktree, "a.txt"), overwrite: true);
+        File.Copy(Path.Combine(kit.Main, "z.txt"), Path.Combine(worktree, "z.txt"), overwrite: true);
+        var alike = Path.Combine(worktree, "a.txt");
+
+        // The second reading of z.txt is the one that follows a.txt's measuring read: the session makes a.txt runnable in
+        // between, after it was weighed and before the refresh records it.
+        var agents = kit.Harness.Agents(
+            new AgentFoldMergeTests.MeanwhileFileSystem(kit.Harness.FileSystem, Path.Combine(worktree, "z.txt"), 2, () => kit.Harness.FilePermissions.SetExecutable(alike, executable: true)),
+            kit.Harness.AnchorRegistryService);
+
+        var applied = await agents.RefreshAsync(kit.Main, "o1", "ag", new RefreshRequest { All = true }, apply: true, Token);
+        var seed = kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!;
+
+        Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
+        Assert.Equal(await DigestAsync(kit.Main, "a.txt"), seed.Paths["a.txt"]);
+        Assert.DoesNotContain("a.txt", seed.Executable ?? []);
+
+        var again = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", new RefreshRequest { All = true }, apply: true, Token);
+
+        Assert.True(again.Succeeded, OrchestrationKit.Describe(again));
+        Assert.True(kit.Harness.FilePermissions.IsExecutable(alike), "The agent's change of the bit was undone.");
+    }
+
+    /// <summary>
+    /// A refresh that stops in its hand-over merges nothing, though every merge is clean and named: each merge is
+    /// written only once everything else is handed, so nothing of the agent's is written over while paths it was to be
+    /// handed still stand - and what stopped it is said with both counts.
+    /// </summary>
+    [Fact]
+    public async Task ARefreshThatStopsInItsHandOver_MergesNothing()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, "m1.txt", "one\ntwo\n");
+        OrchestrationKit.Write(kit.Main, "m2.txt", "a\nb\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "two files both trees will change", Token);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit\n");
+        OrchestrationKit.Write(worktree, "m1.txt", "ONE\ntwo\n");
+        OrchestrationKit.Write(kit.Main, "m1.txt", "one\ntwo\nTHREE\n");
+        OrchestrationKit.Write(worktree, "m2.txt", "A\nb\n");
+        OrchestrationKit.Write(kit.Main, "m2.txt", "a\nb\nC\n");
+        var agents = kit.Harness.Agents(
+            new AgentFoldMergeTests.UnwritableFile(kit.Harness.FileSystem, Path.Combine(worktree, "a.txt")),
+            kit.Harness.AnchorRegistryService);
+
+        var stopped = await agents.RefreshAsync(kit.Main, "o1", "ag", new RefreshRequest { All = true, Merge = ["m1.txt", "m2.txt"] }, apply: true, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
+        Assert.StartsWith("Refreshing agent 'ag' of 'o1' stopped after 0 of 1 path(s) and merging 0 of 2: ", stopped.Message);
+        Assert.Equal("one\n", OrchestrationKit.Read(worktree, "a.txt"));
+        Assert.Equal("ONE\ntwo\n", OrchestrationKit.Read(worktree, "m1.txt"));
+        Assert.Equal("A\nb\n", OrchestrationKit.Read(worktree, "m2.txt"));
+        var seed = kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!;
+        Assert.False(seed.Paths.ContainsKey("m1.txt"));
+        Assert.False(seed.Paths.ContainsKey("m2.txt"));
+    }
+
+    /// <summary>
+    /// A refresh that stops among its merges has handed and recorded everything else: the paths it handed are in its
+    /// seed, each merge that finished is the agent's change recorded as any merge is, and only what stopped stands in
+    /// the way of the command run again.
+    /// </summary>
+    [Fact]
+    public async Task ARefreshThatStopsAmongItsMerges_HandsAndRecordsEverythingElse()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, "m1.txt", "one\ntwo\n");
+        OrchestrationKit.Write(kit.Main, "m2.txt", "a\nb\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "two files both trees will change", Token);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit\n");
+        OrchestrationKit.Write(worktree, "m1.txt", "ONE\ntwo\n");
+        OrchestrationKit.Write(kit.Main, "m1.txt", "one\ntwo\nTHREE\n");
+        OrchestrationKit.Write(worktree, "m2.txt", "A\nb\n");
+        OrchestrationKit.Write(kit.Main, "m2.txt", "a\nb\nC\n");
+        var agents = kit.Harness.Agents(
+            new AgentFoldMergeTests.UnwritableFile(kit.Harness.FileSystem, Path.Combine(worktree, "m2.txt")),
+            kit.Harness.AnchorRegistryService);
+
+        var stopped = await agents.RefreshAsync(kit.Main, "o1", "ag", new RefreshRequest { All = true, Merge = ["m1.txt", "m2.txt"] }, apply: true, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
+        Assert.StartsWith("Refreshing agent 'ag' of 'o1' stopped after 1 of 1 path(s) and merging 1 of 2: ", stopped.Message);
+        Assert.Equal("one\nmain edit\n", OrchestrationKit.Read(worktree, "a.txt"));
+        Assert.Equal("ONE\ntwo\nTHREE\n", OrchestrationKit.Read(worktree, "m1.txt"));
+        Assert.Equal("A\nb\n", OrchestrationKit.Read(worktree, "m2.txt"));
+        var seed = kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!;
+        Assert.Equal(await DigestAsync(kit.Main, "a.txt"), seed.Paths["a.txt"]);
+        Assert.Equal(await DigestAsync(kit.Main, "m1.txt"), seed.Paths["m1.txt"]);
+        Assert.False(seed.Paths.ContainsKey("m2.txt"));
+    }
+
     /// <summary>A path an agent was handed as a deletion that the main tree has since restored is handed again: its file goes back.</summary>
     [Fact]
     public async Task Refreshing_HandsAgainAPathHandedAsADeletionThatTheMainTreeRestored()
@@ -1132,7 +1302,7 @@ public sealed class AgentServiceTests
             [
                 "To hand it every other path and leave these as it changed them, run again with --except <path> for each:",
                 "  --except a.txt",
-                "1 of them hold bytes the main tree itself held at that path: copies gone stale, where nobody changed them on purpose. To hand it the "
+                "1 of them holds bytes the main tree itself held at that path: copies gone stale, where nobody changed them on purpose. To hand it the "
                     + "main tree's copy of each instead, name them:",
                 "  --stale a.txt",
                 "--except says the path stays the agent's change, for its fold to weigh against what the main tree holds; --stale says its copy is "
@@ -1159,6 +1329,108 @@ public sealed class AgentServiceTests
             applied.Details!.Take(2));
         Assert.Equal("one\nthird\n", OrchestrationKit.Read(worktree, "a.txt"));
         Assert.Equal(await DigestAsync(kit.Main, "a.txt"), kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!.Paths["a.txt"]);
+    }
+
+    /// <summary>
+    /// Where the main tree's history holds the agent's very bytes at a path across several commits in a row - another
+    /// path's commits among them - the commit named is the newest of the run: what a person finds first in the log is
+    /// what the line says the main tree holds.
+    /// </summary>
+    [Fact]
+    public async Task ACopyTheMainTreeHeldAtSeveralEqualCommits_IsNamedByTheNewest()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nsecond\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "the second version of the first", Token);
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\nsecond\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "another path, the first unchanged", Token);
+        var equal = await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", Token);
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nthird\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "the third version of the first", Token);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nfourth\n");
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\nthird\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "the fourth version of the first", Token);
+
+        // The agent puts both copies back to versions below its base: its own changes, and stale.
+        OrchestrationKit.Write(worktree, "a.txt", "one\nsecond\n");
+        OrchestrationKit.Write(worktree, "b.txt", "two\n");
+
+        var refused = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("a.txt", "b.txt"), apply: true, Token);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.StartsWith($"  a.txt   (its bytes are the main tree's at {Core.Output.ReportText.Commit(equal!)}", refused.Details![0], StringComparison.Ordinal);
+        Assert.StartsWith("  b.txt   (its bytes are the main tree's at ", refused.Details![1], StringComparison.Ordinal);
+        Assert.Equal("one\nsecond\n", OrchestrationKit.Read(worktree, "a.txt"));
+    }
+
+    /// <summary>
+    /// A --stale naming a path the main tree holds a link or a directory git will not look into at names neither a stale
+    /// copy nor a hand-over: the path is named as itself among what is not handed, and nothing fails - where reading the
+    /// main tree's copy as a file would have failed the whole command, and weighing it as a stale copy would have said
+    /// both that it is handed and that it is not.
+    /// </summary>
+    [Fact]
+    public async Task AStaleNameForAPathTheMainTreeHoldsALinkOrADirectoryAt_IsNamedAsItself_NeverStale()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nsecond\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "the second version", Token);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "a.txt", "one\n");
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nthird\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "the third version", Token);
+        File.Delete(Path.Combine(kit.Main, "a.txt"));
+        TestLinks.OrSkip(() => File.CreateSymbolicLink(Path.Combine(kit.Main, "a.txt"), Path.Combine(kit.Main, "docs", "x.md")));
+        await kit.Harness.CommitAllAsync(kit.Main, "a link where the file was", Token);
+
+        var refreshed = await kit.Harness.AgentService.RefreshAsync(
+            kit.Main, "o1", "ag", new RefreshRequest { All = true, Stale = ["a.txt"] }, apply: true, Token);
+
+        Assert.True(refreshed.Succeeded, OrchestrationKit.Describe(refreshed));
+        Assert.Contains(refreshed.Details!, line => line.StartsWith("not handed: a.txt - a symbolic link the main tree committed", StringComparison.Ordinal));
+        Assert.DoesNotContain(refreshed.Details!, line => line.StartsWith("1 path(s) named with --stale", StringComparison.Ordinal));
+
+        using var other = new TempDirectory();
+        kit = await OrchestrationKit.PrepareAsync(other);
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nsecond\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "the second version", Token);
+        worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "a.txt", "one\n");
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nthird\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "the third version", Token);
+        File.Delete(Path.Combine(kit.Main, "a.txt"));
+        await kit.Harness.InitializeGitRepositoryAsync(Directory.CreateDirectory(Path.Combine(kit.Main, "a.txt")).FullName, Token);
+
+        var unlooked = await kit.Harness.AgentService.RefreshAsync(
+            kit.Main, "o1", "ag", new RefreshRequest { All = true, Stale = ["a.txt"] }, apply: true, Token);
+
+        Assert.True(unlooked.Succeeded, OrchestrationKit.Describe(unlooked));
+        Assert.Contains(unlooked.Details!, line => line.StartsWith("not handed: a.txt - a directory git will not look into", StringComparison.Ordinal));
+        Assert.DoesNotContain(unlooked.Details!, line => line.StartsWith("1 path(s) named with --stale", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A --stale naming a path whose copy in the agent is a link is refused naming it - the agent holds no file there -
+    /// never read as the file the link leads to and never failing the whole command.
+    /// </summary>
+    [Fact]
+    public async Task AStaleNameForAPathWhoseAgentCopyIsALink_IsRefusedNamingIt()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nsecond\n");
+        File.Delete(Path.Combine(worktree, "a.txt"));
+        TestLinks.OrSkip(() => File.CreateSymbolicLink(Path.Combine(worktree, "a.txt"), Path.Combine(worktree, "b.txt")));
+
+        var refused = await kit.Harness.AgentService.RefreshAsync(
+            kit.Main, "o1", "ag", new RefreshRequest { All = true, Stale = ["a.txt"] }, apply: true, Token);
+
+        Assert.True(refused.ExitCode == HarnessExit.Refused, OrchestrationKit.Describe(refused));
+        Assert.Equal("--stale 'a.txt': the agent holds no file there, and a deletion is its change. --except leaves it. Nothing was copied.", refused.Message);
     }
 
     /// <summary>

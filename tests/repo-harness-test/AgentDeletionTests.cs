@@ -230,6 +230,37 @@ public sealed class AgentDeletionTests
     }
 
     /// <summary>
+    /// The proof that nothing is left to fold counts a path the fold would still hand: a path settled by hand, which its
+    /// apply hands, that the main tree moves again between the fold's writing and the proof stops the deletion, exit 21,
+    /// before anything is removed - never "nothing left" while a hand-over is still to come.
+    /// </summary>
+    [Fact]
+    public async Task APathTheDeletionWouldStillHand_StopsIt_BeforeAnythingIsRemoved()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, "settled/x.md", "one\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "a file to reconcile by hand", Token);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "settled/x.md", "one\nagent edit\n");
+        OrchestrationKit.Write(kit.Main, "settled/x.md", "one\nreconciled by hand\n");
+
+        // The main tree moves the settled path between the fold's write and the proof that asks what is left.
+        var agents = kit.Harness.Agents(
+            new ChangedOnSeedWriteFileSystem(kit.Harness.FileSystem, kit.Layout.SeedFile("ag"), Path.Combine(kit.Main, "settled", "x.md")),
+            kit.Harness.AnchorRegistryService);
+
+        var stopped = await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances { Settled = ["settled/x.md"] }, apply: true, discardUncommitted: false, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
+        Assert.StartsWith("Agent 'ag' of 'o1' was not deleted: after its fold was written, it still differs from the main tree - settled/x.md.", stopped.Message);
+        Assert.Equal(AgentStates.Live, kit.Record("ag").State);
+        Assert.True(Directory.Exists(worktree));
+        Assert.Equal("moved meanwhile\n", OrchestrationKit.Read(kit.Main, "settled/x.md"));
+        Assert.Equal("one\nreconciled by hand\n", OrchestrationKit.Read(worktree, "settled/x.md"));
+    }
+
+    /// <summary>
     /// A live agent whose worktree's identity cannot be read - git names no commondir in its git directory - fails its
     /// deletion before anything is written, and its dry run fails the same, in the apply's words: which git worktree it is
     /// is what an --apply reads first, and a worktree whose identity cannot be read is never closed.
@@ -733,5 +764,22 @@ public sealed class AgentDeletionTests
             => string.Equals(Path.GetFullPath(path), Path.GetFullPath(held), StringComparison.OrdinalIgnoreCase)
                 ? throw new IOException($"The process cannot access the file '{path}' because it is being used by another process.")
                 : base.KindOf(path);
+    }
+
+    /// <summary>
+    /// The real file system, except that once the agent's seed is written, one main-tree file is changed, as a person or
+    /// another lane would change it between a fold's write and the proof that asks what is left.
+    /// </summary>
+    private sealed class ChangedOnSeedWriteFileSystem(IFileSystem inner, string seed, string changed) : PassThroughFileSystem(inner)
+    {
+        public override void WriteAllTextAtomic(string path, string contents)
+        {
+            base.WriteAllTextAtomic(path, contents);
+
+            if (string.Equals(Path.GetFullPath(path), Path.GetFullPath(seed), StringComparison.OrdinalIgnoreCase))
+            {
+                File.WriteAllText(changed, "moved meanwhile\n");
+            }
+        }
     }
 }

@@ -191,8 +191,7 @@ public sealed partial class GitClient
 
     /// <summary>
     /// The versions of one path among <paramref name="commits"/>, newest first: each run of commits, one after another,
-    /// that hold the same blob there is one version, named by the oldest of them - the commit that made it, as far as
-    /// was read.
+    /// that hold the same blob there is one version, named by the newest of them, as far as was read.
     /// </summary>
     private static List<GitHeldAt> Versions(IReadOnlyList<string> commits, Func<string, string?> blobAt)
     {
@@ -203,16 +202,9 @@ public sealed partial class GitClient
         {
             var blob = blobAt(commit);
 
-            if (blob is not null)
+            if (blob is not null && blob != last)
             {
-                if (blob == last)
-                {
-                    versions[^1] = new GitHeldAt(commit, blob);
-                }
-                else
-                {
-                    versions.Add(new GitHeldAt(commit, blob));
-                }
+                versions.Add(new GitHeldAt(commit, blob));
             }
 
             last = blob;
