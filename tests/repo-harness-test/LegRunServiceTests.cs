@@ -261,14 +261,15 @@ public sealed class LegRunServiceTests
 
     /// <summary>
     /// A leg that takes its host's copy once its run has synced it, and finds there the reading of another command's
-    /// sync made in between, tests nothing there: it is inputs-moved, naming the copy and the run that synced it again,
-    /// and its host is never asked to run it. A copy that holds this run's reading runs, and the leg's line, its detail and
-    /// its tree say which reading it tested.
+    /// sync made in between, tests nothing there: it is inputs-moved, naming the copy and the run that synced it again -
+    /// or none, for a sync typed by hand, which keeps no run - and its host is never asked to run it. A copy that holds
+    /// this run's reading runs, and the leg's line, its detail and its tree say which reading it tested.
     /// </summary>
     [Theory]
-    [InlineData(null)]
-    [InlineData("20260101-000000-0a1b2c3d")]
-    public async Task ACopyAnotherRunSyncedAfterThisRunsSync_EndsThisRunsLegInputsMoved_NamingThatRun(string? another)
+    [InlineData(true, null)]
+    [InlineData(false, "20260101-000000-0a1b2c3d")]
+    [InlineData(false, null)]
+    public async Task ACopyAnotherRunSyncedAfterThisRunsSync_EndsThisRunsLegInputsMoved_NamingThatRun(bool ours, string? another)
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
@@ -277,7 +278,7 @@ public sealed class LegRunServiceTests
 
         var copy = Substitute.For<ISyncTransport>();
         copy.InspectAsync(Arg.Any<string>(), Arg.Any<GitHistoryWanted?>(), Arg.Any<CancellationToken>())
-            .Returns(new SyncInspectAnswer(true, CopyMark.Complete) { Reading = new CopyReading(another ?? run.Value, "0123456789abcdef", 0) });
+            .Returns(new SyncInspectAnswer(true, CopyMark.Complete) { Reading = new CopyReading(ours ? run.Value : another, "0123456789abcdef", 0) });
 
         var transports = Substitute.For<ISyncTransportFactory>();
         transports.For(Arg.Any<HostReport>()).Returns(copy);
@@ -307,7 +308,7 @@ public sealed class LegRunServiceTests
         Assert.Equal(HostTree, tree.GetProperty("path").GetString());
         Assert.Equal(temp.Path, tree.GetProperty("copyOf").GetString());
 
-        if (another is null)
+        if (ours)
         {
             Assert.Equal("passed", arm.GetProperty("verdict").GetString());
             Assert.Equal(string.Empty, arm.GetProperty("detail").GetString());
@@ -321,8 +322,8 @@ public sealed class LegRunServiceTests
         {
             Assert.Equal("inputs-moved", arm.GetProperty("verdict").GetString());
             Assert.Equal(
-                $"'{HostTree}' on ssh {HostName} was synced again by run {another} after this run made it the tree it read, so it no "
-                + "longer holds that tree.",
+                $"'{HostTree}' on ssh {HostName} was synced again{(another is null ? string.Empty : $" by run {another}")} after this run "
+                + "made it the tree it read, so it no longer holds that tree.",
                 arm.GetProperty("detail").GetString());
             Assert.False(tree.TryGetProperty("readBy", out _));
             Assert.Equal(0, asked);

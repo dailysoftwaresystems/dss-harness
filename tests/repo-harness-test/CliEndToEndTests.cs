@@ -726,6 +726,39 @@ public sealed partial class CliEndToEndTests
     }
 
     /// <summary>
+    /// --in-place has a leg this machine runs itself work in its tree, over the leg's own localCopy key - which, without
+    /// it, has the leg work in a copy of its tree in .legs.
+    /// </summary>
+    [Fact]
+    public async Task InPlace_HasALegWhoseLocalCopyKeySaysACopy_WorkInItsTree()
+    {
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var harness = new HarnessFactory();
+        var platform = harness.Platform;
+
+        await harness.InitializeHarnessAsync(temp.Path, token, new HarnessConfig
+        {
+            // Nothing is built, so no path a build makes in the copy can reach a long limit, as one could in Windows' own.
+            Worktrees = new WorktreeSettings { PathLimit = 1024 },
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Legs = { ["native"] = new LegConfig { Os = platform.PlatformKey, Processor = platform.Processor, Config = "debug", LocalCopy = true } },
+            PredefinedRunners = { ["probe"] = new RunnerConfig { Phases = [new RunnerPhase { Name = "look", Command = ["dotnet", "--version"] }] } },
+        });
+
+        var inPlace = await CliRunner.RunAsync(["run", "probe", "--legs", "native", "--in-place", "-C", temp.Path], token);
+
+        Assert.True(inPlace.ExitCode == HarnessExit.Success, $"exit {inPlace.ExitCode}: {inPlace.StandardError}");
+        Assert.Contains($"native: starting on local, in '{temp.Path}' itself", inPlace.StandardOutput, StringComparison.Ordinal);
+        Assert.Empty(Directory.GetDirectories(Path.Combine(temp.Path, HarnessLayout.LegsDirectoryName)));
+
+        var asKeyed = await CliRunner.RunAsync(["run", "probe", "--legs", "native", "-C", temp.Path], token);
+
+        Assert.True(asKeyed.ExitCode == HarnessExit.Success, $"exit {asKeyed.ExitCode}: {asKeyed.StandardError}");
+        Assert.Contains("native: starting on local, in its copy '", asKeyed.StandardOutput, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A writesTree runner is refused for a leg pinned to a host of its own system too - the leg is that host's alone,
     /// whatever this machine could run - and is not refused for a leg no host can run: the run says so its own way,
     /// without naming a machine that does not exist.

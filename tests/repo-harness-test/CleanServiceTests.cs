@@ -919,6 +919,40 @@ public sealed class CleanServiceTests
     }
 
     /// <summary>
+    /// A directory under the name of a copy its legs work in that no sync made is somebody's: a clean leaves it, and what
+    /// is in it, and says so - as a dry run says the clean would.
+    /// </summary>
+    [Fact]
+    public async Task ADirectoryUnderALegCopysNameThatNoSyncMade_IsLeftByAClean_AndSaidSo()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var config = OneLocalLeg(harness);
+        var somebodys = LegCopies.PathOf(temp.Path, Variant(harness, config));
+        var file = Written(Path.Combine(somebodys, "mine", "a.c"));
+        const string Unmarked = "nothing there says the harness made it, so it is yours to remove";
+
+        File.WriteAllText(file, "int mine;");
+
+        var (_, dry) = await CleanAsync(temp, harness, config, dryRun: true);
+
+        Assert.EndsWith(
+            $"; 1 leg copy(ies): {DiskSpace.Size(9)} in '{somebodys}', which a clean leaves: {Unmarked}",
+            dry.GetProperty("detail").GetString(),
+            StringComparison.Ordinal);
+
+        var (outcome, leg) = await CleanAsync(temp, harness, config);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.EndsWith(
+            $"; '{somebodys}' is named as a copy its legs work in, and was left: {Unmarked}",
+            leg.GetProperty("detail").GetString(),
+            StringComparison.Ordinal);
+        Assert.Equal(0, leg.GetProperty("space").GetProperty("copyBytes").GetInt64());
+        Assert.Equal("int mine;", File.ReadAllText(file));
+    }
+
+    /// <summary>
     /// A dry run of a clean ends as the clean would: a leg a run is building is refused-locked in the dry run too, exit
     /// 13, the run named - with what the directory holds still said, and still in its space, and nothing removed or
     /// moved aside.
@@ -1018,6 +1052,43 @@ public sealed class CleanServiceTests
         Assert.Contains($"1 mutation worker(s): {DiskSpace.Size(Workers.Holding(1000))} in '{held}'", detail, StringComparison.Ordinal);
         Assert.Equal(Workers.Holding(1000), leg.GetProperty("space").GetProperty("workerBytes").GetInt64());
         Assert.True(Directory.Exists(held), "a dry run removes nothing");
+    }
+
+    /// <summary>
+    /// A dry run of a clean one of whose workers a sweep still running claims ends as the clean would: refused-locked, the
+    /// worker and the run claiming it named as the clean names them, each worker still measured - and nothing removed.
+    /// </summary>
+    [Fact]
+    public async Task ADryRunOfAClean_OneOfWhoseWorkersALiveSweepClaims_IsRefusedLocked_AsTheCleanIs()
+    {
+        using var temp = new TempDirectory();
+        using var workers = new Workers(temp);
+        var harness = new HarnessFactory();
+        var config = OneLocalLeg(harness);
+        var variant = Variant(harness, config);
+        var free = workers.Made(variant, 1, 10);
+        var claimed = workers.Made(variant, 2, 20);
+        var claim = RunId.New();
+
+        new DirectoryClaims(harness.FileSystem, harness.Output, harness.Identity, MutationWorkers.Claims(MutationService.CommandName)).Claim(claimed, claim, force: false);
+
+        var (dry, measured) = await CleanAsync(temp, harness, config, dryRun: true);
+        var detail = measured.GetProperty("detail").GetString()!;
+
+        Assert.Equal(Verdicts.ExitCodeFor(LegVerdict.RefusedLocked), dry.ExitCode);
+        Assert.Equal("refused-locked", measured.GetProperty("verdict").GetString());
+        Assert.Contains($"worker 2, '{claimed}', is claimed by a sweep still running: ", detail, StringComparison.Ordinal);
+        Assert.Contains(claim.Value, detail, StringComparison.Ordinal);
+        Assert.Contains(
+            $"2 mutation worker(s): {DiskSpace.Size(Workers.Holding(10))} in '{free}', {DiskSpace.Size(Workers.Holding(20))} in '{claimed}'",
+            detail,
+            StringComparison.Ordinal);
+        Assert.All(new[] { free, claimed }, path => Assert.True(Directory.Exists(path), path));
+
+        // The clean it stands for ends the same way.
+        var (cleaned, _) = await CleanAsync(temp, harness, config);
+
+        Assert.Equal(dry.ExitCode, cleaned.ExitCode);
     }
 
     /// <summary>
