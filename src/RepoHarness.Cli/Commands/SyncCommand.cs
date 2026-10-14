@@ -50,7 +50,7 @@ internal static class SyncCommand
         command.Options.Add(ArtifactOption);
         GlobalOptions.AddTo(command);
 
-        command.SetAction(CommandRunner.Wrap(Name, async (context, cancellationToken) =>
+        CommandRunner.Wire(command, async (context, cancellationToken) =>
         {
             var arguments = context.ParseResult;
 
@@ -69,7 +69,7 @@ internal static class SyncCommand
                     arguments.GetValue(PullOption) ?? [],
                     cancellationToken)
                 .ConfigureAwait(false);
-        }));
+        });
 
         return command;
     }

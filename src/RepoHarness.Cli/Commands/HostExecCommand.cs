@@ -36,7 +36,7 @@ internal static class HostExecCommand
         command.Arguments.Add(CommandArgument);
         GlobalOptions.AddTo(command);
 
-        command.SetAction(CommandRunner.Wrap(Name, (context, cancellationToken) =>
+        CommandRunner.Wire(command, (context, cancellationToken) =>
         {
             var arguments = context.ParseResult;
 
@@ -52,7 +52,7 @@ internal static class HostExecCommand
                 wsl,
                 arguments.GetValue(CommandArgument) ?? [],
                 cancellationToken);
-        }));
+        });
 
         return command;
     }

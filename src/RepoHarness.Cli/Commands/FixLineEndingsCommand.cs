@@ -41,7 +41,7 @@ internal static class FixLineEndingsCommand
         command.Options.Add(JsonOption);
         GlobalOptions.AddTo(command);
 
-        command.SetAction(CommandRunner.Wrap(Name, async (context, cancellationToken) =>
+        CommandRunner.Wire(command, async (context, cancellationToken) =>
         {
             var arguments = context.ParseResult;
 
@@ -52,7 +52,7 @@ internal static class FixLineEndingsCommand
                 .ConfigureAwait(false);
 
             return LineEndingReports.Render(report, arguments.GetValue(JsonOption));
-        }, new JsonAnswer(JsonOption, (arguments, exitCode, summary, _, _) => LineEndingReports.Stopped(exitCode, summary, arguments.GetValue(CheckOption)))));
+        }, new JsonAnswer(JsonOption, (arguments, exitCode, summary, _, _) => LineEndingReports.Stopped(exitCode, summary, arguments.GetValue(CheckOption))));
 
         return command;
     }

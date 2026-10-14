@@ -45,6 +45,36 @@ public sealed class LineEndingServiceTests
         Assert.Equal("one\r\ntwo\r\n", Read(temp, "undeclared.dat"));
     }
 
+    /// <summary>
+    /// The document and the lines say each scope and each ending as their names, a document stopped before it read
+    /// anything names no scope and says the check its command line asked, and a scope or an ending this build does not
+    /// know is refused rather than said as another.
+    /// </summary>
+    [Fact]
+    public void TheReportSaysEachScopeAndEachEnding_AndRefusesOneThisBuildDoesNotKnow()
+    {
+        static LineEndingReport Report(LineEndingScope scope, params DeclaredLineEnding[] endings)
+            => new(scope, CheckOnly: false, endings.Length, 0, 0, 0, [.. endings.Select((ending, at) => new LineEndingChange($"f{at}", ending, 0))]);
+
+        static System.Text.Json.Nodes.JsonObject Document(LineEndingReport report)
+            => System.Text.Json.Nodes.JsonNode.Parse(Assert.Single(LineEndingReports.Render(report, json: true).Data))!.AsObject();
+
+        Assert.Equal("all", Document(Report(LineEndingScope.All))["scope"]!.GetValue<string>());
+        Assert.Equal("changed", Document(Report(LineEndingScope.Changed))["scope"]!.GetValue<string>());
+        Assert.Equal(
+            ["f0   -> undeclared", "f1   -> binary", "f2   -> LF", "f3   -> CRLF"],
+            LineEndingReports.Render(Report(LineEndingScope.All, DeclaredLineEnding.None, DeclaredLineEnding.Binary, DeclaredLineEnding.Lf, DeclaredLineEnding.Crlf), json: false).Data);
+
+        var stopped = System.Text.Json.Nodes.JsonNode.Parse(LineEndingReports.Stopped(HarnessExit.UsageError, "stopped", checkOnly: true))!.AsObject();
+
+        Assert.Null(stopped["scope"]);
+        Assert.True(stopped["check"]!.GetValue<bool>());
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => LineEndingReports.Render(Report((LineEndingScope)99), json: true));
+        Assert.Throws<ArgumentOutOfRangeException>(() => LineEndingReports.Render(Report(LineEndingScope.All, (DeclaredLineEnding)99), json: false));
+        Assert.Throws<ArgumentOutOfRangeException>(() => LineEndingReports.Render(Report(LineEndingScope.All, (DeclaredLineEnding)99), json: true));
+    }
+
     [Fact]
     public async Task Check_RefusesAndWritesNothing()
     {

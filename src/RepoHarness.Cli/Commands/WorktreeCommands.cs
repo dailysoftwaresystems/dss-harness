@@ -30,7 +30,7 @@ internal static class CreateWorktreeCommand
         command.Options.Add(RandomOption);
         GlobalOptions.AddTo(command);
 
-        command.SetAction(CommandRunner.Wrap(Name, async (context, cancellationToken) =>
+        CommandRunner.Wire(command, async (context, cancellationToken) =>
         {
             var result = await context.Get<IWorktreeService>()
                 .CreateAsync(
@@ -41,7 +41,7 @@ internal static class CreateWorktreeCommand
                 .ConfigureAwait(false);
 
             return result.Outcome;
-        }));
+        });
 
         return command;
     }
@@ -81,7 +81,7 @@ internal static class DeleteWorktreeCommand
         command.Options.Add(DiscardUncommittedOption);
         GlobalOptions.AddTo(command);
 
-        command.SetAction(CommandRunner.Wrap(Name, async (context, cancellationToken) =>
+        CommandRunner.Wire(command, async (context, cancellationToken) =>
         {
             var result = await context.Get<IWorktreeService>()
                 .DeleteAsync(
@@ -94,7 +94,7 @@ internal static class DeleteWorktreeCommand
                 .ConfigureAwait(false);
 
             return result.Outcome;
-        }));
+        });
 
         return command;
     }
@@ -122,7 +122,7 @@ internal static class ListWorktreeCommand
         command.Options.Add(JsonOption);
         GlobalOptions.AddTo(command);
 
-        command.SetAction(CommandRunner.Wrap(Name, async (context, cancellationToken) =>
+        CommandRunner.Wire(command, async (context, cancellationToken) =>
         {
             var worktrees = await context.Get<IWorktreeService>()
                 .ListAsync(context.Directory, cancellationToken)
@@ -133,7 +133,7 @@ internal static class ListWorktreeCommand
                 .ConfigureAwait(false);
 
             return WorktreeReports.List(worktrees, copies, context.ParseResult.GetValue(JsonOption));
-        }, new JsonAnswer(JsonOption, (_, exitCode, summary, _, _) => WorktreeReports.Stopped(exitCode, summary))));
+        }, new JsonAnswer(JsonOption, (_, exitCode, summary, _, _) => WorktreeReports.Stopped(exitCode, summary)));
 
         return command;
     }

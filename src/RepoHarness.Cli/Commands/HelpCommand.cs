@@ -35,13 +35,15 @@ internal static class HelpCommand
 
     /// <summary>
     /// What a command asked for --json answers with where it stops before it has anything of its own to say: one
-    /// sentence, said in the overview for every command and wherever a listing's document is described, since a listing
-    /// carries exitCode and summary only then.
+    /// sentence, said in the overview for every command and wherever a listing's document is described, since most
+    /// documents carry exitCode and summary only then.
     /// </summary>
     private const string StoppedDocument = "Asked for --json, a command answers with one document on every exit: stopped before it has "
-        + "anything of its own to say - a --directory that is not there, a repository not initialised, a usage error, or a "
-        + "refusal met before anything is weighed - it answers with its own document holding nothing, exitCode and summary "
-        + "first, which a listing carries only then, or, where its document is an array, with that array empty.";
+        + "anything of its own to say - a command line the parser refuses, a --directory that is not there, a repository not "
+        + "initialised, another usage error, or a refusal met before anything is weighed - it answers with its own document "
+        + "holding nothing, exitCode and summary first, which the leg ledger, the agent document and the check-mutations --list "
+        + "listing carry on every exit and every other document only then, or, where its document is an array, with that array "
+        + "empty.";
 
     /// <summary>
     /// Every topic, in the order the overview lists them: the one list the overview, the topic argument, the answer to an

@@ -2004,12 +2004,7 @@ public sealed partial class HelpTests
     {
         var rendered = await CliRunner.RunAsync([.. command, "--help"], TestContext.Current.CancellationToken);
 
-        var usage = rendered.StandardOutput
-            .Split('\n')
-            .SkipWhile(line => !line.StartsWith("Usage:", StringComparison.Ordinal))
-            .Skip(1)
-            .FirstOrDefault(line => line.Trim().Length > 0)
-            ?.Trim();
+        var usage = CliRunner.UsageLine(rendered.StandardOutput);
 
         Assert.NotNull(usage);
         Assert.StartsWith(ToolPackage.Command + " ", usage, StringComparison.Ordinal);

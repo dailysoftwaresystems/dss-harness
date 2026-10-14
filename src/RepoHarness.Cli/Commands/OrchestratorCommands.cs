@@ -122,14 +122,14 @@ internal static class CreateOrchestratorCommand
         command.Options.Add(SessionOption);
         GlobalOptions.AddTo(command);
 
-        command.SetAction(CommandRunner.Wrap(Name, (context, cancellationToken) => context.Get<IOrchestratorService>()
+        CommandRunner.Wire(command, (context, cancellationToken) => context.Get<IOrchestratorService>()
             .CreateAsync(
                 context.Directory,
                 context.ParseResult.GetRequiredValue(NameArgument),
                 context.ParseResult.GetRequiredValue(ModelOption),
                 context.ParseResult.GetValue(ParallelOption),
                 context.ParseResult.GetValue(SessionOption),
-                cancellationToken)));
+                cancellationToken));
 
         return command;
     }
@@ -154,12 +154,12 @@ internal static class DeleteOrchestratorCommand
         command.Options.Add(DeleteEvidenceOption);
         GlobalOptions.AddTo(command);
 
-        command.SetAction(CommandRunner.Wrap(Name, (context, cancellationToken) => context.Get<IOrchestratorService>()
+        CommandRunner.Wire(command, (context, cancellationToken) => context.Get<IOrchestratorService>()
             .DeleteAsync(
                 context.Directory,
                 context.ParseResult.GetRequiredValue(NameArgument),
                 context.ParseResult.GetValue(DeleteEvidenceOption),
-                cancellationToken)));
+                cancellationToken));
 
         return command;
     }
@@ -191,11 +191,11 @@ internal static class ListOrchestratorCommand
         command.Options.Add(JsonOption);
         GlobalOptions.AddTo(command);
 
-        command.SetAction(CommandRunner.Wrap(
-            Name,
+        CommandRunner.Wire(
+            command,
             (context, cancellationToken) => context.Get<IOrchestratorService>()
                 .ListAsync(context.Directory, context.ParseResult.GetValue(NameArgument), context.ParseResult.GetValue(JsonOption), cancellationToken),
-            JsonAnswerOfList));
+            JsonAnswerOfList);
 
         return command;
     }

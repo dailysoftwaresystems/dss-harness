@@ -4,7 +4,6 @@ using RepoHarness.Cli.Commands;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Repository;
-using RepoHarness.Core.Results;
 using RepoHarness.Core.Worktrees;
 
 // Command selection and dependency wiring only. Every behaviour lives in a service
@@ -66,18 +65,11 @@ async Task<int> RunAsync(string[] arguments, CancellationToken cancellationToken
 {
     var parseResult = root.Parse(arguments);
 
-    // System.CommandLine reports a parse failure as exit code 1, which collides with
-    // verify-git's contract, where 1 means "git is not installed". Usage errors are
-    // reported with the documented shared code instead.
+    // A command line the parser refused reaches no command's action: it is answered as a usage error, with its
+    // command's document where --json asked for it.
     if (parseResult.Errors.Count > 0)
     {
-        foreach (var error in parseResult.Errors)
-        {
-            Console.Error.WriteLine(error.Message);
-        }
-
-        Console.Error.WriteLine($"Run '{ToolPackage.Command} --help' for usage.");
-        return HarnessExit.UsageError;
+        return await CommandRunner.UnparsedAsync(parseResult).ConfigureAwait(false);
     }
 
     // A command past its point of no return goes on after Ctrl+C - a deletion, a fold, a hand-over or a

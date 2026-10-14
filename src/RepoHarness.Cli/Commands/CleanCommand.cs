@@ -36,7 +36,7 @@ internal static class CleanCommand
         command.Options.Add(DispatchOptions.Here);
         GlobalOptions.AddTo(command);
 
-        command.SetAction(CommandRunner.Wrap(Name, async (context, cancellationToken) =>
+        CommandRunner.Wire(command, async (context, cancellationToken) =>
         {
             var arguments = context.ParseResult;
 
@@ -54,7 +54,7 @@ internal static class CleanCommand
                         arguments.GetValue(DispatchOptions.Here)),
                     cancellationToken)
                 .ConfigureAwait(false);
-        }, JsonAnswer.Ledger(JsonOption)));
+        }, JsonAnswer.Ledger(JsonOption));
 
         return command;
     }

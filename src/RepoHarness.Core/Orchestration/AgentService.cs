@@ -606,8 +606,10 @@ public sealed class AgentService(
         var outcome = await RefreshLiveAsync(at, request, apply, json, cancellationToken).ConfigureAwait(false);
         var answered = apply ? _log.Record(at.Layout!, agent, RefreshCommand, outcome) : outcome;
 
-        // Asked for one document, it answers with one on every exit: the dry run's own exits bring theirs, and the rest
-        // - an --apply's, and what was met before anything was weighed - say what the code alone says.
+        // Asked for one document, what the live agent answered brings one: the dry run's own exits bring theirs, and the
+        // rest - an --apply's, and a refusal met there before anything was weighed - say what the code alone says. A usage
+        // error or a refusal returned above, before the agent was found, brings none: the command's plumbing answers it
+        // with the same document, empty, as it answers every exit that brings none.
         return json && answered.Data.Count == 0 ? OrchestrationReports.Document(answered, apply, StandingOfApply(answered), null) : answered;
     }
 
@@ -932,7 +934,8 @@ public sealed class AgentService(
         var outcome = await RebaseLiveAsync(at, request, apply, json, cancellationToken).ConfigureAwait(false);
         var answered = apply ? _log.Record(at.Layout!, agent, RebaseCommand, outcome) : outcome;
 
-        // Asked for one document, it answers with one on every exit, as refresh-agent does.
+        // Asked for one document, what the live agent answered brings one, and what was returned above is the plumbing's
+        // to answer, as refresh-agent says.
         return json && answered.Data.Count == 0 ? OrchestrationReports.Document(answered, apply, StandingOfApply(answered), null) : answered;
     }
 
@@ -1300,7 +1303,8 @@ public sealed class AgentService(
         var outcome = await FoldLiveAsync(at, allowances, apply, json, cancellationToken).ConfigureAwait(false);
         var answered = apply ? _log.Record(at.Layout!, agent, FoldCommand, outcome) : outcome;
 
-        // Asked for one document, it answers with one on every exit, as refresh-agent does.
+        // Asked for one document, what the live agent answered brings one, and what was returned above is the plumbing's
+        // to answer, as refresh-agent says.
         return json && answered.Data.Count == 0 ? OrchestrationReports.Document(answered, apply, StandingOfApply(answered), null) : answered;
     }
 
@@ -1401,7 +1405,8 @@ public sealed class AgentService(
         var outcome = await DeleteFoundAsync(found.Context!, found.Layout!, found.Record!, allowances, apply, discardUncommitted, json, cancellationToken).ConfigureAwait(false);
         var answered = apply ? _log.Record(found.Layout!, agent, DeleteCommand, outcome) : outcome;
 
-        // Asked for one document, it answers with one on every exit, as refresh-agent does.
+        // Asked for one document, what the agent found answered brings one, and what was returned above is the plumbing's
+        // to answer, as refresh-agent says.
         return json && answered.Data.Count == 0 ? OrchestrationReports.Document(answered, apply, StandingOfApply(answered), null) : answered;
     }
 

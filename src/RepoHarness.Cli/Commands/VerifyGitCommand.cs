@@ -19,7 +19,7 @@ internal static class VerifyGitCommand
 
         GlobalOptions.AddTo(command);
 
-        command.SetAction(CommandRunner.Wrap(Name, async (context, cancellationToken) =>
+        CommandRunner.Wire(command, async (context, cancellationToken) =>
         {
             var directory = context.Directory;
 
@@ -39,7 +39,7 @@ internal static class VerifyGitCommand
                     (int)status, $"'{directory}' is not inside a git repository."),
                 _ => CommandOutcome.Failed(HarnessExit.CommandFailed, $"Unexpected status '{status}'."),
             };
-        }));
+        });
 
         return command;
     }

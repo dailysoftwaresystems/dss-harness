@@ -33,7 +33,7 @@ internal static class LegsCommand
         command.Options.Add(JsonOption);
         GlobalOptions.AddTo(command);
 
-        command.SetAction(CommandRunner.Wrap(Name, async (context, cancellationToken) =>
+        CommandRunner.Wire(command, async (context, cancellationToken) =>
         {
             var arguments = context.ParseResult;
 
@@ -61,7 +61,7 @@ internal static class LegsCommand
                 .ConfigureAwait(false);
 
             return LegsReports.Render(report, arguments.GetValue(JsonOption), arguments.GetValue(GlobalOptions.Verbose));
-        }, new JsonAnswer(JsonOption, (_, exitCode, summary, _, _) => LegsReports.Stopped(exitCode, summary))));
+        }, new JsonAnswer(JsonOption, (_, exitCode, summary, _, _) => LegsReports.Stopped(exitCode, summary)));
 
         return command;
     }

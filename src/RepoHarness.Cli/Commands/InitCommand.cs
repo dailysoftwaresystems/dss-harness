@@ -23,11 +23,11 @@ internal static class InitCommand
         command.Options.Add(InstallToolsOption);
         GlobalOptions.AddTo(command);
 
-        command.SetAction(CommandRunner.Wrap(Name, (context, cancellationToken) =>
+        CommandRunner.Wire(command, (context, cancellationToken) =>
             context.Get<InitService>().InitializeAsync(
                 context.Directory,
                 context.ParseResult.GetValue(InstallToolsOption),
-                cancellationToken)));
+                cancellationToken));
 
         return command;
     }

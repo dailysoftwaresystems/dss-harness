@@ -42,7 +42,7 @@ internal static class CheckCiLegsCommand
         command.Options.Add(JsonOption);
         GlobalOptions.AddTo(command);
 
-        command.SetAction(CommandRunner.Wrap(Name, async (context, cancellationToken) =>
+        CommandRunner.Wire(command, async (context, cancellationToken) =>
         {
             var arguments = context.ParseResult;
 
@@ -56,7 +56,7 @@ internal static class CheckCiLegsCommand
                 .ConfigureAwait(false);
 
             return CiLegsReports.Render(report, arguments.GetValue(JsonOption));
-        }, new JsonAnswer(JsonOption, (_, exitCode, summary, _, _) => CiLegsReports.Stopped(exitCode, summary))));
+        }, new JsonAnswer(JsonOption, (_, exitCode, summary, _, _) => CiLegsReports.Stopped(exitCode, summary)));
 
         return command;
     }

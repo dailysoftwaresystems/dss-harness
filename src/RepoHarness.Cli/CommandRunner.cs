@@ -1,4 +1,5 @@
 using System.CommandLine;
+using System.Runtime.CompilerServices;
 using Microsoft.Extensions.DependencyInjection;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
@@ -47,6 +48,14 @@ internal static class CommandRunner
     private static readonly AsyncLocal<CommandOrigin?> Origin = new();
 
     /// <summary>
+    /// Each command's <c>--json</c>, with the document it answers with where it has none of its own, as the command was
+    /// wired (<see cref="Wire(Command, Func{CommandContext, CancellationToken, Task{CommandOutcome}}, JsonAnswer?)"/>): the
+    /// one place a command line the parser refused, which reaches no command's action, finds the document its command
+    /// answers with.
+    /// </summary>
+    private static readonly ConditionalWeakTable<Command, JsonAnswer> Answers = new();
+
+    /// <summary>
     /// Marks what this flow runs from here on as run for <paramref name="origin"/>: by the host agent before it serves a
     /// request, so nothing that flow runs is taken for something typed here, and with what the machine that asked says of
     /// a command before that command runs.
@@ -54,62 +63,109 @@ internal static class CommandRunner
     /// <param name="origin">Who the commands are run for.</param>
     internal static void Serve(CommandOrigin origin) => Origin.Value = origin;
 
-    /// <summary>Wraps a command body into an action the parser can invoke.</summary>
-    /// <param name="commandName">The command, which prefixes every line it writes.</param>
+    /// <summary>Wires a command body as the action the parser invokes for <paramref name="command"/>.</summary>
+    /// <param name="command">The command, whose name prefixes every line it writes.</param>
     /// <param name="body">What the command does.</param>
     /// <param name="json">
-    /// The command's <c>--json</c>, with the document it answers with where it stops before its body has an outcome -
-    /// its own document's shape, empty (<see cref="JsonAnswer"/>). Asked for it, the command answers with one document
-    /// on every exit: a script reading standard output has one document to read whatever happened.
+    /// The command's <c>--json</c>, with the document it answers with where it has none of its own - its own document's
+    /// shape, empty (<see cref="JsonAnswer"/>): where the parser refuses its command line (<see cref="UnparsedAsync"/>),
+    /// where it stops before its body has an outcome, and where its body answers without one (<see cref="Report"/>).
+    /// Asked for it, the command answers with one document on every exit: a script reading standard output has one
+    /// document to read whatever happened.
     /// </param>
-    internal static Func<ParseResult, CancellationToken, Task<int>> Wrap(
-        string commandName,
+    internal static void Wire(
+        Command command,
         Func<CommandContext, CancellationToken, Task<CommandOutcome>> body,
         JsonAnswer? json = null)
-        => Wrap(commandName, (context, _, cancellationToken) => body(context, cancellationToken), json, beginsRun: _ => false);
+        => Wire(command, (context, _, cancellationToken) => body(context, cancellationToken), json, beginsRun: _ => false);
 
     /// <summary>
-    /// Wraps the body of a command that keeps runs - build, test, run and check-mutations - into an action the parser
-    /// can invoke, beginning its run before anything can refuse it, and handing the body that run.
+    /// Wires the body of a command that keeps runs - build, test, run and check-mutations - as the action the parser
+    /// invokes for <paramref name="command"/>, beginning its run before anything can refuse it, and handing the body that
+    /// run.
     /// </summary>
-    /// <param name="commandName">The command, which prefixes every line it writes.</param>
+    /// <param name="command">The command, whose name prefixes every line it writes.</param>
     /// <param name="body">What the command does, given the run it began.</param>
-    /// <param name="json">The command's <c>--json</c>, as <see cref="Wrap(string, Func{CommandContext, CancellationToken, Task{CommandOutcome}}, JsonAnswer?)"/> takes it.</param>
+    /// <param name="json">The command's <c>--json</c>, as <see cref="Wire(Command, Func{CommandContext, CancellationToken, Task{CommandOutcome}}, JsonAnswer?)"/> takes it.</param>
     /// <remarks>
     /// The run is named in the command's first line, and as <c>runId</c> in its <c>--json</c> ledger on every exit, and
     /// is the one its records are kept under: a run refused before it had a directory keeps no records, and its id is
     /// then all there is to cite it by.
     /// </remarks>
-    internal static Func<ParseResult, CancellationToken, Task<int>> Wrap(
-        string commandName,
+    internal static void Wire(
+        Command command,
         Func<CommandContext, RunId, CancellationToken, Task<CommandOutcome>> body,
         JsonAnswer? json = null)
-        => Wrap(commandName, (context, run, cancellationToken) => body(context, run!, cancellationToken), json, beginsRun: _ => true);
+        => Wire(command, (context, run, cancellationToken) => body(context, run!, cancellationToken), json, beginsRun: _ => true);
 
     /// <summary>
-    /// Wraps the body of a command whose parsed command line decides whether it begins a run - check-mutations, whose
+    /// Wires the body of a command whose parsed command line decides whether it begins a run - check-mutations, whose
     /// --list sweeps nothing and begins none - handing the body the run where it began one, and nothing where not.
     /// </summary>
-    /// <param name="commandName">The command, which prefixes every line it writes.</param>
+    /// <param name="command">The command, whose name prefixes every line it writes.</param>
     /// <param name="body">What the command does, given the run it began, or nothing where it began none.</param>
     /// <param name="beginsRun">Whether the parsed command line begins a run.</param>
-    /// <param name="json">The command's <c>--json</c>, as <see cref="Wrap(string, Func{CommandContext, CancellationToken, Task{CommandOutcome}}, JsonAnswer?)"/> takes it.</param>
+    /// <param name="json">The command's <c>--json</c>, as <see cref="Wire(Command, Func{CommandContext, CancellationToken, Task{CommandOutcome}}, JsonAnswer?)"/> takes it.</param>
     /// <remarks>A command line that begins no run prints no <c>run &lt;id&gt;</c> line, and keeps no records.</remarks>
-    internal static Func<ParseResult, CancellationToken, Task<int>> Wrap(
-        string commandName,
+    internal static void Wire(
+        Command command,
         Func<CommandContext, RunId?, CancellationToken, Task<CommandOutcome>> body,
         Func<ParseResult, bool> beginsRun,
         JsonAnswer? json = null)
-        => Wrap(commandName, body, json, beginsRun);
+        => Wire(command, body, json, beginsRun);
 
-    /// <summary>Wraps a command body, given its run where its parsed command line <paramref name="beginsRun"/>, into an action the parser can invoke.</summary>
-    private static Func<ParseResult, CancellationToken, Task<int>> Wrap(
-        string commandName,
+    /// <summary>
+    /// Ends a command line the parser refused - an option its command does not take, an argument missing or one too
+    /// many - with the code a usage error has, rather than the parser's own 1, which collides with verify-git's contract,
+    /// where 1 means git is not installed. Asked for <c>--json</c>, its command answers first with the document it
+    /// registered where it was wired, empty, the first error the line it ends on, as it answers on every other exit; no
+    /// run is named, since a command line the parser refuses never began one. Then each error, and where usage is told.
+    /// </summary>
+    /// <param name="parseResult">The command line the parser refused.</param>
+    /// <returns>The code a usage error has.</returns>
+    internal static async Task<int> UnparsedAsync(ParseResult parseResult)
+    {
+        ArgumentNullException.ThrowIfNull(parseResult);
+
+        if (Answers.TryGetValue(parseResult.CommandResult.Command, out var json) && json.Asked(parseResult))
+        {
+            // Told as every other line the command writes is told: a host answering another machine writes its home as ~.
+            await using var services = HarnessServices.Build(verbose: false, prompting: false, Origin.Value ?? CommandOrigin.Typed);
+            var output = services.GetRequiredService<IHarnessOutput>();
+
+            output.Data(json.Stopped(parseResult, HarnessExit.UsageError, parseResult.Errors[0].Message, output.Shown, run: null));
+        }
+
+        foreach (var error in parseResult.Errors)
+        {
+            Console.Error.WriteLine(error.Message);
+        }
+
+        Console.Error.WriteLine($"Run '{ToolPackage.Command} --help' for usage.");
+        return HarnessExit.UsageError;
+    }
+
+    /// <summary>
+    /// Wires a command body, given its run where its parsed command line <paramref name="beginsRun"/>, as the action the
+    /// parser invokes for <paramref name="command"/>, and keeps the document it answers with where it has none of its own.
+    /// </summary>
+    /// <exception cref="ArgumentException"><paramref name="command"/> was wired with its document already.</exception>
+    private static void Wire(
+        Command command,
         Func<CommandContext, RunId?, CancellationToken, Task<CommandOutcome>> body,
         JsonAnswer? json,
         Func<ParseResult, bool> beginsRun)
     {
-        return async (parseResult, cancellationToken) =>
+        ArgumentNullException.ThrowIfNull(command);
+
+        var commandName = command.Name;
+
+        if (json is not null)
+        {
+            Answers.Add(command, json);
+        }
+
+        command.SetAction(async (parseResult, cancellationToken) =>
         {
             var verbose = parseResult.GetValue(GlobalOptions.Verbose);
             var prompting = !parseResult.GetValue(GlobalOptions.NoPrompt);
@@ -118,7 +174,7 @@ internal static class CommandRunner
             var run = beginsRun(parseResult) ? RunId.New() : null;
 
             // Asked for its document, a command that stops answers in its own document's shape, as it registered it.
-            Func<int, string, string>? stopped = json is not null && parseResult.GetValue(json.Option)
+            Func<int, string, string>? stopped = json is not null && json.Asked(parseResult)
                 ? (exitCode, summary) => json.Stopped(parseResult, exitCode, summary, output.Shown, run)
                 : null;
 
@@ -154,7 +210,7 @@ internal static class CommandRunner
                 // each host it reached that asks to be held awake between commands held.
                 await services.GetRequiredService<CommandEnd>().EndAsync(commandName).ConfigureAwait(false);
             }
-        };
+        });
     }
 
     /// <summary>
@@ -271,8 +327,8 @@ internal static class CommandRunner
     /// <summary>
     /// Reports what a command's body answered: its document, its lines, and the line it ends on. Asked for its document,
     /// a body that answered without one - a usage error or a refusal it returned before it weighed anything - answers with
-    /// the document it registered for a stop (<see cref="JsonAnswer"/>), so a command asked for one answers with one on
-    /// every exit.
+    /// the document it registered where it was wired (<see cref="JsonAnswer"/>), so a command asked for one answers with
+    /// one on every exit.
     /// </summary>
     /// <param name="output">Where the command writes.</param>
     /// <param name="commandName">The command, which prefixes its lines.</param>

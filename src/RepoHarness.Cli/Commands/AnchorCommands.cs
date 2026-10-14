@@ -147,7 +147,7 @@ internal static class WriteAnchorCommand
         command.Options.Add(DryRunOption);
         GlobalOptions.AddTo(command);
 
-        command.SetAction(CommandRunner.Wrap(Name, async (context, cancellationToken) =>
+        CommandRunner.Wire(command, async (context, cancellationToken) =>
         {
             var arguments = context.ParseResult;
 
@@ -166,7 +166,7 @@ internal static class WriteAnchorCommand
                 .ConfigureAwait(false);
 
             return AnchorReports.Change(change);
-        }));
+        });
 
         return command;
     }
@@ -248,7 +248,7 @@ internal static class SetAnchorCommand
         command.Options.Add(DryRunOption);
         GlobalOptions.AddTo(command);
 
-        command.SetAction(CommandRunner.Wrap(Name, async (context, cancellationToken) =>
+        CommandRunner.Wire(command, async (context, cancellationToken) =>
         {
             var arguments = context.ParseResult;
 
@@ -267,7 +267,7 @@ internal static class SetAnchorCommand
                 .ConfigureAwait(false);
 
             return AnchorReports.Change(change);
-        }));
+        });
 
         return command;
     }
@@ -305,7 +305,7 @@ internal static class ReadAnchorCommand
         command.Options.Add(JsonOption);
         GlobalOptions.AddTo(command);
 
-        command.SetAction(CommandRunner.Wrap(Name, async (context, cancellationToken) =>
+        CommandRunner.Wire(command, async (context, cancellationToken) =>
         {
             var arguments = context.ParseResult;
 
@@ -318,7 +318,7 @@ internal static class ReadAnchorCommand
                 .ConfigureAwait(false);
 
             return AnchorReports.Lookup(lookup, arguments.GetValue(JsonOption));
-        }, new JsonAnswer(JsonOption, (_, _, _, _, _) => AnchorReports.LookupStopped())));
+        }, new JsonAnswer(JsonOption, (_, _, _, _, _) => AnchorReports.LookupStopped()));
 
         return command;
     }
@@ -377,7 +377,7 @@ internal static class ReadAnchorsCommand
         command.Options.Add(LintOption);
         GlobalOptions.AddTo(command);
 
-        command.SetAction(CommandRunner.Wrap(Name, async (context, cancellationToken) =>
+        CommandRunner.Wire(command, async (context, cancellationToken) =>
         {
             var arguments = context.ParseResult;
             var service = context.Get<IAnchorRegistryService>();
@@ -401,7 +401,7 @@ internal static class ReadAnchorsCommand
 
             var entries = await service.ListAsync(context.Directory, filter, cancellationToken).ConfigureAwait(false);
             return AnchorReports.List(entries, filter.Scope, json);
-        }, new JsonAnswer(JsonOption, (arguments, _, _, _, _) => AnchorReports.ListStopped(arguments.GetValue(LintOption)))));
+        }, new JsonAnswer(JsonOption, (_, _, _, _, _) => AnchorReports.ListStopped()));
 
         return command;
     }
@@ -452,7 +452,7 @@ internal static class CheckAnchorBalanceCommand
         command.Options.Add(JsonOption);
         GlobalOptions.AddTo(command);
 
-        command.SetAction(CommandRunner.Wrap(Name, async (context, cancellationToken) =>
+        CommandRunner.Wire(command, async (context, cancellationToken) =>
         {
             var arguments = context.ParseResult;
 
@@ -461,7 +461,7 @@ internal static class CheckAnchorBalanceCommand
                 .ConfigureAwait(false);
 
             return AnchorReports.Balance(report, arguments.GetValue(JsonOption));
-        }, new JsonAnswer(JsonOption, (_, exitCode, summary, _, _) => AnchorReports.BalanceStopped(exitCode, summary))));
+        }, new JsonAnswer(JsonOption, (_, exitCode, summary, _, _) => AnchorReports.BalanceStopped(exitCode, summary)));
 
         return command;
     }

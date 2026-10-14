@@ -1,5 +1,4 @@
 using System.CommandLine;
-using RepoHarness.Core.Output;
 using RepoHarness.Core.Tools;
 
 namespace RepoHarness.Cli.Commands;
@@ -37,7 +36,7 @@ internal static class InstallMissingToolsCommand
         command.Options.Add(DryRunOption);
         GlobalOptions.AddTo(command);
 
-        command.SetAction(CommandRunner.Wrap(Name, async (context, cancellationToken) =>
+        CommandRunner.Wire(command, async (context, cancellationToken) =>
         {
             var arguments = context.ParseResult;
 
@@ -47,19 +46,12 @@ internal static class InstallMissingToolsCommand
                 ? arguments.GetValue(LegsOption) ?? []
                 : null;
 
-            var json = arguments.GetValue(JsonOption);
-
-            // Asked for JSON, the document is the whole of standard output. Progress still appears,
-            // on standard error: an install that actually installs something writes a line per host
-            // while it works, and ahead of the document that line is what stops it parsing.
-            using var document = json ? context.Get<IHarnessOutput>().DataOnly() : null;
-
             var report = await context.Get<IToolProvisionService>()
                 .ProvisionAsync(context.Directory, legs, arguments.GetValue(DryRunOption), cancellationToken)
                 .ConfigureAwait(false);
 
-            return ToolProvisionReports.Render(report, json);
-        }, new JsonAnswer(JsonOption, (arguments, exitCode, summary, _, _) => ToolProvisionReports.Stopped(exitCode, summary, arguments.GetValue(DryRunOption)))));
+            return ToolProvisionReports.Render(report, arguments.GetValue(JsonOption));
+        }, new JsonAnswer(JsonOption, (arguments, exitCode, summary, _, _) => ToolProvisionReports.Stopped(exitCode, summary, arguments.GetValue(DryRunOption))));
 
         return command;
     }

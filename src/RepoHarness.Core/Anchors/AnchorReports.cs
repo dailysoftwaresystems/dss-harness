@@ -107,12 +107,11 @@ public static class AnchorReports
     public static string LookupStopped() => LookupJson([]);
 
     /// <summary>
-    /// The document read-anchors answers with where it stops before it reads either registry: its own, empty - the
-    /// listing's array of anchors, or with <paramref name="lint"/> the array of findings. An array has no member to carry
-    /// the code the command exits with, which the process's exit code and the line it ends on say.
+    /// The document read-anchors answers with where it stops before it reads either registry: its own, an empty array -
+    /// the listing's and --lint's alike, so the command line asks nothing of it. An array has no member to carry the code
+    /// the command exits with, which the process's exit code and the line it ends on say.
     /// </summary>
-    /// <param name="lint">Whether the command line asked for --lint.</param>
-    public static string ListStopped(bool lint) => lint ? FindingsJson([]).ToJsonString(JsonOptions) : ListJson([]);
+    public static string ListStopped() => ListJson([]);
 
     /// <summary>
     /// The document check-anchor-balance answers with where it stops before it reads anything - a <c>--directory</c>

@@ -339,7 +339,7 @@ public static class LineEndingReports
         ArgumentNullException.ThrowIfNull(report);
 
         IReadOnlyList<string> data = json
-            ? [Document(report.Scope, report.CheckOnly, report).ToJsonString(ReportJson.Options)]
+            ? [Document(report, report.CheckOnly).ToJsonString(ReportJson.Options)]
             : [.. report.Changed.Select(change => $"{change.Path}   -> {Name(change.Ending)}")];
 
         var looked =
@@ -371,7 +371,8 @@ public static class LineEndingReports
         DeclaredLineEnding.Lf => "LF",
         DeclaredLineEnding.Crlf => "CRLF",
         DeclaredLineEnding.Binary => "binary",
-        _ => "undeclared",
+        DeclaredLineEnding.None => "undeclared",
+        var unknown => throw new ArgumentOutOfRangeException(nameof(ending), unknown, "Not an ending a policy declares."),
     };
 
     /// <summary>
@@ -383,18 +384,24 @@ public static class LineEndingReports
     /// <param name="summary">The line it ends on.</param>
     /// <param name="checkOnly">Whether the command line asked only to look.</param>
     public static string Stopped(int exitCode, string summary, bool checkOnly)
-        => ReportJson.Stopped(exitCode, summary, Document(scope: null, checkOnly, report: null));
+        => ReportJson.Stopped(exitCode, summary, Document(report: null, checkOnly));
 
-    /// <summary>The one document of fix-line-endings --json: what was covered, and what changed; of no report, nothing of either.</summary>
-    private static JsonObject Document(LineEndingScope? scope, bool checkOnly, LineEndingReport? report)
+    /// <summary>
+    /// The one document of fix-line-endings --json: what was covered, and what changed; of no report, nothing of either
+    /// and no scope.
+    /// </summary>
+    /// <param name="report">What was measured; <see langword="null"/> where nothing was.</param>
+    /// <param name="checkOnly">Whether the command line asked only to look.</param>
+    private static JsonObject Document(LineEndingReport? report, bool checkOnly)
     {
         var node = new JsonObject
         {
-            ["scope"] = scope switch
+            ["scope"] = report?.Scope switch
             {
                 LineEndingScope.All => "all",
+                LineEndingScope.Changed => "changed",
                 null => null,
-                _ => "changed",
+                var unknown => throw new ArgumentOutOfRangeException(nameof(report), unknown, "Not a scope fix-line-endings covers."),
             },
             ["check"] = checkOnly,
             ["considered"] = report?.FilesConsidered ?? 0,

@@ -31,9 +31,9 @@ internal static class UpdateToolCommand
         command.Options.Add(ToolPathOption);
         GlobalOptions.AddTo(command);
 
-        command.SetAction(CommandRunner.Wrap(Name, (context, cancellationToken) => context.Get<ToolUpdateService>().RunAsync(
+        CommandRunner.Wire(command, (context, cancellationToken) => context.Get<ToolUpdateService>().RunAsync(
             new ToolUpdateRequest(context.ParseResult.GetValue(WaitOption), context.ParseResult.GetValue(ToolPathOption)),
-            cancellationToken)));
+            cancellationToken));
 
         return command;
     }

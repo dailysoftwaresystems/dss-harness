@@ -2099,8 +2099,8 @@ tool replaces, where a green result had quietly stopped meaning anything.
   its directory reaches that PATH, and never required. One that will not start once the leg is
   running fails the leg, naming the program and the reason the system gave: never a skip, and never
   `poisoned`.
-- A leg-running command asked for `--json` answers with its ledger whatever ended it, once its
-  command line was read: a refusal before any leg was placed, a selection no host could take, a
+- A leg-running command asked for `--json` answers with its ledger whatever ended it: a command
+  line the parser refuses, a refusal before any leg was placed, a selection no host could take, a
   log another run holds, a refusal while the legs ran - each is the document too, with the code
   the process exits with and the line it ends on. An interruption is said as one: `cancelled`,
   with exit 130, so a script never reads it as red. A machine that dispatched a leg reads the
@@ -2112,11 +2112,14 @@ tool replaces, where a green result had quietly stopped meaning anything.
   their own document holding nothing, after `exitCode` and `summary` (`ReportJson.Stopped`);
   `check-mutations --list` with its listing, no legs; and `read-anchor` and `read-anchors`,
   whose document is an array, with that array empty - the process's exit code and the line it
-  ends on say the rest. Each command registers which with `CommandRunner.Wrap` (`JsonAnswer`), so
-  the plumbing answers for it without choosing by its name, both where it stops the command
-  itself and where the body answers with no document - a usage error or a refusal returned
-  before anything is weighed (`CommandRunner.Report`): a command asked for `--json` answers
-  with one document on every exit.
+  ends on say the rest. Each command registers which where it is wired (`CommandRunner.Wire`,
+  `JsonAnswer`), so the plumbing answers for it without choosing by its name: where the parser
+  refuses its command line, the first error the line it ends on, wherever the parser itself read
+  `--json` as that command's own and set - never as another option's value, after `--` or before
+  the command's name (`CommandRunner.UnparsedAsync`); where it stops the command itself; and
+  where the body answers with no document - a usage error or a refusal returned before anything
+  is weighed (`CommandRunner.Report`): a command asked for `--json` answers with one document on
+  every exit.
 - An emulated leg's emulator has passed its witness on that host before the leg starts.
 
 ### Inputs that hold still

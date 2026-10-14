@@ -43,7 +43,7 @@ internal static class SyncServeCommand
         command.Arguments.Add(ArgumentsArgument);
         GlobalOptions.AddTo(command);
 
-        command.SetAction(CommandRunner.Wrap(Name, async (context, cancellationToken) =>
+        CommandRunner.Wire(command, async (context, cancellationToken) =>
         {
             var operation = context.ParseResult.GetRequiredValue(OperationArgument);
             var arguments = context.ParseResult.GetRequiredValue(ArgumentsArgument);
@@ -189,7 +189,7 @@ internal static class SyncServeCommand
                         HarnessExit.UsageError,
                         $"'{operation}' is not a sync operation this build serves.");
             }
-        }));
+        });
 
         return command;
     }

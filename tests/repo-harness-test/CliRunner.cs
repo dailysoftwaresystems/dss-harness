@@ -107,6 +107,34 @@ public static class CliRunner
         }
     }
 
+    /// <summary>The usage line of a command's own help - the first line under <c>Usage:</c> - trimmed; none where there is none.</summary>
+    /// <param name="helpOutput">What the command's own help printed.</param>
+    public static string? UsageLine(string helpOutput)
+    {
+        ArgumentNullException.ThrowIfNull(helpOutput);
+
+        return helpOutput
+            .Split('\n')
+            .SkipWhile(line => !line.StartsWith("Usage:", StringComparison.Ordinal))
+            .Skip(1)
+            .FirstOrDefault(line => line.Trim().Length > 0)
+            ?.Trim();
+    }
+
+    /// <summary>
+    /// The arguments a command takes, required or not, in order, each as the usage line of its own help writes it:
+    /// <c>&lt;name&gt;</c>, <c>[&lt;name&gt;]</c>, <c>&lt;names&gt;...</c>.
+    /// </summary>
+    /// <param name="helpOutput">What the command's own help printed.</param>
+    public static IReadOnlyList<string> Arguments(string helpOutput)
+        => [.. (UsageLine(helpOutput) ?? string.Empty)
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Where(token => token.StartsWith('<') || token.StartsWith("[<", StringComparison.Ordinal))];
+
+    /// <summary>How many arguments a command requires, as the usage line of its own help names them.</summary>
+    /// <param name="helpOutput">What the command's own help printed.</param>
+    public static int RequiredArguments(string helpOutput) => Arguments(helpOutput).Count(token => token.StartsWith('<'));
+
     /// <summary>
     /// Reads the CLI assembly's path from this assembly's metadata, where the build put it
     /// by asking the CLI project for its own output path. Guessing it from directory names

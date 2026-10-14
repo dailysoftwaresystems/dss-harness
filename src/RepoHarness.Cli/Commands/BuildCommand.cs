@@ -56,7 +56,7 @@ internal static class BuildCommand
         command.Options.Add(DispatchOptions.Here);
         GlobalOptions.AddTo(command);
 
-        command.SetAction(CommandRunner.Wrap(Name, async (context, run, cancellationToken) =>
+        CommandRunner.Wire(command, async (context, run, cancellationToken) =>
         {
             var arguments = context.ParseResult;
 
@@ -86,7 +86,7 @@ internal static class BuildCommand
                     (work, token) => BuildLegAsync(builds, work, token),
                     cancellationToken)
                 .ConfigureAwait(false);
-        }, JsonAnswer.Ledger(JsonOption)));
+        }, JsonAnswer.Ledger(JsonOption));
 
         return command;
     }

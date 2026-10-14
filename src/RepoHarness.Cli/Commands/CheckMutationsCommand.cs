@@ -85,7 +85,7 @@ internal static class CheckMutationsCommand
         command.Options.Add(DispatchOptions.Here);
         GlobalOptions.AddTo(command);
 
-        command.SetAction(CommandRunner.Wrap(Name, async (context, run, cancellationToken) =>
+        CommandRunner.Wire(command, async (context, run, cancellationToken) =>
         {
             var arguments = context.ParseResult;
             var list = arguments.GetValue(ListOption);
@@ -121,7 +121,7 @@ internal static class CheckMutationsCommand
             return list
                 ? await service.ListAsync(request, cancellationToken).ConfigureAwait(false)
                 : await service.RunAsync(request, run!, cancellationToken).ConfigureAwait(false);
-        }, beginsRun: arguments => !arguments.GetValue(ListOption), Answer));
+        }, beginsRun: arguments => !arguments.GetValue(ListOption), Answer);
 
         return command;
     }

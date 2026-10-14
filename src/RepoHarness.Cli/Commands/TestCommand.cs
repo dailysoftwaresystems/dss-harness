@@ -83,7 +83,7 @@ internal static class TestCommand
         command.Options.Add(DispatchOptions.Here);
         GlobalOptions.AddTo(command);
 
-        command.SetAction(CommandRunner.Wrap(Name, async (context, run, cancellationToken) =>
+        CommandRunner.Wire(command, async (context, run, cancellationToken) =>
         {
             var arguments = context.ParseResult;
 
@@ -123,7 +123,7 @@ internal static class TestCommand
                     (work, token) => RunLegAsync(builds, tests, context.Get<CMakeToolchainReader>(), work, filter, excludes, labels, skipBuild, token),
                     cancellationToken)
                 .ConfigureAwait(false);
-        }, JsonAnswer.Ledger(JsonOption)));
+        }, JsonAnswer.Ledger(JsonOption));
 
         return command;
     }

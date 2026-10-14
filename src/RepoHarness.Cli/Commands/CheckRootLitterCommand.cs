@@ -17,7 +17,7 @@ internal static class CheckRootLitterCommand
 
         GlobalOptions.AddTo(command);
 
-        command.SetAction(CommandRunner.Wrap(Name, async (context, cancellationToken) =>
+        CommandRunner.Wire(command, async (context, cancellationToken) =>
         {
             var report = await context.Get<IRootLitterService>()
                 .CheckAsync(context.Directory, cancellationToken)
@@ -34,7 +34,7 @@ internal static class CheckRootLitterCommand
             return CommandOutcome.Refused(
                 $"{report.All.Count} loose entr{(report.All.Count == 1 ? "y" : "ies")} at the root of {report.Root}",
                 [.. report.All]);
-        }));
+        });
 
         return command;
     }
