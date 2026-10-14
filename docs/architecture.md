@@ -41,12 +41,15 @@ boundary rather than by discipline.
 
 ### The platform layer
 
-`HostPlatform`, `FilePermissionsFactory` and `ProcessTableFactory` are the **only**
-types that observe the operating system. Everything else depends on `IHostPlatform`,
-`IFilePermissions`, `IProcessTable`, `IProcessRunner` and `IFileSystem`.
+`HostPlatform`, `FilePermissionsFactory` and `ProcessTableFactory` are where the tool learns
+which operating system it runs on and builds what differs by it. Everything above them depends
+on `IHostPlatform`, `IFilePermissions`, `IProcessTable`, `IProcessRunner` and `IFileSystem`.
+Below that seam a few primitives ask the runtime for one fact each, where nothing else is
+asked - `PhysicalFileSystem`, `ProcessRunner`, `DetachedProcessLauncher`, `UserState`,
+`WslDiskImages`, `CMakeToolchainReader` and the command that holds a host awake.
 
 A platform-specific implementation is created only where behaviour genuinely
-differs. Today that is two families of behaviour.
+differs. Today that is three families of behaviour.
 
 **File permissions**: making a file readable only by its owner, deciding whether a file
 is a program at all, and whether other users can read or change a file. Unix answers
@@ -58,6 +61,12 @@ its start time and its command line, which is what a leg's contention check read
 Windows publishes it through WMI, Linux through `/proc`, macOS through `ps`. Behind the
 seam so that nothing above it branches on the operating system to find out, and so a test
 can say what the machine was running without the machine having to be running it.
+
+**The input watch**: what a leg's work hears change among its inputs while it runs. On
+Linux every watch of a process goes through one inotify instance the process calls itself
+(`InotifyHub`); elsewhere, and on a Linux whose C library does not give those calls, through
+.NET's watcher (`FileSystemWatcherKind`), each watched directory then taking an instance of
+its own on Linux. `WatchKinds` chooses, in one place, from `IHostPlatform`.
 
 ### Process execution
 
@@ -458,7 +467,7 @@ worktree, names everything it found on one line, each with its remedy, and exits
 - **Held, on Windows.** Looked at last, once every check above has passed: a worktree something
   holds part of is refused on its own, since git's removal would stop part way on it.
   [Removal](#removal) says what holds one.
-- **A mutation worker kept.** The workers kept in the worktree's `.mutations` (see *Mutation
+- **A copy kept in it.** The workers kept in the worktree's `.mutations` (see *Mutation
   testing*) go before it, and are asked about before anything of it is removed or looked through
   for what holds it: one a sweep still running holds keeps the worktree, exit 13, and one that
   cannot be removed, or told for the harness's - its marker cannot be read - keeps it as a failure,
@@ -468,7 +477,10 @@ worktree, names everything it found on one line, each with its remedy, and exits
   that nothing else of the worktree was removed, exit 130. `--force` deletes the worktree with every
   worker in it, one held or one that could not be removed among them, saying which went with it. A
   directory there under a worker's name that no sync made goes with the worktree, as everything
-  else in it does, and is said.
+  else in it does, and is said. The copies its legs work in, kept in its `.legs`, are asked about
+  the same way after the workers, each under the lock a run takes on it: one a run is building in
+  or replacing keeps the worktree, exit 13, one that cannot be removed keeps it as a failure, exit
+  20, and `--force` deletes them with it.
 
 Without `--force`, when the check cannot be finished, because git cannot answer, a record cannot
 be read or its directory found, or, on Windows, a directory in it cannot be looked through for
@@ -558,11 +570,12 @@ on is exit 21, naming what is in and how running it again finishes.
 `DryRuns.Outcome` is the one place that decides it: each verb composes its dry run's outcome - its summary and its
 lines, or the refusal or failure it met - and hands it over with how the request stands (`RequestStanding`: sound, a
 consent nobody gave, or refused; none where what it weighs could not be read) and with who holds what its `--apply`
-takes (`TreeHolders.Held`). Read downwards, the first case that
+takes (`TreeHeld`, as `TreeHolders.Read` reads it). Read downwards, the first case that
 applies gives the code: delete-agent run from inside the worktree it removes is refused (13), nothing read; what the
 command weighs that cannot be read - for a live agent's deletion, which git worktree it is (`StampOf`, the one read
 both make) - fails it (20); a path, a row or an option that is refused, 13; cells of the rows that need a consent
-nobody gave (`--accept-lost`, `--accept-over`), 13 - the same summary and lines, the line 'to write them:' among them,
+nobody gave (`--accept-lost`, `--accept-over`), 13 - the same summary and lines, the line 'to write them:' (delete-agent's
+'to do it:') among them,
 since a plan of rows still shows every such cell (`AnchorBatchMode.Plan`) and the rule is the command's, not the
 anchors' service's; a run holding a tree the `--apply` takes, or a lock file that cannot be read, 13 - save where what
 the command weighs could not be read, which keeps its own code from above and still names the holder on its lines -
@@ -581,14 +594,16 @@ cannot be kept - is not in a dry run, so 0 says that nothing known now stops the
 
 **Who holds the tree.** Each dry run asks the run lock, last, the question its `--apply` asks first, with the very
 requests the apply takes (`AgentService.Holds`, the one spelling of them, shared with the hold the apply takes): the
-main tree and the agent's worktree for a fold, a refresh and a deletion, the worktree alone for a rebase. Every live
+main tree and the agent's worktree for a fold, a refresh and a live agent's deletion; the worktree alone for a rebase,
+and for the deletion of an agent already closed or whose worktree is gone. Every live
 holder in the way is printed on a `held now:` line (`RunLock.Holders`, read as `HeldBy` reads: nothing reclaimed,
 nothing written), said with where that run's leg stands, from this machine's record of heavy legs (`HeavyLegSlots.Line`,
-joined by `TreeHolders`, the one sentence: it runs with no slot asked, it waits in line with how many are ahead, or it
-holds a slot; a leg on an ssh host's own record says). A run holding a leg copy or a host's copy of the worktree is
+joined by `TreeHolders`, the one sentence: it waits in line with how many are ahead, or it holds a slot, or a leg on
+an ssh host's own record says; a run that asked for no slot is said by the lock's own words alone, `running
+'<command>'`). A run holding a leg copy or a host's copy of the worktree is
 not named by a fold's, a refresh's or a rebase's dry run, and their `--apply` is not refused for it: a copy is not the
 worktree. delete-agent, which removes every copy with the worktree, names a copy a run holds - a host's through the
-lock (`IHostCopyRemover.HeldNow`, the same `RemovalLock` the removal takes), a leg copy's or a mutation worker's
+lock (`IHostCopyRemover.HeldNowAsync`, the same `RemovalLock` the removal takes), a leg copy's or a mutation worker's
 through the measure-only question its removal asks (`WorktreeService.CopiesHeldAsync`), each in its family's own
 words, and asks them on every state the agent may stand in - live, closed or gone - since the removal that asks them
 is the same; its dry run asks that host's `.legs` nothing, as its removal asks nothing of them. Each line the two
@@ -1181,7 +1196,7 @@ Three concepts that are frequently conflated, kept separate here:
 | Concept | Question it answers | Values |
 |---|---|---|
 | **Host** | Where does this run, and how is it reached? | this machine, a WSL distribution, an ssh host |
-| **Tree** | Which checkout am I acting on? | main checkout, a worktree, a host's copy |
+| **Tree** | Which checkout am I acting on? | main checkout, a worktree, a host's copy, a leg's own copy in the tree's `.legs` |
 | **Leg** | One unit of work with a verdict | `(os, processor, emulator?, project, toolchain, config, sanitizer?)` |
 
 A worktree is **not** a host. It is a tree, and it composes with any host. Keeping
@@ -1229,13 +1244,14 @@ failures compare.
 
 A leg's work happens in a tree, and which tree is not where it runs: a leg a host runs works in
 that host's copy of its tree, whatever anything else says. A leg this machine runs itself works
-where the first of these says anything - `--local-copy` or `--in-place` on the command, for that
-run of `build`, `test` or `run`; a runner's `writesTree`, which works in place, its legs refused
-before any host is measured for a leg a host would run and for `--local-copy`, since what it wrote
-in a copy the next sync would make the tree again - and a run check's runner, which runs within the
-leg's own work, is refused instead, wherever the leg it checks would work in a copy; the leg's own
-`localCopy`, `true` or `false`;
-the repository's `defaults.localCopy`; and, where none says, its tree itself. The key is refused
+where the first of these says anything: `--local-copy` or `--in-place` on the command, for that
+run of `build`, `test` or `run`; a runner's `writesTree`, which works in place; the leg's own
+`localCopy`, `true` or `false`; the repository's `defaults.localCopy`; and, where none says, its
+tree itself. A runner that writes the tree is refused before any host is measured where a host
+would run its leg, and with `--local-copy`, since what it wrote in a copy the next sync would make
+the tree again; a run check whose runner writes the tree runs within the leg's own work, and is
+refused wherever the leg it checks would work in a copy (`LegTrees.InLocalCopy`, the rule the
+placement places a leg by). The key is refused
 when the configuration is read on a leg that names a host, whichever value it gives, since a
 host's leg always works in that host's copy; the default never is, for it says nothing of such a
 leg. Where
@@ -1523,8 +1539,10 @@ PowerShell there, which all read a leading `~` as the home.
 - **Every line of DssHarness's own**, whatever the command: a leg's reason, a lock or
   free-space message, a refusal, a failure line quoting git or the system, and under
   `--verbose` a defect's report.
-- **The paths in its ledger**: `runDirectory`, a leg's `detail`, `records` and `space`, what a
-  timing pattern matched, and the instance a developer environment was set up from. The machine
+- **The paths in its ledger**: `runDirectory` and `mutationRecord`, a leg's `detail`, `tree`,
+  `records`, each of its `logs` and its `space`, an arm's and a control's `records`, the admission's
+  record and room, what a timing pattern matched, and the instance a developer environment was set
+  up from. The machine
   that asked names each leg's own `records` in its `logs of` lines; the host's `runDirectory`
   reaches it as `--json` alone. A survey's answer
   names where each program is, the mount of a filesystem, and every reason the same way. The
@@ -1669,7 +1687,7 @@ from the report.
 | `passed` | Ran to completion, succeeded, and its success pattern matched | no |
 | `failed` | Ran to completion and reported failure; or a mutation arm's build failed at a step that is no object depending on its site - a link, another object - or named no step that failed | **yes** |
 | `unwitnessed` | Exited 0, but its success pattern never matched; or a mutation arm's build, or its paired control's, passed with an object that depends on a site not rebuilt | **yes** |
-| `inputs-moved` | Files the tests read changed while they ran; or, for a leg on another machine, a file its host's copy needed changed or was removed after the run began, before it was carried there, and nothing of the leg ran | **yes** |
+| `inputs-moved` | Files the tests read changed while they ran; or, for a leg on a copy of its tree - a host's, or its own in the tree's `.legs` - a file was written, appeared or went while the tree was read, a file to carry changed after it was read, another command synced the copy between this run's sync and the leg taking it, or under `--use-staged` the copy is part made, absent or not this tool's; and nothing of the leg ran | **yes** |
 | `unmeasured` | Whether those files held still could not be established - where they could not be watched at all, with none of the leg's work run; or what a phase printed could not be read back from its log where a verdict was to be read from it; or ninja's log could not be read around a mutation arm's build, so nothing witnessed what it rebuilt; or the report a mutation arm's run wrote, or its binary's unmutated run, could not be read from its file | **yes** |
 | `contended` | Another process used the leg's build directory while it ran | **yes** |
 | `skipped-not-selected` | Filtered out by `--legs`; or a mutation arm `--arms`, or its S row, leaves out of the leg, or `--pending` leaves out because its `passed` holds, and a leg whose sweep drives no arm | no |
@@ -2128,7 +2146,8 @@ a buffer and a thread, and on Linux, where it stands in, an inotify instance of 
 On Linux there is no such bound. Every directory that holds an input is watched for its
 own entries, each above one for the names of the directories in it, and none all the way
 down, through one inotify instance the process makes at its first watch and keeps until it
-ends, read by one thread. .NET's watcher takes an
+ends - or until reading it fails, which ends every watch on it `unmeasured`, and the next watch
+makes another - read by one thread. .NET's watcher takes an
 instance for each directory it watches, and measured, three legs at once in one
 distribution held 120 of a user's 128; through the one instance they hold three. The
 kernel gives one watch for a directory however often it is named, so spans watching the
@@ -2171,7 +2190,7 @@ gate](#the-gate)).
 
 On Linux the reason can be one of two limits, each said with what `/proc` shows of it:
 this user's inotify instances all taken - `fs.inotify.max_user_instances is 128, and
-/proc shows 128 held: 51 by pid 4242 (dssharness), ...` and `A leg needs one.` - or its
+/proc shows 128 held: 51 by pid 4242 (dssharness), ...` and `This process needs one, however many legs it runs.` - or its
 watches run out - `fs.inotify.max_user_watches is 8192; this work watches 3120
 directory(ies) - those its inputs lie in and those above them - one watch each, and /proc
 shows 6011 held: ...`. The holders are this
@@ -2181,9 +2200,10 @@ admission does not count them: at one instance a process this tool is not what h
 them, and another program's hold ends on no schedule this tool can read. What the person
 can act on is who holds them, which is what the leg says.
 
-A leg on another machine tests that machine's copy, which holds still under it; what can
-move is the tree here, before the copy is made of it. So a run reads each tree its hosts'
-copies are made of once, as it begins and before any leg's work, and every copy is made from
+A leg on another machine tests that machine's copy, and a leg here that works in a copy of
+its tree tests that copy; each holds still under it, and what can move is the tree, before the
+copy is made of it. So a run reads each tree its copies are made of - its hosts' and its legs'
+own here - once, as it begins and before any leg's work, and every copy is made from
 that reading, as [Syncing a tree](#syncing-a-tree) says: an edit put back before a host's
 sync comes round leaves no trace there, and where a file to be carried no longer holds what
 was read - edited, or removed - the legs on that copy are `inputs-moved`, naming it, with
@@ -2193,11 +2213,11 @@ it, naming the path. The run says which commit it read the tree at, and each leg
 it again with its verdict. Measured: an edit a mutation-testing
 tool left in the tree for 7.3 seconds of a run, and put back, was built and tested on a Mac
 and reported `failed`, while the tree was the same at the run's start and end. A run with
-`--use-staged` reads nothing, and tests whatever the copies hold. A leg on this machine is
-held to its own guards instead, which watch its inputs while it builds and while it tests: an
-edit made after the run began and left in place reaches a leg here that starts after it, which
-builds and tests the edited tree from start to end, never a mix of two - so one run's legs
-here and on hosts can have tested different trees.
+`--use-staged` reads nothing, and tests whatever the copies hold. A leg that works in its tree
+itself on this machine is held to its own guards instead, which watch its inputs while it builds
+and while it tests: an edit made after the run began and left in place reaches such a leg that
+starts after it, which builds and tests the edited tree from start to end, never a mix of two -
+so one run's legs in their trees here and its legs on copies can have tested different trees.
 
 ### Clocks are never trusted to order anything
 
@@ -2771,8 +2791,9 @@ directory here cannot drift apart.
   same directory, and only one of them deleted somebody's files; the marker is the only thing left
   that can say so.
 - **What survives an adoption is narrower than it looks.** Its `.git` and so every commit, branch
-  and tag in it, the rest of `.harness-config`, the worktrees root and whatever `sync.neverTransfer`
-  names are protected from the deletion — though `config.json` there is replaced with this tree's,
+  and tag in it, its `.orchestrators`, `.mutations` and `.legs`, the rest of `.harness-config` save
+  the runner's actions, the worktrees root and whatever `sync.neverTransfer` names are protected
+  from the deletion — though `config.json` and the actions there are replaced with this tree's,
   and its git HEAD is moved, detached, to this tree's commit where it names another, both of which the refusal says. The ignore list is *not* read from that host: it is this tree's, listed by asking
   git which ignored files exist **here**. A directory only the host has — a build tree under a name
   `sync.neverTransfer` does not carry, a `node_modules`, a virtual environment — is ignored by
@@ -2801,7 +2822,8 @@ directory here cannot drift apart.
   says to run with `--dry-run` to see the list - and exits 13 with each refusal the sync would
   make, in its own words: both, for a directory not made here that is over the bound too. Who holds
   a worktree's copy is read, and nothing recorded. A dry run is the answer to "would this go
-  through": a code of 0 says only that nothing known at that moment stops it.
+  through": a code of 0 says only that nothing known at that moment stops it, as every dry run's
+  does (see *What a dry run answers*).
 - **The copy is created, with its parents,** when the declared `repositoryPath` is not there, so
   the first sync to a fresh host needs no hand-made clone. A path that exists and is not a
   directory, or that cannot be created, is a named failure — never a silent fallback to
@@ -2902,8 +2924,9 @@ directory here cannot drift apart.
   sync. A copy that only ever gains files is not a copy of the tree: a deleted source file keeps
   compiling, a deleted test keeps running, and a renamed file exists twice, so the leg's verdict
   describes a tree that no longer exists.
-- **The never-transfer floor is also a never-delete floor.** `.git`, `.harness-config`, the
-  worktrees root and everything under `sync.neverTransfer` are neither written nor deleted. A
+- **The never-transfer floor is also a never-delete floor.** `.git`, `.orchestrators`,
+  `.mutations`, `.legs`, the worktrees root, everything under `sync.neverTransfer`, and all of
+  `.harness-config` but `config.json` and the runner's actions are neither written nor deleted. A
   path the harness will not write is one it cannot know the source lacks, so deleting it would
   remove the host's own state rather than a file the source gave up — including the build
   directories that make an incremental build possible. `sync.exclude` is different: the source
@@ -2928,17 +2951,20 @@ directory here cannot drift apart.
   20,000-directory budget before it reached most of the tree, and said so on every sync. The
   harness's own directory is searched all the same, though git ignores most of it by design,
   because a `.secrets` there is what the search was written to find - save what the harness writes
-  there as it works, each run's records, the record of host copies, the record of mutation verdicts
-  and each action's own `build` and `artifacts`: the run state of whichever machine made it, which no
+  there as it works, each run's records, the record of host copies, the record of mutation verdicts,
+  the dependency sources a mutation worker is given and each action's own `build` and `artifacts`: the run state of whichever machine made it, which no
   sync carries and no one edits by hand, where a name neither counts nor is looked for below. Counted, a fresh worktree's
   first run, its own `build` not made yet, was told the `build` entry `init` writes protected
   nothing, having found an action's working space, and to write `**/build`, which would withhold
   every source directory of that name too. A search that still runs out says so; it never reads as
   having found none.
-- **The copy gets `.harness-config/config.json`, and nothing else from that directory.** A leg
-  placed on a host runs DssHarness there, and DssHarness in a directory holding no configuration
-  refuses as not initialised — so without it the copy is a tree no leg can run in. The rest of the
-  directory is connection data, credentials, locks and logs, each local to a machine by design.
+- **The copy gets `.harness-config/config.json` and the runner's actions, and nothing else from
+  that directory.** A leg placed on a host runs DssHarness there, and DssHarness in a directory
+  holding no configuration refuses as not initialised — so without it the copy is a tree no leg can
+  run in. The actions cross as any file of the tree does - never what git ignores, never an
+  action's own `build` or `artifacts` - since a leg there reads its runner's action file from the
+  copy. The rest of the directory is connection data, credentials, runner values, locks and run
+  state, each local to a machine by design.
 - **Deletion is bounded.** A sync that would delete more than `sync.maxDeleteFraction` of the
   copy stops and changes nothing. A mistyped repository path makes the source look empty, which
   is indistinguishable from a source that deleted everything, and without the bound that empties
@@ -3335,7 +3361,8 @@ sentences `check-mutations` refuses a registry in (`RegistryValidation.Refusal`)
 readable and carried - before the validation, and weighs `--arms` and the report arguments after it.
 
 A registry two sides both changed is merged by arm, never line against line
-(`MutationRegistryMerge.Merge`): a function of three texts' bytes - what both sides last held, where
+(`MutationRegistryMerge.Merge`, which a fold, a rebase and a refresh call with no option given -
+see *Seeding and folding*): a function of three texts' bytes - what both sides last held, where
 they held one, the main tree's and an agent's - that reads no file, no clock and no configuration.
 Each text is read, through the one reader, as the lines above its first row down to their last blank
 line, its segments - each one row with the comment and blank lines directly above it - and the
@@ -3831,7 +3858,8 @@ configure would be given something else, says so: the causes kept beside the key
 listing exits `0` whatever is pending - a listing is no gate - and otherwise as a sweep gives it:
 `12` for the registry or the configuration, `10` for the command line, `20` where git could not say
 what a tree ignores, and `3` where a tree changed while it was read. It is refused with `--pending`,
-`--self-test`, `--force-lock`, `--use-staged` and `--here`, each in one sentence: it sweeps nothing.
+`--self-test`, `--force-lock`, `--use-staged`, `--here` and the hidden `--held`, each in one sentence:
+it sweeps nothing.
 
 `check-mutations --pending` drives, on each leg, only the arms with no recorded `passed` that holds
 (`MutationLegRunner`, `ArmHolding`); `--arms` narrows the arms it weighs, and a sweep without it

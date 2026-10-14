@@ -264,7 +264,7 @@ public sealed class CleanService(
                 // Asked, and nothing moved: a dry run ends as the clean would, so a leg a run is building is
                 // refused-locked here too, with what the directory holds still said and still in its space.
                 return _runLock.HeldBy(layout, building) is { } buildingHeld
-                    ? leg.Entry(LegVerdict.RefusedLocked, $"{buildingHeld} {said}.") with { Space = space }
+                    ? leg.Entry(LegVerdict.RefusedLocked, $"{buildingHeld} {said}") with { Space = space }
                     : leg.Entry(LegVerdict.Passed, said) with { Space = space };
             }
 

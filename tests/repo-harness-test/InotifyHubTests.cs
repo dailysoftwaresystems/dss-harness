@@ -171,7 +171,7 @@ public sealed class InotifyHubTests
         Assert.Equal(
             "the inputs could not be watched, so none of this work was run: this user's inotify instances are all taken - "
             + "fs.inotify.max_user_instances is 128, and /proc shows 4 held: 3 by pid 99 (node), 1 by pid 4242 "
-            + "(dssharness). A leg needs one.",
+            + "(dssharness). This process needs one, however many legs it runs.",
             refused.Message);
         Assert.Equal(-1, hub.Instance);
         Assert.Empty(calls.Added);

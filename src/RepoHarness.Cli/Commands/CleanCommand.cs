@@ -16,7 +16,7 @@ internal static class CleanCommand
 
     private static readonly Option<bool> DryRunOption = new(CleanService.DryRunOption)
     {
-        Description = "Say what each leg's build directory holds and the room left on its filesystem, and remove nothing.",
+        Description = "Say what each leg's build directory, workers and copies hold and the room left on its filesystem, remove nothing, and exit as the clean would: 13 where a run holds the leg, a sweep its workers or a run its copy.",
     };
 
     private static readonly Option<bool> JsonOption = new("--json")
@@ -28,7 +28,7 @@ internal static class CleanCommand
     {
         var command = new Command(
             Name,
-            "Remove each selected leg's build directory, and the mutation workers its sweeps keep in its tree, wherever the leg runs, writing nothing there first, so a full disk can be freed.");
+            "Remove each selected leg's build directory, the mutation workers its sweeps keep in its tree, and the copies of its tree it works in on this machine (.legs), wherever the leg runs, writing nothing there first, so a full disk can be freed.");
 
         command.Options.Add(LegsOption);
         command.Options.Add(DryRunOption);

@@ -40,13 +40,7 @@ public static class LegTrees
     /// </summary>
     /// <param name="config">The whole configuration.</param>
     /// <param name="leg">The leg.</param>
-    public static bool Configured(HarnessConfig config, LegConfig leg)
-    {
-        ArgumentNullException.ThrowIfNull(config);
-        ArgumentNullException.ThrowIfNull(leg);
-
-        return leg.LocalCopy ?? config.Defaults.LocalCopy;
-    }
+    private static bool Configured(HarnessConfig config, LegConfig leg) => leg.LocalCopy ?? config.Defaults.LocalCopy;
 
     /// <summary>
     /// Whether <paramref name="leg"/>, where this machine runs it, works in a copy of its tree kept in the tree's own .legs:

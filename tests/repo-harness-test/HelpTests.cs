@@ -284,8 +284,8 @@ public sealed partial class HelpTests
             + "of its own that git records no worktree at, so one below the worktrees root is said as any such directory: "
             + "list-worktree warns of it, and delete-orchestrator, and delete-worktree of an orchestrator's directory with or "
             + $"without --force, refuse ({HarnessExit.Refused}) while one is below it.",
-            "built whole before it drives an arm. Of the tree itself a sweep reads every file and writes none: what it writes "
-            + "there - its workers, and the claims on them - is in .mutations alone.",
+            "built whole before it drives an arm. Of the tree itself a sweep reads every file and writes none: its workers, and "
+            + "the claims on them, are in .mutations, and its run's records in .harness-config, as every run's are.",
             "Its workers are kept in the leg's own tree, as a sweep's are, in a family of their own - <tree>/.mutations/<key>s-<n>,",
             "What the sweep timed across a clock step or a host sleep is said on the leg's line, among why its timings are suspect, and "
             + "changes no verdict: an arm's run and the unmutated run that bounds it, however each ended, and what each of its builds says "
@@ -349,7 +349,7 @@ public sealed partial class HelpTests
             + "golden output, a plugin it opens - each a path, everything below a directory, or **/name at any depth: what the "
             + "sweep's reading of the tree holds of each is part of the key of every arm that runner runs.",
             "A runner given no file, an entry outside the tree, one holding a '*' anywhere but a leading '**/', and one naming the "
-            + "whole tree ('.'), are refused; so is a runner no A row of the registry names, when the registry is read.",
+            + "whole tree ('.'), are refused; so is a runner no TEST-RED arm's A row names, when the registry is read.",
             "A file a test binary reads at run time that runReads does not name is read by no part of a key: editing it moves "
             + "none, and a recorded passed it would change still holds.",
             "a key two workers read otherwise, or one a worker could not read, fails the leg as violated, naming the arm, the workers and "
@@ -609,8 +609,9 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains(
             "and one working in a build directory of another tree of the repository on that machine, a worktree's, an agent's or the main "
-            + "checkout's, as that tree's leg's: 'worktree o1/xa's leg 'linux-debug''. Only what no tree there accounts for is nobody's known, "
-            + "and where the other trees could not be listed the line says so.",
+            + "checkout's, or a copy one of them keeps in its .legs, as that tree's leg's: 'worktree o1/xa's leg 'linux-debug'', or "
+            + "'worktree o1/xa's leg copy's leg 'linux-debug''. Only what no tree there accounts for is nobody's known, and where the "
+            + "other trees could not be listed the line says so.",
             said,
             StringComparison.Ordinal);
     }
@@ -625,8 +626,9 @@ public sealed partial class HelpTests
         var said = Prose.Words((await CliRunner.RunAsync(["help", "space"], TestContext.Current.CancellationToken)).StandardOutput);
 
         Assert.Contains(
-            "in this tree's copy, or else the most any other copy of the repository on that host recorded - the main checkout's, or a "
-            + "worktree's, an agent's or a plain one, named in the line - less what the directory already holds.",
+            "in this tree's copy, or else the most any other copy of the repository on that host recorded - the main checkout's, a "
+            + "worktree's, an agent's or a plain one, or a leg copy of any of them, named in the line - less what the directory already "
+            + "holds.",
             said,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -835,7 +837,7 @@ public sealed partial class HelpTests
             "reads it as a shallow repository from then on, said too, which 'git fetch --unshallow'",
             "sync makes its index hold the files it carried, so a build there fingerprints its",
             "                 how much git history a copy is given: 'head' (the commit HEAD names,",
-            "remoteExcludes are given to every leg a host runs, beside --exclude's, and to none",
+            "remoteExcludes are given to every leg that works in a copy - a host's, or its own in",
             "reads there unless the args or a preset choose tests by name too - or beside a test",
             "preset that takes a union or cannot be read. So is a selection ctest could only find",
             "another leaves out by the same part of a test - its name, or a label - where either is",
@@ -1002,6 +1004,24 @@ public sealed partial class HelpTests
                 + "defaults.localCopy.",
             Prose.Words(result.StandardOutput),
             StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Each command's own description says what it does to the copies a tree keeps, and list-orchestrator's --json the
+    /// listing it prints - never the outcome of an --apply it does not have.
+    /// </summary>
+    [Theory]
+    [InlineData("list-orchestrator", "--json Print the listing as one JSON document.")]
+    [InlineData("fold-agent", "--json Print the outcome as one JSON document, the whole of standard output:")]
+    [InlineData("delete-worktree", "and the copies kept in each - the mutation workers in .mutations, and on this machine the leg copies in .legs;")]
+    [InlineData("clean", "and the copies of its tree it works in on this machine (.legs), wherever the leg runs,")]
+    [InlineData("clean", "remove nothing, and exit as the clean would: 13 where a run holds the leg, a sweep its workers or a run its copy.")]
+    public async Task EachCommandsOwnHelp_SaysWhatItDoesToCopies_AndWhatItsJsonPrints(string command, string expected)
+    {
+        var result = await CliRunner.RunAsync([command, "--help"], TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains(expected, Prose.Words(result.StandardOutput), StringComparison.Ordinal);
     }
 
     /// <summary>Both given, --local-copy and --in-place are a usage error; neither is passed to a host.</summary>
@@ -2274,9 +2294,10 @@ public sealed partial class HelpTests
             "Dry runs. A dry run of refresh-agent, rebase-agent, fold-agent or delete-agent exits with what its --apply, typed "
             + "with the same arguments, would exit with at that moment: 0 only where that --apply would go through. Where a path, "
             + $"a row, or a consent nobody gave would refuse it, the dry run exits {HarnessExit.Refused}, and where it would fail "
-            + "before writing anything, with that failure's code - and either way it still prints all it weighed, its summary "
-            + "last, on standard error. A run holding what the --apply takes refuses the dry run too: every holder is named on "
-            + $"a 'held now:' line, said with where its run's leg stands, and it exits {HarnessExit.Refused} - save where the dry "
+            + "before writing anything, with that failure's code - and either way it still prints all it weighed on standard "
+            + "output, its summary last, on standard error. A run holding what the --apply takes refuses the dry run too: every "
+            + "holder is named on a 'held now:' line, said with where its run's leg stands where it asked for a heavy-leg slot, "
+            + $"and it exits {HarnessExit.Refused} - save where the dry "
             + "run already failed before writing anything, which keeps its failure's code and names the holder still; "
             + $"delete-agent, whose --apply would go as far as the removal and leave it unfinished, exits {HarnessExit.Incomplete} "
             + "instead where only a copy of the worktree is held, by a run or a sweep, and where the copies kept in the worktree "
@@ -2295,7 +2316,8 @@ public sealed partial class HelpTests
         Assert.Contains(
             "A dry run of the four asks with the very hold its --apply takes, so a run holding what it needs is named and the dry "
             + $"run refused itself, exit {HarnessExit.Refused}, saying that nothing in the request needs correcting; the refusal an "
-            + "--apply gives ends with the same words. A holder is a fact about one moment, so 0 from a dry run never promises the "
+            + "--apply gives names the holder in the words of the dry run's 'held now:' line, where its run's leg stands included. "
+            + "A holder is a fact about one moment, so 0 from a dry run never promises the "
             + "tree will still be free when the --apply is typed.",
             text,
             StringComparison.Ordinal);

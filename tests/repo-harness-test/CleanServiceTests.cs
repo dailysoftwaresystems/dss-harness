@@ -942,6 +942,7 @@ public sealed class CleanServiceTests
             Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
             Assert.StartsWith($"'{temp.Path}' variant '{Variant(harness, config).DirectoryName}' on local is held by ", detail);
             Assert.Contains($"1000 bytes in '{directory}'", detail);
+            Assert.False(detail.EndsWith('.'), "the room ends the detail as it ends a passed one, so a part joined after it reads on: " + detail);
             Assert.Equal(1000, leg.GetProperty("space").GetProperty("buildBytes").GetInt64());
             Assert.True(Directory.Exists(directory), "a dry run removes nothing");
         }

@@ -33,9 +33,6 @@ internal static class OrchestrationArguments
     /// </summary>
     internal static readonly JsonAnswer AgentAnswer = new(Json, (_, exitCode, summary, _, _) => OrchestrationReports.Stopped(exitCode, summary));
 
-    /// <summary>The --json of list-orchestrator, which a listing that stops before it lists anything answers with its listing for, listing nothing.</summary>
-    internal static readonly JsonAnswer ListAnswer = new(Json, (_, exitCode, summary, _, _) => OrchestrationReports.ListStopped(exitCode, summary));
-
     /// <summary>The option that takes a clean three-way merge of a path both trees changed: one name, whichever command takes it.</summary>
     internal static Option<string[]> Merge(string description) => new(FoldAllowances.MergeOption) { HelpName = "path", Description = description };
 }
@@ -179,18 +176,26 @@ internal static class ListOrchestratorCommand
         Arity = ArgumentArity.ZeroOrOne,
     };
 
+    private static readonly Option<bool> JsonOption = new("--json")
+    {
+        Description = "Print the listing as one JSON document.",
+    };
+
+    /// <summary>Its --json, which a listing that stops before it lists anything answers with its listing for, listing nothing.</summary>
+    private static readonly JsonAnswer JsonAnswerOfList = new(JsonOption, (_, exitCode, summary, _, _) => OrchestrationReports.ListStopped(exitCode, summary));
+
     internal static Command Create()
     {
         var command = new Command(Name, "List orchestrators, their agents and where each stands, and worktrees below an orchestrator's directory that no agent records.");
         command.Arguments.Add(NameArgument);
-        command.Options.Add(OrchestrationArguments.Json);
+        command.Options.Add(JsonOption);
         GlobalOptions.AddTo(command);
 
         command.SetAction(CommandRunner.Wrap(
             Name,
             (context, cancellationToken) => context.Get<IOrchestratorService>()
-                .ListAsync(context.Directory, context.ParseResult.GetValue(NameArgument), context.ParseResult.GetValue(OrchestrationArguments.Json), cancellationToken),
-            OrchestrationArguments.ListAnswer));
+                .ListAsync(context.Directory, context.ParseResult.GetValue(NameArgument), context.ParseResult.GetValue(JsonOption), cancellationToken),
+            JsonAnswerOfList));
 
         return command;
     }

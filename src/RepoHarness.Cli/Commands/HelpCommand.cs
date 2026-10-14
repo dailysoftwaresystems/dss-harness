@@ -812,10 +812,11 @@ internal static class HelpCommand
         builder.AppendLine("as that leg's - two legs on one host share its load, which is maxParallelLegs at");
         builder.AppendLine("work, and yours to decide about - and one working in a build directory of another");
         builder.AppendLine("tree of the repository on that machine, a worktree's, an agent's or the main");
-        builder.AppendLine("checkout's, as that tree's leg's: 'worktree o1/xa's leg 'linux-debug''. Only what no");
-        builder.AppendLine("tree there accounts for is nobody's known, and where the other trees could not be");
-        builder.AppendLine("listed the line says so. contention.sharedState says what each tool shares,");
-        builder.AppendLine("in the words the warning uses:");
+        builder.AppendLine("checkout's, or a copy one of them keeps in its .legs, as that tree's leg's:");
+        builder.AppendLine("'worktree o1/xa's leg 'linux-debug'', or 'worktree o1/xa's leg copy's leg");
+        builder.AppendLine("'linux-debug''. Only what no tree there accounts for is nobody's known, and where the");
+        builder.AppendLine("other trees could not be listed the line says so. contention.sharedState says what");
+        builder.AppendLine("each tool shares, in the words the warning uses:");
         builder.AppendLine();
         builder.AppendLine("  \"sharedState\": { \"ccache\": \"the per-user compiler cache\" }");
         builder.AppendLine();
@@ -877,7 +878,7 @@ internal static class HelpCommand
             + "file, a golden output, a plugin it opens - each a path, everything below a directory, or **/name at any depth: what "
             + "the sweep's reading of the tree holds of each is part of the key of every arm that runner runs. A runner given no "
             + "file, an entry outside the tree, one holding a '*' anywhere but a leading '**/', and one naming the whole tree "
-            + "('.'), are refused; so is a runner no A row of the registry names, when the registry is read.");
+            + "('.'), are refused; so is a runner no TEST-RED arm's A row names, when the registry is read.");
         builder.AppendLine();
         builder.AppendLine("The registry");
         builder.AppendLine();
@@ -972,8 +973,9 @@ internal static class HelpCommand
             + "host answers for its own copy. Before every "
             + "sweep each is synced again from one reading of the tree, by content - so its build stays warm, and a site a "
             + "killed sweep left mutated is put back - and built whole before it drives an arm. Of the tree itself a sweep "
-            + "reads every file and writes none: what it writes there - its workers, and the claims on them - is in "
-            + $"{HarnessLayout.MutationsDirectoryName} alone. A sweep makes no copy of its own even where the leg's localCopy "
+            + $"reads every file and writes none: its workers, and the claims on them, are in {HarnessLayout.MutationsDirectoryName}, "
+            + $"and its run's records in {HarnessLayout.DirectoryName}, as every run's are. A sweep makes no copy of its own "
+            + "even where the leg's localCopy "
             + $"or the repository's default ({HarnessLayout.LegsDirectoryName}) says one - its workers are already copies of "
             + "one reading - and reads the dependency sources the leg's build fetched from where the configuration places "
             + "that build: the copy's build directory, where the leg works in one.");
@@ -1119,7 +1121,13 @@ internal static class HelpCommand
             + "what its runner reads at run time, as runReads names it; and the host. No part is a commit, a date, a run, a "
             + "worker or a tree: the same content judged again, in another worker or another tree, comes to the same key. An "
             + "arm a part of whose key could not be read has none. A file a test binary reads at run time that runReads does "
-            + "not name is read by no part of a key: editing it moves none, and a recorded passed it would change still holds.");
+            + "not name is read by no part of a key: editing it moves none, and a recorded passed it would change still holds. "
+            + "Every TEST-RED arm is judged on what its test binary is built from, so after most changes under a large test "
+            + "binary's sources every arm it runs is pending. What a target is built from is what ninja's own records name, "
+            + "so two changes move no key until the object that reads them is compiled again: a file that stands earlier on "
+            + "a search path than the one an unchanged #include found, and a file a command reads without declaring it. "
+            + "ninja rebuilds nothing for either, and a sweep's workers are built by the same records, so a sweep judges the "
+            + "stale object as build and test would; a worker built from clean - after a clean of the leg - sees both.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -1160,7 +1168,8 @@ internal static class HelpCommand
             + "the texts, the tree's files and the settings, never how a target is built, a file its build makes, the "
             + "dependency sources it fetched, a file outside the tree it reads, the compilers or the developer environment - "
             + "only a sweep on the leg's machine reads those. An arm unmoved here whose build is generated from a file that "
-            + "moved since says so. A leg that cannot be swept is said once, above the rows, and never refused; a record that "
+            + "moved since, or whose configure the configuration now gives otherwise, says so on its row. A leg that cannot "
+            + "be swept is said once, above the rows, and never refused; a record that "
             + $"cannot be read is said as a warning. A listing exits {HarnessExit.Success} whatever is pending - it is no gate - "
             + $"and otherwise as a sweep would: {HarnessExit.CommandFailed} where git could not say what a tree ignores, and "
             + $"{LegExit.InputsMoved} where a tree changed while it was read.");
@@ -1449,7 +1458,7 @@ internal static class HelpCommand
         builder.AppendLine($"  {ToolPackage.Command} test                    Build and test every selected leg");
         builder.AppendLine($"  {ToolPackage.Command} run <runner>            Run a predefined runner across its legs");
         builder.AppendLine($"  {ToolPackage.Command} check-mutations         Prove each selected leg's tests can fail, arm by arm");
-        builder.AppendLine($"  {ToolPackage.Command} clean                   Remove legs' build directories and mutation workers");
+        builder.AppendLine($"  {ToolPackage.Command} clean                   Remove legs' builds, mutation workers and copies");
         builder.AppendLine($"  {ToolPackage.Command} list-worktree           Show worktrees and the copies hosts keep of them");
         builder.AppendLine($"  {ToolPackage.Command} list-orchestrator       Show orchestrators and where each agent stands");
         builder.AppendLine($"  {ToolPackage.Command} read-anchors            List the deferred work recorded as anchors");
@@ -1653,7 +1662,7 @@ internal static class HelpCommand
         builder.AppendLine("starts are then looked for on the PATH it set up, and one missing there skips the");
         builder.AppendLine("leg as a tool missing, named, before anything of it starts. Each leg's line names it:");
         builder.AppendLine("'developer environment: visualStudio (Visual Studio 18.0.11205.157, MSVC 14.50.35717,");
-        builder.AppendLine("amd64)', and developerEnvironment in --json. A copy starts nothing there, and needs none.");
+        builder.AppendLine("amd64)', and developerEnvironment in --json. A sync starts nothing there, and needs none.");
         builder.AppendLine();
         builder.AppendLine("Selected legs run at once and the command waits for all of them, reporting each");
         builder.AppendLine("live. Legs are chunked by the PHYSICAL machine they run on: this machine and every");
@@ -1686,14 +1695,17 @@ internal static class HelpCommand
         builder.AppendLine("--local-copy or --in-place on the command, for that run (build, test, run); a");
         builder.AppendLine("runner's writesTree, which is in place ('help runners'); the leg's own localCopy,");
         builder.AppendLine("true or false; defaults.localCopy, a default for every leg of the repository; and,");
-        builder.AppendLine("where none says, its tree itself. A copy is kept in the tree's own");
-        builder.AppendLine($"own {HarnessLayout.LegsDirectoryName} slot, <tree>/.legs/<key>, one per tree and variant, made");
+        builder.AppendLine("where none says, its tree itself. A runner that writes the tree refuses");
+        builder.AppendLine("--local-copy, and a run check whose runner writes it is refused wherever the leg it");
+        builder.AppendLine("checks would work in a copy. A copy is kept in the tree's own");
+        builder.AppendLine($"{HarnessLayout.LegsDirectoryName} slot, <tree>/.legs/<key>, one per tree and variant, made");
         builder.AppendLine("from the run's one reading of the tree and kept warm between runs: a write the tree");
         builder.AppendLine("receives while the leg runs - a fold, a commit, an edit - ends nothing of the leg's,");
         builder.AppendLine("and the leg ends on the tree its run read. The first build in a copy starts cold, and");
         builder.AppendLine("files git ignores are not in it. A build made in the tree is not the copy's:");
         builder.AppendLine("--no-build tests what is built in the copy, and --use-staged runs it on its copy as");
-        builder.AppendLine("the last sync left it.");
+        builder.AppendLine("the last sync left it. A tree where git does not ignore what a copy would make in");
+        builder.AppendLine($".legs refuses the run ({HarnessExit.Refused}), naming init, with nothing made.");
         builder.AppendLine();
         builder.AppendLine($"  {ToolPackage.Command} legs                          every declared leg");
         builder.AppendLine($"  {ToolPackage.Command} legs --legs a,b gate          legs a and b, and the legs of set gate");
@@ -1952,11 +1964,12 @@ internal static class HelpCommand
         builder.AppendLine("takes any other leg building there with it. What a build needs is what its");
         builder.AppendLine("directory comes to once built - the leg's buildSpaceGiB, or, left out, what a build");
         builder.AppendLine("of its variant recorded as it finished: in this tree's copy, or else the most any");
-        builder.AppendLine("other copy of the repository on that host recorded - the main checkout's, or a");
-        builder.AppendLine("worktree's, an agent's or a plain one, named in the line - less what the directory");
-        builder.AppendLine("already holds. Legs building on one filesystem of a host are counted together, in");
-        builder.AppendLine("the order they were selected, since every build directory stays once built; one");
-        builder.AppendLine("that does not fit beside those before it is skipped-unavailable:");
+        builder.AppendLine("other copy of the repository on that host recorded - the main checkout's, a");
+        builder.AppendLine("worktree's, an agent's or a plain one, or a leg copy of any of them, named in the");
+        builder.AppendLine("line - less what the directory already holds. Legs building on one filesystem of a");
+        builder.AppendLine("host are counted together, in the order they were selected, since every build");
+        builder.AppendLine("directory stays once built; one that does not fit beside those before it is");
+        builder.AppendLine("skipped-unavailable:");
         builder.AppendLine();
         builder.AppendLine("  ssh vps: this leg needs ~11.4 GiB, what worktree o1/xa's copy of the same");
         builder.AppendLine("  variant came to there; 3.2 GiB free on '/'");
@@ -2447,9 +2460,10 @@ internal static class HelpCommand
             "Dry runs. A dry run of refresh-agent, rebase-agent, fold-agent or delete-agent exits with what its --apply, typed "
             + "with the same arguments, would exit with at that moment: 0 only where that --apply would go through. Where a path, "
             + $"a row, or a consent nobody gave would refuse it, the dry run exits {HarnessExit.Refused}, and where it would fail "
-            + "before writing anything, with that failure's code - and either way it still prints all it weighed, its summary "
-            + "last, on standard error. A run holding what the --apply takes refuses the dry run too: every holder is named on "
-            + $"a 'held now:' line, said with where its run's leg stands, and it exits {HarnessExit.Refused} - save where the dry "
+            + "before writing anything, with that failure's code - and either way it still prints all it weighed on standard "
+            + "output, its summary last, on standard error. A run holding what the --apply takes refuses the dry run too: every "
+            + "holder is named on a 'held now:' line, said with where its run's leg stands where it asked for a heavy-leg slot, "
+            + $"and it exits {HarnessExit.Refused} - save where the dry "
             + "run already failed before writing anything, which keeps its failure's code and names the holder still; "
             + $"delete-agent, whose --apply would go as far as the removal and leave it unfinished, exits {HarnessExit.Incomplete} "
             + "instead where only a copy of the worktree is held, by a run or a sweep, and where the copies kept in the worktree "
@@ -2570,7 +2584,8 @@ internal static class HelpCommand
             + "holds its worktree - so no leg builds in either meanwhile, and once one has written, an interruption waits for it "
             + "to finish. A dry run of the four asks with the very hold its --apply takes, so a run holding what it needs is "
             + $"named and the dry run refused itself, exit {HarnessExit.Refused}, saying that nothing in the request needs "
-            + "correcting; the refusal an --apply gives ends with the same words. A holder is a fact about one moment, so 0 "
+            + "correcting; the refusal an --apply gives names the holder in the words of the dry run's 'held now:' line, where "
+            + "its run's leg stands included. A holder is a fact about one moment, so 0 "
             + "from a dry run never promises the tree will still be free when the --apply is typed. A leg that works in a copy "
             + "of the tree holds only the copy ('help legs'): a fold and such a leg never "
             + "refuse each other, and a fold that lands while the run is still reading the tree ends its legs inputs-moved with "
@@ -2596,8 +2611,8 @@ internal static class HelpCommand
         builder.AppendLine();
         builder.AppendLine("  .harness-config/config.json        tracked by git; the whole contract");
         builder.AppendLine($"  {HarnessLayout.RunnerActionsDirectoryRelative}/<name>/<name>.yml");
-        builder.AppendLine("                                    tracked; one directory per action, holding its");
-        builder.AppendLine("                                    steps and whatever those steps run");
+        builder.AppendLine("                                     tracked; one directory per action, holding its");
+        builder.AppendLine("                                     steps and whatever those steps run");
         builder.AppendLine("  .harness-config/runner/.env/       contents ignored; values actions read");
         builder.AppendLine("  .harness-config/runner/.secrets/   contents ignored; secret values actions read");
         builder.AppendLine("  .harness-config/sshItems/<name>/   ignored, and written by you, not init:");
@@ -2609,10 +2624,10 @@ internal static class HelpCommand
         builder.AppendLine("                                     orchestrator and its agents keep, in the main");
         builder.AppendLine("                                     checkout, and never sent to a host by sync");
         builder.AppendLine($"                                     ('{ToolPackage.Command} help orchestrators')");
-        builder.AppendLine($"  {HarnessLayout.MutationsDirectoryName}/                       contents ignored, .gitkeep tracked; the tree's");
+        builder.AppendLine($"  {HarnessLayout.MutationsDirectoryName}/                        contents ignored, .gitkeep tracked; the tree's");
         builder.AppendLine("                                     mutation workers, in every tree, never sent to");
         builder.AppendLine($"                                     a host by sync ('{ToolPackage.Command} help mutations')");
-        builder.AppendLine($"  {HarnessLayout.LegsDirectoryName}/                            contents ignored, .gitkeep tracked; the copies");
+        builder.AppendLine($"  {HarnessLayout.LegsDirectoryName}/                             contents ignored, .gitkeep tracked; the copies");
         builder.AppendLine("                                     of the tree its legs work in, in every tree,");
         builder.AppendLine("                                     never sent to a host by sync");
         builder.AppendLine($"  {HarnessLayout.RunsDirectoryRelative}/              ignored; one directory of records per run, in");
@@ -2663,9 +2678,10 @@ internal static class HelpCommand
         builder.AppendLine();
         builder.AppendLine("Ignored state lives in the main checkout. A worktree receives the tracked part of");
         builder.AppendLine(".harness-config through git but never the ignored part, so connection data and the");
-        builder.AppendLine("run lock resolve back to the originating checkout. A run's records are the");
-        builder.AppendLine("exception: they belong to the tree that ran it, so a run started inside a worktree");
-        builder.AppendLine("writes them there, and build, test, run and check-mutations name the directory in");
+        builder.AppendLine("run lock resolve back to the originating checkout. A run's records are an");
+        builder.AppendLine("exception, and so are a tree's .mutations and .legs: each belongs to the tree that");
+        builder.AppendLine("ran or made it, so a run started inside a worktree writes its records there, and");
+        builder.AppendLine("build, test, run and check-mutations name the directory in");
         builder.AppendLine("their output and as runDirectory in --json. Each leg that kept records has a line of");
         builder.AppendLine("its own naming its directory and the logs in it - 'logs of <leg>[ on <host>]' - as its");
         builder.AppendLine("verdict is said and in the run's closing lines, and as records and the phase logs as");
@@ -2673,6 +2689,7 @@ internal static class HelpCommand
         builder.AppendLine($"'{ToolPackage.Command} help legs'). Each names its run");
         builder.AppendLine("too, in its first line, 'run <id>', and as runId in --json, however it ended: a run");
         builder.AppendLine("refused before it had a directory keeps no records, and is cited by that id alone.");
+        builder.AppendLine("check-mutations --list begins no run, and names neither.");
         builder.AppendLine("A host runs a leg under a run of its own: the dispatcher names it once, '<leg>: run");
         builder.AppendLine("<id> on <host>', never relaying the host's own line, and the leg's --json holds it as");
         builder.AppendLine("hostRunId.");
@@ -2731,7 +2748,8 @@ internal static class HelpCommand
         builder.AppendLine("emulator's phases; ci.workflows; test.inputs; a project's targets and");
         builder.AppendLine("rebuildableFormats; a platform's toolSearchDirectories. Leave the key out instead. A");
         builder.AppendLine("list whose empty form means none - such as sync.neverTransfer, sync.exclude or");
-        builder.AppendLine("contention.buildTools - takes [] as that.");
+        builder.AppendLine("contention.buildTools - takes [] as that. A runner's list under mutations.runReads,");
+        builder.AppendLine("which would say nothing given empty, is refused so: leave the runner out instead.");
         builder.AppendLine();
         builder.AppendLine("A toolchain, a build config and a sanitizer overlay compose: each contributes");
         builder.AppendLine("environment and cache variables, so clang x debug x asan needs no entry of its");
@@ -2799,15 +2817,16 @@ internal static class HelpCommand
         builder.AppendLine("is retired, and refused where it is read.");
         builder.AppendLine();
         builder.AppendLine("Selected legs run at the same time, and a command waits for all of them. Within");
-        builder.AppendLine("a leg the order is fixed: sync when the host needs it, then build on buildCores");
-        builder.AppendLine("cores, then test on testCores cores. Where a leg runs is measured before anything");
-        builder.AppendLine($"starts; see '{ToolPackage.Command} help legs'.");
+        builder.AppendLine("a leg the order is fixed: sync when its copy needs it - a host's, or its own in the");
+        builder.AppendLine("tree's .legs - then build on buildCores cores, then test on testCores cores. Where a");
+        builder.AppendLine("leg runs is measured before anything starts; see");
+        builder.AppendLine($"'{ToolPackage.Command} help legs'.");
         builder.AppendLine();
         builder.AppendLine("A verdict must describe the code, not the moment it ran in. Every test invocation");
         builder.AppendLine("declares a successPattern, since exiting 0 is not proof anything ran. A leg whose");
-        builder.AppendLine("test inputs change while it runs, whose host's copy could not be made the tree the");
-        builder.AppendLine("run began with because a file in it changed first, or whose build directory another");
-        builder.AppendLine("process uses, gets no pass or fail at all.");
+        builder.AppendLine("test inputs change while it runs, whose copy - a host's, or its own - could not be");
+        builder.AppendLine("made the tree the run began with because a file in it changed first, or whose build");
+        builder.AppendLine("directory another process uses, gets no pass or fail at all.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -2875,8 +2894,8 @@ internal static class HelpCommand
         builder.AppendLine("sync makes its index hold the files it carried, so a build there fingerprints its");
         builder.AppendLine("inputs and keeps its directory as a build here does. A test that checks this");
         builder.AppendLine("checkout's state has nothing to say about that copy, so an invocation's");
-        builder.AppendLine("remoteExcludes are given to every leg a host runs, beside --exclude's, and to none");
-        builder.AppendLine("this machine runs:");
+        builder.AppendLine("remoteExcludes are given to every leg that works in a copy - a host's, or its own in");
+        builder.AppendLine("the tree's .legs - beside --exclude's, and to none that works in its tree itself:");
         builder.AppendLine();
         builder.AppendLine("  \"all\": {");
         builder.AppendLine("    \"runner\": \"ctest\", \"successPattern\": \"...\",");
@@ -2896,7 +2915,7 @@ internal static class HelpCommand
         builder.AppendLine("empty, before anything is built for it: a value one option chooses tests by that");
         builder.AppendLine("another leaves out by the same part of a test - its name, or a label - where either is");
         builder.AppendLine("given. With excludeArg '-LE', '--label x' is refused beside an exclusion 'x', given by");
-        builder.AppendLine("--exclude or a host's remoteExcludes, and beside the args' '-LE x' where it is their");
+        builder.AppendLine("--exclude or the remoteExcludes, and beside the args' '-LE x' where it is their");
         builder.AppendLine("only -LE and no test preset they name adds one. Values are judged as written: spelled");
         builder.AppendLine("the same, or plain text where the chosen one holds the other, since ctest finds a");
         builder.AppendLine("pattern anywhere in a name or a label. ctest says it found no test only once the leg");

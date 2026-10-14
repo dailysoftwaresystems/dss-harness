@@ -53,7 +53,7 @@ public sealed class InputsUnwatchedException : Exception
             "this user's inotify instances are all taken"
             + Limit("fs.inotify.max_user_instances", use.MaxInstances)
             + Shown(use.Held(holder => holder.Instances))
-            + ". A leg needs one.");
+            + ". This process needs one, however many legs it runs.");
     }
 
     /// <summary>

@@ -31,7 +31,7 @@ public sealed class InotifyHoldersTests
         Assert.Equal(
             "the inputs could not be watched, so none of this work was run: this user's inotify instances are all taken - "
             + "fs.inotify.max_user_instances is 128, and /proc shows 10 held: 4 by pid 5151 (node), 3 by pid 4242 "
-            + "(dssharness), 1 by pid 12 (code) and 2 more. A leg needs one.",
+            + "(dssharness), 1 by pid 12 (code) and 2 more. This process needs one, however many legs it runs.",
             refused.Message);
     }
 
@@ -102,13 +102,13 @@ public sealed class InotifyHoldersTests
         using var proc = Proc();
 
         Assert.Equal(
-            "this user's inotify instances are all taken - fs.inotify.max_user_instances is 128. A leg needs one.",
+            "this user's inotify instances are all taken - fs.inotify.max_user_instances is 128. This process needs one, however many legs it runs.",
             InputsUnwatchedException.InstancesTaken(Holders(proc).Read()).Why);
 
         var none = new InotifyHolders(proc.Combine("gone"), File.ReadAllText).Read();
 
         Assert.Equal(new InotifyUse(null, null, null), none);
-        Assert.Equal("this user's inotify instances are all taken. A leg needs one.", InputsUnwatchedException.InstancesTaken(none).Why);
+        Assert.Equal("this user's inotify instances are all taken. This process needs one, however many legs it runs.", InputsUnwatchedException.InstancesTaken(none).Why);
         Assert.Equal(
             "this user's inotify watches ran out; this work watches 1 directory(ies) - those its inputs lie in and those above them - one watch each.",
             InputsUnwatchedException.WatchesRanOut(none, 1).Why);
