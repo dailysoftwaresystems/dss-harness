@@ -217,7 +217,7 @@ public sealed class AgentFoldMergeTests
             Assert.Contains(refused.Details!, line => line.StartsWith($"  '{Both}': the main tree changed it after the agent's base", StringComparison.Ordinal)
                 && line.EndsWith("so removing it would lose that change", StringComparison.Ordinal));
             Assert.Contains(refused.Details!, line => line.StartsWith("  'src/other.txt' is at the agent's base", StringComparison.Ordinal)
-                && line.EndsWith("and missing from the main tree", StringComparison.Ordinal));
+                && line.EndsWith("and missing from the main tree, removed by an uncommitted edit, so writing the agent's copy would lose that change", StringComparison.Ordinal));
             Assert.DoesNotContain(refused.Details!, line => line.Contains("three-way merge of the two", StringComparison.Ordinal) && line.StartsWith("  '", StringComparison.Ordinal));
             Assert.False(File.Exists(Path.Combine(worktree, Both)));
             Assert.Equal(Text((9, "MAIN 9")), OrchestrationKit.Read(kit.Main, Both));
@@ -237,7 +237,10 @@ public sealed class AgentFoldMergeTests
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Contains(refused.Details!, line => line.StartsWith("  'made.txt' is not at the agent's base", StringComparison.Ordinal)
-            && line.EndsWith("and the main tree holds it; no three-way merge is offered: both trees made it, and neither held a file there before", StringComparison.Ordinal));
+            && line.EndsWith(
+                "and the main tree made it since, by an uncommitted edit, so writing the agent's copy would lose that change; no three-way merge "
+                    + "is offered: both trees made it, and neither held a file there before",
+                StringComparison.Ordinal));
         Assert.Equal("the main tree's\n", OrchestrationKit.Read(kit.Main, "made.txt"));
     }
 

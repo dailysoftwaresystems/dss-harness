@@ -438,7 +438,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         var settling = new List<string>();
         var leftOut = new List<SettledOut>();
         var refused = new List<(string Path, string Why)>();
-        var drifted = new List<(Look Look, string BaseBlob, string Consequence)>();
+        var sinceBase = new List<(Look Look, Since Change, string? BaseBlob)>();
         var twice = new List<(Look Look, string Why, TwoChangeAncestor? Ancestor)>();
         var at = OrchestrationReports.Base(baseCommit);
 
@@ -566,21 +566,19 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
                 if (look.Main.Kind != Kind.Absent)
                 {
                     // Both trees made it: nothing either held says what a merge would start from.
-                    twice.Add((look, $"'{path}' is not at the agent's base {at}, and the main tree holds it", null));
+                    sinceBase.Add((look, Since.Made, null));
                     continue;
                 }
             }
             else if (look.Main.Kind == Kind.Absent)
             {
                 // A directory with no .git of its own holds no file at its path: one the main tree made of the file is said.
-                refused.Add((path, _fileSystem.KindOf(Path.Combine(main, path)) == PathKind.Directory
-                    ? $"'{path}' is at the agent's base {at}, and the main tree holds a directory there now"
-                    : $"'{path}' is at the agent's base {at}, and missing from the main tree"));
+                sinceBase.Add((look, _fileSystem.KindOf(Path.Combine(main, path)) == PathKind.Directory ? Since.MadeADirectory : Since.Removed, baseBlob));
                 continue;
             }
             else if (mainMoved.Contains(path))
             {
-                drifted.Add((look, baseBlob, look.Agent.Kind == Kind.Absent ? "so removing it would lose that change" : "so writing the agent's copy would lose that change"));
+                sinceBase.Add((look, Since.Changed, baseBlob));
                 continue;
             }
 
@@ -597,30 +595,33 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             }
         }
 
-        // How the main tree moved, because the two are reconciled differently: a commit once a sibling's fold was committed,
-        // an edit while it is not.
-        if (drifted.Count > 0)
+        // How the main tree came to hold otherwise than the agent's base at a path it shares nothing for - changed it, made it,
+        // made a directory of it, or removed it - because the two are reconciled differently: a commit once a sibling's fold
+        // was committed, an edit while it is not.
+        if (sinceBase.Count > 0)
         {
-            // Each entry - its blob and its mode, as git compares a commit - at the main tree's HEAD and at the base: a commit
-            // that changed the path's mode alone moved it as surely as one that changed its bytes. What the base held there
-            // is also what a merge is measured from: a link, which is no file to merge, and whether it could be run, never
-            // read where the platform keeps no such bit.
-            IReadOnlyList<string> drifting = [.. drifted.Select(drift => drift.Look.Path)];
-            var head = await _gitClient.ListEntriesAtAsync(main, "HEAD", drifting, cancellationToken).ConfigureAwait(false);
-            var entries = await _gitClient.ListEntriesAtAsync(worktree, baseCommit, drifting, cancellationToken).ConfigureAwait(false);
+            // Each entry - its blob and its mode, as git compares a commit, or none - at the main tree's HEAD and at the base:
+            // a commit that changed the path's mode alone moved it as surely as one that changed its bytes, and a HEAD that
+            // holds nothing where the base held a file was moved by one too. What the base held there is also what a merge
+            // is measured from: a link, which is no file to merge, and whether it could be run, never read where the
+            // platform keeps no such bit.
+            IReadOnlyList<string> moving = [.. sinceBase.Select(since => since.Look.Path)];
+            var head = await _gitClient.ListEntriesAtAsync(main, "HEAD", moving, cancellationToken).ConfigureAwait(false);
+            var entries = await _gitClient.ListEntriesAtAsync(worktree, baseCommit, moving, cancellationToken).ConfigureAwait(false);
 
-            foreach (var (look, baseBlob, consequence) in drifted)
+            foreach (var (look, change, baseBlob) in sinceBase)
             {
                 var path = look.Path;
-                var how = head.GetValueOrDefault(path) != entries.GetValueOrDefault(path)
-                    ? "by a commit - its HEAD no longer holds what the base holds -"
-                    : "by an uncommitted edit,";
-                var why = $"'{path}': the main tree changed it after the agent's base {at}, {how} {consequence}";
+                var entry = entries.GetValueOrDefault(path);
+                var why = SinceBase(path, at, change, head.GetValueOrDefault(path), entry, look.Agent.Kind == Kind.Absent);
 
-                if (BothHoldAFile(look))
+                if (change == Since.Made)
                 {
-                    var entry = entries.GetValueOrDefault(path);
-                    twice.Add((look, why, new TwoChangeAncestor.Committed(baseBlob, Bit(entry), entry is { IsLink: true })));
+                    twice.Add((look, why, null));
+                }
+                else if (change == Since.Changed && BothHoldAFile(look))
+                {
+                    twice.Add((look, why, new TwoChangeAncestor.Committed(baseBlob!, Bit(entry), entry is { IsLink: true })));
                 }
                 else
                 {
@@ -2516,6 +2517,50 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         Absent,
         File,
         Directory,
+    }
+
+    /// <summary>What the main tree did since the agent's base at a path the agent shares nothing for, and changed too.</summary>
+    private enum Since
+    {
+        /// <summary>Changed the file the base holds there.</summary>
+        Changed,
+
+        /// <summary>Made a file where the base holds none, as the agent did.</summary>
+        Made,
+
+        /// <summary>Made a directory of the file the base holds there.</summary>
+        MadeADirectory,
+
+        /// <summary>Removed the file the base holds there.</summary>
+        Removed,
+    }
+
+    /// <summary>
+    /// The refusal of a path the agent shares nothing for and that the main tree did <paramref name="change"/> to since the
+    /// agent's base, saying how: by a commit where the main tree's HEAD's entry there - its blob and its mode, or none - is
+    /// not the base's, as git compares a commit; by an uncommitted edit otherwise.
+    /// </summary>
+    /// <param name="path">The path.</param>
+    /// <param name="at">The agent's base, as a line names it.</param>
+    /// <param name="change">What the main tree did.</param>
+    /// <param name="head">The main tree's HEAD's entry at the path, or none.</param>
+    /// <param name="based">The base's entry at the path, or none.</param>
+    /// <param name="agentRemoved">Whether the agent removed the path, rather than holding a file there.</param>
+    private static string SinceBase(string path, string at, Since change, GitEntry? head, GitEntry? based, bool agentRemoved)
+    {
+        var how = head == based ? "by an uncommitted edit,"
+            : based is null ? "by a commit - its HEAD holds it, where the base holds nothing -"
+            : "by a commit - its HEAD no longer holds what the base holds -";
+        var consequence = agentRemoved ? "so removing it would lose that change" : "so writing the agent's copy would lose that change";
+
+        return change switch
+        {
+            Since.Made => $"'{path}' is not at the agent's base {at}, and the main tree made it since, {how} {consequence}",
+            Since.MadeADirectory => $"'{path}' is at the agent's base {at}, and the main tree holds a directory there now, made {how} {consequence}",
+            Since.Removed => $"'{path}' is at the agent's base {at}, and missing from the main tree, removed {how} {consequence}",
+            Since.Changed => $"'{path}': the main tree changed it after the agent's base {at}, {how} {consequence}",
+            _ => throw new ArgumentOutOfRangeException(nameof(change), change, "Not something the main tree did since the agent's base."),
+        };
     }
 
     /// <summary>What one tree holds at a path.</summary>
