@@ -1441,16 +1441,88 @@ public sealed class GitClientTests
     }
 
     /// <summary>
+    /// One path git will not answer about, among hundreds, costs a few git processes, not one a path: the question is
+    /// halved until each half is answered or is that one path. A work tree git cannot answer about at all is refused
+    /// once git says so of its root, with no path asked again.
+    /// </summary>
+    [Fact]
+    public async Task FindIgnoredAsync_AsksAFewProcesses_WhereOnePathOfHundredsIsRefused_AndNoneWhereGitCannotAnswer()
+    {
+        using var temp = new TempDirectory();
+        using var outside = new TempDirectory();
+        var harness = new HarnessFactory();
+        var token = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, token);
+        temp.WriteFile(".gitignore", "*.log\n");
+        var nested = temp.Combine("vendor/lib");
+        Directory.CreateDirectory(nested);
+        await harness.InitializeGitRepositoryAsync(nested, token);
+        await harness.RunGitAsync(temp.Path, ["add", "vendor/lib"], token);
+        var counting = new CountingProcessRunner(harness.ProcessRunner, "check-ignore");
+        var git = new GitClient(counting, harness.Output, localVariables: harness.LocalVariables);
+        IReadOnlyList<string> paths = [.. Enumerable.Range(0, 300).Select(index => index == 150 ? "vendor/lib/README.md" : $"f{index:D3}.{(index % 2 == 0 ? "log" : "txt")}")];
+
+        var ignored = await git.FindIgnoredAsync(temp.Path, paths, token);
+        var asked = counting.Count;
+        counting.Count = 0;
+        await Assert.ThrowsAsync<HarnessException>(() => git.FindIgnoredAsync(outside.Path, paths, token));
+
+        Assert.Equal(paths.Where(path => path.EndsWith(".log", StringComparison.Ordinal)).ToHashSet(StringComparer.Ordinal), ignored);
+        Assert.InRange(asked, 3, 2 + (2 * 9));
+        Assert.Equal(2, counting.Count);
+    }
+
+    /// <summary>
+    /// A path named as pathspec magic - beginning with a colon - is read by check-ignore literally, as any other path: a
+    /// rule matching it ignores it, and git answers about every path asked with it.
+    /// </summary>
+    [Fact]
+    public async Task IgnoreQuestions_ReadAPathNamedAsPathspecMagic_Literally()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var token = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, token);
+        temp.WriteFile(".gitignore", "*.log\n");
+
+        var ignored = await harness.GitClient.FindIgnoredAsync(temp.Path, [":!x", ":(glob)y.log", "a.log"], token);
+        var decisions = await harness.GitClient.ExplainIgnoredAsync(temp.Path, [":!x", ":(glob)y.log"], token);
+        var alone = await harness.GitClient.IsIgnoredAsync(temp.Path, ":(glob)y.log", token);
+
+        Assert.Equal([":(glob)y.log", "a.log"], ignored.Order(StringComparer.Ordinal));
+        Assert.Equal([new IgnoreDecision(":!x", null, 0, null), new IgnoreDecision(":(glob)y.log", ".gitignore", 1, "*.log")], decisions);
+        Assert.True(alone);
+    }
+
+    /// <summary>
     /// An answer whose line is not a number is refused as one this build cannot read, naming the path,
     /// rather than escaping as a defect in this tool.
     /// </summary>
     [Fact]
     public void ReadDecisions_RefusesALineThatIsNotANumber()
     {
-        var refusal = Assert.Throws<HarnessException>(() => GitClient.ReadDecisions(".gitignore\0one\0*.log\0a.log\0", ["a.log"]));
+        var refusal = Assert.Throws<HarnessException>(() => GitClient.ReadDecisions(".gitignore\0one\0*.log\0./a.log\0", ["a.log"]));
 
         Assert.Equal(HarnessExit.CommandFailed, refusal.ExitCode);
         Assert.Equal("git answered which rule decides 'a.log' in a form this build cannot read: 'one' is not a line number.", refusal.Message);
+    }
+
+    /// <summary>Runs every program as it is, counting the git processes whose arguments name <paramref name="counted"/>.</summary>
+    private sealed class CountingProcessRunner(IProcessRunner inner, string counted) : IProcessRunner
+    {
+        public int Count { get; set; }
+
+        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default)
+        {
+            if (request.Arguments.Contains(counted))
+            {
+                Count++;
+            }
+
+            return inner.RunAsync(request, cancellationToken);
+        }
+
+        public string? FindExecutable(string command) => inner.FindExecutable(command);
     }
 
     private static readonly GitMergeNames MergeNames = new("the main tree", "what both held", "the agent");

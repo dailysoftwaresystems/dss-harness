@@ -959,7 +959,7 @@ public sealed partial class GitClient(
         // report a secret as safe to copy because the question itself errored.
         var result = await RunAsync(
             directory,
-            ["check-ignore", "--quiet", "--no-index", path],
+            ["check-ignore", "--quiet", "--no-index", "--", Literally(path)],
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
         return result.ExitCode switch
@@ -1021,10 +1021,10 @@ public sealed partial class GitClient(
     /// <summary>
     /// Asks git which rule decides each of <paramref name="paths"/>, every path answered that git answers about. One path
     /// git will not answer about - one beyond a symbolic link, which git never looks past, or one below a submodule where
-    /// the index is consulted - ends the whole question; asked again one at a time, every other path is still answered,
-    /// and that one says why it was not.
-    /// Where git answers about none of them, it is asked about the work tree's root, which it always answers about where it
-    /// can answer at all: only where it cannot is the question refused.
+    /// the index is consulted - ends the whole question. git is then asked about the work tree's root, which it answers
+    /// about wherever it can answer at all, and where it cannot the question is refused at once; otherwise the question is
+    /// halved, and each half that fails halved again, until each part is answered or is one path, which says why it was
+    /// not - a few processes for each path git will not answer about, however many are asked.
     /// </summary>
     /// <param name="directory">The work tree's root.</param>
     /// <param name="paths">Paths relative to that root, with forward separators; at least one.</param>
@@ -1046,27 +1046,45 @@ public sealed partial class GitClient(
             return ReadDecisions(result.StandardOutput, paths);
         }
 
-        if (!result.TimedOut)
+        if (result.TimedOut || !Answered(await CheckIgnoreAsync(directory, ["."], cancellationToken, consultIndex).ConfigureAwait(false)))
         {
-            var decisions = new List<IgnoreDecision>(paths.Count);
-
-            foreach (var path in paths)
-            {
-                var alone = paths.Count == 1 ? result : await CheckIgnoreAsync(directory, [path], cancellationToken, consultIndex).ConfigureAwait(false);
-
-                decisions.Add(Answered(alone)
-                    ? ReadDecisions(alone.StandardOutput, [path])[0]
-                    : new IgnoreDecision(path, null, 0, null) { Unanswered = alone.FailureMessage });
-            }
-
-            if (decisions.Any(decision => decision.Unanswered is null)
-                || Answered(await CheckIgnoreAsync(directory, ["."], cancellationToken, consultIndex).ConfigureAwait(false)))
-            {
-                return decisions;
-            }
+            throw new HarnessException(HarnessExit.CommandFailed, $"Could not ask git {asked}: {result.FailureMessage}");
         }
 
-        throw new HarnessException(HarnessExit.CommandFailed, $"Could not ask git {asked}: {result.FailureMessage}");
+        var decisions = new List<IgnoreDecision>(paths.Count);
+
+        await HalveAsync(paths, result).ConfigureAwait(false);
+
+        return decisions;
+
+        // A part git refused, halved: each half answered is read, in order, and each refused halved again, down to the
+        // one path git will not answer about.
+        async Task HalveAsync(IReadOnlyList<string> refused, GitCommandResult failed)
+        {
+            if (refused.Count == 1)
+            {
+                decisions.Add(new IgnoreDecision(refused[0], null, 0, null) { Unanswered = failed.FailureMessage });
+                return;
+            }
+
+            foreach (var half in new[] { refused.Take(refused.Count / 2).ToList(), refused.Skip(refused.Count / 2).ToList() })
+            {
+                var answer = await CheckIgnoreAsync(directory, half, cancellationToken, consultIndex).ConfigureAwait(false);
+
+                if (Answered(answer))
+                {
+                    decisions.AddRange(ReadDecisions(answer.StandardOutput, half));
+                }
+                else if (answer.TimedOut)
+                {
+                    throw new HarnessException(HarnessExit.CommandFailed, $"Could not ask git {asked}: {answer.FailureMessage}");
+                }
+                else
+                {
+                    await HalveAsync(half, answer).ConfigureAwait(false);
+                }
+            }
+        }
     }
 
     /// <summary>Asks git which rule decides each of <paramref name="paths"/>, as <c>check-ignore</c> answers.</summary>
@@ -1074,14 +1092,22 @@ public sealed partial class GitClient(
     /// NUL-separated both ways, so a path or a rule may hold anything a line can; and every path
     /// answered, matched or not, so the answer lines up with the question. Without the index unless
     /// <paramref name="consultIndex"/>, so a tracked file is judged by the rules alone; with it, a tracked file
-    /// matches nothing, as <c>git add</c> treats it.
+    /// matches nothing, as <c>git add</c> treats it. Each path is asked <see cref="Literally"/>.
     /// </remarks>
     private Task<GitCommandResult> CheckIgnoreAsync(string directory, IReadOnlyList<string> paths, CancellationToken cancellationToken, bool consultIndex = false)
         => RunForBytesAsync(
             directory,
             ["check-ignore", "--verbose", "--non-matching", .. consultIndex ? Array.Empty<string>() : ["--no-index"], "-z", "--stdin"],
             cancellationToken,
-            string.Join('\0', paths) + '\0');
+            string.Concat(paths.Select(path => Literally(path) + '\0')));
+
+    /// <summary>
+    /// <paramref name="path"/> as <c>check-ignore</c> reads it literally: after <c>./</c>, so a name beginning with a colon
+    /// is never read as pathspec magic, which check-ignore refuses outright - with <c>--literal-pathspecs</c> too, for every
+    /// path - and the rules still match it as they match the path itself.
+    /// </summary>
+    /// <param name="path">A path relative to the work tree's root, with forward separators.</param>
+    internal static string Literally(string path) => "./" + path;
 
     /// <summary>
     /// Whether <c>check-ignore</c> answered: 0 when some path matched a rule and 1 when none did.
@@ -1090,7 +1116,10 @@ public sealed partial class GitClient(
     /// </summary>
     private static bool Answered(GitCommandResult result) => !result.TimedOut && result.ExitCode is 0 or 1;
 
-    /// <summary>What <c>check-ignore -v -n -z</c> printed, one decision per path of <paramref name="paths"/>, in order.</summary>
+    /// <summary>
+    /// What <c>check-ignore -v -n -z</c> printed, one decision per path of <paramref name="paths"/>, in order, each asked
+    /// <see cref="Literally"/>.
+    /// </summary>
     /// <exception cref="HarnessException">git answered in another form, or about other paths.</exception>
     internal static IReadOnlyList<IgnoreDecision> ReadDecisions(string output, IReadOnlyList<string> paths)
     {
@@ -1110,13 +1139,15 @@ public sealed partial class GitClient(
         {
             var source = GitName.FromBytes(fields[index * 4]).Quoted;
             var pattern = GitName.FromBytes(fields[(index * 4) + 2]).Quoted;
-            var path = GitName.FromBytes(fields[(index * 4) + 3]).Text;
+            var answered = GitName.FromBytes(fields[(index * 4) + 3]).Text;
+            var path = paths[index];
 
-            if (!string.Equals(path, paths[index], StringComparison.Ordinal))
+            // git names each path as it was asked, literally.
+            if (!string.Equals(answered, Literally(path), StringComparison.Ordinal))
             {
                 throw new HarnessException(
                     HarnessExit.CommandFailed,
-                    $"git answered about '{path}' where it was asked about '{paths[index]}'.");
+                    $"git answered about '{answered}' where it was asked about '{Literally(path)}'.");
             }
 
             if (source.Length == 0)

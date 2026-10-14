@@ -356,9 +356,12 @@ the rule re-including the nearest of them, at the line the tree's file has it on
 `.git/info/exclude` and every excludes file a configuration names, so a re-include undoing the block
 is in one of them; were none named even there, init says git does not ignore the path and names no
 rule, never where one might be. A path git will not answer about - one beyond a symbolic link, which
-git never looks past, ends a whole `check-ignore` with exit 128 - is asked again on its own, named
-with git's reason, and every other path is still answered; asked alone, it is named so where git
-answers about the tree's root, and only where it cannot is the question refused. A scratch
+git never looks past, ends a whole `check-ignore` with exit 128 - is named with git's reason, and
+every other path is still answered: git is asked about the tree's root, which it answers about
+wherever it can answer at all - only where it cannot is the question refused, at once - and the
+question is halved until each part is answered or is that one path, a few processes for each such
+path however many are asked. Each path is asked after `./`, so a name beginning with a colon is never
+read as pathspec magic, which `check-ignore` refuses even under `--literal-pathspecs`. A scratch
 repository that cannot be written is a note that git could not be asked; one that cannot be removed
 afterwards is a warning, and the answer stands.
 
