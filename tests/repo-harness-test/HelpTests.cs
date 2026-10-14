@@ -2309,9 +2309,9 @@ public sealed partial class HelpTests
             + "and each holding a copy kept in the "
             + "worktree, said as its own line says it, a leg copy's holder with where its leg stands, a mutation worker's with "
             + "the process, the run and since when its sweep's claim records. Stopped before "
-            + "anything is weighed - a --directory that is not there, a repository not initialised, a usage error, or a refusal "
-            + "met before then, an agent that is not there among them - it answers with the same document, empty: applied "
-            + "false, request and heldNow null, no lines.",
+            + "anything is weighed - a command line the parser refuses, a --directory that is not there, a repository not "
+            + "initialised, another usage error, or a refusal met before then, an agent that is not there among them - it "
+            + "answers with the same document, empty: applied false, request and heldNow null, no lines.",
             text,
             StringComparison.Ordinal);
         Assert.Contains(

@@ -54,7 +54,8 @@ public sealed class StoppedDocumentTests
 
     /// <summary>
     /// The commands whose stopped document says what their command line asked, each with the option that asks it and the
-    /// member that says it - given in the walks, so a member that does not read the command line is seen.
+    /// member that says it - left out of one walk and given in the other, each holding the member to whether it was given,
+    /// so a member that does not read the command line is seen.
     /// </summary>
     private static readonly Dictionary<string, (string Option, string Member)> Asked = new(StringComparer.Ordinal)
     {
@@ -162,9 +163,9 @@ public sealed class StoppedDocumentTests
     /// <summary>
     /// Every command the root help lists that takes --json, stopped by a --directory that is not there, answers with one
     /// document of its own shape, empty - the code the process exits with in it, and the line it ends on, and what its
-    /// command line asked where the document says it - or, where its document is an array, with that array, empty: never
-    /// nothing, and never another command's document. A command that takes --json and registers no document of its own
-    /// fails here, and so does one this table does not know.
+    /// command line asked where the document says it, here nothing, since no option that asks it is given - or, where its
+    /// document is an array, with that array, empty: never nothing, and never another command's document. A command that
+    /// takes --json and registers no document of its own fails here, and so does one this table does not know.
     /// </summary>
     [Fact]
     public async Task EveryCommandThatTakesJson_AnswersWithItsOwnDocument_Empty_WhereItStops()
@@ -186,8 +187,7 @@ public sealed class StoppedDocumentTests
 
             // Each argument the command requires, given a value, so it is the missing directory that stops it.
             var required = CliRunner.RequiredArguments(help.StandardOutput);
-            string[] asked = Asked.TryGetValue(command, out var flag) ? [flag.Option] : [];
-            var result = await CliRunner.RunAsync([command, .. Enumerable.Repeat("x", required), .. asked, "--json", "--directory", missing], Token);
+            var result = await CliRunner.RunAsync([command, .. Enumerable.Repeat("x", required), "--json", "--directory", missing], Token);
 
             Assert.True(OwnDocuments.TryGetValue(command, out var members), $"'{command}' takes --json, and this test does not know its document.");
             Assert.Equal(HarnessExit.UsageError, result.ExitCode);
@@ -206,9 +206,9 @@ public sealed class StoppedDocumentTests
             Assert.Equal(result.ExitCode, answered["exitCode"]!.GetValue<int>());
             Assert.Contains(answered["summary"]!.GetValue<string>(), result.StandardError, StringComparison.Ordinal);
 
-            if (asked.Length > 0)
+            if (Asked.TryGetValue(command, out var flag))
             {
-                Assert.True(answered[flag.Member]!.GetValue<bool>(), $"'{command} {flag.Option}' answered {flag.Member} false.");
+                Assert.False(answered[flag.Member]!.GetValue<bool>(), $"'{command}' without {flag.Option} answered {flag.Member} true.");
             }
         }
 
@@ -218,8 +218,9 @@ public sealed class StoppedDocumentTests
     /// <summary>
     /// Every command the root help lists, given an option it does not take, is refused by the parser with the code a usage
     /// error has; asked for --json, a command that takes it answers first with its own document, empty - the first error
-    /// its summary, the first line it ends on, what its command line asked where the document says it, and no run, since
-    /// a command line the parser refuses never began one - and a command that takes no --json with nothing on standard
+    /// its summary, the first line it ends on, what its command line asked where the document says it, here given and so
+    /// said, and no run, since a command line the parser refuses never began one - and a command that takes no --json with
+    /// nothing on standard
     /// output. Each argument is given a value, so the parser hands the option to none of them; an argument that takes any
     /// number of values takes an option nobody declared as one more, so a command whose last argument does is refused by
     /// an option given no value instead.
@@ -274,36 +275,45 @@ public sealed class StoppedDocumentTests
     /// <summary>
     /// A command line the parser refuses asks for the document only where the parser itself read --json as the command's
     /// own, set: wherever it sits among the command's arguments and options, and not as another option's value, after
-    /// --, before the command's name or given false. Its summary is the first of the errors, and check-mutations --list
-    /// answers with its listing there too.
+    /// --, before the command's name, given false, or given twice with a value each - a flag whose own value the parser
+    /// refuses reads as not given, so reading it never ends the process unanswered. Its summary is the first of the
+    /// errors; check-mutations --list answers with its listing there too, and with the sweep's ledger, no run named,
+    /// where its --list is so refused; and a flag a stopped document reports is reported false where so refused. Every
+    /// one exits with the code a usage error has, its errors on standard error.
     /// </summary>
     [Fact]
     public async Task ACommandLineTheParserRefuses_AsksForTheDocument_OnlyWhereTheParserReadsItsJsonSet()
     {
         using var temp = new TempDirectory();
+        string[] sweep = [.. Ledger.Where(member => member != "runId")];
 
-        foreach (var arguments in new string[][]
+        foreach (var (arguments, members, flag) in new (string[], string[], string?)[]
         {
-            ["legs", "--no-such-option", "--json", "--nor-this-one"],
-            ["fold-agent", "o1", "--json", "ag", "--no-such-option"],
-            ["check-mutations", "--list", "--no-such-option", "--json"],
+            (["legs", "--no-such-option", "--json", "--nor-this-one"], OwnDocuments["legs"], null),
+            (["fold-agent", "o1", "--json", "ag", "--no-such-option"], AgentDocument, null),
+            (["check-mutations", "--list", "--no-such-option", "--json"], ["exitCode", "summary", "legs"], null),
+            (["install-missing-tools", "--json", "--dry-run", "false", "--dry-run", "true", "--bogus"], OwnDocuments["install-missing-tools"], "dryRun"),
+            (["fix-line-endings", "--json", "--check", "true", "--check", "false"], OwnDocuments["fix-line-endings"], "check"),
+            (["check-mutations", "--json", "--list", "true", "--list", "false"], sweep, null),
         })
         {
             var result = await CliRunner.RunAsync(arguments, Token, workingDirectory: temp.Path);
             var document = Assert.IsType<JsonObject>(JsonNode.Parse(result.StandardOutput.TrimEnd()));
 
             Assert.Equal(HarnessExit.UsageError, result.ExitCode);
+            Assert.Equal(members, document.Select(member => member.Key));
             Assert.Equal(HarnessExit.UsageError, document["exitCode"]!.GetValue<int>());
             Assert.Equal(result.StandardError.Split('\n')[0].TrimEnd('\r'), document["summary"]!.GetValue<string>());
-            Assert.Contains("'--no-such-option'", document["summary"]!.GetValue<string>(), StringComparison.Ordinal);
-            Assert.Equal(
-                arguments[0] switch
-                {
-                    "legs" => OwnDocuments["legs"],
-                    "fold-agent" => AgentDocument,
-                    _ => ["exitCode", "summary", "legs"],
-                },
-                document.Select(member => member.Key));
+            Assert.Contains(
+                arguments.Contains("--no-such-option") ? "'--no-such-option'" : "expects a single argument but 2 were provided.",
+                result.StandardError,
+                StringComparison.Ordinal);
+            Assert.EndsWith($"Run '{ToolPackage.Command} --help' for usage.", result.StandardError.TrimEnd(), StringComparison.Ordinal);
+
+            if (flag is not null)
+            {
+                Assert.False(document[flag]!.GetValue<bool>(), $"'{string.Join(' ', arguments)}' answered {flag} true.");
+            }
         }
 
         foreach (var arguments in new string[][]
@@ -313,6 +323,8 @@ public sealed class StoppedDocumentTests
             ["legs", "--no-such-option", "--", "--json"],
             ["legs", "--json", "false", "--no-such-option"],
             ["--json", "legs", "--no-such-option"],
+            ["legs", "--json", "true", "--json", "false"],
+            ["fold-agent", "o1", "ag", "--json", "true", "--json", "false"],
         })
         {
             var result = await CliRunner.RunAsync(arguments, Token, workingDirectory: temp.Path);
@@ -320,6 +332,10 @@ public sealed class StoppedDocumentTests
             Assert.Equal(HarnessExit.UsageError, result.ExitCode);
             Assert.Equal(string.Empty, result.StandardOutput.Trim());
             Assert.NotEqual(string.Empty, result.StandardError.Trim());
+            Assert.True(
+                !arguments.Contains("true") || result.StandardError.StartsWith("Option '--json' expects a single argument but 2 were provided.", StringComparison.Ordinal),
+                result.StandardError);
+            Assert.EndsWith($"Run '{ToolPackage.Command} --help' for usage.", result.StandardError.TrimEnd(), StringComparison.Ordinal);
         }
     }
 
@@ -368,14 +384,17 @@ public sealed class StoppedDocumentTests
     /// The help says, once for every command and again wherever a listing's document is described, what a command asked
     /// for --json answers with where it stops - a command line the parser refuses among the stops - its own document
     /// holding nothing, exitCode and summary first, which only the ledger, the agent document and the check-mutations
-    /// --list listing carry on every exit, or an array empty; and the architecture says which document each command
-    /// answers with, and that a refused command line and a body's own usage error or refusal are answered with it too.
+    /// --list listing carry on every exit, or an array empty - and that --help, -h or -? is the one exit without it, which
+    /// holds; and the architecture says which document each command answers with, that a refused command line and a
+    /// body's own usage error or refusal are answered with it too, how a refused command line's flags are read, and the
+    /// same one exit without it.
     /// </summary>
     [Fact]
     public async Task TheHelpAndTheArchitectureSayWhatAStoppedCommandAnswersWith()
     {
-        const string Said = "Asked for --json, a command answers with one document on every exit: stopped before it has anything of its own to "
-            + "say - a command line the parser refuses, a --directory that is not there, a repository not initialised, another usage "
+        const string Said = "Asked for --json, a command answers with one document on every exit but one: --help, -h or -? prints its usage "
+            + "instead, exit 0, whatever else its command line holds, even what the parser would otherwise refuse. Stopped before it "
+            + "has anything of its own to say - a command line the parser refuses, a --directory that is not there, a repository not initialised, another usage "
             + "error, or a refusal met before anything is weighed - it answers with its own document holding nothing, exitCode and "
             + "summary first, which the leg ledger, the agent document and the check-mutations --list listing carry on every exit and "
             + "every other document only then, or, where its document is an array, with that array empty.";
@@ -400,10 +419,24 @@ public sealed class StoppedDocumentTests
                 + "process's exit code and the line it ends on say the rest. Each command registers which where it is wired "
                 + "(`CommandRunner.Wire`, `JsonAnswer`), so the plumbing answers for it without choosing by its name: where the parser "
                 + "refuses its command line, the first error the line it ends on, wherever the parser itself read `--json` as that "
-                + "command's own and set - never as another option's value, after `--` or before the command's name "
-                + "(`CommandRunner.UnparsedAsync`); where it stops the command itself; and where the body answers with no document - a "
-                + "usage error or a refusal returned before anything is weighed (`CommandRunner.Report`): a command asked for `--json` "
-                + "answers with one document on every exit.",
+                + "command's own and set - never as another option's value, after `--`, before the command's name or given twice with "
+                + "a value each (`CommandRunner.UnparsedAsync`); where it stops the command itself; and where the body answers with no "
+                + "document - a usage error or a refusal returned before anything is weighed (`CommandRunner.Report`): a command asked "
+                + "for `--json` answers with one document on every exit save its usage.",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "One reader reads a command line's flags wherever the parser may have refused it (`CommandFlags`): whether `--json` is "
+                + "set, and each flag a stopped document says - `fix-line-endings`' `check`, `install-missing-tools`' `dryRun`, and "
+                + "whether `check-mutations` answers with its listing. It never throws: a flag whose own value the parser refused, "
+                + "given twice with a value each, reads as not given. A command's body reads `--json` as that reader read it where "
+                + "the command was wired (`CommandContext.Json`), never from the option again.",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "The one exit of a command asked for `--json` without its document is its usage: `--help`, `-h` or `-?` prints it "
+                + "instead, exit 0, whatever else the command line holds, even what the parser would otherwise refuse - the parser "
+                + "answers it before any command's action, its errors cleared.",
             architecture,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -412,12 +445,27 @@ public sealed class StoppedDocumentTests
             architecture,
             StringComparison.Ordinal);
         Assert.Contains(
-            "A command stopped before anything is weighed - a `--directory` that is not there, a repository not initialised, a usage "
-                + "error, or a refusal met before then, an agent that is not there among them - answers with the same document, empty "
+            "A command stopped before anything is weighed - a command line the parser refuses, a `--directory` that is not there, a "
+                + "repository not initialised, another usage error, or a refusal met before then, an agent that is not there among them - answers with the same document, empty "
                 + "(`OrchestrationReports.Stopped`): `applied` false, `request`, `heldNow` and `heldUnread` null, no `lines`, its "
                 + "`exitCode` and `summary` the code it exits with and the line it ends on.",
             architecture,
             StringComparison.Ordinal);
+
+        // The one exit without the document holds as both say it: the usage, exit 0, a part the parser would refuse and all.
+        foreach (var arguments in new string[][]
+        {
+            ["legs", "--json", "--help"],
+            ["fold-agent", "--json", "-h", "--no-such-option"],
+            ["build", "--json", "-?"],
+        })
+        {
+            var result = await CliRunner.RunAsync(arguments, Token);
+
+            Assert.Equal(HarnessExit.Success, result.ExitCode);
+            Assert.Equal(arguments[0], CliRunner.UsageLine(result.StandardOutput)?.Split(' ')[1]);
+            Assert.Equal(string.Empty, result.StandardError.Trim());
+        }
     }
 
     /// <summary>A leg command stopped before its body answers with its ledger, as it always has: no legs, nothing passed.</summary>

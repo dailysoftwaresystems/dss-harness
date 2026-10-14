@@ -20,7 +20,12 @@ namespace RepoHarness.Cli;
 /// The directory to act on: absolute, and already confirmed to exist. Commands use this
 /// rather than reading the option themselves, so none can act on a value that was not checked.
 /// </param>
-internal sealed record CommandContext(IServiceProvider Services, ParseResult ParseResult, string Directory)
+/// <param name="Json">
+/// Whether the command was asked for its <c>--json</c> document, as <see cref="JsonAnswer.Asked"/> read it where the command
+/// was wired; false for a command that takes no <c>--json</c>. Commands use this rather than reading the option again, so
+/// none can answer otherwise than the document it registered says it was asked.
+/// </param>
+internal sealed record CommandContext(IServiceProvider Services, ParseResult ParseResult, string Directory, bool Json)
 {
     /// <summary>Resolves a service.</summary>
     internal T Get<T>()
@@ -70,8 +75,9 @@ internal static class CommandRunner
     /// The command's <c>--json</c>, with the document it answers with where it has none of its own - its own document's
     /// shape, empty (<see cref="JsonAnswer"/>): where the parser refuses its command line (<see cref="UnparsedAsync"/>),
     /// where it stops before its body has an outcome, and where its body answers without one (<see cref="Report"/>).
-    /// Asked for it, the command answers with one document on every exit: a script reading standard output has one
-    /// document to read whatever happened.
+    /// Asked for it, the command answers with one document on every exit save its usage, which <c>--help</c> asks for and
+    /// the parser answers before any command's action: a script reading standard output has one document to read
+    /// whatever happened.
     /// </param>
     internal static void Wire(
         Command command,
@@ -127,13 +133,16 @@ internal static class CommandRunner
     {
         ArgumentNullException.ThrowIfNull(parseResult);
 
-        if (Answers.TryGetValue(parseResult.CommandResult.Command, out var json) && json.Asked(parseResult))
+        // Read by the one reader that never throws: reading a flag whose own value the parser refused for that value would.
+        var flags = new CommandFlags(parseResult);
+
+        if (Answers.TryGetValue(parseResult.CommandResult.Command, out var json) && json.Asked(flags))
         {
             // Told as every other line the command writes is told: a host answering another machine writes its home as ~.
             await using var services = HarnessServices.Build(verbose: false, prompting: false, Origin.Value ?? CommandOrigin.Typed);
             var output = services.GetRequiredService<IHarnessOutput>();
 
-            output.Data(json.Stopped(parseResult, HarnessExit.UsageError, parseResult.Errors[0].Message, output.Shown, run: null));
+            output.Data(json.Stopped(flags, HarnessExit.UsageError, parseResult.Errors[0].Message, output.Shown, run: null));
         }
 
         foreach (var error in parseResult.Errors)
@@ -172,10 +181,11 @@ internal static class CommandRunner
             await using var services = HarnessServices.Build(verbose, prompting, Origin.Value ?? CommandOrigin.Typed);
             var output = services.GetRequiredService<IHarnessOutput>();
             var run = beginsRun(parseResult) ? RunId.New() : null;
+            var flags = new CommandFlags(parseResult);
 
             // Asked for its document, a command that stops answers in its own document's shape, as it registered it.
-            Func<int, string, string>? stopped = json is not null && json.Asked(parseResult)
-                ? (exitCode, summary) => json.Stopped(parseResult, exitCode, summary, output.Shown, run)
+            Func<int, string, string>? stopped = json is not null && json.Asked(flags)
+                ? (exitCode, summary) => json.Stopped(flags, exitCode, summary, output.Shown, run)
                 : null;
 
             // The document is the whole of standard output from the first line, not from the moment
@@ -194,7 +204,8 @@ internal static class CommandRunner
                     return Stop(output, commandName, HarnessExit.UsageError, problem, stopped);
                 }
 
-                var context = new CommandContext(services, parseResult, directory);
+                // Its body answers with its document exactly where a stop would: --json read once, here.
+                var context = new CommandContext(services, parseResult, directory, Json: stopped is not null);
                 var outcome = await body(context, run, cancellationToken).ConfigureAwait(false);
 
                 Report(output, commandName, outcome, stopped);

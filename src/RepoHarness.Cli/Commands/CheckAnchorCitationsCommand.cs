@@ -51,7 +51,7 @@ internal static class CheckAnchorCitationsCommand
                 .CheckAsync(context.Directory, ReadSubject(arguments), cancellationToken)
                 .ConfigureAwait(false);
 
-            return AnchorCitationReports.Render(report, arguments.GetValue(JsonOption));
+            return AnchorCitationReports.Render(report, context.Json);
         }, new JsonAnswer(JsonOption, (_, exitCode, summary, _, _) => AnchorCitationReports.Stopped(exitCode, summary)));
 
         return command;

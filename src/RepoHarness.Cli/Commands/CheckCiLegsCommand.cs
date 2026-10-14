@@ -55,7 +55,7 @@ internal static class CheckCiLegsCommand
                 .CheckAsync(context.Directory, request, cancellationToken)
                 .ConfigureAwait(false);
 
-            return CiLegsReports.Render(report, arguments.GetValue(JsonOption));
+            return CiLegsReports.Render(report, context.Json);
         }, new JsonAnswer(JsonOption, (_, exitCode, summary, _, _) => CiLegsReports.Stopped(exitCode, summary)));
 
         return command;

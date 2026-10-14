@@ -60,7 +60,7 @@ internal static class LegsCommand
                 .CheckAsync(context.Directory, legs, LegWorkload.BuildAndTest, here: null, cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
 
-            return LegsReports.Render(report, arguments.GetValue(JsonOption), arguments.GetValue(GlobalOptions.Verbose));
+            return LegsReports.Render(report, context.Json, arguments.GetValue(GlobalOptions.Verbose));
         }, new JsonAnswer(JsonOption, (_, exitCode, summary, _, _) => LegsReports.Stopped(exitCode, summary)));
 
         return command;

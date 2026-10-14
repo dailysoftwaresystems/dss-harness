@@ -50,7 +50,7 @@ internal static class CleanCommand
                         context.Directory,
                         legs,
                         arguments.GetValue(DryRunOption),
-                        arguments.GetValue(JsonOption),
+                        context.Json,
                         arguments.GetValue(DispatchOptions.Here)),
                     cancellationToken)
                 .ConfigureAwait(false);

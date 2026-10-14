@@ -132,7 +132,7 @@ internal static class ListWorktreeCommand
                 .ListAsync(context.Directory, worktrees, context.ParseResult.GetValue(HostsOption), cancellationToken)
                 .ConfigureAwait(false);
 
-            return WorktreeReports.List(worktrees, copies, context.ParseResult.GetValue(JsonOption));
+            return WorktreeReports.List(worktrees, copies, context.Json);
         }, new JsonAnswer(JsonOption, (_, exitCode, summary, _, _) => WorktreeReports.Stopped(exitCode, summary)));
 
         return command;

@@ -317,7 +317,7 @@ internal static class ReadAnchorCommand
                     cancellationToken)
                 .ConfigureAwait(false);
 
-            return AnchorReports.Lookup(lookup, arguments.GetValue(JsonOption));
+            return AnchorReports.Lookup(lookup, context.Json);
         }, new JsonAnswer(JsonOption, (_, _, _, _, _) => AnchorReports.LookupStopped()));
 
         return command;
@@ -381,7 +381,7 @@ internal static class ReadAnchorsCommand
         {
             var arguments = context.ParseResult;
             var service = context.Get<IAnchorRegistryService>();
-            var json = arguments.GetValue(JsonOption);
+            var json = context.Json;
 
             if (arguments.GetValue(LintOption))
             {
@@ -460,7 +460,7 @@ internal static class CheckAnchorBalanceCommand
                 .CheckAsync(context.Directory, arguments.GetValue(BaseOption), cancellationToken)
                 .ConfigureAwait(false);
 
-            return AnchorReports.Balance(report, arguments.GetValue(JsonOption));
+            return AnchorReports.Balance(report, context.Json);
         }, new JsonAnswer(JsonOption, (_, exitCode, summary, _, _) => AnchorReports.BalanceStopped(exitCode, summary)));
 
         return command;

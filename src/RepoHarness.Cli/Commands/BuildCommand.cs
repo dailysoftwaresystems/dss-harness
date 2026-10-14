@@ -74,7 +74,7 @@ internal static class BuildCommand
                         context.Directory,
                         legs,
                         arguments.GetValue(ForceLockOption),
-                        arguments.GetValue(JsonOption),
+                        context.Json,
                         arguments.GetValue(UseStagedOption),
                         arguments.GetValue(TimeOption),
                         arguments.GetValue(DispatchOptions.Here),

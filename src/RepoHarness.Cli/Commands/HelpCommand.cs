@@ -34,16 +34,17 @@ internal static class HelpCommand
     internal const string UnknownTopicPrefix = "Unknown topic";
 
     /// <summary>
-    /// What a command asked for --json answers with where it stops before it has anything of its own to say: one
-    /// sentence, said in the overview for every command and wherever a listing's document is described, since most
-    /// documents carry exitCode and summary only then.
+    /// What a command asked for --json answers with where it stops before it has anything of its own to say, and the one
+    /// exit where it answers with none: said in the overview for every command and wherever a listing's document is
+    /// described, since most documents carry exitCode and summary only then.
     /// </summary>
-    private const string StoppedDocument = "Asked for --json, a command answers with one document on every exit: stopped before it has "
-        + "anything of its own to say - a command line the parser refuses, a --directory that is not there, a repository not "
-        + "initialised, another usage error, or a refusal met before anything is weighed - it answers with its own document "
-        + "holding nothing, exitCode and summary first, which the leg ledger, the agent document and the check-mutations --list "
-        + "listing carry on every exit and every other document only then, or, where its document is an array, with that array "
-        + "empty.";
+    private const string StoppedDocument = "Asked for --json, a command answers with one document on every exit but one: --help, "
+        + "-h or -? prints its usage instead, exit 0, whatever else its command line holds, even what the parser would otherwise "
+        + "refuse. Stopped before it has anything of its own to say - a command line the parser refuses, a --directory that is not "
+        + "there, a repository not initialised, another usage error, or a refusal met before anything is weighed - it answers "
+        + "with its own document holding nothing, exitCode and summary first, which the leg ledger, the agent document and the "
+        + "check-mutations --list listing carry on every exit and every other document only then, or, where its document is an "
+        + "array, with that array empty.";
 
     /// <summary>
     /// Every topic, in the order the overview lists them: the one list the overview, the topic argument, the answer to an
@@ -2501,9 +2502,9 @@ internal static class HelpCommand
             + "and each holding a copy kept in the "
             + "worktree, said as its own line says it, a leg copy's holder with where its leg stands, a mutation worker's with "
             + "the process, the run and since when its sweep's claim records. Stopped before "
-            + "anything is weighed - a --directory that is not there, a repository not initialised, a usage error, or a refusal "
-            + "met before then, an agent that is not there among them - it answers with the same document, empty: applied "
-            + "false, request and heldNow null, no lines.");
+            + "anything is weighed - a command line the parser refuses, a --directory that is not there, a repository not "
+            + "initialised, another usage error, or a refusal met before then, an agent that is not there among them - it "
+            + "answers with the same document, empty: applied false, request and heldNow null, no lines.");
         builder.AppendLine();
         AppendWrapped(
             builder,

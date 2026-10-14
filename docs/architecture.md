@@ -630,9 +630,9 @@ them or, where a claim of the copy's family rather than the lock names its holde
 (`CopyHolder`), and what only a lock entry says, `command`, `variant` and `standing`, null for such a holder;
 `standing` is null too for a leg of this machine where this machine's record of heavy legs cannot be read - and
 `heldUnread`, why the lock file could not be read. A command stopped before
-anything is weighed - a `--directory` that is not there, a repository not initialised, a usage error, or a refusal met
-before then, an agent that is not there among them - answers with the same document, empty
-(`OrchestrationReports.Stopped`): `applied` false, `request`, `heldNow` and `heldUnread` null, no `lines`, its
+anything is weighed - a command line the parser refuses, a `--directory` that is not there, a repository not
+initialised, another usage error, or a refusal met before then, an agent that is not there among them - answers with
+the same document, empty (`OrchestrationReports.Stopped`): `applied` false, `request`, `heldNow` and `heldUnread` null, no `lines`, its
 `exitCode` and `summary` the code it exits with and the line it ends on.
 
 An agent's worktree is `<worktrees.root>/<orchestrator>/<agent>`, addressed `orchestrator/agent` by list-worktree
@@ -2121,11 +2121,20 @@ tool replaces, where a green result had quietly stopped meaning anything.
   ends on say the rest. Each command registers which where it is wired (`CommandRunner.Wire`,
   `JsonAnswer`), so the plumbing answers for it without choosing by its name: where the parser
   refuses its command line, the first error the line it ends on, wherever the parser itself read
-  `--json` as that command's own and set - never as another option's value, after `--` or before
-  the command's name (`CommandRunner.UnparsedAsync`); where it stops the command itself; and
-  where the body answers with no document - a usage error or a refusal returned before anything
-  is weighed (`CommandRunner.Report`): a command asked for `--json` answers with one document on
-  every exit.
+  `--json` as that command's own and set - never as another option's value, after `--`, before
+  the command's name or given twice with a value each (`CommandRunner.UnparsedAsync`); where it
+  stops the command itself; and where the body answers with no document - a usage error or a
+  refusal returned before anything is weighed (`CommandRunner.Report`): a command asked for
+  `--json` answers with one document on every exit save its usage.
+- One reader reads a command line's flags wherever the parser may have refused it
+  (`CommandFlags`): whether `--json` is set, and each flag a stopped document says -
+  `fix-line-endings`' `check`, `install-missing-tools`' `dryRun`, and whether `check-mutations`
+  answers with its listing. It never throws: a flag whose own value the parser refused, given
+  twice with a value each, reads as not given. A command's body reads `--json` as that reader
+  read it where the command was wired (`CommandContext.Json`), never from the option again.
+- The one exit of a command asked for `--json` without its document is its usage: `--help`, `-h`
+  or `-?` prints it instead, exit 0, whatever else the command line holds, even what the parser
+  would otherwise refuse - the parser answers it before any command's action, its errors cleared.
 - An emulated leg's emulator has passed its witness on that host before the leg starts.
 
 ### Inputs that hold still

@@ -110,7 +110,7 @@ internal static class TestCommand
                         context.Directory,
                         legs,
                         arguments.GetValue(ForceLockOption),
-                        arguments.GetValue(JsonOption),
+                        context.Json,
                         arguments.GetValue(UseStagedOption),
                         time,
                         arguments.GetValue(DispatchOptions.Here),

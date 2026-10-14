@@ -51,8 +51,8 @@ internal static class FixLineEndingsCommand
                 .ApplyAsync(context.Directory, request, cancellationToken)
                 .ConfigureAwait(false);
 
-            return LineEndingReports.Render(report, arguments.GetValue(JsonOption));
-        }, new JsonAnswer(JsonOption, (arguments, exitCode, summary, _, _) => LineEndingReports.Stopped(exitCode, summary, arguments.GetValue(CheckOption))));
+            return LineEndingReports.Render(report, context.Json);
+        }, new JsonAnswer(JsonOption, (flags, exitCode, summary, _, _) => LineEndingReports.Stopped(exitCode, summary, flags.IsSet(CheckOption))));
 
         return command;
     }

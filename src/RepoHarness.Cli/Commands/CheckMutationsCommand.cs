@@ -58,14 +58,14 @@ internal static class CheckMutationsCommand
     };
 
     /// <summary>
-    /// The document a stop answers with under --json: a listing's, listing no leg, where --list was given, and a sweep's
-    /// ledger, with no legs, where it was not.
+    /// The document a stop answers with under --json: a listing's, listing no leg, where --list is set, and a sweep's
+    /// ledger, with no legs, where it is not - a --list whose value the parser refused among them (<see cref="CommandFlags"/>).
     /// </summary>
     private static readonly JsonAnswer Answer = new(
         JsonOption,
-        (arguments, exitCode, summary, shown, run) => arguments.GetValue(ListOption)
+        (flags, exitCode, summary, shown, run) => flags.IsSet(ListOption)
             ? MutationService.ListStopped(exitCode, summary, shown)
-            : JsonAnswer.Ledger(JsonOption).Stopped(arguments, exitCode, summary, shown, run));
+            : JsonAnswer.Ledger(JsonOption).Stopped(flags, exitCode, summary, shown, run));
 
     internal static Command Create()
     {
@@ -109,7 +109,7 @@ internal static class CheckMutationsCommand
                 legs,
                 arms,
                 arguments.GetValue(ForceLockOption),
-                arguments.GetValue(JsonOption),
+                context.Json,
                 arguments.GetValue(UseStagedOption),
                 arguments.GetValue(DispatchOptions.Here),
                 selfTest,

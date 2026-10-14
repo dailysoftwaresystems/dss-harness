@@ -295,7 +295,7 @@ internal static class RunCommand
                         context.Directory,
                         selected,
                         arguments.GetValue(ForceLockOption),
-                        arguments.GetValue(JsonOption),
+                        context.Json,
                         arguments.GetValue(UseStagedOption),
                         arguments.GetValue(TimeOption),
                         arguments.GetValue(DispatchOptions.Here),

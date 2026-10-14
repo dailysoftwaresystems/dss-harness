@@ -194,7 +194,7 @@ internal static class ListOrchestratorCommand
         CommandRunner.Wire(
             command,
             (context, cancellationToken) => context.Get<IOrchestratorService>()
-                .ListAsync(context.Directory, context.ParseResult.GetValue(NameArgument), context.ParseResult.GetValue(JsonOption), cancellationToken),
+                .ListAsync(context.Directory, context.ParseResult.GetValue(NameArgument), context.Json, cancellationToken),
             JsonAnswerOfList);
 
         return command;

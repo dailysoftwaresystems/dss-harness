@@ -50,8 +50,8 @@ internal static class InstallMissingToolsCommand
                 .ProvisionAsync(context.Directory, legs, arguments.GetValue(DryRunOption), cancellationToken)
                 .ConfigureAwait(false);
 
-            return ToolProvisionReports.Render(report, arguments.GetValue(JsonOption));
-        }, new JsonAnswer(JsonOption, (arguments, exitCode, summary, _, _) => ToolProvisionReports.Stopped(exitCode, summary, arguments.GetValue(DryRunOption))));
+            return ToolProvisionReports.Render(report, context.Json);
+        }, new JsonAnswer(JsonOption, (flags, exitCode, summary, _, _) => ToolProvisionReports.Stopped(exitCode, summary, flags.IsSet(DryRunOption))));
 
         return command;
     }
