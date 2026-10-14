@@ -94,6 +94,15 @@ public sealed class MutationSettings
     [Description("each runner's files of the tree its runs read at run time, by the runner as the A rows name it; part of the key of every arm it runs")]
     public Dictionary<string, List<string>>? RunReads { get; init; }
 
+    /// <summary>
+    /// The patterns <see cref="RunReads"/> names for <paramref name="runner"/>, found as configuration compares names,
+    /// ignoring case - the one rule the registry's guard refuses a runner no A row names by: an entry spelled in another
+    /// case than the row still covers the files it names. <see langword="null"/> where none is named for it.
+    /// </summary>
+    /// <param name="runner">The runner, as the registry's A row names it.</param>
+    public List<string>? PatternsFor(string runner)
+        => RunReads?.FirstOrDefault(entry => string.Equals(entry.Key, runner, StringComparison.OrdinalIgnoreCase)).Value;
+
     /// <summary>The setting <see cref="RunReads"/> is named by, as a refusal names it.</summary>
     public const string RunReadsSetting = "mutations.runReads";
 }

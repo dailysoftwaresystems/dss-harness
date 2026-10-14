@@ -1,9 +1,11 @@
 using System.Globalization;
 using System.Text;
+using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Mutations;
+using RepoHarness.Core.Sync;
 
 namespace RepoHarness.Tests;
 
@@ -441,6 +443,26 @@ public sealed class JudgedOnTests
         Assert.Equal(
             [("run-reads-moved", "what its runner reads at run time moved: Data/Golden.txt, data/golden.txt")],
             Said(KeyDifference.Between(recorded.JudgedOn, tables, now, StringComparer.Ordinal)));
+    }
+
+    /// <summary>
+    /// A runReads entry is found however its runner is spelt, as configuration compares names - one rule with the guard
+    /// that refuses a runner no A row names: an entry spelled in another case than the row covers the files it names, and
+    /// no silence about what a runner reads survives through the case of its name.
+    /// </summary>
+    [Fact]
+    public void ARunReadsEntry_IsFoundHoweverItsRunnerIsSpelt_AsConfigurationComparesNames()
+    {
+        var arm = Arms(Registry).Find("one")!;
+        var settings = new MutationSettings { RunReads = new Dictionary<string, List<string>>(StringComparer.Ordinal) { ["LIB_TESTS"] = ["data"] } };
+        var tree = new TreeFiles(
+            new SyncManifest(
+                "tree",
+                new Dictionary<string, SyncEntry>(StringComparer.Ordinal) { ["data/golden.txt"] = new("data/golden.txt", 6, "golden") }),
+            StringComparer.Ordinal);
+
+        Assert.Equal(["data/golden.txt"], JudgedOn.RunReadsOf(arm, settings, tree).Keys);
+        Assert.Empty(new RunReadsOf(settings, tree).Of(arm).Uncovered);
     }
 
     /// <summary>The key of <paramref name="arm"/> where everything but its rows is held as one value.</summary>

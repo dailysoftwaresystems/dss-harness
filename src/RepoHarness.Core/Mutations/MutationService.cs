@@ -260,13 +260,29 @@ public sealed class MutationService(
         var sink = new RecordSink(new ArmVerdictRecord(_fileSystem, context.Layout), leg.Name, _output, CommandName);
         var tables = new Dictionary<string, BuiltFromTable>(StringComparer.Ordinal);
 
+        // A note whose base64 decodes to no JSON this build writes - a piece lost, a marker missed, a truncation that
+        // lands aligned - is dropped as a damaged one is: the record then lacks that arm, which is pending, and nothing
+        // a host said in passing fails this run.
+        T? Read<T>(string text)
+            where T : class
+        {
+            try
+            {
+                return JsonSerializer.Deserialize<T>(text, JsonStateFile.LineOptions);
+            }
+            catch (JsonException)
+            {
+                return null;
+            }
+        }
+
         return (kind, text) =>
         {
             switch (kind)
             {
                 case NoteSink.TableKind:
 
-                    if (JsonSerializer.Deserialize<BuiltFromTable>(text, JsonStateFile.LineOptions) is { } table)
+                    if (Read<BuiltFromTable>(text) is { } table)
                     {
                         tables[table.Digest()] = table;
                     }
@@ -275,7 +291,7 @@ public sealed class MutationService(
 
                 case NoteSink.ArmKind:
 
-                    if (JsonSerializer.Deserialize<NotedArm>(text, JsonStateFile.LineOptions) is { } arm)
+                    if (Read<NotedArm>(text) is { } arm)
                     {
                         sink.Judged(
                             arm.Arm,
@@ -287,7 +303,7 @@ public sealed class MutationService(
 
                 case NoteSink.VerifiedKind:
 
-                    if (JsonSerializer.Deserialize<NotedVerified>(text, JsonStateFile.LineOptions) is { } verified)
+                    if (Read<NotedVerified>(text) is { } verified)
                     {
                         sink.Verified(verified.Keys, verified.By);
                     }

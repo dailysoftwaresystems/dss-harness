@@ -129,7 +129,7 @@ public sealed record JudgedOn
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(tree);
 
-        return arm.Kind == RedKind.TestRed && settings.RunReads?.GetValueOrDefault(arm.Runner) is { Count: > 0 } patterns
+        return arm.Kind == RedKind.TestRed && settings.PatternsFor(arm.Runner) is { Count: > 0 } patterns
             ? tree.Matching(patterns)
             : new Dictionary<string, string>(StringComparer.Ordinal);
     }
@@ -264,7 +264,7 @@ internal sealed class RunReadsOf(MutationSettings settings, TreeFiles tree)
 
         // The union is what the arm is judged on; each entry on its own says whether it covers anything, so one that
         // names nothing is named rather than silently holding none of what the runner reads.
-        foreach (var pattern in settings.RunReads?.GetValueOrDefault(arm.Runner) ?? [])
+        foreach (var pattern in settings.PatternsFor(arm.Runner) ?? [])
         {
             if (tree.Matching([pattern]).Count == 0)
             {

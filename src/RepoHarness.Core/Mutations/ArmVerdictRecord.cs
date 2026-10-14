@@ -560,8 +560,9 @@ public sealed class ArmVerdictRecord(IFileSystem fileSystem, HarnessLayout layou
             return LegVerdictRecord.Unreadable(file, RecordUnread.Because($"it is the record of leg '{document.Leg}'"));
         }
 
-        // What only this build's own hand keeps out: a null where entries or tables go, or an entry with a key and nothing
-        // it was judged on, would otherwise reach every comparison of it as a crash. Refused here, once, as unreadable.
+        // What only this build's own hand keeps out: a null where entries or tables go, an entry with a key and nothing
+        // it was judged on, or a null inside what it was judged on where no null goes, would otherwise reach every
+        // comparison of it as a crash. Refused here, once, as unreadable.
         foreach (var (arm, entries) in document.Arms)
         {
             if (entries is null || entries.Any(entry => entry is null))
@@ -574,6 +575,14 @@ public sealed class ArmVerdictRecord(IFileSystem fileSystem, HarnessLayout layou
                 return LegVerdictRecord.Unreadable(
                     file,
                     RecordUnread.Because($"it holds an entry of arm '{arm}' with the key '{entry.Key}' and nothing it was judged on"));
+            }
+
+            foreach (var entry in entries)
+            {
+                if (entry.JudgedOn is { } on && Damaged(arm, on) is { } damaged)
+                {
+                    return LegVerdictRecord.Unreadable(file, RecordUnread.Because(damaged));
+                }
             }
         }
 
@@ -594,6 +603,17 @@ public sealed class ArmVerdictRecord(IFileSystem fileSystem, HarnessLayout layou
 
         return LegVerdictRecord.Read(file, arms, new Dictionary<string, TableIndex>(document.Tables, StringComparer.Ordinal));
     }
+
+    /// <summary>
+    /// Why a hand-damaged <paramref name="on"/> cannot be read - a null inside one of its collections, which the strict
+    /// reader lets load and no comparison can answer - or <see langword="null"/> where each is as this build writes it.
+    /// A member of its own turned to null never reaches here: the reader refuses it as it reads.
+    /// </summary>
+    private static string? Damaged(string arm, JudgedOn on)
+        => on.Built.FirstOrDefault(built => built.Value is null) is { Key: { } target } ? $"it holds an entry of arm '{arm}' whose target '{target}' is named by no digest"
+        : on.Compilers.Any(compiler => compiler is null) ? $"it holds an entry of arm '{arm}' with a compiler that is no compiler"
+        : on.RunReads.FirstOrDefault(read => read.Value is null) is { Key: { } named } ? $"it holds an entry of arm '{arm}' whose run-time read '{named}' is named by no hash"
+        : null;
 
     /// <summary>Why a record this build cannot read says it cannot be, in this tool's words, wherever a shape is to blame.</summary>
     private static string WrittenOtherwise => $"it holds what no build of {ToolPackage.Id} writes - another build wrote it, or a hand changed it";

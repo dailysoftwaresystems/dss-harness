@@ -1490,6 +1490,110 @@ public sealed class MutationServiceTests
         Assert.Equal(["charge"], held.Recorded!.Arms.Keys);
     }
 
+    /// <summary>
+    /// A listing of a tree written while it is read is refused, in the reading's own sentence, naming the path that moved:
+    /// a listing of a tree that never existed would say <c>unmoved here</c> of files as no moment held them, so it is not
+    /// printed - the arm the registry read has no row.
+    /// </summary>
+    [Fact]
+    public async Task AListingOfATreeWrittenWhileItIsRead_IsRefused_NamingThePath_AndPrintsNoRow()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var config = Sweepable();
+        var written = temp.Combine("mutations", "texts", "charge.before");
+        var token = TestContext.Current.CancellationToken;
+
+        // Once every file of the tree is hashed, as the reading's second look begins, the tree is written to.
+        var (service, _) = Prepare(
+            temp,
+            config,
+            reading: SyncKit.Service(
+                harness,
+                fileSystem: new WrittenAsTheSecondLookBegins(
+                    harness.FileSystem,
+                    temp.Path,
+                    () =>
+                    {
+                        File.WriteAllText(written, "c < b, and written since\n");
+                        File.SetLastWriteTimeUtc(written, File.GetLastWriteTimeUtc(written).AddSeconds(4));
+                    })));
+
+        // The real reading reads the tree's own configuration, which a listing's does; the command's own is the one it
+        // loaded, given to it by the loader a test doubles.
+        await harness.InitializeHarnessAsync(temp.Path, token, new HarnessConfig());
+
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => service.ListAsync(new MutationRequest(temp.Path, null, null, List: true), token));
+
+        Assert.Equal(LegExit.InputsMoved, refused.ExitCode);
+        Assert.Equal(
+            $"'{temp.Path}' changed while it was read: 'mutations/texts/charge.before' was written. Let it settle, then run again.",
+            refused.Message);
+    }
+
+    /// <summary>
+    /// A note whose base64 decodes to no JSON this build writes - a piece lost, a marker missed, a truncation that lands
+    /// aligned - is dropped as a damaged one is: the record then lacks that arm, which is pending, and never does the
+    /// dispatcher's run fail for what a host said in passing.
+    /// </summary>
+    [Fact]
+    public async Task ACorruptNote_IsDropped_NeverFailingTheDispatchersRun()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var config = Sweepable();
+
+        config.Hosts.Ssh["pi"] = new SshHostConfig { RepositoryPath = "/home/pi/repo" };
+        config.Legs["pi"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", Toolchain = "gcc", Project = "app", Ssh = "pi" };
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            // Decodable base64 holding no JSON: what a damaged note arrives as.
+            command.OnErrorLine?.Invoke(HostAgentProtocol.NoteLine(Request(command).Nonce!, NoteSink.ArmKind, last: true, Convert.ToBase64String("not json"u8)));
+
+            ScriptedHostCommands.Answer(command, """{"legs": [{"leg": "pi", "verdict": "passed", "durationSeconds": 1, "commandSeconds": 1}]}""");
+
+            return HostResults.Finished(command, 0);
+        });
+        var inspector = new RecordingInspector(host => host.Kind == HostKind.Local
+            ? new HostReport { Host = host, Os = "windows", Processor = "x86_64" }
+            : new HostReport { Host = host, Os = "linux", Processor = "arm64", Session = new HostSession(new HostConnection { Host = host, Address = "192.0.2.10" }, ".dotnet/tools/dssharness") });
+        var (service, context) = Prepare(temp, config, harness: harness, inspector: inspector, hosts: hosts);
+
+        var outcome = await service.RunAsync(new MutationRequest(temp.Path, ["pi"], null, Json: true), RunId.New(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Empty(new ArmVerdictRecord(harness.FileSystem, context.Layout).Read("pi").Arms);
+    }
+
+    /// <summary>
+    /// The real file system, save that <paramref name="move"/> runs once, as the tree's root is listed again after its
+    /// files began to be hashed: as a reading's second look begins, every hash taken.
+    /// </summary>
+    private sealed class WrittenAsTheSecondLookBegins(IFileSystem inner, string root, Action move) : PassThroughFileSystem(inner)
+    {
+        private bool _hashing;
+        private bool _moved;
+
+        public override Stream OpenRead(string path)
+        {
+            _hashing = true;
+            return base.OpenRead(path);
+        }
+
+        public override IEnumerable<string> EnumerateFiles(string path, bool recursive)
+        {
+            if (_hashing && !_moved && !recursive
+                && string.Equals(Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar), Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase))
+            {
+                _moved = true;
+                move();
+            }
+
+            return base.EnumerateFiles(path, recursive);
+        }
+    }
+
     /// <summary>The run request a host was sent, read from what its transport carried.</summary>
     private static HostAgentRequest Request(HostCommand command)
         => JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput.Read(), HostAgentProtocol.JsonOptions)!;
@@ -1827,7 +1931,8 @@ public sealed class MutationServiceTests
         IFileSystem? files = null,
         ScriptedHostCommands? hosts = null,
         IGitClient? git = null,
-        KnownTrees? trees = null)
+        KnownTrees? trees = null,
+        ISyncService? reading = null)
     {
         harness ??= new HarnessFactory();
 
@@ -1842,7 +1947,7 @@ public sealed class MutationServiceTests
         var loader = HostDoubles.Loader(config, temp.Path, temp.Path);
 
         return (
-            Service(harness, temp, loader, inspector ?? new RecordingInspector(host => new HostReport { Host = host }), files, hosts, git, trees),
+            Service(harness, temp, loader, inspector ?? new RecordingInspector(host => new HostReport { Host = host }), files, hosts, git, trees, reading),
             new HarnessContext(new HarnessLayout(temp.Path, temp.Path), config));
     }
 
@@ -1860,7 +1965,8 @@ public sealed class MutationServiceTests
         IFileSystem? files = null,
         ScriptedHostCommands? hosts = null,
         IGitClient? git = null,
-        KnownTrees? trees = null)
+        KnownTrees? trees = null,
+        ISyncService? reading = null)
     {
         var processes = Substitute.For<IProcessRunner>();
         var builds = Substitute.For<IBuildService>();
@@ -1901,7 +2007,7 @@ public sealed class MutationServiceTests
             loader,
             git ?? harness.GitClient,
             legRuns,
-            SyncKit.Service(harness, loader, git: git),
+            reading ?? SyncKit.Service(harness, loader, git: git),
             SyncKit.Transport(harness),
             builds,
             processes,

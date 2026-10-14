@@ -36,8 +36,11 @@ public sealed record ListedArm
     /// <summary>Each file of the tree its leg's build is generated from that moved since the verdict shown, as the record spells it.</summary>
     public IReadOnlyList<string> CausesMoved { get; init; } = [];
 
-    /// <summary>Whether what the configuration gives the configure changed since the verdict shown.</summary>
-    public bool GenerationMoved { get; init; }
+    /// <summary>
+    /// What the row says after <c>unmoved here, though</c>: the clauses naming what moved beside its key - the files its
+    /// build is generated from, and what the configuration gives its configure - joined; empty where none moved.
+    /// </summary>
+    public string Though { get; init; } = string.Empty;
 
     /// <summary>
     /// Every reason it is pending, the first that applies first; none where it is not. What the row and the leg's count
@@ -180,14 +183,29 @@ internal static class MutationListing
         var verdictShown = shown!;
         var causes = verdictShown.Entry.Causes;
 
+        // The files its build is generated from that moved list among causesMoved, the one closed shape of what moved
+        // beside the key; the row says them and what the configuration gives its configure.
+        var causesMoved = causes is null
+            ? (IReadOnlyList<string>)[]
+            : [.. causes.GeneratedFrom.Where(file => input.Tree.HashOf(file.Key) != file.Value).Select(file => file.Key).Order(StringComparer.Ordinal)];
+        var though = new List<string>();
+
+        if (causesMoved.Count > 0)
+        {
+            though.Add($"{ReportText.Counted(causesMoved.Count, "file")} its build is generated from moved ({ReportText.Listed(causesMoved)})");
+        }
+
+        if (causes is not null && input.Generation is not null && causes.Generation != input.Generation)
+        {
+            though.Add("what the configuration gives its configure changed");
+        }
+
         listed = listed with
         {
             Last = verdictShown.Entry,
             Files = verdictShown.Files,
-            CausesMoved = causes is null
-                ? []
-                : [.. causes.GeneratedFrom.Where(file => input.Tree.HashOf(file.Key) != file.Value).Select(file => file.Key).Order(StringComparer.Ordinal)],
-            GenerationMoved = causes is not null && input.Generation is not null && causes.Generation != input.Generation,
+            CausesMoved = causesMoved,
+            Though = string.Join(", and ", though),
         };
 
         if (verdictShown.Unmoved)
@@ -339,7 +357,6 @@ internal static class MutationListing
                         Read = new { arm.Texts, arm.Sites, arm.Files },
                         arm.NotRead,
                         arm.CausesMoved,
-                        arm.GenerationMoved,
                         Why = arm.Why.Select(reason => new
                         {
                             reason.Code,
@@ -372,20 +389,8 @@ internal static class MutationListing
             return $"pending: {arm.Why[0].Row}";
         }
 
-        var moved = new List<string>();
-
-        if (arm.CausesMoved.Count > 0)
-        {
-            moved.Add($"{ReportText.Counted(arm.CausesMoved.Count, "file")} its build is generated from moved ({ReportText.Listed(arm.CausesMoved)})");
-        }
-
-        if (arm.GenerationMoved)
-        {
-            moved.Add("what the configuration gives its configure changed");
-        }
-
-        return moved.Count > 0
-            ? $"unmoved here, though {string.Join(", and ", moved)}"
+        return arm.Though.Length > 0
+            ? $"unmoved here, though {arm.Though}"
             : $"unmoved here: its rows, {ReportText.Counted(arm.Texts, "text")}, {ReportText.Counted(arm.Sites, "site")} and "
                 + $"{ReportText.Counted(arm.Files, "file")} of the tree are as recorded";
     }

@@ -252,6 +252,108 @@ public sealed class CtestEntriesTests
         Assert.Equal([("WORKING_DIRECTORY", Path.Combine(Start, "tests"))], notApplied.Select(left => (left.Name, string.Join("|", left.Value))));
         Assert.Empty(CtestEntries.NotAppliedOf([another, same], same, Worker, Start, Names));
     }
+
+    /// <summary>
+    /// A test's command and working directory are compared as whole paths, each side made whole however it is spelled:
+    /// ctest's description writes forward slashes whatever the system, and the sweep's own strings carry the system's
+    /// separator, so a binary whose command is spelled with one separator is still the binary the sweep starts.
+    /// </summary>
+    [Fact]
+    public void ATestCommandSpeltWithEitherSeparator_IsStillThatBinarys()
+    {
+        var forward = Worker.Replace(Path.DirectorySeparatorChar, '/');
+        var tests = new[] { new CtestTest("lex_tests", [forward], []) };
+
+        var match = CtestEntries.For(tests, Worker, ["Fixture.Charge"], Start, Names);
+
+        Assert.Equal(CtestMatched.OneTest, match.Matched);
+        Assert.Equal($"ctest starts {Worker} as one test, 'lex_tests', with nothing a sweep does not apply", match.Said);
+
+        var sameOtherSpelt = new CtestTest(
+            "lex.Directory",
+            [Worker],
+            [new CtestProperty("WORKING_DIRECTORY", CtestValue.Of(Start.Replace(Path.DirectorySeparatorChar, '/')))]);
+
+        Assert.Empty(CtestEntries.NotAppliedOf([sameOtherSpelt], sameOtherSpelt, Worker, Start, Names));
+    }
+
+    /// <summary>
+    /// A fixture a test requires is named by its own name and by the tests that set it up: the FIXTURES_SETUP entries of
+    /// the other tests of the description, so the line says who would have made what a sweep does not.
+    /// </summary>
+    [Fact]
+    public void ARequiredFixture_IsNamedWithTheTestsThatSetUpIt()
+    {
+        var requires = new CtestTest("lex.CacheTest", [Worker], [new CtestProperty("FIXTURES_REQUIRED", CtestValue.Of(["warm_cache"]))]);
+        var setUp = new CtestTest(
+            "lex.cache_warm",
+            [Path.Combine(Start, "cache_warm")],
+            [new CtestProperty("FIXTURES_SETUP", CtestValue.Of(["warm_cache"]))]);
+
+        var notApplied = CtestEntries.NotAppliedOf([requires, setUp], requires, Worker, Start, Names);
+
+        Assert.Equal([("FIXTURES_REQUIRED", "warm_cache", "lex.cache_warm")], notApplied.Select(left => (left.Name, string.Join("|", left.Value), string.Join("|", left.SetUpBy ?? []))));
+
+        var match = CtestEntries.For([requires, setUp], Worker, ["CacheTest"], Start, Names);
+
+        Assert.Equal(
+            $"ctest starts {Worker} as one test, 'lex.CacheTest', whose FIXTURES_REQUIRED (warm_cache, set up by test 'lex.cache_warm') a sweep does not apply",
+            match.Said);
+    }
+
+    /// <summary>
+    /// Everything of a test's entry a sweep does not apply is named, in one closed list - the seventeen names spelled here
+    /// apart, so a name dropped or mistyped in the code's own list changes this verdict - a test declaring every property
+    /// of the list has each named back, an environment by its variables and never its values, the command's arguments
+    /// last.
+    /// </summary>
+    [Fact]
+    public void EverythingOfATestsEntryASweepDoesNotApply_IsNamed_InOneClosedList()
+    {
+        string[] closed =
+        [
+            "ENVIRONMENT",
+            "ENVIRONMENT_MODIFICATION",
+            "WORKING_DIRECTORY",
+            "FIXTURES_REQUIRED",
+            "FIXTURES_SETUP",
+            "FIXTURES_CLEANUP",
+            "DEPENDS",
+            "REQUIRED_FILES",
+            "RESOURCE_LOCK",
+            "RUN_SERIAL",
+            "TIMEOUT",
+            "WILL_FAIL",
+            "PASS_REGULAR_EXPRESSION",
+            "FAIL_REGULAR_EXPRESSION",
+            "SKIP_REGULAR_EXPRESSION",
+            "SKIP_RETURN_CODE",
+            "DISABLED",
+        ];
+
+        Assert.Equal(closed, CtestEntries.NotAppliedNames);
+
+        var test = new CtestTest(
+            "lex.Everything",
+            [Worker, "--verbose"],
+            [.. closed.Select(name => new CtestProperty(name, name switch
+            {
+                "ENVIRONMENT" => CtestValue.Of(["LEX_CACHE_DIR=/tmp/cache"]),
+                "ENVIRONMENT_MODIFICATION" => CtestValue.Of(["LEX_MODE:reset=1"]),
+                "WORKING_DIRECTORY" => CtestValue.Of(Path.Combine(Start, "tests")),
+                "FIXTURES_REQUIRED" or "FIXTURES_SETUP" or "FIXTURES_CLEANUP" => CtestValue.Of(["warm_cache"]),
+                "TIMEOUT" => CtestValue.Of(120),
+                "SKIP_RETURN_CODE" => CtestValue.Of(2),
+                "RUN_SERIAL" or "WILL_FAIL" or "DISABLED" => CtestValue.Of(true),
+                _ => CtestValue.Of("anything"),
+            }))]);
+
+        var notApplied = CtestEntries.NotAppliedOf([test], test, Worker, Start, Names);
+
+        Assert.Equal([.. closed, "arguments"], notApplied.Select(left => left.Name));
+        Assert.Equal(["LEX_CACHE_DIR"], notApplied[0].Value);
+        Assert.Equal(["LEX_MODE"], notApplied[1].Value);
+    }
 }
 
 /// <summary>

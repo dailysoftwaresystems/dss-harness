@@ -8,6 +8,7 @@ using RepoHarness.Core.Processes;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Runs;
+using RepoHarness.Core.Testing;
 
 namespace RepoHarness.Tests;
 
@@ -489,6 +490,63 @@ public sealed class RemoteLegRunnerTests
         Assert.Equal(LegVerdict.Poisoned, floor.Verdict);
         Assert.Equal((null, null, null, null, null), (floor.Worker, floor.Cases, floor.Reds, floor.Records, floor.Key));
         Assert.Equal(["Fixture.Floor"], floor.DeclaredReds);
+    }
+
+    /// <summary>
+    /// Each control a host's sweep stopped is carried on its leg's line as the host judged it, read from the very
+    /// document a host writes: its detail named by the host this machine knows, its records named as the host names them,
+    /// which stay on that host, and what ctest registered for its red cases carried whole - the match, the tests, and
+    /// what of each a sweep does not apply.
+    /// </summary>
+    [Fact]
+    public async Task EachControlAHostsSweepStopped_IsCarriedOnItsLegsLine_WithWhatCtestRegistered()
+    {
+        var written = LedgerReport
+            .From(
+                [
+                    new LegEntry
+                    {
+                        Leg = "wsl-debug",
+                        Verdict = LegVerdict.Failed,
+                        Detail = "the unmutated fixture_tests has 1 red: Fixture.Depth",
+                        Controls =
+                        [
+                            new ControlEntry(
+                                "fixture_tests",
+                                "failed",
+                                "the unmutated fixture_tests has 1 red: Fixture.Depth; ctest registers 'Fixture.Depth' as test 'lex.depth', whose TIMEOUT (120) a sweep does not apply",
+                                ["Fixture.Depth"],
+                                "/home/dev/repo/.harness-config/runs/r/wsl-debug/controls/fixture_tests",
+                                new CtestControl(
+                                    Matched: "by-name",
+                                    Unread: null,
+                                    Tests: [new CtestTestLine("lex.depth", ["Fixture.Depth"], [new NotApplied("TIMEOUT", ["120"])])])),
+                        ],
+                    },
+                ],
+                durationWarningFactor: 0)
+            .ToJson(cancelled: false, unfinished: []);
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            Answer(command, written);
+
+            return HostResults.Finished(command, 0);
+        });
+
+        var entry = await Runner(hosts).RunAsync(MutationService.CommandName, Leg(), [], cancellationToken: TestContext.Current.CancellationToken);
+
+        var control = Assert.Single(entry.Controls);
+
+        Assert.Equal(
+            ("fixture_tests", "failed", "the unmutated fixture_tests has 1 red: Fixture.Depth; ctest registers 'Fixture.Depth' as test 'lex.depth', whose TIMEOUT (120) a sweep does not apply", "Fixture.Depth", "/home/dev/repo/.harness-config/runs/r/wsl-debug/controls/fixture_tests"),
+            (control.Runner, control.Verdict, control.Detail, Assert.Single(control.Reds), control.Records));
+
+        var ctest = control.Ctest!;
+
+        Assert.Equal("by-name", ctest.Matched);
+        Assert.Null(ctest.Unread);
+        Assert.Equal([("lex.depth", "Fixture.Depth", "TIMEOUT", "120")], ctest.Tests.Select(test => (test.Test, string.Join(", ", test.Cases), test.NotApplied[0].Name, test.NotApplied[0].Value[0])));
     }
 
     /// <summary>

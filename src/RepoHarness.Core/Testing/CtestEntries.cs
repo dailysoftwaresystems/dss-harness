@@ -177,7 +177,7 @@ public static class CtestEntries
             }
             else if (property.Name == "WORKING_DIRECTORY")
             {
-                if (property.Value.Shown is [var directory] && !names.Equals(Whole(directory, start), start))
+                if (property.Value.Shown is [var directory] && !names.Equals(Whole(directory, start), Whole(start, start)))
                 {
                     notApplied.Add(new NotApplied(property.Name, property.Value.Shown));
                 }
@@ -320,7 +320,7 @@ public static class CtestEntries
     /// <summary>Whether <paramref name="test"/>'s command starts the binary <paramref name="program"/>, as one of its words, compared as full paths.</summary>
     private static bool Starts(CtestTest test, string program, string start, StringComparer names)
         => test.Command is { } command
-            && command.Any(word => names.Equals(Whole(word, start), program));
+            && command.Any(word => names.Equals(Whole(word, start), Whole(program, start)));
 
     /// <summary>
     /// The words of <paramref name="command"/> around the program <paramref name="program"/>: those after it, and where
@@ -337,7 +337,7 @@ public static class CtestEntries
 
         for (var index = 0; index < words.Count; index++)
         {
-            if (names.Equals(Whole(words[index], start), program))
+            if (names.Equals(Whole(words[index], start), Whole(program, start)))
             {
                 at = index;
                 break;
@@ -352,9 +352,13 @@ public static class CtestEntries
         return at == 0 ? [.. words.Skip(1)] : [.. words.Take(at), .. words.Skip(at + 1)];
     }
 
-    /// <summary><paramref name="path"/> as a full path, made whole against <paramref name="start"/> where it is relative.</summary>
+    /// <summary>
+    /// <paramref name="path"/> as a full path, made whole and canonical against <paramref name="start"/> however either is
+    /// spelled: ctest's description writes forward slashes whatever the system, and a relative path is the test command's
+    /// own to resolve from where it starts.
+    /// </summary>
     private static string Whole(string path, string start)
-        => Path.IsPathRooted(path) ? path : Path.GetFullPath(path, start);
+        => Path.GetFullPath(path, start);
 
     /// <summary>The variable a value of an environment names, which is all a line shows of it: never its operation or value.</summary>
     private static string VariableOf(string value)

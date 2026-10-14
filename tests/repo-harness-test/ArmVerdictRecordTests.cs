@@ -291,14 +291,20 @@ public sealed class ArmVerdictRecordTests : IDisposable
 
     /// <summary>
     /// A record a hand damaged - an arm's entries or a table's index turned to null, a null inside an arm's entries, an
-    /// entry given a key and nothing it was judged on - is refused as unreadable, naming the file and what to do, never
-    /// reaching a comparison of it as a crash.
+    /// entry given a key and nothing it was judged on, a null inside what it was judged on where no null goes - is refused
+    /// as unreadable, naming the file and what to do, never reaching a comparison of it as a crash.
     /// </summary>
     [Theory]
     [InlineData("""{ "format": 1, "leg": "native", "arms": { "charge": null }, "tables": {} }""", "it holds no list of entries for arm 'charge'")]
     [InlineData("""{ "format": 1, "leg": "native", "arms": { "charge": [null] }, "tables": {} }""", "it holds what no build of DssHarness writes - another build wrote it, or a hand changed it")]
     [InlineData("""{ "format": 1, "leg": "native", "arms": {}, "tables": { "77a0": null } }""", "it holds no table index for '77a0'")]
     [InlineData("""{ "format": 1, "leg": "native", "arms": { "charge": [ { "verdict": "passed", "run": "r1", "at": "2026-10-12T14:58:11Z", "sweptIn": "the main checkout", "key": "k1" } ] }, "tables": {} }""", "it holds an entry of arm 'charge' with the key 'k1' and nothing it was judged on")]
+    [InlineData(DamagedBuilt, "it holds an entry of arm 'charge' whose target 'lib_tests' is named by no digest")]
+    [InlineData(DamagedRunRead, "it holds an entry of arm 'charge' whose run-time read 'data/golden.txt' is named by no hash")]
+    [InlineData(DamagedCompiler, "it holds an entry of arm 'charge' with a compiler that is no compiler")]
+    [InlineData(DamagedRows, "it holds what no build of DssHarness writes - another build wrote it, or a hand changed it")]
+    [InlineData(DamagedHost, "it holds what no build of DssHarness writes - another build wrote it, or a hand changed it")]
+    [InlineData(DamagedSettings, "it holds what no build of DssHarness writes - another build wrote it, or a hand changed it")]
     public void ARecordAHandDamaged_IsRefusedAsUnreadable_NamingWhatIsWrong(string held, string why)
     {
         var file = Record.FileOf(Leg);
@@ -320,6 +326,43 @@ public sealed class ArmVerdictRecordTests : IDisposable
         Assert.Equal(why, weighed.Unread?.Why);
         Assert.Empty(weighed.Arms);
     }
+
+    /// <summary>The entry every damaged judgement is written around: a verdict with a key, judged on a whole <c>judgedOn</c>.</summary>
+    private const string EntryHead =
+        """{ "format": 1, "leg": "native", "arms": { "charge": [ { "verdict": "passed", "run": "r1", "at": "2026-10-12T14:58:11Z", "sweptIn": "the main checkout", "key": "k1", "judgedOn": """;
+
+    /// <summary>The record's tail after the judgement: the entry's list, the arm's, the tables and the document's.</summary>
+    private const string EntryTail = """ } ] }, "tables": {} }""";
+
+    /// <summary>An entry whose target's table is named by no digest: <c>"built": {"lib_tests": null}</c>.</summary>
+    private const string DamagedBuilt = EntryHead
+        + """{ "judge": 2, "rows": { "a": "rows" }, "texts": {}, "sites": {}, "built": { "lib_tests": null }, "compilers": [], "developerEnvironment": null, "settings": { "build": "b", "run": "r", "judge": "j" }, "runReads": {}, "host": "local" }"""
+        + EntryTail;
+
+    /// <summary>An entry whose run-time read is named by no hash: <c>"runReads": {"data/golden.txt": null}</c>.</summary>
+    private const string DamagedRunRead = EntryHead
+        + """{ "judge": 2, "rows": { "a": "rows" }, "texts": {}, "sites": {}, "built": {}, "compilers": [], "developerEnvironment": null, "settings": { "build": "b", "run": "r", "judge": "j" }, "runReads": { "data/golden.txt": null }, "host": "local" }"""
+        + EntryTail;
+
+    /// <summary>An entry with a null where one of its members goes: <c>"host": null</c> - refused as what no build writes, its own reader letting no null into a member.</summary>
+    private const string DamagedHost = EntryHead
+        + """{ "judge": 2, "rows": { "a": "rows" }, "texts": {}, "sites": {}, "built": {}, "compilers": [], "developerEnvironment": null, "settings": { "build": "b", "run": "r", "judge": "j" }, "runReads": {}, "host": null }"""
+        + EntryTail;
+
+    /// <summary>An entry with a null where one of its members goes: <c>"settings": null</c> - refused as what no build writes, its own reader letting no null into a member.</summary>
+    private const string DamagedSettings = EntryHead
+        + """{ "judge": 2, "rows": { "a": "rows" }, "texts": {}, "sites": {}, "built": {}, "compilers": [], "developerEnvironment": null, "settings": null, "runReads": {}, "host": "local" }"""
+        + EntryTail;
+
+    /// <summary>An entry with a compiler that is no compiler: <c>"compilers": [null]</c>.</summary>
+    private const string DamagedCompiler = EntryHead
+        + """{ "judge": 2, "rows": { "a": "rows" }, "texts": {}, "sites": {}, "built": {}, "compilers": [null], "developerEnvironment": null, "settings": { "build": "b", "run": "r", "judge": "j" }, "runReads": {}, "host": "local" }"""
+        + EntryTail;
+
+    /// <summary>An entry with a null where one of its members goes: <c>"rows": null</c> - refused as what no build writes, its own reader letting no null into a member.</summary>
+    private const string DamagedRows = EntryHead
+        + """{ "judge": 2, "rows": null, "texts": {}, "sites": {}, "built": {}, "compilers": [], "developerEnvironment": null, "settings": { "build": "b", "run": "r", "judge": "j" }, "runReads": {}, "host": "local" }"""
+        + EntryTail;
 
     /// <summary>
     /// What the record holds of the arms a sweep under --pending weighs is every entry of each, under any spelling of its

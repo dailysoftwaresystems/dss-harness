@@ -4,6 +4,7 @@ using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Results;
+using RepoHarness.Core.Testing;
 
 namespace RepoHarness.Tests;
 
@@ -346,6 +347,69 @@ public sealed class LedgerReportTests
 
         Assert.False(legs[0].TryGetProperty("keptOutputs", out _));
         Assert.Equal(["a/artifacts/r/lin/pack/payload.txt"], legs[1].GetProperty("keptOutputs").EnumerateArray().Select(path => path.GetString()));
+    }
+
+    /// <summary>
+    /// The document carries each control of a leg's sweep that did not pass - its runner, verdict, detail and red cases,
+    /// where its records are as the reader is told them, and what ctest registered for its red cases: how they were
+    /// matched, or why ctest could not say, and what of each test it names a sweep does not apply; a leg no control
+    /// stopped carries none.
+    /// </summary>
+    [Fact]
+    public void TheDocument_CarriesEachControlThatDidNotPass_WithWhatCtestRegistered()
+    {
+        var registered = new CtestTestLine(
+            "lex.CacheTest.ReadsWarm",
+            ["CacheTest.ReadsWarm"],
+            [new NotApplied("FIXTURES_REQUIRED", ["warm_cache"], ["lex.cache_warm"]), new NotApplied("ENVIRONMENT", ["LEX_CACHE_DIR"])]);
+        var stopped = new ControlEntry(
+            "lex_tests",
+            "failed",
+            "the unmutated lex_tests has 1 red: CacheTest.ReadsWarm",
+            ["CacheTest.ReadsWarm"],
+            "/home/dev/repo/.harness-config/runs/r/lin/controls/lex_tests",
+            new CtestControl(Matched: "by-name", Unread: null, Tests: [registered]));
+        var report = LedgerReport.From(
+        [
+            Entry("win", LegVerdict.Passed, TimeSpan.FromSeconds(1), string.Empty),
+            Entry("lin", LegVerdict.Failed, TimeSpan.FromSeconds(1), string.Empty) with { Controls = [stopped] },
+        ],
+        durationWarningFactor: 0);
+
+        using var document = JsonDocument.Parse(report.ToJson(cancelled: false, unfinished: [], shown: text => "~" + text));
+        var legs = document.RootElement.GetProperty("legs").EnumerateArray().ToList();
+
+        Assert.False(legs[0].TryGetProperty("controls", out _));
+
+        var control = legs[1].GetProperty("controls")[0];
+
+        Assert.Equal(
+            ("lex_tests", "failed", "~the unmutated lex_tests has 1 red: CacheTest.ReadsWarm", "CacheTest.ReadsWarm", "~/home/dev/repo/.harness-config/runs/r/lin/controls/lex_tests"),
+            (control.GetProperty("runner").GetString(), control.GetProperty("verdict").GetString(), control.GetProperty("detail").GetString(),
+                control.GetProperty("reds")[0].GetString(), control.GetProperty("records").GetString()));
+
+        var ctest = control.GetProperty("ctest");
+
+        Assert.Equal("by-name", ctest.GetProperty("matched").GetString());
+        Assert.False(ctest.TryGetProperty("unread", out _));
+
+        var test = ctest.GetProperty("tests")[0];
+
+        Assert.Equal(("lex.CacheTest.ReadsWarm", "CacheTest.ReadsWarm"), (test.GetProperty("test").GetString(), test.GetProperty("cases")[0].GetString()));
+
+        var notApplied = test.GetProperty("notApplied").EnumerateArray().ToList();
+        string? SetUpBy(JsonElement element)
+            => element.TryGetProperty("setUpBy", out var setUp) && setUp.GetArrayLength() > 0 ? setUp[0].GetString() : null;
+
+        var expected = new List<(string? Name, string? Value, string? SetUpBy)>
+        {
+            ("FIXTURES_REQUIRED", "warm_cache", "lex.cache_warm"),
+            ("ENVIRONMENT", "LEX_CACHE_DIR", null),
+        };
+
+        Assert.Equal(
+            expected,
+            notApplied.Select(each => (each.GetProperty("name").GetString(), each.GetProperty("value")[0].GetString(), SetUpBy(each))));
     }
 
     [Fact]

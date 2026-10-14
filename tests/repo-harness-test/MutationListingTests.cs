@@ -84,6 +84,40 @@ public sealed class MutationListingTests
     }
 
     /// <summary>
+    /// The files its build is generated from that moved list among <c>causesMoved</c>, the one closed shape of what moved
+    /// beside the key: the document carries no member of their own, and the row says both them and what the configuration
+    /// gives the configure, where either moved.
+    /// </summary>
+    [Fact]
+    public void TheFilesItsBuildIsGeneratedFrom_ListAmongCausesMoved_WithNoMemberOfTheirOwn()
+    {
+        var listing = new Listing();
+
+        listing.Tree["CMakeLists.txt"] = "edited";
+
+        var configured = MutationListing.Of(listing.Input() with { Generation = "another" });
+
+        using var document = JsonDocument.Parse(MutationListing.Json([configured], "arms.txt", "the record", text => text));
+        var arm = document.RootElement.GetProperty("legs")[0].GetProperty("arms")[0];
+
+        Assert.Equal(["CMakeLists.txt"], arm.GetProperty("causesMoved").EnumerateArray().Select(file => file.GetString()));
+        Assert.False(arm.TryGetProperty("generationMoved", out _));
+
+        Assert.EndsWith(
+            "unmoved here, though 1 file(s) its build is generated from moved (CMakeLists.txt), and what the configuration gives its configure changed",
+            MutationListing.Table([configured], text => text)[2],
+            StringComparison.Ordinal);
+
+        var editedOnly = MutationListing.Of(listing.Input());
+
+        Assert.Equal(["CMakeLists.txt"], Assert.Single(editedOnly.Arms).CausesMoved);
+        Assert.EndsWith(
+            "unmoved here, though 1 file(s) its build is generated from moved (CMakeLists.txt)",
+            MutationListing.Table([editedOnly], text => text)[2],
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A run-read file that leaves what its runner's entry covers - moved out of the directory it names, so the file is
     /// still in the tree and only what covers it is gone - moves the key as one whose content changed does.
     /// </summary>

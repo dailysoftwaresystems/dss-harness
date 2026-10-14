@@ -177,7 +177,7 @@ public sealed class HostAgentServiceTests
 
     /// <summary>
     /// A command a host serves for another machine tells it something while it runs by notes on its own standard error:
-    /// each whole note cut into pieces of at most <see cref="HostAgentProtocol.CarriedPiece"/> bytes, each piece one line
+    /// each whole note cut into pieces of at most <see cref="HostAgentProtocol.NotePiece"/> bytes, each piece one line
     /// carrying the request's nonce, its kind and whether it is the last, so the machine that asked reads it whole and
     /// relays none of it. A note of nothing is one line, so no reader is left waiting for a last piece that says nothing;
     /// and nothing is written where no machine asked, which is a command typed on the host by hand.
@@ -190,7 +190,7 @@ public sealed class HostAgentServiceTests
             CommandOrigin.Served(Dispatch.Of(new HostAgentRequest { Kind = HostAgentRequestKind.Run, Arguments = ["check-mutations"], Nonce = Nonce })),
             new ConsoleHarnessOutput(new StringWriter(), lines, verbose: false));
 
-        notes.Write(NoteSink.ArmKind, new string('t', HostAgentProtocol.CarriedPiece * 2 + 3));
+        notes.Write(NoteSink.ArmKind, new string('t', HostAgentProtocol.NotePiece(NoteSink.ArmKind) * 2 + 3));
         notes.Write(NoteSink.VerifiedKind, string.Empty);
         new HostNotes(CommandOrigin.Typed, new ConsoleHarnessOutput(new StringWriter(), lines, verbose: false)).Write(NoteSink.ArmKind, "typed by hand");
 
@@ -207,10 +207,52 @@ public sealed class HostAgentServiceTests
             gathered.AddRange(Convert.FromBase64String(base64));
         }
 
-        Assert.Equal(new string('t', HostAgentProtocol.CarriedPiece * 2 + 3), System.Text.Encoding.UTF8.GetString([.. gathered]));
+        Assert.Equal(new string('t', HostAgentProtocol.NotePiece(NoteSink.ArmKind) * 2 + 3), System.Text.Encoding.UTF8.GetString([.. gathered]));
 
         Assert.True(HostAgentProtocol.TryReadNoteLine(written[3], out var nonceOfNone, out var kindOfNone, out var lastOfNone, out var base64OfNone));
         Assert.Equal((Nonce, NoteSink.VerifiedKind, true, ""), (nonceOfNone, kindOfNone, lastOfNone, base64OfNone));
+    }
+
+    /// <summary>
+    /// Every line a note is cut into fits whole what a stream kept as a tail is handed on in - the longest line the
+    /// process reader hands on, which cuts a longer one in two and would land the note's base64 damaged: fed through that
+    /// very cut, each piece arrives whole and the note reads back as it was written, however many pieces it took.
+    /// </summary>
+    [Fact]
+    public void EachLineOfANote_FitsWhatAReaderHandsOnInPieces()
+    {
+        var lines = new StringWriter();
+        var notes = new HostNotes(
+            CommandOrigin.Served(Dispatch.Of(new HostAgentRequest { Kind = HostAgentRequestKind.Run, Arguments = ["check-mutations"], Nonce = Nonce })),
+            new ConsoleHarnessOutput(new StringWriter(), lines, verbose: false));
+        var text = new string('t', HostAgentProtocol.NotePiece(NoteSink.VerifiedKind) * 2 + 3);
+
+        notes.Write(NoteSink.VerifiedKind, text);
+
+        var written = lines.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(line => line.TrimEnd('\r')).ToList();
+
+        // The real cut the dispatcher's tail-kept standard error is read through.
+        var read = new List<string>();
+        var splitter = new LineSplitter(read.Add, ProcessRunner.LongestLine);
+
+        foreach (var line in written)
+        {
+            splitter.Add(line + "\n");
+        }
+
+        splitter.End();
+
+        Assert.Equal(written, read);
+
+        var noted = new List<(string Kind, string Text)>();
+        var agent = new HostAgentLines(Nonce, (kind, body) => noted.Add((kind, body)));
+
+        foreach (var line in read)
+        {
+            Assert.False(agent.Error(line), "no piece of a note is relayed");
+        }
+
+        Assert.Equal([(NoteSink.VerifiedKind, text)], noted);
     }
 
     [Fact]
