@@ -679,8 +679,9 @@ it is given - or anywhere in the tree, off the floor, with `--all` (`RefreshRequ
 no path beside it - refused, copying nothing, where the agent changed or deleted one of them (`EditedAsync`, the same
 comparison asked of the agent's worktree). What it does is measured in one place, beside the fold's and the move's
 (`AgentFold.MeasureRefreshAsync`, a `RefreshPlan`): a path the agent already holds as the main tree does - the same file,
-or absent from both - is recorded as shared at what both held when it was measured, the file whole with its bit, its
-bytes kept from the agent's copy (`AgentFold.AlikeAsync`), listed, and written only with `--apply`, so its record says
+or no file in either, a directory of the agent's own files there included - is recorded as shared at what both held
+when it was measured, the file whole with its bit, its bytes kept from the agent's copy (`AgentFold.AlikeAsync`),
+listed, and written only with `--apply`, so its record says
 what it holds and the next move of the main tree hands it; dropped unrecorded, as before, the agent's copy read as its
 change from then on. `--stale <path>` hands the main tree's copy over a path the agent changed only where its copy is
 proved the main tree's own at an earlier commit (`AgentFold.StaleAtAsync`, asked once for every path a refusal or a
@@ -825,7 +826,11 @@ empty, where asked for both at once it finds that gone and stops, and a submodul
 place, hidden from git. Where the worktree's file system finds a name in any case, a file the new base renamed in case
 alone is that one file (`AgentFold.RenamedInCase`): what the worktree holds at the new name is the file at the old one,
 never a file the agent made there, and the new name is written last, once the old is removed - written first, the
-removal of the old name would take it. The record names where the move goes (`Moving`) before anything is written, then the new
+removal of the old name would take it. It comes in only with its old name: where the agent keeps what it holds there -
+declared settled, shared with the main tree, or its own change - the new name refuses the move, naming both, since
+writing it would write over that. The record names where the move goes (`Moving`) before anything is written; then each
+path the move takes is asked to hold what was measured there (`RebasePlan.Held`, `AgentFold.RequireTakenAsync`), so a
+file the agent's session wrote since stops the move, exit 21, before git writes anything, never written over; then the new
 base's paths are written, HEAD and the index move (`git reset --mixed`), then the record and the worktree's base ref
 name the new base: a move that stopped part way, exit 21, is finished where it was going by running rebase-agent
 again - the command its last words name, with every `--merge` and `--settled` the move was given, a merge it wrote
@@ -866,7 +871,8 @@ git, with no word of when it came. A file of a submodule of the main tree's in t
 holds, where git looks at nothing and `check-ignore` answers nothing - came as that record did: by a commit where HEAD
 holds it, then changed by an uncommitted edit where status lists the record, and by an uncommitted edit where only the
 index holds it (`Came`, the one wording of how a path came to be held, and `Since`, of what the main tree did, both
-decided once). A shared path's
+decided once). The base's entry and HEAD's are found alike, as git spells the path where the repository ignores case,
+so a rename of case alone is the commit's that made it, and none other's. A shared path's
 refusal says the main tree changed it after the agent was last handed it or folded, which the seed records alike. A deletion needs the same baseline proof a copy does. A directory with no `.git` of its own
 holds no file at its path, so a file the agent turned into a directory folds as the file's deletion and the directory's
 files, and a directory it turned into a file as the files' deletions and the file: every removal is made first, with
@@ -882,7 +888,12 @@ weigh is refused as a misspelling. So is a `--merge`
 naming no path the fold weighs, while one naming a path it weighs with nothing left to merge is let stand, so the
 command line of a fold that stopped part way runs again. A path named with both `--merge` and `--settled` is a usage
 error, exit 10, before anything is read, and a `--merge` naming an anchor registry or the arm registry is refused. A path the main
-tree already holds as the agent does is already in, so a fold run again finds its own writes. A path this process
+tree already holds as the agent does is already in, so a fold run again finds its own writes. Where the agent's
+worktree finds a name in any case, two paths it changes that differ in case alone are one file there, each read only
+where a tree holds it so spelled (`PathCase.Spelled`), never as the other; where the agent's worktree spells that file
+otherwise than the main tree, which finds a name in any case too, the agent renamed it in case alone, which a fold
+cannot write - the main tree's git would go on naming the file as before - so it is refused by name, saying to run
+`git mv` there; once that is run, the old name is already in, absent from both. A path this process
 cannot look at is never read as absent, which would take the agent's file for its deletion: the fold fails before
 anything is written. A file of either tree that changed after it was weighed is never written over: the agent's copy is
 refused where it no longer holds the SHA-256 weighed (`VerifiedFileCopy`), and the main tree's file is weighed again

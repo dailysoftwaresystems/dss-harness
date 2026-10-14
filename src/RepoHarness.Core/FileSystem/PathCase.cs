@@ -32,4 +32,46 @@ public static class PathCase
             ? StringComparer.OrdinalIgnoreCase
             : StringComparer.Ordinal;
     }
+
+    /// <summary>
+    /// <paramref name="path"/> as the tree at <paramref name="root"/> spells it, part by part as each directory lists its
+    /// names - the very spelling where the tree holds one so spelled, and otherwise, where its file system finds a name in
+    /// any case, the one it holds in another case - or null where it holds nothing there.
+    /// </summary>
+    /// <param name="fileSystem">The file system to ask.</param>
+    /// <param name="root">The tree's root, a directory that exists.</param>
+    /// <param name="path">A path relative to it, with forward separators.</param>
+    public static string? Spelled(IFileSystem fileSystem, string root, string path)
+    {
+        ArgumentNullException.ThrowIfNull(fileSystem);
+        ArgumentNullException.ThrowIfNull(root);
+        ArgumentNullException.ThrowIfNull(path);
+
+        var names = In(fileSystem, root);
+        var parts = path.Split('/');
+        var directory = root;
+
+        for (var index = 0; index < parts.Length; index++)
+        {
+            if (!fileSystem.DirectoryExists(directory))
+            {
+                return null;
+            }
+
+            // What a directory along the path holds is a directory; the path itself may be anything.
+            var held = fileSystem.EnumerateDirectories(directory);
+            var listed = (index == parts.Length - 1 ? held.Concat(fileSystem.EnumerateFiles(directory, recursive: false)) : held).Select(Path.GetFileName).ToList();
+            var name = listed.Find(name => string.Equals(name, parts[index], StringComparison.Ordinal)) ?? listed.Find(name => names.Equals(name, parts[index]));
+
+            if (name is null)
+            {
+                return null;
+            }
+
+            parts[index] = name;
+            directory = Path.Combine(directory, name);
+        }
+
+        return string.Join('/', parts);
+    }
 }

@@ -837,6 +837,31 @@ public sealed class AgentServiceTests
     }
 
     /// <summary>
+    /// A file the main tree deleted that the agent turned into a directory of files of its own is a path holding no file in
+    /// either tree: the refresh records it as absent from both, its dry run and its --apply alike, and the agent's
+    /// directory stays as it is.
+    /// </summary>
+    [Fact]
+    public async Task AFileTheMainTreeDeleted_ThatTheAgentTurnedIntoADirectory_IsRecordedAbsentFromBoth()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        File.Delete(Path.Combine(kit.Main, "a.txt"));
+        File.Delete(Path.Combine(worktree, "a.txt"));
+        OrchestrationKit.Write(worktree, "a.txt/inner.md", "the agent's\n");
+
+        var dry = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", new RefreshRequest { All = true }, apply: false, Token);
+        var applied = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", new RefreshRequest { All = true }, apply: true, Token);
+
+        Assert.True(dry.Succeeded, OrchestrationKit.Describe(dry));
+        Assert.Contains("  a.txt", dry.Details!);
+        Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
+        Assert.Contains("a.txt", kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!.Absent ?? []);
+        Assert.Equal("the agent's\n", OrchestrationKit.Read(worktree, "a.txt/inner.md"));
+    }
+
+    /// <summary>
     /// A path the agent already holds as the main tree does is recorded as shared with the bit it was measured with, not
     /// the bit its session gives it meanwhile: the record then says what both trees held, and the next refresh leaves the
     /// session's change of the bit as the agent's own instead of weighing the path moved and silently undoing it.

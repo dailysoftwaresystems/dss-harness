@@ -1652,6 +1652,85 @@ public sealed class AgentRebaseTests
         Assert.Empty((await kit.Harness.RunGitAsync(worktree, ["status", "--porcelain"], Token)).StandardOutput.Trim());
     }
 
+    /// <summary>
+    /// A file the main tree renamed in case alone comes in only with its old name, where the worktree's file system finds a
+    /// name in any case: where the agent keeps what it holds at the old name - declared settled, shared with the main
+    /// tree, or changed and refused - the move is refused naming both, and the agent's file is not written over.
+    /// </summary>
+    /// <param name="kept">How the agent keeps the old name: declared settled, shared, or changed.</param>
+    [Theory]
+    [InlineData("settled")]
+    [InlineData("shared")]
+    [InlineData("changed")]
+    public async Task AFileTheMainTreeRenamedInCase_WhoseOldNameTheAgentKeeps_RefusesTheMove_NamingBoth(string kept)
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        Assert.SkipUnless(await kit.Harness.GitClient.IgnoresCaseAsync(kit.Main, Token), "Only a repository that ignores case holds a rename of case alone as the same file.");
+
+        if (kept == "shared")
+        {
+            // Handed to the agent as it is made: a path it shares with the main tree.
+            OrchestrationKit.Write(kit.Main, "a.txt", "one\nhanded\n");
+        }
+
+        var worktree = await kit.CreateAgentAsync("ag");
+        var at = ReportText.Commit(kit.Record("ag").Base!);
+        OrchestrationKit.Write(worktree, "a.txt", "one\nthe agent's\n");
+        await kit.GitAsync(kit.Main, "mv", "a.txt", "A.txt");
+        await kit.Harness.CommitAllAsync(kit.Main, "a sibling's rename", Token);
+        var tail = kept switch
+        {
+            "settled" => "declared settled: fold it into the main tree first, and run again without --settled for it",
+            "shared" => "which the agent shares with the main tree: refresh-agent hands it what the main tree holds there first",
+            _ => "which the agent changed: fold it into the main tree first, and run again",
+        };
+
+        var refused = await RebaseAsync(kit, apply: true, kept == "settled" ? new[] { "a.txt" } : []);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(
+            $"  'A.txt': the main tree committed it since the agent's base {at}, renaming 'a.txt' in case alone, and the agent's worktree finds both names as one "
+                + $"file, so writing it would write over 'a.txt', {tail}",
+            refused.Details!);
+        Assert.Equal("one\nthe agent's\n", OrchestrationKit.Read(worktree, "a.txt"));
+        Assert.Equal(at, ReportText.Commit(kit.Record("ag").Base!));
+    }
+
+    /// <summary>
+    /// A file the move takes that the agent's session writes after it was weighed is never written over: the move stops
+    /// before git writes anything, exit 21, naming it, and the session's file stays as it wrote it.
+    /// </summary>
+    [Fact]
+    public async Task AFileTheAgentsSessionWritesAfterItWasWeighed_StopsTheMove_AndIsNotWrittenOver()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        var from = kit.Record("ag").Base!;
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\ncommitted\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "between waves", Token);
+        var to = await HeadAsync(kit.Main);
+        var copy = Path.Combine(worktree, "b.txt");
+
+        // The record names where the move goes once the move is weighed under its hold, and before git writes anything:
+        // the session writes then.
+        var agents = kit.Harness.Agents(
+            new WrittenMeanwhileFileSystem(kit.Harness.FileSystem, kit.Layout.AgentRecordFile("ag"), "\"moving\"", () => File.WriteAllText(copy, "two\nthe session's edit\n")),
+            kit.Harness.AnchorRegistryService);
+
+        var stopped = await agents.RebaseAsync(kit.Main, "o1", "ag", new RebaseRequest(), apply: true, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
+        Assert.StartsWith(
+            $"Moving the base of agent 'ag' of 'o1' from {ReportText.Commit(from)} to the main tree's HEAD {ReportText.Commit(to)} stopped part way: 'b.txt' holds other "
+                + "content in the agent's worktree now than when it was measured, so it was not replaced with what the new base holds there.",
+            stopped.Message,
+            StringComparison.Ordinal);
+        Assert.Equal("two\nthe session's edit\n", OrchestrationKit.Read(worktree, "b.txt"));
+        Assert.Equal(from, await HeadAsync(worktree));
+    }
+
     /// <summary>--merge reaches a move from the command line, once for each path, and a path no tree could hold is a usage error there.</summary>
     [Fact]
     public async Task TheCommandLine_TakesMergeOnceForEachPath()
@@ -1685,6 +1764,24 @@ public sealed class AgentRebaseTests
         => kit.Harness.AgentService.RebaseAsync(kit.Main, "o1", "ag", request, apply, Token);
 
     private static async Task<string> HeadAsync(string tree) => (await new HarnessFactory().GitClient.ResolveCommitAsync(tree, "HEAD", Token))!;
+
+    /// <summary>The real file system, which runs <paramref name="meanwhile"/> once, right after it first writes <paramref name="file"/> holding <paramref name="holding"/>.</summary>
+    private sealed class WrittenMeanwhileFileSystem(IFileSystem inner, string file, string holding, Action meanwhile) : PassThroughFileSystem(inner)
+    {
+        private int _done;
+
+        public override void WriteAllTextAtomic(string path, string contents)
+        {
+            base.WriteAllTextAtomic(path, contents);
+
+            if (string.Equals(Path.GetFullPath(path), Path.GetFullPath(file), StringComparison.OrdinalIgnoreCase)
+                && contents.Contains(holding, StringComparison.Ordinal)
+                && Interlocked.Exchange(ref _done, 1) == 0)
+            {
+                meanwhile();
+            }
+        }
+    }
 
     /// <summary>The real file system, except that one path cannot be looked at, as one this process may not read.</summary>
     private sealed class UnlookableFileSystem(IFileSystem inner, string hidden) : PassThroughFileSystem(inner)

@@ -1063,6 +1063,9 @@ public sealed class AgentService(
                     _store.UpdateAgent(layout, record.Name, current => current with { Moving = to, MovingWith = told.Count > 0 ? told : null });
                 }
 
+                // What git writes over or removes is what was weighed under the hold: a file the agent's session wrote since
+                // stops the move here, before git writes anything.
+                await _fold.RequireTakenAsync(path, plan!).ConfigureAwait(false);
                 await _gitClient.CheckOutAtAsync(path, to, plan!.Written, CancellationToken.None).ConfigureAwait(false);
                 await _gitClient.CheckOutAtAsync(path, to, plan.WrittenLast, CancellationToken.None).ConfigureAwait(false);
 

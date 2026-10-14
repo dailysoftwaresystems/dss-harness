@@ -2280,6 +2280,61 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The orchestrators topic, the architecture and the README say alike that a file the new base renamed in case alone
+    /// comes in only with its old name, that a file the agent's session wrote after it was weighed stops a move before git
+    /// writes anything, and that a fold refuses a rename of case alone the agent made, naming git mv for the main tree.
+    /// </summary>
+    [Fact]
+    public async Task OrchestratorsTopic_SaysWhatRenamesOfCaseAlone_AndASessionsWrites_DoToAMoveAndAFold()
+    {
+        var result = await CliRunner.RunAsync(["help", "agents"], TestContext.Current.CancellationToken);
+        var text = Prose.Words(result.StandardOutput);
+        var architecture = Prose.Document("docs", "architecture.md");
+        var readme = Prose.Document("README.md");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains(
+            "So does a file the new base renamed in case alone, where the agent's file system finds a name in any case, unless its old name comes in "
+            + "with it: where the agent keeps that - its own change, settled or shared - writing the new name would write over it, and both are named. "
+            + $"A file of the agent's written after it was weighed is never written over or removed: the move stops there, exit {HarnessExit.Incomplete}, "
+            + "before git writes anything, naming it.",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A rename of case alone the agent made, where both trees find a name in any case, is refused by name: a fold writes files, and the main "
+            + "tree's git would go on naming the file as before - git mv there makes the rename, and the fold run again finds the old name absent from "
+            + "both.",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "It comes in only with its old name: where the agent keeps what it holds there - declared settled, shared with the main tree, or its own "
+            + "change - the new name refuses the move, naming both, since writing it would write over that. The record names where the move goes "
+            + "(`Moving`) before anything is written; then each path the move takes is asked to hold what was measured there (`RebasePlan.Held`, "
+            + "`AgentFold.RequireTakenAsync`), so a file the agent's session wrote since stops the move, exit 21, before git writes anything, never "
+            + "written over;",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "The base's entry and HEAD's are found alike, as git spells the path where the repository ignores case, so a rename of case alone is the "
+            + "commit's that made it, and none other's.",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "where the agent's worktree spells that file otherwise than the main tree, which finds a name in any case too, the agent renamed it in "
+            + "case alone, which a fold cannot write - the main tree's git would go on naming the file as before - so it is refused by name, saying "
+            + "to run `git mv` there; once that is run, the old name is already in, absent from both.",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains("a path the agent already holds as the main tree does - the same file, or no file in either, a directory of the agent's own files there included -", architecture, StringComparison.Ordinal);
+        Assert.Contains(
+            "refused over anything of its own what comes in would go over, a file renamed in case alone over the agent's copy at its old name among "
+            + "it; a file the agent's session wrote after it was weighed stops it, exit 21, never written over;",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains("a rename of case alone the agent made is refused, saying to `git mv` it in the main tree;", readme, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The orchestrators topic says the one rule of what a dry run exits with, where its summary then stands, that a row
     /// an earlier fold applied is weighed cell by cell with --accept-over, and that a closed agent's husk is answered by
     /// its dry run as every --apply of it answers.
