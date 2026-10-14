@@ -538,7 +538,7 @@ public sealed class AgentArmRegistryTests
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Contains(refused.Details!, line => line.StartsWith($"  '{Registry}' is not at the agent's base ", StringComparison.Ordinal)
             && line.Contains(
-                ", and the main tree made it since, by a commit - its HEAD holds it, where the base holds nothing - so writing the agent's copy would "
+                ", and the main tree made it since, by a commit, so writing the agent's copy would "
                     + "lose that change; ",
                 StringComparison.Ordinal)
             && line.EndsWith(

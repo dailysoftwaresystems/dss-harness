@@ -98,7 +98,7 @@ public sealed class AgentFoldTests
     /// </summary>
     [Theory]
     [InlineData(false, "by an uncommitted edit, so writing the agent's copy would lose that change")]
-    [InlineData(true, "by a commit - its HEAD no longer holds what the base holds - so writing the agent's copy would lose that change")]
+    [InlineData(true, "by a commit, so writing the agent's copy would lose that change")]
     public async Task APathTheMainTreeChangedSinceTheBase_IsRefused_SayingHow(bool committed, string how)
     {
         using var temp = new TempDirectory();
@@ -150,7 +150,7 @@ public sealed class AgentFoldTests
         Assert.Contains(
             refused.Details!,
             line => line.StartsWith("  'b.txt': the main tree changed it after the agent's base", StringComparison.Ordinal)
-                && line.Contains("by a commit - its HEAD no longer holds what the base holds - so writing the agent's copy would lose that change", StringComparison.Ordinal));
+                && line.Contains("by a commit, so writing the agent's copy would lose that change", StringComparison.Ordinal));
         Assert.DoesNotContain(refused.Details!, line => line.StartsWith("  'b.txt'", StringComparison.Ordinal) && line.Contains("uncommitted", StringComparison.Ordinal));
         Assert.Equal("two\n", OrchestrationKit.Read(kit.Main, "b.txt"));
     }
@@ -198,9 +198,7 @@ public sealed class AgentFoldTests
             await kit.Harness.CommitAllAsync(kit.Main, $"the main tree {change} {path}", TestContext.Current.CancellationToken);
         }
 
-        var how = !committed ? "by an uncommitted edit,"
-            : change == "made" ? "by a commit - its HEAD holds it, where the base holds nothing -"
-            : "by a commit - its HEAD no longer holds what the base holds -";
+        var how = committed ? "by a commit," : "by an uncommitted edit,";
         var said = change switch
         {
             "made" => $"  '{path}' is not at the agent's base {at}, and the main tree made it since, {how} so writing the agent's copy would lose that change",
@@ -219,9 +217,180 @@ public sealed class AgentFoldTests
     }
 
     /// <summary>
+    /// Where a commit moved a path the agent shares nothing for and an uncommitted edit then moved it again, the refusal
+    /// says both - by a commit alone only where the main tree's HEAD already holds what the main tree holds there now -
+    /// since neither alone reconciles it: a sibling's committed change of a file the main tree then removed; a sibling's
+    /// committed removal of a file the main tree then made a directory of; a commit inside a directory of the base the
+    /// main tree then made a file of; a sibling's committed change the main tree then edited further; and a file a
+    /// sibling's commit made that the main tree then edited.
+    /// </summary>
+    /// <param name="change">What the main tree did, uncommitted, after the sibling's commit.</param>
+    [Theory]
+    [InlineData("removed")]
+    [InlineData("directory")]
+    [InlineData("made-over-a-directory")]
+    [InlineData("changed")]
+    [InlineData("made")]
+    public async Task APathACommitMovedAndAnUncommittedEditMovedAgain_IsSaidMovedByBoth(string change)
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        var at = ReportText.Commit(kit.Record("ag").Base!);
+        var path = change switch
+        {
+            "made-over-a-directory" => "docs",
+            "made" => "new.txt",
+            "changed" => "b.txt",
+            _ => "a.txt",
+        };
+
+        if (change == "made-over-a-directory")
+        {
+            Directory.Delete(Path.Combine(worktree, "docs"), recursive: true);
+        }
+
+        OrchestrationKit.Write(worktree, path, "one\nthe agent's\n");
+
+        // What a sibling's fold committed.
+        switch (change)
+        {
+            case "directory":
+                File.Delete(Path.Combine(kit.Main, path));
+                break;
+            case "made-over-a-directory":
+                OrchestrationKit.Write(kit.Main, "docs/x.md", "x\nthe sibling's\n");
+                break;
+            default:
+                OrchestrationKit.Write(kit.Main, path, "the sibling's\n");
+                break;
+        }
+
+        await kit.Harness.CommitAllAsync(kit.Main, $"a sibling's fold, {change}", TestContext.Current.CancellationToken);
+
+        // What the main tree did since, uncommitted.
+        switch (change)
+        {
+            case "removed":
+                File.Delete(Path.Combine(kit.Main, path));
+                break;
+            case "directory":
+                OrchestrationKit.Write(kit.Main, $"{path}/inner.txt", "the main tree's\n");
+                break;
+            case "made-over-a-directory":
+                Directory.Delete(Path.Combine(kit.Main, path), recursive: true);
+                OrchestrationKit.Write(kit.Main, path, "the main tree's\n");
+                break;
+            default:
+                OrchestrationKit.Write(kit.Main, path, "the sibling's\nand the main tree's\n");
+                break;
+        }
+
+        var said = change switch
+        {
+            "removed" => $"  'a.txt' is at the agent's base {at}, and missing from the main tree, removed by an uncommitted edit, after a commit changed it, "
+                + "so writing the agent's copy would lose that change",
+            "directory" => $"  'a.txt' is at the agent's base {at}, and the main tree holds a directory there now, made by an uncommitted edit, after a commit "
+                + "removed it, so writing the agent's copy would lose that change",
+            "made-over-a-directory" => $"  'docs' is not at the agent's base {at}, and the main tree made it since, by an uncommitted edit, after a commit "
+                + "changed the directory there, so writing the agent's copy would lose that change",
+            "changed" => $"  'b.txt': the main tree changed it after the agent's base {at}, by an uncommitted edit, after a commit changed it, so writing "
+                + "the agent's copy would lose that change",
+            _ => $"  'new.txt' is not at the agent's base {at}, and the main tree made it since, by an uncommitted edit, after a commit made it, so writing "
+                + "the agent's copy would lose that change",
+        };
+
+        var refused = await kit.FoldAsync("ag", apply: true);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(refused.Details!, line => line.StartsWith(said, StringComparison.Ordinal));
+        Assert.DoesNotContain(refused.Details!, line => line.StartsWith($"  '{path}'", StringComparison.Ordinal) && line.Contains("by a commit", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// What the main tree holds in the way of the agent's files is said made since the agent's base by a commit or by an
+    /// uncommitted edit, as any other path the main tree moved since is: a file where one of the agent's files needs a
+    /// directory, and each file of a directory one of them replaces.
+    /// </summary>
+    /// <param name="below">Whether the main tree holds a directory where the agent writes a file, rather than a file where it needs a directory.</param>
+    /// <param name="committed">Whether the main tree committed what is in the way.</param>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task WhatTheMainTreeHoldsInTheWay_IsSaidMadeByACommitOrAnUncommittedEdit(bool below, bool committed)
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        var at = ReportText.Commit(kit.Record("ag").Base!);
+
+        if (below)
+        {
+            OrchestrationKit.Write(kit.Main, "notes/a.md", "the sibling's\n");
+            OrchestrationKit.Write(worktree, "notes", "the agent's\n");
+        }
+        else
+        {
+            OrchestrationKit.Write(kit.Main, "plan", "the sibling's\n");
+            OrchestrationKit.Write(worktree, "plan/step.md", "the agent's\n");
+        }
+
+        if (committed)
+        {
+            await kit.Harness.CommitAllAsync(kit.Main, "a sibling's fold", TestContext.Current.CancellationToken);
+        }
+
+        var how = committed ? "by a commit" : "by an uncommitted edit";
+        var said = below
+            ? $"  'notes': the main tree holds a directory there with files the agent did not delete - notes/a.md (made since the agent's base {at} {how}) - "
+                + "which writing it would remove"
+            : $"  'plan/step.md' needs a directory at 'plan', where the main tree holds a file the agent did not delete, made since the agent's base {at} {how}";
+
+        var refused = await kit.FoldAsync("ag", apply: true);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(said, refused.Details!);
+    }
+
+    /// <summary>
+    /// A file of the base's in the way of the agent's - one it turned into a directory, whose removal the fold does not
+    /// make - is said changed since the agent's base where the main tree changed it, and nothing more where the main tree
+    /// holds it as the base does: it did nothing there since.
+    /// </summary>
+    /// <param name="changed">Whether the main tree changed the file, uncommitted.</param>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AFileOfTheBaseInTheWay_IsSaidChangedSinceTheBase_OnlyWhereTheMainTreeChangedIt(bool changed)
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        var at = ReportText.Commit(kit.Record("ag").Base!);
+        File.Delete(Path.Combine(worktree, "a.txt"));
+        OrchestrationKit.Write(worktree, "a.txt/step.md", "the agent's\n");
+
+        if (changed)
+        {
+            OrchestrationKit.Write(kit.Main, "a.txt", "one\nthe main tree's\n");
+        }
+
+        // Unchanged, the agent's removal of it is held back by naming it settled, where nothing was reconciled.
+        var refused = await kit.FoldAsync("ag", apply: true, changed ? [] : ["a.txt"]);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(
+            "  'a.txt/step.md' needs a directory at 'a.txt', where the main tree holds a file the agent did not delete"
+                + (changed ? $", changed since the agent's base {at} by an uncommitted edit" : string.Empty),
+            refused.Details!);
+    }
+
+    /// <summary>
     /// The help and the architecture say how a refusal of a main-tree path changed since says it: a path the agent shares,
-    /// changed after it was last handed it or folded; any other, since the agent's base, by a commit or by an uncommitted
-    /// edit, which the message says.
+    /// changed after it was last handed it or folded; any other, since the agent's base, by a commit, by an uncommitted
+    /// edit or by both, which the message says - and so for what the main tree holds in the way of the agent's files.
     /// </summary>
     [Fact]
     public async Task TheHelpAndTheArchitectureSayHowAMainTreePathChangedSinceIsSaid()
@@ -229,18 +398,28 @@ public sealed class AgentFoldTests
         var help = Prose.Words((await CliRunner.RunAsync(["help", "agents"], TestContext.Current.CancellationToken)).StandardOutput);
 
         Assert.Contains(
-            "The whole fold is refused, and nothing written, where the main tree changed one of its paths since - a path the agent "
-                + "shares, after the agent was last handed it or folded, and any other since the agent's base, made, changed, made a "
-                + "directory of or removed by a commit or by an uncommitted edit, the message says which - where the agent's HEAD is "
-                + "off its base",
+            "The whole fold is refused, and nothing written, where the main tree changed a path the agent shares after the agent was "
+                + "last handed it or folded, or any other of its paths since the agent's base - made, changed, made a directory of or "
+                + "removed by a commit, by an uncommitted edit or by both, which the message says - where the agent's HEAD is off its base",
+            help,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "where what the main tree holds is in the way of what it writes - a file where a directory goes, or files the agent did "
+                + "not delete in a directory a file replaces, each said made or changed since the agent's base as any other path is - "
+                + "and for an anchor registry",
             help,
             StringComparison.Ordinal);
         Assert.Contains(
             "A refusal of a main-tree path the agent shares nothing for, made, changed, made a directory of or removed since the "
-                + "agent's base, says whether a commit or an uncommitted edit did it, since the two are reconciled differently - the "
-                + "main tree's HEAD compared with the base entry by entry, as git compares a commit, so a commit of a mode alone is a "
-                + "commit, and a HEAD that holds nothing where the base held a file one too - and a shared path's says the main tree "
-                + "changed it after the agent was last handed it or folded, which the seed records alike.",
+                + "agent's base, says whether a commit, an uncommitted edit or both did it, since the two are reconciled differently: a "
+                + "commit alone where the main tree's HEAD already holds what the main tree holds there now - nothing where it was "
+                + "removed, a directory where one was made, and where a file was made or changed, that file as the main tree holds it - "
+                + "its entry compared with the base's as git compares a commit, so a commit of a mode alone is a commit; an uncommitted "
+                + "edit alone where HEAD holds what the base holds; and both otherwise, the edit said after what the commit did. A file "
+                + "of the main tree in the way of the agent's - where one of its files needs a directory, or in a directory one "
+                + "replaces - is said made or changed since the base the same way (`Came.How`, the one wording of both), and a shared "
+                + "path's refusal says the main tree changed it after the agent was last handed it or folded, which the seed records "
+                + "alike.",
             Prose.Document("docs", "architecture.md"),
             StringComparison.Ordinal);
     }
@@ -1212,8 +1391,9 @@ public sealed class AgentFoldTests
     /// <summary>
     /// A file of the agent's where the main tree holds a directory of files the agent never deleted, and a file the agent made
     /// below a path the main tree holds as a file, each refuse the fold, named, before anything is written: written, the
-    /// first would remove the main tree's files, and the second stop at its file part way. A file of its base's the agent
-    /// changed where the main tree made a directory of it is said to be one, once.
+    /// first would remove the main tree's files, and the second stop at its file part way - each file of the main tree's in
+    /// the way said made since the agent's base, here by an uncommitted edit. A file of its base's the agent changed where
+    /// the main tree made a directory of it is said to be one, once.
     /// </summary>
     [Fact]
     public async Task WhatTheMainTreeHoldsWhereTheAgentsFilesNeedRoom_RefusesTheFold()
@@ -1237,8 +1417,10 @@ public sealed class AgentFoldTests
             [
                 "3 problem(s), and nothing was written:",
                 $"  'a.txt' is at the agent's base {at}, and the main tree holds a directory there now, made by an uncommitted edit, so writing the agent's copy would lose that change",
-                "  'notes': the main tree holds a directory there with files the agent did not delete - notes/a.md - which writing it would remove",
-                "  'plan/step.md' needs a directory at 'plan', where the main tree holds a file the agent did not delete",
+                $"  'notes': the main tree holds a directory there with files the agent did not delete - notes/a.md (made since the agent's base {at} by an "
+                    + "uncommitted edit) - which writing it would remove",
+                $"  'plan/step.md' needs a directory at 'plan', where the main tree holds a file the agent did not delete, made since the agent's base {at} by an "
+                    + "uncommitted edit",
             ],
             refused.Details!.Take(4));
         Assert.Equal("the main tree's\n", OrchestrationKit.Read(kit.Main, "notes/a.md"));
