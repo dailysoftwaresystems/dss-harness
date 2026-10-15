@@ -2101,7 +2101,9 @@ public sealed partial class HelpTests
         Assert.Contains(
             "A path the agent changed that the main tree moved too, each holding a file there, is weighed in full as a fold weighs one: the refusal "
             + "says beside it what a three-way merge of the two gives - from what the agent last shared, or its base - shows the conflicts, and names "
-            + "the arguments that take the clean ones. --merge <path>, once for each, takes a clean merge: written into the agent's worktree as its "
+            + "the arguments that take the clean ones. Two such paths that differ in case alone, one file in the agent's worktree, are weighed once: "
+            + "under the name the main tree's git gives the file, from the base's file as git finds it. "
+            + "--merge <path>, once for each, takes a clean merge: written into the agent's worktree as its "
             + "change, for its fold to write, and the path recorded as handed the main tree's copy, which the merge descends from. It is never taken "
             + "unasked, and a clean textual merge proves nothing about the program; one naming no path under the paths refreshed is refused as a "
             + "misspelling, and one naming a path with nothing left to merge is let stand. The arm registry both changed is merged by arm, unasked, "
@@ -2285,11 +2287,13 @@ public sealed partial class HelpTests
 
     /// <summary>
     /// The orchestrators topic, the architecture and the README say alike that a file the new base renamed in case alone
-    /// comes in only with its old name, that a file the agent's session wrote after it was weighed stops a move before git
-    /// writes anything, and that a fold refuses a rename of case alone the agent made, naming git mv for the main tree.
+    /// comes in only with its old name, never over the agent's copy or its deletion of it, that a file the agent's session
+    /// wrote after it was weighed stops a move before git writes anything, that a fold refuses a rename of case alone the
+    /// agent made, naming git mv -f for the main tree, and weighs it against the base's file under its old name, and that a
+    /// refresh weighs two names of one file once.
     /// </summary>
     [Fact]
-    public async Task OrchestratorsTopic_SaysWhatRenamesOfCaseAlone_AndASessionsWrites_DoToAMoveAndAFold()
+    public async Task OrchestratorsTopic_SaysWhatRenamesOfCaseAlone_AndASessionsWrites_DoToAMoveAFoldAndARefresh()
     {
         var result = await CliRunner.RunAsync(["help", "agents"], TestContext.Current.CancellationToken);
         var text = Prose.Words(result.StandardOutput);
@@ -2299,23 +2303,32 @@ public sealed partial class HelpTests
         Assert.Equal(0, result.ExitCode);
         Assert.Contains(
             "So does a file the new base renamed in case alone, where the agent's file system finds a name in any case, unless its old name comes in "
-            + "with it: where the agent keeps that - its own change, settled or shared - writing the new name would write over it, and both are named. "
+            + "with it: where the agent keeps that - its own change, settled or shared - writing the new name would write over it, and both are named, "
+            + "a shared one it changed to be folded first, since no refresh hands it, and one it did not to be refreshed under the new name; where the "
+            + "agent deleted it, the two are named as a rename and a deletion of one file, with what to do - unless a move that stopped part way removed "
+            + "it, which running it again finishes. "
             + $"A file of the agent's written after it was weighed is never written over or removed: the move stops there, exit {HarnessExit.Incomplete}, "
             + "before git writes anything, naming it.",
             text,
             StringComparison.Ordinal);
         Assert.Contains(
-            "A rename of case alone the agent made, where both trees find a name in any case, is refused by name: a fold writes files, and the main "
-            + "tree's git would go on naming the file as before - git mv there makes the rename, and the fold run again finds the old name absent from "
-            + "both.",
+            "A rename of case alone the agent made, where both trees find a name in any case and the main tree's git index names the file as before, is "
+            + "refused by name: a fold writes files, and the main tree's git would go on naming the file as before - git mv -f there makes the rename, of "
+            + "a file in a directory renamed in case too, and the fold run again finds the old name absent from both. The renamed file is weighed "
+            + "against the base's under its old name, as git finds it: an edit made with the rename merges with the main tree's, and the main tree's "
+            + "removal of the file refuses it, never undone.",
             text,
             StringComparison.Ordinal);
         Assert.Contains(
             "It comes in only with its old name: where the agent keeps what it holds there - declared settled, shared with the main tree, or its own "
-            + "change - the new name refuses the move, naming both, since writing it would write over that. The record names where the move goes "
-            + "(`Moving`) before anything is written; then each path the move takes is asked to hold what was measured there (`RebasePlan.Held`, "
-            + "`AgentFold.RequireTakenAsync`), so a file the agent's session wrote since stops the move, exit 21, before git writes anything, never "
-            + "written over;",
+            + "change - the new name refuses the move, naming both, since writing it would write over that; a shared file the agent changed is to be "
+            + "folded first, since no refresh hands a path the agent changed, and one it did not to be refreshed under the new name, which records the "
+            + "file it holds as shared there. Where it holds nothing at the old name, the agent deleted it, and the new name refuses the move as a "
+            + "rename and a deletion of one file - to be put back with `git checkout HEAD`, or, shared, folded and committed in the main tree - unless "
+            + "the move is being finished, where the move that stopped part way removed it, the new name written last. The record names where the "
+            + "move goes (`Moving`) before anything is written; then each path the move takes is asked to hold what was measured there "
+            + "(`RebasePlan.Held`, `AgentFold.RequireTakenAsync`), so a file the agent's session wrote since stops the move, exit 21, before git "
+            + "writes anything, never written over;",
             architecture,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -2324,18 +2337,35 @@ public sealed partial class HelpTests
             architecture,
             StringComparison.Ordinal);
         Assert.Contains(
-            "where the agent's worktree spells that file otherwise than the main tree, which finds a name in any case too, the agent renamed it in "
-            + "case alone, which a fold cannot write - the main tree's git would go on naming the file as before - so it is refused by name, saying "
-            + "to run `git mv` there; once that is run, the old name is already in, absent from both.",
+            "where its git index spells that file otherwise than its base does, found as git spells it, the agent renamed it in case alone, and each "
+            + "path is read only where a tree spells the file so (`AgentFold.Spellings`) - as its git index does, where it holds the file under one "
+            + "spelling, since a rename git makes in the index alone leaves a directory's name on disk as it was, and otherwise as its file system "
+            + "does (`PathCase.Spelled`) - never as the other. Where the main tree's git index spells that file otherwise, each tree "
+            + "holding it, and the main tree finds a name in any case too, a fold cannot write the rename - the main tree's git would go on naming the "
+            + "file as before - so it is refused by name, saying to run `git mv -f` there, forced since git finds the new name taken where the "
+            + "repository does not say it ignores case; once that is run, the old name is already in, absent from both. Every path the agent shares "
+            + "nothing for is weighed against the base's entry found as git spells it, as `Came` finds it, so a file renamed in case alone is weighed "
+            + "against the base's under its old name: an edit made with the rename merges with the main tree's, and a removal of the file in the main "
+            + "tree refuses it, never undone.",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "(`TwoChanges`, from what the seed records or the agent's base holds, found as git spells the path; the main tree's file the side merged "
+            + "into) - two such paths that differ in case alone, one file in the agent's worktree where it finds a name in any case, once, under the "
+            + "name the main tree's git index spells the file by, the others no file of the main tree's, whatever its file system finds under them:",
             architecture,
             StringComparison.Ordinal);
         Assert.Contains("a path the agent already holds as the main tree does - the same file, or no file in either, a directory of the agent's own files there included -", architecture, StringComparison.Ordinal);
         Assert.Contains(
-            "refused over anything of its own what comes in would go over, a file renamed in case alone over the agent's copy at its old name among "
-            + "it; a file the agent's session wrote after it was weighed stops it, exit 21, never written over;",
+            "refused over anything of its own what comes in would go over, a file renamed in case alone over the agent's copy at its old name, or its "
+            + "deletion of it, among it; a file the agent's session wrote after it was weighed stops it, exit 21, never written over;",
             readme,
             StringComparison.Ordinal);
-        Assert.Contains("a rename of case alone the agent made is refused, saying to `git mv` it in the main tree;", readme, StringComparison.Ordinal);
+        Assert.Contains(
+            "a rename of case alone the agent made is refused, saying to `git mv -f` it in the main tree, and once made there is weighed against the "
+            + "base's file under its old name;",
+            readme,
+            StringComparison.Ordinal);
     }
 
     /// <summary>

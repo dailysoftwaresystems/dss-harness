@@ -402,9 +402,10 @@ public sealed class AgentFoldTests
     /// <summary>
     /// A rename of case alone the agent made, where the trees find a name in any case, is refused by name - its dry run, its
     /// --apply and its deletion alike, with an edit or without - and neither name is taken for one the main tree already
-    /// holds: written there, the file would go on under the name the main tree's git has. Once git mv makes it there, each
-    /// name is read only where a tree holds it so spelled, and the fold goes through, the old name recorded as absent from
-    /// both; an edit besides is said as what the uncommitted git mv did, never as a commit's.
+    /// holds: written there, the file would go on under the name the main tree's git has. Once the git mv -f it names makes
+    /// the rename there, each name is read only where a tree spells it so, and the fold goes through, the old name recorded
+    /// as absent from both; an edit besides is weighed against the base's file under its old name - what the uncommitted git
+    /// mv did, never a commit's, and never a file both trees made - so its clean merge is offered, and --merge folds it.
     /// </summary>
     /// <param name="edited">Whether the agent edited the renamed file too.</param>
     [Theory]
@@ -424,38 +425,172 @@ public sealed class AgentFoldTests
             OrchestrationKit.Write(worktree, "A.txt", "one\nthe agent's\n");
         }
 
-        const string Said = "  'A.txt': the agent renamed 'a.txt' to it in case alone, which a fold cannot write - the main tree finds a name in any case, and its git would go "
-            + "on naming the file 'a.txt': run git mv 'a.txt' 'A.txt' in the main tree, then fold again";
-
         foreach (var refused in new[] { await kit.FoldAsync("ag", apply: false), await kit.FoldAsync("ag", apply: true), await kit.DeleteAsync("ag", apply: true) })
         {
             Assert.Equal(HarnessExit.Refused, refused.ExitCode);
-            Assert.Contains(Said, refused.Details!);
+            Assert.Contains(RenamedInCase("a.txt", "A.txt"), refused.Details!);
             Assert.DoesNotContain(refused.Details!, line => line.StartsWith("  'a.txt'", StringComparison.Ordinal) || line.Contains("already holds", StringComparison.Ordinal));
         }
 
         Assert.Equal(AgentStates.Live, kit.Record("ag").State);
         Assert.Equal(["a.txt"], Directory.EnumerateFiles(kit.Main, "?.txt").Select(Path.GetFileName).Where(name => string.Equals(name, "a.txt", StringComparison.OrdinalIgnoreCase)));
 
-        await kit.GitAsync(kit.Main, "mv", "a.txt", "A.txt");
+        await kit.GitAsync(kit.Main, "mv", "-f", "a.txt", "A.txt");
         var folded = await kit.FoldAsync("ag", apply: true);
 
         if (edited)
         {
             Assert.Equal(HarnessExit.Refused, folded.ExitCode);
             Assert.Contains(
-                folded.Details!,
-                line => line.StartsWith($"  'A.txt' is not at the agent's base {at}, and the main tree made it since, by an uncommitted edit, so writing the agent's copy", StringComparison.Ordinal));
-            return;
+                $"  'A.txt': the main tree changed it after the agent's base {at}, by an uncommitted edit, so writing the agent's copy would lose that change; a three-way "
+                    + "merge of the two is clean - 1 hunk(s) from the agent, 0 from the main tree - and --merge A.txt writes it",
+                folded.Details!);
+
+            folded = await kit.FoldAsync("ag", apply: true, new FoldAllowances { Merge = ["A.txt"] });
         }
 
         var seed = kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!;
 
         Assert.True(folded.Succeeded, OrchestrationKit.Describe(folded));
+        Assert.Equal(edited ? "one\nthe agent's\n" : "one\n", OrchestrationKit.Read(kit.Main, "A.txt"));
         Assert.Contains("a.txt", seed.Absent ?? []);
         Assert.Contains("A.txt", seed.Paths.Keys);
         Assert.DoesNotContain("a.txt", seed.Paths.Keys);
     }
+
+    /// <summary>
+    /// A directory the agent renamed in case alone - its folder renamed on disk, or its files renamed in its git index
+    /// alone, the folder keeping its name - is refused file by file, each naming the git mv -f that makes the rename in the
+    /// main tree: run, it renames what the main tree's git holds, though its folder keeps its name on disk, and the fold
+    /// run again goes through, each old name recorded as absent from both.
+    /// </summary>
+    /// <param name="inTheIndexAlone">Whether the agent renamed the files in its git index alone.</param>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ADirectoryTheAgentRenamedInCase_IsRefusedByName_AndTheGitMvItNamesLetsTheFoldThrough(bool inTheIndexAlone)
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        Assert.SkipUnless(await kit.Harness.GitClient.IgnoresCaseAsync(kit.Main, TestContext.Current.CancellationToken), "Only a repository that ignores case holds a rename of case alone as the same file.");
+        var worktree = await kit.CreateAgentAsync("ag");
+
+        if (inTheIndexAlone)
+        {
+            await kit.GitAsync(worktree, "mv", "-f", "docs/x.md", "Docs/x.md");
+        }
+        else
+        {
+            await kit.GitAsync(worktree, "mv", "docs", "renaming");
+            await kit.GitAsync(worktree, "mv", "renaming", "Docs");
+        }
+
+        var refused = await kit.FoldAsync("ag", apply: true);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(RenamedInCase("docs/x.md", "Docs/x.md"), refused.Details!);
+
+        await kit.GitAsync(kit.Main, "mv", "-f", "docs/x.md", "Docs/x.md");
+        var folded = await kit.FoldAsync("ag", apply: true);
+        var seed = kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!;
+
+        Assert.True(folded.Succeeded, OrchestrationKit.Describe(folded));
+        Assert.Contains("docs/x.md", seed.Absent ?? []);
+        Assert.Contains("Docs/x.md", seed.Paths.Keys);
+    }
+
+    /// <summary>
+    /// A rename of case alone the agent made of a file it then deleted is no rename to refuse: the agent holds no file under
+    /// either name, so the fold removes the file from the main tree, as it does any deletion of the agent's.
+    /// </summary>
+    [Fact]
+    public async Task ARenameOfCaseAloneTheAgentMade_OfAFileItThenDeleted_FoldsAsItsDeletion()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        Assert.SkipUnless(await kit.Harness.GitClient.IgnoresCaseAsync(kit.Main, TestContext.Current.CancellationToken), "Only a repository that ignores case holds a rename of case alone as the same file.");
+        var worktree = await kit.CreateAgentAsync("ag");
+        await kit.GitAsync(worktree, "mv", "a.txt", "A.txt");
+        File.Delete(Path.Combine(worktree, "A.txt"));
+
+        var folded = await kit.FoldAsync("ag", apply: true);
+
+        Assert.True(folded.Succeeded, OrchestrationKit.Describe(folded));
+        Assert.False(File.Exists(Path.Combine(kit.Main, "a.txt")), "The main tree holds the file the agent deleted under either name.");
+    }
+
+    /// <summary>
+    /// Where the repository does not say it ignores case, on a file system that finds a name in any case, the agent's rename
+    /// of case alone is refused all the same, and the git mv -f it names - which git needs there, since it finds the new name
+    /// taken - makes it in the main tree, and the fold goes through.
+    /// </summary>
+    [Fact]
+    public async Task ARenameOfCaseAlone_WhereTheRepositoryDoesNotIgnoreCase_IsRefused_AndTheGitMvItNamesLetsTheFoldThrough()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        Assert.SkipUnless(PathCase.In(kit.Harness.FileSystem, kit.Main).Equals("a", "A"), "Only a file system that finds a name in any case holds a rename of case alone as the same file.");
+        var worktree = await kit.CreateAgentAsync("ag");
+        await kit.GitAsync(kit.Main, "config", "core.ignorecase", "false");
+        await kit.GitAsync(worktree, "mv", "-f", "a.txt", "A.txt");
+
+        var refused = await kit.FoldAsync("ag", apply: true);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(RenamedInCase("a.txt", "A.txt"), refused.Details!);
+
+        await kit.GitAsync(kit.Main, "mv", "-f", "a.txt", "A.txt");
+        var folded = await kit.FoldAsync("ag", apply: true);
+
+        Assert.True(folded.Succeeded, OrchestrationKit.Describe(folded));
+        Assert.Contains("A.txt", kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!.Paths.Keys);
+    }
+
+    /// <summary>
+    /// A rename of case alone the agent made of a file the main tree removed since is weighed against the base's file under
+    /// its old name, as git finds it: the removal is said and refuses the fold, never undone by writing the agent's file
+    /// under its new name, and --settled hands the agent the removal.
+    /// </summary>
+    /// <param name="edited">Whether the agent edited the renamed file too.</param>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ARenameOfCaseAloneTheAgentMade_OfAFileTheMainTreeRemoved_RefusesTheFoldAsTheRemoval(bool edited)
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        Assert.SkipUnless(await kit.Harness.GitClient.IgnoresCaseAsync(kit.Main, TestContext.Current.CancellationToken), "Only a repository that ignores case holds a rename of case alone as the same file.");
+        var worktree = await kit.CreateAgentAsync("ag");
+        var at = ReportText.Commit(kit.Record("ag").Base!);
+        await kit.GitAsync(worktree, "mv", "a.txt", "A.txt");
+        File.Delete(Path.Combine(kit.Main, "a.txt"));
+
+        if (edited)
+        {
+            OrchestrationKit.Write(worktree, "A.txt", "one\nthe agent's\n");
+        }
+
+        foreach (var refused in new[] { await kit.FoldAsync("ag", apply: false), await kit.FoldAsync("ag", apply: true) })
+        {
+            Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+            Assert.Contains(
+                $"  'A.txt' is at the agent's base {at}, and missing from the main tree, removed by an uncommitted edit, so writing the agent's copy would lose that change",
+                refused.Details!);
+        }
+
+        Assert.False(File.Exists(Path.Combine(kit.Main, "a.txt")), "The main tree holds the file it removed under either name.");
+
+        var settled = await kit.FoldAsync("ag", apply: true, "A.txt");
+
+        Assert.True(settled.Succeeded, OrchestrationKit.Describe(settled));
+        Assert.False(File.Exists(Path.Combine(worktree, "A.txt")));
+        Assert.False(File.Exists(Path.Combine(kit.Main, "a.txt")), "The main tree holds the file it removed under either name.");
+    }
+
+    /// <summary>The refusal of a rename of case alone the agent made of <paramref name="named"/> to <paramref name="renamed"/>, as a line of the fold's.</summary>
+    private static string RenamedInCase(string named, string renamed)
+        => $"  '{renamed}': the agent renamed '{named}' to it in case alone, which a fold cannot write - the main tree finds a name in any case, and its git would go on "
+            + $"naming the file '{named}': run git mv -f '{named}' '{renamed}' in the main tree, then fold again";
 
     /// <summary>
     /// A file the main tree holds where neither its HEAD nor the agent's base holds one, and that git ignores, is said to be

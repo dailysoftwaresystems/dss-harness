@@ -266,4 +266,56 @@ public sealed class AgentRefreshMergeTests
             new RefreshRequest { Stale = [Both], Merge = [Both] }.Problem());
         Assert.Equal(Text((2, "AGENT 2")), OrchestrationKit.Read(worktree, Both));
     }
+
+    /// <summary>
+    /// A file the main tree renamed in case alone and changed, which the agent changed under its old name, is one file in
+    /// the agent's worktree where it finds a name in any case: merged once, under the name the main tree's git spells it
+    /// by, from the base's file under its old name, as git finds it where the repository ignores case - clean, and offered;
+    /// the old name, which the main tree's git no longer holds, is left as the agent's change. Doing what the refusals say -
+    /// --merge for the one, --except for the other, then --settled for the old name as the base moves - brings the merge
+    /// into the main tree with the agent's fold.
+    /// </summary>
+    [Fact]
+    public async Task AFileTheMainTreeRenamedInCaseAndChanged_IsMergedOnce_FromTheBasesFileUnderItsOldName()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        Assert.SkipUnless(await kit.Harness.GitClient.IgnoresCaseAsync(kit.Main, Token), "Only a repository that ignores case holds a rename of case alone as the same file.");
+        const string Renamed = "src/M.txt";
+        OrchestrationKit.Write(kit.Main, Both, Text());
+        await kit.Harness.CommitAllAsync(kit.Main, "a file two will change", Token);
+        var worktree = await kit.CreateAgentAsync(Agent);
+        OrchestrationKit.Write(worktree, Both, Text((2, "AGENT 2")));
+        await kit.GitAsync(kit.Main, "mv", Both, Renamed);
+        OrchestrationKit.Write(kit.Main, Renamed, Text((9, "MAIN 9")));
+        await kit.Harness.CommitAllAsync(kit.Main, "the main tree's rename and change", Token);
+        var merged = Text((2, "AGENT 2"), (9, "MAIN 9"));
+
+        var refused = await RefreshAsync(kit, apply: true);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains($"  {Renamed}   (a three-way merge of the two is clean - 1 hunk(s) from the agent, 1 from the main tree)", refused.Details!);
+        Assert.Contains($"  --except {Renamed} --except {Both}", refused.Details!);
+        Assert.Contains($"  --merge {Renamed}", refused.Details!);
+
+        var applied = await kit.Harness.AgentService.RefreshAsync(
+            kit.Main, OrchestrationKit.Orchestrator, Agent, new RefreshRequest { Paths = ["src"], Except = [Both], Merge = [Renamed] }, apply: true, Token);
+
+        Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
+        Assert.Equal(merged, OrchestrationKit.Read(worktree, Renamed));
+
+        var unsettled = await kit.Harness.AgentService.RebaseAsync(kit.Main, OrchestrationKit.Orchestrator, Agent, new RebaseRequest(), apply: true, Token);
+
+        Assert.Equal(HarnessExit.Refused, unsettled.ExitCode);
+        Assert.Contains(unsettled.Details!, line => line.StartsWith($"  '{Both}': the agent changed it, and the main tree committed a change to it", StringComparison.Ordinal));
+
+        var moved = await kit.Harness.AgentService.RebaseAsync(kit.Main, OrchestrationKit.Orchestrator, Agent, new RebaseRequest { Settled = [Both] }, apply: true, Token);
+
+        Assert.True(moved.Succeeded, OrchestrationKit.Describe(moved));
+
+        var folded = await kit.FoldAsync(Agent, apply: true);
+
+        Assert.True(folded.Succeeded, OrchestrationKit.Describe(folded));
+        Assert.Equal(merged, OrchestrationKit.Read(kit.Main, Renamed));
+    }
 }

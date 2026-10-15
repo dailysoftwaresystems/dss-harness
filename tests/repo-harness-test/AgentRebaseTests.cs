@@ -1654,21 +1654,30 @@ public sealed class AgentRebaseTests
 
     /// <summary>
     /// A file the main tree renamed in case alone comes in only with its old name, where the worktree's file system finds a
-    /// name in any case: where the agent keeps what it holds at the old name - declared settled, shared with the main
-    /// tree, or changed and refused - the move is refused naming both, and the agent's file is not written over.
+    /// name in any case. Where the agent's worktree holds the old name and the agent keeps it - declared settled, shared
+    /// with the main tree, changed, or renamed itself - the move is refused naming both, and the agent's file is not written
+    /// over; where the agent deleted the old name, it is refused as a rename and a deletion of one file. A shared file the
+    /// agent changed is folded first, never refreshed, since a refresh never hands a path the agent changed. Each refusal
+    /// says what to do, and doing it - with what the fold or the refresh it names says in turn - moves the base, the
+    /// agent's work kept.
     /// </summary>
-    /// <param name="kept">How the agent keeps the old name: declared settled, shared, or changed.</param>
+    /// <param name="kept">What the agent did with the old name.</param>
     [Theory]
     [InlineData("settled")]
     [InlineData("shared")]
+    [InlineData("sharedChanged")]
     [InlineData("changed")]
-    public async Task AFileTheMainTreeRenamedInCase_WhoseOldNameTheAgentKeeps_RefusesTheMove_NamingBoth(string kept)
+    [InlineData("renamedItself")]
+    [InlineData("deleted")]
+    [InlineData("deletedShared")]
+    public async Task AFileTheMainTreeRenamedInCase_WhoseOldNameTheAgentKeepsOrDeleted_RefusesTheMove_AndDoingWhatItSaysMovesIt(string kept)
     {
         using var temp = new TempDirectory();
         var kit = await OrchestrationKit.PrepareAsync(temp);
         Assert.SkipUnless(await kit.Harness.GitClient.IgnoresCaseAsync(kit.Main, Token), "Only a repository that ignores case holds a rename of case alone as the same file.");
+        var deleted = kept is "deleted" or "deletedShared";
 
-        if (kept == "shared")
+        if (kept is "shared" or "sharedChanged" or "deletedShared")
         {
             // Handed to the agent as it is made: a path it shares with the main tree.
             OrchestrationKit.Write(kit.Main, "a.txt", "one\nhanded\n");
@@ -1676,25 +1685,163 @@ public sealed class AgentRebaseTests
 
         var worktree = await kit.CreateAgentAsync("ag");
         var at = ReportText.Commit(kit.Record("ag").Base!);
-        OrchestrationKit.Write(worktree, "a.txt", "one\nthe agent's\n");
+
+        if (kept == "renamedItself")
+        {
+            await kit.GitAsync(worktree, "mv", "a.txt", "A.txt");
+        }
+
+        if (deleted)
+        {
+            File.Delete(Path.Combine(worktree, "a.txt"));
+        }
+        else if (kept != "shared")
+        {
+            OrchestrationKit.Write(worktree, kept == "renamedItself" ? "A.txt" : "a.txt", "one\nthe agent's\n");
+        }
+
         await kit.GitAsync(kit.Main, "mv", "a.txt", "A.txt");
         await kit.Harness.CommitAllAsync(kit.Main, "a sibling's rename", Token);
-        var tail = kept switch
-        {
-            "settled" => "declared settled: fold it into the main tree first, and run again without --settled for it",
-            "shared" => "which the agent shares with the main tree: refresh-agent hands it what the main tree holds there first",
-            _ => "which the agent changed: fold it into the main tree first, and run again",
-        };
+        var renaming = $"  'A.txt': the main tree committed it since the agent's base {at}, renaming 'a.txt' in case alone, ";
+        var writtenOver = $"{renaming}and the agent's worktree finds both names as one file, so writing it would write over 'a.txt', ";
+        var refreshFirst = $"{writtenOver}which the agent shares with the main tree: refresh-agent hands it what the main tree holds at 'A.txt' first";
+        var deletion = $"{renaming}which the agent deleted - a rename and a deletion of one file, which a move cannot both keep: ";
 
-        var refused = await RebaseAsync(kit, apply: true, kept == "settled" ? new[] { "a.txt" } : []);
+        var refused = await RebaseAsync(kit, apply: true, kept == "settled" ? ["a.txt"] : []);
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Contains(
-            $"  'A.txt': the main tree committed it since the agent's base {at}, renaming 'a.txt' in case alone, and the agent's worktree finds both names as one "
-                + $"file, so writing it would write over 'a.txt', {tail}",
+            kept switch
+            {
+                "settled" => $"{writtenOver}declared settled: fold it into the main tree first, and run again without --settled for it",
+                "shared" => refreshFirst,
+                "deleted" => $"{deletion}put it back with git checkout HEAD -- 'a.txt' in the agent's worktree, run again, then delete 'A.txt'",
+                "deletedShared" => $"{deletion}fold the deletion into the main tree, commit it there, and run again",
+                _ => $"{writtenOver}which the agent changed: fold it into the main tree first, and run again",
+            },
             refused.Details!);
-        Assert.Equal("one\nthe agent's\n", OrchestrationKit.Read(worktree, "a.txt"));
         Assert.Equal(at, ReportText.Commit(kit.Record("ag").Base!));
+
+        if (!deleted)
+        {
+            Assert.Equal(kept == "shared" ? "one\nhanded\n" : "one\nthe agent's\n", OrchestrationKit.Read(worktree, "A.txt"));
+        }
+
+        // What the refusal says to do, and what the command it names says in turn.
+        switch (kept)
+        {
+            case "settled" or "changed" or "renamedItself":
+                var merging = kept == "renamedItself" ? "A.txt" : "a.txt";
+                var mergeable = await kit.FoldAsync("ag", apply: true);
+
+                Assert.Equal(HarnessExit.Refused, mergeable.ExitCode);
+                Assert.Contains(mergeable.Details!, line => line.EndsWith($"and --merge {merging} writes it", StringComparison.Ordinal));
+                Assert.True((await kit.FoldAsync("ag", apply: true, new FoldAllowances { Merge = [merging] })).Succeeded);
+
+                // Folded under its old name, it is shared: the move is refused over it until it is refreshed.
+                if (kept != "renamedItself")
+                {
+                    await RefreshedAsync(refusedFirst: true);
+                }
+
+                break;
+            case "shared":
+                await RefreshedAsync(refusedFirst: false);
+                break;
+            case "sharedChanged":
+                Assert.True((await kit.FoldAsync("ag", apply: true)).Succeeded);
+                await RefreshedAsync(refusedFirst: true);
+                break;
+            case "deleted":
+                await kit.GitAsync(worktree, "checkout", "HEAD", "--", "a.txt");
+                break;
+            case "deletedShared":
+                Assert.True((await kit.FoldAsync("ag", apply: true)).Succeeded);
+                await kit.Harness.CommitAllAsync(kit.Main, "the agent's deletion, folded", Token);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(kept), kept, "Not what the agent did with the old name.");
+        }
+
+        var moved = await RebaseAsync(kit, apply: true);
+
+        Assert.True(moved.Succeeded, OrchestrationKit.Describe(moved));
+        Assert.Equal(await HeadAsync(kit.Main), kit.Record("ag").Base);
+
+        if (kept == "deleted")
+        {
+            File.Delete(Path.Combine(worktree, "A.txt"));
+            var folded = await kit.FoldAsync("ag", apply: true);
+
+            Assert.True(folded.Succeeded, OrchestrationKit.Describe(folded));
+        }
+
+        Assert.Equal(!deleted, File.Exists(Path.Combine(kit.Main, "A.txt")));
+
+        if (!deleted)
+        {
+            Assert.Equal("A.txt", (await kit.Harness.RunGitAsync(worktree, ["ls-files", "--", "a.txt", "A.txt"], Token)).StandardOutput.Trim());
+            var content = kept == "shared" ? "one\nhanded\n" : "one\nthe agent's\n";
+
+            Assert.Equal(content, OrchestrationKit.Read(worktree, "A.txt"));
+            Assert.Equal(content, OrchestrationKit.Read(kit.Main, "A.txt"));
+        }
+
+        // Refreshed as the refusal over the path the agent shares, unchanged, says - first refused so, where it was folded.
+        async Task RefreshedAsync(bool refusedFirst)
+        {
+            if (refusedFirst)
+            {
+                var shared = await RebaseAsync(kit, apply: true);
+
+                Assert.Equal(HarnessExit.Refused, shared.ExitCode);
+                Assert.Contains(refreshFirst, shared.Details!);
+            }
+
+            var refreshed = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("A.txt"), apply: true, Token);
+
+            Assert.True(refreshed.Succeeded, OrchestrationKit.Describe(refreshed));
+        }
+    }
+
+    /// <summary>
+    /// A move of a file the main tree renamed in case alone that stopped after git removed the old name, and before it wrote
+    /// the new, is finished by running it again: the old name the move removed is held as the new base holds it - nothing
+    /// there - and never taken for a deletion of the agent's, and the new name is written.
+    /// </summary>
+    [Fact]
+    public async Task AMoveOfARenameOfCaseAlone_StoppedBetweenTheOldNameAndTheNew_IsFinishedByRunningItAgain()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        Assert.SkipUnless(await kit.Harness.GitClient.IgnoresCaseAsync(kit.Main, Token), "Only a repository that ignores case holds a rename of case alone as the same file.");
+        var worktree = await kit.CreateAgentAsync("ag");
+        await kit.GitAsync(kit.Main, "mv", "a.txt", "A.txt");
+        await kit.Harness.CommitAllAsync(kit.Main, "a sibling's rename", Token);
+        var to = await HeadAsync(kit.Main);
+        var git = new InterceptingGitClient(kit.Harness.GitClient)
+        {
+            BeforeCheckOut = paths =>
+            {
+                if (paths.Contains("A.txt"))
+                {
+                    throw new HarnessException(HarnessExit.CommandFailed, "fatal: Unable to create 'index.lock': File exists.");
+                }
+            },
+        };
+
+        var stopped = await kit.Harness.Agents(kit.Harness.FileSystem, kit.Harness.AnchorRegistryService, git).RebaseAsync(kit.Main, "o1", "ag", new RebaseRequest(), apply: true, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
+        Assert.False(File.Exists(Path.Combine(worktree, "a.txt")), "The old name was not removed before the move stopped.");
+
+        var finished = await RebaseAsync(kit, apply: true);
+
+        Assert.True(finished.Succeeded, OrchestrationKit.Describe(finished));
+        Assert.Equal(to, kit.Record("ag").Base);
+        Assert.Equal(["A.txt"], Directory.EnumerateFiles(worktree, "?.txt").Select(Path.GetFileName).Where(name => string.Equals(name, "a.txt", StringComparison.OrdinalIgnoreCase)));
+        Assert.Equal("one\n", OrchestrationKit.Read(worktree, "A.txt"));
+        Assert.Empty((await kit.Harness.RunGitAsync(worktree, ["status", "--porcelain"], Token)).StandardOutput.Trim());
     }
 
     /// <summary>
