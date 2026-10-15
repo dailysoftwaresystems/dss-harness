@@ -310,43 +310,61 @@ public sealed partial class GitClient(
 
         // Decided file by file, as each directory compares names: a tree may hold a directory that tells names apart
         // below one that does not, and the other way round.
-        indexed.UnionWith(files.Where(file => held[file].Any(spelling => spelling != file && ReachedOnlyInAnotherCase(_fileSystem, top, spelling))));
+        indexed.UnionWith(files.Where(file => held[file].Any(spelling => spelling != file && SameFileInAnotherCase(_fileSystem, top, file, spelling))));
         return indexed;
     }
 
     /// <summary>
-    /// Whether <paramref name="spelling"/>, a path from the top of the tree at <paramref name="top"/>, reaches something on
-    /// disk though the disk holds no entry so spelled at some part of it: the file the index names, found by its name in
-    /// another case, as a directory that does not tell names apart by case finds it. False where nothing is there - a
-    /// tracked file deleted, beside which a new one in another case is a file of its own - and where every part is held
-    /// so spelled, the tracked file and the untracked one two files of a directory that tells them apart. A directory that
-    /// cannot be listed answers false: the untracked name is kept, never taken for a file the index holds.
+    /// Whether <paramref name="untracked"/> and <paramref name="indexed"/>, two paths from the top of the tree at
+    /// <paramref name="top"/> that differ in case alone, name one entry on disk: at each part where they differ, the
+    /// directory holding it lists the untracked spelling and not the index's, finds the untracked name in another case it
+    /// does not list - so it does not tell names apart by case, and holds no other spelling of it - and reaches something
+    /// by the index's spelling. False where a directory tells names apart, the tracked file and the untracked one two files
+    /// of it, or reaches nothing by the index's spelling, a tracked file deleted beside a new one; and where a directory
+    /// cannot be listed: the untracked name is kept, never taken for a file the index holds.
     /// </summary>
     /// <param name="fileSystem">The file system to ask.</param>
     /// <param name="top">The top of the tree.</param>
-    /// <param name="spelling">A path the index holds, with forward separators.</param>
-    internal static bool ReachedOnlyInAnotherCase(IFileSystem fileSystem, string top, string spelling)
+    /// <param name="untracked">The path git status called untracked, as the disk spells it, with forward separators.</param>
+    /// <param name="indexed">The path the index holds, with forward separators.</param>
+    internal static bool SameFileInAnotherCase(IFileSystem fileSystem, string top, string untracked, string indexed)
     {
+        var onDisk = untracked.Split('/');
+        var inIndex = indexed.Split('/');
+
+        if (onDisk.Length != inIndex.Length)
+        {
+            return false;
+        }
+
         try
         {
-            if (fileSystem.KindOf(Path.Combine(top, spelling)) == PathKind.None)
-            {
-                return false;
-            }
-
             var directory = top;
 
-            foreach (var part in spelling.Split('/'))
+            for (var index = 0; index < onDisk.Length; index++)
             {
-                if (!fileSystem.EnumerateDirectories(directory).Concat(fileSystem.EnumerateFiles(directory, recursive: false)).Any(held => Path.GetFileName(held) == part))
+                if (onDisk[index] != inIndex[index])
                 {
-                    return true;
+                    var listed = fileSystem.EnumerateDirectories(directory)
+                        .Concat(fileSystem.EnumerateFiles(directory, recursive: false))
+                        .Select(Path.GetFileName)
+                        .ToHashSet(StringComparer.Ordinal);
+
+                    if (!listed.Contains(onDisk[index])
+                        || listed.Contains(inIndex[index])
+                        || PathCase.OtherCase(onDisk[index]) is not { } probe
+                        || listed.Contains(probe)
+                        || fileSystem.KindOf(Path.Combine(directory, probe)) == PathKind.None
+                        || fileSystem.KindOf(Path.Combine(directory, inIndex[index])) == PathKind.None)
+                    {
+                        return false;
+                    }
                 }
 
-                directory = Path.Combine(directory, part);
+                directory = Path.Combine(directory, onDisk[index]);
             }
 
-            return false;
+            return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

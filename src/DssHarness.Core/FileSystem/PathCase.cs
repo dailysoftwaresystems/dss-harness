@@ -77,7 +77,7 @@ public static class PathCase
     }
 
     /// <summary><paramref name="name"/> in upper case, or in lower case where it is all upper already; null where it has no letter whose case can change.</summary>
-    private static string? OtherCase(string name)
+    internal static string? OtherCase(string name)
     {
         var other = name.ToUpperInvariant();
 

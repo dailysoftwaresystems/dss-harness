@@ -140,35 +140,68 @@ public sealed class GitClientTests
     }
 
     /// <summary>
-    /// The index's spelling of an untracked name is the same file only where it reaches something on disk not held so
-    /// spelled: a directory that finds a name in any case reaching the file the disk spells otherwise. Nothing there - a
-    /// tracked file deleted - and both spellings held - two files a directory tells apart - are not, nor is a directory
-    /// that cannot be listed; each part of the path is asked of the directory holding it.
+    /// An untracked name and the index's spelling of it are one file only where each directory along them that the two
+    /// spell differently does not tell names apart and holds the untracked spelling alone: the file the disk spells
+    /// otherwise. A directory that tells names apart, holding the two as two files or reaching nothing by the index's
+    /// spelling (a tracked file deleted), is not; nor is one that lists the index's spelling itself, one an index entry
+    /// reaches beside a new file in another case, nor one that cannot be listed.
     /// </summary>
     [Fact]
-    public void ReachedOnlyInAnotherCase_IsAskedOfEachDirectoryAlongThePath()
+    public void SameFileInAnotherCase_IsAskedOfEachDirectoryTheTwoSpellDifferently()
     {
         var top = Path.Combine(Path.GetTempPath(), "tree");
         var src = Path.Combine(top, "src");
 
-        IFileSystem Disk(string held, PathKind reached)
+        IFileSystem Disk(string[] held, bool folds)
         {
             var disk = Substitute.For<IFileSystem>();
-            disk.KindOf(Path.Combine(top, "src/M.txt")).Returns(reached);
             disk.EnumerateDirectories(top).Returns([src]);
             disk.EnumerateFiles(top, false).Returns([]);
+            disk.KindOf(Path.Combine(top, "SRC")).Returns(PathKind.Directory);
+            disk.KindOf(Path.Combine(top, "Src")).Returns(PathKind.Directory);
             disk.EnumerateDirectories(src).Returns([]);
-            disk.EnumerateFiles(src, false).Returns([Path.Combine(src, held)]);
+            disk.EnumerateFiles(src, false).Returns([.. held.Select(name => Path.Combine(src, name))]);
+
+            foreach (var name in new[] { "M.txt", "M.TXT", "FOO.CS", "Foo.cs" })
+            {
+                disk.KindOf(Path.Combine(src, name)).Returns(folds || held.Contains(name) ? PathKind.File : PathKind.None);
+            }
+
             return disk;
         }
 
-        var unlistable = Disk("m.txt", PathKind.File);
+        var unlistable = Disk(["m.txt"], folds: true);
         unlistable.EnumerateFiles(src, false).Returns(_ => throw new IOException("denied"));
 
-        Assert.True(GitClient.ReachedOnlyInAnotherCase(Disk("m.txt", PathKind.File), top, "src/M.txt"));
-        Assert.False(GitClient.ReachedOnlyInAnotherCase(Disk("m.txt", PathKind.None), top, "src/M.txt"));
-        Assert.False(GitClient.ReachedOnlyInAnotherCase(Disk("M.txt", PathKind.File), top, "src/M.txt"));
-        Assert.False(GitClient.ReachedOnlyInAnotherCase(unlistable, top, "src/M.txt"));
+        // The file the disk spells otherwise, in a directory that does not tell names apart.
+        Assert.True(GitClient.SameFileInAnotherCase(Disk(["m.txt"], folds: true), top, "src/m.txt", "src/M.txt"));
+
+        // A directory that tells names apart: the tracked file deleted, or the two files side by side.
+        Assert.False(GitClient.SameFileInAnotherCase(Disk(["m.txt"], folds: false), top, "src/m.txt", "src/M.txt"));
+        Assert.False(GitClient.SameFileInAnotherCase(Disk(["m.txt", "M.txt"], folds: false), top, "src/m.txt", "src/M.txt"));
+
+        // One index entry, Src/Foo.cs, reaching the tracked file through a directory spelled otherwise, beside a new file in
+        // another case in a directory that tells names apart: the tracked file's other spelling is it, the new file is not.
+        Assert.True(GitClient.SameFileInAnotherCase(Disk(["Foo.cs", "foo.cs"], folds: false), top, "src/Foo.cs", "Src/Foo.cs"));
+        Assert.False(GitClient.SameFileInAnotherCase(Disk(["Foo.cs", "foo.cs"], folds: false), top, "src/foo.cs", "Src/Foo.cs"));
+
+        Assert.False(GitClient.SameFileInAnotherCase(unlistable, top, "src/m.txt", "src/M.txt"));
+
+        // What the directory lists says it tells names apart: the untracked spelling missing, the index's spelling listed
+        // itself, or another spelling of the untracked name listed beside it - whatever a look by name would answer.
+        Assert.False(GitClient.SameFileInAnotherCase(Disk(["other.txt"], folds: true), top, "src/m.txt", "src/M.txt"));
+        Assert.False(GitClient.SameFileInAnotherCase(Disk(["m.txt", "M.txt"], folds: true), top, "src/m.txt", "src/M.txt"));
+        Assert.False(GitClient.SameFileInAnotherCase(Disk(["m.txt", "M.TXT"], folds: true), top, "src/m.txt", "src/M.txt"));
+
+        // A directory that tells names apart by case reaching the index's spelling another way - a name composed otherwise
+        // in Unicode, which macOS finds either way - and one that folds case reaching nothing by the index's spelling.
+        var composedOtherwise = Disk(["m.txt"], folds: false);
+        composedOtherwise.KindOf(Path.Combine(src, "M.txt")).Returns(PathKind.File);
+        var reachingNothing = Disk(["m.txt"], folds: true);
+        reachingNothing.KindOf(Path.Combine(src, "M.txt")).Returns(PathKind.None);
+
+        Assert.False(GitClient.SameFileInAnotherCase(composedOtherwise, top, "src/m.txt", "src/M.txt"));
+        Assert.False(GitClient.SameFileInAnotherCase(reachingNothing, top, "src/m.txt", "src/M.txt"));
     }
 
     [Fact]

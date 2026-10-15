@@ -920,8 +920,9 @@ index holds it (`Came`, the one wording of how a path came to be held, and `Sinc
 decided once). The base's entry and HEAD's are found alike, as git spells the path and, where the main tree's file
 system finds a name in any case, in any case, whatever `core.ignorecase` says, so a rename of case alone is the
 commit's that made it, and none other's. Each tree's status is read alike: where `core.ignorecase` says the
-repository heeds case, an untracked name the index holds under another spelling is dropped only where that spelling
-reaches something on disk not held so spelled - decided file by file, as each directory compares names, since a
+repository heeds case, an untracked name the index holds under another spelling is dropped only where every
+directory the two spell differently lists the untracked spelling alone, finds it in another case it does not list,
+and reaches something by the index's spelling - decided file by file, as each directory compares names, since a
 tree may hold a directory that tells names apart below one that does not (`GitClient.IndexedInAnotherCaseAsync`,
 read by the one status question and by `check-root-litter`). So a file the disk spells otherwise than the index - as
 a write put in place over it leaves it on macOS, which keeps the old spelling where Windows takes the new - is one
