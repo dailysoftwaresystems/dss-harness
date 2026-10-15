@@ -2102,7 +2102,7 @@ public sealed partial class HelpTests
             "A path the agent changed that the main tree moved too, each holding a file there, is weighed in full as a fold weighs one: the refusal "
             + "says beside it what a three-way merge of the two gives - from what the agent last shared, or its base - shows the conflicts, and names "
             + "the arguments that take the clean ones. Two such paths that differ in case alone, one file in the agent's worktree, are weighed once: "
-            + "under the name the main tree's git gives the file, from the base's file as git finds it. "
+            + "under the name the main tree's git gives the file, from the base's file found in any case, whatever core.ignorecase says. "
             + "--merge <path>, once for each, takes a clean merge: written into the agent's worktree as its "
             + "change, for its fold to write, and the path recorded as handed the main tree's copy, which the merge descends from. It is never taken "
             + "unasked, and a clean textual merge proves nothing about the program; one naming no path under the paths refreshed is refused as a "
@@ -2306,7 +2306,7 @@ public sealed partial class HelpTests
             + "with it: where the agent keeps that - its own change, settled or shared - writing the new name would write over it, and both are named, "
             + "a shared one it changed to be folded first, since no refresh hands it, and one it did not to be refreshed under the new name; where the "
             + "agent deleted it, the two are named as a rename and a deletion of one file, with what to do - unless a move that stopped part way removed "
-            + "it, which running it again finishes. "
+            + "it, taking it out of the agent's git index, which running it again finishes. "
             + $"A file of the agent's written after it was weighed is never written over or removed: the move stops there, exit {HarnessExit.Incomplete}, "
             + "before git writes anything, naming it.",
             text,
@@ -2315,7 +2315,8 @@ public sealed partial class HelpTests
             "A rename of case alone the agent made, where both trees find a name in any case and the main tree's git index names the file as before, is "
             + "refused by name: a fold writes files, and the main tree's git would go on naming the file as before - git mv -f there makes the rename, of "
             + "a file in a directory renamed in case too, and the fold run again finds the old name absent from both. The renamed file is weighed "
-            + "against the base's under its old name, as git finds it: an edit made with the rename merges with the main tree's, and the main tree's "
+            + "against the base's under its old name, found in any case whatever core.ignorecase says: an edit made with the rename merges with the main "
+            + "tree's, and the main tree's "
             + "removal of the file refuses it, never undone.",
             text,
             StringComparison.Ordinal);
@@ -2325,19 +2326,22 @@ public sealed partial class HelpTests
             + "folded first, since no refresh hands a path the agent changed, and one it did not to be refreshed under the new name, which records the "
             + "file it holds as shared there. Where it holds nothing at the old name, the agent deleted it, and the new name refuses the move as a "
             + "rename and a deletion of one file - to be put back with `git checkout HEAD`, or, shared, folded and committed in the main tree - unless "
-            + "the move is being finished, where the move that stopped part way removed it, the new name written last. The record names where the "
+            + "the move being finished removed it, the new name written last: its checkout takes the old name out of the agent's git index, where a "
+            + "deletion of the agent's session - made before that checkout ran, or after the move stopped - leaves the index holding it. The record "
+            + "names where the "
             + "move goes (`Moving`) before anything is written; then each path the move takes is asked to hold what was measured there "
             + "(`RebasePlan.Held`, `AgentFold.RequireTakenAsync`), so a file the agent's session wrote since stops the move, exit 21, before git "
             + "writes anything, never written over;",
             architecture,
             StringComparison.Ordinal);
         Assert.Contains(
-            "The base's entry and HEAD's are found alike, as git spells the path where the repository ignores case, so a rename of case alone is the "
+            "The base's entry and HEAD's are found alike, as git spells the path where the repository ignores case, and in any case, whatever "
+            + "`core.ignorecase` says, for paths that are one file in the agent's worktree, so a rename of case alone is the "
             + "commit's that made it, and none other's.",
             architecture,
             StringComparison.Ordinal);
         Assert.Contains(
-            "where its git index spells that file otherwise than its base does, found as git spells it, the agent renamed it in case alone, and each "
+            "where its git index spells that file otherwise than its base does, found in any case, the agent renamed it in case alone, and each "
             + "path is read only where a tree spells the file so (`AgentFold.Spellings`) - as its git index does, where it holds the file under one "
             + "spelling, since a rename git makes in the index alone leaves a directory's name on disk as it was, and otherwise as its file system "
             + "does (`PathCase.Spelled`) - never as the other. Where the main tree's git index spells that file otherwise, each tree "
@@ -2352,7 +2356,8 @@ public sealed partial class HelpTests
         Assert.Contains(
             "(`TwoChanges`, from what the seed records or the agent's base holds, found as git spells the path; the main tree's file the side merged "
             + "into) - two such paths that differ in case alone, one file in the agent's worktree where it finds a name in any case, once, under the "
-            + "name the main tree's git index spells the file by, the others no file of the main tree's, whatever its file system finds under them:",
+            + "name the main tree's git index spells the file by, from the base's entry found in any case, the others - one left as the agent changed "
+            + "it among them - no file of the main tree's, whatever its file system finds under them:",
             architecture,
             StringComparison.Ordinal);
         Assert.Contains("a path the agent already holds as the main tree does - the same file, or no file in either, a directory of the agent's own files there included -", architecture, StringComparison.Ordinal);

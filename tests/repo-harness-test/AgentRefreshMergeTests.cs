@@ -270,23 +270,26 @@ public sealed class AgentRefreshMergeTests
     /// <summary>
     /// A file the main tree renamed in case alone and changed, which the agent changed under its old name, is one file in
     /// the agent's worktree where it finds a name in any case: merged once, under the name the main tree's git spells it
-    /// by, from the base's file under its old name, as git finds it where the repository ignores case - clean, and offered;
-    /// the old name, which the main tree's git no longer holds, is left as the agent's change. Doing what the refusals say -
-    /// --merge for the one, --except for the other, then --settled for the old name as the base moves - brings the merge
-    /// into the main tree with the agent's fold.
+    /// by, from the base's file under its old name, found in any case whether the repository says it ignores case or not -
+    /// clean, and offered; the old name, which the main tree's git no longer holds, is left as the agent's change. Doing
+    /// what the refusals say - --merge for the one, --except for the other, then --settled for the old name as the base
+    /// moves - brings the merge into the main tree with the agent's fold.
     /// </summary>
-    [Fact]
-    public async Task AFileTheMainTreeRenamedInCaseAndChanged_IsMergedOnce_FromTheBasesFileUnderItsOldName()
+    /// <param name="ignoresCase">Whether the repository says it ignores case.</param>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AFileTheMainTreeRenamedInCaseAndChanged_IsMergedOnce_FromTheBasesFileUnderItsOldName(bool ignoresCase)
     {
         using var temp = new TempDirectory();
         var kit = await OrchestrationKit.PrepareAsync(temp);
-        Assert.SkipUnless(await kit.Harness.GitClient.IgnoresCaseAsync(kit.Main, Token), "Only a repository that ignores case holds a rename of case alone as the same file.");
         const string Renamed = "src/M.txt";
         OrchestrationKit.Write(kit.Main, Both, Text());
         await kit.Harness.CommitAllAsync(kit.Main, "a file two will change", Token);
         var worktree = await kit.CreateAgentAsync(Agent);
+        await AgentFoldTests.CaseFoldedAsync(kit, ignoresCase);
         OrchestrationKit.Write(worktree, Both, Text((2, "AGENT 2")));
-        await kit.GitAsync(kit.Main, "mv", Both, Renamed);
+        await kit.GitAsync(kit.Main, "mv", "-f", Both, Renamed);
         OrchestrationKit.Write(kit.Main, Renamed, Text((9, "MAIN 9")));
         await kit.Harness.CommitAllAsync(kit.Main, "the main tree's rename and change", Token);
         var merged = Text((2, "AGENT 2"), (9, "MAIN 9"));
