@@ -2119,7 +2119,10 @@ internal static class HelpCommand
             + $"of it is removed or looked through: one a sweep still running holds - or a run holds a leg copy - keeps the "
             + $"worktree ({HarnessExit.Refused}), "
             + $"and one that cannot be removed, or told for the harness's, keeps it as a failure ({HarnessExit.CommandFailed}), as "
-            + "workers that cannot be looked for do, with nothing removed. A sweep that takes one meanwhile keeps the worktree as "
+            + "workers that cannot be looked for do, with nothing removed. A run holds a leg copy however the worktree is spelt: "
+            + "the run lock keys a tree on this machine by where it leads, every link followed, so a run in a worktree kept on "
+            + "another disk through a linked worktrees root keeps it from a deletion that reaches it through the link. A sweep "
+            + "that takes one meanwhile keeps the worktree as "
             + "well, and so does one whose removal then fails, the others gone by then, which is said. An interruption as they go "
             + $"says which went, and that nothing else of the worktree was removed ({HarnessExit.Cancelled}). --force deletes the "
             + "worktree with every copy in it, one held or one that could not be removed among them, saying which went with "
@@ -2142,17 +2145,19 @@ internal static class HelpCommand
         builder.AppendLine("and deleting the worktree asks each host that holds one to remove it, where the");
         builder.AppendLine("harness made it: a copy it took over with --adopt, or a directory with no mark of");
         builder.AppendLine("the harness's, is left where it is, and said to be. A copy is removed under the lock");
-        builder.AppendLine("a leg this machine runs there takes, and its marker goes last, so a removal that");
-        builder.AppendLine("stops part way leaves the rest still the harness's to remove. A host is reached");
-        builder.AppendLine("through the worktree's own configuration, read before it goes, or else through the");
-        builder.AppendLine("one the command runs in; one neither declares is not asked, and its copy is");
-        builder.AppendLine("forgotten, and named.");
+        builder.AppendLine("a leg this machine runs there takes, taken with everything kept inside the copy, so");
+        builder.AppendLine("a sweep this machine runs there keeps it as a run does, and its marker goes last,");
+        builder.AppendLine("so a removal that stops part way leaves the rest still the harness's to remove. A");
+        builder.AppendLine("host is reached through the worktree's own configuration, read before it goes, or");
+        builder.AppendLine("else through the one the command runs in; one neither declares is not asked, and");
+        builder.AppendLine("its copy is forgotten, and named.");
         builder.AppendLine("A copy that cannot be removed now stays recorded, and the worktree is deleted all the");
         builder.AppendLine("same, but the command fails, naming each, with the highest code among them:");
-        builder.AppendLine($"{HarnessExit.Refused} where a run holds one or it was refused, {HarnessExit.HostUnavailable} where its host cannot be reached,");
-        builder.AppendLine($"{HarnessExit.CommandFailed} where removing it failed there; or {HarnessExit.Cancelled} when interrupted. Running delete-worktree");
-        builder.AppendLine("again removes what it left. For a name whose worktree is gone, it removes what any");
-        builder.AppendLine("worktree of that name left, and never the copies of one that still exists.");
+        builder.AppendLine($"{HarnessExit.Refused} where a run or a sweep holds one or it was refused, {HarnessExit.HostUnavailable} where its host cannot");
+        builder.AppendLine($"be reached, {HarnessExit.CommandFailed} where removing it failed there; or {HarnessExit.Cancelled} when interrupted. Running");
+        builder.AppendLine("delete-worktree again removes what it left. For a name whose worktree is gone, it");
+        builder.AppendLine("removes what any worktree of that name left, and never the copies of one that still");
+        builder.AppendLine("exists.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -2495,18 +2500,22 @@ internal static class HelpCommand
             builder,
             "Dry runs. A dry run of refresh-agent, rebase-agent, fold-agent or delete-agent exits with what its --apply, typed "
             + "with the same arguments, would exit with at that moment: 0 only where that --apply would go through. Where a path, "
-            + $"a row, or a consent nobody gave would refuse it, the dry run exits {HarnessExit.Refused}, and where it would fail "
+            + $"a row, or a consent nobody gave would refuse it, the dry run exits {HarnessExit.Refused} - {HarnessExit.UsageError} "
+            + "where its arguments are a usage error, a path never handed to an agent among them - and where it would fail "
             + "before writing anything, with that failure's code - and either way it still prints all it weighed on standard "
             + "output, its summary last, on standard error. A run holding what the --apply takes refuses the dry run too: every "
             + "holder is named on a 'held now:' line, said with where its run's leg stands where it asked for a heavy-leg slot, "
             + $"and it exits {HarnessExit.Refused} - save where the dry "
-            + "run already failed before writing anything, which keeps its failure's code and names the holder still; "
+            + "run already failed before writing anything, or met a usage error its --apply answers before it takes anything, "
+            + "which keeps its code and names the holder still; "
             + $"delete-agent, whose --apply would go as far as the removal and leave it unfinished, exits {HarnessExit.Incomplete} "
             + "instead where only a copy of the worktree is held, by a run or a sweep; and where nothing refuses its --apply "
             + "before the removal - a tree held, a lock file that cannot be read, a path, a row or a consent - it exits "
             + $"{HarnessExit.Incomplete} too where the copies kept in the worktree cannot be removed as they stand, one that "
             + "cannot be told or removed or none that can be looked for, its request then refused; a directory there that no "
-            + "sync made goes with the worktree, and is only said. What an --apply can only find by "
+            + $"sync made goes with the worktree, and is only said. A record of the copies hosts keep that cannot be read refuses "
+            + $"delete-agent ({HarnessExit.Refused}), its dry run and its --apply alike, before anything is written. What an "
+            + "--apply can only find by "
             + "writing - a file changed after it was weighed, a write "
             + "that fails - is not in a dry run, so 0 never promises that the --apply will finish. --json answers with one "
             + "document, the whole of standard output, whose request member says what is wanted of you - 'sound' (nothing; wait, "
@@ -2515,7 +2524,8 @@ internal static class HelpCommand
             + "where its leg stands - null for a leg of this machine where this machine's record of heavy legs cannot be read - "
             + "and each holding a copy kept in the "
             + "worktree, said as its own line says it, a leg copy's holder with where its leg stands, a mutation worker's with "
-            + "the process, the run and since when its sweep's claim records. Stopped before "
+            + "the process, the run and since when its sweep's claim records. An --apply refused at its hold answers the same "
+            + "document, applied true: request 'sound', and the run it met in heldNow. Stopped before "
             + "anything is weighed - a command line the parser refuses, a --directory that is not there, a repository not "
             + "initialised, another usage error, or a refusal met before then, an agent that is not there among them - it "
             + "answers with the same document, empty: applied false, request and heldNow null, no lines.");

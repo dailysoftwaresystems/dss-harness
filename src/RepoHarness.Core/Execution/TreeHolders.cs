@@ -163,6 +163,11 @@ public sealed record TreeHeld(IReadOnlyList<TreeHolder> Holders, string? Unread,
     public bool HoldsOnlyCopies => HoldsCopies && !HoldsATree;
 }
 
+/// <summary>What a hold that a run stood in the way of met (<see cref="TreeHolders.Refused"/>).</summary>
+/// <param name="Said">The refusal the hold gives, naming the run.</param>
+/// <param name="Held">The run, as a dry run at that moment names it: one holder of a tree the <c>--apply</c> takes.</param>
+public sealed record HoldRefusal(string Said, TreeHeld Held);
+
 /// <summary>
 /// Who holds what a command's <c>--apply</c> takes: the run lock asked with the very requests the apply takes, joined
 /// with this machine's record of heavy legs, so each holder is named with where its leg stands. Reads both - the record
@@ -196,19 +201,20 @@ public sealed class TreeHolders(RunLock runLock, HeavyLegSlots slots, IProcessId
         {
             // A copy kept in the worktree that a run holds is asked of the lock as its removal asks it, in the one reading
             // that asks for the trees, so its holder is named with its entry; one a claim of its family's own holds - a
-            // sweep's, on a mutation worker - is named by that claim alone, on its family's line.
+            // sweep's, on a mutation worker - is named by that claim alone, on its family's line. Which request each entry
+            // is in the way of is the lock's own answer, by the rule its holds are taken by.
             var held = kept.Where(said => said.HeldPath is not null).ToList();
-            var entries = _runLock.Holders(layout, [.. takes, .. removes, .. held.Select(said => said.Asked).OfType<LockRequest>()]);
+            var inTheWay = _runLock.Holders(layout, [.. takes, .. removes, .. held.Select(said => said.Asked).OfType<LockRequest>()]);
 
             return Joined(
                 [
-                    .. entries
-                        .Where(entry => takes.Concat(removes).Any(request => RunLockMatches(entry, request)))
-                        .Select(entry => (Entry: entry, Copy: removes.Any(request => RunLockMatches(entry, request)))),
+                    .. inTheWay
+                        .Where(holding => holding.Of.Any(request => takes.Contains(request) || removes.Contains(request)))
+                        .Select(holding => (holding.Entry, Copy: holding.Of.Any(removes.Contains))),
                 ],
                 [
                     .. held.Select(said => (Line: said, Entries: said.Asked is { } asked
-                        ? [.. entries.Where(entry => RunLockMatches(entry, asked))]
+                        ? [.. inTheWay.Where(holding => holding.Of.Contains(asked)).Select(holding => holding.Entry)]
                         : (IReadOnlyList<LockEntry>)[])),
                 ]) with
             {
@@ -242,17 +248,23 @@ public sealed class TreeHolders(RunLock runLock, HeavyLegSlots slots, IProcessId
     }
 
     /// <summary>
-    /// The refusal a hold gives where <paramref name="holder"/> stood in its way: the lock's own sentence, and where
-    /// that run's leg stands - the same words a dry run's <c>held now:</c> line says after the tree it names.
+    /// What a hold met where <paramref name="holder"/> stood in its way: the refusal it gives - the lock's own sentence,
+    /// the tree as the lock keys it, and where that run's leg stands, the same words a dry run's <c>held now:</c> line
+    /// says after the tree it names - and the holder as a dry run at that moment reads it, from the same reading of this
+    /// machine's record of heavy legs, so an <c>--apply</c> answering in one document names the run it waits on.
     /// </summary>
     /// <param name="wanted">What was asked for.</param>
     /// <param name="holder">Who held it.</param>
-    public string Refusal(LockRequest wanted, LockEntry holder)
+    public HoldRefusal Refused(LockRequest wanted, LockEntry holder)
     {
         ArgumentNullException.ThrowIfNull(wanted);
         ArgumentNullException.ThrowIfNull(holder);
 
-        return $"{RunLock.TreeNamed(wanted.Host, wanted.Tree, wanted.Variant)} is held by {Held(holder, Tail(Stands(holder, LineFor([holder]).Line)))}.";
+        var (line, standingUnread) = LineFor([holder]);
+
+        return new HoldRefusal(
+            $"{RunLock.TreeNamed(wanted.Host, _runLock.Key(wanted.Host, wanted.Tree), wanted.Variant)} is held by {Held(holder, Tail(Stands(holder, line)))}.",
+            new TreeHeld([Holder(holder, line, copy: false)], null, standingUnread, []));
     }
 
     /// <summary>
@@ -303,7 +315,7 @@ public sealed class TreeHolders(RunLock runLock, HeavyLegSlots slots, IProcessId
     /// Who holds the copy kept in the worktree that <paramref name="said"/> names, each said on that line: every entry of
     /// the lock for it, joined with the line; or, where no entry names one, the holder its family's claim named.
     /// </summary>
-    private static IEnumerable<TreeHolder> KeptHolders(KeptCopyLine said, IReadOnlyList<LockEntry> entries, IReadOnlyList<SlotInLine>? line)
+    private IEnumerable<TreeHolder> KeptHolders(KeptCopyLine said, IReadOnlyList<LockEntry> entries, IReadOnlyList<SlotInLine>? line)
         => entries.Count == 0
             ? [TreeHolder.OfKeptCopy(said, entry: null, standing: null, ahead: null)]
             : entries.Select(entry =>
@@ -330,11 +342,12 @@ public sealed class TreeHolders(RunLock runLock, HeavyLegSlots slots, IProcessId
     /// where any of its places in this machine's line does, it waits where the line holds it further back, and it asked
     /// for no slot where the line holds it nowhere. Nothing for a leg of this machine where this machine's record of heavy
     /// legs could not be read: where that leg stands is not known then, and is never said to be a leg that asked for no
-    /// slot.
+    /// slot. A place in the line names its tree as the leg spelled it, so it is keyed as the lock keys a tree before it is
+    /// told to the entry, which the lock keyed so.
     /// </summary>
     /// <param name="entry">The lock's entry for what the run holds.</param>
     /// <param name="line">This machine's record of heavy legs, in line order; <see langword="null"/> where it could not be read.</param>
-    private static (HolderStanding? Standing, int? Ahead) Stands(LockEntry entry, IReadOnlyList<SlotInLine>? line)
+    private (HolderStanding? Standing, int? Ahead) Stands(LockEntry entry, IReadOnlyList<SlotInLine>? line)
     {
         if (!AsksThisMachine(entry))
         {
@@ -351,8 +364,8 @@ public sealed class TreeHolders(RunLock runLock, HeavyLegSlots slots, IProcessId
             .Where(place => string.Equals(place.slot.Entry.RunId, entry.Holder.RunId, StringComparison.Ordinal)
                 && place.slot.Entry.ProcessId == entry.Holder.ProcessId
                 && string.Equals(place.slot.Entry.Host, entry.Host, StringComparison.OrdinalIgnoreCase)
-                && string.Equals(place.slot.Entry.Tree, entry.Tree, StringComparison.OrdinalIgnoreCase)
-                && string.Equals(place.slot.Entry.Variant ?? string.Empty, entry.Variant ?? string.Empty, StringComparison.OrdinalIgnoreCase))
+                && string.Equals(place.slot.Entry.Variant ?? string.Empty, entry.Variant ?? string.Empty, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(_runLock.Key(place.slot.Entry.Host, place.slot.Entry.Tree), entry.Tree, StringComparison.OrdinalIgnoreCase))
             .ToList();
 
         if (places.Count == 0)
@@ -362,10 +375,6 @@ public sealed class TreeHolders(RunLock runLock, HeavyLegSlots slots, IProcessId
 
         return places.Any(place => place.slot.HoldsSlot) ? (HolderStanding.HoldsSlot, null) : (HolderStanding.Waiting, places.Min(place => place.at));
     }
-
-    private static bool RunLockMatches(LockEntry entry, LockRequest request)
-        => string.Equals(entry.Host, request.Host, StringComparison.OrdinalIgnoreCase)
-            && string.Equals(entry.Tree, request.Tree, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// What the sentence says of where a holder's leg stands - the endings a dry run's line may take, a closed list

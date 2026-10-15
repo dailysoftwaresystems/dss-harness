@@ -47,9 +47,11 @@ public static class DryRuns
     /// first row that applies deciding. A lock file that cannot be read refuses it, since the --apply could not take its
     /// trees either, and a run holding a tree the --apply takes refuses it, whatever else the request needs - save, for
     /// both, where what the command weighs could not be read, which stands above them in the plan's order and keeps its own
-    /// code, the holder named on the dry run's lines as ever. Below them, where what the command weighs could not be read,
-    /// or the request is refused, that is the answer as it is; where it needs a consent nobody gave, the same words and the
-    /// same lines refused, since the --apply refuses it, writing nothing, until each is named. Only a sound request goes
+    /// code, and where the request is a usage error, which its --apply answers before it takes anything and so keeps its
+    /// own code too; either way the holder is named on the dry run's lines as ever. Below them, where what the command
+    /// weighs could not be read, or the request is refused, that is the answer as it is; where it needs a consent nobody
+    /// gave, the same words and the same lines refused, since the --apply refuses it, writing nothing, until each is
+    /// named. Only a sound request goes
     /// further: what is kept in a deletion's worktree that its removal cannot take as it stands - a line of
     /// <see cref="TreeHeld.KeptCopies"/> that <see cref="KeptCopyLine.Stops"/> - leaves it unfinished, its request refused
     /// until that is put right, which no waiting does; and a run or a sweep holding only a copy a deletion removes - a
@@ -63,11 +65,16 @@ public static class DryRuns
     {
         ArgumentNullException.ThrowIfNull(planned);
 
+        // What cannot be read stands above a lock file that cannot be read and a holder, and so does a usage error, which
+        // its --apply answers before it takes anything: either keeps its own code, its lines naming the holder - or why none
+        // could be named - as any dry run's do.
+        var keepsItsCode = standing is null || planned.ExitCode == HarnessExit.UsageError;
+
         if (holders?.Unread is { } unread)
         {
             var said = $"whether a run holds what --apply needs cannot be told: {unread}; --apply is refused until the lock file can be read";
 
-            if (standing is null)
+            if (keepsItsCode)
             {
                 return new(planned with { Details = [.. planned.Details ?? [], said] }, standing);
             }
@@ -77,9 +84,7 @@ public static class DryRuns
 
         if (holders?.HoldsATree == true)
         {
-            // What cannot be read stands above a holder: a dry run whose own reading failed keeps its failure's code,
-            // and its lines name the holder as any dry run's do.
-            if (standing is null)
+            if (keepsItsCode)
             {
                 return new(planned, standing);
             }

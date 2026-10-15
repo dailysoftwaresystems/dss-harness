@@ -410,6 +410,29 @@ public sealed class DryRunsTests
     }
 
     /// <summary>
+    /// A usage error keeps its code above a tree a run holds and above a lock file that cannot be read: its --apply answers
+    /// it before it takes anything, so the dry run exits as that --apply does, 10, its words and lines unchanged - save
+    /// the one line that says why nobody could be named, as a failing dry run gains it - and its request refused.
+    /// </summary>
+    [Fact]
+    public void AUsageErrorKeepsItsCode_AboveATreeHeldAndALockThatCannotBeRead()
+    {
+        var usage = CommandOutcome.Usage("'.orchestrators' is never handed to an agent: .orchestrators stay in their own tree.", ["held now: 'C:\\src\\repo\\.worktrees\\o\\a' on local is held by pid 4242."]);
+        var unreadable = new TreeHeld([], "The run lock 'C:\\src\\.harness-config\\lock.json' could not be read: the disk is full", null, []);
+
+        var held = DryRuns.Answer(usage, RequestStanding.Refused, ATreeHeld());
+        var unread = DryRuns.Answer(usage, RequestStanding.Refused, unreadable);
+
+        Assert.Same(usage, held.Outcome);
+        Assert.Equal(RequestStanding.Refused, held.Standing);
+        Assert.Equal(HarnessExit.UsageError, unread.Outcome.ExitCode);
+        Assert.Equal(usage.Message, unread.Outcome.Message);
+        Assert.Equal([.. usage.Details!, "whether a run holds what --apply needs cannot be told: The run lock 'C:\\src\\.harness-config\\lock.json' could not be read: "
+            + "the disk is full; --apply is refused until the lock file can be read"], unread.Outcome.Details);
+        Assert.Equal(RequestStanding.Refused, unread.Standing);
+    }
+
+    /// <summary>
     /// A lock file that cannot be read refuses a sound dry run, exit 13, saying why; one whose verb could not read what it
     /// weighs keeps its own code, with why the holders cannot be named among its lines.
     /// </summary>

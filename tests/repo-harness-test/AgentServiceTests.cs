@@ -994,6 +994,29 @@ public sealed class AgentServiceTests
     }
 
     /// <summary>
+    /// A path a refresh never hands an agent - the orchestrators' own directory - is a usage error its --apply answers
+    /// before it takes anything, exit 10, whoever holds the worktree; so its dry run, while a run holds the worktree,
+    /// exits 10 too, in the same words, the holder named on its lines as ever.
+    /// </summary>
+    [Fact]
+    public async Task APathNeverHanded_IsAUsageError_InTheDryRunAsInTheApply_ThoughARunHoldsTheWorktree()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        await using var held = await HoldTheWorktreeAsync(kit, worktree);
+
+        var dry = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under(".orchestrators"), apply: false, Token);
+        var applied = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under(".orchestrators"), apply: true, Token);
+
+        Assert.Equal(HarnessExit.UsageError, applied.ExitCode);
+        Assert.StartsWith("'.orchestrators' is never handed to an agent: ", applied.Message, StringComparison.Ordinal);
+        Assert.Equal(HarnessExit.UsageError, dry.ExitCode);
+        Assert.Equal(applied.Message, dry.Message);
+        Assert.Contains(dry.Details!, line => line.StartsWith($"held now: '{worktree}' on local is held by ", StringComparison.Ordinal));
+    }
+
+    /// <summary>
     /// A refresh never hands a path into a submodule the agent's worktree records: where the main tree turned a submodule
     /// into files of its own, committed or not, the refresh is refused, exit 13, naming each path with the submodule it is
     /// or lies in, and nothing is written.

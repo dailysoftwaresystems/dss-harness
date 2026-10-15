@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json.Serialization;
 using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
@@ -59,7 +60,7 @@ public sealed record LockHolder(
 
 /// <summary>One entry in the lock file: what is held, how much of it, and by whom.</summary>
 /// <param name="Host">The host the work runs on, as the command line names it.</param>
-/// <param name="Tree">The tree on that host.</param>
+/// <param name="Tree">The tree on that host, as the lock keys it (<see cref="RunLock.Key"/>).</param>
 /// <param name="Scope">How much of the tree the entry takes.</param>
 /// <param name="Holder">Who holds it.</param>
 /// <param name="Variant">The build variant, when the entry takes one; absent for a whole tree.</param>
@@ -87,6 +88,14 @@ public sealed record LockRequest
     /// <summary>How much of the tree to take.</summary>
     public required LockScope Scope { get; init; }
 
+    /// <summary>
+    /// Whether the tree is to be removed, with everything kept inside it: then an entry on that host for anything inside the
+    /// tree - a sweep's key in a host's copy, kept in its <c>.mutations</c> - is in its way too, as an entry for the tree
+    /// is. Recorded as the tree taken as <see cref="Scope"/> says, so it is what a run asking for the tree afterwards
+    /// meets.
+    /// </summary>
+    public bool Removal { get; init; }
+
     /// <summary>The run taking it.</summary>
     public required RunId RunId { get; init; }
 
@@ -106,7 +115,10 @@ public sealed record LockRequest
 /// <remarks>
 /// In the main checkout because a worktree has its own <c>.harness-config</c>, so a per-tree lock
 /// would make two runs of the same leg invisible to each other. A held lock refuses immediately and
-/// names its holder: silently blocking for hours is worse than a refusal somebody can act on.
+/// names its holder: silently blocking for hours is worse than a refusal somebody can act on. A tree on
+/// this machine is keyed one way however it is reached (<see cref="Key"/>), when an entry is written and
+/// whenever the lock is asked, so a tree reached through a link and the same tree named as git names it
+/// are one key, whoever spells it.
 /// </remarks>
 public sealed class RunLock(IFileSystem fileSystem, IHarnessOutput output, IProcessIdentity identity)
 {
@@ -143,8 +155,9 @@ public sealed class RunLock(IFileSystem fileSystem, IHarnessOutput output, IProc
     /// lock file nobody can use, which stops every run on every tree alike.
     /// </remarks>
     /// <exception cref="HarnessException">
-    /// The lock file could not be read or updated, or the request names no variant for a shared
-    /// hold. Never a wait: a run blocked for hours on a lock cannot be told from one that hung.
+    /// The lock file could not be read or updated, the request names no variant for a shared hold,
+    /// or where a tree on this machine leads cannot be told (<see cref="Key"/>). Never a wait: a run
+    /// blocked for hours on a lock cannot be told from one that hung.
     /// </exception>
     public Task<LockAttempt> TryAcquireAsync(
         HarnessLayout layout,
@@ -166,10 +179,10 @@ public sealed class RunLock(IFileSystem fileSystem, IHarnessOutput output, IProc
 
         var heldBy = File(layout).Update<(string? Said, LockEntry? Holder)?>((entries, afterwards) =>
         {
-            var kept = Live(entries, entry, request.Force, afterwards);
+            var kept = Live(entries, request.Force ? existing => InTheWay(existing, entry, request.Removal) : null, afterwards);
 
             // A request that was refused writes nothing: the file is left as it was found.
-            return kept.FirstOrDefault(existing => Conflicts(existing, entry)) is { } holder
+            return kept.FirstOrDefault(existing => InTheWay(existing, entry, request.Removal)) is { } holder
                 ? (null, ($"{Describe(entry)} is held by {holder.Describe(_identity)}{_identity.ElsewhereNote(holder.Holder.Machine)}.", holder))
                 : ([.. kept, entry], null);
         });
@@ -181,32 +194,39 @@ public sealed class RunLock(IFileSystem fileSystem, IHarnessOutput output, IProc
 
     /// <summary>
     /// Every live entry in the way of any of <paramref name="requests"/>, without taking anything: all of them, each
-    /// once, in the file's order. The lock file is only read, and nothing is reclaimed and nothing written: a holder
-    /// whose process has ended is passed over and stays.
+    /// once, in the file's order, each with the requests it is in the way of - so whoever asks for several things at once
+    /// tells what each entry holds by the lock's own rule, from the one reading. The lock file is only read, and nothing
+    /// is reclaimed and nothing written: a holder whose process has ended is passed over and stays.
     /// </summary>
     /// <param name="layout">The repository, whose main checkout holds the lock file.</param>
     /// <param name="requests">What would be taken. Never forced: nothing is taken, so there is nothing to take over.</param>
-    /// <exception cref="HarnessException">The lock file could not be read, or another process kept it for too long.</exception>
-    public IReadOnlyList<LockEntry> Holders(HarnessLayout layout, IEnumerable<LockRequest> requests)
+    /// <exception cref="HarnessException">
+    /// The lock file could not be read, another process kept it for too long, or where a tree on this machine leads
+    /// cannot be told (<see cref="Key"/>).
+    /// </exception>
+    public IReadOnlyList<LockInTheWay> Holders(HarnessLayout layout, IReadOnlyList<LockRequest> requests)
     {
         ArgumentNullException.ThrowIfNull(layout);
         ArgumentNullException.ThrowIfNull(requests);
 
-        var wanted = requests.Select(Entry).ToList();
+        var wanted = requests.Select(request => (Request: request, Entry: Entry(request))).ToList();
 
         if (wanted.Count == 0)
         {
             return [];
         }
 
-        return File(layout).Update<IReadOnlyList<LockEntry>>((entries, _) =>
+        return File(layout).Update<IReadOnlyList<LockInTheWay>>((entries, _) =>
         {
-            var inTheWay = Live(entries, wanted[0], force: false, afterwards: null)
-                .Where(existing => wanted.Any(one => Conflicts(existing, one)))
+            var inTheWay = Live(entries, forced: null, afterwards: null)
                 .Distinct()
+                .Select(existing => new LockInTheWay(
+                    existing,
+                    [.. wanted.Where(one => InTheWay(existing, one.Entry, one.Request.Removal)).Select(one => one.Request)]))
+                .Where(holding => holding.Of.Count > 0)
                 .ToList();
 
-            return (null, (IReadOnlyList<LockEntry>)inTheWay);
+            return (null, (IReadOnlyList<LockInTheWay>)inTheWay);
         });
     }
 
@@ -228,7 +248,10 @@ public sealed class RunLock(IFileSystem fileSystem, IHarnessOutput output, IProc
     /// mutex a run needs to take the lock, for as long as a rename takes. An entry of a run that has ended is
     /// passed over and left: taking it back would write the file.
     /// </remarks>
-    /// <exception cref="HarnessException">The lock file could not be read, or another process kept it for too long.</exception>
+    /// <exception cref="HarnessException">
+    /// The lock file could not be read, another process kept it for too long, or where a tree on this machine leads
+    /// cannot be told (<see cref="Key"/>).
+    /// </exception>
     public string? HeldBy(HarnessLayout layout, LockRequest request, Action? whileFree = null)
     {
         ArgumentNullException.ThrowIfNull(layout);
@@ -243,7 +266,7 @@ public sealed class RunLock(IFileSystem fileSystem, IHarnessOutput output, IProc
 
         return File(layout).Update<string?>((entries, _) =>
         {
-            if (Live(entries, wanted, force: false, afterwards: null).FirstOrDefault(existing => Conflicts(existing, wanted)) is { } holder)
+            if (Live(entries, forced: null, afterwards: null).FirstOrDefault(existing => InTheWay(existing, wanted, request.Removal)) is { } holder)
             {
                 return (null, $"{Describe(wanted)} is held by {holder.Describe(_identity)}{_identity.ElsewhereNote(holder.Holder.Machine)}.");
             }
@@ -253,11 +276,47 @@ public sealed class RunLock(IFileSystem fileSystem, IHarnessOutput output, IProc
         });
     }
 
-    /// <summary>The entry <paramref name="request"/> would record, naming this process.</summary>
+    /// <summary>
+    /// The one spelling the lock keys <paramref name="tree"/> on <paramref name="host"/> by, which every entry is written
+    /// with and every request is asked by: on this machine, the full path with every link and junction along it followed,
+    /// as git spells a tree - so a worktree reached through a worktrees root that is a link to another disk, and the same
+    /// worktree as git names it, are one key - and as spelled on any other host, whose links this machine cannot follow,
+    /// and for a path that is not fully qualified.
+    /// </summary>
+    /// <param name="host">The host the tree is on, as the command line names it.</param>
+    /// <param name="tree">The tree on that host.</param>
+    /// <exception cref="HarnessException">
+    /// Where a tree on this machine leads cannot be told - its links form a cycle, or one cannot be read: refused, never
+    /// keyed as spelled, which would miss a run holding it by another spelling.
+    /// </exception>
+    public string Key(string host, string tree)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(host);
+        ArgumentException.ThrowIfNullOrWhiteSpace(tree);
+
+        if (!HostId.TryParse(host, out var on) || on.Kind != HostKind.Local || !Path.IsPathFullyQualified(tree))
+        {
+            return tree;
+        }
+
+        try
+        {
+            return _fileSystem.ResolveLinks(tree);
+        }
+        catch (IOException ex)
+        {
+            throw new HarnessException(
+                HarnessExit.Refused,
+                $"The run lock keys '{tree}' by where it leads, and that cannot be told: {ex.Message.TrimEnd('.')}. Until it can be, a run "
+                + "holding it by another spelling cannot be told from none.");
+        }
+    }
+
+    /// <summary>The entry <paramref name="request"/> would record, naming this process, its tree as the lock keys it.</summary>
     private LockEntry Entry(LockRequest request)
         => new(
             request.Host,
-            request.Tree,
+            Key(request.Host, request.Tree),
             request.Scope,
             new LockHolder(
                 _identity.CurrentMachine,
@@ -307,18 +366,37 @@ public sealed class RunLock(IFileSystem fileSystem, IHarnessOutput output, IProc
     /// <summary>
     /// Whether <paramref name="wanted"/> cannot be taken while <paramref name="existing"/> stands.
     /// A tree taken exclusively excludes everything on it; a tree taken shared excludes only the
-    /// same variant, which is what lets variants build side by side.
+    /// same variant, which is what lets variants build side by side; and a tree to be removed
+    /// (<see cref="LockRequest.Removal"/>) excludes as well everything on its host kept inside it.
     /// </summary>
-    private static bool Conflicts(LockEntry existing, LockEntry wanted)
+    private static bool InTheWay(LockEntry existing, LockEntry wanted, bool removal)
     {
-        if (!Same(existing.Host, wanted.Host) || !Same(existing.Tree, wanted.Tree))
+        if (!Same(existing.Host, wanted.Host))
         {
             return false;
+        }
+
+        if (!Same(existing.Tree, wanted.Tree))
+        {
+            return removal && Inside(wanted.Tree, existing.Tree);
         }
 
         return existing.Scope == LockScope.TreeExclusive
             || wanted.Scope == LockScope.TreeExclusive
             || Same(existing.Variant, wanted.Variant);
+    }
+
+    /// <summary>
+    /// Whether <paramref name="path"/> is kept inside <paramref name="tree"/>: below it, past a separator of either kind, as
+    /// a host spells it, compared as the lock compares trees.
+    /// </summary>
+    private static bool Inside(string tree, string path)
+    {
+        var root = tree.TrimEnd('/', '\\');
+
+        return path.Length > root.Length + 1
+            && path.StartsWith(root, StringComparison.OrdinalIgnoreCase)
+            && path[root.Length] is '/' or '\\';
     }
 
     private static bool Ours(LockEntry existing, LockEntry ours)
@@ -346,14 +424,16 @@ public sealed class RunLock(IFileSystem fileSystem, IHarnessOutput output, IProc
     /// because nothing here can ask that machine whether it is still running.
     /// </summary>
     /// <param name="entries">What the lock file records.</param>
-    /// <param name="wanted">What is asked for.</param>
-    /// <param name="force">Whether to drop the entries in its way, as <c>--force-lock</c> says to.</param>
+    /// <param name="forced">
+    /// Which entries are in the way of what is asked for, where they are to be dropped, as <c>--force-lock</c> says to;
+    /// <see langword="null"/> where nothing is forced.
+    /// </param>
     /// <param name="afterwards">
     /// Where what is left is written back: takes what is said of each entry taken out, a dead holder's reclaimed or one
     /// forced, to be said once the file is let go. <see langword="null"/> where nothing is written: a dead holder's entry
     /// is then passed over without a word, and stays until a run takes a lock.
     /// </param>
-    private IReadOnlyList<LockEntry> Live(IReadOnlyList<LockEntry> entries, LockEntry wanted, bool force, Action<Action>? afterwards)
+    private IReadOnlyList<LockEntry> Live(IReadOnlyList<LockEntry> entries, Func<LockEntry, bool>? forced, Action<Action>? afterwards)
     {
         var kept = new List<LockEntry>();
 
@@ -366,7 +446,7 @@ public sealed class RunLock(IFileSystem fileSystem, IHarnessOutput output, IProc
             // Asked before the holder's machine is, so that a lock this machine will not reclaim on
             // its own can still be given up. Otherwise an entry whose process id has come back around
             // to something live is held for ever, and only editing the file by hand recovers it.
-            if (force && Conflicts(entry, wanted))
+            if (forced?.Invoke(entry) == true)
             {
                 afterwards?.Invoke(() => _output.Warn(CommandName, ProcessHolders.TakenByForce(Describe(entry), entry.Describe(_identity))));
                 continue;
@@ -386,6 +466,11 @@ public sealed class RunLock(IFileSystem fileSystem, IHarnessOutput output, IProc
         return kept;
     }
 }
+
+/// <summary>A live entry of the lock in the way of what was asked, and which of the requests asked it is in the way of.</summary>
+/// <param name="Entry">The entry, its tree as the lock keys it.</param>
+/// <param name="Of">Each request it is in the way of, among those asked, as it was asked.</param>
+public sealed record LockInTheWay(LockEntry Entry, IReadOnlyList<LockRequest> Of);
 
 /// <summary>What asking for a lock came to: the lock, or the run that holds it. Exactly one is set.</summary>
 /// <param name="Handle">The lock, when it was taken.</param>

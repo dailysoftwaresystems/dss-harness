@@ -1,8 +1,10 @@
 using System.Diagnostics;
 using System.Globalization;
 using RepoHarness.Core.Execution;
+using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
+using RepoHarness.Core.Worktrees;
 
 namespace RepoHarness.Tests;
 
@@ -619,6 +621,140 @@ public sealed class RunLockTests
 
         Assert.Throws<ArgumentException>(() => runLock.HeldBy(Layout(temp), Building("x86_64-gcc-debug") with { Force = true }));
     }
+
+    /// <summary>
+    /// A tree on this machine is one key however it is reached: an entry written through a link - as a worktree under a
+    /// worktrees root that is a junction to another disk is spelled from the main checkout - and a request spelled as
+    /// git spells it, every link followed, meet, whichever writes and whichever asks, and the entry records the tree
+    /// with its links followed.
+    /// </summary>
+    [Fact]
+    public async Task ATreeReachedThroughALink_IsOneKeyWithTheTreeItLeadsTo()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runLock = new RunLock(factory.FileSystem, factory.Output, factory.Identity);
+        var layout = Layout(temp);
+        var reached = Directory.CreateDirectory(temp.Combine("elsewhere", "o1--ag")).FullName;
+        TestLinks.DirectoryLink(temp.Combine("linked"), temp.Combine("elsewhere"));
+        var linked = temp.Combine("linked", "o1--ag");
+        var copy = Path.Combine(linked, ".legs", "357e24c");
+        var copyReached = Path.Combine(reached, ".legs", "357e24c");
+
+        await using (var throughTheLink = await runLock.AcquireAsync(layout, Whole(copy), TestContext.Current.CancellationToken))
+        {
+            Assert.Equal(copyReached, throughTheLink.Entry.Tree);
+            Assert.False((await runLock.TryAcquireAsync(layout, Whole(copyReached), TestContext.Current.CancellationToken)).Taken);
+            Assert.StartsWith($"'{copyReached}' on local is held by pid ", runLock.HeldBy(layout, Whole(copyReached)), StringComparison.Ordinal);
+        }
+
+        await using (await runLock.AcquireAsync(layout, Whole(copyReached), TestContext.Current.CancellationToken))
+        {
+            Assert.False((await runLock.TryAcquireAsync(layout, Whole(copy), TestContext.Current.CancellationToken)).Taken);
+            Assert.NotNull(runLock.HeldBy(layout, Whole(copy)));
+        }
+    }
+
+    /// <summary>
+    /// Only this machine's trees are keyed by where they lead: a host's - a WSL distribution's or an ssh host's - whose links
+    /// this machine cannot follow, is the key it is spelled as, though a link of this machine's lies along that spelling.
+    /// And asked for several things at once, the lock tells each live entry to every request it is in the way of, and to no
+    /// other: the same tree whole, and a removal of a tree it is kept inside, but never another tree or another variant.
+    /// </summary>
+    [Fact]
+    public async Task OnlyThisMachinesTreesAreKeyedByWhereTheyLead_AndEachEntryIsToldToWhatItIsInTheWayOf()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runLock = new RunLock(factory.FileSystem, factory.Output, factory.Identity);
+        var layout = Layout(temp);
+        var reached = Directory.CreateDirectory(temp.Combine("elsewhere", "tree")).FullName;
+        TestLinks.DirectoryLink(temp.Combine("linked"), temp.Combine("elsewhere"));
+        var tree = temp.Combine("linked", "tree");
+
+        Assert.Equal(tree, runLock.Key("ssh pi", tree));
+        Assert.Equal(tree, runLock.Key("wsl ubuntu", tree));
+        Assert.Equal(reached, runLock.Key("local", tree));
+
+        await using var held = await runLock.AcquireAsync(layout, Whole(tree) with { Scope = LockScope.TreeShared, Variant = "debug" }, TestContext.Current.CancellationToken);
+
+        var whole = Whole(tree);
+        var removing = Whole(temp.Combine("linked")) with { Removal = true };
+        var holding = Assert.Single(runLock.Holders(
+            layout,
+            [Whole(temp.Combine("elsewhere")), whole, Whole(reached) with { Scope = LockScope.TreeShared, Variant = "release" }, removing]));
+
+        Assert.Equal(held.Entry, holding.Entry);
+        Assert.Equal([whole, removing], holding.Of);
+    }
+
+    /// <summary>
+    /// Where the links along a tree on this machine cannot be followed - they form a cycle - the lock cannot key it, so it
+    /// refuses, naming the tree, rather than key it as spelled and miss a run holding it by another spelling.
+    /// </summary>
+    [Fact]
+    public async Task ATreeWhoseLinksCannotBeFollowed_IsRefused_NeverKeyedAsSpelled()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runLock = new RunLock(factory.FileSystem, factory.Output, factory.Identity);
+        TestLinks.DirectoryLink(temp.Combine("one"), temp.Combine("two"));
+        TestLinks.DirectoryLink(temp.Combine("two"), temp.Combine("one"));
+        var tree = temp.Combine("one", "tree");
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => runLock.TryAcquireAsync(Layout(temp), Whole(tree), TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+        Assert.StartsWith($"The run lock keys '{tree}' by where it leads, and that cannot be told: ", refusal.Message, StringComparison.Ordinal);
+        Assert.False(File.Exists(Layout(temp).LockFile), "a request the lock cannot key writes nothing");
+    }
+
+    /// <summary>
+    /// A removal of a host's copy takes it with everything kept inside it: a sweep holding its key there - one more copy
+    /// in the copy's <c>.mutations</c> - is in the way of removing that copy, on that host only, and of nothing beside it
+    /// whose name only begins the same; while a sync or a build of the copy, which a sweep never holds off, still takes it.
+    /// </summary>
+    [Fact]
+    public async Task ARemovalOfAHostsCopy_IsHeldByASweepInsideIt_OnThatHostOnly()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runLock = new RunLock(factory.FileSystem, factory.Output, factory.Identity);
+        var layout = Layout(temp);
+        var copy = "/home/pi/repo--wt--o1--ag";
+        var sweep = new LockRequest { Host = "ssh pi", Tree = copy + "/.mutations/357e24c", Scope = LockScope.TreeExclusive, RunId = RunId.New(), Command = "check-mutations" };
+
+        await using var swept = await runLock.AcquireAsync(layout, sweep, TestContext.Current.CancellationToken);
+
+        var refused = await runLock.TryAcquireAsync(layout, HostCopyRemover.RemovalLock(HostId.Ssh("pi"), copy, RunId.New()), TestContext.Current.CancellationToken);
+
+        Assert.False(refused.Taken);
+        Assert.Equal(swept.Entry, refused.Holder);
+        Assert.StartsWith($"'{copy}' on ssh pi is held by pid ", refused.HeldBy, StringComparison.Ordinal);
+        Assert.Contains("running 'check-mutations'", refused.HeldBy, StringComparison.Ordinal);
+        Assert.NotNull(runLock.HeldBy(layout, HostCopyRemover.RemovalLock(HostId.Ssh("pi"), copy + "/", RunId.New())));
+
+        Assert.Null(runLock.HeldBy(layout, HostCopyRemover.RemovalLock(HostId.Ssh("other"), copy, RunId.New())));
+        Assert.Null(runLock.HeldBy(layout, HostCopyRemover.RemovalLock(HostId.Wsl("pi"), copy, RunId.New())));
+        Assert.Null(runLock.HeldBy(layout, HostCopyRemover.RemovalLock(HostId.Ssh("pi"), copy + "-2", RunId.New())));
+
+        await using (await runLock.AcquireAsync(
+            layout,
+            new LockRequest { Host = "ssh pi", Tree = copy, Scope = LockScope.TreeExclusive, RunId = RunId.New(), Command = "sync" },
+            TestContext.Current.CancellationToken))
+        {
+        }
+    }
+
+    /// <summary>A leg's copy on this machine, taken whole.</summary>
+    private static LockRequest Whole(string copy) => new()
+    {
+        Host = "local",
+        Tree = copy,
+        Scope = LockScope.TreeExclusive,
+        RunId = RunId.New(),
+        Command = "test",
+    };
 
     private static LockRequest Building(string variant) => new()
     {

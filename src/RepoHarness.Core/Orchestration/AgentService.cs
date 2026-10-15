@@ -250,7 +250,7 @@ public sealed class AgentService(
         {
             // Seeding reads the main tree, which a fold writes: held while the worktree is made and handed what it is
             // handed, so the seed is one moment of it.
-            hold = await HoldAsync(context.Layout, CreateCommand, cancellationToken, main).ConfigureAwait(false);
+            hold = await HoldAsync(context.Layout, CreateCommand, met: null, cancellationToken, main).ConfigureAwait(false);
 
             if (hold.Refusal is { } held)
             {
@@ -519,7 +519,7 @@ public sealed class AgentService(
         }
 
         // The agent's worktree is held too: a leg building in it would be building what is being replaced.
-        var hold = await HoldAsync(context.Layout, SeedCommand, cancellationToken, main, _fileSystem.ResolveLinks(path)).ConfigureAwait(false);
+        var hold = await HoldAsync(context.Layout, SeedCommand, met: null, cancellationToken, main, path).ConfigureAwait(false);
 
         if (hold.Refusal is { } held)
         {
@@ -623,18 +623,20 @@ public sealed class AgentService(
             return refusal;
         }
 
-        var outcome = await RefreshLiveAsync(at, request, apply, json, cancellationToken).ConfigureAwait(false);
+        var met = new HoldersMet();
+        var outcome = await RefreshLiveAsync(at, request, apply, json, met, cancellationToken).ConfigureAwait(false);
         var answered = apply ? _log.Record(at.Layout!, agent, RefreshCommand, outcome) : outcome;
 
         // Asked for one document, what the live agent answered brings one: the dry run's own exits bring theirs, and the
-        // rest - an --apply's, and a refusal met there before anything was weighed - say what the code alone says. A usage
-        // error or a refusal returned above, before the agent was found, brings none: the command's plumbing answers it
-        // with the same document, empty, as it answers every exit that brings none.
-        return json && answered.Data.Count == 0 ? OrchestrationReports.Document(answered, apply, StandingOfApply(answered), null) : answered;
+        // rest - an --apply's, and a refusal met there before anything was weighed - say what the code alone says, save an
+        // --apply refused at its hold, which names the run it met. A usage error or a refusal returned above, before the
+        // agent was found, brings none: the command's plumbing answers it with the same document, empty, as it answers
+        // every exit that brings none.
+        return Answered(answered, apply, json, met);
     }
 
     /// <summary>Refreshing a live agent, once it is found.</summary>
-    private async Task<CommandOutcome> RefreshLiveAsync(AgentAt at, RefreshRequest request, bool apply, bool json, CancellationToken cancellationToken)
+    private async Task<CommandOutcome> RefreshLiveAsync(AgentAt at, RefreshRequest request, bool apply, bool json, HoldersMet met, CancellationToken cancellationToken)
     {
         var (context, layout, record, path) = (at.Context!, at.Layout!, at.Record!, at.Path!);
         var floor = Floor(context);
@@ -643,7 +645,7 @@ public sealed class AgentService(
         // Who holds what this command's --apply takes, named on every exit a dry run makes, refused or not: the refusal a
         // dry run is refused with, and the failure it meets, keep their own words and gain the holders' lines.
         CommandOutcome RefusedInDry(CommandOutcome refused)
-            => !apply ? Dry(json, context.Layout, RefreshCommand, refused, RequestStanding.Refused, main, _fileSystem.ResolveLinks(path)) : refused;
+            => !apply ? Dry(json, context.Layout, RefreshCommand, refused, RequestStanding.Refused, main, path) : refused;
 
         if (_store.ReadSeed(layout, record.Name) is not { } seed)
         {
@@ -697,7 +699,7 @@ public sealed class AgentService(
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return !apply
-                ? Dry(json, context.Layout, RefreshCommand, CommandOutcome.Failed(HarnessExit.CommandFailed, $"{Agent(record)} was not refreshed: what it or the main tree holds cannot be read - {ex.Message.TrimEnd('.')}. Nothing was copied."), null, main, _fileSystem.ResolveLinks(path))
+                ? Dry(json, context.Layout, RefreshCommand, CommandOutcome.Failed(HarnessExit.CommandFailed, $"{Agent(record)} was not refreshed: what it or the main tree holds cannot be read - {ex.Message.TrimEnd('.')}. Nothing was copied."), null, main, path)
                 : CommandOutcome.Failed(HarnessExit.CommandFailed, $"{Agent(record)} was not refreshed: what it or the main tree holds cannot be read - {ex.Message.TrimEnd('.')}. Nothing was copied.");
         }
 
@@ -867,11 +869,11 @@ public sealed class AgentService(
                     [.. handedLines, .. staleLines, .. mergedLines, .. alikeLines, .. leftLines, .. NotHanded(moved), .. behind]),
                 RequestStanding.Sound,
                 main,
-                _fileSystem.ResolveLinks(path));
+                path);
         }
 
         // The agent's worktree is held too: a leg building in it would be building what is being replaced.
-        var hold = await HoldAsync(context.Layout, RefreshCommand, cancellationToken, main, _fileSystem.ResolveLinks(path)).ConfigureAwait(false);
+        var hold = await HoldAsync(context.Layout, RefreshCommand, met, cancellationToken, main, path).ConfigureAwait(false);
 
         if (hold.Refusal is { } held)
         {
@@ -956,16 +958,17 @@ public sealed class AgentService(
             return refusal;
         }
 
-        var outcome = await RebaseLiveAsync(at, request, apply, json, cancellationToken).ConfigureAwait(false);
+        var met = new HoldersMet();
+        var outcome = await RebaseLiveAsync(at, request, apply, json, met, cancellationToken).ConfigureAwait(false);
         var answered = apply ? _log.Record(at.Layout!, agent, RebaseCommand, outcome) : outcome;
 
         // Asked for one document, what the live agent answered brings one, and what was returned above is the plumbing's
         // to answer, as refresh-agent says.
-        return json && answered.Data.Count == 0 ? OrchestrationReports.Document(answered, apply, StandingOfApply(answered), null) : answered;
+        return Answered(answered, apply, json, met);
     }
 
     /// <summary>Moving a live agent's base, once it is found.</summary>
-    private async Task<CommandOutcome> RebaseLiveAsync(AgentAt at, RebaseRequest request, bool apply, bool json, CancellationToken cancellationToken)
+    private async Task<CommandOutcome> RebaseLiveAsync(AgentAt at, RebaseRequest request, bool apply, bool json, HoldersMet met, CancellationToken cancellationToken)
     {
         var (context, layout, record, path) = (at.Context!, at.Layout!, at.Record!, at.Path!);
         var main = context.Layout.MainCheckoutRoot;
@@ -974,7 +977,7 @@ public sealed class AgentService(
 
         // A rebase takes the worktree alone, never the main tree: who holds it is named on every exit a dry run makes.
         CommandOutcome RefusedInDry(CommandOutcome refused)
-            => !apply ? Dry(json, context.Layout, RebaseCommand, refused, RequestStanding.Refused, _fileSystem.ResolveLinks(path)) : refused;
+            => !apply ? Dry(json, context.Layout, RebaseCommand, refused, RequestStanding.Refused, path) : refused;
 
         if (_store.ReadSeed(layout, record.Name) is not { } seed)
         {
@@ -1020,7 +1023,7 @@ public sealed class AgentService(
 
         if (stop is not null)
         {
-            return !apply ? Dry(json, context.Layout, RebaseCommand, stop, DryRuns.StandingOf(stop), _fileSystem.ResolveLinks(path)) : stop;
+            return !apply ? Dry(json, context.Layout, RebaseCommand, stop, DryRuns.StandingOf(stop), path) : stop;
         }
 
         if (!apply)
@@ -1031,12 +1034,12 @@ public sealed class AgentService(
                 RebaseCommand,
                 CommandOutcome.Ok($"dry run: the base of {Lower(Agent(record))} would move {moving}; pass --apply to move it", [.. RebaseLines(plan!, applied: false)]),
                 RequestStanding.Sound,
-                _fileSystem.ResolveLinks(path));
+                path);
         }
 
         // The agent's worktree is held: a leg building in it would be building what is being replaced. Measured again under
         // the hold, so what is written is what was weighed.
-        var hold = await HoldAsync(context.Layout, RebaseCommand, cancellationToken, _fileSystem.ResolveLinks(path)).ConfigureAwait(false);
+        var hold = await HoldAsync(context.Layout, RebaseCommand, met, cancellationToken, path).ConfigureAwait(false);
 
         if (hold.Refusal is { } held)
         {
@@ -1328,22 +1331,23 @@ public sealed class AgentService(
             return refusal;
         }
 
-        var outcome = await FoldLiveAsync(at, allowances, apply, json, cancellationToken).ConfigureAwait(false);
+        var met = new HoldersMet();
+        var outcome = await FoldLiveAsync(at, allowances, apply, json, met, cancellationToken).ConfigureAwait(false);
         var answered = apply ? _log.Record(at.Layout!, agent, FoldCommand, outcome) : outcome;
 
         // Asked for one document, what the live agent answered brings one, and what was returned above is the plumbing's
         // to answer, as refresh-agent says.
-        return json && answered.Data.Count == 0 ? OrchestrationReports.Document(answered, apply, StandingOfApply(answered), null) : answered;
+        return Answered(answered, apply, json, met);
     }
 
     /// <summary>Folding a live agent, once it is found.</summary>
-    private async Task<CommandOutcome> FoldLiveAsync(AgentAt at, FoldAllowances allowances, bool apply, bool json, CancellationToken cancellationToken)
+    private async Task<CommandOutcome> FoldLiveAsync(AgentAt at, FoldAllowances allowances, bool apply, bool json, HoldersMet met, CancellationToken cancellationToken)
     {
         var (context, layout, record, path) = (at.Context!, at.Layout!, at.Record!, at.Path!);
         var (unfoldable, seed) = await UnfoldableAsync(context.Layout.MainCheckoutRoot, layout, record, path, cancellationToken).ConfigureAwait(false);
 
         // A fold takes the main tree and the agent's worktree: who holds either is named on every exit a dry run makes.
-        string[] heldTrees = [context.Layout.MainCheckoutRoot, _fileSystem.ResolveLinks(path)];
+        string[] heldTrees = [context.Layout.MainCheckoutRoot, path];
 
         if (unfoldable is not null)
         {
@@ -1374,7 +1378,7 @@ public sealed class AgentService(
         }
 
         // The agent's worktree is held too: a leg building in it would be writing what is being folded.
-        var hold = await HoldAsync(context.Layout, FoldCommand, cancellationToken, context.Layout.MainCheckoutRoot, _fileSystem.ResolveLinks(path)).ConfigureAwait(false);
+        var hold = await HoldAsync(context.Layout, FoldCommand, met, cancellationToken, context.Layout.MainCheckoutRoot, path).ConfigureAwait(false);
 
         if (hold.Refusal is { } held)
         {
@@ -1430,12 +1434,13 @@ public sealed class AgentService(
             return refusal;
         }
 
-        var outcome = await DeleteFoundAsync(found.Context!, found.Layout!, found.Record!, allowances, apply, discardUncommitted, json, cancellationToken).ConfigureAwait(false);
+        var met = new HoldersMet();
+        var outcome = await DeleteFoundAsync(found.Context!, found.Layout!, found.Record!, allowances, apply, discardUncommitted, json, met, cancellationToken).ConfigureAwait(false);
         var answered = apply ? _log.Record(found.Layout!, agent, DeleteCommand, outcome) : outcome;
 
         // Asked for one document, what the agent found answered brings one, and what was returned above is the plumbing's
         // to answer, as refresh-agent says.
-        return json && answered.Data.Count == 0 ? OrchestrationReports.Document(answered, apply, StandingOfApply(answered), null) : answered;
+        return Answered(answered, apply, json, met);
     }
 
     /// <summary>Deleting an agent, once its record is found.</summary>
@@ -1447,6 +1452,7 @@ public sealed class AgentService(
         bool apply,
         bool discardUncommitted,
         bool json,
+        HoldersMet met,
         CancellationToken cancellationToken)
     {
         if (record.State == AgentStates.Deleted)
@@ -1476,22 +1482,22 @@ public sealed class AgentService(
         var target = new Target(context, layout, record, WorktreeAddress.Nested(record.Orchestrator, record.Name), path, standing);
 
         return record.State == AgentStates.Closed
-            ? await FinishAsync(target, allowances, apply, json, cancellationToken).ConfigureAwait(false)
-            : await CloseAsync(target, allowances, apply, discardUncommitted, json, cancellationToken).ConfigureAwait(false);
+            ? await FinishAsync(target, allowances, apply, json, met, cancellationToken).ConfigureAwait(false)
+            : await CloseAsync(target, allowances, apply, discardUncommitted, json, met, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
     /// Deleting a live agent: its fold and rows - or nothing, abandoning it - then its transcripts and evidence kept, its
     /// closing recorded, and its worktree's removal asked for.
     /// </summary>
-    private async Task<CommandOutcome> CloseAsync(Target target, FoldAllowances allowances, bool apply, bool discard, bool json, CancellationToken cancellationToken)
+    private async Task<CommandOutcome> CloseAsync(Target target, FoldAllowances allowances, bool apply, bool discard, bool json, HoldersMet met, CancellationToken cancellationToken)
     {
         var (context, layout, record, path) = (target.Context, target.Layout, target.Record, target.Path);
 
         switch (target.Standing.Kind)
         {
             case Standing.Gone when discard:
-                return await AbandonGoneAsync(target, apply, json, cancellationToken).ConfigureAwait(false);
+                return await AbandonGoneAsync(target, apply, json, met, cancellationToken).ConfigureAwait(false);
 
             case Standing.Gone:
                 return CommandOutcome.Refused(
@@ -1512,7 +1518,7 @@ public sealed class AgentService(
             {
                 // Named on every exit a dry run makes, refused or not: who holds what its --apply takes.
                 return !apply
-                    ? Dry(json, context.Layout, DeleteCommand, unfoldable, DryRuns.StandingOf(unfoldable), context.Layout.MainCheckoutRoot, _fileSystem.ResolveLinks(path))
+                    ? Dry(json, context.Layout, DeleteCommand, unfoldable, DryRuns.StandingOf(unfoldable), context.Layout.MainCheckoutRoot, path)
                     : unfoldable;
             }
 
@@ -1525,13 +1531,13 @@ public sealed class AgentService(
 
             if (dry.Refusal is { } refusal)
             {
-                return Dry(json, context.Layout, DeleteCommand, refusal, DryRuns.StandingOf(refusal), context.Layout.MainCheckoutRoot, _fileSystem.ResolveLinks(path));
+                return Dry(json, context.Layout, DeleteCommand, refusal, DryRuns.StandingOf(refusal), context.Layout.MainCheckoutRoot, path);
             }
 
             // Which git worktree this is, as its --apply reads it before it writes: one that cannot be read fails both alike.
             if (StampOf(target).Failure is { } unread)
             {
-                return Dry(json, context.Layout, DeleteCommand, unread, standing: null, context.Layout.MainCheckoutRoot, _fileSystem.ResolveLinks(path));
+                return Dry(json, context.Layout, DeleteCommand, unread, standing: null, context.Layout.MainCheckoutRoot, path);
             }
 
             var evidence = dry.Evidence.Files.Count == 0
@@ -1562,10 +1568,10 @@ public sealed class AgentService(
                 dry.Fold is { } fold ? Consenting(fold.Rows.Batch) : RequestStanding.Sound,
                 cancellationToken,
                 context.Layout.MainCheckoutRoot,
-                _fileSystem.ResolveLinks(path)).ConfigureAwait(false);
+                path).ConfigureAwait(false);
         }
 
-        var hold = await HoldAsync(context.Layout, DeleteCommand, cancellationToken, context.Layout.MainCheckoutRoot, _fileSystem.ResolveLinks(path)).ConfigureAwait(false);
+        var hold = await HoldAsync(context.Layout, DeleteCommand, met, cancellationToken, context.Layout.MainCheckoutRoot, path).ConfigureAwait(false);
 
         if (hold.Refusal is { } held)
         {
@@ -1588,6 +1594,13 @@ public sealed class AgentService(
             if (unreadable is not null)
             {
                 return unreadable;
+            }
+
+            // Which copies hosts keep of it, read before anything is written, as its dry run reads them: a removal that could
+            // not tell them would leave an agent closed and its removal unfinished.
+            if (HostCopiesOf(target).Unread is { } copiesUnread)
+            {
+                return copiesUnread;
             }
 
             var lines = new List<string>();
@@ -1740,7 +1753,7 @@ public sealed class AgentService(
     /// Deleting a closed agent again: nothing is folded; its worktree is compared with what closing it recorded, never with
     /// the main tree, its evidence and transcripts are kept again, and its removal is asked for again.
     /// </summary>
-    private async Task<CommandOutcome> FinishAsync(Target target, FoldAllowances allowances, bool apply, bool json, CancellationToken cancellationToken)
+    private async Task<CommandOutcome> FinishAsync(Target target, FoldAllowances allowances, bool apply, bool json, HoldersMet met, CancellationToken cancellationToken)
     {
         var (context, layout, record, path) = (target.Context, target.Layout, target.Record, target.Path);
         var closing = record.Closing!;
@@ -1821,7 +1834,7 @@ public sealed class AgentService(
             // which that --apply stops before it reaches.
             if (target.Standing.Kind == Standing.Husk)
             {
-                return Dry(json, context.Layout, DeleteCommand, CommandOutcome.Failed(HarnessExit.Incomplete, Husk(target, was, applied: false)), RequestStanding.Refused, _fileSystem.ResolveLinks(path));
+                return Dry(json, context.Layout, DeleteCommand, CommandOutcome.Failed(HarnessExit.Incomplete, Husk(target, was, applied: false)), RequestStanding.Refused, path);
             }
 
             // Closed or gone, the removal's questions are the same ones a live agent's dry run asks, unqualified by the
@@ -1832,10 +1845,10 @@ public sealed class AgentService(
                 CommandOutcome.Ok($"dry run: {Lower(was)}; pass --apply to {(target.Standing.Kind == Standing.Gone ? "finish the removal" : "keep its evidence again and finish the removal")}"),
                 RequestStanding.Sound,
                 cancellationToken,
-                _fileSystem.ResolveLinks(path)).ConfigureAwait(false);
+                path).ConfigureAwait(false);
         }
 
-        var hold = await HoldAsync(context.Layout, DeleteCommand, cancellationToken, _fileSystem.ResolveLinks(path)).ConfigureAwait(false);
+        var hold = await HoldAsync(context.Layout, DeleteCommand, met, cancellationToken, path).ConfigureAwait(false);
 
         if (hold.Refusal is { } held)
         {
@@ -1844,6 +1857,14 @@ public sealed class AgentService(
 
         await using (hold.Handles)
         {
+            // Which copies hosts keep of it, read before anything is kept again, as its dry run reads them - save for a
+            // directory that is no longer a git worktree, whose --apply stops before the removal, and whose dry run asks
+            // nothing of it.
+            if (target.Standing.Kind != Standing.Husk && HostCopiesOf(target).Unread is { } copiesUnread)
+            {
+                return copiesUnread;
+            }
+
             var lines = new List<string>();
 
             try
@@ -1891,15 +1912,15 @@ public sealed class AgentService(
     }
 
     /// <summary>Deleting a live agent whose worktree is gone, with nothing folded: its transcripts kept, and what is left of the worktree removed.</summary>
-    private async Task<CommandOutcome> AbandonGoneAsync(Target target, bool apply, bool json, CancellationToken cancellationToken)
+    private async Task<CommandOutcome> AbandonGoneAsync(Target target, bool apply, bool json, HoldersMet met, CancellationToken cancellationToken)
     {
         var (layout, record) = (target.Layout, target.Record);
         var again = OrchestrationReports.DeleteAgentLine(record.Orchestrator, record.Name, "--apply --discard-uncommitted");
 
         if (!apply)
         {
-            // The worktree asked about as its --apply spells it, links resolved, beside the removal's other questions:
-            // a run holding what the removal takes is named, and a copy a run holds leaves it unfinished.
+            // The worktree asked about as its --apply asks for it, keyed as the lock keys it, beside the removal's other
+            // questions: a run holding what the removal takes is named, and a copy a run holds leaves it unfinished.
             return await DryRemovalAsync(
                 json,
                 target,
@@ -1909,10 +1930,10 @@ public sealed class AgentService(
                     [TranscriptsPlan(record)]),
                 RequestStanding.Sound,
                 cancellationToken,
-                _fileSystem.ResolveLinks(target.Path)).ConfigureAwait(false);
+                target.Path).ConfigureAwait(false);
         }
 
-        var hold = await HoldAsync(target.Context.Layout, DeleteCommand, cancellationToken, _fileSystem.ResolveLinks(target.Path)).ConfigureAwait(false);
+        var hold = await HoldAsync(target.Context.Layout, DeleteCommand, met, cancellationToken, target.Path).ConfigureAwait(false);
 
         if (hold.Refusal is { } held)
         {
@@ -1921,6 +1942,12 @@ public sealed class AgentService(
 
         await using (hold.Handles)
         {
+            // Which copies hosts keep of it, read before anything is kept, as its dry run reads them.
+            if (HostCopiesOf(target).Unread is { } copiesUnread)
+            {
+                return copiesUnread;
+            }
+
             var transcripts = await TranscriptsAsync(layout, record).ConfigureAwait(false);
 
             if (transcripts.Failed is { } lost)
@@ -2721,7 +2748,9 @@ public sealed class AgentService(
     /// <c>--apply</c> takes, spelled as that --apply spells them. A copy a run or a sweep holds does not refuse the
     /// --apply, which goes as far as the removal and leaves it unfinished; what is kept in the worktree that the removal
     /// cannot take as it stands leaves it unfinished too, until that is put right; a directory there no sync made goes
-    /// with the worktree, and is only said. A record that cannot be read refuses it, as the removal is refused.
+    /// with the worktree, and is only said. A record of host copies that cannot be read refuses it, as its --apply is
+    /// refused reading that record before it writes anything (<see cref="HostCopiesOf"/>), with the lines it weighed and
+    /// who holds the trees that --apply takes.
     /// </summary>
     /// <param name="json">Whether to answer with one JSON document.</param>
     /// <param name="target">The agent whose deletion is asked about.</param>
@@ -2733,24 +2762,40 @@ public sealed class AgentService(
     {
         ArgumentNullException.ThrowIfNull(planned);
 
-        IReadOnlyList<LockRequest> copies;
-        IReadOnlyList<KeptCopyLine> leftInIt;
+        var layout = target.Context.Layout;
+        var (copies, unread) = HostCopiesOf(target);
 
-        try
+        if (unread is not null)
         {
-            copies = _hostCopies.RemovalLocks(target.Context, target.Address.CopyName, target.Path, RunId.New());
-            leftInIt = await _worktrees.CopiesHeldAsync(target.Address.Name, target.Context.Layout, target.Path, cancellationToken).ConfigureAwait(false);
+            return Dry(json, unread with { Details = planned.Details }, RequestStanding.Refused, _treeHolders.Read(layout, Holds(DeleteCommand, RunId.New(), trees), [], []));
         }
-        catch (HarnessException ex)
-        {
-            return CommandOutcome.Refused($"{Agent(target.Record)} was not deleted: {ex.Message.TrimEnd('.')} Nothing was removed.");
-        }
+
+        var leftInIt = await _worktrees.CopiesHeldAsync(target.Address.Name, layout, target.Path, cancellationToken).ConfigureAwait(false);
 
         // The lock is asked once, for the trees and the hosts' copies alike, so a lock that cannot be read is said by the one
         // rule's row for it; and what is kept in the worktree that the removal cannot take as it stands is weighed by that
         // rule, in its order, with every holder: below a lock that cannot be read and a tree a run holds, either of which
         // refuses the --apply before it goes anywhere near the removal.
-        return Dry(json, planned, standing, _treeHolders.Read(target.Context.Layout, Holds(DeleteCommand, RunId.New(), trees), copies, leftInIt));
+        return Dry(json, planned, standing, _treeHolders.Read(layout, Holds(DeleteCommand, RunId.New(), trees), copies, leftInIt));
+    }
+
+    /// <summary>
+    /// The locks the removal of the copies hosts keep of the agent's worktree takes, read from the record of host copies -
+    /// by a dry run of the deletion, and by its --apply before it writes anything; or, where that record cannot be read,
+    /// the refusal both give: no removal could tell which copies are the worktree's to remove, and one that went ahead would
+    /// leave the agent closed and its removal unfinished.
+    /// </summary>
+    /// <param name="target">The agent being deleted.</param>
+    private (IReadOnlyList<LockRequest> Copies, CommandOutcome? Unread) HostCopiesOf(Target target)
+    {
+        try
+        {
+            return (_hostCopies.RemovalLocks(target.Context, target.Address.CopyName, target.Path, RunId.New()), null);
+        }
+        catch (HarnessException ex)
+        {
+            return ([], CommandOutcome.Refused($"{Agent(target.Record)} was not deleted: {ex.Message.TrimEnd('.')}. Nothing was removed."));
+        }
     }
 
     /// <summary>
@@ -2785,10 +2830,26 @@ public sealed class AgentService(
             : outcome.ExitCode is HarnessExit.Refused or HarnessExit.UsageError ? RequestStanding.Refused : null;
 
     /// <summary>
-    /// Takes each of <paramref name="trees"/> on this machine whole, as a sync takes a copy: no leg builds in it, and no other
-    /// fold, seed or deletion writes it, meanwhile. All of them, or none; the run's id names what it keeps.
+    /// What fold-agent, refresh-agent, rebase-agent or delete-agent answers once its outcome is in: one document where
+    /// <paramref name="json"/> asks and the outcome brings none - an --apply refused at its hold sound, nothing in it to
+    /// correct, the run it met in heldNow, as its dry run at that moment answers; any other as it stands, nobody asked -
+    /// and the outcome itself otherwise.
     /// </summary>
-    private async Task<Hold> HoldAsync(HarnessLayout layout, string command, CancellationToken cancellationToken, params string[] trees)
+    /// <param name="answered">The outcome, with its log's line where an --apply wrote one.</param>
+    /// <param name="apply">Whether --apply was given.</param>
+    /// <param name="json">Whether to answer with one JSON document.</param>
+    /// <param name="met">The run the --apply's hold met, where one was in its way.</param>
+    private static CommandOutcome Answered(CommandOutcome answered, bool apply, bool json, HoldersMet met)
+        => json && answered.Data.Count == 0
+            ? OrchestrationReports.Document(answered, apply, met.Held is null ? StandingOfApply(answered) : RequestStanding.Sound, met.Held)
+            : answered;
+
+    /// <summary>
+    /// Takes each of <paramref name="trees"/> on this machine whole, as a sync takes a copy: no leg builds in it, and no other
+    /// fold, seed or deletion writes it, meanwhile. All of them, or none; the run's id names what it keeps. Where a run is in
+    /// the way, <paramref name="met"/> - where given - is told that run, as a dry run at that moment names it.
+    /// </summary>
+    private async Task<Hold> HoldAsync(HarnessLayout layout, string command, HoldersMet? met, CancellationToken cancellationToken, params string[] trees)
     {
         var runId = RunId.New();
         var handles = new List<RunLockHandle>();
@@ -2800,8 +2861,14 @@ public sealed class AgentService(
             if (attempt.Handle is not { } handle)
             {
                 await new Handles(handles).DisposeAsync().ConfigureAwait(false);
-                var held = attempt.Holder is { } holder ? _treeHolders.Refusal(request, holder) : attempt.HeldBy ?? string.Empty;
-                return new Hold(new Handles([]), CommandOutcome.Refused($"{held} Nothing was changed; run it again once that is done."), runId);
+                var refused = _treeHolders.Refused(request, attempt.Holder!);
+
+                if (met is not null)
+                {
+                    met.Held = refused.Held;
+                }
+
+                return new Hold(new Handles([]), CommandOutcome.Refused($"{refused.Said} Nothing was changed; run it again once that is done."), runId);
             }
 
             handles.Add(handle);
@@ -3043,6 +3110,16 @@ public sealed class AgentService(
 
     /// <summary>The trees held, or why they could not be, and the run's id.</summary>
     private sealed record Hold(Handles Handles, CommandOutcome? Refusal, RunId Run);
+
+    /// <summary>
+    /// The run an --apply's hold met in its way, told by the hold to the verb that answers with one document, so its heldNow
+    /// names the run its refusal names.
+    /// </summary>
+    private sealed class HoldersMet
+    {
+        /// <summary>The run met, as a dry run at that moment names it; <see langword="null"/> where no hold was refused.</summary>
+        public TreeHeld? Held { get; set; }
+    }
 
     /// <summary>Locks let go together, in the reverse of the order they were taken.</summary>
     private sealed class Handles(IReadOnlyList<RunLockHandle> handles) : IAsyncDisposable

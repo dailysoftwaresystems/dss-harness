@@ -55,13 +55,18 @@ internal sealed class OrchestrationKit
 
     /// <summary>
     /// A repository holding <c>a.txt</c>, <c>b.txt</c> and <c>docs/x.md</c>, run through init with
-    /// <paramref name="settings"/>, ignoring the evidence root, all of it committed, and orchestrator <c>o1</c> created.
+    /// <paramref name="settings"/> and the hosts <paramref name="hosts"/> declares - each ssh host with its entry in
+    /// sshItems - ignoring the evidence root, all of it committed, and orchestrator <c>o1</c> created.
     /// </summary>
-    public static async Task<OrchestrationKit> PrepareAsync(TempDirectory temp, int? parallel = null, WorktreeSettings? settings = null)
+    public static async Task<OrchestrationKit> PrepareAsync(TempDirectory temp, int? parallel = null, WorktreeSettings? settings = null, HostsConfig? hosts = null)
     {
         var harness = new HarnessFactory();
+        var declared = hosts ?? new HostsConfig();
 
-        await harness.InitializeHarnessAsync(temp.Path, Token, new HarnessConfig { Worktrees = settings ?? Settings });
+        await harness.InitializeHarnessAsync(
+            temp.Path,
+            Token,
+            new HarnessConfig { Worktrees = settings ?? Settings, Hosts = declared, SshItems = [.. declared.Ssh.Keys] });
         temp.WriteFile("a.txt", "one\n");
         temp.WriteFile("b.txt", "two\n");
         temp.WriteFile(Path.Combine("docs", "x.md"), "x\n");

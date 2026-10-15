@@ -88,9 +88,10 @@ public interface IHostCopyRemover
 /// <remarks>
 /// A copy is removed only where the harness made it: one it took over was somebody's directory first, and one
 /// that holds no mark of the harness's is nothing the harness knows it may remove. Each is removed under the lock a
-/// leg this machine runs there holds while it builds, so a copy one of its runs is using is never removed from
-/// under it, and forgotten before that lock is let go. A copy not dealt with - its host cannot be asked, a run
-/// holds it, or removing it failed - stays recorded, so deleting the worktree again asks once more.
+/// leg this machine runs there holds while it builds, taken with everything kept inside the copy, so a copy one of its
+/// runs or sweeps is using is never removed from under it, and forgotten before that lock is let go. A copy not dealt
+/// with - its host cannot be asked, a run or a sweep holds it, or removing it failed - stays recorded, so deleting the
+/// worktree again asks once more.
 /// <para>
 /// The mutation workers a host keeps in the copy go first, each as a copy is removed, by its marker and its claim: each a
 /// copy of it a sweep there made. One still in use - a sweep still running there holds it - says the copy is, which
@@ -121,8 +122,10 @@ public sealed class HostCopyRemover(
     private readonly HostCopyRecord _record = new(fileSystem, platform.PathComparison);
 
     /// <summary>
-    /// The lock a copy's removal takes: the copy whole, on the host that holds it - which a run holding it, building in it
-    /// or replacing it, is named by, and which the removal and the question a dry run asks of it both spell.
+    /// The lock a copy's removal takes: the copy whole, on the host that holds it, with everything kept inside it
+    /// (<see cref="LockRequest.Removal"/>) - which a run holding it, building in it or replacing it, is named by, and so is
+    /// a sweep this machine runs there, holding its key in the copy's <c>.mutations</c> - and which the removal and the
+    /// question a dry run asks of it both spell.
     /// </summary>
     /// <param name="host">The host holding the copy.</param>
     /// <param name="path">The copy's path on that host.</param>
@@ -140,6 +143,7 @@ public sealed class HostCopyRemover(
             Scope = LockScope.TreeExclusive,
             RunId = runId,
             Command = WorktreeService.DeleteCommand,
+            Removal = true,
         };
     }
 

@@ -366,6 +366,42 @@ public sealed class TreeHoldersTests
     }
 
     /// <summary>
+    /// Where the worktrees root is a link, a leg naming the worktree through it waits in this machine's line under that
+    /// spelling while the lock records the worktree with its links followed: the place in line is joined to the entry as
+    /// the lock keys a tree, so the dry run still says the leg waits - and the --apply's refusal names the worktree as the
+    /// lock keys it, with the same words.
+    /// </summary>
+    [Fact]
+    public async Task AHoldersPlaceInLine_IsJoinedToItsEntryAsTheLockKeysTheTree()
+    {
+        using var temp = new TempDirectory();
+        using var elsewhere = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp, settings: OrchestrationKit.SettingsWith(root: "wt-link"));
+        Directory.Move(Path.Combine(kit.Main, "wt-link"), elsewhere.Combine("wt-real"));
+        TestLinks.DirectoryLink(Path.Combine(kit.Main, "wt-link"), elsewhere.Combine("wt-real"));
+        await kit.CreateAgentAsync("ag");
+        var worktree = WorktreeAddress.Nested(OrchestrationKit.Orchestrator, "ag").PathUnder(Path.Combine(kit.Main, "wt-link"));
+        var reached = kit.Harness.FileSystem.ResolveLinks(worktree);
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        var run = RunId.New();
+
+        await using var held = await HoldAsync(kit, worktree, run);
+        WriteSlots(kit, InLine(kit, "/src/first", "run-first", "first"), InLine(kit, worktree, run.Value));
+
+        var dry = await kit.FoldAsync("ag", apply: false);
+        var applied = await kit.FoldAsync("ag", apply: true);
+
+        Assert.Equal(HarnessExit.Refused, dry.ExitCode);
+        Assert.Contains(
+            dry.Details!,
+            line => line.StartsWith($"held now: '{reached}' on local is held by ", StringComparison.Ordinal)
+                && line.EndsWith(", whose leg has not started: it waits for a heavy-leg slot, 1 leg(s) ahead of it.", StringComparison.Ordinal));
+        Assert.Equal(HarnessExit.Refused, applied.ExitCode);
+        Assert.StartsWith($"'{reached}' on local is held by ", applied.Message, StringComparison.Ordinal);
+        Assert.EndsWith(", whose leg has not started: it waits for a heavy-leg slot, 1 leg(s) ahead of it. Nothing was changed; run it again once that is done.", applied.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A dry run of a deletion names the run that holds what its --apply takes whether its own request is refused or not:
     /// refused over a path --merge names that the fold weighs not, and refused because the agent is not whole, both end
     /// in the one clause, with the holder on a line of their own.
@@ -790,6 +826,69 @@ public sealed class TreeHoldersTests
     }
 
     /// <summary>
+    /// The help, README and the architecture say how the lock keys a tree on this machine - every link followed, one key
+    /// however a command spells it - what a removal of a host's copy takes with it, a sweep's key there among it, what an
+    /// --apply refused at its hold answers with <c>--json</c>, and that a usage error and a record of host copies that
+    /// cannot be read answer a dry run as they answer its --apply.
+    /// </summary>
+    [Fact]
+    public async Task TheDocumentsSayHowTheLockKeysATree_WhatARemovalTakes_AndWhatAnApplyHeldOffAnswers()
+    {
+        var readme = Prose.Document("README.md");
+        var architecture = Prose.Document("docs", "architecture.md");
+        var worktrees = Prose.Words((await CliRunner.RunAsync(["help", "worktrees"], Token)).StandardOutput);
+
+        Assert.Contains(
+            "The run lock knows a tree on this machine by where it leads, every link followed, so worktrees kept on another disk "
+                + "through a worktrees root that is a link are held, and asked about, as one tree however a command spells them.",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "`10` where its arguments are a usage error, which that `--apply` answers before it takes anything,",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains("An `--apply` refused at its hold answers the same document, `sound`, with the run it met in `heldNow`.", readme, StringComparison.Ordinal);
+        Assert.Contains(
+            $"A tree on this machine is **one key however it is reached** (`{nameof(RunLock)}.{nameof(RunLock.Key)}`): its full path with every "
+                + "link and junction along it followed, as git spells a tree, when an entry is written and whenever the lock is asked",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"A **removal** takes the tree with everything kept inside it (`{nameof(LockRequest)}.{nameof(LockRequest.Removal)}`): an entry on "
+                + "that host for anything inside the tree - a sweep's key in a host's copy - is in its way",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"taken with everything kept inside the copy (`{nameof(LockRequest)}.{nameof(LockRequest.Removal)}`, on "
+                + $"`{nameof(HostCopyRemover)}.{nameof(HostCopyRemover.RemovalLock)}`), so a sweep this machine runs there - its key in the "
+                + "copy's `.mutations` - keeps the copy as a run in it does",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "An `--apply` refused at its hold answers the same document, `applied` true, its `request` `sound` and the run it met in "
+                + $"`heldNow`, said as a dry run at that moment says it (`{nameof(TreeHolders)}.{nameof(TreeHolders.Refused)}`",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "or, for a deletion, a record of the copies hosts keep that cannot be read, which its `--apply` reads before it writes "
+                + "anything (`AgentService.HostCopiesOf`, the lines weighed kept) - 13, save a usage error, 10, which its `--apply` answers "
+                + "before it takes anything;",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "save where what the command weighs could not be read, or the request is a usage error, either of which keeps its own "
+                + "code from above",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A copy is removed under the lock a leg this machine runs there takes, taken with everything kept inside the copy, so a "
+                + "sweep this machine runs there keeps it as a run does,",
+            worktrees,
+            StringComparison.Ordinal);
+        Assert.Contains($"{HarnessExit.Refused} where a run or a sweep holds one or it was refused,", worktrees, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// With <c>--json</c> the outcome is one document: a sound dry run that is held answers exit 13 with
     /// <c>request</c> <c>sound</c> and the run in <c>heldNow</c>, its <c>holds</c> <c>tree</c>; a refused request answers
     /// <c>refused</c>, held or not; an <c>--apply</c> that wrote answers <c>applied</c> true and <c>request</c>
@@ -869,6 +968,104 @@ public sealed class TreeHoldersTests
                 outcome.Message,
                 StringComparison.Ordinal);
         }
+    }
+
+    /// <summary>
+    /// fold-agent's --apply refused at its hold answers <c>--json</c> as its dry run at that moment does: request sound,
+    /// since nothing in it needs correcting, and the run it met in <c>heldNow</c> - the holder a script waits for - said in
+    /// the words a <c>held now:</c> line says.
+    /// </summary>
+    [Fact]
+    public async Task AFoldsApplyRefusedAtItsHold_AnswersSound_NamingTheHolderItMet()
+    {
+        using var temp = new TempDirectory();
+        var (kit, worktree) = await AFoldToMakeAsync(temp);
+        var run = RunId.New();
+
+        await using var held = await HoldAsync(kit, worktree, run);
+
+        var answered = await kit.Harness.AgentService.FoldAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: true, Token, json: true);
+
+        AnsweredAsHeld(answered, worktree, run);
+        Assert.Equal("two\n", OrchestrationKit.Read(kit.Main, "b.txt"));
+    }
+
+    /// <summary>refresh-agent's --apply refused at its hold answers <c>--json</c> with request sound and the run it met in <c>heldNow</c>.</summary>
+    [Fact]
+    public async Task ARefreshsApplyRefusedAtItsHold_AnswersSound_NamingTheHolderItMet()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit\n");
+        var run = RunId.New();
+
+        await using var held = await HoldAsync(kit, worktree, run);
+
+        var answered = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("a.txt"), apply: true, Token, json: true);
+
+        AnsweredAsHeld(answered, worktree, run);
+        Assert.Equal("one\n", OrchestrationKit.Read(worktree, "a.txt"));
+    }
+
+    /// <summary>rebase-agent's --apply refused at its hold answers <c>--json</c> with request sound and the run it met in <c>heldNow</c>.</summary>
+    [Fact]
+    public async Task ARebasesApplyRefusedAtItsHold_AnswersSound_NamingTheHolderItMet()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        var from = kit.Record("ag").Base;
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\ncommitted edit\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "a committed change", Token);
+        var run = RunId.New();
+
+        await using var held = await HoldAsync(kit, worktree, run);
+
+        var answered = await kit.Harness.AgentService.RebaseAsync(kit.Main, "o1", "ag", new RebaseRequest(), apply: true, Token, json: true);
+
+        AnsweredAsHeld(answered, worktree, run);
+        Assert.Equal(from, kit.Record("ag").Base);
+    }
+
+    /// <summary>delete-agent's --apply refused at its hold answers <c>--json</c> with request sound and the run it met in <c>heldNow</c>.</summary>
+    [Fact]
+    public async Task ADeletionsApplyRefusedAtItsHold_AnswersSound_NamingTheHolderItMet()
+    {
+        using var temp = new TempDirectory();
+        var (kit, worktree) = await AFoldToMakeAsync(temp);
+        var run = RunId.New();
+
+        await using var held = await HoldAsync(kit, worktree, run);
+
+        var answered = await kit.Harness.AgentService.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: true, discardUncommitted: false, Token, json: true);
+
+        AnsweredAsHeld(answered, worktree, run);
+        Assert.Equal(AgentStates.Live, kit.Record("ag").State);
+    }
+
+    /// <summary>
+    /// What an --apply refused at its hold answers with <c>--json</c>: exit 13 and one document - applied, request sound,
+    /// its summary the refusal's, and the one run it met in <c>heldNow</c>, holding <paramref name="tree"/>, said as a
+    /// <c>held now:</c> line says it.
+    /// </summary>
+    private static void AnsweredAsHeld(CommandOutcome answered, string tree, RunId run)
+    {
+        Assert.Equal(HarnessExit.Refused, answered.ExitCode);
+        Assert.EndsWith("Nothing was changed; run it again once that is done.", answered.Message, StringComparison.Ordinal);
+        var document = JsonNode.Parse(answered.Data.Single())!;
+        Assert.Equal(HarnessExit.Refused, document["exitCode"]!.GetValue<int>());
+        Assert.True(document["applied"]!.GetValue<bool>());
+        Assert.Equal("sound", document["request"]!.GetValue<string>());
+        Assert.Equal(answered.Message, document["summary"]!.GetValue<string>());
+        var holder = document["heldNow"]!.AsArray().Single()!;
+        Assert.Equal("tree", holder["holds"]!.GetValue<string>());
+        Assert.Equal(tree, holder["path"]!.GetValue<string>());
+        Assert.Equal("local", holder["host"]!.GetValue<string>());
+        Assert.Equal(run.Value, holder["run"]!.GetValue<string>());
+        Assert.Equal("test", holder["command"]!.GetValue<string>());
+        Assert.Equal("no-slot", holder["standing"]!.GetValue<string>());
+        Assert.StartsWith($"'{tree}' on local is held by pid ", holder["said"]!.GetValue<string>(), StringComparison.Ordinal);
     }
 
     /// <summary>A dry run writes neither the lock file nor the record of heavy legs, and reclaims nothing: both are as they were.</summary>

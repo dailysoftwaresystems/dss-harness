@@ -648,6 +648,252 @@ public sealed class AgentDeletionTests
         Assert.Equal(AgentStates.Live, kit.Record("ag").State);
     }
 
+    /// <summary>
+    /// Where the worktrees root is a link - as it is where the worktrees are kept on another disk - a run in the agent's
+    /// worktree holds its leg copy as git spells that worktree, every link followed, while the deletion reaches the copy
+    /// through the link: the lock keys both spellings alike, so the dry run names the run and is unfinished, exit 21, as
+    /// its --apply is, which closes the agent and leaves the copy where the run works in it.
+    /// </summary>
+    [Fact]
+    public async Task ALegCopyARunHoldsThroughALinkedWorktreesRoot_LeavesTheDeletionUnfinished_InTheDryRunAsInTheApply()
+    {
+        using var temp = new TempDirectory();
+        using var elsewhere = new TempDirectory();
+        var (kit, worktree) = await ThroughALinkedRootAsync(temp, elsewhere);
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        var copy = await LegCopyAsync(kit, Path.Combine(worktree, HarnessLayout.LegsDirectoryName, "357e24c"));
+        var run = RunId.New();
+
+        await using var held = await HoldTheCopyAsync(kit, kit.Harness.FileSystem.ResolveLinks(copy), run);
+
+        var dry = await kit.DeleteAsync("ag", apply: false);
+
+        Assert.Equal(HarnessExit.Incomplete, dry.ExitCode);
+        Assert.EndsWith(TreeHolders.RemovalHeld, dry.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            dry.Details!,
+            line => line.StartsWith($"left the leg copy '{copy}' kept in it: a run still running holds it: ", StringComparison.Ordinal)
+                && line.Contains($"run {run.Value}", StringComparison.Ordinal));
+
+        var applied = await kit.DeleteAsync("ag", apply: true);
+
+        Assert.Equal(HarnessExit.Incomplete, applied.ExitCode);
+        Assert.Equal(AgentStates.Closed, kit.Record("ag").State);
+        Assert.True(File.Exists(Path.Combine(copy, "main.c")), "the copy a run works in was removed");
+    }
+
+    /// <summary>
+    /// delete-worktree asks the lock for a leg copy kept in the worktree as the lock keys it, links followed: where the
+    /// worktrees root is a link and a run holds the copy as git spells the worktree, the deletion is refused, exit 13,
+    /// naming the run, and removes nothing.
+    /// </summary>
+    [Fact]
+    public async Task DeleteWorktree_IsRefusedForALegCopyARunHoldsThroughALinkedWorktreesRoot()
+    {
+        using var temp = new TempDirectory();
+        using var elsewhere = new TempDirectory();
+        var (kit, worktree) = await ThroughALinkedRootAsync(temp, elsewhere);
+        var copy = await LegCopyAsync(kit, Path.Combine(worktree, HarnessLayout.LegsDirectoryName, "357e24c"));
+        var run = RunId.New();
+
+        await using var held = await HoldTheCopyAsync(kit, kit.Harness.FileSystem.ResolveLinks(copy), run);
+
+        var refused = await kit.Harness.WorktreeService.DeleteAsync(kit.Main, "o1/ag", force: false, deleteEvidence: true, cancellationToken: Token);
+
+        Assert.Equal(HarnessExit.Refused, refused.Outcome.ExitCode);
+        Assert.StartsWith(
+            $"Worktree 'o1/ag' was not deleted: a leg copy kept in it is in use - '{copy}': a run still running holds it: ",
+            refused.Outcome.Message,
+            StringComparison.Ordinal);
+        Assert.Contains($"run {run.Value}", refused.Outcome.Message, StringComparison.Ordinal);
+        Assert.True(File.Exists(Path.Combine(copy, "main.c")), "the copy a run works in was removed");
+        Assert.True(Directory.Exists(worktree));
+    }
+
+    /// <summary>
+    /// A sweep this machine runs on a host holds its key in the host's copy of the worktree - one more copy in that copy's
+    /// .mutations - and removing the copy takes everything in it: the dry run names the sweep on a <c>held now:</c> line
+    /// and is unfinished, exit 21, as its --apply is, which closes the agent and leaves the copy recorded without asking
+    /// the host to remove a copy the sweep works in. With <c>--json</c> the sweep is in <c>heldNow</c>, holding a copy.
+    /// </summary>
+    [Fact]
+    public async Task ASweepInAHostsCopyOfTheWorktree_LeavesTheDeletionUnfinished_InTheDryRunAsInTheApply()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(
+            temp,
+            hosts: new Core.Configuration.HostsConfig { Ssh = { ["pi"] = new Core.Configuration.SshHostConfig { RepositoryPath = "/home/pi/repo" } } });
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        var copy = "/home/pi/repo" + HostCopies.WorktreeSuffix + WorktreeAddress.Nested("o1", "ag").CopyName;
+        var layout = new HarnessLayout(kit.Main, kit.Main);
+        var record = new HostCopyRecord(kit.Harness.FileSystem, kit.Harness.Platform.PathComparison);
+        record.Claim(layout, new HostCopyEntry(WorktreeAddress.Nested("o1", "ag").CopyName, "ssh pi", copy, worktree));
+        var agents = kit.Harness.Agents(
+            kit.Harness.FileSystem,
+            kit.Harness.AnchorRegistryService,
+            hostCopies: new HostCopyRemover(new NoHosts(), new NoHosts(), kit.Harness.RunLock, kit.Harness.FileSystem, kit.Harness.Platform));
+        var sweep = MutationWorkers.SweepLock(Core.Hosts.HostId.Ssh("pi"), copy, new VariantKey("x86_64", "gcc", "debug", null), RunId.New(), "check-mutations");
+        var attempt = await kit.Harness.RunLock.TryAcquireAsync(layout, sweep, Token);
+
+        await using var swept = attempt.Handle ?? throw new InvalidOperationException($"the test could not hold '{sweep.Tree}': {attempt.HeldBy}");
+
+        var dry = await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: false, discardUncommitted: false, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, dry.ExitCode);
+        Assert.EndsWith(TreeHolders.RemovalHeld, dry.Message, StringComparison.Ordinal);
+        Assert.Contains(dry.Details!, line => line.StartsWith($"held now: '{sweep.Tree}' on ssh pi is held by ", StringComparison.Ordinal));
+
+        var document = JsonNode.Parse((await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: false, discardUncommitted: false, Token, json: true)).Data[0])!;
+        var holder = document["heldNow"]!.AsArray().Single()!;
+
+        Assert.Equal("sound", document["request"]!.GetValue<string>());
+        Assert.Equal("copy", holder["holds"]!.GetValue<string>());
+        Assert.Equal(sweep.Tree, holder["path"]!.GetValue<string>());
+        Assert.Equal("ssh pi", holder["host"]!.GetValue<string>());
+        Assert.Equal("check-mutations", holder["command"]!.GetValue<string>());
+
+        var applied = await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: true, discardUncommitted: false, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, applied.ExitCode);
+        Assert.Equal(AgentStates.Closed, kit.Record("ag").State);
+        Assert.Contains(applied.Details!, line => line.Contains($"ssh pi: its copy at '{copy}' stays, and is still recorded: '{copy}' on ssh pi is held by ", StringComparison.Ordinal));
+        Assert.Single(record.Of(layout, WorktreeAddress.Nested("o1", "ag").CopyName));
+    }
+
+    /// <summary>
+    /// A record of host copies that cannot be read leaves a deletion unable to tell which copies are its worktree's, so a
+    /// live agent's --apply is refused before it writes anything - exit 13, nothing folded, the agent live, its worktree
+    /// there - in the words its dry run says, which keeps the lines it weighed.
+    /// </summary>
+    [Fact]
+    public async Task ARecordOfHostCopiesThatCannotBeRead_RefusesALiveAgentsDeletion_BeforeAnythingIsWritten_InTheDryRunAsInTheApply()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        var agents = WithHostCopies(kit, kit.Harness.FileSystem);
+        UnreadableHostCopies(kit);
+
+        var dry = await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: false, discardUncommitted: false, Token);
+        var applied = await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: true, discardUncommitted: false, Token);
+
+        Assert.Equal(HarnessExit.Refused, dry.ExitCode);
+        Assert.StartsWith("Agent 'ag' of 'o1' was not deleted: ", dry.Message, StringComparison.Ordinal);
+        Assert.EndsWith(". Nothing was removed.", dry.Message, StringComparison.Ordinal);
+        Assert.Contains(dry.Details!, line => line.Contains("b.txt", StringComparison.Ordinal));
+        Assert.Equal(HarnessExit.Refused, applied.ExitCode);
+        Assert.Equal(dry.Message, applied.Message);
+        Assert.Equal("two\n", OrchestrationKit.Read(kit.Main, "b.txt"));
+        Assert.Equal(AgentStates.Live, kit.Record("ag").State);
+        Assert.Equal("two\nagent edit\n", OrchestrationKit.Read(worktree, "b.txt"));
+    }
+
+    /// <summary>
+    /// A record of host copies that cannot be read refuses a closed agent's --apply before it keeps its evidence again, exit
+    /// 13, as its dry run is refused: no removal it would go on to could tell which copies are its worktree's.
+    /// </summary>
+    [Fact]
+    public async Task ARecordOfHostCopiesThatCannotBeRead_RefusesAClosedAgentsDeletion_BeforeItsEvidenceIsKeptAgain()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "evidence/run.log", "measured\n");
+        var closing = WithHostCopies(kit, new LateEvidenceFileSystem(kit.Harness.FileSystem, Path.Combine(worktree, "evidence", "late.log")));
+        Assert.Equal(HarnessExit.Incomplete, (await closing.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: true, discardUncommitted: false, Token)).ExitCode);
+        Assert.Equal(AgentStates.Closed, kit.Record("ag").State);
+        var agents = WithHostCopies(kit, kit.Harness.FileSystem);
+        var kept = Directory.GetDirectories(kit.Layout.EvidenceDirectory("ag"));
+        UnreadableHostCopies(kit);
+
+        var dry = await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: false, discardUncommitted: false, Token);
+        var applied = await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: true, discardUncommitted: false, Token);
+
+        Assert.Equal(HarnessExit.Refused, dry.ExitCode);
+        Assert.StartsWith("Agent 'ag' of 'o1' was not deleted: ", dry.Message, StringComparison.Ordinal);
+        Assert.Equal(HarnessExit.Refused, applied.ExitCode);
+        Assert.Equal(dry.Message, applied.Message);
+        Assert.Equal(kept, Directory.GetDirectories(kit.Layout.EvidenceDirectory("ag")));
+        Assert.True(Directory.Exists(worktree));
+    }
+
+    /// <summary>
+    /// A record of host copies that cannot be read refuses the --apply that would delete an agent whose worktree is gone,
+    /// exit 13, before anything is written, as its dry run is refused: the agent stays live.
+    /// </summary>
+    [Fact]
+    public async Task ARecordOfHostCopiesThatCannotBeRead_RefusesAGoneAgentsDeletion_InTheDryRunAsInTheApply()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync("ag");
+        Assert.True((await kit.Harness.WorktreeService.DeleteAsync(kit.Main, "o1/ag", force: true, deleteEvidence: true, cancellationToken: Token)).Succeeded);
+        var agents = WithHostCopies(kit, kit.Harness.FileSystem);
+        UnreadableHostCopies(kit);
+
+        var dry = await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: false, discardUncommitted: true, Token);
+        var applied = await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: true, discardUncommitted: true, Token);
+
+        Assert.Equal(HarnessExit.Refused, dry.ExitCode);
+        Assert.StartsWith("Agent 'ag' of 'o1' was not deleted: ", dry.Message, StringComparison.Ordinal);
+        Assert.Equal(HarnessExit.Refused, applied.ExitCode);
+        Assert.Equal(dry.Message, applied.Message);
+        Assert.Equal(AgentStates.Live, kit.Record("ag").State);
+    }
+
+    /// <summary>The kit's agents over <paramref name="fileSystem"/>, removing the copies hosts keep as a deletion does, asking no host anything.</summary>
+    private static AgentService WithHostCopies(OrchestrationKit kit, IFileSystem fileSystem)
+        => kit.Harness.Agents(
+            fileSystem,
+            kit.Harness.AnchorRegistryService,
+            hostCopies: new HostCopyRemover(new NoHosts(), new NoHosts(), kit.Harness.RunLock, kit.Harness.FileSystem, kit.Harness.Platform));
+
+    /// <summary>Leaves the kit's record of host copies a file that does not read as one.</summary>
+    private static void UnreadableHostCopies(OrchestrationKit kit)
+    {
+        var record = HostCopyRecord.PathOf(new HarnessLayout(kit.Main, kit.Main));
+        Directory.CreateDirectory(Path.GetDirectoryName(record)!);
+        File.WriteAllText(record, "not json");
+    }
+
+    /// <summary>
+    /// A kit whose worktrees root is a link - a junction on Windows - to a directory in <paramref name="elsewhere"/>, as
+    /// worktrees kept on another disk are, with agent <c>ag</c> made through it; and its worktree, spelled through the link.
+    /// </summary>
+    private static async Task<(OrchestrationKit Kit, string Worktree)> ThroughALinkedRootAsync(TempDirectory temp, TempDirectory elsewhere)
+    {
+        var kit = await OrchestrationKit.PrepareAsync(temp, settings: OrchestrationKit.SettingsWith(root: "wt-link"));
+        var reached = elsewhere.Combine("wt-real");
+        Directory.Move(Path.Combine(kit.Main, "wt-link"), reached);
+        TestLinks.DirectoryLink(Path.Combine(kit.Main, "wt-link"), reached);
+        await kit.CreateAgentAsync("ag");
+
+        return (kit, WorktreeAddress.Nested(OrchestrationKit.Orchestrator, "ag").PathUnder(Path.Combine(kit.Main, "wt-link")));
+    }
+
+    /// <summary>A leg's copy of a worktree at <paramref name="path"/>, as a sync makes one.</summary>
+    private static async Task<string> LegCopyAsync(OrchestrationKit kit, string path)
+    {
+        await kit.Harness.LocalTransport.CreateRootAsync(path, CopyMark.Complete, Token);
+        Directory.CreateDirectory(Path.Combine(path, ".git"));
+        File.WriteAllText(Path.Combine(path, "main.c"), "int main;");
+
+        return path;
+    }
+
+    /// <summary>Holds the leg copy at <paramref name="copy"/> for one variant of run <paramref name="run"/>, as a leg working in it does.</summary>
+    private static async Task<RunLockHandle> HoldTheCopyAsync(OrchestrationKit kit, string copy, RunId run)
+    {
+        var attempt = await kit.Harness.RunLock.TryAcquireAsync(
+            new HarnessLayout(kit.Main, kit.Main),
+            new LockRequest { Host = "local", Tree = copy, Variant = "debug", Scope = LockScope.TreeShared, RunId = run, Command = "test" },
+            Token);
+
+        return attempt.Handle ?? throw new InvalidOperationException($"the test could not hold '{copy}': {attempt.HeldBy}");
+    }
+
     /// <summary>Takes the worktree at <paramref name="path"/> whole for a run of the test, for as long as the caller holds the attempt.</summary>
     private static async Task<RunLockHandle> HoldTheWorktreeAsync(OrchestrationKit kit, string path)
     {

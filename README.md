@@ -107,7 +107,8 @@ orchestrator or an agent exits `21` too when it stops part way - an agent closed
 not yet removed, a fold or a hand-over half written, a move of an agent's base half made, an
 orchestrator half deleted; run again, it finishes. Without `--apply`, `refresh-agent`,
 `rebase-agent`, `fold-agent` and `delete-agent` are dry runs, and a dry run exits as its `--apply`
-would: `0` only when that `--apply` would go through, `13` where it would be refused - a consent
+would: `0` only when that `--apply` would go through, `10` where its arguments are a usage error,
+which that `--apply` answers before it takes anything, `13` where it would be refused - a consent
 nobody gave, or a run holding what the `--apply` needs, included - and `21` where a deletion's
 `--apply` would go as far as the removal and leave it unfinished, over a copy a run or a sweep
 holds or copies kept in the worktree it cannot remove as they stand. A run holding a tree the
@@ -115,7 +116,8 @@ holds or copies kept in the worktree it cannot remove as they stand. A run holdi
 a leg copy or a mutation worker kept in the worktree in that copy's own words; `--json` answers
 with one document whose `request` member says what is wanted of you - `sound` (nothing; wait
 where `heldNow` names a holder), `needs-consent` or `refused` - and whose `heldNow` holds each
-holder, those copies' among them. Either way a dry run still prints all it weighed.
+holder, those copies' among them. An `--apply` refused at its hold answers the same document,
+`sound`, with the run it met in `heldNow`. Either way a dry run still prints all it weighed.
 `dssharness help orchestrators` explains seeding, rebasing, folding and deleting agents.
 
 `--time` pulls each phase's own timing marks out of its output, using `buildTimingRegex`,
@@ -236,6 +238,9 @@ Secrets and the run lock live only in the main checkout. A worktree receives the
 part of `.harness-config` through git but never the ignored part, so both resolve back to
 the originating checkout. What a tree makes for itself - its runs' records, its mutation
 workers in `.mutations`, its legs' copies in `.legs` - is ignored too, and kept in that tree.
+The run lock knows a tree on this machine by where it leads, every link followed, so
+worktrees kept on another disk through a worktrees root that is a link are held, and asked
+about, as one tree however a command spells them.
 
 ## Legs and hosts
 

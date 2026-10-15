@@ -578,12 +578,15 @@ takes (`TreeHeld`, as `TreeHolders.Read` reads it), and it answers the code and 
 says it (`DryAnswer`), which `--json` reports. Read downwards, the first case that
 applies gives the code: delete-agent run from inside the worktree it removes is refused (13), nothing read; what the
 command weighs that cannot be read - for a live agent's deletion, which git worktree it is (`StampOf`, the one read
-both make) - fails it (20); a path, a row or an option that is refused, 13; cells of the rows that need a consent
-nobody gave (`--accept-lost`, `--accept-over`), 13 - the same summary and lines, the line 'to write them:' (delete-agent's
-'to do it:') among them,
+both make) - fails it (20); a path, a row or an option that is refused - or, for a deletion, a record of the copies
+hosts keep that cannot be read, which its `--apply` reads before it writes anything (`AgentService.HostCopiesOf`, the
+lines weighed kept) - 13, save a usage error, 10, which its `--apply` answers before it takes anything; cells of the
+rows that need a consent nobody gave (`--accept-lost`, `--accept-over`), 13 - the same summary and lines, the line 'to
+write them:' (delete-agent's 'to do it:') among them,
 since a plan of rows still shows every such cell (`AnchorBatchMode.Plan`) and the rule is the command's, not the
 anchors' service's; a run holding a tree the `--apply` takes, or a lock file that cannot be read, 13 - save where what
-the command weighs could not be read, which keeps its own code from above and still names the holder on its lines -
+the command weighs could not be read, or the request is a usage error, either of which keeps its own code from above
+and still names the holder on its lines -
 the summary of a sound request ending in `TreeHolders.Blocked`, one sentence that says waiting is all there is to do,
 and a refused request or a consent ending in the one clause that says a run also holds what the `--apply` needs; a
 closed agent whose directory is no
@@ -633,7 +636,10 @@ worktree, its `said` the line its family says of it - its `processId`, `run` and
 them or, where a claim of the copy's family rather than the lock names its holder, as that claim records them
 (`CopyHolder`), and what only a lock entry says, `command`, `variant` and `standing`, null for such a holder;
 `standing` is null too for a leg of this machine where this machine's record of heavy legs cannot be read - and
-`heldUnread`, why the lock file could not be read. A command stopped before
+`heldUnread`, why the lock file could not be read. An `--apply` refused at its hold answers the same document,
+`applied` true, its `request` `sound` and the run it met in `heldNow`, said as a dry run at that moment says it
+(`TreeHolders.Refused`, the one sentence and holder both take, handed up by the hold to the verb's answer), so a
+script waits on it as on its dry run. A command stopped before
 anything is weighed - a command line the parser refuses, a `--directory` that is not there, a repository not
 initialised, another usage error, or a refusal met before then, an agent that is not there among them - answers with
 the same document, empty (`OrchestrationReports.Stopped`): `applied` false, `request`, `heldNow` and `heldUnread` null, no `lines`, its
@@ -2497,13 +2503,16 @@ while a gate ran turned a green suite red, with four test processes live at once
   reached through the worktree's own configuration, read before it goes - its branch may declare a
   host the configuration the command runs in does not - or else through that one; a host neither
   declares is not asked, and its copy is forgotten, named. Each copy is removed under the lock a leg
-  this machine runs there takes, the record read again once it is held, so a copy another worktree
+  this machine runs there takes, taken with everything kept inside the copy (`LockRequest.Removal`,
+  on `HostCopyRemover.RemovalLock`), so a sweep this machine runs there - its key in the copy's
+  `.mutations` - keeps the copy as a run in it does, and the dry run of a deletion names it as one;
+  the record is read again once the lock is held, so a copy another worktree
   of the name has claimed since is left for it; it is forgotten before that lock is let go, and its
   marker goes last, so a removal that stops part way leaves the rest marked as the harness's. The
   host is asked from its home directory, which is there when the directory the copy was kept in is
   not, so a copy whose directory is gone is answered as not there, and forgotten.
   A copy that cannot be removed then stays recorded, and the deletion fails naming it though the
-  worktree is gone, with the highest code a copy was left with - 13 where a run holds one or it was
+  worktree is gone, with the highest code a copy was left with - 13 where a run or a sweep holds one or it was
   refused, 15 where its host is unreachable, 20 where the removal failed there - so whoever deleted
   it learns something of it is left; deleting the worktree again finishes the job, and for a name
   whose worktree is gone removes what any worktree of that name left, never the copies of one that
@@ -2610,6 +2619,18 @@ reads the folded tree.
 
 - A held lock **refuses immediately**. It never waits: silently blocking for
   hours is worse than a refusal that names the holder.
+- A tree on this machine is **one key however it is reached** (`RunLock.Key`): its full path with
+  every link and junction along it followed, as git spells a tree, when an entry is written and
+  whenever the lock is asked - by a run, a dry run, a clean or a deletion alike. A worktree kept on
+  another disk through a worktrees root that is a link is spelled through the link from the main
+  checkout and as git resolves it by a run inside it; keyed as spelled, a deletion asking for a leg
+  copy one way missed a run holding it the other, and removed it under that run. A tree whose links
+  cannot be followed is refused, never keyed as spelled; a host's tree, whose links this machine
+  cannot follow, is the key it is spelled as.
+- A **removal** takes the tree with everything kept inside it (`LockRequest.Removal`): an entry on
+  that host for anything inside the tree - a sweep's key in a host's copy - is in its way, as one
+  for the tree is, while a sync, a build or a test of the tree still meets only what is on the
+  tree itself.
 - A holder is named by its process, run and start - `pid 12, run R, since T` - never by its
   machine's name, which only its record keeps, to tell a holder here from one elsewhere: a host's
   lines reach the machine that sent it work, and wherever that machine's output goes, and a
