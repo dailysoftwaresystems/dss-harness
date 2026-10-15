@@ -320,8 +320,11 @@ public sealed partial class GitClient(
     /// directory holding it lists the untracked spelling and not the index's, finds the untracked name in another case it
     /// does not list - so it does not tell names apart by case, and holds no other spelling of it - and reaches something
     /// by the index's spelling. False where a directory tells names apart, the tracked file and the untracked one two files
-    /// of it, or reaches nothing by the index's spelling, a tracked file deleted beside a new one; and where a directory
-    /// cannot be listed: the untracked name is kept, never taken for a file the index holds.
+    /// of it, or reaches nothing by the index's spelling, a tracked file deleted beside a new one; where a directory
+    /// cannot be listed; and where a part the two spell differently holds a character outside ASCII: macOS may keep such a
+    /// name composed otherwise in Unicode than git gives it, finding it either way, and this build reads names as the
+    /// invariant culture does, which composes nothing, so it cannot tell whether two such spellings are one entry. The
+    /// untracked name is then kept, never taken for a file the index holds.
     /// </summary>
     /// <param name="fileSystem">The file system to ask.</param>
     /// <param name="top">The top of the tree.</param>
@@ -345,6 +348,11 @@ public sealed partial class GitClient(
             {
                 if (onDisk[index] != inIndex[index])
                 {
+                    if (!Ascii.IsValid(onDisk[index]) || !Ascii.IsValid(inIndex[index]))
+                    {
+                        return false;
+                    }
+
                     var listed = fileSystem.EnumerateDirectories(directory)
                         .Concat(fileSystem.EnumerateFiles(directory, recursive: false))
                         .Select(Path.GetFileName)

@@ -202,6 +202,17 @@ public sealed class GitClientTests
 
         Assert.False(GitClient.SameFileInAnotherCase(composedOtherwise, top, "src/m.txt", "src/M.txt"));
         Assert.False(GitClient.SameFileInAnotherCase(reachingNothing, top, "src/m.txt", "src/M.txt"));
+
+        // A part the two spell differently holding a character outside ASCII, which may be composed otherwise in Unicode
+        // on disk than git gives it, is kept, however the directory answers.
+        var accented = Substitute.For<IFileSystem>();
+        accented.EnumerateDirectories(top).Returns([src]);
+        accented.EnumerateFiles(top, false).Returns([]);
+        accented.EnumerateDirectories(src).Returns([]);
+        accented.EnumerateFiles(src, false).Returns([Path.Combine(src, "\u00e9.txt")]);
+        accented.KindOf(Arg.Any<string>()).Returns(PathKind.File);
+
+        Assert.False(GitClient.SameFileInAnotherCase(accented, top, "src/\u00e9.txt", "src/\u00c9.txt"));
     }
 
     [Fact]

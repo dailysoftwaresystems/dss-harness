@@ -357,8 +357,9 @@ public interface IGitClient
     /// under the index's name and untracked under the disk's, though the directory holds one file. Decided file by file, as
     /// each directory compares names: one is that file only where every directory the two spell differently lists the
     /// untracked spelling alone and does not tell names apart by case; a new file beside a tracked one a directory tells
-    /// apart, or beside a tracked one deleted, is not. Empty where the repository says it ignores case: git already finds
-    /// such a name in its index. An untracked
+    /// apart, or beside a tracked one deleted, is not, nor is a name whose differing part holds a character outside ASCII,
+    /// which may be composed otherwise in Unicode on disk than git gives it. Empty where the repository says it ignores
+    /// case: git already finds such a name in its index. An untracked
     /// directory, named as one entry, is never among them. git's ignore rules are left as the repository has them.
     /// </summary>
     /// <exception cref="HarnessException">git could not read the configuration or the index.</exception>
