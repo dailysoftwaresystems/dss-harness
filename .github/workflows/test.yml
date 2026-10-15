@@ -28,7 +28,7 @@ jobs:
   test:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 50
+    timeout-minutes: 75
 
     strategy:
       # Every platform's result is wanted. Cancelling the others on the first failure
@@ -88,10 +88,11 @@ jobs:
         # two minutes, named again every two minutes it runs on, and the slowest tests once the
         # run ends. And it is stopped short of the job's own limit: a job that limit ended kept
         # no log, so nothing said which test had hung. The limit is not how a hang is found -
-        # the two-minute notice names it - and it sits well above the slowest runner: the Intel
-        # macOS runner was measured taking more than twenty minutes over a suite that hung
-        # nowhere, no test of it running two minutes, while the arm64 one took seventeen.
-        timeout-minutes: 40
+        # the two-minute notice names it - and it sits well above the slowest runner: over a
+        # suite of 6,282 tests that hung nowhere, one test alone running two minutes, the arm64
+        # macOS runner took 37 minutes and the Intel one 39, where the 5,115 before them took
+        # 23 and 33.
+        timeout-minutes: 60
         env:
           # A runner is meant to hold cmake, ninja and a compiler: a test that really builds fails here where one is
           # lacking, and is skipped only on a developer's machine that has none.
