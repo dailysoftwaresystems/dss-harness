@@ -122,7 +122,8 @@ public sealed class RootLitterService(
             .OrderBy(entry => entry, StringComparer.Ordinal)
             .ToList();
 
-        // A tracked file the disk spells otherwise than the index is that file, never litter to move or delete.
+        // A tracked file the disk spells otherwise than the index is that file, never litter to move or delete - save a
+        // name the git client keeps, whose part spelled otherwise holds a character outside ASCII.
         var tracked = await _gitClient.IndexedInAnotherCaseAsync(root, untracked, cancellationToken).ConfigureAwait(false);
 
         return new RootLitterReport(root, [.. untracked.Where(entry => !tracked.Contains(entry))], FindMalformed(root));

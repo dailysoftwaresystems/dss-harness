@@ -922,14 +922,16 @@ system finds a name in any case, in any case, whatever `core.ignorecase` says, s
 commit's that made it, and none other's. Each tree's status is read alike: where `core.ignorecase` says the
 repository heeds case, an untracked name the index holds under another spelling is dropped only where every
 directory the two spell differently lists the untracked spelling alone, finds it in another case it does not list,
-and reaches something by the index's spelling, and the part they spell differently is ASCII - macOS may keep a name
-composed otherwise in Unicode than git gives it, and the invariant culture this build reads names in composes
-nothing, so such a name stays listed twice there - decided file by file, as each directory compares names, since a
-tree may hold a directory that tells names apart below one that does not (`GitClient.IndexedInAnotherCaseAsync`,
-read by the one status question and by `check-root-litter`). So a file the disk spells otherwise than the index - as
-a write put in place over it leaves it on macOS, which keeps the old spelling where Windows takes the new - is one
-file, never changed under one name and untracked under the other, while a new file beside a tracked one a directory
-tells apart, or beside a tracked one deleted, stays listed. git is never told to ignore case: that would match the
+and reaches something by the index's spelling, and the part they spell differently is ASCII - decided file by file,
+as each directory compares names, since a tree may hold a directory that tells names apart below one that does not
+(`GitClient.IndexedInAnotherCaseAsync`, read by the one status question and by `check-root-litter`). So a file the
+disk spells otherwise than the index - as a write put in place over it leaves it on macOS, which keeps the old
+spelling where Windows takes the new - is one file, never changed under one name and untracked under the other,
+while a new file beside a tracked one a directory tells apart, or beside a tracked one deleted, stays listed. Left as
+it is: where the part spelled otherwise holds a character outside ASCII, the name is kept, on every system - a disk
+may hold it composed otherwise in Unicode than git gives it, and the invariant culture this build reads names in
+composes nothing - so with `core.ignorecase` false such a file is listed under both spellings, a fold of it stops
+part way at the second, and `check-root-litter` names it. git is never told to ignore case: that would match the
 repository's ignore rules in any case too, and hide a new file they do not ignore as it spells them. Whether a
 directory finds a name in any case is asked of the directory itself, by a name it holds in another case
 (`PathCase.In`): one made case-sensitive under folders that are not compares exactly. A shared path's

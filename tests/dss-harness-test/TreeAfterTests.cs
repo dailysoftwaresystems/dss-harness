@@ -29,7 +29,7 @@ public sealed class TreeAfterTests
 
         var after = await TreeAfter.OfAsync(
             sync,
-            new CaseFolding(harness.FileSystem, temp.Path),
+            new CaseOf(harness.FileSystem, temp.Path, folds: true),
             context,
             temp.Path,
             [("mutations/texts/old.diag", null), ("mutations/texts/Old.diag", _ => Task.FromResult("new"u8.ToArray()))],
@@ -39,12 +39,5 @@ public sealed class TreeAfterTests
         Assert.Equal(["Old.diag"], after.List("mutations/texts")!.Files);
         Assert.True(after.Exists("mutations/texts/Old.diag"));
         Assert.Equal("new"u8.ToArray(), await after.ReadAsync("mutations/texts/old.diag", Token));
-    }
-
-    /// <summary>The real file system, except that the tree's root is found by its name in any case, as on Windows and macOS.</summary>
-    private sealed class CaseFolding(IFileSystem inner, string root) : PassThroughFileSystem(inner)
-    {
-        public override bool DirectoryExists(string path)
-            => base.DirectoryExists(string.Equals(Path.GetFullPath(path), Path.GetFullPath(root), StringComparison.OrdinalIgnoreCase) ? root : path);
     }
 }

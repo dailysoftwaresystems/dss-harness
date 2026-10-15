@@ -242,7 +242,8 @@ public sealed partial class GitClient(
     /// discard it. <c>--no-optional-locks</c> keeps the question from writing anything: status otherwise refreshes the
     /// index and writes it back whenever it can take the lock.
     /// <para>
-    /// An untracked file that is a tracked one the disk spells otherwise is not listed (<see cref="IndexedInAnotherCaseAsync"/>):
+    /// An untracked file that is a tracked one the disk spells otherwise is not listed, save the names
+    /// <see cref="IndexedInAnotherCaseAsync"/> keeps:
     /// where a directory finds a name in any case and core.ignorecase says the repository does not, git lists such a file
     /// twice, changed under the index's name and untracked under the disk's. Measured: a write put in place over such a
     /// file keeps the old spelling on macOS and takes the new one on Windows, so a fold of the one file wrote it, then

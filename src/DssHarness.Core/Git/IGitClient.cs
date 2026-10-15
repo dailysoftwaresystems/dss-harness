@@ -51,7 +51,7 @@ public interface IGitClient
     /// Porcelain status entries, one per changed path; a rename or copy is one entry, with its new path and the one it
     /// was made from. Untracked files and changed submodules are listed even where configuration would hide them; an
     /// untracked directory is one entry, and an ignored file is none. A file the disk spells otherwise than the index is
-    /// one entry, under the index's name (<see cref="IndexedInAnotherCaseAsync"/>).
+    /// one entry, under the index's name, save the names <see cref="IndexedInAnotherCaseAsync"/> keeps.
     /// </summary>
     /// <exception cref="HarnessException">git could not read the status.</exception>
     Task<IReadOnlyList<GitStatusEntry>> GetStatusAsync(string directory, CancellationToken cancellationToken = default);
@@ -61,7 +61,7 @@ public interface IGitClient
     /// each file of an untracked directory, git's ignore rules followed - which a walk of the directory would not
     /// follow; and both the new and the old path of a rename or a copy. Asked with <c>-z</c>, so no path is ever
     /// quoted, and without git's optional locks, so asking writes nothing. A file the disk spells otherwise than the index
-    /// is named once, under the index's name (<see cref="IndexedInAnotherCaseAsync"/>).
+    /// is named once, under the index's name, save the names <see cref="IndexedInAnotherCaseAsync"/> keeps.
     /// </summary>
     /// <exception cref="HarnessException">git could not read the status.</exception>
     Task<IReadOnlyList<GitStatusEntry>> ReadStatusAsync(string directory, CancellationToken cancellationToken = default);

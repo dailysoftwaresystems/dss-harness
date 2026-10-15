@@ -15,12 +15,27 @@ internal sealed class CaseOf(IFileSystem inner, string root, bool folds) : PassT
     public override bool DirectoryExists(string path)
         => path != root && string.Equals(path, root, StringComparison.OrdinalIgnoreCase) ? folds : base.DirectoryExists(path);
 
+    /// <summary>
+    /// A name directly in the root spelled otherwise than the root holds it: the entry held in another case
+    /// where the file system folds, and nothing where it does not; any other path as the real file system answers.
+    /// </summary>
     public override PathKind KindOf(string path)
-        => !folds && Path.GetDirectoryName(path) is { } parent && string.Equals(parent, root, StringComparison.OrdinalIgnoreCase) && !Holds(parent, Path.GetFileName(path))
-            ? PathKind.None
-            : base.KindOf(path);
+    {
+        if (Path.GetDirectoryName(path) is not { } parent || !string.Equals(parent, root, StringComparison.OrdinalIgnoreCase))
+        {
+            return base.KindOf(path);
+        }
 
-    /// <summary>Whether <paramref name="directory"/> holds <paramref name="name"/> spelled so.</summary>
-    private bool Holds(string directory, string name)
-        => base.EnumerateDirectories(directory).Concat(base.EnumerateFiles(directory, recursive: false)).Any(held => Path.GetFileName(held) == name);
+        var name = Path.GetFileName(path);
+        var held = base.EnumerateDirectories(root).Concat(base.EnumerateFiles(root, recursive: false)).Select(Path.GetFileName).ToList();
+
+        if (held.Contains(name, StringComparer.Ordinal))
+        {
+            return base.KindOf(Path.Combine(root, name));
+        }
+
+        return folds && held.Find(other => string.Equals(other, name, StringComparison.OrdinalIgnoreCase)) is { } spelled
+            ? base.KindOf(Path.Combine(root, spelled))
+            : PathKind.None;
+    }
 }
