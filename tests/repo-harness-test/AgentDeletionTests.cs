@@ -402,6 +402,43 @@ public sealed class AgentDeletionTests
     }
 
     /// <summary>
+    /// A closed agent's --apply takes its worktree - there, or gone since the closing - before it keeps anything again, so
+    /// its dry run asks the lock for it: a run holding it refuses the dry run, exit 13, saying nothing in the request needs
+    /// correcting, and is named on a <c>held now:</c> line.
+    /// </summary>
+    [Fact]
+    public async Task AClosedAgentsDryRun_IsRefusedWhileARunHoldsItsWorktree_ThereOrGone()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "evidence/run.log", "measured\n");
+        var agents = kit.Harness.Agents(new LateEvidenceFileSystem(kit.Harness.FileSystem, Path.Combine(worktree, "evidence", "late.log")), kit.Harness.AnchorRegistryService);
+        Assert.Equal(HarnessExit.Incomplete, (await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: true, discardUncommitted: false, Token)).ExitCode);
+        Assert.Equal(AgentStates.Closed, kit.Record("ag").State);
+
+        await using (await HoldTheWorktreeAsync(kit, worktree))
+        {
+            var there = await kit.DeleteAsync("ag", apply: false);
+
+            Assert.Equal(HarnessExit.Refused, there.ExitCode);
+            Assert.EndsWith(TreeHolders.Blocked, there.Message, StringComparison.Ordinal);
+            Assert.Contains(there.Details!, line => line.StartsWith($"held now: '{worktree}' on local is held by ", StringComparison.Ordinal));
+        }
+
+        Assert.True((await kit.Harness.WorktreeService.DeleteAsync(kit.Main, "o1/ag", force: true, deleteEvidence: true, cancellationToken: Token)).Succeeded);
+
+        await using (await HoldTheWorktreeAsync(kit, worktree))
+        {
+            var gone = await kit.DeleteAsync("ag", apply: false);
+
+            Assert.Equal(HarnessExit.Refused, gone.ExitCode);
+            Assert.EndsWith(TreeHolders.Blocked, gone.Message, StringComparison.Ordinal);
+            Assert.Contains(gone.Details!, line => line.StartsWith($"held now: '{worktree}' on local is held by ", StringComparison.Ordinal));
+        }
+    }
+
+    /// <summary>
     /// A mutation worker a sweep still running holds is named by a dry run of the deletion, in its family's own words,
     /// and the dry run is unfinished - exit 21 - as its --apply is, which folds and closes and cannot finish the
     /// removal. With <c>--json</c> the sweep is in <c>heldNow</c>, as every holder that decides the code is:

@@ -196,6 +196,94 @@ public sealed class TreeHoldersTests
     }
 
     /// <summary>
+    /// A fold's --apply takes the main tree beside the worktree, so its dry run asks the lock for both: a run holding the
+    /// main tree refuses it, exit 13, saying nothing in the request needs correcting, and is named on a <c>held now:</c>
+    /// line.
+    /// </summary>
+    [Fact]
+    public async Task AFoldsDryRun_IsRefusedWhileARunHoldsTheMainTree()
+    {
+        using var temp = new TempDirectory();
+        var (kit, _) = await AFoldToMakeAsync(temp);
+
+        await using var held = await HoldAsync(kit, kit.Main);
+
+        var dry = await kit.FoldAsync("ag", apply: false);
+
+        HeldOffTheMainTree(dry, kit.Main);
+    }
+
+    /// <summary>A refresh's --apply takes the main tree beside the worktree: a run holding the main tree refuses its dry run, exit 13, named.</summary>
+    [Fact]
+    public async Task ARefreshsDryRun_IsRefusedWhileARunHoldsTheMainTree()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit\n");
+
+        await using var held = await HoldAsync(kit, kit.Main);
+
+        var dry = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("a.txt"), apply: false, Token);
+
+        HeldOffTheMainTree(dry, kit.Main);
+    }
+
+    /// <summary>A live agent's deletion folds it, so its --apply takes the main tree beside the worktree: a run holding the main tree refuses its dry run, exit 13, named.</summary>
+    [Fact]
+    public async Task ALiveAgentsDeletionsDryRun_IsRefusedWhileARunHoldsTheMainTree()
+    {
+        using var temp = new TempDirectory();
+        var (kit, _) = await AFoldToMakeAsync(temp);
+
+        await using var held = await HoldAsync(kit, kit.Main);
+
+        var dry = await kit.DeleteAsync("ag", apply: false);
+
+        HeldOffTheMainTree(dry, kit.Main);
+    }
+
+    /// <summary>A sound dry run a run holding the main tree refuses: exit 13, its summary ending in the words that waiting is all there is to do, the run on a <c>held now:</c> line.</summary>
+    private static void HeldOffTheMainTree(CommandOutcome dry, string main)
+    {
+        Assert.Equal(HarnessExit.Refused, dry.ExitCode);
+        Assert.EndsWith(TreeHolders.Blocked, dry.Message, StringComparison.Ordinal);
+        Assert.Contains(dry.Details!, line => line.StartsWith($"held now: '{main}' on local is held by ", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// With <c>--json</c>, a dry run of refresh-agent or rebase-agent that a run holds off answers one document, as fold-agent's
+    /// and delete-agent's do: request sound - nothing to correct, only to wait - and the run in <c>heldNow</c>.
+    /// </summary>
+    [Fact]
+    public async Task WithJson_HeldDryRunsOfARefreshAndARebase_AnswerSound_NamingTheRun()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\ncommitted edit\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "a committed change", Token);
+        var run = RunId.New();
+
+        await using var held = await HoldAsync(kit, worktree, run);
+
+        string[][] commands = [["refresh-agent", "o1", "ag", "a.txt", "--json"], ["rebase-agent", "o1", "ag", "--json"]];
+
+        foreach (var command in commands)
+        {
+            var answered = await CliRunner.RunAsync(command, Token, workingDirectory: kit.Main);
+
+            Assert.Equal(HarnessExit.Refused, answered.ExitCode);
+            var document = JsonNode.Parse(answered.StandardOutput.TrimEnd())!;
+            Assert.Equal("sound", document["request"]!.GetValue<string>());
+            Assert.False(document["applied"]!.GetValue<bool>());
+            var holder = document["heldNow"]!.AsArray().Single()!;
+            Assert.Equal(worktree, holder["path"]!.GetValue<string>());
+            Assert.Equal(run.Value, holder["run"]!.GetValue<string>());
+        }
+    }
+
+    /// <summary>
     /// A dry run asks the run lock for exactly the trees its --apply takes: a rebase takes the worktree alone, so a run
     /// holding the main tree does not refuse it, and a run holding a copy of the worktree - which no fold, refresh or
     /// rebase writes - is named by none of them.
