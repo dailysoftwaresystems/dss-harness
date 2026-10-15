@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using NSubstitute;
+using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Git;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Processes;
@@ -52,6 +53,37 @@ public sealed class GitClientTests
 
         File.AppendAllText(temp.Combine(".git", "config"), "[core\n");
         await Assert.ThrowsAsync<HarnessException>(() => harness.GitClient.IgnoresCaseAsync(temp.Path, cancellationToken));
+    }
+
+    /// <summary>
+    /// A file spelled on disk otherwise than its index is one file where the file system finds a name in any case, whatever
+    /// core.ignorecase says: status names it once, under the index's name, and a tree whose file is otherwise untouched is
+    /// clean - never the file changed under one name and untracked under the other.
+    /// </summary>
+    /// <param name="ignoresCase">Whether the repository says it ignores case.</param>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Status_NamesAFileSpelledOnDiskOtherwiseThanItsIndexOnce_WhereTheFileSystemFindsANameInAnyCase(bool ignoresCase)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
+        Assert.SkipUnless(PathCase.In(harness.FileSystem, temp.Path).Equals("a", "A"), "Only a file system that finds a name in any case holds one file under two spellings.");
+        File.WriteAllText(temp.Combine("a.txt"), "one\n");
+        await harness.CommitAllAsync(temp.Path, "a file", cancellationToken);
+        await harness.RunGitAsync(temp.Path, ["config", "core.ignorecase", ignoresCase ? "true" : "false"], cancellationToken);
+        File.Move(temp.Combine("a.txt"), temp.Combine("respelling"));
+        File.Move(temp.Combine("respelling"), temp.Combine("A.txt"));
+
+        Assert.Empty(await harness.GitClient.ReadStatusAsync(temp.Path, cancellationToken));
+        Assert.False(await harness.GitClient.IsDirtyAsync(temp.Path, cancellationToken));
+
+        File.WriteAllText(temp.Combine("A.txt"), "two\n");
+
+        Assert.Equal(["a.txt"], (await harness.GitClient.ReadStatusAsync(temp.Path, cancellationToken)).SelectMany(entry => entry.Paths).Select(name => name.Text));
+        Assert.Equal(["a.txt"], (await harness.GitClient.GetStatusAsync(temp.Path, cancellationToken)).SelectMany(entry => entry.Paths).Select(name => name.Text));
     }
 
     [Fact]

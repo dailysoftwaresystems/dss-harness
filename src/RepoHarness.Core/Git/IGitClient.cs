@@ -50,7 +50,8 @@ public interface IGitClient
     /// <summary>
     /// Porcelain status entries, one per changed path; a rename or copy is one entry, with its new path and the one it
     /// was made from. Untracked files and changed submodules are listed even where configuration would hide them; an
-    /// untracked directory is one entry, and an ignored file is none.
+    /// untracked directory is one entry, and an ignored file is none. Where the tree's file system finds a name in any case,
+    /// a file is one entry whatever core.ignorecase says, though the disk spells it otherwise than the index.
     /// </summary>
     /// <exception cref="HarnessException">git could not read the status.</exception>
     Task<IReadOnlyList<GitStatusEntry>> GetStatusAsync(string directory, CancellationToken cancellationToken = default);
@@ -59,7 +60,8 @@ public interface IGitClient
     /// Every path the work tree at <paramref name="directory"/> changes, as git names it: modified, staged or deleted;
     /// each file of an untracked directory, git's ignore rules followed - which a walk of the directory would not
     /// follow; and both the new and the old path of a rename or a copy. Asked with <c>-z</c>, so no path is ever
-    /// quoted, and without git's optional locks, so asking writes nothing.
+    /// quoted, and without git's optional locks, so asking writes nothing. Where the tree's file system finds a name in
+    /// any case, a file is named once whatever core.ignorecase says, though the disk spells it otherwise than the index.
     /// </summary>
     /// <exception cref="HarnessException">git could not read the status.</exception>
     Task<IReadOnlyList<GitStatusEntry>> ReadStatusAsync(string directory, CancellationToken cancellationToken = default);

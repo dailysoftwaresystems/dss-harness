@@ -913,7 +913,10 @@ holds it, then changed by an uncommitted edit where status lists the record, and
 index holds it (`Came`, the one wording of how a path came to be held, and `Since`, of what the main tree did, both
 decided once). The base's entry and HEAD's are found alike, as git spells the path and, where the main tree's file
 system finds a name in any case, in any case, whatever `core.ignorecase` says, so a rename of case alone is the
-commit's that made it, and none other's. A shared path's
+commit's that made it, and none other's. Each tree's status is read alike: where its file system finds a name in any
+case, git status is asked as a repository that ignores case (`GitClient`'s one status question), so a file the disk
+spells otherwise than the index - as a write put in place over it leaves it on macOS, which keeps the old spelling
+where Windows takes the new - is one file, never changed under one name and untracked under the other. A shared path's
 refusal says the main tree changed it after the agent was last handed it or folded, which the seed records alike. A deletion needs the same baseline proof a copy does. A directory with no `.git` of its own
 holds no file at its path, so a file the agent turned into a directory folds as the file's deletion and the directory's
 files, and a directory it turned into a file as the files' deletions and the file: every removal is made first, with

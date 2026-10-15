@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
@@ -19,11 +20,16 @@ namespace RepoHarness.Core.Git;
 /// The variables every git command starts without; asked of git through <paramref name="processRunner"/>
 /// where none is given.
 /// </param>
+/// <param name="fileSystem">
+/// Says whether a tree's file system finds a name in any case, which git status is told; this platform's own where none is
+/// given.
+/// </param>
 public sealed partial class GitClient(
     IProcessRunner processRunner,
     IHarnessOutput output,
     IFilePermissions? filePermissions = null,
-    GitLocalVariables? localVariables = null) : IGitClient
+    GitLocalVariables? localVariables = null,
+    IFileSystem? fileSystem = null) : IGitClient
 {
     private const string GitExecutable = "git";
 
@@ -43,6 +49,7 @@ public sealed partial class GitClient(
     private readonly IHarnessOutput _output = output;
     private readonly IFilePermissions _filePermissions = filePermissions ?? FilePermissionsFactory.Create();
     private readonly GitLocalVariables _localVariables = localVariables ?? new GitLocalVariables(processRunner);
+    private readonly IFileSystem _fileSystem = fileSystem ?? new PhysicalFileSystem(filePermissions ?? FilePermissionsFactory.Create());
 
     /// <summary>The version the git this client runs names itself by, once read (<see cref="InstalledVersionAsync"/>).</summary>
     private string? _installed;
@@ -234,12 +241,20 @@ public sealed partial class GitClient(
     /// status.showUntrackedFiles=no a new file is not listed at all, and the tree reads as clean to a caller about to
     /// discard it. <c>--no-optional-locks</c> keeps the question from writing anything: status otherwise refreshes the
     /// index and writes it back whenever it can take the lock.
+    /// <para>
+    /// Where the tree's file system finds a name in any case, git is asked as a repository that ignores case, whatever
+    /// core.ignorecase says - as git sets it where it makes a repository on such a file system. Told it heeds case, git
+    /// lists a file spelled on disk otherwise than its index twice: changed under the index's name, and untracked under
+    /// the disk's, one file read as two. Measured: a write put in place over such a file keeps the old spelling on macOS
+    /// and takes the new one on Windows, so a fold of the one file wrote it, then stopped part way at its other name.
+    /// </para>
     /// </remarks>
     private async Task<IReadOnlyList<GitStatusEntry>> StatusAsync(string directory, string untracked, CancellationToken cancellationToken)
     {
+        IReadOnlyList<string> inAnyCase = PathCase.In(_fileSystem, directory).Equals("a", "A") ? ["-c", "core.ignorecase=true"] : [];
         var result = await RunForBytesAsync(
             directory,
-            ["--no-optional-locks", "status", "--porcelain", "-z", $"--untracked-files={untracked}", "--ignore-submodules=none"],
+            [.. inAnyCase, "--no-optional-locks", "status", "--porcelain", "-z", $"--untracked-files={untracked}", "--ignore-submodules=none"],
             cancellationToken).ConfigureAwait(false);
 
         // An empty list must mean "nothing changed", never "the question failed": a caller reads it as a clean tree and

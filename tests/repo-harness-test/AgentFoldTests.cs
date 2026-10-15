@@ -572,6 +572,48 @@ public sealed class AgentFoldTests
     }
 
     /// <summary>
+    /// A file the agent's worktree spells on disk otherwise than its git index - as a write put in place over it leaves it
+    /// on macOS, which keeps the old spelling where Windows takes the new - is one file where the trees find a name in any
+    /// case, whatever core.ignorecase says: folded once under the name its index holds, or not at all where the agent left
+    /// its content alone, and never written a second time under the disk's spelling.
+    /// </summary>
+    /// <param name="edited">Whether the agent edited the file too.</param>
+    /// <param name="ignoresCase">Whether the repository says it ignores case.</param>
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    public async Task AFileTheAgentsDiskSpellsOtherwiseThanItsIndex_IsOneFile_FoldedOnceUnderTheIndexsName(bool edited, bool ignoresCase)
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        await CaseFoldedAsync(kit, ignoresCase);
+
+        if (edited)
+        {
+            OrchestrationKit.Write(worktree, "a.txt", "one\nthe agent's\n");
+        }
+
+        File.Move(Path.Combine(worktree, "a.txt"), Path.Combine(worktree, "respelling"));
+        File.Move(Path.Combine(worktree, "respelling"), Path.Combine(worktree, "A.txt"));
+
+        var dry = await kit.FoldAsync("ag", apply: false);
+
+        Assert.Equal(
+            $"dry run: folding agent 'ag' of 'o1' writes {(edited ? 1 : 0)} path(s) into the main tree, removes 0 and applies 0 row(s); pass --apply to write them",
+            dry.Message);
+        Assert.DoesNotContain(dry.Details ?? [], line => line.Contains("A.txt", StringComparison.Ordinal));
+
+        var folded = await kit.FoldAsync("ag", apply: true);
+
+        Assert.True(folded.Succeeded, OrchestrationKit.Describe(folded));
+        Assert.Equal(edited ? "one\nthe agent's\n" : "one\n", OrchestrationKit.Read(kit.Main, "a.txt"));
+        Assert.Equal(["a.txt"], Directory.EnumerateFiles(kit.Main, "?.txt").Select(Path.GetFileName).Where(name => string.Equals(name, "a.txt", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    /// <summary>
     /// Skips unless the main tree's file system finds a name in any case, and the repository says it ignores case where
     /// <paramref name="ignoresCase"/>; otherwise makes it say it does not, for the main tree and the agent's worktree alike.
     /// </summary>
