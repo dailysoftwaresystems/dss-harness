@@ -89,7 +89,8 @@ public interface IHostCopyRemover
 /// A copy is removed only where the harness made it: one it took over was somebody's directory first, and one
 /// that holds no mark of the harness's is nothing the harness knows it may remove. Each is removed under the lock a
 /// leg this machine runs there holds while it builds, taken with everything kept inside the copy, so a copy one of its
-/// runs or sweeps is using is never removed from under it, and forgotten before that lock is let go. A copy not dealt
+/// runs or sweeps is using is never removed from under it, no sweep starts in it while it goes, and it is forgotten
+/// before that lock is let go. A copy not dealt
 /// with - its host cannot be asked, a run or a sweep holds it, or removing it failed - stays recorded, so deleting the
 /// worktree again asks once more.
 /// <para>
@@ -123,9 +124,9 @@ public sealed class HostCopyRemover(
 
     /// <summary>
     /// The lock a copy's removal takes: the copy whole, on the host that holds it, with everything kept inside it
-    /// (<see cref="LockRequest.Removal"/>) - which a run holding it, building in it or replacing it, is named by, and so is
-    /// a sweep this machine runs there, holding its key in the copy's <c>.mutations</c> - and which the removal and the
-    /// question a dry run asks of it both spell.
+    /// (<see cref="RunLock.RemovalCommand"/>) - which a run holding it, building in it or replacing it, is named by, and so
+    /// is a sweep this machine runs there, holding its key in the copy's <c>.mutations</c>, while no sweep can take one there
+    /// once the removal holds it - and which the removal and the question a dry run asks of it both spell.
     /// </summary>
     /// <param name="host">The host holding the copy.</param>
     /// <param name="path">The copy's path on that host.</param>
@@ -142,8 +143,7 @@ public sealed class HostCopyRemover(
             Tree = path,
             Scope = LockScope.TreeExclusive,
             RunId = runId,
-            Command = WorktreeService.DeleteCommand,
-            Removal = true,
+            Command = RunLock.RemovalCommand,
         };
     }
 

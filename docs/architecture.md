@@ -2512,9 +2512,10 @@ while a gate ran turned a green suite red, with four test processes live at once
   reached through the worktree's own configuration, read before it goes - its branch may declare a
   host the configuration the command runs in does not - or else through that one; a host neither
   declares is not asked, and its copy is forgotten, named. Each copy is removed under the lock a leg
-  this machine runs there takes, taken with everything kept inside the copy (`LockRequest.Removal`,
+  this machine runs there takes, taken with everything kept inside the copy (`RunLock.RemovalCommand`,
   on `HostCopyRemover.RemovalLock`), so a sweep this machine runs there - its key in the copy's
-  `.mutations` - keeps the copy as a run in it does, and the dry run of a deletion names it as one;
+  `.mutations` - keeps the copy as a run in it does, and the dry run of a deletion names it as one,
+  while no sweep takes a key there once the removal holds the copy;
   the record is read again once the lock is held, so a copy another worktree
   of the name has claimed since is left for it; it is forgotten before that lock is let go, and its
   marker goes last, so a removal that stops part way leaves the rest marked as the harness's. The
@@ -2629,17 +2630,25 @@ reads the folded tree.
 - A held lock **refuses immediately**. It never waits: silently blocking for
   hours is worse than a refusal that names the holder.
 - A tree on this machine is **one key however it is reached** (`RunLock.Key`): its full path with
-  every link and junction along it followed, as git spells a tree, when an entry is written and
-  whenever the lock is asked - by a run, a dry run, a clean or a deletion alike. A worktree kept on
-  another disk through a worktrees root that is a link is spelled through the link from the main
-  checkout and as git resolves it by a run inside it; keyed as spelled, a deletion asking for a leg
-  copy one way missed a run holding it the other, and removed it under that run. A tree whose links
-  cannot be followed is refused, never keyed as spelled; a host's tree, whose links this machine
-  cannot follow, is the key it is spelled as.
-- A **removal** takes the tree with everything kept inside it (`LockRequest.Removal`): an entry on
-  that host for anything inside the tree - a sweep's key in a host's copy - is in its way, as one
-  for the tree is, while a sync, a build or a test of the tree still meets only what is on the
-  tree itself.
+  every link and junction along it followed, as git spells a tree, told whenever the lock is read -
+  by a run, a dry run, a clean or a deletion alike - for each entry and each request, once a
+  reading. An entry keeps its tree as its run spelled it, so a build before this one, which
+  compares trees as spelled, still meets what it spelled alike, and this one meets whatever it
+  spelled: a worktree kept on another disk through a worktrees root that is a link, or a copy kept
+  through a `.legs` or `.mutations` that is one (`init` allows it), is spelled through the link from
+  the main checkout and as git resolves it by a run inside it; compared as spelled, a deletion, a
+  clean or a sync asking for a copy one way missed a run holding it the other, and removed or
+  replaced it under that run. A request whose links cannot be followed is refused before anything
+  is written, never keyed as spelled; a host's tree, whose links this machine cannot follow, is the
+  key it is spelled as. An agent's trees are taken as git names them (`AgentService.Holds`), as
+  builds before this one took them.
+- A **removal** takes the tree with everything kept inside it: a tree taken whole under
+  `delete-worktree` (`RunLock.RemovalCommand`), as every removal of a host's copy is recorded, by
+  this build and those before it, rather than by a field of its own, which an older build would
+  refuse the lock file over. Asked for, an entry on that host for anything inside the tree - a
+  sweep's key in a host's copy - is in its way, as one for the tree is; standing, its entry is in
+  the way of whatever is asked inside the tree, so no sweep starts in a copy while it is removed.
+  A sync, a build or a test of the tree still meets only what is on the tree itself.
 - A holder is named by its process, run and start - `pid 12, run R, since T` - never by its
   machine's name, which only its record keeps, to tell a holder here from one elsewhere: a host's
   lines reach the machine that sent it work, and wherever that machine's output goes, and a

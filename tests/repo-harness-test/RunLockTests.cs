@@ -4,6 +4,7 @@ using RepoHarness.Core.Execution;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
+using RepoHarness.Core.Sync;
 using RepoHarness.Core.Worktrees;
 
 namespace RepoHarness.Tests;
@@ -625,8 +626,8 @@ public sealed class RunLockTests
     /// <summary>
     /// A tree on this machine is one key however it is reached: an entry written through a link - as a worktree under a
     /// worktrees root that is a junction to another disk is spelled from the main checkout - and a request spelled as
-    /// git spells it, every link followed, meet, whichever writes and whichever asks, and the entry records the tree
-    /// with its links followed.
+    /// git spells it, every link followed, meet, whichever writes and whichever asks, and the entry records the tree as
+    /// it was spelled.
     /// </summary>
     [Fact]
     public async Task ATreeReachedThroughALink_IsOneKeyWithTheTreeItLeadsTo()
@@ -643,7 +644,7 @@ public sealed class RunLockTests
 
         await using (var throughTheLink = await runLock.AcquireAsync(layout, Whole(copy), TestContext.Current.CancellationToken))
         {
-            Assert.Equal(copyReached, throughTheLink.Entry.Tree);
+            Assert.Equal(copy, throughTheLink.Entry.Tree);
             Assert.False((await runLock.TryAcquireAsync(layout, Whole(copyReached), TestContext.Current.CancellationToken)).Taken);
             Assert.StartsWith($"'{copyReached}' on local is held by pid ", runLock.HeldBy(layout, Whole(copyReached)), StringComparison.Ordinal);
         }
@@ -679,7 +680,7 @@ public sealed class RunLockTests
         await using var held = await runLock.AcquireAsync(layout, Whole(tree) with { Scope = LockScope.TreeShared, Variant = "debug" }, TestContext.Current.CancellationToken);
 
         var whole = Whole(tree);
-        var removing = Whole(temp.Combine("linked")) with { Removal = true };
+        var removing = Whole(temp.Combine("linked")) with { Command = RunLock.RemovalCommand };
         var holding = Assert.Single(runLock.Holders(
             layout,
             [Whole(temp.Combine("elsewhere")), whole, Whole(reached) with { Scope = LockScope.TreeShared, Variant = "release" }, removing]));
@@ -742,6 +743,89 @@ public sealed class RunLockTests
             layout,
             new LockRequest { Host = "ssh pi", Tree = copy, Scope = LockScope.TreeExclusive, RunId = RunId.New(), Command = "sync" },
             TestContext.Current.CancellationToken))
+        {
+        }
+    }
+
+    /// <summary>
+    /// An entry keeps the tree as its run spelled it, and is told from a request by where each leads only when the lock is
+    /// read - so a copy recorded through a slot that is a link to another disk, as a build before this one records it, and
+    /// a request for it spelled where it leads, meet, and the other way round; and one recorded through the slot is kept as
+    /// spelled, so a build before this one, which compares trees as spelled, meets it asking as its run spelled it.
+    /// </summary>
+    [Fact]
+    public async Task AnEntryKeepsItsRunsSpelling_AndMeetsARequestSpelledEitherWay_ThroughASlotThatIsALink()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runLock = new RunLock(factory.FileSystem, factory.Output, factory.Identity);
+        var layout = Layout(temp);
+        var tree = Directory.CreateDirectory(temp.Combine("tree")).FullName;
+        var disk = Directory.CreateDirectory(temp.Combine("disk", "legs")).FullName;
+        var spelled = Path.Combine(tree, ".legs", "357e24c");
+        var reached = Path.Combine(disk, "357e24c");
+
+        await using (await runLock.AcquireAsync(layout, Whole(spelled), TestContext.Current.CancellationToken))
+        {
+            TestLinks.DirectoryLink(Path.Combine(tree, ".legs"), disk);
+            Directory.CreateDirectory(reached);
+
+            Assert.Equal(spelled, Assert.Single(runLock.Read(layout)).Tree);
+            Assert.False((await runLock.TryAcquireAsync(layout, Whole(reached), TestContext.Current.CancellationToken)).Taken);
+            Assert.NotNull(runLock.HeldBy(layout, Whole(reached)));
+        }
+
+        await using (await runLock.AcquireAsync(layout, Whole(reached), TestContext.Current.CancellationToken))
+        {
+            Assert.False((await runLock.TryAcquireAsync(layout, Whole(spelled), TestContext.Current.CancellationToken)).Taken);
+            Assert.NotNull(runLock.HeldBy(layout, Whole(spelled)));
+        }
+
+        await using (var throughTheSlot = await runLock.AcquireAsync(layout, Whole(spelled), TestContext.Current.CancellationToken))
+        {
+            Assert.Equal(spelled, throughTheSlot.Entry.Tree);
+            Assert.Equal(spelled, Assert.Single(runLock.Read(layout)).Tree);
+        }
+    }
+
+    /// <summary>
+    /// A removal's entry - a host's copy taken whole by its removal - holds off whatever is asked inside the copy while it
+    /// stands, as a removal asked is held off by whatever is held inside it: a sweep cannot take its key in the copy's
+    /// <c>.mutations</c>, and is named the removal; on that host only, and nothing beside the copy whose name only begins
+    /// the same; and a copy taken whole by anything but a removal - a sync - holds off nothing kept inside it.
+    /// </summary>
+    [Fact]
+    public async Task ARemovalsEntry_HoldsOffWhateverIsAskedInsideItsTree_OnThatHostOnly()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runLock = new RunLock(factory.FileSystem, factory.Output, factory.Identity);
+        var layout = Layout(temp);
+        var copy = "/home/pi/repo" + HostCopies.WorktreeSuffix + "o1--ag";
+        var sweep = new LockRequest { Host = "ssh pi", Tree = copy + "/.mutations/357e24c", Scope = LockScope.TreeExclusive, RunId = RunId.New(), Command = "check-mutations" };
+
+        await using (var removing = await runLock.AcquireAsync(layout, HostCopyRemover.RemovalLock(HostId.Ssh("pi"), copy, RunId.New()), TestContext.Current.CancellationToken))
+        {
+            var refused = await runLock.TryAcquireAsync(layout, sweep, TestContext.Current.CancellationToken);
+
+            Assert.False(refused.Taken);
+            Assert.Equal(removing.Entry, refused.Holder);
+            Assert.StartsWith($"'{sweep.Tree}' on ssh pi is held by pid ", refused.HeldBy, StringComparison.Ordinal);
+            Assert.Contains($"running '{WorktreeService.DeleteCommand}'", refused.HeldBy, StringComparison.Ordinal);
+            Assert.NotNull(runLock.HeldBy(layout, sweep));
+            Assert.Equal(removing.Entry, Assert.Single(runLock.Holders(layout, [sweep])).Entry);
+
+            await using (await runLock.AcquireAsync(layout, sweep with { Host = "ssh other" }, TestContext.Current.CancellationToken))
+            await using (await runLock.AcquireAsync(layout, sweep with { Tree = copy + "-2/.mutations/357e24c" }, TestContext.Current.CancellationToken))
+            {
+            }
+        }
+
+        await using (await runLock.AcquireAsync(
+            layout,
+            new LockRequest { Host = "ssh pi", Tree = copy, Scope = LockScope.TreeExclusive, RunId = RunId.New(), Command = "sync" },
+            TestContext.Current.CancellationToken))
+        await using (await runLock.AcquireAsync(layout, sweep, TestContext.Current.CancellationToken))
         {
         }
     }

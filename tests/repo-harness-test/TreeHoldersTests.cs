@@ -455,12 +455,12 @@ public sealed class TreeHoldersTests
 
     /// <summary>
     /// Where the worktrees root is a link, a leg naming the worktree through it waits in this machine's line under that
-    /// spelling while the lock records the worktree with its links followed: the place in line is joined to the entry as
-    /// the lock keys a tree, so the dry run still says the leg waits - and the --apply's refusal names the worktree as the
-    /// lock keys it, with the same words.
+    /// spelling, and the lock keeps its entry so spelled: the fold, which takes the worktree as git names it, meets the
+    /// run all the same, the place in line is joined to its entry, so the dry run says the leg waits, naming the worktree
+    /// as the run spelled it - and the --apply's refusal names it as the fold asked for it, with the same words after.
     /// </summary>
     [Fact]
-    public async Task AHoldersPlaceInLine_IsJoinedToItsEntryAsTheLockKeysTheTree()
+    public async Task AHoldersPlaceInLine_IsJoinedToItsEntry_ThoughTheFoldSpellsTheWorktreeAnotherWay()
     {
         using var temp = new TempDirectory();
         using var elsewhere = new TempDirectory();
@@ -482,7 +482,7 @@ public sealed class TreeHoldersTests
         Assert.Equal(HarnessExit.Refused, dry.ExitCode);
         Assert.Contains(
             dry.Details!,
-            line => line.StartsWith($"held now: '{reached}' on local is held by ", StringComparison.Ordinal)
+            line => line.StartsWith($"held now: '{worktree}' on local is held by ", StringComparison.Ordinal)
                 && line.EndsWith(", whose leg has not started: it waits for a heavy-leg slot, 1 leg(s) ahead of it.", StringComparison.Ordinal));
         Assert.Equal(HarnessExit.Refused, applied.ExitCode);
         Assert.StartsWith($"'{reached}' on local is held by ", applied.Message, StringComparison.Ordinal);
@@ -793,7 +793,7 @@ public sealed class TreeHoldersTests
 
             var held = holders.Read(
                 layout,
-                [new LockRequest { Host = HostId.Local.ToString(), Tree = worktree, Scope = LockScope.TreeExclusive, RunId = RunId.New(), Command = WorktreeService.DeleteCommand }],
+                [new LockRequest { Host = HostId.Local.ToString(), Tree = worktree, Scope = LockScope.TreeExclusive, RunId = RunId.New(), Command = AgentService.DeleteCommand }],
                 [HostCopyRemover.RemovalLock(HostId.Ssh("pi"), "/home/pi/repo--wt--wt", RunId.New())],
                 kept);
 
@@ -915,7 +915,8 @@ public sealed class TreeHoldersTests
 
     /// <summary>
     /// The help, README and the architecture say how the lock keys a tree on this machine - every link followed, one key
-    /// however a command spells it - what a removal of a host's copy takes with it, a sweep's key there among it, what an
+    /// however a command spells it, a build before this one included, each entry kept as spelled - what a removal of a
+    /// host's copy takes with it, a sweep's key there among it, and that no sweep starts there while it goes, what an
     /// --apply refused at its hold answers with <c>--json</c>, and that a usage error and a record of host copies that
     /// cannot be read answer a dry run as they answer its --apply.
     /// </summary>
@@ -928,7 +929,9 @@ public sealed class TreeHoldersTests
 
         Assert.Contains(
             "The run lock knows a tree on this machine by where it leads, every link followed, so worktrees kept on another disk "
-                + "through a worktrees root that is a link are held, and asked about, as one tree however a command spells them.",
+                + "through a worktrees root that is a link, and copies kept through a `.legs` or `.mutations` that is one, are held, and "
+                + "asked about, as one tree however a command spells them - a build before this one's too, since the lock keeps each "
+                + "tree as its run spelled it.",
             readme,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -938,18 +941,28 @@ public sealed class TreeHoldersTests
         Assert.Contains("An `--apply` refused at its hold answers the same document, `sound`, with the run it met in `heldNow`.", readme, StringComparison.Ordinal);
         Assert.Contains(
             $"A tree on this machine is **one key however it is reached** (`{nameof(RunLock)}.{nameof(RunLock.Key)}`): its full path with every "
-                + "link and junction along it followed, as git spells a tree, when an entry is written and whenever the lock is asked",
+                + "link and junction along it followed, as git spells a tree, told whenever the lock is read - by a run, a dry run, a clean "
+                + "or a deletion alike - for each entry and each request, once a reading. An entry keeps its tree as its run spelled it, so a "
+                + "build before this one, which compares trees as spelled, still meets what it spelled alike",
             architecture,
             StringComparison.Ordinal);
         Assert.Contains(
-            $"A **removal** takes the tree with everything kept inside it (`{nameof(LockRequest)}.{nameof(LockRequest.Removal)}`): an entry on "
-                + "that host for anything inside the tree - a sweep's key in a host's copy - is in its way",
+            $"An agent's trees are taken as git names them (`{nameof(AgentService)}.Holds`), as builds before this one took them.",
             architecture,
             StringComparison.Ordinal);
         Assert.Contains(
-            $"taken with everything kept inside the copy (`{nameof(LockRequest)}.{nameof(LockRequest.Removal)}`, on "
+            $"A **removal** takes the tree with everything kept inside it: a tree taken whole under `{WorktreeService.DeleteCommand}` "
+                + $"(`{nameof(RunLock)}.{nameof(RunLock.RemovalCommand)}`), as every removal of a host's copy is recorded, by this build and "
+                + "those before it, rather than by a field of its own, which an older build would refuse the lock file over. Asked for, an "
+                + "entry on that host for anything inside the tree - a sweep's key in a host's copy - is in its way, as one for the tree is; "
+                + "standing, its entry is in the way of whatever is asked inside the tree, so no sweep starts in a copy while it is removed.",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"taken with everything kept inside the copy (`{nameof(RunLock)}.{nameof(RunLock.RemovalCommand)}`, on "
                 + $"`{nameof(HostCopyRemover)}.{nameof(HostCopyRemover.RemovalLock)}`), so a sweep this machine runs there - its key in the "
-                + "copy's `.mutations` - keeps the copy as a run in it does",
+                + "copy's `.mutations` - keeps the copy as a run in it does, and the dry run of a deletion names it as one, while no sweep "
+                + "takes a key there once the removal holds the copy;",
             architecture,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -970,7 +983,7 @@ public sealed class TreeHoldersTests
             StringComparison.Ordinal);
         Assert.Contains(
             "A copy is removed under the lock a leg this machine runs there takes, taken with everything kept inside the copy, so a "
-                + "sweep this machine runs there keeps it as a run does,",
+                + "sweep this machine runs there keeps it as a run does, none starts there while it goes,",
             worktrees,
             StringComparison.Ordinal);
         Assert.Contains($"{HarnessExit.Refused} where a run or a sweep holds one or it was refused,", worktrees, StringComparison.Ordinal);

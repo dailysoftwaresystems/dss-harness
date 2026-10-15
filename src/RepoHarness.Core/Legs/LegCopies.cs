@@ -52,7 +52,9 @@ public static class LegCopies
     /// <summary>
     /// What whatever would remove a copy of the family asks the run lock first: the copy taken whole on this machine, so
     /// a run holding it any way - building in it, or replacing it - is named. The run it names is the asking's own, new,
-    /// and the command the one asking - clean, or a deletion of the tree - and asking writes no entry.
+    /// and the command the one asking - clean, or a deletion of the tree, whose command asks it as the removal it is
+    /// (<see cref="RunLock.RemovalCommand"/>), so a run holding anything kept inside the copy is named too - and asking
+    /// writes no entry.
     /// </summary>
     /// <param name="copy">The copy.</param>
     /// <param name="command">The command asking.</param>

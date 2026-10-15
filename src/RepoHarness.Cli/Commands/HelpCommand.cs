@@ -2119,9 +2119,11 @@ internal static class HelpCommand
             + $"of it is removed or looked through: one a sweep still running holds - or a run holds a leg copy - keeps the "
             + $"worktree ({HarnessExit.Refused}), "
             + $"and one that cannot be removed, or told for the harness's, keeps it as a failure ({HarnessExit.CommandFailed}), as "
-            + "workers that cannot be looked for do, with nothing removed. A run holds a leg copy however the worktree is spelt: "
-            + "the run lock keys a tree on this machine by where it leads, every link followed, so a run in a worktree kept on "
-            + "another disk through a linked worktrees root keeps it from a deletion that reaches it through the link. A sweep "
+            + "workers that cannot be looked for do, with nothing removed. A run holds a leg copy however either spells it: "
+            + "the run lock tells a tree on this machine by where it leads, every link followed, whichever way the run holding "
+            + "it spelled it - a build before this one's included - so a run in a worktree kept on another disk through a "
+            + $"linked worktrees root, or in a copy kept through a {HarnessLayout.LegsDirectoryName} that is a link, keeps it "
+            + "from a deletion that reaches it the other way. A sweep "
             + "that takes one meanwhile keeps the worktree as "
             + "well, and so does one whose removal then fails, the others gone by then, which is said. An interruption as they go "
             + $"says which went, and that nothing else of the worktree was removed ({HarnessExit.Cancelled}). --force deletes the "
@@ -2146,11 +2148,11 @@ internal static class HelpCommand
         builder.AppendLine("harness made it: a copy it took over with --adopt, or a directory with no mark of");
         builder.AppendLine("the harness's, is left where it is, and said to be. A copy is removed under the lock");
         builder.AppendLine("a leg this machine runs there takes, taken with everything kept inside the copy, so");
-        builder.AppendLine("a sweep this machine runs there keeps it as a run does, and its marker goes last,");
-        builder.AppendLine("so a removal that stops part way leaves the rest still the harness's to remove. A");
-        builder.AppendLine("host is reached through the worktree's own configuration, read before it goes, or");
-        builder.AppendLine("else through the one the command runs in; one neither declares is not asked, and");
-        builder.AppendLine("its copy is forgotten, and named.");
+        builder.AppendLine("a sweep this machine runs there keeps it as a run does, none starts there while it");
+        builder.AppendLine("goes, and its marker goes last, so a removal that stops part way leaves the rest");
+        builder.AppendLine("still the harness's to remove. A host is reached through the worktree's own");
+        builder.AppendLine("configuration, read before it goes, or else through the one the command runs in; one");
+        builder.AppendLine("neither declares is not asked, and its copy is forgotten, and named.");
         builder.AppendLine("A copy that cannot be removed now stays recorded, and the worktree is deleted all the");
         builder.AppendLine("same, but the command fails, naming each, with the highest code among them:");
         builder.AppendLine($"{HarnessExit.Refused} where a run or a sweep holds one or it was refused, {HarnessExit.HostUnavailable} where its host cannot");

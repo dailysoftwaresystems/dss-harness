@@ -239,8 +239,10 @@ part of `.harness-config` through git but never the ignored part, so both resolv
 the originating checkout. What a tree makes for itself - its runs' records, its mutation
 workers in `.mutations`, its legs' copies in `.legs` - is ignored too, and kept in that tree.
 The run lock knows a tree on this machine by where it leads, every link followed, so
-worktrees kept on another disk through a worktrees root that is a link are held, and asked
-about, as one tree however a command spells them.
+worktrees kept on another disk through a worktrees root that is a link, and copies kept
+through a `.legs` or `.mutations` that is one, are held, and asked about, as one tree however
+a command spells them - a build before this one's too, since the lock keeps each tree as its
+run spelled it.
 
 ## Legs and hosts
 

@@ -249,9 +249,9 @@ public sealed class TreeHolders(RunLock runLock, HeavyLegSlots slots, IProcessId
 
     /// <summary>
     /// What a hold met where <paramref name="holder"/> stood in its way: the refusal it gives - the lock's own sentence,
-    /// the tree as the lock keys it, and where that run's leg stands, the same words a dry run's <c>held now:</c> line
-    /// says after the tree it names - and the holder as a dry run at that moment reads it, from the same reading of this
-    /// machine's record of heavy legs, so an <c>--apply</c> answering in one document names the run it waits on.
+    /// and where that run's leg stands, the same words a dry run's <c>held now:</c> line says after the tree it names -
+    /// and the holder as a dry run at that moment reads it, from the same reading of this machine's record of heavy legs,
+    /// so an <c>--apply</c> answering in one document names the run it waits on.
     /// </summary>
     /// <param name="wanted">What was asked for.</param>
     /// <param name="holder">Who held it.</param>
@@ -263,7 +263,7 @@ public sealed class TreeHolders(RunLock runLock, HeavyLegSlots slots, IProcessId
         var (line, standingUnread) = LineFor([holder]);
 
         return new HoldRefusal(
-            $"{RunLock.TreeNamed(wanted.Host, _runLock.Key(wanted.Host, wanted.Tree), wanted.Variant)} is held by {Held(holder, Tail(Stands(holder, line)))}.",
+            $"{RunLock.TreeNamed(wanted.Host, wanted.Tree, wanted.Variant)} is held by {Held(holder, Tail(Stands(holder, line)))}.",
             new TreeHeld([Holder(holder, line, copy: false)], null, standingUnread, []));
     }
 
@@ -315,7 +315,7 @@ public sealed class TreeHolders(RunLock runLock, HeavyLegSlots slots, IProcessId
     /// Who holds the copy kept in the worktree that <paramref name="said"/> names, each said on that line: every entry of
     /// the lock for it, joined with the line; or, where no entry names one, the holder its family's claim named.
     /// </summary>
-    private IEnumerable<TreeHolder> KeptHolders(KeptCopyLine said, IReadOnlyList<LockEntry> entries, IReadOnlyList<SlotInLine>? line)
+    private static IEnumerable<TreeHolder> KeptHolders(KeptCopyLine said, IReadOnlyList<LockEntry> entries, IReadOnlyList<SlotInLine>? line)
         => entries.Count == 0
             ? [TreeHolder.OfKeptCopy(said, entry: null, standing: null, ahead: null)]
             : entries.Select(entry =>
@@ -342,12 +342,11 @@ public sealed class TreeHolders(RunLock runLock, HeavyLegSlots slots, IProcessId
     /// where any of its places in this machine's line does, it waits where the line holds it further back, and it asked
     /// for no slot where the line holds it nowhere. Nothing for a leg of this machine where this machine's record of heavy
     /// legs could not be read: where that leg stands is not known then, and is never said to be a leg that asked for no
-    /// slot. A place in the line names its tree as the leg spelled it, so it is keyed as the lock keys a tree before it is
-    /// told to the entry, which the lock keyed so.
+    /// slot. A place in the line names its tree as the leg spelled it, as the lock's entry of the same run does.
     /// </summary>
     /// <param name="entry">The lock's entry for what the run holds.</param>
     /// <param name="line">This machine's record of heavy legs, in line order; <see langword="null"/> where it could not be read.</param>
-    private (HolderStanding? Standing, int? Ahead) Stands(LockEntry entry, IReadOnlyList<SlotInLine>? line)
+    private static (HolderStanding? Standing, int? Ahead) Stands(LockEntry entry, IReadOnlyList<SlotInLine>? line)
     {
         if (!AsksThisMachine(entry))
         {
@@ -364,8 +363,8 @@ public sealed class TreeHolders(RunLock runLock, HeavyLegSlots slots, IProcessId
             .Where(place => string.Equals(place.slot.Entry.RunId, entry.Holder.RunId, StringComparison.Ordinal)
                 && place.slot.Entry.ProcessId == entry.Holder.ProcessId
                 && string.Equals(place.slot.Entry.Host, entry.Host, StringComparison.OrdinalIgnoreCase)
-                && string.Equals(place.slot.Entry.Variant ?? string.Empty, entry.Variant ?? string.Empty, StringComparison.OrdinalIgnoreCase)
-                && string.Equals(_runLock.Key(place.slot.Entry.Host, place.slot.Entry.Tree), entry.Tree, StringComparison.OrdinalIgnoreCase))
+                && string.Equals(place.slot.Entry.Tree, entry.Tree, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(place.slot.Entry.Variant ?? string.Empty, entry.Variant ?? string.Empty, StringComparison.OrdinalIgnoreCase))
             .ToList();
 
         if (places.Count == 0)

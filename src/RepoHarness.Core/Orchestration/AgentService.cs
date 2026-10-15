@@ -2691,16 +2691,18 @@ public sealed class AgentService(
     /// <summary>
     /// The lock requests <paramref name="command"/> takes: each of <paramref name="trees"/> whole, on this machine. The
     /// one spelling of them, asked by the hold an <c>--apply</c> takes and by its dry run, so the two can never ask
-    /// differently.
+    /// differently: where each leads (<see cref="RunLock.Key"/>), as git names a tree and as the builds before this one
+    /// recorded an agent's trees, so a run of one of them asking for the tree as it spells it meets the hold.
     /// </summary>
     /// <param name="command">The command taking them.</param>
     /// <param name="runId">The run taking them.</param>
     /// <param name="trees">The trees, on this machine.</param>
-    private static IReadOnlyList<LockRequest> Holds(string command, RunId runId, params string[] trees)
+    /// <exception cref="HarnessException">Where one of them leads cannot be told: refused (<see cref="RunLock.Key"/>).</exception>
+    private IReadOnlyList<LockRequest> Holds(string command, RunId runId, params string[] trees)
         => [.. trees.Select(tree => new LockRequest
         {
             Host = HostId.Local.ToString(),
-            Tree = tree,
+            Tree = _runLock.Key(HostId.Local.ToString(), tree),
             Scope = LockScope.TreeExclusive,
             RunId = runId,
             Command = command,
