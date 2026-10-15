@@ -88,7 +88,7 @@ public static class LegRoom
             {
                 // A host that declares nowhere to keep a copy is refused where the leg is placed on it; asked
                 // nothing here.
-                if (Paths(context, leg.Leg, host, here, comparison, sweeps, trees, local) is not { } paths)
+                if (Paths(context, leg.Leg, host, here, comparison, sweeps, trees, local, workload.CopyOnHosts) is not { } paths)
                 {
                     continue;
                 }
@@ -147,7 +147,7 @@ public static class LegRoom
         for (var index = 0; index < placed.Count; index++)
         {
             if (placed[index] is not { Host: { } host } placement
-                || Need(context, placement.Leg, host, here, comparison, workload.On(placement.Leg.Leg.Os).AdmitsEachUnit, trees, local) is not { } need)
+                || Need(context, placement.Leg, host, here, comparison, workload.On(placement.Leg.Leg.Os).AdmitsEachUnit, trees, local, workload.CopyOnHosts) is not { } need)
             {
                 continue;
             }
@@ -258,9 +258,10 @@ public static class LegRoom
         StringComparison comparison,
         bool sweeps,
         IReadOnlyDictionary<HostId, RepositoryTreesFound> trees,
-        LocalTrees local)
+        LocalTrees local,
+        bool copyOnHosts)
     {
-        if (Paths(context, leg.Leg, host.Host, here, comparison, sweeps, trees, local) is not { } paths
+        if (Paths(context, leg.Leg, host.Host, here, comparison, sweeps, trees, local, copyOnHosts) is not { } paths
             || Answered(host, paths.Own) is not { } own
             || Answered(host, paths.Fills) is not { } fills
             || ExpectedBuildBytes(leg.Leg, own.RecordedBytes, paths.Siblings.Select(sibling => (sibling.Tree, Answered(host, sibling.Build)?.RecordedBytes)))
@@ -350,13 +351,14 @@ public static class LegRoom
         StringComparison comparison,
         bool sweeps,
         IReadOnlyDictionary<HostId, RepositoryTreesFound> trees,
-        LocalTrees local)
+        LocalTrees local,
+        bool copyOnHosts)
     {
         try
         {
             var variant = VariantKey.For(context.Config, leg, leg.Os);
             var main = LegTrees.On(context, host, context.Layout.MainCheckoutRoot, comparison);
-            var own = LegTrees.For(context, leg, variant, host, here, comparison, local).Work;
+            var own = LegTrees.For(context, leg, variant, host, here, comparison, local, copyOnHosts).Work;
             var built = variant.DirectoryOn(host, own);
 
             // The trees as they were found there: on a host running a leg another machine sent it, the main checkout's copy

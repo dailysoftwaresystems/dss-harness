@@ -48,6 +48,95 @@ public sealed class SyncServiceTests
     }
 
     /// <summary>
+    /// A copy kept in the slot of a host's copy of the tree is made there, the slot with it - through a host's agent too,
+    /// which starts in the host's copy, a sync withholding the slot - and a later sync of either leaves the other as it
+    /// is: the host's copy may be in use, and the copy kept in it is.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ACopyKeptInAHostsCopy_IsMadeInItsSlot_AndEachIsSyncedAlone(bool throughAnAgent)
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, service) = await PrepareAsync(temp, cancellationToken);
+        var hostCopy = SyncKit.CopyPath(temp);
+        ISyncTransport Transport() => throughAnAgent ? SyncKit.AgentHere(harness) : SyncKit.Transport(harness);
+        var own = HarnessLayout.InSlot(hostCopy, HarnessLayout.LegsDirectoryName, "abc1234");
+
+        try
+        {
+            Assert.True((await service.SyncAsync(temp.Path, Transport(), hostCopy, new SyncOptions(), cancellationToken)).Verified);
+            Assert.False(Directory.Exists(Path.Combine(hostCopy, HarnessLayout.LegsDirectoryName)), "the sync carried the slot");
+
+            await service.SyncAsync(temp.Path, Transport(), own, new SyncOptions(DryRun: true) { Adoptable = false, KeptIn = hostCopy }, cancellationToken);
+
+            Assert.False(Directory.Exists(own), "a dry run made the copy");
+
+            var made = await service.SyncAsync(temp.Path, Transport(), own, new SyncOptions { Adoptable = false, KeptIn = hostCopy }, cancellationToken);
+
+            Assert.True(made.Verified);
+            Assert.True(File.Exists(Path.Combine(own, "src", "a.c")));
+
+            File.WriteAllText(Path.Combine(temp.Path, "src", "added-later.c"), "int later;");
+
+            var again = await service.SyncAsync(temp.Path, Transport(), own, new SyncOptions { Adoptable = false, KeptIn = hostCopy }, cancellationToken);
+
+            Assert.True(again.Verified);
+            Assert.True(File.Exists(Path.Combine(own, "src", "added-later.c")));
+            Assert.False(File.Exists(Path.Combine(hostCopy, "src", "added-later.c")), "a sync of the copy kept in the host's copy synced the host's copy too");
+
+            var shared = await service.SyncAsync(temp.Path, Transport(), hostCopy, new SyncOptions(), cancellationToken);
+
+            Assert.True(shared.Verified);
+            Assert.True(File.Exists(Path.Combine(hostCopy, "src", "added-later.c")));
+            Assert.True(File.Exists(Path.Combine(own, "src", "a.c")), "the sync of the host's copy removed the copy kept in it");
+        }
+        finally
+        {
+            SyncKit.DeleteIfPresent(hostCopy);
+        }
+    }
+
+    /// <summary>
+    /// A directory this tool did not make where a leg's own copy is kept in a host's copy is refused, saying it is on that
+    /// host and to move it away there - never the remedy of a leg's copy on this machine, nor --adopt, which takes over no
+    /// copy of a leg's own.
+    /// </summary>
+    [Fact]
+    public async Task ADirectoryWhereALegsOwnCopyIsKeptOnAHost_IsRefused_SayingToMoveItAwayThere()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, service) = await PrepareAsync(temp, cancellationToken);
+        var hostCopy = SyncKit.CopyPath(temp);
+        var own = HarnessLayout.InSlot(hostCopy, HarnessLayout.LegsDirectoryName, "abc1234");
+
+        try
+        {
+            Directory.CreateDirectory(own);
+            File.WriteAllText(Path.Combine(own, "notes.txt"), "somebody's");
+
+            var refused = await Assert.ThrowsAsync<HarnessException>(() => service.SyncAsync(
+                temp.Path,
+                new RecordingTransport(SyncKit.Transport(harness), reports: HostId.Ssh("pi")),
+                own,
+                new SyncOptions { Adoptable = false, KeptIn = hostCopy },
+                cancellationToken));
+
+            Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+            Assert.Contains($"It is where a leg's own copy is kept on ssh pi: move it away there. Nothing was changed.", refused.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("--in-place", refused.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("--adopt", refused.Message, StringComparison.Ordinal);
+            Assert.Equal("somebody's", File.ReadAllText(Path.Combine(own, "notes.txt")));
+        }
+        finally
+        {
+            SyncKit.DeleteIfPresent(hostCopy);
+        }
+    }
+
+    /// <summary>
     /// A copy's git index holds every file the sync carried and the configuration it placed, and nothing
     /// else: a file the tree drops leaves it on the next sync. Written without staging one, a copy's index
     /// named nothing, so every build there fingerprinted no input and each after the first started from
@@ -3193,7 +3282,7 @@ public sealed class SyncServiceTests
     /// A worktree's copy on a host is recorded before anything is written to it, so that deleting the worktree asks
     /// that host to remove it - a first sync that stops part way included, since it has made a copy all the same.
     /// The main checkout's copy, which deleting no worktree removes, is not recorded, and a dry run, which writes
-    /// nothing, records nothing.
+    /// nothing, records nothing. A copy kept in the worktree's copy on a host records that copy, which holds it.
     /// </summary>
     [Fact]
     public async Task AWorktreesCopyOnAHost_IsRecordedBeforeAnythingIsWritten_AndTheMainCheckoutsIsNot()
@@ -3207,6 +3296,7 @@ public sealed class SyncServiceTests
         var worktreeCopy = HostCopies.ForWorktree(mainCopy, name);
         var stoppedCopy = HostCopies.ForWorktree(mainCopy + "-stopped", name);
         var dryCopy = HostCopies.ForWorktree(mainCopy + "-dry", name);
+        var keptCopy = HostCopies.ForWorktree(mainCopy + "-kept", name);
         var pi = HostId.Ssh("pi");
         var vps = HostId.Ssh("vps");
 
@@ -3216,6 +3306,12 @@ public sealed class SyncServiceTests
 
             await service.SyncAsync(temp.Path, new RecordingTransport(SyncKit.Transport(harness), reports: pi), mainCopy, new SyncOptions(), cancellationToken);
             await service.SyncAsync(worktree, new RecordingTransport(SyncKit.Transport(harness), reports: pi), worktreeCopy, new SyncOptions(), cancellationToken);
+            await service.SyncAsync(
+                worktree,
+                new RecordingTransport(SyncKit.Transport(harness), reports: HostId.Ssh("pi-legs")),
+                HarnessLayout.InSlot(keptCopy, HarnessLayout.LegsDirectoryName, "abc1234"),
+                new SyncOptions { Adoptable = false, KeptIn = keptCopy },
+                cancellationToken);
             await service.SyncAsync(worktree, new RecordingTransport(SyncKit.Transport(harness), reports: HostId.Ssh("mac")), dryCopy, new SyncOptions(DryRun: true), cancellationToken);
             var dropped = await Assert.ThrowsAsync<HarnessException>(() => service.SyncAsync(
                 worktree, new RecordingTransport(SyncKit.Transport(harness), reports: vps) { FailsWrite = 1 }, stoppedCopy, new SyncOptions(), cancellationToken));
@@ -3226,7 +3322,7 @@ public sealed class SyncServiceTests
             var recorded = record.Of(context.Layout, name);
 
             Assert.True(Directory.Exists(stoppedCopy));
-            Assert.Equal([("ssh pi", worktreeCopy), ("ssh vps", stoppedCopy)], recorded.Select(entry => (entry.Host, entry.Path)));
+            Assert.Equal([("ssh pi", worktreeCopy), ("ssh pi-legs", keptCopy), ("ssh vps", stoppedCopy)], recorded.Select(entry => (entry.Host, entry.Path)));
             Assert.All(recorded, entry => Assert.True(record.SameTree(worktree, entry.Tree), entry.Tree));
             Assert.Empty(record.Of(context.Layout, HostCopies.NameOf(temp.Combine(".harness-config", "worktrees"), temp.Path, StringComparison.OrdinalIgnoreCase)));
         }
@@ -3236,6 +3332,7 @@ public sealed class SyncServiceTests
             SyncKit.DeleteIfPresent(worktreeCopy);
             SyncKit.DeleteIfPresent(stoppedCopy);
             SyncKit.DeleteIfPresent(dryCopy);
+            SyncKit.DeleteIfPresent(keptCopy);
             SyncKit.DeleteIfPresent(worktree);
         }
     }

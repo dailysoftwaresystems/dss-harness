@@ -202,6 +202,13 @@ public sealed class TestInvocation
     public List<string>? RemoteExcludes { get; init; }
 
     /// <summary>
+    /// The set-ups a leg running this invocation brings up before its work and down after it, where the run is asked
+    /// to set up (<c>test --set-up</c>); never otherwise. Each is a name declared under <c>setUp</c>, or that name with
+    /// values for its inputs; a platform's section replaces <c>all</c>'s list, as it does every other field.
+    /// </summary>
+    public List<SetUpUse>? SetUp { get; init; }
+
+    /// <summary>
     /// Argument introducing a label the tests to run must carry, such as <c>-L</c> for ctest, so one
     /// <c>--label</c> option works everywhere. Beside <see cref="FilterArg"/>, which selects by name,
     /// and <see cref="ExcludeArg"/>, which a label can already be left out by: a group a runner labels

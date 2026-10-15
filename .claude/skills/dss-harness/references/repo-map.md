@@ -58,12 +58,13 @@ them.
 | `Orchestration` | Orchestrators and agents: seeding, folding, rebasing (`OrchestratorService`, `AgentService`, `AgentFold`) |
 | `Output` | `IHarnessOutput`/`ConsoleHarnessOutput`, text and JSON reports |
 | `Platform` | The operating-system seam (`IHostPlatform`, `IFilePermissions`, `IProcessTable`, `PathBudget`) |
-| `Processes` | `IProcessRunner`/`ProcessRunner`, `ProcessRequest`/`ProcessResult` |
+| `Processes` | `IProcessRunner`/`ProcessRunner`, `ProcessRequest`/`ProcessResult`, `CommandLineText` (the one no-shell line splitter) |
 | `Projects` | What `init` detects and seeds (`IProjectDetector`) |
 | `Repository` | The harness context and layout, `GitIgnoreManager` |
 | `Results` | `CommandOutcome`, `HarnessException`, `HarnessExit` (the shared exit codes) |
 | `Runners` | Predefined runners and action files (`RunnerRunService`, `ActionFileParser`) |
 | `Runs` | Leg runs, remote runs, `clean` (`LegRunService`, `RemoteLegRunner`, `CleanService`) |
+| `SetUps` | `up`/`down` and a run's `--set-up`: lines, shared holds, bringing up around a leg (`SetUpService`, `SetUpHolds`, `LegSetUps`) |
 | `Secrets` | Host connection data and its permission checks (`HostSecretsStore`, `DotEnvFile`) |
 | `Sync` | Syncing a tree to hosts (`SyncService`, `SyncManifest`, `HostCopies`) |
 | `Testing` | `test` and ctest (`TestService`, `TestInvocationResolver`) |

@@ -46,7 +46,9 @@ purpose: find a member by name. Sentences of `README.md` and `docs/architecture.
 `HarnessConfigValidator` reports every problem at once.
 
 1. Add the property to its model (`HarnessConfig`, `RunnerModels`, `MutationSettings`, `AdmissionSettings`,
-   `HostModels`...), `required` where it must be given.
+   `HostModels`...), `required` where it must be given. A value a string or a per-platform map may give derives from
+   `PerPlatformText` with a `PerPlatformTextConverter` (`BuildOutput`, `SetUpLine`); a command line is split by
+   `CommandLineText` and its program held to `ActionToolPolicy`, never a shell.
 2. Give it a `[Description("...")]`: `ConfigKeys.Of<T>()` turns descriptions into help.
 3. Add its rules to the matching `HarnessConfigValidator.Validate*`.
 4. Seed it in `DefaultConfigFactory.Create` only if `init` should write it.

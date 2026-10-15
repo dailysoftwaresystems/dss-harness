@@ -122,9 +122,11 @@ public sealed class MutationService(
 
     /// <summary>
     /// What a sweep has each leg do: build, as a leg builds, in workers of its own, each arm asking its machine to take it
-    /// as it starts rather than the leg taking a slot for the whole of a sweep of hours.
+    /// as it starts rather than the leg taking a slot for the whole of a sweep of hours - and, on another machine, in a
+    /// copy of its own there (<see cref="LegWorkload.CopyOnHosts"/>), so a sweep of hours never holds off a test of the
+    /// host's copy, nor waits for one.
     /// </summary>
-    public static LegWorkload Workload { get; } = LegWorkload.BuildOnly with { AdmitsEachUnit = true };
+    public static LegWorkload Workload { get; } = LegWorkload.BuildOnly with { AdmitsEachUnit = true, CopyOnHosts = true };
 
     /// <summary>
     /// What a self-test has each leg do: build as a sweep builds, the fixture this tool carries in place of the leg's tree,

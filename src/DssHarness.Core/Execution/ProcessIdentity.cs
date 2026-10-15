@@ -237,9 +237,9 @@ public sealed class ProcessIdentity(IHostPlatform platform) : IProcessIdentity
 /// <remarks>
 /// One place for what the run lock and a log directory's owner decide the same way - a holder on this machine stands
 /// while its process runs, and one naming another machine until <c>--force-lock</c> takes it - so neither can come to
-/// disagree with the other about which holder is gone. A machine's heavy-leg slots are told by
-/// <see cref="IProcessIdentity.IsAlive"/> alone, every entry of their record being this machine's whatever name it
-/// carries; they name their holders, and say what was reclaimed, as the other two do.
+/// disagree with the other about which holder is gone. A machine's heavy-leg slots and the set-ups its legs hold are
+/// told by <see cref="IProcessIdentity.IsAlive"/> alone, every entry of their records being this machine's whatever
+/// name it carries; they name their holders, and say what was reclaimed, as the other two do.
 /// </remarks>
 public static class ProcessHolders
 {

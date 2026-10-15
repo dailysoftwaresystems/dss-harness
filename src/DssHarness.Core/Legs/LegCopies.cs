@@ -50,22 +50,24 @@ public static class LegCopies
     public static string SaidHeld(string holder) => $"a run still running holds it: {holder}";
 
     /// <summary>
-    /// What whatever would remove a copy of the family asks the run lock first: the copy taken whole on this machine, so
-    /// a run holding it any way - building in it, or replacing it - is named. The run it names is the asking's own, new,
+    /// The copy taken whole: what whatever would remove a copy of the family asks the run lock first, so a run holding it
+    /// any way - building in it, or replacing it - is named; and what a sweep in a copy of its own on another machine holds
+    /// for as long as it runs (<see cref="Mutations.MutationWorkers.SweepLock(Runs.PlacedLeg, RunId, string)"/>). The run it names is the asking's own, new,
     /// and the command the one asking - clean, or a deletion of the tree, whose command asks it as the removal it is
     /// (<see cref="RunLock.RemovalCommand"/>), so a run holding anything kept inside the copy is named too - and asking
     /// writes no entry.
     /// </summary>
     /// <param name="copy">The copy.</param>
     /// <param name="command">The command asking.</param>
-    public static LockRequest Whole(string copy, string command)
+    /// <param name="host">The machine the copy is on, as this one names it; this machine where left out.</param>
+    public static LockRequest Whole(string copy, string command, HostId? host = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(copy);
         ArgumentException.ThrowIfNullOrWhiteSpace(command);
 
         return new LockRequest
         {
-            Host = HostId.Local.ToString(),
+            Host = (host ?? HostId.Local).ToString(),
             Tree = copy,
             Scope = LockScope.TreeExclusive,
             RunId = RunId.New(),
@@ -89,6 +91,28 @@ public static class LegCopies
         return new LegCopyClaims(runLock, layout, command);
     }
 
+    /// <summary>
+    /// Which run holds <paramref name="copy"/>, a copy of the family in a tree of <paramref name="layout"/>'s repository on
+    /// this machine, as whatever would remove it asks first (<see cref="Whole"/>) - <paramref name="whileFree"/> done under
+    /// the lock where none does: the repository's lock, and the copy's own. A command another machine sent here runs in
+    /// the copy it was sent, which is a repository of its own whose lock is its own: a sweep a host runs for another
+    /// machine in a copy of its own (<see cref="LegWorkload.CopyOnHosts"/>) holds it there, and nowhere else.
+    /// </summary>
+    /// <param name="runLock">Reads the run locks.</param>
+    /// <param name="layout">The repository, whose main checkout holds its lock file.</param>
+    /// <param name="copy">The copy.</param>
+    /// <param name="command">The command asking.</param>
+    /// <param name="whileFree">Done under the repository's lock where nothing holds the copy.</param>
+    public static string? HeldBy(RunLock runLock, HarnessLayout layout, string copy, string command, Action? whileFree = null)
+    {
+        ArgumentNullException.ThrowIfNull(runLock);
+        ArgumentNullException.ThrowIfNull(layout);
+
+        // Asked of the copy's own lock as the removal of the copy it is: every tree that lock names is the copy, or in it.
+        return runLock.HeldBy(new HarnessLayout(copy, copy), Whole(copy, RunLock.RemovalCommand))
+            ?? runLock.HeldBy(layout, Whole(copy, command), whileFree);
+    }
+
     /// <summary>How a copy of the family's name reads, as its removal says one it left aside.</summary>
     private sealed class LegCopyClaims(RunLock runLock, HarnessLayout layout, string command) : ICopyClaims
     {
@@ -98,7 +122,7 @@ public static class LegCopies
 
         public string SaidHeld(string holder) => LegCopies.SaidHeld(holder);
 
-        public CopyHolder? HeldBy(string copy) => runLock.HeldBy(layout, Whole(copy, command)) is { } said ? new CopyHolder(said, Claim: null) : null;
+        public CopyHolder? HeldBy(string copy) => LegCopies.HeldBy(runLock, layout, copy, command) is { } said ? new CopyHolder(said, Claim: null) : null;
 
         public void Forget(string copy)
         {

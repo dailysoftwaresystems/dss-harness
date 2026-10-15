@@ -91,7 +91,10 @@ public sealed class ConfigStoreTests
                 ["arm64-debug"] = new LegConfig { Os = "linux", Processor = "arm64", Emulator = "qemu-arm64", Wsl = "Ubuntu", Config = "debug" },
             },
             LegSets = { ["gate"] = ["vps-debug", "arm64-debug"] },
-            Exec = { ["fmt"] = new ExecConfig { Command = "clang-format", Args = ["-i"] } },
+            SetUp =
+            {
+                ["e2e"] = new SetUpConfig { Up = "docker compose up -d", Down = SetUpLine.Keyed([new("windows", @"scripts\down.cmd"), new("all", "./scripts/down.sh")]) },
+            },
             Worktrees = new WorktreeSettings { MaxNameLength = 16, PathLimit = 1024 },
         };
 
@@ -118,7 +121,9 @@ public sealed class ConfigStoreTests
         Assert.Equal("qemu-arm64", loaded.Legs["arm64-debug"].Emulator);
         Assert.Equal("Ubuntu", loaded.Legs["arm64-debug"].Wsl);
         Assert.Equal(["vps-debug", "arm64-debug"], loaded.LegSets["gate"]);
-        Assert.Equal(["-i"], loaded.Exec["fmt"].Args);
+        Assert.Equal("docker compose up -d", loaded.SetUp["e2e"].Up.Plain);
+        Assert.Equal(SetUpLine.Keyed([new("windows", @"scripts\down.cmd"), new("all", "./scripts/down.sh")]), loaded.SetUp["e2e"].Down);
+        Assert.Null(loaded.SetUp["e2e"].Down.Plain);
         Assert.Equal(16, loaded.Worktrees.MaxNameLength);
         Assert.Equal(1024, loaded.Worktrees.PathLimit);
     }
@@ -174,7 +179,7 @@ public sealed class ConfigStoreTests
               "emulators": { "qemu-arm64": {{QemuArm64}} },
               "legs": { "local-debug": { "os": "linux", "processor": "x86_64", "config": "debug" } },
               "legSets": { "gate": ["local-debug"] },
-              "exec": { "fmt": { "command": "clang-format" } }
+              "setUp": { "e2e": { "up": "docker compose up -d", "down": "docker compose down" } }
             }
             """);
 
@@ -185,7 +190,7 @@ public sealed class ConfigStoreTests
         Assert.True(config.Emulators.ContainsKey("QEMU-ARM64"), "emulators");
         Assert.True(config.Legs.ContainsKey("Local-Debug"), "legs");
         Assert.True(config.LegSets.ContainsKey("Gate"), "legSets");
-        Assert.True(config.Exec.ContainsKey("FMT"), "exec");
+        Assert.True(config.SetUp.ContainsKey("E2E"), "setUp");
     }
 
     [Fact]
@@ -2686,6 +2691,180 @@ public sealed class ConfigStoreTests
 
         Assert.Contains("predefined runner 'guard' phase 'check' declares 'heavy', which only a step of an action file takes", exception.Message, StringComparison.Ordinal);
         Assert.Contains("Whether a runner's legs are heavy is said on the runner itself, as \"heavy\": true beside its phases.", exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// exec, whose named commands no command ever ran, is refused wherever the file still says it - given empty, holding
+    /// entries, in any case - saying that each is a set-up's line now and how to run one: a file that still declares it
+    /// reads as declaring something the tool does.
+    /// </summary>
+    [Theory]
+    [InlineData("""{ "exec": {} }""")]
+    [InlineData("""{ "Exec": {} }""")]
+    [InlineData("""{ "exec": { "e2e": { "command": ["docker", "compose", "up"] } } }""")]
+    public void Exec_IsRefused_EvenEmpty_SayingSetUpTookItsPlace(string json)
+    {
+        var exception = LoadInvalid(json);
+
+        Assert.Contains("exec is no longer read, and no command ever ran what it named.", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("\"setUp\": { \"<name>\": { \"up\": \"<command line>\", \"down\": \"<command line>\" } }", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("'dssharness up <name>' and 'dssharness down <name>'", exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A set-up line written in a shape that is no line - a number, an empty line or spaces alone, a map naming nothing, a platform's
+    /// entry that is not a line or is empty, a platform named twice - is refused where the file is read, in the words a
+    /// buildOutputs entry is refused in, naming what a line is.
+    /// </summary>
+    [Theory]
+    [InlineData("""{ "setUp": { "e2e": { "up": 3, "down": "x" } } }""", "A setUp command is a command line, or a mapping of platform to command line, found Number.")]
+    [InlineData("""{ "setUp": { "e2e": { "up": "x", "down": "" } } }""", "A setUp command is an empty command line, which names no program.")]
+    [InlineData("""{ "setUp": { "e2e": { "up": "   ", "down": "x" } } }""", "A setUp command is an empty command line, which names no program.")]
+    [InlineData("""{ "setUp": { "e2e": { "up": {}, "down": "x" } } }""", "A setUp command names no command line at all; a set-up that runs nothing brings nothing up and nothing down.")]
+    [InlineData("""{ "setUp": { "e2e": { "up": { "windows": ["a"] }, "down": "x" } } }""", "A setUp command for 'windows' is not a command line.")]
+    [InlineData("""{ "setUp": { "e2e": { "up": { "linux": "" }, "down": "x" } } }""", "A setUp command for 'linux' is an empty command line, which names no program.")]
+    [InlineData("""{ "setUp": { "e2e": { "up": { "windows": "a", "WINDOWS": "b" }, "down": "x" } } }""", "A setUp command names platform 'WINDOWS' twice; nothing could say which command line it meant.")]
+    public void Load_RefusesASetUpLineThatIsNoLine(string json, string expected)
+    {
+        var exception = LoadInvalid(json);
+
+        Assert.Contains(expected, exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A set-up declares both of its lines: one with no down would bring up what nothing brings down, and one with no up
+    /// would bring down what nothing brought up.
+    /// </summary>
+    [Theory]
+    [InlineData("""{ "setUp": { "e2e": { "up": "x" } } }""", "down")]
+    [InlineData("""{ "setUp": { "e2e": { "down": "x" } } }""", "up")]
+    public void Load_RefusesASetUpWithoutBothLines(string json, string missing)
+    {
+        var exception = LoadInvalid(json);
+
+        Assert.Contains($"'{missing}'", exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A set-up line the run could not start as written is refused when the file is read, each problem named with the
+    /// set-up, the direction and the line: a quote left open, which the splitter would drop the rest of the line after;
+    /// quotes around nothing, which name no program; a platform no machine is; and a name the command line could not
+    /// select.
+    /// </summary>
+    [Theory]
+    [InlineData("""{ "setUp": { "e2e": { "up": "docker \"compose up", "down": "x" } } }""", "setUp 'e2e' up 'docker \"compose up' has an unbalanced double quote.")]
+    [InlineData("""{ "setUp": { "e2e": { "up": "x", "down": { "linux": "a \"b" } } } }""", "setUp 'e2e' down 'a \"b' has an unbalanced double quote.")]
+    [InlineData("""{ "setUp": { "e2e": { "up": "\"\"", "down": "x" } } }""", "setUp 'e2e' up '\"\"' names no program.")]
+    [InlineData("""{ "setUp": { "e2e": { "up": { "plan9": "x" }, "down": "x" } } }""", "setUp 'e2e' up has an entry for 'plan9'; expected one of")]
+    [InlineData("""{ "setUp": { "e 2e": { "up": "x", "down": "x" } } }""", "setUp 'e 2e' cannot be selected with up and down; use a name with no commas or spaces")]
+    public void Load_RefusesASetUpLineTheRunCouldNotStart(string json, string expected)
+    {
+        var exception = LoadInvalid(json);
+
+        Assert.Contains(expected, exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A runner or a test invocation naming a set-up setUp does not declare is refused, as is one naming a set-up twice,
+    /// in any case: each is found out when the file is read, never by the run that would bring it up.
+    /// </summary>
+    [Theory]
+    [InlineData("""{ "predefinedRunners": { "r": { "phases": [ { "name": "p", "command": ["x"] } ], "setUp": ["db"] } } }""", "predefined runner 'r' setUp names set-up 'db', which is not declared under setUp")]
+    [InlineData("""{ "projects": [ { "name": "a", "type": "cmake", "test": { "all": { "setUp": ["db"] } } } ] }""", "project 'a' test.all.setUp names set-up 'db', which is not declared under setUp")]
+    [InlineData("""{ "buildConfigs": { "debug": {} }, "legs": { "l": { "os": "linux", "processor": "x86_64", "config": "debug", "test": { "linux": { "setUp": ["db"] } } } } }""", "leg 'l' test.linux.setUp names set-up 'db', which is not declared under setUp")]
+    [InlineData("""{ "setUp": { "e2e": { "up": "x", "down": "y" } }, "predefinedRunners": { "r": { "phases": [ { "name": "p", "command": ["x"] } ], "setUp": ["e2e", "E2E"] } } }""", "predefined runner 'r' setUp names set-up 'e2e' twice")]
+    public void Load_RefusesASetUpNameNothingDeclares_OrOneNamedTwice(string json, string expected)
+    {
+        var exception = LoadInvalid(json);
+
+        Assert.Contains(expected, exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A set-up a runner or a test invocation names is matched ignoring case, as every declared name is, and its lines
+    /// are read in the shape they were written: one line for every platform, or a map.
+    /// </summary>
+    [Fact]
+    public void Load_AcceptsSetUpsNamedInAnyCase_TheirLinesInEitherShape()
+    {
+        var config = LoadValid("""
+            {
+              "setUp": {
+                "E2E": { "up": "docker compose up -d", "down": { "windows": "scripts/down.cmd", "all": "./scripts/down.sh" } }
+              },
+              "predefinedRunners": { "r": { "phases": [ { "name": "p", "command": ["x"] } ], "setUp": ["e2e"] } },
+              "projects": [ { "name": "a", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "tests passed", "setUp": ["E2e"] } } } ]
+            }
+            """);
+
+        var setUp = config.SetUp["e2e"];
+
+        Assert.Equal("docker compose up -d", setUp.Up.Plain);
+        Assert.Equal("docker compose up -d", setUp.Up.For("macos"));
+        Assert.Null(setUp.Down.Plain);
+        Assert.Equal("scripts/down.cmd", setUp.Down.For("windows"));
+        Assert.Equal("./scripts/down.sh", setUp.Down.For("linux"));
+        Assert.Equal<SetUpUse>(["e2e"], config.PredefinedRunners["r"].SetUp!);
+    }
+
+    /// <summary>
+    /// A set-up's inputs are read with its lines: a brace no input fills, an input no brace can name, a value given an
+    /// input the set-up does not declare, and an input left with no value and no default are each refused when the file
+    /// is read, never by the run that would bring the set-up up.
+    /// </summary>
+    [Theory]
+    [InlineData("""{ "setUp": { "e2e": { "up": "x {profile}", "down": "y" } } }""", "setUp 'e2e' up 'x {profile}' names '{profile}', which nothing fills in: it can hold no name in braces, and a brace it means is written twice.")]
+    [InlineData("""{ "setUp": { "e2e": { "up": "x", "down": "y {profile}", "inputs": { "port": { "default": "1" } } } } }""", "setUp 'e2e' down 'y {profile}' names '{profile}', which nothing fills in: it can hold only {port}.")]
+    [InlineData("""{ "setUp": { "e2e": { "up": "x", "down": "y", "inputs": { "1st": { "default": "1" } } } } }""", "setUp 'e2e' input '1st' cannot be named in braces: a name starts with a letter or '_'")]
+    [InlineData("""{ "setUp": { "e2e": { "up": "x", "down": "y" } }, "predefinedRunners": { "r": { "phases": [ { "name": "p", "command": ["x"] } ], "setUp": [ { "name": "e2e", "with": { "nope": "1" } } ] } } }""", "predefined runner 'r' setUp gives 'nope' a value, and set-up 'e2e' declares no such input: it declares none")]
+    [InlineData("""{ "setUp": { "e2e": { "up": "x {region}", "down": "y", "inputs": { "region": { "description": "where it runs" } } } }, "predefinedRunners": { "r": { "phases": [ { "name": "p", "command": ["x"] } ], "setUp": ["e2e"] } } }""", "predefined runner 'r' setUp gives input 'region' of set-up 'e2e' no value, and it has no default (where it runs)")]
+    [InlineData("""{ "setUp": { "e2e": { "up": "x", "down": "y" } }, "predefinedRunners": { "r": { "phases": [ { "name": "p", "command": ["x"] } ], "setUp": [ { "name": "e2e", "using": { } } ] } } }""", "using")]
+    public void Load_RefusesSetUpInputsALineOrAUseCouldNotHave(string json, string expected)
+    {
+        var exception = LoadInvalid(json);
+
+        Assert.Contains(expected, exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Who shares a set-up is the legs of one tree, or of the machine: anything else is refused when the file is read, and
+    /// a set-up that says nothing is shared by tree.
+    /// </summary>
+    [Fact]
+    public void Load_ReadsWhoSharesASetUp_AndRefusesAnythingElse()
+    {
+        var exception = LoadInvalid("""{ "setUp": { "e2e": { "up": "x", "down": "y", "shared": "everywhere" } } }""");
+
+        Assert.Contains(
+            "setUp 'e2e' shared must be 'tree' (the legs working in one tree of a machine share it) or 'machine' (every leg of the repository on the machine shares it), found 'everywhere'",
+            exception.Message,
+            StringComparison.Ordinal);
+
+        var config = LoadValid("""{ "setUp": { "e2e": { "up": "x", "down": "y", "shared": "machine" }, "db": { "up": "x", "down": "y" } } }""");
+
+        Assert.True(config.SetUp["e2e"].MachineWide);
+        Assert.False(config.SetUp["db"].MachineWide);
+    }
+
+    /// <summary>
+    /// What names a set-up gives its inputs values as an object, its name and inputs matched ignoring case; a brace
+    /// written twice is a brace, never an input.
+    /// </summary>
+    [Fact]
+    public void Load_AcceptsASetUpNamedWithValues()
+    {
+        var config = LoadValid("""
+            {
+              "setUp": { "e2e": { "up": "x {profile} {{literal}}", "down": "y", "inputs": { "profile": { "default": "dev", "description": "which services" } } } },
+              "predefinedRunners": { "r": { "phases": [ { "name": "p", "command": ["x"] } ], "setUp": [ { "name": "E2E", "with": { "PROFILE": "ci" } } ] } }
+            }
+            """);
+
+        var uses = config.PredefinedRunners["r"].SetUp!;
+
+        Assert.Equal("E2E", uses[0].Name);
+        Assert.Equal("ci", uses[0].With["profile"]);
+        Assert.Equal("dev", config.SetUp["e2e"].Inputs["Profile"].Default);
     }
 
     private static HarnessConfig LoadValid(string json)

@@ -177,6 +177,24 @@ public static partial class HostCopies
     /// <param name="here">The host this machine is to the machine that sent the legs here, or <see langword="null"/>.</param>
     public static HostId? KeptAs(HostId? here) => here is { Kind: not HostKind.Local } ? here : null;
 
+    /// <summary>
+    /// The host's copy of the main checkout that <paramref name="copy"/>, a copy a host keeps, is kept beside: for a
+    /// worktree's copy (<c>repo.worktree-o1--xa</c>), the main checkout's copy beside it (<c>repo</c>); for any other, the
+    /// copy itself.
+    /// </summary>
+    /// <param name="copy">The copy, as this machine spells it.</param>
+    public static string MainCopyOf(string copy)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(copy);
+
+        var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(copy));
+        var at = name.LastIndexOf(WorktreeSuffix, StringComparison.Ordinal);
+
+        return at > 0 && IsCopyName(name[(at + WorktreeSuffix.Length)..]) && Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(copy)) is { } parent
+            ? Path.Combine(parent, name[..at])
+            : copy;
+    }
+
     /// <summary>Where a host keeps the main checkout's copy, as the configuration declares it.</summary>
     /// <param name="config">The configuration that declares the host.</param>
     /// <param name="host">The host.</param>

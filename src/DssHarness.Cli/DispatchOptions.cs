@@ -3,6 +3,7 @@ using DssHarness.Core.Hosts;
 using DssHarness.Core.Legs;
 using DssHarness.Core.Results;
 using DssHarness.Core.Runs;
+using DssHarness.Core.SetUps;
 
 namespace DssHarness.Cli;
 
@@ -64,6 +65,15 @@ internal static class DispatchOptions
     internal static Option<bool> InPlace { get; } = new("--in-place")
     {
         Description = "Every leg this machine runs itself works in its tree itself, for this run: over the leg's own localCopy and defaults.localCopy.",
+    };
+
+    /// <summary>
+    /// <c>--set-up</c>: each leg brings up the set-ups its work names before that work, and down after it. One definition
+    /// for the two commands that take it.
+    /// </summary>
+    internal static Option<bool> SetUp { get; } = new(LegSetUps.Option)
+    {
+        Description = "Bring up the set-ups each leg's work names under setUp before that work starts, on the machine that runs it, and down after it. Without it, none is.",
     };
 
     /// <summary>

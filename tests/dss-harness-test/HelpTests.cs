@@ -280,8 +280,10 @@ public sealed partial class HelpTests
             + "A directory there under a worker's name that no sync made goes with the worktree, or the host's copy, as everything "
             + "else in it does, and is said. No copy of a tree carries its workers, and a sync into a host's copy never deletes that "
             + "copy's own. Workers an earlier version of this tool kept beside a tree, as <tree>.mutation-<key><mark>-<n>, are no "
-            + "workers to anything here: nothing counts or removes one as a worker, and they are yours to delete. Each holds a .git "
-            + "of its own that git records no worktree at, so one below the worktrees root is said as any such directory: "
+            + "workers to a sweep: nothing counts one, and clean --former-workers alone removes them - beside each tree of the "
+            + "repository on each machine a selected leg runs on, here and on hosts, and beside each one deleted since, a dry run "
+            + "listing each with its size - keeping one a sweep of that version still claims by the claim file beside it. Each holds a .git of its own that git records "
+            + "no worktree at, so until then one below the worktrees root is said as any such directory: "
             + "list-worktree warns of it, and delete-orchestrator, and delete-worktree of an orchestrator's directory with or "
             + $"without --force, refuse ({HarnessExit.Refused}) while one is below it.",
             "built whole before it drives an arm. Of the tree itself a sweep reads every file and writes none: its workers, and "
@@ -1429,7 +1431,9 @@ public sealed partial class HelpTests
                 + "host by sync",
             "The worktrees root, the orchestrators directory, .mutations and .legs are kept in git by their placeholders, so each "
                 + "reads as not ignored itself while everything made in it is, and none can be a link: init names one it finds, and "
-                + "writes nothing through it. Sync withholds each by name.",
+                + "writes nothing through it. Sync withholds each by name. Each copy in them is a whole copy of the tree, so a "
+                + "program of the repository's own that walks the tree from its root - a census, a guard over every file - must "
+                + "leave out what the block ignores, as git does, or it reads every file once more for each copy kept there.",
         })
         {
             Assert.Contains(said, text, StringComparison.Ordinal);
@@ -1780,8 +1784,9 @@ public sealed partial class HelpTests
             "An orchestrator's agents' worktrees sit below the directory named for it, <worktrees.root>/<orchestrator>/<agent>, made by "
             + "create-agent with its records, never by create-worktree. list-worktree lists each as orchestrator/agent, and delete-worktree "
             + "takes that address. The directory named for an orchestrator is never deleted as one while worktrees are below it, or a "
-            + "directory holding a .git of its own that git records no worktree at - what a removal left, or a worker an earlier "
-            + "version of this tool kept beside an agent's worktree, a person's to look in and delete - --force "
+            + "directory holding a .git of its own that git records no worktree at - what a removal left, a person's to look in and "
+            + "delete, or a worker an earlier version of this tool kept beside an agent's worktree, which clean --former-workers "
+            + "removes - --force "
             + $"or not ({HarnessExit.Refused}), nor any directory with no .git of its own while git cannot list its worktrees "
             + $"({HarnessExit.CommandFailed}); a worktree's own submodules are never taken for worktrees. A plain worktree cannot take an "
             + "orchestrator's name. An agent's copies on hosts are kept under orchestrator--agent, so two orchestrators' agents of one name "
@@ -2020,6 +2025,46 @@ public sealed partial class HelpTests
 
         Assert.NotNull(usage);
         Assert.StartsWith(ToolPackage.Command + " ", usage, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The set-ups topic, asked for by any of its names, says how a set-up is declared, what up and down run and exit
+    /// with, and what a run asked to set up does with one; config names setUp, and exec no longer.
+    /// </summary>
+    [Theory]
+    [InlineData("setups")]
+    [InlineData("set-up")]
+    [InlineData("up")]
+    [InlineData("down")]
+    public async Task SetUpsTopic_SaysHowOneIsDeclared_RunByHand_AndAroundARun(string topic)
+    {
+        var token = TestContext.Current.CancellationToken;
+        var result = await CliRunner.RunAsync(["help", topic], token);
+        var text = Prose.Words(result.StandardOutput);
+
+        Assert.Equal(0, result.ExitCode);
+
+        foreach (var said in new[]
+        {
+            "config.json names each set-up under setUp, with an up and a down command line",
+            "a double-quoted word kept whole, and no shell between",
+            "dssharness up <name> run its up line at the root of the tree, on this machine",
+            "dssharness down <name> run its down line there",
+            "test and run bring them up only when given --set-up; without it a run runs as it did.",
+            "so a line must be safe to run twice.",
+            "the run exits 21 where nothing failed.",
+            "--input name=value gives an input its value, once per input, over its default;",
+            "\"projects\": [ { \"name\": \"core\", \"test\": { \"all\": { \"setUp\": [\"e2e\"] } } } ]",
+            "and 13 where a line a leg would run could not run on its system",
+        })
+        {
+            Assert.Contains(said, text, StringComparison.Ordinal);
+        }
+
+        var config = Prose.Words((await CliRunner.RunAsync(["help", "config"], token)).StandardOutput);
+
+        Assert.Contains("setUp what a run brings up around its work and down after, by name", config, StringComparison.Ordinal);
+        Assert.DoesNotContain(" exec ", config, StringComparison.Ordinal);
     }
 
     /// <summary>

@@ -32,7 +32,7 @@ public sealed class ConfigKeysTests
         var runner = ConfigKeys.Of<RunnerConfig>();
 
         Assert.Equal(
-            ["description", "legs", "writesTree", "phases", "action", "steps", "requireBuild", "heavy", "stallSeconds", "expectedExceptions", "cleanDirectories", "env"],
+            ["description", "legs", "writesTree", "phases", "action", "steps", "requireBuild", "heavy", "stallSeconds", "expectedExceptions", "cleanDirectories", "env", "setUp"],
             KeyDescription.Names(runner));
         Assert.DoesNotContain(runner, key => key.Required);
 
@@ -44,6 +44,24 @@ public sealed class ConfigKeysTests
         var checks = Section(expected, "runChecks");
         Assert.Equal(["predefinedRunner", "expects", "minStepsInFailureWindow", "minStepSeconds"], KeyDescription.Names(checks));
         Assert.Equal(["sameException", "success", "resultCode", "message"], KeyDescription.Names(Section(checks, "expects")));
+    }
+
+    /// <summary>
+    /// A set-up takes an up and a down line, both required: one without the other would bring up what nothing brings
+    /// down, or bring down what nothing brought up. Its inputs are optional, each with a default and what it is for,
+    /// neither required. Every key is explained.
+    /// </summary>
+    [Fact]
+    public void ASetUpsKeys_AreUpAndDown_BothRequired_ItsInputs_AndWhoSharesIt_EachExplained()
+    {
+        var setUp = ConfigKeys.Of<SetUpConfig>();
+        var input = Section(setUp, "inputs");
+
+        Assert.Equal(["up", "down", "inputs", "shared"], KeyDescription.Names(setUp));
+        Assert.Equal(["up", "down"], setUp.Where(key => key.Required).Select(key => key.Name));
+        Assert.Equal(["default", "description"], KeyDescription.Names(input));
+        Assert.DoesNotContain(input, key => key.Required);
+        Assert.All(setUp.Concat(input), key => Assert.False(string.IsNullOrWhiteSpace(key.Meaning), $"{key.Name} says nothing of what it does"));
     }
 
     /// <summary>

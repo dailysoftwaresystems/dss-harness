@@ -6,7 +6,7 @@ namespace DssHarness.Core.Execution;
 
 /// <summary>
 /// A state file holding a list of entries that every process on the machine decides by - the run lock, the heavy
-/// legs admitted onto a machine and the room they claim - read, decided on and written back as one step under
+/// legs admitted onto a machine and the room they claim, the set-ups its legs hold - read, decided on and written back as one step under
 /// <see cref="MachineWideFile"/>.
 /// </summary>
 /// <remarks>

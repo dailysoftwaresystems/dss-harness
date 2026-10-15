@@ -7,6 +7,7 @@ using DssHarness.Core.Output;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
+using DssHarness.Core.SetUps;
 using DssHarness.Core.Runs;
 using DssHarness.Core.Testing;
 
@@ -205,7 +206,7 @@ public sealed class RemoteLegRunnerTests
             return HostResults.Finished(command, 0);
         });
 
-        await Runner(hosts).RunAsync("build", Leg(), [], run, onNote: null, TestContext.Current.CancellationToken);
+        await Runner(hosts).RunAsync("build", Leg(), [], run, onNote: null, cancellationToken: TestContext.Current.CancellationToken);
         await Runner(hosts).RunAsync("clean", Leg(), [], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal([run.Value, null], sent.Select(command => Request(command).RunId));
@@ -760,6 +761,42 @@ public sealed class RemoteLegRunnerTests
     }
 
     /// <summary>
+    /// What a host's leg did with its set-ups travels on the leg's line, read from the very document the host writes -
+    /// one it left running among them, the host exiting 21 for it - so this machine's run is incomplete for it too, and
+    /// its line names it once.
+    /// </summary>
+    [Fact]
+    public async Task TheSetUpsAHostsLegBroughtUp_AreCarried_OneLeftRunningAmongThem()
+    {
+        IReadOnlyList<SetUpFact> setUps =
+        [
+            new("db", SetUpFact.BroughtUp, SetUpFact.BroughtDown),
+            new("e2e", SetUpFact.BroughtUp, SetUpFact.Failed, "'./down.sh' exited 3"),
+        ];
+
+        var written = LedgerReport
+            .From([new LegEntry { Leg = "wsl-debug", Verdict = LegVerdict.Passed, SetUps = setUps }], durationWarningFactor: 0)
+            .ToJson(cancelled: false, unfinished: []);
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            Answer(command, written);
+
+            return HostResults.Finished(command, HarnessExit.Incomplete);
+        });
+
+        var entry = await Runner(hosts).RunAsync("test", Leg(), [], cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, entry.Verdict);
+        Assert.Equal(setUps, entry.SetUps);
+
+        var report = LedgerReport.From([entry], durationWarningFactor: 0);
+
+        Assert.Equal(HarnessExit.Incomplete, report.ExitCode);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(report.Render()[1], "set-up 'e2e'"));
+    }
+
+    /// <summary>
     /// A leg a host did not admit is not-admitted here, named by the host this machine knows, carrying what held the
     /// host's slots, why it could not read its memory, and where it keeps its record - nothing of it ran there.
     /// </summary>
@@ -949,6 +986,31 @@ public sealed class RemoteLegRunnerTests
         Assert.Equal(
             "wsl Example-Linux refused 'run' for leg 'wsl-debug': git does not ignore this action's 'artifacts/'. Nothing has run.",
             refusal.Message);
+    }
+
+    /// <summary>
+    /// A set-up the leg left running on the host, where the host's run ended with no line for the leg, is told to this run
+    /// as the host's ledger names it, so this run says it too, whatever else it makes of the host's answer.
+    /// </summary>
+    [Fact]
+    public async Task ASetUpALegLeftRunningOnAHost_WithNoLine_IsToldToThisRun()
+    {
+        IReadOnlyList<SetUpFact>? told = null;
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            Answer(
+                command,
+                """{"exitCode":13,"summary":"refused","legs":[],"setUpsLeftRunning":[{"leg":"wsl-debug","setUp":"db","up":"joined","inputs":{"profile":"ci"},"detail":"'down' exited 1","remedy":"r"}]}""");
+            return HostResults.Finished(command, HarnessExit.Refused);
+        });
+
+        await Assert.ThrowsAsync<HarnessException>(() => Runner(hosts).RunAsync(
+            "run", Leg(), [], setUpsLeftRunning: facts => told = facts, cancellationToken: TestContext.Current.CancellationToken));
+
+        var fact = Assert.Single(told!);
+
+        Assert.Equal(("db", SetUpFact.Joined, SetUpFact.Failed, "'down' exited 1"), (fact.Name, fact.Up, fact.Down, fact.Detail));
+        Assert.Equal("ci", fact.Inputs!["profile"]);
     }
 
     [Fact]

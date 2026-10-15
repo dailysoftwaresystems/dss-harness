@@ -176,20 +176,50 @@ public sealed class HarnessContextLoaderTests
             StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The repository a tree is of is the same whether a command is typed in it or a run works in it: a tree git holds,
+    /// and a copy made for a run, name the main checkout; a copy a sync made, a repository of its own to git, is told by
+    /// where it is kept - in a tree's .legs, of that tree's repository, a host's worktree copy, of the main checkout's copy
+    /// beside it, anything else, its own.
+    /// </summary>
+    [Fact]
+    public async Task TheRepositoryATreeIsOf_IsTheSame_TypedInItOrWorkedInByARun()
+    {
+        var config = new HarnessConfig();
+        var hostMain = Path.Combine(TestHost.TemporaryRoot, "loader", "host", "repo");
+        var hostWorktree = hostMain + ".worktree-o1--xa";
+        var localLegCopy = Path.Combine(Worktree, HarnessLayout.LegsDirectoryName, "abc1234");
+        var hostLegCopy = Path.Combine(hostWorktree, HarnessLayout.LegsDirectoryName, "abc1234");
+
+        _locator.LocateAsync(Worktree, Arg.Any<CancellationToken>()).Returns(Task.FromResult<HarnessLayout?>(new HarnessLayout(Worktree, Main)));
+        _locator.LocateAsync(hostWorktree, Arg.Any<CancellationToken>()).Returns(Task.FromResult<HarnessLayout?>(new HarnessLayout(hostWorktree, hostWorktree)));
+        _fileSystem.FileExists(new HarnessLayout(hostWorktree, hostWorktree).SyncedCopyMarkerFile).Returns(true);
+
+        Assert.Equal(Main, await RepositoryOf(new HarnessContext(new HarnessLayout(Worktree, Main), config)));
+        Assert.Equal(Main, await RepositoryOf(new HarnessContext(new HarnessLayout(localLegCopy, Main), config) { IsSyncedCopy = true }));
+        Assert.Equal(Main, await RepositoryOf(new HarnessContext(new HarnessLayout(localLegCopy, localLegCopy), config) { IsSyncedCopy = true }));
+        Assert.Equal(hostMain, await RepositoryOf(new HarnessContext(new HarnessLayout(hostMain, hostMain), config) { IsSyncedCopy = true }));
+        Assert.Equal(hostMain, await RepositoryOf(new HarnessContext(new HarnessLayout(hostWorktree, hostWorktree), config) { IsSyncedCopy = true }));
+        Assert.Equal(hostMain, await RepositoryOf(new HarnessContext(new HarnessLayout(hostLegCopy, hostLegCopy), config) { IsSyncedCopy = true }));
+    }
+
     private readonly StringWriter _errors = new();
 
-    private Task<HarnessContext> Load(string directory)
+    private Task<HarnessContext> Load(string directory) => Loader().LoadAsync(directory, TestContext.Current.CancellationToken);
+
+    private Task<string> RepositoryOf(HarnessContext context) => Loader().RepositoryOfAsync(context, TestContext.Current.CancellationToken);
+
+    private HarnessContextLoader Loader()
     {
         var output = new ConsoleHarnessOutput(new StringWriter(), _errors, verbose: false);
 
         return new HarnessContextLoader(
-                _locator,
-                _configStore,
-                _git,
-                _fileSystem,
-                new HostPlatform(),
-                output,
-                new SyncedCopyToolCheck(new PublishedVersionsDouble(), new RunningToolDouble(), CommandOrigin.Typed, output))
-            .LoadAsync(directory, TestContext.Current.CancellationToken);
+            _locator,
+            _configStore,
+            _git,
+            _fileSystem,
+            new HostPlatform(),
+            output,
+            new SyncedCopyToolCheck(new PublishedVersionsDouble(), new RunningToolDouble(), CommandOrigin.Typed, output));
     }
 }

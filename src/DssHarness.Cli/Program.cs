@@ -45,6 +45,8 @@ root.Subcommands.Add(TestCommand.Create());
 root.Subcommands.Add(RunCommand.Create());
 root.Subcommands.Add(CheckMutationsCommand.Create());
 root.Subcommands.Add(CleanCommand.Create());
+root.Subcommands.Add(UpCommand.Create());
+root.Subcommands.Add(DownCommand.Create());
 root.Subcommands.Add(HostExecCommand.Create());
 root.Subcommands.Add(HelpCommand.Create());
 
@@ -73,11 +75,12 @@ async Task<int> RunAsync(string[] arguments, CancellationToken cancellationToken
     }
 
     // A command past its point of no return goes on after Ctrl+C - a deletion, a fold, a hand-over or a
-    // move of an agent's base is never left half written, and a host agent can be running one for another
-    // machine - so each is waited for as long as a deletion expects. No other command is any slower to stop.
+    // move of an agent's base is never left half written, a host agent can be running one for another
+    // machine, and a run asked to set up brings down what it brought up - so each is waited for as long as a
+    // deletion expects. No other command is any slower to stop.
     var invocation = new InvocationConfiguration();
 
-    if (PointOfNoReturn.Commands.Contains(parseResult.CommandResult.Command.Name))
+    if (PointOfNoReturn.Holds([parseResult.CommandResult.Command.Name, .. parseResult.Tokens.Select(token => token.Value)]))
     {
         invocation.ProcessTerminationTimeout = WorktreeService.DefaultInterruptionGrace;
     }

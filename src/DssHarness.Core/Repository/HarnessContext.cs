@@ -2,7 +2,9 @@ using DssHarness.Core.Configuration;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
 using DssHarness.Core.Hosts;
+using DssHarness.Core.Platform;
 using DssHarness.Core.Results;
+using DssHarness.Core.Sync;
 
 namespace DssHarness.Core.Repository;
 
@@ -58,6 +60,20 @@ public interface IHarnessContextLoader
     /// <param name="copy">The copy of the tree the work happens in.</param>
     /// <exception cref="HarnessException">The copy holds no configuration (<see cref="HarnessExit.NotInitialized"/>).</exception>
     HarnessContext ForCopy(HarnessContext of, string copy);
+
+    /// <summary>
+    /// The repository <paramref name="context"/>'s tree is of, as its main checkout - or the copy of it a host keeps - is
+    /// spelt on this machine, the same whether a command is typed in the tree or a run works in it: what a set-up the
+    /// machine shares is shared within.
+    /// </summary>
+    /// <param name="context">The tree's context, as <see cref="LoadAsync"/> or <see cref="ForCopy"/> made it.</param>
+    /// <param name="cancellationToken">Stops the lookup.</param>
+    /// <remarks>
+    /// A tree git holds names its main checkout. A copy a sync made is a repository of its own to git, so it is told by
+    /// where it is kept: in a tree's <c>.legs</c>, of that tree's repository - a copy made for a run as one typed in; beside a host's copy of the main checkout as a worktree's copy (<c>repo.worktree-o1--xa</c>),
+    /// of that copy's (<see cref="HostCopies.MainCopyOf"/>); anywhere else, the copy of the main checkout itself.
+    /// </remarks>
+    Task<string> RepositoryOfAsync(HarnessContext context, CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc cref="IHarnessContextLoader"/>
@@ -181,4 +197,32 @@ public sealed class HarnessContextLoader(
                 $"'{copy}' holds no harness configuration at '{configFile}', so work cannot run by the reading it was made from. "
                 + "Sync it again.");
     }
+
+    /// <inheritdoc/>
+    public async Task<string> RepositoryOfAsync(HarnessContext context, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        if (!context.IsSyncedCopy)
+        {
+            return Whole(context.Layout.MainCheckoutRoot);
+        }
+
+        var root = Whole(context.Layout.RepositoryRoot);
+
+        if (Path.GetDirectoryName(root) is { } slot
+            && string.Equals(Path.GetFileName(slot), HarnessLayout.LegsDirectoryName, _platform.PathComparison)
+            && Path.GetDirectoryName(slot) is { Length: > 0 } holder
+            && await _repositoryLocator.LocateAsync(holder, cancellationToken).ConfigureAwait(false) is { } held)
+        {
+            return await RepositoryOfAsync(
+                    new HarnessContext(held, context.Config) { IsSyncedCopy = _fileSystem.FileExists(held.SyncedCopyMarkerFile) },
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        return HostCopies.MainCopyOf(root);
+    }
+
+    private static string Whole(string path) => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
 }

@@ -231,9 +231,9 @@ public sealed class RepositoryTreesTests
         Assert.Equal(
             [
                 new RepositoryTree(temp.Path, RepositoryTree.MainCheckout),
-                new RepositoryTree(HarnessLayout.InSlot(temp.Path, HarnessLayout.LegsDirectoryName, "357e24c"), "the main checkout's leg copy"),
+                new RepositoryTree(HarnessLayout.InSlot(temp.Path, HarnessLayout.LegsDirectoryName, "357e24c"), "the main checkout's leg copy") { LegCopy = true },
                 new RepositoryTree(plain, "worktree plain"),
-                new RepositoryTree(HarnessLayout.InSlot(plain, HarnessLayout.LegsDirectoryName, "357e24d"), "worktree plain's leg copy"),
+                new RepositoryTree(HarnessLayout.InSlot(plain, HarnessLayout.LegsDirectoryName, "357e24d"), "worktree plain's leg copy") { LegCopy = true },
             ],
             found.Trees);
     }

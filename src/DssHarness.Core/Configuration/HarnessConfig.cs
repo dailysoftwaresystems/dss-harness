@@ -87,8 +87,12 @@ public sealed class HarnessConfig
             .Where(entry => !string.IsNullOrWhiteSpace(entry.Value.Action))
             .Select(entry => new KeyValuePair<string, string>(entry.Key, entry.Value.Action!));
 
-    /// <summary>Named commands invokable through <c>DssHarness exec</c>.</summary>
-    public Dictionary<string, ExecConfig> Exec { get; init; } = Map<ExecConfig>();
+    /// <summary>
+    /// Named set-ups, each the command line that brings up what the repository's work needs on this machine and the one
+    /// that brings it down: run by <c>up &lt;name&gt;</c> and <c>down &lt;name&gt;</c>, and around a leg's work where
+    /// what the leg runs names one and the run is asked to set up.
+    /// </summary>
+    public Dictionary<string, SetUpConfig> SetUp { get; init; } = Map<SetUpConfig>();
 
     /// <summary>Commit message templating and policy.</summary>
     public CommitConfig Commit { get; init; } = new();

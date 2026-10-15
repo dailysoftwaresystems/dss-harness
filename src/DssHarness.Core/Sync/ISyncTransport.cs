@@ -242,6 +242,19 @@ public interface ISyncTransport
     Task<WorkersRemoval> RemoveWorkersAsync(string root, bool measureOnly = false, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Removes the mutation workers an earlier version of this tool kept beside the copies of a repository kept together -
+    /// beside the main checkout's copy at <paramref name="repositoryPath"/> and each worktree's copy beside it
+    /// (<c>&lt;repositoryPath&gt;.worktree-&lt;name&gt;</c>), whether that copy is there still or was removed since - with
+    /// what an unfinished removal of one left aside; a worker that version's sweep still claims is left, and answered for.
+    /// None where the directory the copies are kept in is not there.
+    /// </summary>
+    /// <param name="repositoryPath">Where the main checkout's copy is kept, as the configuration declares it.</param>
+    /// <param name="measureOnly">Whether to say what would be removed, and remove nothing.</param>
+    /// <param name="cancellationToken">Stops the removal between workers.</param>
+    /// <exception cref="HarnessException">The directory the copies are kept in could not be looked in; nothing was removed.</exception>
+    Task<WorkersRemoval> RemoveFormerWorkersBesideCopiesAsync(string repositoryPath, bool measureOnly = false, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Reads one file out of the copy: one a sync or a carry sends on, one it checks after writing, or a
     /// leg's output brought home.
     /// </summary>

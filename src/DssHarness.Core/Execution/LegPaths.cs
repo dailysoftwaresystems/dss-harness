@@ -536,8 +536,10 @@ public static partial class LegPathNames
                 ? filled
                 : throw new HarnessException(
                     HarnessExit.ConfigInvalid,
-                    $"{setting} names '{match.Value}', which nothing fills in: it can hold only "
-                    + $"{string.Join(", ", names.Keys.Select(name => $"{{{name}}}"))}.");
+                    $"{setting} names '{match.Value}', which nothing fills in: "
+                    + (names.Count == 0
+                        ? "it can hold no name in braces, and a brace it means is written twice."
+                        : $"it can hold only {string.Join(", ", names.Keys.Select(name => $"{{{name}}}"))}."));
         });
     }
 

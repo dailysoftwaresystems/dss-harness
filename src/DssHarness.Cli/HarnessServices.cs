@@ -20,6 +20,7 @@ using DssHarness.Core.Repository;
 using DssHarness.Core.Runners;
 using DssHarness.Core.Runs;
 using DssHarness.Core.Secrets;
+using DssHarness.Core.SetUps;
 using DssHarness.Core.Sync;
 using DssHarness.Core.Testing;
 using DssHarness.Core.Tools;
@@ -232,6 +233,14 @@ internal static class HarnessServices
 
         // Guards that became commands.
         services.AddSingleton<IRootLitterService, RootLitterService>();
+        services.AddSingleton(provider => new SetUpHolds(
+            provider.GetRequiredService<IFileSystem>(),
+            provider.GetRequiredService<IHarnessOutput>(),
+            provider.GetRequiredService<IProcessIdentity>(),
+            provider.GetRequiredService<IHostPlatform>(),
+            () => SetUpHolds.PathFor(provider.GetRequiredService<IHostPlatform>(), provider.GetRequiredService<IHarnessOutput>())));
+        services.AddSingleton<ISetUpService, SetUpService>();
+        services.AddSingleton<LegSetUps>();
         services.AddSingleton<IAnchorCitationService, AnchorCitationService>();
         services.AddSingleton<ILineEndingService, LineEndingService>();
         services.AddSingleton<ICiJobSource, GhCiJobSource>();

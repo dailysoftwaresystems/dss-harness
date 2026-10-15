@@ -168,6 +168,12 @@ public sealed record LegEntry
     public Hosts.DeveloperEnvironmentFact? DeveloperEnvironment { get; init; }
 
     /// <summary>
+    /// What the leg did with each set-up its work named, where its run was asked to set up: how each came up for it, and
+    /// how it let go of it. Named on its line with whatever verdict it reached.
+    /// </summary>
+    public IReadOnlyList<SetUps.SetUpFact> SetUps { get; init; } = [];
+
+    /// <summary>
     /// How the leg's machine took it, where it is heavy and that machine declares admission: how long it waited, and
     /// the memory in use it started at. An admitted leg's line names both, whatever verdict it then reached; a leg not
     /// admitted says why as its detail.
@@ -281,6 +287,12 @@ public sealed class LegLedger(IHarnessOutput output, string commandName, bool di
     /// </summary>
     private readonly Dictionary<string, HostId> _where = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// What each leg did with its set-ups, as it let the last of them go: put on the leg's line as it is recorded, and
+    /// said in the run's own where the leg ends with none - stopped, its work never reaching a verdict.
+    /// </summary>
+    private readonly Dictionary<string, IReadOnlyList<SetUps.SetUpFact>> _setUps = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>The command every line is reported under, so interleaved output stays attributable.</summary>
     public string CommandName => _commandName;
 
@@ -351,9 +363,27 @@ public sealed class LegLedger(IHarnessOutput output, string commandName, bool di
     }
 
     /// <summary>
+    /// Keeps what <paramref name="leg"/> did with its set-ups once it let the last go, whatever ended its work: its line
+    /// says it as it is recorded, and where it is never recorded, the run's last line does.
+    /// </summary>
+    /// <param name="leg">The leg.</param>
+    /// <param name="facts">What it did with each.</param>
+    public void SetUpsEnded(string leg, IReadOnlyList<SetUps.SetUpFact> facts)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(leg);
+        ArgumentNullException.ThrowIfNull(facts);
+
+        lock (_gate)
+        {
+            _setUps[leg] = facts;
+        }
+    }
+
+    /// <summary>
     /// Records a leg's verdict, and says it - unless the machine that dispatched it here says so itself. A leg is
     /// recorded exactly once; recording it twice is a defect, because the second entry would give one leg two verdicts
-    /// in a table that promises one.
+    /// in a table that promises one. What it did with its set-ups (<see cref="SetUpsEnded"/>) goes on its line, whatever
+    /// made that line.
     /// </summary>
     /// <param name="entry">The leg's line.</param>
     /// <exception cref="InvalidOperationException">The leg was already recorded.</exception>
@@ -368,6 +398,12 @@ public sealed class LegLedger(IHarnessOutput output, string commandName, bool di
                 throw new InvalidOperationException($"Leg '{entry.Leg}' already has a verdict in this run's ledger.");
             }
 
+            // Its work may have ended in an exception, its line made from that by whoever caught it.
+            if (entry.SetUps.Count == 0 && _setUps.GetValueOrDefault(entry.Leg) is { Count: > 0 } facts)
+            {
+                entry = entry with { SetUps = facts };
+            }
+
             _entries.Add(entry);
         }
 
@@ -377,7 +413,7 @@ public sealed class LegLedger(IHarnessOutput output, string commandName, bool di
             return;
         }
 
-        var said = LedgerReport.Marked(entry.Detail, entry.Tree, [], entry.Compilers, entry.DeveloperEnvironment, entry.Admission, testCountNote: null);
+        var said = LedgerReport.Marked(entry.Detail, entry.Tree, [], entry.Compilers, entry.DeveloperEnvironment, entry.SetUps, entry.Admission, testCountNote: null);
 
         Transition(entry.Leg, Verdicts.Display(entry.Verdict) + (said.Length > 0 ? $" ({said})" : string.Empty));
 
@@ -403,5 +439,18 @@ public sealed class LegLedger(IHarnessOutput output, string commandName, bool di
     /// How many times longer than the same phase on a sibling leg a phase may take before its
     /// timings are marked suspect; zero or less disables the mark.
     /// </param>
-    public LedgerReport Build(double durationWarningFactor) => LedgerReport.From(Entries, durationWarningFactor);
+    public LedgerReport Build(double durationWarningFactor)
+    {
+        lock (_gate)
+        {
+            // A leg that ended with no line - stopped - still did what it did with its set-ups, and one it left running
+            // runs on after the run.
+            var lineless = _setUps
+                .Where(pair => !_entries.Any(entry => string.Equals(entry.Leg, pair.Key, StringComparison.OrdinalIgnoreCase)))
+                .SelectMany(pair => pair.Value.Select(fact => (pair.Key, fact)))
+                .ToList();
+
+            return LedgerReport.From([.. _entries], durationWarningFactor, lineless);
+        }
+    }
 }

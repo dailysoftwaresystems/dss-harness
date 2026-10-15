@@ -75,6 +75,9 @@ public sealed record LedgerLine(
     /// <summary>The developer environment the leg's processes started in, where it was set up.</summary>
     public Hosts.DeveloperEnvironmentFact? DeveloperEnvironment { get; init; }
 
+    /// <summary>What the leg did with each set-up its work named, as <see cref="LegEntry.SetUps"/> says.</summary>
+    public IReadOnlyList<SetUps.SetUpFact> SetUps { get; init; } = [];
+
     /// <summary>How the leg's machine took it, as <see cref="LegEntry.Admission"/> says.</summary>
     public AdmissionFact? Admission { get; init; }
 
@@ -134,11 +137,15 @@ public sealed class LedgerReport
     /// <summary>Tells each text as it was written: a document read on the machine that wrote it.</summary>
     private static readonly Func<string, string> AsWritten = text => text;
 
-    private LedgerReport(IReadOnlyList<LedgerLine> lines)
+    private LedgerReport(IReadOnlyList<LedgerLine> lines, IReadOnlyList<(string Leg, SetUps.SetUpFact SetUp)> lineless)
     {
         Lines = lines;
+        Lineless = lineless;
         Verdict = Verdicts.Worst(lines.Select(line => line.Verdict));
     }
+
+    /// <summary>What each leg that ended with no line - stopped before its work reached a verdict - did with its set-ups.</summary>
+    public IReadOnlyList<(string Leg, SetUps.SetUpFact SetUp)> Lineless { get; }
 
     /// <summary>One row per leg, in the order the legs were recorded.</summary>
     public IReadOnlyList<LedgerLine> Lines { get; }
@@ -202,7 +209,7 @@ public sealed class LedgerReport
         {
             // Not a red verdict. A caller reading a failure code for an interrupted run would
             // report the code as broken when nothing reached a verdict at all.
-            return $"interrupted after {ReportText.Counted(Lines.Count, "leg")}";
+            return string.Join("; ", [$"interrupted after {ReportText.Counted(Lines.Count, "leg")}", .. LeftRunningSaid]);
         }
 
         if (!Passed)
@@ -218,8 +225,14 @@ public sealed class LedgerReport
                 .Select(group => $"{group.Count()} {Verdicts.Display(group.Key)}")
                 .ToList();
 
-            return $"{Verdicts.Display(Verdict)}: {worst} of {ReportText.Counted(Lines.Count, "leg")}"
-                + (others.Count == 0 ? string.Empty : $"; {string.Join(", ", others)}");
+            // What a leg left running is said whatever the verdicts: it runs on after the run, failed or not.
+            return string.Join(
+                "; ",
+                [
+                    $"{Verdicts.Display(Verdict)}: {worst} of {ReportText.Counted(Lines.Count, "leg")}",
+                    .. others.Count == 0 ? Array.Empty<string>() : [string.Join(", ", others)],
+                    .. LeftRunningSaid,
+                ]);
         }
 
         if (ExitCodeGiven(cancelled, unfinished) == HarnessExit.Success)
@@ -239,10 +252,19 @@ public sealed class LedgerReport
         [
             .. withoutWork.Count > 0 ? [$"{withoutWork.Count} did no work: {string.Join(", ", withoutWork)}"] : Array.Empty<string>(),
             .. stopped.Count > 0 ? [$"{stopped.Count} stopped before finishing: {string.Join(", ", stopped)}"] : Array.Empty<string>(),
+            .. LeftRunningSaid,
         ];
 
         return $"{Reported} of {ReportText.Counted(Lines.Count, "leg")} passed; {string.Join("; ", unreported)}";
     }
+
+    /// <summary>Each set-up a leg brought up and did not bring down, as the run's last line says it, and how to.</summary>
+    /// <remarks>
+    /// Said wherever the run ends - its last line, or after the refusal that ended it - since a set-up left running runs
+    /// on after the run whatever ended it.
+    /// </remarks>
+    public IReadOnlyList<string> LeftRunningSaid
+        => [.. LeftRunning.Select(left => $"{left.Leg} did not bring set-up '{left.SetUp.Name}' down; {SetUps.SetUpFact.Remedy(left.SetUp.Name, left.SetUp.Inputs)}")];
 
     /// <summary>Whether every leg reached a verdict that is not a failure.</summary>
     public bool Passed => !Lines.Any(line => Verdicts.IsFailure(line.Verdict));
@@ -260,15 +282,26 @@ public sealed class LedgerReport
     /// <summary>How many legs actually reached a verdict of their own.</summary>
     public int Reported => Lines.Count - WithoutVerdict.Count;
 
-    /// <summary>Whether every leg with a row reached a verdict of its own.</summary>
+    /// <summary>
+    /// Whether every leg with a row reached a verdict of its own, and brought down every set-up it brought up.
+    /// </summary>
     /// <remarks>
     /// Orthogonal to <see cref="Passed"/> on purpose: "did everything report" and "did anything
     /// fail" are separate questions, and folding them into one boolean made a run where all eight
     /// legs ran and two failed report as incomplete — which reads as a run that did not finish,
-    /// when it finished and found bugs. Interruption is not visible from the rows at all, so the
+    /// when it finished and found bugs. A set-up left up is a change begun and not finished, whatever
+    /// the verdicts: what it started may still run, and bringing it down finishes it. Interruption is not visible from the rows at all, so the
     /// caller that can see it supplies it to <see cref="ExitCodeGiven"/> and <see cref="ToJson(bool, IReadOnlyList{string}, string, Func{string, string}, RunId, string)"/>.
     /// </remarks>
-    public bool Complete => WithoutVerdict.Count == 0;
+    public bool Complete => WithoutVerdict.Count == 0 && LeftRunning.Count == 0;
+
+    /// <summary>
+    /// Each set-up a leg brought up and did not bring down, with the leg - one with a line, or one stopped with none:
+    /// what it started may still run, so the run did not finish what it began, whatever its legs' verdicts -
+    /// <see cref="HarnessExit.Incomplete"/> where nothing failed.
+    /// </summary>
+    public IReadOnlyList<(string Leg, SetUps.SetUpFact SetUp)> LeftRunning
+        => [.. Lines.SelectMany(line => line.SetUps.Select(setUp => (Leg: line.Leg, SetUp: setUp))).Concat(Lineless).Where(left => left.SetUp.LeftRunning)];
 
     /// <summary>
     /// Builds the report, marking a phase that took more than
@@ -277,7 +310,11 @@ public sealed class LedgerReport
     /// </summary>
     /// <param name="entries">Each leg's line.</param>
     /// <param name="durationWarningFactor">The factor; zero or less disables the mark.</param>
-    public static LedgerReport From(IReadOnlyList<LegEntry> entries, double durationWarningFactor)
+    /// <param name="lineless">What each leg stopped with no line did with its set-ups; none where none was.</param>
+    public static LedgerReport From(
+        IReadOnlyList<LegEntry> entries,
+        double durationWarningFactor,
+        IReadOnlyList<(string Leg, SetUps.SetUpFact SetUp)>? lineless = null)
     {
         ArgumentNullException.ThrowIfNull(entries);
 
@@ -319,6 +356,7 @@ public sealed class LedgerReport
                     LogTail = entry.LogTail,
                     Compilers = entry.Compilers,
                     DeveloperEnvironment = entry.DeveloperEnvironment,
+                    SetUps = entry.SetUps,
                     Admission = entry.Admission,
                     Space = entry.Space,
                     KeptOutputs = entry.KeptOutputs,
@@ -331,7 +369,8 @@ public sealed class LedgerReport
                     TestCountNote = counts.GetValueOrDefault(entry.Leg),
                 };
             }),
-        ]);
+        ],
+        lineless ?? []);
     }
 
     /// <summary>
@@ -391,7 +430,7 @@ public sealed class LedgerReport
             line.Leg,
             Verdicts.Display(line.Verdict),
             FormatDuration(line.Duration),
-            Marked(line.Detail, line.Tree, line.TimingNotes, line.Compilers, line.DeveloperEnvironment, line.Admission, line.TestCountNote),
+            Marked(line.Detail, line.Tree, line.TimingNotes, line.Compilers, line.DeveloperEnvironment, line.SetUps, line.Admission, line.TestCountNote),
             leg,
             verdict,
             duration)));
@@ -616,6 +655,20 @@ public sealed class LedgerReport
             // the same boolean only when every leg ran. A run that was interrupted, or that left a
             // leg running, reported on fewer legs than it was asked about whatever its rows say.
             Complete = !stopped && !cancelled && Complete && unfinished.Count == 0,
+
+            // Each set-up a leg left running - on its line, or stopped with none - and the command that brings it down:
+            // a script told the run did not complete is told what it left behind.
+            SetUpsLeftRunning = LeftRunning.Count == 0
+                ? null
+                : LeftRunning.Select(left => new
+                {
+                    left.Leg,
+                    SetUp = left.SetUp.Name,
+                    left.SetUp.Up,
+                    left.SetUp.Inputs,
+                    left.SetUp.Detail,
+                    Remedy = SetUps.SetUpFact.Remedy(left.SetUp.Name, left.SetUp.Inputs),
+                }),
             Legs = Lines.Select(line => new
             {
                 line.Leg,
@@ -669,6 +722,9 @@ public sealed class LedgerReport
                 DeveloperEnvironment = line.DeveloperEnvironment is { } environment
                     ? environment with { InstallationPath = show(environment.InstallationPath) }
                     : null,
+
+                // Only where the run was asked to set up and the leg's work named a set-up: how each came up, and went.
+                SetUps = line.SetUps.Count > 0 ? line.SetUps : null,
 
                 // Only where the leg is heavy and its machine declares admission: taken or not, how long it waited,
                 // the memory in use, the room it claimed, what held the slots or claimed the room where it was not taken
@@ -942,6 +998,7 @@ public sealed class LedgerReport
     /// <param name="notes">Why its timings are suspect, if they are.</param>
     /// <param name="compilers">The compilers CMake configured its build with.</param>
     /// <param name="developerEnvironment">The developer environment its processes started in, if one was set up.</param>
+    /// <param name="setUps">What it did with each set-up its work named.</param>
     /// <param name="admission">How its machine took it, where it is heavy and the machine declares admission.</param>
     /// <param name="testCountNote">Why its test count stands apart from its siblings', if it does.</param>
     /// <remarks>
@@ -954,6 +1011,7 @@ public sealed class LedgerReport
         IReadOnlyList<string> notes,
         IReadOnlyList<Build.CompilerFact> compilers,
         Hosts.DeveloperEnvironmentFact? developerEnvironment,
+        IReadOnlyList<SetUps.SetUpFact> setUps,
         AdmissionFact? admission,
         string? testCountNote)
     {
@@ -980,6 +1038,8 @@ public sealed class LedgerReport
         {
             parts.Add(developerEnvironment.Describe());
         }
+
+        parts.AddRange(setUps.Select(setUp => setUp.Describe()));
 
         // A leg not let start says why as its detail; one let start says how, beside it.
         if (admission?.Describe() is { } admitted)

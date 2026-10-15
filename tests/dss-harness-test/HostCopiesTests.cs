@@ -26,6 +26,22 @@ public sealed class HostCopiesTests
     private static readonly HostId Mac = HostId.Ssh("mac");
 
     /// <summary>
+    /// A worktree's copy is kept beside the main checkout's copy, so that copy is the one it is of; any other copy - the
+    /// main checkout's, or one named as no worktree's copy is - is its own.
+    /// </summary>
+    [Fact]
+    public void TheMainCopyOfAWorktreesCopy_IsTheCopyBesideIt_AndOfAnyOtherCopy_ItsOwn()
+    {
+        var main = Path.Combine(TestHost.TemporaryRoot, "host", "repo");
+
+        Assert.Equal(main, HostCopies.MainCopyOf(main + ".worktree-o1--xa"));
+        Assert.Equal(main, HostCopies.MainCopyOf(main + ".worktree-feature" + Path.DirectorySeparatorChar));
+        Assert.Equal(main, HostCopies.MainCopyOf(main));
+        Assert.Equal(main + ".worktree-My_Feature", HostCopies.MainCopyOf(main + ".worktree-My_Feature"));
+        Assert.Equal(main + ".worktree-", HostCopies.MainCopyOf(main + ".worktree-"));
+    }
+
+    /// <summary>
     /// The main checkout keeps the host's repositoryPath, and a worktree a copy of its own beside it, named for its
     /// directory as a worktree's name is spelt, whatever form the repositoryPath takes.
     /// </summary>
@@ -2443,6 +2459,86 @@ public sealed class HostCopiesTests
 
     private static async Task<HarnessLayout> LayoutAsync(HarnessFactory harness, TempDirectory temp)
         => (await harness.ContextLoader.LoadAsync(temp.Path, TestContext.Current.CancellationToken)).Layout;
+
+    /// <summary>
+    /// The workers an earlier version of this tool kept beside a tree are removed as the workers kept in it are: a free
+    /// one, and what a removal of one left aside, go; one a sweep of that version still claims, by the claim file beside
+    /// it, is left and keeps the removal from passing; one no sync made is somebody's; another tree's are not looked at.
+    /// </summary>
+    [Fact]
+    public async Task TheWorkersAnEarlierVersionKeptBesideATree_AreRemovedAsItsOwnAre()
+    {
+        using var hosts = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = new HarnessFactory();
+        var tree = hosts.Combine("repo");
+        string Former(string root, string name) => root + MutationWorkers.FormerFamily + name;
+        var free = Former(tree, "357e24cw-1");
+        var held = Former(tree, "357e24cw-2");
+        var somebodys = Former(tree, "357e24cs-1");
+        var aside = RemovalAside.Of(Former(tree, "357e24cw-3"));
+        var anothers = Former(hosts.Combine("repo2"), "357e24cw-1");
+
+        Directory.CreateDirectory(tree);
+
+        foreach (var made in new[] { free, held, anothers })
+        {
+            await Local(harness).CreateRootAsync(made, CopyMark.Complete, cancellationToken);
+            File.WriteAllText(Path.Combine(made, "main.c"), "int main;");
+        }
+
+        File.WriteAllText(Path.Combine(Directory.CreateDirectory(somebodys).FullName, "notes.txt"), "somebody's");
+        File.WriteAllText(Path.Combine(Directory.CreateDirectory(aside).FullName, "part.o"), "what a removal left");
+
+        var claims = new Claims { Held = { [held] = "run 20261007-101500-abcd, process 4242 on this machine" } };
+        var removed = await Local(harness, claims: claims).RemoveFormerWorkersAsync(tree, cancellationToken: cancellationToken);
+
+        Assert.Equal([free, aside], removed.Removed.Select(worker => worker.Path));
+        Assert.Equal(
+            [(somebodys, WorkerLeftAs.Somebodys), (held, WorkerLeftAs.Held)],
+            removed.Left.Select(worker => (worker.Path, worker.As)));
+        Assert.Equal(LegVerdict.RefusedLocked, removed.Verdict);
+        Assert.All(new[] { free, aside }, path => Assert.False(Directory.Exists(path), path));
+        Assert.All(new[] { held, somebodys, anothers }, path => Assert.True(Directory.Exists(path), path));
+    }
+
+    /// <summary>
+    /// A sweep another machine sent here works in a copy of its own kept in the tree's .legs, its workers in that copy: a
+    /// removal of the tree's workers meets them as the tree's own - a free one removed, one a live sweep claims left, which
+    /// keeps the tree - and a copy no sync made is not looked in.
+    /// </summary>
+    [Fact]
+    public async Task TheWorkersOfACopyKeptInTheTreesLegs_AreRemovedAsTheTreesOwn()
+    {
+        using var hosts = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = new HarnessFactory();
+        var tree = hosts.Combine("repo");
+        var copy = HarnessLayout.InSlot(tree, HarnessLayout.LegsDirectoryName, "357e24c");
+        var somebodys = HarnessLayout.InSlot(tree, HarnessLayout.LegsDirectoryName, "1234567");
+        var free = Worker(copy, "357e24cw-1");
+        var held = Worker(copy, "357e24cw-2");
+        var unlooked = Worker(somebodys, "1234567w-1");
+
+        await Local(harness).CreateRootAsync(tree, CopyMark.Complete, cancellationToken);
+        await Local(harness).CreateRootAsync(copy, CopyMark.Complete, cancellationToken);
+
+        foreach (var made in new[] { free, held, unlooked })
+        {
+            await Local(harness).CreateRootAsync(made, CopyMark.Complete, cancellationToken);
+            File.WriteAllText(Path.Combine(made, "main.c"), "int main;");
+        }
+
+        var claims = new Claims { Held = { [held] = "run 20261007-101500-abcd, process 4242 on this machine" } };
+        var removed = await Local(harness, claims: claims).RemoveWorkersAsync(tree, cancellationToken: cancellationToken);
+
+        Assert.Equal([free], removed.Removed.Select(worker => worker.Path));
+        Assert.Equal(held, removed.Kept?.Path);
+        Assert.Equal(LegVerdict.RefusedLocked, removed.Verdict);
+        Assert.False(Directory.Exists(free));
+        Assert.True(Directory.Exists(held));
+        Assert.True(Directory.Exists(unlooked));
+    }
 
     /// <summary>Where the mutation worker kept under <paramref name="name"/> in <paramref name="tree"/> is.</summary>
     private static string Worker(string tree, string name) => HarnessLayout.InSlot(tree, HarnessLayout.MutationsDirectoryName, name);

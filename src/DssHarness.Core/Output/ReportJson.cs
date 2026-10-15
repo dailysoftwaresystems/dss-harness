@@ -28,7 +28,7 @@ public static class ReportJson
     /// <summary>
     /// The document a command whose document carries the code it exits with and the line it ends on only where it stops -
     /// list-orchestrator, list-worktree, legs, install-missing-tools, check-ci-legs, check-anchor-citations,
-    /// check-anchor-balance and fix-line-endings - answers with where it stops before it has anything of its own to say:
+    /// check-anchor-balance, fix-line-endings, up and down - answers with where it stops before it has anything of its own to say:
     /// that code and that line, then the document's own members, as <paramref name="empty"/> holds them holding nothing.
     /// </summary>
     /// <param name="exitCode">The code the command exits with.</param>

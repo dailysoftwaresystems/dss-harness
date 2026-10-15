@@ -79,6 +79,7 @@ internal static class RunCommand
         command.Options.Add(LocalCopyOption);
         command.Options.Add(InPlaceOption);
         command.Options.Add(DispatchOptions.Here);
+        command.Options.Add(DispatchOptions.SetUp);
         GlobalOptions.AddTo(command);
 
         CommandRunner.Wire(command, async (context, run, cancellationToken) =>
@@ -199,7 +200,7 @@ internal static class RunCommand
             // phase naming what the build makes - {product}, {buildDir} or one of the leg's compilers - and never
             // tested: a host needs cmake for a runner that measures a build product, and not for one that only runs
             // a script. Decided once, here, for every leg: whether a leg builds is this workload read for its system.
-            var workload = LegWorkload.ForRunner(runner, file?.File, checks);
+            var workload = LegWorkload.ForRunner(runner, file?.File, checks) with { SetUp = arguments.GetValue(DispatchOptions.SetUp) };
 
             // A leg it would build that cannot be built, a {product} this runner's steps or phases name that no one
             // declared file fills in, and a compiler they name on a leg no build identifies one for, refused here as
@@ -347,8 +348,7 @@ internal static class RunCommand
         return declared is null
             ? throw new HarnessException(
                 HarnessExit.UsageError,
-                $"'{runnerName}' is not declared under predefinedRunners. Declared: "
-                + $"{string.Join(", ", config.PredefinedRunners.Keys.Order(StringComparer.Ordinal))}.")
+                DeclaredName.NotDeclared(runnerName, "predefinedRunners", config.PredefinedRunners.Keys))
             : config.PredefinedRunners[declared];
     }
 

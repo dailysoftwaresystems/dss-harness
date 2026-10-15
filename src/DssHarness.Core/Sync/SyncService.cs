@@ -37,6 +37,13 @@ public sealed record SyncOptions(bool DryRun = false, IReadOnlyList<string>? Ado
     public bool Adoptable { get; init; } = true;
 
     /// <summary>
+    /// The host's copy of the tree the copy is kept in, in its .legs, where it is one a leg works in of its own there;
+    /// <see langword="null"/> for any other. The worktree's copy recorded is that one, which the copy kept in it goes
+    /// with; the run syncs the tree to it first where it is not there yet.
+    /// </summary>
+    public string? KeptIn { get; init; }
+
+    /// <summary>
     /// The run whose artifacts to carry to each host instead of syncing the tree, or
     /// <see langword="null"/> for an ordinary sync.
     /// </summary>
@@ -821,14 +828,15 @@ public sealed class SyncService(
                 context.Layout.WorktreesDirectoryUnder(context.Config.Worktrees.Root),
                 context.Layout.RepositoryRoot,
                 _platform.PathComparison);
-            var claim = new HostCopyEntry(name, transport.Host.ToString(), destinationRoot, Path.GetFullPath(context.Layout.RepositoryRoot));
+            // A leg's own copy kept in the worktree's copy on the host goes with that copy: the copy is the one recorded.
+            var claim = new HostCopyEntry(name, transport.Host.ToString(), options.KeptIn ?? destinationRoot, Path.GetFullPath(context.Layout.RepositoryRoot));
             var record = new HostCopyRecord(_fileSystem, _platform.PathComparison);
 
             if ((options.DryRun ? record.Holder(context.Layout, claim) : record.Claim(context.Layout, claim)) is { } holder)
             {
                 throw new HarnessException(
                     HarnessExit.Refused,
-                    $"{transport.Host}: '{destinationRoot}' is the copy of the worktree at '{holder}', which is kept under "
+                    $"{transport.Host}: '{options.KeptIn ?? destinationRoot}' is the copy of the worktree at '{holder}', which is kept under "
                     + $"the same name, '{name}', and still exists: synced by both, each would replace the tree the other "
                     + "put there. Rename one of them, or delete the other. Nothing was changed.");
             }
@@ -1908,11 +1916,14 @@ public sealed class SyncService(
             ? ("Finishing it", "would remove nothing further")
             : ("Taking it over", "would remove nothing that is there");
 
-        // A copy that cannot be adopted - a leg's own, on this machine - says what a person can do instead: for one of
-        // those, the way to run without it.
+        // A copy that cannot be adopted - a leg's own, on this machine or kept in a host's copy - says what a person can do
+        // instead: on this machine, move it or run the leg without a copy of its own; on a host, where a sweep always works
+        // in one, move it.
         if (!options.Adoptable)
         {
-            var remedy = "It is a directory on this machine: move it away, or run the leg with --in-place. Nothing was changed.";
+            var remedy = transport.Host.Kind == Hosts.HostKind.Local
+                ? "It is a directory on this machine: move it away, or run the leg with --in-place. Nothing was changed."
+                : $"It is where a leg's own copy is kept on {transport.Host}: move it away there. Nothing was changed.";
 
             return plan.Overwrites.Count == 0 && plan.Deletes.Count == 0 && links.Count == 0
                 ? $"{opening} {remedy}"

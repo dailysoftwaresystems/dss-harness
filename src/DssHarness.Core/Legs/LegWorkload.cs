@@ -54,6 +54,71 @@ public sealed record LegWorkload(bool Build, bool Test, IReadOnlyList<string> Pr
     public IReadOnlyList<BuildCause> BuiltBy { get; init; } = [];
 
     /// <summary>
+    /// The set-ups its runner, and each runner its run checks name, says its legs bring up around their work, where the
+    /// run is asked to set up (<see cref="SetUp"/>). A test invocation's own are read from the leg's test settings
+    /// (<see cref="Test"/>); every leg's, by <see cref="SetUpsOf"/>.
+    /// </summary>
+    public IReadOnlyList<SetUpUse> SetUps { get; init; } = [];
+
+    /// <summary>
+    /// Whether the run was asked to set up (<c>--set-up</c>): each leg brings up the set-ups its work names before that
+    /// work starts, on the machine that runs it, and down after it - which its host must then have the programs for.
+    /// Never otherwise.
+    /// </summary>
+    public bool SetUp { get; init; }
+
+    /// <summary>
+    /// The set-ups <paramref name="leg"/> brings up for this work, where the run is asked to set up; none otherwise. Its
+    /// runner's and its run checks' (<see cref="SetUps"/>), then, where it tests, its test invocation's for its own
+    /// system - each named as <c>setUp</c> declares it, in the order named, and once where two name it alike. Two naming
+    /// it with other values are both kept, for the run to refuse.
+    /// </summary>
+    /// <param name="config">The configuration.</param>
+    /// <param name="leg">The leg.</param>
+    /// <remarks>
+    /// The one answer the survey, the refusals before a run and the run itself read, so a host is never asked for a
+    /// program of a set-up its leg does not bring up, nor a leg brings up one its host was not asked about.
+    /// </remarks>
+    public IReadOnlyList<SetUpUse> SetUpsOf(HarnessConfig config, LegConfig leg)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        ArgumentNullException.ThrowIfNull(leg);
+
+        if (!SetUp)
+        {
+            return [];
+        }
+
+        IEnumerable<SetUpUse> named = SetUps;
+
+        if (Test && Testing.TestInvocationResolver.SettingsFor(config, leg, VariantKey.ProjectFor(config, leg)) is { } settings)
+        {
+            named = named.Concat(Testing.TestInvocationResolver.InvocationFor(settings, leg.Os).SetUp ?? []);
+        }
+
+        return [.. named.Select(use => Resolved(config, use)).Distinct()];
+    }
+
+    /// <summary>
+    /// <paramref name="use"/> as the set-up it names is declared, giving every input the value it takes - what it gives,
+    /// else the default - so two uses that come to the same values are one, however each writes them. One whose values
+    /// cannot be had is left as written, for the run to refuse by name.
+    /// </summary>
+    private static SetUpUse Resolved(HarnessConfig config, SetUpUse use)
+    {
+        var name = DeclaredName.In(config.SetUp.Keys, use.Name) ?? use.Name;
+
+        if (!config.SetUp.TryGetValue(name, out var setUp))
+        {
+            return new SetUpUse { Name = name, With = use.With };
+        }
+
+        var values = SetUpValues.Resolve(name, setUp, use.With, $"setUp '{name}'", out var problems);
+
+        return new SetUpUse { Name = name, With = problems.Count == 0 ? new Dictionary<string, string>(values, StringComparer.OrdinalIgnoreCase) : use.With };
+    }
+
+    /// <summary>
     /// Whether the command starts any program on the leg's host. A copy starts none, so nothing has to
     /// be set up there for it - not even the developer environment the leg's toolchain names.
     /// </summary>
@@ -80,6 +145,14 @@ public sealed record LegWorkload(bool Build, bool Test, IReadOnlyList<string> Pr
     /// that sent it there, and its sweep runs one worker.
     /// </summary>
     public bool AdmitsEachUnit { get; init; }
+
+    /// <summary>
+    /// Whether a leg another machine runs works in a copy of its own there, kept in the host's copy of its tree
+    /// (<see cref="LegTrees.For"/>), rather than in that copy: so a command that holds its tree for hours - a sweep -
+    /// never holds the copy other runs sync and build in, nor waits for one of them to let it go. Its copy is made from
+    /// this machine's reading as the host's copy is, and is the variant's own.
+    /// </summary>
+    public bool CopyOnHosts { get; init; }
 
     /// <summary>
     /// Whether what the command builds is the leg's own tree - its build directory, or the first worker in it of a
@@ -168,6 +241,7 @@ public sealed record LegWorkload(bool Build, bool Test, IReadOnlyList<string> Pr
             UnderOwnPath = [.. everywhere.Where(start => start.OwnPath).Select(start => start.Program)],
             OnlyOn = [.. starts.Where(start => start.RunOn.Count > 0)],
             BuiltBy = causes,
+            SetUps = [.. (runner.SetUp ?? []).Concat(checking.SelectMany(check => check.Runner.SetUp ?? [])).Distinct()],
             DeclaredHeavy = own.Everywhere || checked_.Any(check => check.Unread || check.Steps.Everywhere),
             HeavyOnlyOn = [.. own.OnlyOn.Concat(checked_.SelectMany(check => check.Steps.OnlyOn)).Distinct(StringComparer.OrdinalIgnoreCase)],
         };

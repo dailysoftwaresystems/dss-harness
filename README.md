@@ -91,17 +91,19 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `update-tool [--wait] [--tool-path <directory>]` | Update this machine's installed DssHarness to the newest release, only while no other `dssharness` process runs here: refused naming each (13), or waited for with `--wait`; on Windows run it from beside the installed tool, as above (`help legs`) |
 | `sync` | Put a host's copy of this tree in step with it, deletions included: each worktree has a copy of its own; `--dry-run` lists what it would write and delete and exits as the sync would; `--pull <path>` instead brings a file back from it, or every file below a directory named with a `/` at its end |
 | `build [--legs a,b] [--time]` | Build every selected leg, in its own variant-keyed build directory |
-| `test [--legs a,b] [--time]` | Build and test every selected leg, with a witness for each verdict |
-| `run <runner> [--legs a,b] [--time] [--input name=value]` | Run a predefined runner across the legs it declares, giving its action's inputs values for this run. A run line names what only the tool knows of a leg - its build directory, the file its build makes, and the compiler its build identified, `{compiler_C}` or `{compiler_CXX}`, which is gcc on one leg and cl on another - and a step naming one of those has its leg built first (`help runners`) |
+| `test [--legs a,b] [--time] [--set-up]` | Build and test every selected leg, with a witness for each verdict; `--set-up` brings up the set-ups its test invocation names around each leg's work, on the machine that runs it, and down after (`help setups`) |
+| `run <runner> [--legs a,b] [--time] [--input name=value] [--set-up]` | Run a predefined runner across the legs it declares, giving its action's inputs values for this run; `--set-up` brings up the set-ups the runner and its run checks' runners name around each leg's work, and down after (`help setups`). A run line names what only the tool knows of a leg - its build directory, the file its build makes, and the compiler its build identified, `{compiler_C}` or `{compiler_CXX}`, which is gcc on one leg and cl on another - and a step naming one of those has its leg built first (`help runners`) |
 | `check-mutations [--legs a,b] [--arms a,b] [--self-test] [--list] [--pending]` | Prove each selected leg's tests can fail: in worker copies of its tree, mutate each arm the registry declares, build it, witness every object depending on the site rebuilt, run its test binary whole and judge what reddened; `--self-test` sweeps the fixture the tool carries instead, through each leg's toolchain; `--list` says, without sweeping, each arm's last verdict on each leg and whether anything it was judged on has moved - of what a test binary reads at run time, only the files `mutations.runReads` names for its runner; `--pending` sweeps only the arms with no passed that still holds, and with nothing pending passes, sweeping nothing (`help mutations`) |
-| `clean [--legs a,b] [--dry-run]` | Remove each selected leg's build directory, the mutation workers its sweeps and self-tests keep in its tree, and the copies of its tree it works in on this machine (`.legs`), wherever the leg runs, so a full disk can be freed; `--dry-run` says what each holds and exits as the clean would (`help space`) |
+| `clean [--legs a,b] [--dry-run] [--former-workers]` | Remove each selected leg's build directory, the mutation workers its sweeps and self-tests keep in its tree, and the copies of its tree it works in (`.legs`), wherever the leg runs, so a full disk can be freed; `--dry-run` says what each holds and exits as the clean would; `--former-workers` removes only the workers an earlier version kept beside the repository's trees, here and on each host (`help space`) |
+| `up <name> [--input name=value] [--json]` | Bring a set-up up on this machine: run the `up` command line `setUp` declares for it, at the root of the tree - a program and its arguments, no shell, a line per platform where they differ, its declared inputs filled in with what `--input` gives over their defaults (`help setups`) |
+| `down <name> [--input name=value] [--json]` | Bring a set-up down: run its `down` command line there, with the values it was brought up with; refused (13) while a leg of a run on this machine still uses it in that tree - in any of the repository's, for one the machine shares - whose last leg brings it down |
 | `host-exec --ssh <name> \| --wsl [<distro>] -- <command>` | Run a DssHarness command on an ssh host or in a WSL distribution |
-| `help [topic]` | Explain exit codes, configuration, legs, disk space, heavy-leg admission, worktrees, orchestrators, anchors, layout, secrets, tools, runners, verdicts, mutation testing and CI legs |
+| `help [topic]` | Explain exit codes, configuration, legs, disk space, heavy-leg admission, worktrees, orchestrators, anchors, layout, secrets, tools, runners, set-ups, verdicts, mutation testing and CI legs |
 
 Every command takes `-C, --directory <dir>` and `-v, --verbose`.
 
 Zero means every selected leg reached a verdict and none failed. A run where nothing failed but
-some leg never reported exits `21` and names those legs: a leg that did no work proves nothing
+some leg never reported, or left a set-up it brought up running, exits `21` and names those legs: a leg that did no work proves nothing
 about the code, so it is never counted among the legs that passed. A command that changes an
 orchestrator or an agent exits `21` too when it stops part way - an agent closed and its worktree
 not yet removed, a fold or a hand-over half written, a move of an agent's base half made, an
@@ -230,10 +232,13 @@ A sweep keeps its workers in the tree it sweeps, and a leg that works in a copy 
 tree's `.legs`; either is refused (exit 13), nothing made, in a tree whose git does not ignore
 that slot: run `init` once in each repository and commit what it writes - each agent's branch
 needs that commit before it can sweep or have a leg work in a copy. Workers an earlier version kept
-beside a tree, `<tree>.mutation-*`, on this machine and on every host, are no longer known to the
-tool: find them with `ls -d <tree>.mutation-*` and delete them. `list-worktree` warns of one
-beside a worktree, and `delete-orchestrator` is refused (13) while one is beside an agent's
-worktree. Each worker's build is made once again.
+beside a tree, `<tree>.mutation-*`, on this machine and on every host, are no workers to a sweep:
+`clean --former-workers --dry-run` lists them with their sizes, beside each tree of the repository
+here and on each host a selected leg runs on, and beside each one deleted since, and
+`clean --former-workers` removes them - one a
+sweep of that version still claims is kept. Until then `list-worktree` warns of one beside a
+worktree, and `delete-orchestrator` is refused (13) while one is beside an agent's worktree. Each
+worker's build is made once again.
 
 Secrets and the run lock live only in the main checkout. A worktree receives the tracked
 part of `.harness-config` through git but never the ignored part, so both resolve back to

@@ -63,6 +63,12 @@ public sealed record PlacedLeg(
     /// <summary>Whether the leg works in a copy of its tree kept in the tree's own .legs on this machine.</summary>
     public bool LocalCopy { get; init; }
 
+    /// <summary>
+    /// The host's copy of the leg's tree that the copy the leg works in is kept in, in its .legs, where the leg works in
+    /// a copy of its own on another machine (<see cref="LegWorkload.CopyOnHosts"/>); <see langword="null"/> otherwise.
+    /// </summary>
+    public string? KeptIn { get; init; }
+
     /// <summary>Whether another machine's process runs the leg's work: a WSL distribution's, or an ssh host's.</summary>
     public bool Dispatched => Host.Host.Kind != HostKind.Local;
 
@@ -368,7 +374,7 @@ public static class LegRunPlan
                 continue;
             }
 
-            placed.Add(Place(context, placement.Leg, placement.Host, report.Here, report.LocalTrees, platform.PathComparison) with { Need = placement.Need });
+            placed.Add(Place(context, placement.Leg, placement.Host, report.Here, report.LocalTrees, report.CopyOnHosts, platform.PathComparison) with { Need = placement.Need });
         }
 
         RefuseSharedBuildDirectories(placed, platform);
@@ -403,7 +409,7 @@ public static class LegRunPlan
             [.. skipped.Select(entry => $"{entry.Leg}: {Verdicts.Display(entry.Verdict)}: {entry.Detail}")]);
     }
 
-    private static PlacedLeg Place(HarnessContext context, SelectedLeg selected, HostReport host, HostId? here, LocalTrees local, StringComparison comparison)
+    private static PlacedLeg Place(HarnessContext context, SelectedLeg selected, HostReport host, HostId? here, LocalTrees local, bool copyOnHosts, StringComparison comparison)
     {
         var config = context.Config;
         var leg = selected.Leg;
@@ -420,7 +426,7 @@ public static class LegRunPlan
         // in the tree's own .legs where this machine runs the leg and this run has it work in one. One answer, asked
         // here, so a path derived from the work's tree never names a directory the work never touches - and the room the
         // leg is placed by is reckoned for the tree its build is in.
-        var tree = LegTrees.For(context, leg, variant, host.Host, here, comparison, local);
+        var tree = LegTrees.For(context, leg, variant, host.Host, here, comparison, local, copyOnHosts);
 
         // Read under the name the reader knows the host by. A host running a leg another machine
         // dispatched to it is 'local' to itself, and 'local' in the configuration the two share is
@@ -442,6 +448,7 @@ public static class LegRunPlan
         {
             Named = named,
             LocalCopy = tree.LocalCopy,
+            KeptIn = tree.KeptIn,
         };
     }
 

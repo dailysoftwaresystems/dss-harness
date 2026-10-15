@@ -697,7 +697,8 @@ public static class TestInvocationResolver
             platform?.CountPattern ?? all?.CountPattern,
             platform?.WorkingDirectory ?? all?.WorkingDirectory,
             platform?.TestSet ?? all?.TestSet,
-            platform?.RemoteExcludes ?? all?.RemoteExcludes ?? []);
+            platform?.RemoteExcludes ?? all?.RemoteExcludes ?? [],
+            platform?.SetUp ?? all?.SetUp ?? []);
 }
 
 /// <summary>One test invocation, with every field decided.</summary>
@@ -716,6 +717,7 @@ public static class TestInvocationResolver
 /// <param name="WorkingDirectory">Where the runner starts, or null for the leg's tree root.</param>
 /// <param name="TestSet">Which of the project's test sets it runs, or null for the shared one.</param>
 /// <param name="RemoteExcludes">What a leg on a host reached through a transport leaves out beside what it is asked to.</param>
+/// <param name="SetUp">The set-ups a leg running it brings up around its work, where the run is asked to set up.</param>
 public sealed record ResolvedTestInvocation(
     string Runner,
     IReadOnlyList<string> Args,
@@ -731,7 +733,8 @@ public sealed record ResolvedTestInvocation(
     string? CountPattern,
     string? WorkingDirectory = null,
     string? TestSet = null,
-    IReadOnlyList<string>? RemoteExcludes = null);
+    IReadOnlyList<string>? RemoteExcludes = null,
+    IReadOnlyList<SetUpUse>? SetUp = null);
 
 /// <summary>A test invocation ready to start.</summary>
 /// <param name="Program">The runner to start.</param>

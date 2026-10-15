@@ -141,16 +141,29 @@ public sealed class ActionToolPolicy(IHostPlatform platform)
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRoot);
         ArgumentNullException.ThrowIfNull(started);
 
-        var declared = config.Tools.Count == 0
-            ? "nothing is declared under 'tools'"
-            : $"declared: '{string.Join("', '", config.Tools.Select(tool => tool.Name))}'";
-
         return
         [
             .. action.Steps
-                .SelectMany(step => step.Commands.Select(command => Problem(command, started(step, command), config.Tools, repositoryRoot, declared, redact ?? (text => text))))
+                .SelectMany(step => step.Commands.Select(command => Problem(command, started(step, command), config.Tools, repositoryRoot, redact ?? (text => text))))
                 .OfType<string>(),
         ];
+    }
+
+    /// <summary>
+    /// The end of a refusal of a program the configuration does not allow, after the program as its line names it:
+    /// <c>is not declared under 'tools' and is not a path inside the repository (declared: 'cmake', 'ninja')</c>.
+    /// </summary>
+    /// <remarks>One sentence for every line that starts a program - an action file's, a set-up's - so each is refused alike.</remarks>
+    /// <param name="tools">The tools the configuration declares.</param>
+    public static string Undeclared(IReadOnlyList<ToolConfig> tools)
+    {
+        ArgumentNullException.ThrowIfNull(tools);
+
+        var declared = tools.Count == 0
+            ? "nothing is declared under 'tools'"
+            : $"declared: '{string.Join("', '", tools.Select(tool => tool.Name))}'";
+
+        return $"is not declared under 'tools' and is not a path inside the repository ({declared})";
     }
 
     /// <summary>What is wrong with one line, or <see langword="null"/> when what it starts may run.</summary>
@@ -159,7 +172,6 @@ public sealed class ActionToolPolicy(IHostPlatform platform)
         (string Program, string WorkingDirectory) started,
         IReadOnlyList<ToolConfig> tools,
         string repositoryRoot,
-        string declared,
         Func<string, string> redact)
     {
         var line = $"line {command.LineNumber}: '{command.Program}'";
@@ -176,7 +188,7 @@ public sealed class ActionToolPolicy(IHostPlatform platform)
             return null;
         }
 
-        return $"{line}{ReadAs(command, started, repositoryRoot, redact)} is not declared under 'tools' and is not a path inside the repository ({declared}).";
+        return $"{line}{ReadAs(command, started, repositoryRoot, redact)} {Undeclared(tools)}.";
     }
 
     /// <summary>

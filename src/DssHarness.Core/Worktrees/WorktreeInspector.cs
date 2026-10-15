@@ -271,7 +271,7 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
     /// as every line that meets one says it: told by what it holds, never by its name.
     /// </summary>
     public const string UnrecordedWhy =
-        "what a removal leaves when git's record goes and something in the directory could not, or a copy an earlier version of this tool kept beside a worktree";
+        "what a removal leaves when git's record goes and something in the directory could not, or a copy an earlier version of this tool kept beside a worktree, which 'clean --former-workers' removes";
 
     /// <summary>
     /// What is said of <paramref name="directories"/>, each holding a .git entry of its own that git records no worktree

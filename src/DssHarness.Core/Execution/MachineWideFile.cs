@@ -12,7 +12,7 @@ namespace DssHarness.Core.Execution;
 /// Serialises one file's read-decide-write across every process on the machine.
 /// </summary>
 /// <remarks>
-/// The run lock, a log directory's owner and a machine's heavy-leg slots are each decided by
+/// The run lock, a log directory's owner, a machine's heavy-leg slots and the set-ups its legs hold are each decided by
 /// reading a file, deciding, and writing it back. Two runs that each read "free" would each write
 /// themselves in, and both would believe they held it. A named mutex is the machine-wide lock .NET offers on Windows, Linux and macOS alike,
 /// and it is the same mechanism the anchor registries are changed under.

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using DssHarness.Core.Runners;
+using DssHarness.Core.Hosts;
 
 namespace DssHarness.Core.Configuration;
 
@@ -52,7 +53,15 @@ internal static class MisplacedKeys
     }
 
     private static IEnumerable<string> Retired(JsonElement root)
-        => HostSections(root)
+        => (Property(root, Exec) is null
+                ? []
+                : new[]
+                {
+                    $"{Exec} is no longer read, and no command ever ran what it named. Declare each named command line "
+                    + "under setUp - \"setUp\": { \"<name>\": { \"up\": \"<command line>\", \"down\": \"<command line>\" } } - "
+                    + $"and run it with '{ToolPackage.Command} up <name>' and '{ToolPackage.Command} down <name>'.",
+                })
+            .Concat(HostSections(root)
             .Where(section => Property(section.Settings, CompilerCacheDirectory) is not null)
             .Select(section => $"{section.Name} {CompilerCacheDirectory} is no longer read. A compiler "
                 + "cache's store is that cache's own variable: declare it under the host's env - "
@@ -62,7 +71,13 @@ internal static class MisplacedKeys
                 .Where(section => Property(section.Test, TestConfigs) is not null)
                 .Select(section => $"{section.Name} test {TestConfigs} is not read, and never was: nothing built or "
                     + "tested the configs it named. Each leg builds and tests the one build config its 'config' names; "
-                    + "declare a leg for each config to test, and delete the key."));
+                    + "declare a leg for each config to test, and delete the key.")));
+
+    /// <summary>
+    /// A section of named commands that no command ever ran: refused even given empty, since a file that still says it
+    /// is a file whose reader takes it for something the tool does.
+    /// </summary>
+    private const string Exec = "exec";
 
     /// <summary>
     /// A test section's list of build configs to test: written by <c>init</c> and checked against
