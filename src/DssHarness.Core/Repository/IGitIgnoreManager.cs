@@ -14,8 +14,20 @@ public interface IGitIgnoreManager
     string ApplyManagedBlock(string? existingContent, IReadOnlyList<string> lines);
 
     /// <summary>
-    /// Applies the managed block to the file at <paramref name="path"/>.
-    /// Returns whether the file's content changed.
+    /// Applies the managed block to the file at <paramref name="path"/>, and says what that did to it.
     /// </summary>
-    bool Update(string path, IReadOnlyList<string> lines);
+    GitIgnoreUpdate Update(string path, IReadOnlyList<string> lines);
+}
+
+/// <summary>What <see cref="IGitIgnoreManager.Update"/> did to a <c>.gitignore</c>.</summary>
+public enum GitIgnoreUpdate
+{
+    /// <summary>It already held the block as it is: nothing was written.</summary>
+    Unchanged,
+
+    /// <summary>It was written with the block as it is now.</summary>
+    Updated,
+
+    /// <summary>It was written with the block as it is now, the block moving from the markers of the tool's former name.</summary>
+    MovedFromRetiredMarkers,
 }

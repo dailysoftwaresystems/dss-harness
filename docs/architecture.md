@@ -310,7 +310,13 @@ or the slot whose ignore rule init writes, it is. The root may not be `.git`, `.
 `.mutations` or `.legs`, or inside any of them.
 
 `init` leaves hand-written `.gitignore` rules alone, so a repository that already ignored one of
-these paths by hand keeps its rule beside the managed one. What `init` reports is git's own answer,
+these paths by hand keeps its rule beside the managed one. A block an earlier build wrote under the
+markers of the tool's former name (`GitIgnoreManager.RetiredBeginMarker` / `RetiredEndMarker`, read
+for ever and never written) is the managed block too: markers pair by position, whatever their
+spelling, so `init` rewrites it in place under the current ones and says so, and the check of
+hand-written rules never reads its lines as the repository's own. The machine-wide locks are named
+for the tool too (`Global\dss-harness-...`), so a process of a build from before the rename and one
+of this build do not exclude each other: update while no `dssharness` runs on the machine. What `init` reports is git's own answer,
 never a reading of how the rules are spelled. Each managed rule carries a path it decides - the
 file it names, or a name inside the directory it rules on - and `git check-ignore -v --no-index`
 says which rule decides each of those paths in the tree. A rule deciding one against the block is

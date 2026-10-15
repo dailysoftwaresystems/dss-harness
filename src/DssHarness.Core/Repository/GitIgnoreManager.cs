@@ -7,10 +7,20 @@ namespace DssHarness.Core.Repository;
 public sealed class GitIgnoreManager(IFileSystem fileSystem) : IGitIgnoreManager
 {
     /// <summary>Opening marker of the managed block.</summary>
-    public const string BeginMarker = "# >>> repo-harness managed block >>>";
+    public const string BeginMarker = "# >>> dss-harness managed block >>>";
 
     /// <summary>Closing marker of the managed block.</summary>
-    public const string EndMarker = "# <<< repo-harness managed block <<<";
+    public const string EndMarker = "# <<< dss-harness managed block <<<";
+
+    /// <summary>
+    /// The opening marker builds wrote before the tool took its name: read as the block's for ever, so a block a teammate's
+    /// older build wrote is rewritten in place, never left beside the current one or read as the repository's own rules;
+    /// never written.
+    /// </summary>
+    public const string RetiredBeginMarker = "# >>> repo-harness managed block >>>";
+
+    /// <summary>The closing marker builds wrote before the tool took its name (<see cref="RetiredBeginMarker"/>).</summary>
+    public const string RetiredEndMarker = "# <<< repo-harness managed block <<<";
 
     private readonly IFileSystem _fileSystem = fileSystem;
 
@@ -43,7 +53,7 @@ public sealed class GitIgnoreManager(IFileSystem fileSystem) : IGitIgnoreManager
         {
             var trimmed = line.Trim();
 
-            if (trimmed == BeginMarker)
+            if (IsBegin(trimmed))
             {
                 // A second begin before any end means the first was unpaired: keep what it
                 // appeared to enclose, and start buffering again.
@@ -53,7 +63,7 @@ public sealed class GitIgnoreManager(IFileSystem fileSystem) : IGitIgnoreManager
                 continue;
             }
 
-            if (trimmed == EndMarker)
+            if (IsEnd(trimmed))
             {
                 // Paired: everything buffered was the old block, so it is discarded. An end
                 // with nothing buffered is a stray marker, and only the marker is dropped.
@@ -105,7 +115,7 @@ public sealed class GitIgnoreManager(IFileSystem fileSystem) : IGitIgnoreManager
         return builder.ToString();
     }
 
-    public bool Update(string path, IReadOnlyList<string> lines)
+    public GitIgnoreUpdate Update(string path, IReadOnlyList<string> lines)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
@@ -114,11 +124,15 @@ public sealed class GitIgnoreManager(IFileSystem fileSystem) : IGitIgnoreManager
 
         if (string.Equals(existing, updated, StringComparison.Ordinal))
         {
-            return false;
+            return GitIgnoreUpdate.Unchanged;
         }
 
         _fileSystem.WriteAllTextAtomic(path, updated);
-        return true;
+
+        // Every marker is written anew, so a former one the file held is gone.
+        return existing is not null && existing.Split('\n').Any(line => line.Trim() is RetiredBeginMarker or RetiredEndMarker)
+            ? GitIgnoreUpdate.MovedFromRetiredMarkers
+            : GitIgnoreUpdate.Updated;
     }
 
     /// <summary>
@@ -142,11 +156,11 @@ public sealed class GitIgnoreManager(IFileSystem fileSystem) : IGitIgnoreManager
         {
             var trimmed = lines[index].Trim();
 
-            if (trimmed == BeginMarker)
+            if (IsBegin(trimmed))
             {
                 begin = index;
             }
-            else if (trimmed == EndMarker && begin is { } start)
+            else if (IsEnd(trimmed) && begin is { } start)
             {
                 for (var blank = start; blank <= index; blank++)
                 {
@@ -159,6 +173,12 @@ public sealed class GitIgnoreManager(IFileSystem fileSystem) : IGitIgnoreManager
 
         return string.Join('\n', lines);
     }
+
+    /// <summary>Whether a line, trimmed, opens the managed block: under the current marker or the retired one.</summary>
+    private static bool IsBegin(string trimmed) => trimmed is BeginMarker or RetiredBeginMarker;
+
+    /// <summary>Whether a line, trimmed, closes the managed block: under the current marker or the retired one.</summary>
+    private static bool IsEnd(string trimmed) => trimmed is EndMarker or RetiredEndMarker;
 
     private static string BuildBlock(IReadOnlyList<string> lines, string newline)
     {

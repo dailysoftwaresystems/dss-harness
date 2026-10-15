@@ -2745,6 +2745,11 @@ internal static class HelpCommand
         builder.AppendLine("and none can be a link: init names one it finds, and writes nothing through it.");
         builder.AppendLine("Sync withholds each by name.");
         builder.AppendLine();
+        builder.AppendLine("A block an earlier build wrote under the markers of the tool's former name");
+        builder.AppendLine($"('{GitIgnoreManager.RetiredBeginMarker}') is the managed block too: init");
+        builder.AppendLine("rewrites it in place under the current markers and says so, and none of its lines");
+        builder.AppendLine("is read as a rule of the repository's own.");
+        builder.AppendLine();
         builder.AppendLine("init writes the tree it runs in, a worktree's own included: its configuration - a");
         builder.AppendLine("copy of the main checkout's, where the worktree was running on that one - its");
         builder.AppendLine(".gitignore and its placeholders. The main checkout is left as it is, but for an");

@@ -48,7 +48,7 @@ public static class MachineWideMutex
 
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(key));
 
-        return $@"Global\repo-harness-{prefix}-" + Convert.ToHexStringLower(hash, 0, 16);
+        return $@"Global\dss-harness-{prefix}-" + Convert.ToHexStringLower(hash, 0, 16);
     }
 
     /// <summary>Opens the named mutex.</summary>

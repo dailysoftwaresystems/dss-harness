@@ -10,6 +10,21 @@ namespace DssHarness.Tests;
 public sealed class MachineWideMutexTests
 {
     /// <summary>
+    /// The lock is named for the tool, the subject's kind and a digest of its paths - one name for the same paths in any
+    /// order, and, where the platform ignores case, in any case.
+    /// </summary>
+    [Fact]
+    public void TheName_IsTheToolsTheKindsAndADigestOfThePaths()
+    {
+        var paths = new[] { Path.Combine(Path.GetTempPath(), "b"), Path.Combine(Path.GetTempPath(), "a") };
+        var name = MachineWideMutex.NameFor("run", paths, ignoreCase: true);
+
+        Assert.Matches(@"^Global\\dss-harness-run-[0-9a-f]{32}$", name);
+        Assert.Equal(name, MachineWideMutex.NameFor("run", [.. paths.Reverse()], ignoreCase: true));
+        Assert.Equal(name, MachineWideMutex.NameFor("run", [.. paths.Select(path => path.ToUpperInvariant())], ignoreCase: true));
+    }
+
+    /// <summary>
     /// An open that fails for a moment - as two processes racing to create the runtime's directory for
     /// named mutexes make it fail - is tried again, a little later each time, and the mutex it then
     /// opens is the one returned.

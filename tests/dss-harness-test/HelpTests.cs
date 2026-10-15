@@ -1399,6 +1399,8 @@ public sealed partial class HelpTests
             "configuration, a placeholder, an action's files, an anchor registry - and no",
             "the slot a placeholder is kept in is overruled for the slot's contents and needed",
             "init writes the tree it runs in, a worktree's own included",
+            $"('{GitIgnoreManager.RetiredBeginMarker}') is the managed block too: init",
+            "rewrites it in place under the current markers and says so, and none of its lines",
         })
         {
             Assert.Contains(text, layout.StandardOutput, StringComparison.Ordinal);

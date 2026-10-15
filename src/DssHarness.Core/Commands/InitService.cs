@@ -259,9 +259,12 @@ public sealed class InitService(
         var gitIgnorePath = Path.Combine(root, ".gitignore");
         var ignoreRules = BuildIgnoreRules(config.Worktrees);
 
-        actions.Add(_gitIgnoreManager.Update(gitIgnorePath, [.. ignoreRules.Select(rule => rule.Rule)])
-            ? $"updated {Describe(root, gitIgnorePath)}"
-            : $"kept    {Describe(root, gitIgnorePath)} (rules already current)");
+        actions.Add(_gitIgnoreManager.Update(gitIgnorePath, [.. ignoreRules.Select(rule => rule.Rule)]) switch
+        {
+            GitIgnoreUpdate.Unchanged => $"kept    {Describe(root, gitIgnorePath)} (rules already current)",
+            GitIgnoreUpdate.MovedFromRetiredMarkers => $"updated {Describe(root, gitIgnorePath)} (its managed block moved from the markers of the tool's former name)",
+            _ => $"updated {Describe(root, gitIgnorePath)}",
+        });
 
         // Located before the rules are judged: a rule a registry git tracks rests on is never told it
         // does nothing.

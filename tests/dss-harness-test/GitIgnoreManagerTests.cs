@@ -76,9 +76,87 @@ public sealed class GitIgnoreManagerTests
         var manager = CreateManager();
         var path = temp.Combine(".gitignore");
 
-        Assert.True(manager.Update(path, Rules));
-        Assert.False(manager.Update(path, Rules));
-        Assert.True(manager.Update(path, ["/different"]));
+        Assert.Equal(GitIgnoreUpdate.Updated, manager.Update(path, Rules));
+        Assert.Equal(GitIgnoreUpdate.Unchanged, manager.Update(path, Rules));
+        Assert.Equal(GitIgnoreUpdate.Updated, manager.Update(path, ["/different"]));
+    }
+
+    /// <summary>
+    /// A block a build from before the rename wrote, under the former markers, is rewritten under the current ones where it
+    /// stood, every other line as it was, in a file with either line ending.
+    /// </summary>
+    /// <param name="newline">The file's line ending.</param>
+    [Theory]
+    [InlineData("\n")]
+    [InlineData("\r\n")]
+    public void ABlockWrittenUnderTheRetiredMarkers_IsRewrittenUnderTheCurrentOnes_WhereItStood(string newline)
+    {
+        var existing = $"bin/{newline}{GitIgnoreManager.RetiredBeginMarker}{newline}/old{newline}{GitIgnoreManager.RetiredEndMarker}{newline}after/{newline}";
+
+        var result = CreateManager().ApplyManagedBlock(existing, Rules);
+
+        Assert.Equal(
+            $"bin/{newline}{GitIgnoreManager.BeginMarker}{newline}/a{newline}!/a/.gitkeep{newline}{GitIgnoreManager.EndMarker}{newline}after/{newline}",
+            result);
+    }
+
+    /// <summary>A block under each spelling - one left by a teammate on an earlier build - becomes one block, at the first one's place.</summary>
+    [Fact]
+    public void ABlockUnderEachSpelling_BecomesOneBlock_AtTheFirstOnesPlace()
+    {
+        var existing = $"bin/\n{GitIgnoreManager.RetiredBeginMarker}\n/old\n{GitIgnoreManager.RetiredEndMarker}\nmid/\n"
+            + $"{GitIgnoreManager.BeginMarker}\n/older\n{GitIgnoreManager.EndMarker}\nafter/\n";
+
+        var result = CreateManager().ApplyManagedBlock(existing, Rules);
+
+        Assert.Equal($"bin/\n{GitIgnoreManager.BeginMarker}\n/a\n!/a/.gitkeep\n{GitIgnoreManager.EndMarker}\nmid/\nafter/\n", result);
+    }
+
+    /// <summary>
+    /// A file whose block moved from the former markers says so, once: the next run finds its block current and leaves the
+    /// file as it is.
+    /// </summary>
+    [Fact]
+    public void ARewrittenFile_IsLeftAsItIs_ByTheNextRun()
+    {
+        using var temp = new TempDirectory();
+        var manager = CreateManager();
+        var path = temp.Combine(".gitignore");
+        File.WriteAllText(path, $"bin/\n{GitIgnoreManager.RetiredBeginMarker}\n/a\n!/a/.gitkeep\n{GitIgnoreManager.RetiredEndMarker}\n");
+
+        Assert.Equal(GitIgnoreUpdate.MovedFromRetiredMarkers, manager.Update(path, Rules));
+
+        var rewritten = File.ReadAllText(path);
+
+        Assert.Equal(GitIgnoreUpdate.Unchanged, manager.Update(path, Rules));
+        Assert.Equal(rewritten, File.ReadAllText(path));
+        Assert.DoesNotContain("repo-harness", rewritten, StringComparison.Ordinal);
+    }
+
+    /// <summary>A former begin marker no end follows encloses nothing, as a current one does not: what follows it is kept.</summary>
+    [Fact]
+    public void ARetiredBeginWithNoEnd_KeepsWhatItEncloses()
+    {
+        var result = CreateManager().ApplyManagedBlock($"{GitIgnoreManager.RetiredBeginMarker}\nmine/\n", Rules);
+
+        Assert.Equal($"{GitIgnoreManager.BeginMarker}\n/a\n!/a/.gitkeep\n{GitIgnoreManager.EndMarker}\nmine/\n", result);
+    }
+
+    /// <summary>Markers pair by position, never by spelling: a begin of one name and an end of the other are one block.</summary>
+    /// <param name="formerBegin">Whether the begin marker is the former one, and the end the current one; otherwise the other way.</param>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AMixedPair_IsReadAsOneBlock(bool formerBegin)
+    {
+        var begin = formerBegin ? GitIgnoreManager.RetiredBeginMarker : GitIgnoreManager.BeginMarker;
+        var end = formerBegin ? GitIgnoreManager.EndMarker : GitIgnoreManager.RetiredEndMarker;
+        var existing = $"bin/\n{begin}\n/old\n{end}\nafter/\n";
+
+        Assert.Equal(
+            $"bin/\n{GitIgnoreManager.BeginMarker}\n/a\n!/a/.gitkeep\n{GitIgnoreManager.EndMarker}\nafter/\n",
+            CreateManager().ApplyManagedBlock(existing, Rules));
+        Assert.Equal("bin/\n\n\n\nafter/\n", GitIgnoreManager.WithoutManagedBlock(existing));
     }
 
     /// <summary>
@@ -95,6 +173,18 @@ public sealed class GitIgnoreManagerTests
         var lines = GitIgnoreManager.WithoutManagedBlock(content).Split('\n').Select(line => line.TrimEnd('\r'));
 
         Assert.Equal(["bin/", "!/a/x", "", "", "", "", "", "after/", ""], lines);
+    }
+
+    /// <summary>
+    /// A block under the former markers is the managed block too: blanked, every other line keeping its number, so none of
+    /// its rules is read as the repository's own.
+    /// </summary>
+    [Fact]
+    public void WithoutManagedBlock_BlanksABlockUnderTheRetiredMarkers_AndKeepsEveryOtherLineWhereItWas()
+    {
+        var content = $"bin/\n{GitIgnoreManager.RetiredBeginMarker}\n/old\n{GitIgnoreManager.RetiredEndMarker}\nafter/\n";
+
+        Assert.Equal("bin/\n\n\n\nafter/\n", GitIgnoreManager.WithoutManagedBlock(content));
     }
 
     /// <summary>

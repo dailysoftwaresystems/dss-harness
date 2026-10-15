@@ -96,6 +96,33 @@ public sealed class InitServiceTests
         Assert.DoesNotContain(outcome.Details!, line => line.StartsWith("tools", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// A .gitignore whose managed block a build from before the rename wrote, under the former markers, is rewritten in
+    /// place under the current ones and said so: one block where the former stood, every other line as it was, and none of
+    /// its lines read as the repository's own rules.
+    /// </summary>
+    [Fact]
+    public async Task InitializeAsync_RewritesABlockUnderTheFormerMarkers_AsOneBlockWhereItStood()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var token = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, token);
+        Assert.True((await harness.InitService.InitializeAsync(temp.Path, token)).Succeeded);
+        var current = File.ReadAllText(temp.Combine(".gitignore"));
+        var former = current
+            .Replace(GitIgnoreManager.BeginMarker, GitIgnoreManager.RetiredBeginMarker, StringComparison.Ordinal)
+            .Replace(GitIgnoreManager.EndMarker, GitIgnoreManager.RetiredEndMarker, StringComparison.Ordinal);
+        File.WriteAllText(temp.Combine(".gitignore"), "mine/\n" + former + "after/\n");
+
+        var again = await harness.InitService.InitializeAsync(temp.Path, token);
+
+        Assert.True(again.Succeeded, again.Message);
+        Assert.Contains("updated .gitignore (its managed block moved from the markers of the tool's former name)", again.Details!);
+        Assert.DoesNotContain(again.Details!, line => line.StartsWith("note    .gitignore line", StringComparison.Ordinal));
+        Assert.Equal("mine/\n" + current + "after/\n", File.ReadAllText(temp.Combine(".gitignore")));
+    }
+
     [Fact]
     public async Task InitializeAsync_CreatesBothAnchorRegistries_FromTheSkeleton()
     {
