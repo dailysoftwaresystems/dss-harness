@@ -1,11 +1,12 @@
 namespace DssHarness.Core.Platform;
 
 /// <summary>
-/// The primary place where the current operating system is observed. Only
-/// <see cref="FilePermissionsFactory"/> also calls <c>OperatingSystem.IsWindows()</c>,
-/// and only so the platform-compatibility analyser can prove a POSIX-only call site
-/// unreachable on Windows. No other type may: platform decisions are centralised here
-/// so command and domain logic stay platform agnostic.
+/// The primary place where the current operating system is observed: command and domain
+/// logic ask this, and the platform seams beside it, so they stay platform agnostic. Below
+/// that seam <see cref="FilePermissionsFactory"/> also calls <c>OperatingSystem.IsWindows()</c>,
+/// so the platform-compatibility analyser can prove a POSIX-only call site unreachable on
+/// Windows, and a few primitives ask the runtime for one fact each. docs/architecture.md,
+/// "The platform layer", names every one of them; a new one is named there.
 /// </summary>
 public interface IHostPlatform
 {

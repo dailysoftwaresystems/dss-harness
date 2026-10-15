@@ -1,9 +1,10 @@
 namespace DssHarness.Core.Platform;
 
 /// <summary>
-/// Chooses the permission model for the running platform. Together with
-/// <see cref="HostPlatform"/> this is the only code that observes the operating
-/// system directly; everything downstream depends on <see cref="IFilePermissions"/>.
+/// Chooses the permission model for the running platform. One of the few places that
+/// observes the operating system, beside <see cref="HostPlatform"/> and the primitives
+/// docs/architecture.md names under "The platform layer"; everything downstream depends
+/// on <see cref="IFilePermissions"/>.
 /// </summary>
 public static class FilePermissionsFactory
 {

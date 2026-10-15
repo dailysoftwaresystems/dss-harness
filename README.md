@@ -172,8 +172,9 @@ written twice, a list given empty where leaving it out means every one or a set 
 something undeclared is rejected when it is read, with every problem listed at once.
 
 **One behaviour everywhere.** Windows, macOS and Linux run the same code path. The
-operating system is observed in two tightly scoped places and nowhere else;
-everything downstream is platform agnostic. CI runs the whole suite on all three, on
+operating system is learned in one platform layer, beside a few primitives that each ask
+the runtime for one fact and are named in the [architecture](docs/architecture.md);
+everything above that layer is platform agnostic. CI runs the whole suite on all three, on
 both x86_64 and arm64.
 
 **Witness the work, never the exit code.** A build passes only when every file the project's
