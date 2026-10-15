@@ -1679,6 +1679,13 @@ public sealed class GitClientTests
             architecture,
             StringComparison.Ordinal);
         Assert.Contains(
+            "(`--attr-source`, git 2.41's). A path below an attribute file the work tree lacks, which git reads from the index, has its "
+                + "attributes declared so too. An older git, which refuses that option as unknown and has no other way to be told, is "
+                + "refused before it is asked anything for the file, naming git 2.41 and the version installed, which is asked of git once "
+                + "(`GitClient.InstalledVersionAsync`).",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
             "info/attributes outranks that tree: where it says otherwise of the path, the question is refused, said, never guessed. "
                 + "Nothing is staged, so no index is written and no mark on an entry stands for a file's bytes; every index the tool does "
                 + "write of its own is written with `core.ignoreStat` off, in one place (`GitClient.RunCoreAsync`), so no comparison made "
@@ -2251,6 +2258,54 @@ public sealed class GitClientTests
         var read = await harness.GitClient.ReadStagedAsync(temp.Path, "crlf.txt", [new GitContent.Bytes(Utf8(content))], cancellationToken);
 
         Assert.Equal("one\r\n$Id$\r\nthree\r\n", Text(Assert.Single(read)));
+
+        await harness.RunGitAsync(temp.Path, ["add", "crlf.txt"], cancellationToken);
+
+        Assert.Equal((await harness.RunGitAsync(temp.Path, ["rev-parse", ":crlf.txt"], cancellationToken)).StandardOutput.Trim(), Assert.Single(ids));
+    }
+
+    /// <summary>
+    /// Telling git how it would store such a file takes <c>--attr-source</c>, which git has from 2.41 on: an older git is
+    /// refused before it is asked anything for the file, the refusal naming the version needed and the one installed, never
+    /// handed an option it does not know and its failure blamed on the attributes. A git from 2.41 on is asked, however it
+    /// names its build, and its version is read once for every question.
+    /// </summary>
+    [Theory]
+    [InlineData("git version 2.40.1", "2.40.1")]
+    [InlineData("git version 2.34.1", "2.34.1")]
+    [InlineData("git version 2.39.5 (Apple Git-154)", "2.39.5")]
+    [InlineData("git version 2.41.0", null)]
+    [InlineData("git version 2.47.1.windows.1", null)]
+    public async Task AFileOnlyAttributesDeclaredToGitTellHowToRead_IsReadFromGit241On_AndRefusedBeforeIt(string answer, string? installed)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await CommitBeforeConvertingAsync(harness, temp.Path, "text=auto", cancellationToken);
+        File.AppendAllText(temp.Combine(".gitattributes"), "*.txt ident\n");
+        var content = "one\r\n$Id: anything $\r\nthree\r\n";
+        temp.WriteFile("crlf.txt", content);
+        var processes = new CountingProcesses(new GitAnsweringItsVersion(harness.ProcessRunner, answer));
+        var git = new GitClient(processes, harness.Output, localVariables: harness.LocalVariables);
+
+        if (installed is not null)
+        {
+            var refused = await Assert.ThrowsAsync<HarnessException>(() => git.ListStagedIdsAsync(temp.Path, ["crlf.txt"], cancellationToken));
+
+            Assert.Equal(HarnessExit.CommandFailed, refused.ExitCode);
+            Assert.Equal(
+                $"Could not read what the tree holds as git would store it: telling git how it would store 'crlf.txt' takes its "
+                    + $"--attr-source, which needs git 2.41 or later, and the git installed is {installed}.",
+                refused.Message);
+            Assert.DoesNotContain(processes.Started, request => request.Arguments.Any(argument => argument.StartsWith("--attr-source", StringComparison.Ordinal)));
+            return;
+        }
+
+        var ids = await git.ListStagedIdsAsync(temp.Path, ["crlf.txt"], cancellationToken);
+        var read = await git.ReadStagedAsync(temp.Path, "crlf.txt", [new GitContent.Bytes(Utf8(content))], cancellationToken);
+
+        Assert.Equal("one\r\n$Id$\r\nthree\r\n", Text(Assert.Single(read)));
+        Assert.Single(processes.Started, request => request.Arguments is ["version"]);
 
         await harness.RunGitAsync(temp.Path, ["add", "crlf.txt"], cancellationToken);
 
@@ -2923,6 +2978,17 @@ internal sealed class CountingProcesses(IProcessRunner inner) : IProcessRunner
 
         return inner.RunAsync(request, cancellationToken);
     }
+
+    public string? FindExecutable(string command) => inner.FindExecutable(command);
+}
+
+/// <summary>Runs every program through <paramref name="inner"/> but <c>git version</c>, which <paramref name="answer"/> answers.</summary>
+internal sealed class GitAnsweringItsVersion(IProcessRunner inner, string answer) : IProcessRunner
+{
+    public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default)
+        => request.Arguments is ["version"]
+            ? Task.FromResult(new ProcessResult(0, answer + "\n", string.Empty, TimeSpan.Zero, TimedOut: false))
+            : inner.RunAsync(request, cancellationToken);
 
     public string? FindExecutable(string command) => inner.FindExecutable(command);
 }

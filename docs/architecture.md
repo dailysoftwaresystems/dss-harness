@@ -781,9 +781,11 @@ Where `git ls-files --eol` says the path's entry holds carriage returns (`i/crlf
 converted only as git sees fit (no attribute under `core.autocrlf`, or `text=auto`), git leaves that conversion out,
 and hash-object is told to as well: `core.autocrlf` off; the bytes as they stand, where nothing else converts the
 file; or, where a clean filter, `ident` or `working-tree-encoding` still does, the path's attributes declared whole
-with `text` unset, in a tree of the question's own git reads attributes from instead (`--attr-source`, git 2.40's). A
+with `text` unset, in a tree of the question's own git reads attributes from instead (`--attr-source`, git 2.41's). A
 path below an attribute file the work tree lacks, which git reads from the index, has its attributes declared so too.
-info/attributes outranks that tree: where it says otherwise of the path, the question is refused, said, never guessed.
+An older git, which refuses that option as unknown and has no other way to be told, is refused before it is asked
+anything for the file, naming git 2.41 and the version installed, which is asked of git once
+(`GitClient.InstalledVersionAsync`). info/attributes outranks that tree: where it says otherwise of the path, the question is refused, said, never guessed.
 Nothing is staged, so no index is written and no mark on an entry stands for a file's bytes; every index the tool does
 write of its own is written with `core.ignoreStat` off, in one place (`GitClient.RunCoreAsync`), so no comparison made
 with it reads an edited file as its entry's blob. `GitClient.HashAsync` is the one caller of `hash-object`, told what

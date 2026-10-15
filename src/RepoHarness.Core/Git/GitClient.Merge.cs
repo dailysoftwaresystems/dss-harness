@@ -513,15 +513,19 @@ public sealed partial class GitClient
     /// <summary>
     /// The blob <c>git add</c> would record for each of <paramref name="files"/>, read with the attributes
     /// <paramref name="declared"/> gives their paths in place of the work tree's: each path's line in an attribute file at the
-    /// root of a tree of the question's own, which git reads attributes from instead (<c>--attr-source</c>, git 2.40's), its
+    /// root of a tree of the question's own, which git reads attributes from instead (<c>--attr-source</c>, git 2.41's), its
     /// other sources - the repository's info/attributes and the configured ones - read as ever.
     /// </summary>
     /// <remarks>
-    /// Each path's attributes are read back through that tree before a file is read: info/attributes outranks any tree, and
-    /// one that says otherwise of a path leaves no way to tell git how it would read it there - said, never guessed.
+    /// An older git, which refuses the option as unknown and has no other way to be told, is refused before it is asked
+    /// anything for the files, naming the version needed and the one installed. Each path's attributes are read back
+    /// through that tree before a file is read: info/attributes outranks any tree, and one that says otherwise of a path
+    /// leaves no way to tell git how it would read it there - said, never guessed.
     /// </remarks>
-    /// <exception cref="HarnessException">git could not write the tree or read a file through it, or a path's attributes read back otherwise.</exception>
-    private Task<IReadOnlyList<string>> DeclaredIdsAsync(
+    /// <exception cref="HarnessException">
+    /// The git installed is older than 2.41, git could not write the tree or read a file through it, or a path's attributes read back otherwise.
+    /// </exception>
+    private async Task<IReadOnlyList<string>> DeclaredIdsAsync(
         string directory,
         IReadOnlyList<string> files,
         string? asPath,
@@ -530,7 +534,17 @@ public sealed partial class GitClient
         ObjectStore? store,
         string what,
         CancellationToken cancellationToken)
-        => InScratchAsync(what, async scratch =>
+    {
+        var (installed, release) = await InstalledVersionAsync(directory, cancellationToken).ConfigureAwait(false);
+
+        if (release is not ({ Major: > 2 } or { Major: 2, Minor: >= 41 }))
+        {
+            throw new HarnessException(
+                HarnessExit.CommandFailed,
+                $"Could not {what}: telling git how it would store '{declared.Keys.First()}' takes its --attr-source, which needs git 2.41 or later, and the git installed is {installed}.");
+        }
+
+        return await InScratchAsync(what, async scratch =>
         {
             var own = store ?? await StoreAsync(directory, scratch, cancellationToken).ConfigureAwait(false);
             var lines = Path.Combine(scratch, AttributesFile);
@@ -553,7 +567,8 @@ public sealed partial class GitClient
             }
 
             return await HashAsync(directory, files, new Hashing(written, Filtered: true, asPath, own, told), what, cancellationToken).ConfigureAwait(false);
-        });
+        }).ConfigureAwait(false);
+    }
 
     /// <summary>The line of an attribute file declaring <paramref name="attributes"/> for <paramref name="path"/> alone.</summary>
     private static string Declaration(string path, IReadOnlyDictionary<string, string> attributes)

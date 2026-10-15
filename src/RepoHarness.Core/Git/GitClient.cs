@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Processes;
@@ -42,6 +43,9 @@ public sealed partial class GitClient(
     private readonly IHarnessOutput _output = output;
     private readonly IFilePermissions _filePermissions = filePermissions ?? FilePermissionsFactory.Create();
     private readonly GitLocalVariables _localVariables = localVariables ?? new GitLocalVariables(processRunner);
+
+    /// <summary>The version the git this client runs names itself by, once read (<see cref="InstalledVersionAsync"/>).</summary>
+    private string? _installed;
 
     public bool IsInstalled() => _processRunner.FindExecutable(GitExecutable) is not null;
 
@@ -1966,6 +1970,28 @@ public sealed partial class GitClient(
             : throw new HarnessException(
                 HarnessExit.CommandFailed,
                 $"git counted commits in a form this build cannot read: '{text}'");
+    }
+
+    /// <summary>
+    /// The version the git this client runs names itself by, as <c>git version</c> gives it - "2.47.1.windows.1" - and the
+    /// release its first three numbers make, where they make one: asked of git once, and the answer kept.
+    /// </summary>
+    /// <exception cref="HarnessException">git could not say its version.</exception>
+    private async Task<(string Named, SemanticVersion? Release)> InstalledVersionAsync(string directory, CancellationToken cancellationToken)
+    {
+        const string Answer = "git version ";
+
+        if (_installed is null)
+        {
+            var result = await RunQueryAsync(directory, ["version"], cancellationToken).ConfigureAwait(false);
+
+            Ensure(result, "read which git is installed");
+
+            var line = result.OutputLines.FirstOrDefault() ?? string.Empty;
+            _installed = line.StartsWith(Answer, StringComparison.Ordinal) ? line[Answer.Length..].Split(' ')[0] : line.Trim();
+        }
+
+        return (_installed, SemanticVersion.TryParse(string.Join('.', _installed.Split('.').Take(3)), out var release) ? release : null);
     }
 
     /// <summary>
