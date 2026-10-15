@@ -4,9 +4,10 @@ name: Package Pipeline
 # publishing to nuget.org, and the GitHub release. Started by Deploy once it has promoted a
 # release branch, or by hand from the Actions tab for a release branch.
 #
-# It runs no test suite. Deploy promotes only a commit the full test matrix passed on - for
-# beta, its parent, which differs only in <Version> - and a run started by hand publishes the
-# release branch as it stands, with nothing run against it here.
+# It runs no test suite, and neither does Deploy. What Deploy promotes passed the full test
+# matrix before it reached main, through the check merging a pull request waits for - for
+# beta, the commit under the bump, which changes only <Version> - and a run started by hand
+# publishes the release branch as it stands, with nothing run against it here.
 #
 # beta releases on GitHub alone, as a prerelease with the package attached. stable publishes
 # to nuget.org, then releases on GitHub with the package attached too. However a run started,

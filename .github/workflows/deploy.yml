@@ -5,10 +5,12 @@ name: Deploy
 # packing, publishing, tagging and the GitHub release. Keeping that boundary means
 # re-running one phase never half-performs the other.
 #
-# Nothing moves until the commit has passed the test matrix, and only what passed it moves:
-# the commit is pinned before testing, so a push to the source branch while the matrix runs
-# cannot slip an untested commit into a release. stable promotes the tested commit itself;
-# beta promotes the version bump on top of it, which changes nothing but <Version>.
+# No suite runs here. main changes through pull requests, and merging one waits for the
+# required check, which runs the full test matrix; see "The required check" in
+# docs/releasing.md. The commit is pinned once, before anything else, so a push to the source
+# branch while this runs cannot slip another commit into a release. stable promotes the
+# pinned commit itself; beta promotes the version bump on top of it, which changes nothing
+# but <Version>.
 #
 # DssHarness ships as an app: people install the released tool rather than build on
 # it, so it uses two channels, main -> release/beta -> release/stable. beta releases each
@@ -103,7 +105,7 @@ jobs:
             exit 1
           fi
 
-          # The pinned commit is what gets tested and promoted; an empty one would let the
+          # The pinned commit is what gets promoted; an empty one would let the
           # checkout fall back to another commit.
           if ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
             echo "::error::Reading source branch '$source' gave '$sha', not a commit."
@@ -116,17 +118,11 @@ jobs:
             echo "sha=$sha"
           } >> "$GITHUB_OUTPUT"
 
-          echo "Will promote $source at $sha to $target once it passes the test matrix."
-
-  test:
-    needs: plan
-    uses: ./.github/workflows/test.yml
-    with:
-      ref: ${{ needs.plan.outputs.sha }}
+          echo "Will promote $source at $sha to $target."
 
   promote:
     name: promote
-    needs: [plan, test]
+    needs: plan
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -139,10 +135,10 @@ jobs:
       CHANNEL: ${{ inputs.channel }}
       SOURCE: ${{ needs.plan.outputs.source }}
       TARGET: ${{ needs.plan.outputs.target }}
-      TESTED_SHA: ${{ needs.plan.outputs.sha }}
+      PINNED_SHA: ${{ needs.plan.outputs.sha }}
 
     steps:
-      - name: Checkout the tested commit
+      - name: Checkout the pinned commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.plan.outputs.sha }}
@@ -196,12 +192,12 @@ jobs:
             fi
           done
 
-          # Fast-forward only. A merge would put a tree on the release branch that the matrix
-          # never tested; a release branch that cannot fast-forward holds commits that did not
-          # come through this gate, and must be reconciled by a person.
+          # Fast-forward only. A merge would put a tree on the release branch that was never on
+          # main, so no check ever ran on it; a release branch that cannot fast-forward holds
+          # commits that did not come through Deploy, and must be reconciled by a person.
           if target_head=$(git rev-parse -q --verify "refs/remotes/origin/$TARGET"); then
-            if ! git merge-base --is-ancestor "$target_head" "$TESTED_SHA"; then
-              echo "::error::$TARGET has commits that $TESTED_SHA does not; it only ever moves forward to tested commits. Reconcile it before promoting."
+            if ! git merge-base --is-ancestor "$target_head" "$PINNED_SHA"; then
+              echo "::error::$TARGET has commits that $PINNED_SHA does not; it only ever moves forward, to commits $SOURCE holds. Reconcile it before promoting."
               exit 1
             fi
 
@@ -241,11 +237,11 @@ jobs:
           # Tags, not where the branches point, record what was published: a release branch moved
           # by hand publishes nothing, and Deploy promotes from wherever it was left.
           if [ "$CHANNEL" = "beta" ]; then
-            released=$(git tag --list --contains "$TESTED_SHA" 'v*')
+            released=$(git tag --list --contains "$PINNED_SHA" 'v*')
 
             if [ -n "$released" ]; then
               first=${released%%$'\n'*}
-              echo "::error::$TESTED_SHA is already tagged as $first, so there is nothing new to publish. To finish a publish that stopped, start Package Pipeline for $TARGET again."
+              echo "::error::$PINNED_SHA is already tagged as $first, so there is nothing new to publish. To finish a publish that stopped, start Package Pipeline for $TARGET again."
               exit 1
             fi
 
@@ -267,8 +263,8 @@ jobs:
             exit 1
           fi
 
-          if [ "$tagged" != "$TESTED_SHA" ]; then
-            echo "::error::${beta_tag} names ${tagged}, not ${TESTED_SHA} at the head of ${SOURCE}; stable publishes only the commit beta published."
+          if [ "$tagged" != "$PINNED_SHA" ]; then
+            echo "::error::${beta_tag} names ${tagged}, not ${PINNED_SHA} at the head of ${SOURCE}; stable publishes only the commit beta published."
             exit 1
           fi
 
@@ -283,7 +279,7 @@ jobs:
             exit 1
           fi
 
-      - name: Bump the version on top of the tested commit
+      - name: Bump the version on top of the pinned commit
         if: inputs.channel == 'beta'
         env:
           REQUESTED_VERSION: ${{ inputs.version }}
@@ -330,12 +326,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          # For beta this is the bump on top of the tested commit; for stable, the tested commit.
+          # For beta this is the bump on top of the pinned commit; for stable, the pinned commit.
           promoted=$(git rev-parse HEAD)
 
           # beta moves main and release/beta together or not at all. Nothing is forced: a branch
-          # that moved to a commit the promotion does not contain rejects the whole push, and
-          # nothing untested reaches either branch.
+          # that moved to a commit the promotion does not contain rejects the whole push, so
+          # nothing pushed to either branch while this ran is lost.
           if [ "$CHANNEL" = "beta" ]; then
             refs=("$promoted:refs/heads/main" "$promoted:refs/heads/$TARGET")
           else
@@ -356,7 +352,7 @@ jobs:
           fi
 
           echo "PROMOTED_SHA=$promoted" >> "$GITHUB_ENV"
-          echo "Promoted $SOURCE ($TESTED_SHA) to $TARGET as $promoted."
+          echo "Promoted $SOURCE ($PINNED_SHA) to $TARGET as $promoted."
 
       - name: Start the package pipeline
         env:
