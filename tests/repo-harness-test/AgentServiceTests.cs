@@ -1606,6 +1606,32 @@ public sealed class AgentServiceTests
     }
 
     /// <summary>
+    /// In a repository that leaves files unexamined - <c>core.ignoreStat</c>, under which the agent's worktree is made with
+    /// every entry marked unchanged - the agent's edit of a file it was handed is read as it stands: no commit holds it, so
+    /// --stale is refused and the edit kept. (Read as its base's blob where it was staged into a copy of the worktree's
+    /// index, proved stale, and the main tree's copy written over it.)
+    /// </summary>
+    [Fact]
+    public async Task WhereGitIgnoresStat_AnAgentsEditIsNeverProvedStale_AndIsKept()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nsecond\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "the second version", Token);
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nhanded\n");
+        await kit.GitAsync(kit.Main, "config", "core.ignoreStat", "true");
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "a.txt", "the agent's own edit\n");
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nthird\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "the third version", Token);
+
+        var refused = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", new RefreshRequest { Paths = ["a.txt"], Stale = ["a.txt"] }, apply: true, Token);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal("the agent's own edit\n", OrchestrationKit.Read(worktree, "a.txt"));
+    }
+
+    /// <summary>
     /// Where the main tree's history holds the agent's very bytes at a path across several commits in a row - another
     /// path's commits among them - the commit named is the newest of the run: what a person finds first in the log is
     /// what the line says the main tree holds.

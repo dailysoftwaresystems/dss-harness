@@ -1640,17 +1640,13 @@ public sealed class GitClientTests
         var unknown = await harness.GitClient.RunAsync(temp.Path, ["cat-file", "-e", Assert.Single(ids)], cancellationToken: cancellationToken);
         Assert.False(unknown.Succeeded, "The repository holds an object for a file that was only read.");
 
-        // A file is staged to be read as git would store it, into an index of the question's own: the work tree's is never
-        // git's index for it, and a file staged in place writes no object.
-        var staging = processes.Started.Where(request => request.Arguments.Contains("update-index") && request.Arguments.Contains("--add")).ToList();
-        Assert.Equal(3, staging.Count);
-        Assert.All(staging, request => Assert.NotEqual(Path.GetFullPath(index), Path.GetFullPath(request.Environment["GIT_INDEX_FILE"]!)));
-        Assert.Single(staging, request => request.Arguments.Contains("--info-only"));
+        // Nothing is staged to read a file as git would store it, so no index is written, and no index is named to git.
+        Assert.DoesNotContain(processes.Started, request => request.Arguments.Contains("update-index") || request.Environment.GetValueOrDefault("GIT_INDEX_FILE") is not null);
 
         // Every object git was told to write went to a directory outside the repository, set once the inherited one was
         // cleared, with the repository's own beside it, as one entry of a list.
-        var written = processes.Started.Where(request => request.Arguments.Contains("-w") || (staging.Contains(request) && !request.Arguments.Contains("--info-only"))).ToList();
-        Assert.Equal(3, written.Count);
+        var written = processes.Started.Where(request => request.Arguments.Contains("-w")).ToList();
+        Assert.NotEmpty(written);
         Assert.All(written, request =>
         {
             Assert.Null(request.Environment["GIT_COMMON_DIR"]);
@@ -1660,25 +1656,33 @@ public sealed class GitClientTests
             Assert.StartsWith("\"", request.Environment["GIT_ALTERNATE_OBJECT_DIRECTORIES"], StringComparison.Ordinal);
         });
         Assert.All(written, request => Assert.False(Directory.Exists(request.Environment["GIT_OBJECT_DIRECTORY"]), "The directory of a question's own was left behind."));
-        Assert.All(staging, request => Assert.False(File.Exists(request.Environment["GIT_INDEX_FILE"]), "The index of a question's own was left behind."));
 
         var architecture = Prose.Document("docs", "architecture.md");
 
         Assert.Contains(
-            "the agent's copy as `git add` would record it in its worktree (`ListStagedIdsAsync`, staged into a copy of the worktree's "
-                + "index), so a copy that differs from a commit's file only by a line-ending conversion is that commit's file, and one "
-                + "committed with carriage returns keeps them as git keeps them,",
+            "the agent's copy as `git add` would record it in its worktree (`ListStagedIdsAsync`, read as the merge's versions are, "
+                + "below), so a copy that differs from a commit's file only by a line-ending conversion is that commit's file, one committed "
+                + "with carriage returns keeps them as git keeps them, and an edit is its own bytes wherever git leaves files unexamined "
+                + "(`core.ignoreStat`),",
             architecture,
             StringComparison.Ordinal);
         Assert.Contains(
-            "and one committed with carriage returns, under `core.autocrlf` or a `text=auto` attribute, keeps them on every side, as "
-                + "git keeps them, so a merge git makes clean is clean. A clean filter runs in the tree of the question's own.",
+            "The path's clean filters run from the root, as git add runs them, and its attributes and line-ending rules apply: a file one "
+                + "tree checked out with other line endings merges as `git merge` would merge it, and one committed with carriage returns, "
+                + "under `core.autocrlf` or a `text=auto` attribute, keeps them on every side, as git keeps them, so a merge git makes clean "
+                + "is clean.",
             architecture,
             StringComparison.Ordinal);
         Assert.Contains(
-            "What git would record for a file is asked in one place (`GitClient.StagedIdsAsync`): staged, never hashed alone - `git "
-                + "hash-object` reads no index, and so misses the rule that keeps the line endings of a file whose entry holds carriage "
-                + "returns. `GitClient.HashAsync` is the one caller of `hash-object`, for bytes as they stand.",
+            "What git would record for a file is asked in one place (`GitClient.StoredIdsAsync`), of `hash-object` at the work tree's "
+                + "root, told the two things `git add` reads in the index and hash-object does not (`GitClient.StoringAsync`).",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "info/attributes outranks that tree: where it says otherwise of the path, the question is refused, said, never guessed. "
+                + "Nothing is staged, so no index is written and no mark on an entry stands for a file's bytes; every index the tool does "
+                + "write of its own is written with `core.ignoreStat` off, in one place (`GitClient.RunCoreAsync`), so no comparison made "
+                + "with it reads an edited file as its entry's blob.",
             architecture,
             StringComparison.Ordinal);
     }
@@ -2227,6 +2231,191 @@ public sealed class GitClientTests
         Assert.Equal("one\r\nedited\r\n", (await harness.RunGitAsync(temp.Path, ["cat-file", "blob", ":crlf.txt"], cancellationToken)).StandardOutput);
     }
 
+    /// <summary>
+    /// Where git keeps a file's carriage returns under a <c>text=auto</c> attribute, every other conversion of its path
+    /// still applies, as <c>git add</c> applies it: an <c>ident</c> keyword is collapsed, the line endings kept - for a
+    /// file in place and for bytes read as that path alike.
+    /// </summary>
+    [Fact]
+    public async Task AFileWhoseCarriageReturnsGitKeeps_IsStillReadThroughEveryOtherConversionOfItsPath()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await CommitBeforeConvertingAsync(harness, temp.Path, "text=auto", cancellationToken);
+        File.AppendAllText(temp.Combine(".gitattributes"), "*.txt ident\n");
+        var content = "one\r\n$Id: anything $\r\nthree\r\n";
+        temp.WriteFile("crlf.txt", content);
+
+        var ids = await harness.GitClient.ListStagedIdsAsync(temp.Path, ["crlf.txt"], cancellationToken);
+        var read = await harness.GitClient.ReadStagedAsync(temp.Path, "crlf.txt", [new GitContent.Bytes(Utf8(content))], cancellationToken);
+
+        Assert.Equal("one\r\n$Id$\r\nthree\r\n", Text(Assert.Single(read)));
+
+        await harness.RunGitAsync(temp.Path, ["add", "crlf.txt"], cancellationToken);
+
+        Assert.Equal((await harness.RunGitAsync(temp.Path, ["rev-parse", ":crlf.txt"], cancellationToken)).StandardOutput.Trim(), Assert.Single(ids));
+    }
+
+    /// <summary>
+    /// Where the repository's info/attributes - which outranks any attributes declared to git - says how such a file's line
+    /// endings are stored, git cannot be told how it would read it: the question is refused, saying so, never answered with
+    /// a blob git would not record.
+    /// </summary>
+    [Fact]
+    public async Task AFileWhoseLineEndingsInfoAttributesDecides_IsRefused_NeverGuessed()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await CommitBeforeConvertingAsync(harness, temp.Path, "text=auto", cancellationToken);
+        File.Delete(temp.Combine(".gitattributes"));
+        temp.WriteFile(".git/info/attributes", "crlf.txt text=auto ident\n");
+        temp.WriteFile("crlf.txt", "one\r\n$Id: anything $\r\n");
+
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => harness.GitClient.ListStagedIdsAsync(temp.Path, ["crlf.txt"], cancellationToken));
+
+        Assert.Equal(HarnessExit.CommandFailed, refused.ExitCode);
+        Assert.Equal(
+            "Could not read what the tree holds as git would store it: the repository's info/attributes decides how 'crlf.txt' is "
+                + "stored, and outranks any attributes declared to git, so how git would read it cannot be told.",
+            refused.Message);
+    }
+
+    /// <summary>
+    /// An attribute file the work tree no longer holds is read as <c>git add</c> reads it, from the index: a path its
+    /// attributes say is text is converted though the file that says so was deleted.
+    /// </summary>
+    [Fact]
+    public async Task AnAttributeFileOnlyTheIndexHolds_StillSaysHowAFileIsStored()
+    {
+        using var temp = new TempDirectory();
+        using var outside = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
+        temp.WriteFile("sub/.gitattributes", "*.txt text eol=lf\n");
+        temp.WriteFile("sub/a.txt", "one\n");
+        await harness.CommitAllAsync(temp.Path, "text, said so in the directory", cancellationToken);
+        File.Delete(temp.Combine("sub", ".gitattributes"));
+        temp.WriteFile("sub/a.txt", "one\r\ntwo\r\n");
+
+        var ids = await harness.GitClient.ListStagedIdsAsync(temp.Path, ["sub/a.txt"], cancellationToken);
+        var read = await harness.GitClient.ReadStagedAsync(temp.Path, "sub/a.txt", [new GitContent.File(outside.WriteFile("kept", "one\r\nkept\r\n"))], cancellationToken);
+
+        Assert.Equal("one\nkept\n", Text(Assert.Single(read)));
+
+        await harness.RunGitAsync(temp.Path, ["add", "sub/a.txt"], cancellationToken);
+
+        Assert.Equal((await harness.RunGitAsync(temp.Path, ["rev-parse", ":sub/a.txt"], cancellationToken)).StandardOutput.Trim(), Assert.Single(ids));
+    }
+
+    /// <summary>
+    /// A repository that leaves files unexamined - <c>core.ignoreStat</c>, which marks each entry git writes as unchanged -
+    /// still has each file read as it stands: the blob named for an edited file is its edit's, never the entry's, and a
+    /// file's versions read as git would store them are each its own. (Staged into an index of the question's own, each
+    /// was the entry's blob: a stale copy handed over an agent's edit, and two edits merged into neither.)
+    /// </summary>
+    [Fact]
+    public async Task WhereGitIgnoresStat_AnEditedFile_IsStillReadAsItStands()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
+        await harness.RunGitAsync(temp.Path, ["config", "core.ignoreStat", "true"], cancellationToken);
+        temp.WriteFile("a.txt", "one\n");
+        await harness.CommitAllAsync(temp.Path, "a file git marks unchanged", cancellationToken);
+        var head = (await harness.GitClient.ResolveCommitAsync(temp.Path, "HEAD", cancellationToken))!;
+        temp.WriteFile("a.txt", "edited\n");
+
+        var ids = await harness.GitClient.ListStagedIdsAsync(temp.Path, ["a.txt"], cancellationToken);
+        var read = await harness.GitClient.ReadStagedAsync(temp.Path, "a.txt", [new GitContent.Bytes(Utf8("ours\n")), new GitContent.Bytes(Utf8("theirs\n"))], cancellationToken);
+        var held = await harness.GitClient.ListHeldAsAtAsync(temp.Path, head, ["a.txt"], cancellationToken);
+
+        Assert.Equal((await harness.RunGitAsync(temp.Path, ["hash-object", "a.txt"], cancellationToken)).StandardOutput.Trim(), Assert.Single(ids));
+        Assert.Equal(["ours\n", "theirs\n"], read.Select(Text));
+        Assert.Empty(held);
+    }
+
+    /// <summary>
+    /// A clean filter is run from the work tree's root, as <c>git add</c> runs it, for a version read as the path stores
+    /// it as for the file there: one named relative to the root still starts. (Not found where it ran from a tree of the
+    /// question's own, and the version read unfiltered.)
+    /// </summary>
+    [Fact]
+    public async Task ACleanFilterNamedFromTheWorkTreesRoot_IsRunForEveryVersionReadAsThePathStoresIt()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
+        temp.WriteFile("tools/up.sh", "tr a-z A-Z\n");
+        temp.WriteFile(".gitattributes", "*.txt filter=up\n");
+        await harness.RunGitAsync(temp.Path, ["config", "filter.up.clean", "sh tools/up.sh"], cancellationToken);
+        temp.WriteFile("a.txt", "abc\n");
+
+        var read = await harness.GitClient.ReadStagedAsync(temp.Path, "a.txt", [new GitContent.Bytes(Utf8("in hand\n"))], cancellationToken);
+        var ids = await harness.GitClient.ListStagedIdsAsync(temp.Path, ["a.txt"], cancellationToken);
+
+        Assert.Equal("IN HAND\n", Text(Assert.Single(read)));
+
+        await harness.RunGitAsync(temp.Path, ["add", "a.txt"], cancellationToken);
+
+        Assert.Equal((await harness.RunGitAsync(temp.Path, ["rev-parse", ":a.txt"], cancellationToken)).StandardOutput.Trim(), Assert.Single(ids));
+    }
+
+    /// <summary>
+    /// A path as long as git takes in the work tree is read as that path stores it, nothing made longer on the way: git
+    /// refuses a longer path on Windows where <c>core.longpaths</c> is not set. (Refused where it was read in a tree of the
+    /// question's own, further down the system's temporary directory.)
+    /// </summary>
+    [Fact]
+    public async Task APathAsLongAsGitTakesInTheWorkTree_IsReadAsThatPathStoresIt()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
+
+        // 230 characters from the drive to the file's last: within the 260 Windows allows a path, where git needs no
+        // core.longpaths, and short of it by less than a temporary tree's own name adds.
+        var length = 230 - temp.Path.Length - 1;
+        var directories = (length - 50) / 41;
+        var path = string.Concat(Enumerable.Range(0, directories).Select(at => $"d{at}".PadRight(40, 'x') + "/")) + "f".PadRight(length - (41 * directories) - 4, 'x') + ".txt";
+        temp.WriteFile(path, "one\n");
+
+        var read = await harness.GitClient.ReadStagedAsync(temp.Path, path, [new GitContent.Bytes(Utf8("in hand\n"))], cancellationToken);
+
+        Assert.Equal(230, temp.Combine(path).Length);
+        Assert.Equal("in hand\n", Text(Assert.Single(read)));
+    }
+
+    /// <summary>
+    /// A file where the index holds a file at a directory above it - one the work tree turned into a directory - is read
+    /// as any other, as <c>git add</c> would read it, and every other file asked about with it is answered. (The whole
+    /// question failed where each was staged: git would not stage it beside the entry in its way.)
+    /// </summary>
+    [Fact]
+    public async Task AFileWhereTheIndexHoldsAFileAboveIt_IsReadAsAnyOther_WithTheRestAskedBesideIt()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
+        temp.WriteFile("lib", "a file\n");
+        temp.WriteFile("other.txt", "other\n");
+        await harness.CommitAllAsync(temp.Path, "a file a directory will replace", cancellationToken);
+        File.Delete(temp.Combine("lib"));
+        temp.WriteFile("lib/mod.txt", "a module\n");
+        temp.WriteFile("other.txt", "edited\n");
+
+        var ids = await harness.GitClient.ListStagedIdsAsync(temp.Path, ["lib/mod.txt", "other.txt"], cancellationToken);
+        var hashed = await harness.RunGitAsync(temp.Path, ["hash-object", "lib/mod.txt", "other.txt"], cancellationToken);
+
+        Assert.Equal(hashed.StandardOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries), ids);
+    }
+
     [Fact]
     public async Task Blobs_AreReadAsTheirBytes_AndWhatIsNoBlobGitCanRead_AsNone()
     {
@@ -2351,6 +2540,9 @@ public sealed class GitClientProtocolTests
         var indexed = processes.Started.Where(request => request.Environment.TryGetValue("GIT_INDEX_FILE", out var index) && index is not null).ToList();
         Assert.NotEmpty(indexed);
         Assert.All(indexed, request => Assert.Null(request.Environment["GIT_COMMON_DIR"]));
+
+        // An index of the tool's own is never written with its entries marked unchanged, as core.ignoreStat would mark them.
+        Assert.All(indexed, request => Assert.Equal(["-c", "core.ignoreStat=false"], request.Arguments.Take(2)));
     }
 
     [Fact]

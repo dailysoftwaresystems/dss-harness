@@ -691,9 +691,10 @@ listed, and written only with `--apply`, so its record says
 what it holds and the next move of the main tree hands it; dropped unrecorded, as before, the agent's copy read as its
 change from then on. `--stale <path>` hands the main tree's copy over a path the agent changed only where its copy is
 proved the main tree's own at an earlier commit (`AgentFold.StaleAtAsync`, asked once for every path a refusal or a
-`--stale` names): the agent's copy as `git add` would record it in its worktree (`ListStagedIdsAsync`, staged into a
-copy of the worktree's index), so a copy that differs from a commit's file only by a line-ending conversion is that
-commit's file, and one committed with carriage returns keeps them as git keeps them, against the blobs the main tree's
+`--stale` names): the agent's copy as `git add` would record it in its worktree (`ListStagedIdsAsync`, read as the
+merge's versions are, below), so a copy that differs from a commit's file only by a line-ending conversion is that
+commit's file, one committed with carriage returns keeps them as git keeps them, and an edit is its own bytes wherever
+git leaves files unexamined (`core.ignoreStat`), against the blobs the main tree's
 history held at the path (`ListHeldInHistoryAsync` from its HEAD, `rev-list --full-history` so a version a merge dropped
 is still its history's, at most `TwoChanges.MostCommits` commits, each run of equal blobs named by its newest commit).
 Bytes that history holds are the main tree's own there, so replacing them loses nothing it does not keep; the bound
@@ -765,20 +766,28 @@ Every command that writes an agent's records names where they are on each way ou
 
 Merging two changes of one file is git's work, never a comparison of lines made here (`GitClient.Merge.cs`). Each of
 the three versions - what both held, and each side's - is first read as git would store it at the path
-(`IGitClient.ReadStagedAsync`), as `git add` would record it there: a blob as it is, and a file or bytes in hand
-placed at the path in a tree of the question's own and staged there (`git update-index --add`, then `cat-file
---batch`) into an index holding what the work tree's own holds at the path and at each `.gitattributes` above it,
-beside a copy of each `.gitattributes` the work tree holds there. git then reads the path's clean filters and
-line-ending rules, and the entry whose carriage returns decide whether a file's are kept: a file one tree checked out
-with other line endings merges as `git merge` would merge it, and one committed with carriage returns, under
-`core.autocrlf` or a `text=auto` attribute, keeps them on every side, as git keeps them, so a merge git makes clean is
-clean. A clean filter runs in the tree of the question's own. git stores a file to read it so, and what it stores
-goes to an object directory of the question's own - a temporary directory as `GIT_OBJECT_DIRECTORY`, the repository's
-own as `GIT_ALTERNATE_OBJECT_DIRECTORIES`, quoted so a path holding the character that parts that list is still one
-entry - discarded with the answer: neither the repository's objects nor its index are written by a merge that was only
-measured. What git would record for a file is asked in one place (`GitClient.StagedIdsAsync`): staged, never hashed
-alone - `git hash-object` reads no index, and so misses the rule that keeps the line endings of a file whose entry
-holds carriage returns. `GitClient.HashAsync` is the one caller of `hash-object`, for bytes as they stand.
+(`IGitClient.ReadStagedAsync`), as `git add` would record it there: a blob as it is, and a file or bytes in hand as
+the file at the path would be (`git hash-object -w --path=<path>` run at the work tree's root, then `cat-file
+--batch`). The path's clean filters run from the root, as git add runs them, and its attributes and line-ending rules
+apply: a file one tree checked out with other line endings merges as `git merge` would merge it, and one committed
+with carriage returns, under `core.autocrlf` or a `text=auto` attribute, keeps them on every side, as git keeps them,
+so a merge git makes clean is clean. git stores a file to read it so, and what it stores goes to an object directory
+of the question's own - a temporary directory as `GIT_OBJECT_DIRECTORY`, the repository's own as
+`GIT_ALTERNATE_OBJECT_DIRECTORIES`, quoted so a path holding the character that parts that list is still one entry -
+discarded with the answer: neither the repository's objects nor its index are written by a merge that was only
+measured. What git would record for a file is asked in one place (`GitClient.StoredIdsAsync`), of `hash-object` at the
+work tree's root, told the two things `git add` reads in the index and hash-object does not (`GitClient.StoringAsync`).
+Where `git ls-files --eol` says the path's entry holds carriage returns (`i/crlf`, `i/mixed`) and its line endings are
+converted only as git sees fit (no attribute under `core.autocrlf`, or `text=auto`), git leaves that conversion out,
+and hash-object is told to as well: `core.autocrlf` off; the bytes as they stand, where nothing else converts the
+file; or, where a clean filter, `ident` or `working-tree-encoding` still does, the path's attributes declared whole
+with `text` unset, in a tree of the question's own git reads attributes from instead (`--attr-source`, git 2.40's). A
+path below an attribute file the work tree lacks, which git reads from the index, has its attributes declared so too.
+info/attributes outranks that tree: where it says otherwise of the path, the question is refused, said, never guessed.
+Nothing is staged, so no index is written and no mark on an entry stands for a file's bytes; every index the tool does
+write of its own is written with `core.ignoreStat` off, in one place (`GitClient.RunCoreAsync`), so no comparison made
+with it reads an edited file as its entry's blob. `GitClient.HashAsync` is the one caller of `hash-object`, told what
+differs - written or not, filtered or not, as which path, what git is told first, into which directory.
 The three are merged by `git merge-file -p --diff3` (`MergeTextAsync`), outside any repository. Its exit code is the
 answer and is read as one, never as success or failure: 0 is a clean merge, whose output is the merged bytes; 1 to
 127 is that many conflicts, 127 standing for as many or more; anything else is no merge - a binary file, for one -

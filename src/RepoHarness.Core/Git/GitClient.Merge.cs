@@ -220,58 +220,10 @@ public sealed partial class GitClient
     {
         ArgumentNullException.ThrowIfNull(paths);
 
-        if (paths.Count == 0)
-        {
-            return [];
-        }
-
-        const string What = "read what the tree holds as git would store it";
-        var real = await GetIndexFileAsync(directory, cancellationToken).ConfigureAwait(false);
-
-        // Staged into a copy of the work tree's own index, as git add stages into it: each file whose entry and stat still
-        // agree is the blob the entry holds, and any other is read again, its entry's line endings deciding its own.
-        return await InIndexOfItsOwnAsync(async index =>
-        {
-            CopyIndex(real, index, What);
-
-            return await StagedIdsAsync(directory, workTree: null, index, paths, store: null, What, cancellationToken).ConfigureAwait(false);
-        }).ConfigureAwait(false);
-    }
-
-    /// <summary>
-    /// Copies the index at <paramref name="real"/> to <paramref name="copy"/> with the time it was last written, which git
-    /// compares each entry's own with: an entry written as late as its index could hide an edit made the same moment, and git
-    /// reads such a file again rather than trust it - a copy timed now would trust it. An index never written leaves no copy,
-    /// which git takes for one holding nothing.
-    /// </summary>
-    /// <remarks>
-    /// Read while git may replace it: opened so a replacement is not refused, and read whole from what was opened.
-    /// </remarks>
-    /// <exception cref="HarnessException">The index could not be read, or its copy written.</exception>
-    private static void CopyIndex(string real, string copy, string what)
-    {
-        try
-        {
-            DateTime written;
-
-            using (var source = new FileStream(real, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
-            {
-                written = File.GetLastWriteTimeUtc(source.SafeFileHandle);
-
-                using var target = new FileStream(copy, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-                source.CopyTo(target);
-            }
-
-            File.SetLastWriteTimeUtc(copy, written);
-        }
-        catch (FileNotFoundException)
-        {
-            // Nothing was ever staged there: git starts the copy empty, as it reads the index that is not there.
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            throw new HarnessException(HarnessExit.CommandFailed, $"Could not {what}: the index '{real}' could not be copied - {ex.Message}");
-        }
+        return paths.Count == 0
+            ? []
+            : await StoredIdsAsync(directory, paths, asPath: null, written: false, store: null, "read what the tree holds as git would store it", cancellationToken)
+                .ConfigureAwait(false);
     }
 
     public Task<IReadOnlyList<byte[]>> ReadStagedAsync(string directory, string path, IReadOnlyList<GitContent> contents, CancellationToken cancellationToken = default)
@@ -285,7 +237,7 @@ public sealed partial class GitClient
         {
             var store = await StoreAsync(directory, scratch, cancellationToken).ConfigureAwait(false);
             var ids = new string?[contents.Count];
-            var placed = new List<(int At, Func<string, Task> Write)>();
+            var files = new List<(int At, string File)>();
 
             for (var at = 0; at < contents.Count; at++)
             {
@@ -295,29 +247,26 @@ public sealed partial class GitClient
                         ids[at] = blob.Id;
                         break;
                     case GitContent.File file:
-                        placed.Add((at, destination =>
-                        {
-                            File.Copy(file.Path, destination);
-
-                            return Task.CompletedTask;
-                        }));
+                        files.Add((at, Path.GetFullPath(file.Path)));
                         break;
                     case GitContent.Bytes bytes:
-                        placed.Add((at, destination => File.WriteAllBytesAsync(destination, bytes.Content, cancellationToken)));
+                        var held = Path.Combine(scratch, $"content-{at}");
+                        await File.WriteAllBytesAsync(held, bytes.Content, cancellationToken).ConfigureAwait(false);
+                        files.Add((at, held));
                         break;
                 }
             }
 
-            if (placed.Count > 0)
+            if (files.Count > 0)
             {
                 // Written, since it is the object that is read back - into the store of this question's own, never the
                 // repository's.
-                var staged = await StagedAtAsync(directory, path, [.. placed.Select(content => content.Write)], scratch, store, what, cancellationToken)
+                var hashed = await StoredIdsAsync(directory, [.. files.Select(file => file.File)], path, written: true, store, what, cancellationToken)
                     .ConfigureAwait(false);
 
-                for (var at = 0; at < placed.Count; at++)
+                for (var at = 0; at < files.Count; at++)
                 {
-                    ids[placed[at].At] = staged[at];
+                    ids[files[at].At] = hashed[at];
                 }
             }
 
@@ -330,87 +279,291 @@ public sealed partial class GitClient
     }
 
     /// <summary>
-    /// The blob <c>git add</c> would record for each content <paramref name="contents"/> writes, were it the file at
-    /// <paramref name="path"/> in the work tree at <paramref name="directory"/>, in the same order, each written into
-    /// <paramref name="store"/>: each placed at that path in a tree of its own under <paramref name="scratch"/> and staged
-    /// there (<see cref="StagedIdsAsync"/>), into an index holding what the work tree's own holds at the path and at each
-    /// attribute file above it, beside a copy of each such attribute file the work tree holds.
+    /// The blob <c>git add</c> would record for each of <paramref name="files"/>, in the same order, were it the file at its
+    /// path in the work tree at <paramref name="directory"/> - its own, or <paramref name="asPath"/> for them all: the one
+    /// place this client asks what git stores for a file.
     /// </summary>
     /// <remarks>
-    /// git then reads what it reads in the work tree: the entry whose carriage returns decide whether the file's are kept,
-    /// and each attribute file the work tree holds or, where it holds none, the index's, with the repository's own
-    /// configuration and attributes. One that is the path itself is the content placed there, as it would be in the work
-    /// tree. A link the work tree holds in an attribute file's place is not copied, as git does not read it. A clean filter
-    /// runs in the tree of the question's own, where in the work tree it would run at its root.
+    /// Read by <c>git hash-object</c> run at the work tree's root, as <c>git add</c> reads a file there: the path's clean
+    /// filters run from the root, its attributes and the repository's settings read as git reads them, the path the work
+    /// tree's own. hash-object reads no index, where <c>git add</c> reads it twice in reading a file: for the rule that
+    /// leaves the line endings of a file whose entry holds carriage returns as they are, and for an attribute file the work
+    /// tree lacks. Both are read here and told to it (<see cref="StoringAsync"/>). Nothing is staged, so no index is written
+    /// and no mark on an entry - core.ignoreStat's, assume-unchanged, skip-worktree - stands for the file's bytes.
     /// </remarks>
-    /// <exception cref="HarnessException">git could not stage one - a filter of the path failed, for one.</exception>
-    /// <exception cref="IOException">A file could not be read, or a tree written.</exception>
-    private async Task<IReadOnlyList<string>> StagedAtAsync(
+    /// <param name="directory">The work tree's root, where git runs.</param>
+    /// <param name="files">The files to read: each a path in the work tree, or each a file kept elsewhere where <paramref name="asPath"/> is given.</param>
+    /// <param name="asPath">The path whose rules apply to every file; each file's own where null.</param>
+    /// <param name="written">Whether each blob is written, into <paramref name="store"/>.</param>
+    /// <param name="store">An object directory of the question's own; one is made where a tree of attributes needs a place and none is given.</param>
+    /// <param name="what">What was being done, for the failure.</param>
+    /// <param name="cancellationToken">Cancels the git processes.</param>
+    /// <exception cref="HarnessException">git could not read a file, a filter of its path failed, or the path's attributes cannot be told to git.</exception>
+    private async Task<IReadOnlyList<string>> StoredIdsAsync(
         string directory,
-        string path,
-        IReadOnlyList<Func<string, Task>> contents,
-        string scratch,
-        ObjectStore store,
+        IReadOnlyList<string> files,
+        string? asPath,
+        bool written,
+        ObjectStore? store,
         string what,
         CancellationToken cancellationToken)
     {
-        // The attribute file of each directory above the path, from the root down.
-        var directories = path.Split('/')[..^1];
-        var attributes = Enumerable.Range(0, directories.Length + 1)
-            .Select(depth => string.Join('/', [.. directories.Take(depth), AttributesFile]))
-            .Where(file => file != path)
-            .ToList();
+        var storing = await StoringAsync(directory, asPath is null ? files : [asPath], cancellationToken).ConfigureAwait(false);
+        var ids = new string[files.Count];
 
-        var entries = await ListIndexAsync(directory, indexFile: null, [path, .. attributes], cancellationToken).ConfigureAwait(false);
-        var template = Path.Combine(scratch, "index");
+        Storing Of(int at) => storing[asPath ?? files[at]];
 
-        if (entries.Count > 0)
+        // Each way of reading asked once, for every file it reads.
+        foreach (var group in Enumerable.Range(0, files.Count).GroupBy(at => (Of(at).Filtered, Of(at).Told, Declared: Of(at).Declared is not null)))
         {
-            var written = await RunWithIndexAsync(
-                    directory,
-                    template,
-                    ["update-index", "--no-split-index", "-z", "--index-info"],
-                    string.Concat(entries.Select(entry => $"{entry.Mode} {entry.ObjectId} {entry.Stage}\t{entry.Path}\0")),
-                    cancellationToken)
-                .ConfigureAwait(false);
+            var at = group.ToList();
+            IReadOnlyList<string> read = group.Key.Declared
+                ? await DeclaredIdsAsync(
+                        directory,
+                        [.. at.Select(index => files[index])],
+                        asPath,
+                        at.Select(index => asPath ?? files[index]).Distinct(StringComparer.Ordinal).ToDictionary(path => path, path => storing[path].Declared!, StringComparer.Ordinal),
+                        written,
+                        store,
+                        what,
+                        cancellationToken)
+                    .ConfigureAwait(false)
+                : await HashAsync(directory, [.. at.Select(index => files[index])], new Hashing(written, group.Key.Filtered, asPath, store, group.Key.Told), what, cancellationToken)
+                    .ConfigureAwait(false);
 
-            Ensure(written, what);
-        }
-
-        var held = attributes.Where(file => new FileInfo(Path.Combine(directory, file)) is { Exists: true, LinkTarget: null }).ToList();
-        var ids = new List<string>();
-
-        for (var at = 0; at < contents.Count; at++)
-        {
-            var tree = Path.Combine(scratch, $"tree-{at}");
-            var index = Path.Combine(scratch, $"index-{at}");
-
-            foreach (var file in held)
+            for (var index = 0; index < at.Count; index++)
             {
-                File.Copy(Path.Combine(directory, file), Placed(tree, file));
+                ids[at[index]] = read[index];
             }
-
-            await contents[at](Placed(tree, path)).ConfigureAwait(false);
-
-            if (entries.Count > 0)
-            {
-                File.Copy(template, index);
-            }
-
-            ids.Add((await StagedIdsAsync(directory, tree, index, [path], store, what, cancellationToken).ConfigureAwait(false))[0]);
         }
 
         return ids;
-
-        // Where a file goes at a path in a tree, its directory made.
-        static string Placed(string tree, string path)
-        {
-            var file = Path.Combine(tree, path);
-            Directory.CreateDirectory(Path.GetDirectoryName(file)!);
-
-            return file;
-        }
     }
+
+    /// <summary>What <c>git hash-object</c> is told so it reads a file as <c>git add</c> would at its path.</summary>
+    /// <param name="Filtered">Whether the path's clean filters and line-ending rules are applied; not where none of them would change the file.</param>
+    /// <param name="Told">A setting given to git first, where one is.</param>
+    /// <param name="Declared">The path's conversion attributes, declared whole in place of the work tree's, where they are.</param>
+    private sealed record Storing(bool Filtered, IReadOnlyList<string>? Told = null, IReadOnlyDictionary<string, string>? Declared = null)
+    {
+        /// <summary>As the path's attributes and the repository's settings say: git's rule for an entry's carriage returns does not apply.</summary>
+        public static readonly Storing AsAttributed = new(Filtered: true);
+
+        /// <summary>With <c>core.autocrlf</c> off: it alone asked for the conversion git's rule leaves out, and no other rule of the path changes.</summary>
+        public static readonly Storing WithoutAutocrlf = new(Filtered: true, ["-c", "core.autocrlf=false"]);
+
+        /// <summary>As its bytes stand: a <c>text=auto</c> attribute asked for the conversion git's rule leaves out, and nothing else would change the file.</summary>
+        public static readonly Storing AsItStands = new(Filtered: false);
+    }
+
+    /// <summary>The attributes git reads in converting a file it stores, each read here to tell it again.</summary>
+    private static readonly string[] ConversionAttributes = ["crlf", "ident", "filter", "eol", "text", "working-tree-encoding"];
+
+    /// <summary>
+    /// How <c>git hash-object</c> reads each of <paramref name="paths"/> as <c>git add</c> would in the work tree at
+    /// <paramref name="directory"/>: what hash-object, which reads no index, is told of the two things git add reads in it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// git's rule (convert.c, <c>crlf_to_git</c>): where a path's line endings are converted only as git sees fit - its
+    /// attributes say <c>text=auto</c>, or say nothing and <c>core.autocrlf</c> is true or input - and the path's entry in the
+    /// index is text holding a carriage return before a line feed, the conversion is left out, and every other conversion of
+    /// the path - a clean filter, <c>working-tree-encoding</c>, <c>ident</c> - still applies. Whether the entry holds one and
+    /// what the attributes say are git's own words, from <c>git ls-files --eol</c>: <c>i/crlf</c> or <c>i/mixed</c> is the
+    /// test the rule makes of the entry, and <c>attr/</c> the attributes as read before <c>core.autocrlf</c> is weighed. Where
+    /// the attributes say nothing, <c>core.autocrlf</c> off leaves out exactly that conversion. Where they say
+    /// <c>text=auto</c>, no setting does: a file no other conversion applies to is read as its bytes stand, and any other with
+    /// its attributes declared whole, <c>text</c> unset.
+    /// </para>
+    /// <para>
+    /// The second: git reads an attribute file the work tree does not hold as a file from the index, which hash-object never
+    /// reads. A path below one is read with its attributes declared whole as git resolves them there (<c>git check-attr</c>,
+    /// which reads the index as git add does).
+    /// </para>
+    /// </remarks>
+    /// <exception cref="HarnessException">git could not list the index's line endings or a path's attributes.</exception>
+    private async Task<IReadOnlyDictionary<string, Storing>> StoringAsync(string directory, IReadOnlyList<string> paths, CancellationToken cancellationToken)
+    {
+        var asked = paths.Distinct(StringComparer.Ordinal).ToList();
+        var above = asked.ToDictionary(path => path, AttributeFilesAbove, StringComparer.Ordinal);
+        var listed = await LineEndingsAsync(directory, [.. asked.Concat(above.Values.SelectMany(files => files)).Distinct(StringComparer.Ordinal)], cancellationToken)
+            .ConfigureAwait(false);
+
+        // git reads an attribute file from the work tree where it opens there as a file, a link not followed, and from the
+        // index otherwise.
+        bool FromIndex(string path) => above[path].Any(file => listed.ContainsKey(file) && new FileInfo(Path.Combine(directory, file)) is not { Exists: true, LinkTarget: null });
+
+        bool Kept(string path) => listed.TryGetValue(path, out var held)
+            && held.Index is "crlf" or "mixed"
+            && (held.Attributes.Length == 0 || held.Attributes.StartsWith("text=auto", StringComparison.Ordinal));
+
+        var weighed = asked.Where(path => FromIndex(path) || (Kept(path) && listed[path].Attributes.Length > 0)).ToList();
+        var resolved = weighed.Count == 0
+            ? new Dictionary<string, IReadOnlyDictionary<string, string>>(StringComparer.Ordinal)
+            : await ReadAttributesAsync(directory, ConversionAttributes, weighed, told: [], store: null, unread: null, cancellationToken).ConfigureAwait(false);
+
+        return asked.ToDictionary(
+            path => path,
+            path => (FromIndex(path), Kept(path)) switch
+            {
+                (true, var kept) => Declaring(resolved[path], kept),
+                (false, false) => Storing.AsAttributed,
+                (false, true) when listed[path].Attributes.Length == 0 => Storing.WithoutAutocrlf,
+                (false, true) when ConvertsOtherwise(resolved[path]) => Declaring(resolved[path], kept: true),
+                (false, true) => Storing.AsItStands,
+            },
+            StringComparer.Ordinal);
+
+        // A clean filter, an encoding or an ident keyword the path has: git converts the file beside its line endings.
+        static bool ConvertsOtherwise(IReadOnlyDictionary<string, string> attributes)
+            => attributes["filter"] is not (GitAttributes.Set or GitAttributes.Unset or GitAttributes.Unspecified)
+                || attributes["ident"] == GitAttributes.Set
+                || attributes["working-tree-encoding"] is not (GitAttributes.Set or GitAttributes.Unset or GitAttributes.Unspecified);
+
+        // The attributes as git resolves them, text unset where its rule leaves the line endings as they are.
+        static Storing Declaring(IReadOnlyDictionary<string, string> attributes, bool kept)
+            => new(Filtered: true, Declared: ConversionAttributes.ToDictionary(
+                name => name,
+                name => kept && name == "text" ? GitAttributes.Unset : attributes[name],
+                StringComparer.Ordinal));
+    }
+
+    /// <summary>The attribute file of each directory above <paramref name="path"/>, from the root down, the path itself left out.</summary>
+    private static List<string> AttributeFilesAbove(string path)
+    {
+        var directories = path.Split('/')[..^1];
+
+        return [.. Enumerable.Range(0, directories.Length + 1)
+            .Select(depth => string.Join('/', [.. directories.Take(depth), AttributesFile]))
+            .Where(file => file != path)];
+    }
+
+    /// <summary>
+    /// What the index holds at each of <paramref name="paths"/> it holds, as <c>git ls-files --eol</c> says: the line endings
+    /// of its entry (<c>i/</c>) and its attributes as git weighs them for line endings (<c>attr/</c>); a path it does not hold
+    /// has none. Read a command line of paths at a time, each literally.
+    /// </summary>
+    /// <exception cref="HarnessException">git could not list them, or listed one in a form this build cannot read.</exception>
+    private async Task<Dictionary<string, (string Index, string Attributes)>> LineEndingsAsync(
+        string directory,
+        IReadOnlyList<string> paths,
+        CancellationToken cancellationToken)
+    {
+        var asked = paths.ToHashSet(StringComparer.Ordinal);
+        var listed = new Dictionary<string, (string Index, string Attributes)>(StringComparer.Ordinal);
+
+        foreach (var batch in CommandLineBatches(paths))
+        {
+            var result = await RunForBytesAsync(directory, ["--literal-pathspecs", "ls-files", "--eol", "-z", "--", .. batch], cancellationToken).ConfigureAwait(false);
+
+            Ensure(result, $"read the line endings the index holds at {ReportText.Counted(batch.Count, "path")}");
+
+            // 'i/<entry> w/<file> attr/<attributes>TAB<name>', each padded with spaces; the attributes may hold one.
+            foreach (var record in Records(result.StandardOutput))
+            {
+                var tab = record.IndexOf('\t', StringComparison.Ordinal);
+                var attributes = record.IndexOf(" attr/", StringComparison.Ordinal);
+
+                if (tab < 0 || !record.StartsWith("i/", StringComparison.Ordinal) || attributes < 0 || attributes > tab)
+                {
+                    throw new HarnessException(HarnessExit.CommandFailed, $"git listed an entry's line endings in a form this build cannot read: '{GitName.FromBytes(record).Quoted}'");
+                }
+
+                var name = GitName.FromBytes(record[(tab + 1)..]);
+
+                // An entry in conflict is listed once for each side, each with what git's rule reads for the path.
+                if (name.IsUtf8 && asked.Contains(name.Text))
+                {
+                    listed.TryAdd(name.Text, (record[2..record.IndexOf(' ', StringComparison.Ordinal)], record[(attributes + 6)..tab].TrimEnd()));
+                }
+            }
+        }
+
+        return listed;
+    }
+
+    /// <summary>
+    /// The pattern of a line of an attribute file at the root that matches <paramref name="path"/> and nothing else: from
+    /// the root, each character a pattern reads otherwise escaped, quoted as git quotes a name so a space or a quote in it is
+    /// still the pattern's.
+    /// </summary>
+    private static string AttributePattern(string path)
+    {
+        var quoted = new StringBuilder("\"/");
+
+        foreach (var character in path)
+        {
+            if (character is '\\' or '*' or '?' or '[')
+            {
+                quoted.Append(@"\\");
+            }
+
+            quoted.Append(character switch
+            {
+                '\\' => @"\\",
+                '"' => "\\\"",
+                < ' ' or '\x7F' => $"\\{Convert.ToString((int)character, 8).PadLeft(3, '0')}",
+                _ => character.ToString(),
+            });
+        }
+
+        return quoted.Append('"').ToString();
+    }
+
+    /// <summary>
+    /// The blob <c>git add</c> would record for each of <paramref name="files"/>, read with the attributes
+    /// <paramref name="declared"/> gives their paths in place of the work tree's: each path's line in an attribute file at the
+    /// root of a tree of the question's own, which git reads attributes from instead (<c>--attr-source</c>, git 2.40's), its
+    /// other sources - the repository's info/attributes and the configured ones - read as ever.
+    /// </summary>
+    /// <remarks>
+    /// Each path's attributes are read back through that tree before a file is read: info/attributes outranks any tree, and
+    /// one that says otherwise of a path leaves no way to tell git how it would read it there - said, never guessed.
+    /// </remarks>
+    /// <exception cref="HarnessException">git could not write the tree or read a file through it, or a path's attributes read back otherwise.</exception>
+    private Task<IReadOnlyList<string>> DeclaredIdsAsync(
+        string directory,
+        IReadOnlyList<string> files,
+        string? asPath,
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> declared,
+        bool written,
+        ObjectStore? store,
+        string what,
+        CancellationToken cancellationToken)
+        => InScratchAsync(what, async scratch =>
+        {
+            var own = store ?? await StoreAsync(directory, scratch, cancellationToken).ConfigureAwait(false);
+            var lines = Path.Combine(scratch, AttributesFile);
+            await File.WriteAllTextAsync(lines, string.Concat(declared.Select(path => Declaration(path.Key, path.Value) + '\n')), cancellationToken).ConfigureAwait(false);
+
+            var blob = (await HashAsync(directory, [lines], new Hashing(Written: true, Filtered: false, Store: own), what, cancellationToken).ConfigureAwait(false))[0];
+            var tree = await RunCoreAsync(directory, ["mktree"], echoOutput: false, untranslated: false, indexFile: null, $"100644 blob {blob}\t{AttributesFile}\n", cancellationToken, objects: own)
+                .ConfigureAwait(false);
+
+            Ensure(tree, what);
+
+            string[] told = [$"--attr-source={tree.StandardOutput.Trim()}"];
+            var read = await ReadAttributesAsync(directory, ConversionAttributes, [.. declared.Keys], told, own, unread: null, cancellationToken).ConfigureAwait(false);
+
+            if (declared.FirstOrDefault(path => ConversionAttributes.Any(name => read[path.Key][name] != path.Value[name])) is { Key: { } differing })
+            {
+                throw new HarnessException(
+                    HarnessExit.CommandFailed,
+                    $"Could not {what}: the repository's info/attributes decides how '{differing}' is stored, and outranks any attributes declared to git, so how git would read it cannot be told.");
+            }
+
+            return await HashAsync(directory, files, new Hashing(written, Filtered: true, asPath, own, told), what, cancellationToken).ConfigureAwait(false);
+        });
+
+    /// <summary>The line of an attribute file declaring <paramref name="attributes"/> for <paramref name="path"/> alone.</summary>
+    private static string Declaration(string path, IReadOnlyDictionary<string, string> attributes)
+        => string.Join(' ', [AttributePattern(path), .. ConversionAttributes.Select(name => attributes[name] switch
+        {
+            GitAttributes.Set => name,
+            GitAttributes.Unset => $"-{name}",
+            GitAttributes.Unspecified => $"!{name}",
+            var value => $"{name}={value}",
+        })]);
 
     public Task<byte[]> ReadCheckedOutAsync(string directory, string path, byte[] staged, CancellationToken cancellationToken = default)
     {
@@ -427,7 +580,7 @@ public sealed partial class GitClient
 
             // Stored as the bytes stand - they are the staged form already - and then read back as a checkout of the
             // path would write them.
-            var id = (await HashAsync(directory, [held], store, what, cancellationToken).ConfigureAwait(false))[0];
+            var id = (await HashAsync(directory, [held], new Hashing(Written: true, Filtered: false, Store: store), what, cancellationToken).ConfigureAwait(false))[0];
             var result = await RunForBytesAsync(directory, ["cat-file", "--filters", $"--path={path}", id], cancellationToken, objects: store).ConfigureAwait(false);
 
             Ensure(result, what);
@@ -484,12 +637,27 @@ public sealed partial class GitClient
         return [.. read.Select(answer => answer is { Type: "blob" } blob ? Encoding.Latin1.GetBytes(blob.Content) : null)];
     }
 
-    public async Task<IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>>> ReadAttributesAsync(
+    public Task<IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>>> ReadAttributesAsync(
         string directory,
         IReadOnlyList<string> attributes,
         IReadOnlyList<string> paths,
         string? unread = null,
         CancellationToken cancellationToken = default)
+        => ReadAttributesAsync(directory, attributes, paths, told: [], store: null, unread, cancellationToken);
+
+    /// <summary>
+    /// What <see cref="ReadAttributesAsync(string, IReadOnlyList{string}, IReadOnlyList{string}, string?, CancellationToken)"/>
+    /// answers, git told <paramref name="told"/> first - where its attributes are read from - and reading
+    /// <paramref name="store"/> beside the repository's objects where one is given.
+    /// </summary>
+    private async Task<IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>>> ReadAttributesAsync(
+        string directory,
+        IReadOnlyList<string> attributes,
+        IReadOnlyList<string> paths,
+        IReadOnlyList<string> told,
+        ObjectStore? store,
+        string? unread,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(attributes);
         ArgumentNullException.ThrowIfNull(paths);
@@ -502,7 +670,7 @@ public sealed partial class GitClient
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                var result = await RunForBytesAsync(directory, ["check-attr", "-z", .. attributes, "--", .. batch], cancellationToken)
+                var result = await RunForBytesAsync(directory, [.. told, "check-attr", "-z", .. attributes, "--", .. batch], cancellationToken, objects: store)
                     .ConfigureAwait(false);
 
                 if (!result.Succeeded)

@@ -133,15 +133,15 @@ public interface IGitClient
 
     /// <summary>
     /// The blob each of <paramref name="paths"/> would be stored as at its own path in the work tree at
-    /// <paramref name="directory"/>, in the same order: the one <c>git add</c> would record there - its file read through
-    /// the clean filters and the line-ending rules of that path, its line endings kept where the work tree's index holds
-    /// the path with carriage returns, as git keeps them. Staged into a copy of that index, discarded with the answer:
-    /// neither the index nor the repository's objects are written.
+    /// <paramref name="directory"/>, in the same order: the one <c>git add</c> would record for its bytes as they stand -
+    /// read through the clean filters and the line-ending rules of that path, its line endings kept where the work tree's
+    /// index holds the path with carriage returns, as git keeps them, and never the entry's blob for a file the index
+    /// marks unchanged. Nothing in the repository is written - neither its index nor its objects.
     /// </summary>
     /// <param name="directory">The work tree's root.</param>
     /// <param name="paths">Files in it, relative to the root, with forward separators.</param>
     /// <param name="cancellationToken">Cancels the git processes.</param>
-    /// <exception cref="HarnessException">git could not read a file, or a filter of its path failed.</exception>
+    /// <exception cref="HarnessException">git could not read a file, a filter of its path failed, or the path's attributes cannot be told to git.</exception>
     Task<IReadOnlyList<string>> ListStagedIdsAsync(string directory, IReadOnlyList<string> paths, CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -155,7 +155,7 @@ public interface IGitClient
     /// <param name="path">The path whose rules apply, relative to the root, with forward separators.</param>
     /// <param name="contents">The contents to read.</param>
     /// <param name="cancellationToken">Cancels the git processes.</param>
-    /// <exception cref="HarnessException">git could not read one of them as it would store it: a filter that failed, or a blob it does not hold.</exception>
+    /// <exception cref="HarnessException">git could not read one of them as it would store it: a filter that failed, a blob it does not hold, or attributes of the path that cannot be told to it.</exception>
     Task<IReadOnlyList<byte[]>> ReadStagedAsync(string directory, string path, IReadOnlyList<GitContent> contents, CancellationToken cancellationToken = default);
 
     /// <summary>
