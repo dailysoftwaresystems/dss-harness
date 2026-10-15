@@ -1,7 +1,7 @@
 namespace DssHarness.Tests;
 
 /// <summary>
-/// The workflows that run this suite, and the one that promotes a release, as written: embedded into the tests, so a
+/// The workflow that runs this suite, and the two that release this tool, as written: embedded into the tests, so a
 /// test can hold a job or a step of one to what it has to say. Nothing runs a workflow here; what one says is all a
 /// test of it can read.
 /// </summary>

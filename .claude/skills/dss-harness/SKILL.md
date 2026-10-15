@@ -59,7 +59,8 @@ equally mandatory.
 - **Help, README and architecture are held to the code by tests** → same file, §5.
 - **One pull request at a time; never push to `main`, force-push, dispatch Deploy or Package Pipeline, or bump
   `<Version>`** → [references/release-and-ci.md](references/release-and-ci.md) §1.
-- **The package pipeline runs no test suite** — Deploy's matrix is what tests a release → same file, §2.
+- **Deploy and the package pipeline run no test suite** — the required check on each pull request is what tests
+  a release → same file, §4.
 - **The repository is public:** nothing committed names a secret, a private repository or an internal tool → same
   file, §6.
 - **Status is never written into this skill.** The version is `<Version>` in the Cli project, releases are

@@ -29,8 +29,8 @@ disagree, it wins and this file is fixed.
 | Workflow | Fires on | Does |
 |---|---|---|
 | [`pipeline-pr.yml`](../../../../.github/workflows/pipeline-pr.yml) ("Pipeline") | pull request to `main`, push to `main` | Runs `test.yml`, packs, installs and runs the packed tool, posts the required status |
-| [`test.yml`](../../../../.github/workflows/test.yml) ("Test") | called by `pipeline-pr.yml` and `deploy.yml` | Builds and runs the suite on every runner of the matrix |
-| [`deploy.yml`](../../../../.github/workflows/deploy.yml) ("Deploy") | by hand: `channel` beta or stable, optional `version` for beta | `plan` pins the commit, `test` runs the matrix on it, `promote` checks, bumps (beta), pushes atomically and starts Package Pipeline naming the commit |
+| [`test.yml`](../../../../.github/workflows/test.yml) ("Test") | called by `pipeline-pr.yml` | Builds and runs the suite on every runner of the matrix |
+| [`deploy.yml`](../../../../.github/workflows/deploy.yml) ("Deploy") | by hand: `channel` beta or stable, optional `version` for beta | `plan` pins the commit, `promote` checks, bumps (beta), pushes atomically and starts Package Pipeline naming the commit. Runs no test suite |
 | [`pipeline-pkg.yml`](../../../../.github/workflows/pipeline-pkg.yml) ("Package Pipeline") | started by Deploy, or by hand for a release branch | `package` builds, packs and verifies read-only; `tag`; `nuget` for stable; `release` last. Runs no test suite |
 | [`cleanup-cache.yml`](../../../../.github/workflows/cleanup-cache.yml) | pull request closed | Deletes that pull request's caches |
 
@@ -60,6 +60,11 @@ requires. The `ci-check` job in `pipeline-pr.yml` posts it once the matrix and t
 only when both succeeded, and the job fails whenever the status is a failure. A pull request from a fork cannot post
 it, so a maintainer runs such a change from a branch here. Read required checks from rulesets
 (`gh api repos/<owner>/<repo>/rules/branches/main`): `branches/main/protection` answers that `main` is unprotected.
+
+Every release stands on this check: neither Deploy nor Package Pipeline runs a suite. Deploy promotes `main`'s
+commit as the check passed it (for beta, with only `<Version>` bumped on top) and stable promotes what beta
+released. Never add a suite back to either; a slow runner is met by the Test step's `timeout-minutes` in
+`test.yml` (80, the job's 90).
 
 ## 5. Versions and channels
 
@@ -101,8 +106,8 @@ it, so a maintainer runs such a change from a branch here. Read required checks 
    hold steps and jobs to what they must say through
    [`WorkflowFiles`](../../../../tests/dss-harness-test/WorkflowFiles.cs) (`Lines`, `Job`, `StepNamed`,
    `StepRunning`). Find the tests a step is pinned by with `git grep -n "WorkflowFiles\." tests`, and change them in the
-   same commit: `PackagePipelineTests` pins that the package pipeline runs no suite and what makes Deploy's runs safe
-   to publish; `BuildToolsTests` pins the build-tools variable on the step that runs the suite.
+   same commit: `PackagePipelineTests` pins that neither Deploy nor the package pipeline runs a suite and that
+   what Deploy starts publishes the commit it pinned and promoted; `BuildToolsTests` pins the build-tools variable on the step that runs the suite.
 2. A workflow that newly runs the suite sets `DSSHARNESS_TESTS_REQUIRE_BUILD_TOOLS: "1"` on that step, last among its
    variables, and joins the `BuildToolsTests` theory.
 3. Pin any new action to a full commit SHA with `# v<version>` beside it.

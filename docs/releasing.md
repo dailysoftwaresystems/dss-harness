@@ -122,26 +122,31 @@ Run the **Deploy** workflow from the Actions tab.
 
 | Channel | Run from | What it does |
 |---|---|---|
-| `beta` | `main` | Tests `main`, bumps `<Version>` on the tested commit (committed as `v<version>`), then moves `main` and `release/beta` to it in one atomic push |
-| `stable` | anywhere | Tests `release/beta`, checks that beta released that version from that commit, moves `release/stable` to it |
+| `beta` | `main` | Bumps `<Version>` on `main`'s current commit (committed as `v<version>`), then moves `main` and `release/beta` to it in one atomic push |
+| `stable` | anywhere | Checks that beta released that version from `release/beta`'s current commit, moves `release/stable` to it |
 
 `beta` accepts an optional explicit version; without one it bumps the patch. A
 major or minor change is always a deliberate decision, so it must be passed
 explicitly. `stable` refuses an explicit version: it promotes exactly what `beta`
 already released.
 
-Deploy runs as three jobs:
+Deploy runs as two jobs:
 
 1. **plan** validates the request and pins the source branch's current commit.
-2. **test** runs `test.yml`, the same gate every pull request passes: Linux, Windows and
-   macOS, each on x86_64 and arm64, on that pinned commit.
-3. **promote** first runs every check that can refuse the release: that no publish of the
+2. **promote** first runs every check that can refuse the release: that no publish of the
    release branch, or for stable of `release/beta`, is still running; that the release
-   branch can fast-forward to the tested commit and its last publish finished; for beta,
-   that no release tag already contains the tested commit; and for stable, that beta
+   branch can fast-forward to the pinned commit and its last publish finished; for beta,
+   that no release tag already contains the pinned commit; and for stable, that beta
    released it. Only then does it commit the beta bump, mint the deploy app's token and
    push, `main` and `release/beta` together for beta, and start **Package Pipeline** for
    that branch, naming the exact commit it promoted.
+
+Deploy runs no test suite. What it promotes passed the full matrix before it reached
+`main`: merging a pull request waits for the required check, which runs it (see The
+required check). For beta, the bump differs from that commit only in `<Version>`; stable
+promotes the commit beta released. A commit pushed to `main` past the ruleset, which only
+a bypass allows, is promoted with nothing gating it: that push's own run of
+`pipeline-pr.yml` tests it, but Deploy neither waits for that run nor reads its result.
 
 Package Pipeline runs as four jobs:
 
@@ -167,15 +172,15 @@ minutes after accepting it, so a run started again within those minutes stops an
 start it again a little later. Runs of either workflow wait in the order they started rather
 than cancelling a run that waits.
 
-Package Pipeline runs no test suite. A run Deploy started has the full matrix behind it: on
-that commit for stable, and for beta on its parent, which differs only in `<Version>`. A run a
-person starts publishes its release branch as it stands, with nothing run against it there:
-start one for a commit Deploy promoted, as when finishing a publish that stopped.
+Package Pipeline runs no test suite either. A run Deploy started publishes the commit Deploy
+promoted. A run a person starts publishes its release branch as it stands, with nothing run
+against it there: start one for a commit Deploy promoted, as when finishing a publish that
+stopped.
 
 ## Refusals worth knowing
 
 The pipelines fail loudly rather than reporting a green run that shipped nothing, or a
-Deploy that shipped something the matrix never tested:
+Deploy that shipped a tree `main` never held:
 
 - **Nothing new to publish.** `beta` refuses a commit that a release tag already contains,
   and `stable` a version that is already tagged. Tags record what was published, not where
@@ -188,12 +193,13 @@ Deploy that shipped something the matrix never tested:
   finish a publish from the branch's head. A tag the branch has already moved past is
   released by hand, and a publish nuget.org never received is abandoned by deleting its
   tag.
-- **Release branch diverged.** A release branch only ever fast-forwards to a tested
-  commit. One holding commits the tested commit lacks is refused, because merging would
-  put a tree on it that the matrix never tested; a person reconciles it. Every check
-  runs before the beta bump is committed, so a refusal leaves `main` as it was.
+- **Release branch diverged.** A release branch only ever fast-forwards, to a commit its
+  source branch holds. One holding commits the pinned commit lacks is refused, because
+  merging would put a tree on it that was never on `main`, so no check ever ran on it; a
+  person reconciles it. Every check runs before the beta bump is committed, so a refusal
+  leaves `main` as it was.
 - **The branch moved during the release.** Nothing is force-pushed, and beta pushes `main`
-  and `release/beta` atomically, so if `main` moved while the matrix ran, git rejects the
+  and `release/beta` atomically, so if `main` moved while Deploy ran, git rejects the
   whole push and nothing is promoted. A Package Pipeline run publishes the commit its
   branch held when the run started, and refuses one that is not the commit Deploy promoted.
 - **Beta never released.** `stable` refuses a version whose beta tag is missing, names a
@@ -224,6 +230,7 @@ which the organisation's ruleset requires on every pull request. A status, unlik
 check, exists only once something posts it. The `ci-check` job in `pipeline-pr.yml` posts
 it once the test matrix and the package check have finished: `success` when both
 succeeded, and `failure` otherwise, including when either was skipped or cancelled.
+Every release stands on this check: neither Deploy nor Package Pipeline runs a suite.
 
 - **The job agrees with the status.** `ci-check` fails whenever the status it posts is a
   failure. Ending on the successful post would show a green job beside a red status, and
@@ -240,8 +247,8 @@ succeeded, and `failure` otherwise, including when either was skipped or cancell
 | Workflow | Fires on | Does |
 |---|---|---|
 | `pipeline-pr.yml` | pull request, push to `main` | Runs `test.yml`; packs, installs and runs the tool; uploads the package, kept for the repository's artifact retention period; posts the `Pipeline / ci-check result` status |
-| `test.yml` | called by `pipeline-pr.yml` and `deploy.yml` | Builds and tests on Linux, Windows and macOS, each on x86_64 and arm64 |
-| `deploy.yml` | manual | Tests, checks, bumps the version, promotes with the deploy app's token, starts `pipeline-pkg.yml` |
+| `test.yml` | called by `pipeline-pr.yml` | Builds and tests on Linux, Windows and macOS, each on x86_64 and arm64 |
+| `deploy.yml` | manual | Checks, bumps the version, promotes with the deploy app's token, starts `pipeline-pkg.yml`; runs no suite |
 | `pipeline-pkg.yml` | dispatched by `deploy.yml`, or manual | Checks, builds, packs, verifies and tags; publishes stable to nuget.org; releases on GitHub, as a prerelease for beta; resumes a run that stopped part way |
 | `cleanup-cache.yml` | pull request closed | Evicts that pull request's caches |
 

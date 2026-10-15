@@ -1,8 +1,9 @@
 name: Test
 
-# The build and test matrix, shared by every workflow that must prove a commit before
-# acting on it: pull requests, and Deploy before it promotes anything. One definition,
-# so the gate a release passes cannot drift from the gate a pull request passes.
+# The build and test matrix, which pipeline-pr.yml runs on every pull request and every
+# push to main. What a release promotes passed it there: merging waits for the required
+# check that rolls it up, and neither Deploy nor the package pipeline runs a suite; see
+# "The required check" in docs/releasing.md.
 #
 # Linux, Windows and macOS, each on x86_64 and on arm64, always. Behaving identically
 # everywhere is this tool's central claim, so a change that passes on one runner and fails
@@ -14,12 +15,6 @@ name: Test
 
 on:
   workflow_call:
-    inputs:
-      ref:
-        description: "Commit to test. Defaults to the commit the calling workflow runs for."
-        required: false
-        type: string
-        default: ""
 
 permissions:
   contents: read
@@ -28,7 +23,7 @@ jobs:
   test:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 75
+    timeout-minutes: 90
 
     strategy:
       # Every platform's result is wanted. Cancelling the others on the first failure
@@ -48,7 +43,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.ref || github.sha }}
           # Nothing here pushes, so no credential is left in the working copy for the
           # code under test to find.
           persist-credentials: false
@@ -88,11 +82,10 @@ jobs:
         # two minutes, named again every two minutes it runs on, and the slowest tests once the
         # run ends. And it is stopped short of the job's own limit: a job that limit ended kept
         # no log, so nothing said which test had hung. The limit is not how a hang is found -
-        # the two-minute notice names it - and it sits well above the slowest runner: over a
-        # suite of 6,282 tests that hung nowhere, one test alone running two minutes, the arm64
-        # macOS runner took 37 minutes and the Intel one 39, where the 5,115 before them took
-        # 23 and 33.
-        timeout-minutes: 60
+        # the two-minute notice names it - and it sits above the slowest runner: over a suite
+        # of 6,468 tests that hung nowhere, one test alone running two minutes, the Intel macOS
+        # runner took 60 minutes where the arm64 one took 23.
+        timeout-minutes: 80
         env:
           # A runner is meant to hold cmake, ninja and a compiler: a test that really builds fails here where one is
           # lacking, and is skipped only on a developer's machine that has none.
