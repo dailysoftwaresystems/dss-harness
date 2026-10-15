@@ -15,6 +15,12 @@ namespace DssHarness.Core.Worktrees;
 /// <param name="Name">What a line calls it: <see cref="MainCheckout"/>, or <c>worktree o1/xa</c>.</param>
 public sealed record RepositoryTree(string Root, string Name)
 {
+    /// <summary>
+    /// Whether it is a copy of another tree its legs work in, kept in that tree's <c>.legs</c>, rather than the main
+    /// checkout, a worktree, or a host's copy of either.
+    /// </summary>
+    public bool LegCopy { get; init; }
+
     /// <summary>What a line calls the main checkout, or a host's copy of it.</summary>
     public const string MainCheckout = "the main checkout";
 
@@ -44,6 +50,24 @@ public sealed record RepositoryTree(string Root, string Name)
         return string.Equals(Whole(treeRoot), Whole(context.Layout.MainCheckoutRoot), comparison)
             ? MainCheckout
             : WorktreeAt(context.Layout.WorktreesDirectoryUnder(context.Config.Worktrees.Root), treeRoot, comparison);
+    }
+
+    /// <summary>
+    /// Where the main checkout of <paramref name="context"/>'s repository is on this machine: the main checkout itself,
+    /// or, on a host running legs another machine sent it, the copy of it the configuration says this host keeps - spelt
+    /// with this host's home where it is kept under it, as every host's copy is spelt where it is read: a path below a
+    /// directory called '~' is nowhere.
+    /// </summary>
+    /// <param name="context">The repository and its configuration.</param>
+    /// <param name="here">The host this machine is to the machine that sent the legs here, or <see langword="null"/>.</param>
+    /// <exception cref="HarnessException">The host declares nowhere to keep its copy (<see cref="HostCopies.RepositoryPathOf"/>).</exception>
+    public static string MainCheckoutOf(HarnessContext context, HostId? here)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        return HostCopies.KeptAs(here) is { } kept
+            ? LocalSyncTransport.Home(HostCopies.RepositoryPathOf(context.Config, kept))
+            : context.Layout.MainCheckoutRoot;
     }
 
     private static string Whole(string path) => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
@@ -116,22 +140,18 @@ public sealed class RepositoryTrees(IGitClient gitClient, LocalSyncTransport loc
     {
         ArgumentNullException.ThrowIfNull(context);
 
-        if (HostCopies.KeptAs(here) is { } kept)
+        if (HostCopies.KeptAs(here) is not null)
         {
-            string declared;
+            string main;
 
             try
             {
-                declared = HostCopies.RepositoryPathOf(context.Config, kept);
+                main = RepositoryTree.MainCheckoutOf(context, here);
             }
             catch (HarnessException ex)
             {
                 return Nowhere(ex);
             }
-
-            // Spelt with this host's home where the configuration keeps the copy under it, as every host's copy is spelt
-            // where it is read: a path below a directory called '~' is nowhere.
-            var main = LocalSyncTransport.Home(declared);
 
             try
             {
@@ -193,7 +213,7 @@ public sealed class RepositoryTrees(IGitClient gitClient, LocalSyncTransport loc
             [
                 .. _localTransport
                     .CopiesInSlot(tree.Root, HarnessLayout.LegsDirectoryName, LegCopies.IsKey)
-                    .Select(copy => new RepositoryTree(copy.Path, $"{tree.Name}'s leg copy")),
+                    .Select(copy => new RepositoryTree(copy.Path, $"{tree.Name}'s leg copy") { LegCopy = true }),
             ];
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

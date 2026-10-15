@@ -73,7 +73,6 @@ public sealed class BuildToolsTests
     /// </summary>
     [Theory]
     [InlineData("test.yml")]
-    [InlineData("pipeline-pkg.yml")]
     public void EachWorkflowRunningThisSuite_SaysItsRunnerHoldsEveryBuildTool(string workflow)
     {
         var step = WorkflowFiles.StepRunning(workflow, typeof(WorkflowFiles).Assembly.GetName().Name!);

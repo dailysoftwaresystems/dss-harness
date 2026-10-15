@@ -219,7 +219,7 @@ public sealed class HostAgentService(
 
         // A deletion, a fold, a hand-over goes on once cancelled, to finish what it began or to say what is left: given
         // here what it is given where it is typed and interrupted, never ended part way with nothing said.
-        var unwind = request.Arguments is [var command, ..] && PointOfNoReturn.Commands.Contains(command.Text) ? _patience.Finishing : _patience.Unwind;
+        var unwind = PointOfNoReturn.Holds([.. request.Arguments.Select(argument => argument.Text)]) ? _patience.Finishing : _patience.Unwind;
 
         if (await Task.WhenAny(serving, Task.Delay(unwind, CancellationToken.None)).ConfigureAwait(false) == serving)
         {

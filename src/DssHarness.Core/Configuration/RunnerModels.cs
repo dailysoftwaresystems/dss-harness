@@ -124,6 +124,15 @@ public sealed class RunnerConfig
     /// <summary>Environment applied to every phase.</summary>
     [Description("variables every phase and step gets")]
     public Dictionary<string, string> Env { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The set-ups each of its legs brings up before its work and down after it, where the run is asked to set up
+    /// (<c>--set-up</c>); never otherwise. Each is a name declared under <c>setUp</c>, or that name with values for its
+    /// inputs.
+    /// </summary>
+    [Description("set-ups its legs bring up before their work and down after it, when the run says --set-up: each a name, "
+        + "or { \"name\": ..., \"with\": { input: value } }")]
+    public List<SetUpUse>? SetUp { get; init; }
 }
 
 /// <summary>One phase of a runner.</summary>
@@ -225,23 +234,4 @@ public sealed record RunnerPhase
     /// <remarks>Never read from <c>config.json</c>, for the reason <see cref="Outputs"/> is not.</remarks>
     [JsonIgnore]
     public bool Persist { get; init; }
-}
-
-/// <summary>A named command invokable through <c>DssHarness exec</c>.</summary>
-public sealed class ExecConfig
-{
-    /// <summary>Executable to run.</summary>
-    public required string Command { get; init; }
-
-    /// <summary>Arguments; any given on the command line are appended to these.</summary>
-    public List<string> Args { get; init; } = [];
-
-    /// <summary>Working directory, relative to the tree root.</summary>
-    public string? WorkingDirectory { get; init; }
-
-    /// <summary>Environment for the command.</summary>
-    public Dictionary<string, string> Env { get; init; } = new(StringComparer.OrdinalIgnoreCase);
-
-    /// <summary>What the command does, shown in help.</summary>
-    public string? Description { get; init; }
 }

@@ -3,6 +3,7 @@ using DssHarness.Core.Build;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Hosts;
+using DssHarness.Core.Legs;
 using DssHarness.Core.Output;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Runs;
@@ -63,7 +64,7 @@ public sealed record WorkerFamily
     /// <c>&lt;tree&gt;.mutation-&lt;key&gt;&lt;mark&gt;-&lt;n&gt;</c>: what a tree that fitted such a worker within the
     /// path limit, and fits no worker kept in it, lacks.
     /// </summary>
-    public static int DeeperThanBeside { get; } = AddedToItsTreesPath - (".mutation-".Length + VariantKey.CopyKeyLength + 1 + "-1".Length);
+    public static int DeeperThanBeside { get; } = AddedToItsTreesPath - (MutationWorkers.FormerFamily.Length + VariantKey.CopyKeyLength + 1 + "-1".Length);
 
     /// <summary>What every worker of the family is named after: its path, before the hyphen and the worker's number.</summary>
     public string Root => HarnessLayout.InSlot(TreeRoot, HarnessLayout.MutationsDirectoryName, Name);
@@ -145,13 +146,21 @@ public sealed record WorkerFamily
 /// <para>
 /// The workers go with their tree: whatever removes a worktree, or a host's copy of one, removes the workers kept in it
 /// first, and leaves the tree where a sweep still running holds one of them. Workers an earlier version of this tool
-/// kept beside a tree are known to nothing here, and are a person's to delete.
+/// kept beside a tree (<see cref="FormerFamily"/>) are counted by nothing here, and removed by <c>clean --former-workers</c>
+/// alone, which a claim that version's sweep still holds keeps one from.
 /// </para>
 /// </remarks>
 public static class MutationWorkers
 {
     /// <summary>The suffix of a worker's claim file, beside the worker's copy: which run's sweep is using it.</summary>
     public const string ClaimSuffix = ".claim.json";
+
+    /// <summary>
+    /// What an earlier version of this tool put between a tree's own name and a worker's when it kept its workers beside
+    /// the tree: <c>&lt;tree&gt;.mutation-&lt;key&gt;&lt;mark&gt;-&lt;n&gt;</c>, each claimed by a claim file beside it as a
+    /// worker is now.
+    /// </summary>
+    public const string FormerFamily = ".mutation-";
 
     /// <summary>What a line calls one worker, as the claims on workers say it (<see cref="ICopyClaims.Member"/>).</summary>
     public const string Member = "mutation worker";
@@ -241,7 +250,10 @@ public static class MutationWorkers
 
     /// <summary>
     /// The lock a sweep of <paramref name="leg"/> takes: its workers' key, whole, on the leg's host - which a build of the
-    /// leg, keyed by its tree, never meets.
+    /// leg, keyed by its tree, never meets. Where the leg is swept in a copy of its own on another machine
+    /// (<see cref="PlacedLeg.KeptIn"/>), that copy, whole: the variant's own, which nothing else builds in, so a second
+    /// sweep of the variant there is refused before its sync rewrites it, and a run of the host's copy it is kept in never
+    /// meets it.
     /// </summary>
     /// <param name="leg">The leg swept.</param>
     /// <param name="runId">The run taking it.</param>
@@ -250,7 +262,9 @@ public static class MutationWorkers
     {
         ArgumentNullException.ThrowIfNull(leg);
 
-        return SweepLock(leg.Host.Host, leg.HostTreeRoot, leg.Variant, runId, command);
+        return leg.KeptIn is null
+            ? SweepLock(leg.Host.Host, leg.HostTreeRoot, leg.Variant, runId, command)
+            : LegCopies.Whole(leg.HostTreeRoot, command, leg.Host.Host) with { RunId = runId };
     }
 
     /// <summary>The lock a sweep of <paramref name="variant"/> in <paramref name="hostTreeRoot"/> on <paramref name="host"/> takes.</summary>

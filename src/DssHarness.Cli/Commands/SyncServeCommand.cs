@@ -114,7 +114,13 @@ internal static class SyncServeCommand
 
                 case SyncServe.RemoveWorkers:
                     return Answer(new SyncWorkersAnswer(
-                        await transport.RemoveWorkersAsync(root, SyncServe.MeasuresOnly(arguments), cancellationToken).ConfigureAwait(false)));
+                        await transport.RemoveWorkersAsync(root, SyncServe.MeasuresOnly(operation, arguments), cancellationToken).ConfigureAwait(false)));
+
+                case SyncServe.RemoveFormerWorkers:
+                    return Answer(new SyncWorkersAnswer(
+                        await transport
+                            .RemoveFormerWorkersBesideCopiesAsync(root, SyncServe.MeasuresOnly(operation, arguments), cancellationToken)
+                            .ConfigureAwait(false)));
 
                 case SyncServe.Manifest:
                     var manifest = await transport

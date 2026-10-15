@@ -1,4 +1,3 @@
-using System.CommandLine.Parsing;
 using System.Diagnostics;
 using System.Text.RegularExpressions;
 using DssHarness.Core.Configuration;
@@ -6,6 +5,7 @@ using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
+using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
 using YamlDotNet.Core;
 using YamlDotNet.RepresentationModel;
@@ -184,26 +184,6 @@ public sealed class ActionFileParser(
         return problems.Count == 0
             ? new ActionFile(path, name, description, inputs, steps)
             : throw Refuse(path, problems);
-    }
-
-    /// <summary>
-    /// Whether <paramref name="line"/> can be split without losing arguments.
-    /// </summary>
-    /// <remarks>
-    /// <c>CommandLineParser.SplitCommandLine</c> honours double quotes only and understands no
-    /// escape, and an unterminated double quote makes it return everything <em>before</em> the
-    /// quote and drop the rest of the line with no error at all. Measured, on System.CommandLine
-    /// 2.0.12: <c>dotnet build "unterminated -c Release</c> splits to <c>[dotnet, build]</c>, and
-    /// <c>tool --x "a b" "c</c> splits to <c>[tool, --x, a b]</c>. A file that lost its last three
-    /// arguments still runs, still exits zero, and still looks like it did the work. So the line is
-    /// refused when the file is read instead.
-    /// </remarks>
-    /// <param name="line">One trimmed line of a <c>run</c> block.</param>
-    public static bool HasBalancedQuotes(string line)
-    {
-        ArgumentNullException.ThrowIfNull(line);
-
-        return line.Count(character => character == '"') % 2 == 0;
     }
 
     /// <summary>
@@ -911,19 +891,9 @@ public sealed class ActionFileParser(
         {
             var lineNumber = firstLine + offset;
 
-            if (!HasBalancedQuotes(line))
+            if (CommandLineText.Split(line, out var arguments) is { } problem)
             {
-                problems.Add($"line {lineNumber}: '{line}' has an unbalanced double quote. "
-                    + "The command splitter drops everything after an unterminated quote without a "
-                    + "word, so this line would run with its remaining arguments missing.");
-                continue;
-            }
-
-            var arguments = CommandLineParser.SplitCommandLine(line).ToArray();
-
-            if (arguments.Length == 0 || string.IsNullOrEmpty(arguments[0]))
-            {
-                problems.Add($"line {lineNumber}: '{line}' names no program.");
+                problems.Add($"line {lineNumber}: '{line}' {problem}");
                 continue;
             }
 

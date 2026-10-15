@@ -13,6 +13,7 @@ using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 using DssHarness.Core.Runs;
 using DssHarness.Core.Sync;
+using DssHarness.Core.Worktrees;
 
 namespace DssHarness.Tests;
 
@@ -341,6 +342,461 @@ public sealed class CleanServiceTests
         Assert.Contains(held.Entry.Holder.RunId, leg.GetProperty("detail").GetString(), StringComparison.Ordinal);
         Assert.Empty(hosts.Calls);
         transports.DidNotReceiveWithAnyArgs().For(default!);
+    }
+
+    /// <summary>
+    /// A leg on a host that a sweep of this machine's is sweeping there, in the copy of its own it works in, is
+    /// refused-locked here, and the host - whose clean would remove that copy - is asked nothing.
+    /// </summary>
+    [Fact]
+    public async Task ALegOnAHostASweepOfThisMachineHoldsInACopyOfItsOwn_IsRefusedLocked_BeforeTheHostIsAsked()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var runLock = new RunLock(harness.FileSystem, harness.Output, harness.Identity);
+        var hosts = new ScriptedHostCommands((_, command) => throw HostResults.Unexpected(command));
+        var transports = Substitute.For<ISyncTransportFactory>();
+        var copy = LegCopies.PathOf(HostTree, VariantKey.For(OneHostLeg(), OneHostLeg().Legs["arm"], "linux"));
+
+        await using var held = await runLock.AcquireAsync(
+            new HarnessLayout(temp.Path, temp.Path),
+            LegCopies.Whole(copy, MutationService.CommandName, HostId.Ssh(HostName)),
+            TestContext.Current.CancellationToken);
+
+        var (_, leg) = await CleanAsync(temp, harness, OneHostLeg(), OnTheHost(), runLock, hosts, transports: transports);
+
+        Assert.Equal("refused-locked", leg.GetProperty("verdict").GetString());
+        Assert.Contains(held.Entry.Holder.RunId, leg.GetProperty("detail").GetString(), StringComparison.Ordinal);
+        Assert.Empty(hosts.Calls);
+        transports.DidNotReceiveWithAnyArgs().For(default!);
+    }
+
+    /// <summary>
+    /// --former-workers removes the workers an earlier version of this tool kept beside each tree of the repository on
+    /// this machine - the main checkout and every worktree - and nothing else: not the leg's build directory, not a
+    /// directory under such a name that no sync made, which is said and left, not one beside another repository's tree.
+    /// A dry run says each with its size and removes nothing; once a machine, whichever legs run there.
+    /// </summary>
+    [Fact]
+    public async Task FormerWorkers_AreRemovedFromBesideEachTreeHere_AndNothingElse()
+    {
+        using var temp = new TempDirectory();
+        using var worktree = new TempDirectory();
+        var harness = new HarnessFactory();
+        var config = OneLocalLeg(harness);
+        var transport = SyncKit.Transport(harness);
+        var token = TestContext.Current.CancellationToken;
+        var directory = BuildDirectory(temp, harness, config);
+        var mine = temp.Path + MutationWorkers.FormerFamily + "357e24cw-1";
+        var worktrees = worktree.Path + MutationWorkers.FormerFamily + "357e24cs-2";
+        var somebodys = temp.Path + MutationWorkers.FormerFamily + "357e24cw-3";
+        var anothers = temp.Path + "-other" + MutationWorkers.FormerFamily + "357e24cw-1";
+        var legCopy = new RepositoryTree(Path.Combine(temp.Path, ".legs", "357e24c"), "the main checkout's leg copy") { LegCopy = true };
+        var trees = new KnownTrees { Beside = host => host == HostId.Local ? [new RepositoryTree(worktree.Path, "worktree w"), legCopy] : [] };
+
+        File.WriteAllText(Written(Path.Combine(directory, "a.o")), "object");
+
+        try
+        {
+            foreach (var made in new[] { mine, worktrees, anothers })
+            {
+                await transport.CreateRootAsync(made, CopyMark.Complete, token);
+                File.WriteAllText(Path.Combine(made, "main.c"), new string('m', 100));
+            }
+
+            File.WriteAllText(Written(Path.Combine(somebodys, "notes.txt")), "somebody's");
+
+            var (measured, dry) = await CleanAsync(temp, harness, config, dryRun: true, trees: trees, formerWorkers: true);
+            var said = dry.GetProperty("detail").GetString()!;
+
+            Assert.Equal(HarnessExit.Success, measured.ExitCode);
+            Assert.StartsWith("2 worker(s) an earlier version kept beside its trees, ", said, StringComparison.Ordinal);
+            Assert.Contains($"'{mine}'", said, StringComparison.Ordinal);
+            Assert.Contains($"'{worktrees}'", said, StringComparison.Ordinal);
+            Assert.Contains($"'{somebodys}': nothing there says the harness made it, so it is yours to remove", said, StringComparison.Ordinal);
+            Assert.All(new[] { mine, worktrees }, path => Assert.True(Directory.Exists(path), path));
+
+            var (outcome, leg) = await CleanAsync(temp, harness, config, trees: trees, formerWorkers: true);
+
+            Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+            Assert.StartsWith("removed 2 worker(s) an earlier version kept beside its trees, ", leg.GetProperty("detail").GetString(), StringComparison.Ordinal);
+            Assert.True(leg.GetProperty("space").GetProperty("workerBytes").GetInt64() > 0);
+            Assert.All(new[] { mine, worktrees }, path => Assert.False(Directory.Exists(path), path));
+            Assert.All(new[] { somebodys, anothers, directory }, path => Assert.True(Directory.Exists(path), path));
+
+            var (_, again) = await CleanAsync(temp, harness, config, trees: trees, formerWorkers: true);
+
+            Assert.Equal($"no worker an earlier version kept beside '{temp.Path}', '{worktree.Path}' is there; '{somebodys}': nothing there says the harness made it, so it is yours to remove", again.GetProperty("detail").GetString());
+        }
+        finally
+        {
+            foreach (var path in new[] { mine, worktrees, somebodys, anothers }.Where(Directory.Exists))
+            {
+                Directory.Delete(path, recursive: true);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Where the worktrees cannot be listed, --former-workers still removes the workers beside the trees it knows - the
+    /// one the command is typed in, and the main checkout - and the leg fails, saying the rest were not looked for.
+    /// </summary>
+    [Fact]
+    public async Task FormerWorkers_BesideTheTreesKnown_AreRemoved_WhereTheWorktreesCannotBeListed_AndTheLegFailsSayingSo()
+    {
+        using var main = new TempDirectory();
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var config = OneLocalLeg(harness);
+        var mine = temp.Path + MutationWorkers.FormerFamily + "357e24cw-1";
+        var mains = main.Path + MutationWorkers.FormerFamily + "357e24cw-1";
+
+        try
+        {
+            foreach (var made in new[] { mine, mains })
+            {
+                await SyncKit.Transport(harness).CreateRootAsync(made, CopyMark.Complete, TestContext.Current.CancellationToken);
+            }
+
+            var (outcome, leg) = await CleanAsync(
+                temp, harness, config, trees: new KnownTrees { Unlisted = "git worktree list exited 128" }, formerWorkers: true, mainCheckout: main.Path);
+            var said = leg.GetProperty("detail").GetString()!;
+
+            Assert.NotEqual(HarnessExit.Success, outcome.ExitCode);
+            Assert.Equal("failed", leg.GetProperty("verdict").GetString());
+            Assert.StartsWith("removed 2 worker(s) an earlier version kept beside its trees, ", said, StringComparison.Ordinal);
+            Assert.EndsWith($": '{mine}', '{mains}'; the worktrees beside the main checkout could not be listed, so none beside them was looked for: git worktree list exited 128", said, StringComparison.Ordinal);
+            Assert.False(Directory.Exists(mine));
+            Assert.False(Directory.Exists(mains));
+        }
+        finally
+        {
+            foreach (var path in new[] { mine, mains }.Where(Directory.Exists))
+            {
+                Directory.Delete(path, recursive: true);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Where the worktrees deleted since cannot be looked for - the worktrees root cannot be listed - --former-workers
+    /// still removes the workers beside the trees it knows, and the leg fails, saying why, rather than ending poisoned
+    /// with nothing removed.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FormerWorkers_BesideTheTreesKnown_AreRemoved_WhereTheWorktreesDeletedSinceCannotBeLookedFor(bool denied)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var config = OneLocalLeg(harness);
+        var root = (await HostDoubles.Loader(config, temp.Path).LoadAsync(temp.Path, TestContext.Current.CancellationToken)).Layout.WorktreesDirectoryUnder(config.Worktrees.Root);
+        var mine = temp.Path + MutationWorkers.FormerFamily + "357e24cw-1";
+
+        Directory.CreateDirectory(root);
+
+        try
+        {
+            await SyncKit.Transport(harness).CreateRootAsync(mine, CopyMark.Complete, TestContext.Current.CancellationToken);
+
+            var (outcome, leg) = await CleanAsync(temp, harness, config, fileSystem: new CannotList(harness.FileSystem, root, denied), formerWorkers: true);
+            var said = leg.GetProperty("detail").GetString()!;
+
+            Assert.NotEqual(HarnessExit.Success, outcome.ExitCode);
+            Assert.Equal("failed", leg.GetProperty("verdict").GetString());
+            Assert.StartsWith("removed 1 worker(s) an earlier version kept beside its trees, ", said, StringComparison.Ordinal);
+            Assert.EndsWith("; the worktrees deleted since could not be looked for, so none beside them was: the disk would not say", said, StringComparison.Ordinal);
+            Assert.False(Directory.Exists(mine));
+        }
+        finally
+        {
+            if (Directory.Exists(mine))
+            {
+                Directory.Delete(mine, recursive: true);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The workers beside one tree reached by two spellings - a separator after it, a link along the way to it - are said
+    /// once: measured once for each spelling, a dry run counted them, and the room they hold, twice.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FormerWorkers_BesideOneTreeSpeltTwoWays_AreSaidOnce(bool throughALink)
+    {
+        using var temp = new TempDirectory();
+        using var place = new TempDirectory();
+        var harness = new HarnessFactory();
+        var config = OneLocalLeg(harness);
+        var real = Directory.CreateDirectory(Path.Combine(place.Path, "real")).FullName;
+        var tree = Path.Combine(real, "wt");
+        var worker = tree + MutationWorkers.FormerFamily + "357e24cw-1";
+        var again = tree + Path.DirectorySeparatorChar;
+
+        if (throughALink)
+        {
+            TestLinks.DirectoryLink(Path.Combine(place.Path, "linked"), real);
+            again = Path.Combine(place.Path, "linked", "wt");
+        }
+
+        await SyncKit.Transport(harness).CreateRootAsync(worker, CopyMark.Complete, TestContext.Current.CancellationToken);
+
+        var trees = new KnownTrees
+        {
+            Beside = host => host == HostId.Local ? [new RepositoryTree(tree, "worktree w"), new RepositoryTree(again, "worktree w, spelt again")] : [],
+        };
+        var (_, dry) = await CleanAsync(temp, harness, config, dryRun: true, trees: trees, formerWorkers: true);
+
+        Assert.StartsWith("1 worker(s) an earlier version kept beside its trees, ", dry.GetProperty("detail").GetString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// --former-workers stopped part way says which went and that it was stopped, the leg stopped with it - also where a
+    /// tree after the one it was stopped in holds none to stop in - and leaves the rest for the next clean.
+    /// </summary>
+    [Fact]
+    public async Task FormerWorkers_StoppedPartWay_SayWhichWent_AndTheLegIsStopped()
+    {
+        using var temp = new TempDirectory();
+        using var worktree = new TempDirectory();
+        using var interruption = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var harness = new HarnessFactory();
+        var config = OneLocalLeg(harness);
+        var first = temp.Path + MutationWorkers.FormerFamily + "357e24cw-1";
+        var second = temp.Path + MutationWorkers.FormerFamily + "357e24cw-2";
+
+        try
+        {
+            foreach (var made in new[] { first, second })
+            {
+                await SyncKit.Transport(harness).CreateRootAsync(made, CopyMark.Complete, TestContext.Current.CancellationToken);
+            }
+
+            var (_, leg) = await CleanAsync(
+                temp,
+                harness,
+                config,
+                fileSystem: new InterruptsOnceRemoved(harness.FileSystem, first, interruption),
+                trees: new KnownTrees { Beside = host => host == HostId.Local ? [new RepositoryTree(worktree.Path, "worktree w")] : [] },
+                formerWorkers: true,
+                cancellationToken: interruption.Token);
+            var said = leg.GetProperty("detail").GetString()!;
+
+            Assert.Equal("stopped", leg.GetProperty("verdict").GetString());
+            Assert.StartsWith($"removed 1 worker(s) an earlier version kept beside its trees, ", said, StringComparison.Ordinal);
+            Assert.EndsWith(LocalSyncTransport.StoppedPartWay, said, StringComparison.Ordinal);
+            Assert.False(Directory.Exists(first));
+            Assert.True(Directory.Exists(second));
+        }
+        finally
+        {
+            foreach (var path in new[] { first, second }.Where(Directory.Exists))
+            {
+                Directory.Delete(path, recursive: true);
+            }
+        }
+    }
+
+    /// <summary>
+    /// --former-workers on a leg a host runs is asked of the host from its home, beside its copies of the repository kept
+    /// together, whatever copy of it the host holds - none, even, every one removed since - and --dry-run with it: no
+    /// command is run in a tree there, and what went is said as here.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FormerWorkers_OfALegOnAHost_AreAskedOfTheHost_BesideItsCopies_WhateverCopyItHolds(bool dryRun)
+    {
+        using var temp = new TempDirectory();
+        var transport = Substitute.For<ISyncTransport>();
+        var transports = Substitute.For<ISyncTransportFactory>();
+        var hosts = new ScriptedHostCommands((_, command) => throw HostResults.Unexpected(command));
+        var worker = HostTree + HostCopies.WorktreeSuffix + "gone" + MutationWorkers.FormerFamily + "357e24cw-1";
+
+        transport.RemoveFormerWorkersBesideCopiesAsync(HostTree, dryRun, Arg.Any<CancellationToken>())
+            .Returns(new WorkersRemoval([new WorkerRemoved(worker, 2048)], []));
+        transports.For(Arg.Any<HostReport>()).Returns(transport);
+
+        var (outcome, leg) = await CleanAsync(temp, new HarnessFactory(), OneHostLeg(), OnTheHost(), hosts: hosts, transports: transports, dryRun: dryRun, formerWorkers: true);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal(
+            $"{(dryRun ? string.Empty : "removed ")}1 worker(s) an earlier version kept beside its trees, 2 KiB: '{worker}'",
+            leg.GetProperty("detail").GetString());
+        Assert.Empty(hosts.Calls);
+        _ = transport.DidNotReceiveWithAnyArgs().RootExistsAsync(default!, TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>
+    /// --former-workers on a host keeping no worker of an earlier version says where it looked; one whose copies cannot
+    /// be looked in fails the leg, saying why; and one that cannot be reached leaves it unavailable, as any leg there.
+    /// </summary>
+    [Fact]
+    public async Task FormerWorkers_OfALegOnAHost_SayWhereTheyWereLookedFor_AndWhyNot()
+    {
+        using var temp = new TempDirectory();
+        var answers = new Queue<Func<WorkersRemoval>>(
+        [
+            () => WorkersRemoval.None,
+            () => throw new HarnessException(HarnessExit.CommandFailed, "'/home/pi' could not be looked in: Permission denied"),
+            () => throw new HarnessException(HarnessExit.HostUnavailable, "ssh pi: the host did not answer"),
+        ]);
+        var transport = Substitute.For<ISyncTransport>();
+        var transports = Substitute.For<ISyncTransportFactory>();
+
+        transport.RemoveFormerWorkersBesideCopiesAsync(Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
+            .Returns(_ => answers.Dequeue()());
+        transports.For(Arg.Any<HostReport>()).Returns(transport);
+
+        async Task<(string? Verdict, string? Detail)> CleanedAsync()
+        {
+            var (_, leg) = await CleanAsync(temp, new HarnessFactory(), OneHostLeg(), OnTheHost(), transports: transports, formerWorkers: true);
+            return (leg.GetProperty("verdict").GetString(), leg.GetProperty("detail").GetString());
+        }
+
+        Assert.Equal(("passed", $"no worker an earlier version kept beside '{HostTree}' or a copy beside it is there"), await CleanedAsync());
+        Assert.Equal(("failed", "'/home/pi' could not be looked in: Permission denied"), await CleanedAsync());
+        Assert.Equal("skipped-unavailable", (await CleanedAsync()).Verdict);
+    }
+
+    /// <summary>
+    /// --former-workers removes the workers an earlier version kept beside a worktree deleted since, wherever in the
+    /// worktrees root it was - as the worktree's directory, or in an orchestrator's - where list-worktree warns of each.
+    /// </summary>
+    [Fact]
+    public async Task FormerWorkers_BesideAWorktreeDeletedSince_AreRemoved()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var config = OneLocalLeg(harness);
+        var root = (await HostDoubles.Loader(config, temp.Path).LoadAsync(temp.Path, TestContext.Current.CancellationToken)).Layout.WorktreesDirectoryUnder(config.Worktrees.Root);
+        var plain = Path.Combine(root, "gone" + MutationWorkers.FormerFamily + "357e24cw-1");
+        var agents = Path.Combine(root, "o1", "xa" + MutationWorkers.FormerFamily + "357e24cs-2");
+
+        // All an unfinished removal of one left, with nothing else beside the tree it was kept beside.
+        var aside = RemovalAside.Of(Path.Combine(root, "left" + MutationWorkers.FormerFamily + "357e24cw-3"));
+
+        foreach (var made in new[] { plain, agents })
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(made)!);
+            await SyncKit.Transport(harness).CreateRootAsync(made, CopyMark.Complete, TestContext.Current.CancellationToken);
+        }
+
+        File.WriteAllText(Written(Path.Combine(aside, "part.o")), "what a removal left");
+
+        var (outcome, leg) = await CleanAsync(temp, harness, config, formerWorkers: true);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.StartsWith("removed 3 worker(s) an earlier version kept beside its trees, ", leg.GetProperty("detail").GetString(), StringComparison.Ordinal);
+        Assert.False(Directory.Exists(plain));
+        Assert.False(Directory.Exists(agents));
+        Assert.False(Directory.Exists(aside));
+    }
+
+    /// <summary>
+    /// A host asked removes the workers an earlier version kept beside its copy of the main checkout, and beside a copy of
+    /// a worktree removed since, and nothing beside another repository's copy - measuring them first where asked to,
+    /// removing nothing - here as through its agent.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FormerWorkers_OnAHost_AreRemovedBesideItsCopies_ThereStillOrRemovedSince(bool throughAnAgent)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        ISyncTransport transport = throughAnAgent ? SyncKit.AgentHere(harness) : SyncKit.Transport(harness);
+        var mine = temp.Path + MutationWorkers.FormerFamily + "357e24cw-1";
+        var removedCopys = temp.Path + HostCopies.WorktreeSuffix + "gone" + MutationWorkers.FormerFamily + "357e24cs-1";
+        var anothers = temp.Path + "-other" + MutationWorkers.FormerFamily + "357e24cw-1";
+        var noCopys = temp.Path + HostCopies.WorktreeSuffix + "Not_A_Copy" + MutationWorkers.FormerFamily + "357e24cw-1";
+
+        try
+        {
+            foreach (var made in new[] { mine, removedCopys, anothers, noCopys })
+            {
+                await SyncKit.Transport(harness).CreateRootAsync(made, CopyMark.Complete, TestContext.Current.CancellationToken);
+            }
+
+            var measured = await transport.RemoveFormerWorkersBesideCopiesAsync(temp.Path, measureOnly: true, TestContext.Current.CancellationToken);
+
+            Assert.Equal([mine, removedCopys], measured.Removed.Select(worker => worker.Path).Order(StringComparer.Ordinal));
+            Assert.True(Directory.Exists(mine));
+
+            var removed = await transport.RemoveFormerWorkersBesideCopiesAsync(temp.Path, cancellationToken: TestContext.Current.CancellationToken);
+
+            Assert.Equal(2, removed.Removed.Count);
+            Assert.False(Directory.Exists(mine));
+            Assert.False(Directory.Exists(removedCopys));
+            Assert.True(Directory.Exists(anothers));
+            Assert.True(Directory.Exists(noCopys));
+            Assert.Empty((await transport.RemoveFormerWorkersBesideCopiesAsync(Path.Combine(temp.Path, "nowhere", "repo"), cancellationToken: TestContext.Current.CancellationToken)).Removed);
+        }
+        finally
+        {
+            foreach (var path in new[] { mine, removedCopys, anothers, noCopys }.Where(Directory.Exists))
+            {
+                Directory.Delete(path, recursive: true);
+            }
+        }
+    }
+
+    /// <summary>
+    /// --former-workers looks beside a machine's trees once, whichever of the selected legs run there: the first leg on
+    /// each machine removes them, every other leg there names it, and a host is asked once.
+    /// </summary>
+    [Fact]
+    public async Task FormerWorkers_AreRemovedOnceAMachine_ByItsFirstLeg()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var platform = harness.Platform;
+        var config = new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration(), ["release"] = new BuildConfiguration() },
+            Hosts = OneHostLeg().Hosts,
+            Legs =
+            {
+                ["native"] = new LegConfig { Os = platform.PlatformKey, Processor = platform.Processor, Config = "debug" },
+                ["native-release"] = new LegConfig { Os = platform.PlatformKey, Processor = platform.Processor, Config = "release" },
+                ["arm"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", Ssh = HostName },
+                ["arm-release"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "release", Ssh = HostName },
+            },
+        };
+        var former = temp.Path + MutationWorkers.FormerFamily + "357e24cw-1";
+        var transport = Substitute.For<ISyncTransport>();
+        var transports = Substitute.For<ISyncTransportFactory>();
+
+        transport.RemoveFormerWorkersBesideCopiesAsync(Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<CancellationToken>()).Returns(WorkersRemoval.None);
+        transports.For(Arg.Any<HostReport>()).Returns(transport);
+
+        try
+        {
+            await SyncKit.Transport(harness).CreateRootAsync(former, CopyMark.Complete, TestContext.Current.CancellationToken);
+
+            var (outcome, legs) = await CleanEveryLegAsync(temp, harness, config, OnTheHost(), transports: transports, formerWorkers: true);
+            var said = legs.ToDictionary(leg => leg.GetProperty("leg").GetString()!, leg => leg.GetProperty("detail").GetString() ?? string.Empty, StringComparer.Ordinal);
+            var here = new[] { "native", "native-release" };
+            var removing = Assert.Single(here, leg => said[leg].StartsWith("removed 1 worker(s) an earlier version kept beside its trees, ", StringComparison.Ordinal));
+
+            Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+            Assert.Equal(
+                $"the workers an earlier version kept on this machine are cleaned with leg '{removing}'",
+                said[Assert.Single(here, leg => leg != removing)]);
+            Assert.False(Directory.Exists(former));
+            await transport.Received(1).RemoveFormerWorkersBesideCopiesAsync(HostTree, false, Arg.Any<CancellationToken>());
+            Assert.Single(["arm", "arm-release"], leg => said[leg].StartsWith("the workers an earlier version kept on ", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(former))
+            {
+                Directory.Delete(former, recursive: true);
+            }
+        }
     }
 
     /// <summary>
@@ -919,6 +1375,35 @@ public sealed class CleanServiceTests
     }
 
     /// <summary>
+    /// A copy its legs work in that a run holds under the copy's own lock - a command another machine sent here, run in
+    /// the copy it was sent: a sweep in a copy of its own - is left by a clean, saying who holds it, as one a run of the
+    /// tree's own holds is.
+    /// </summary>
+    [Fact]
+    public async Task ACopyARunHoldsUnderTheCopysOwnLock_IsLeftByAClean()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var config = OneLocalLeg(harness);
+        var variant = Variant(harness, config);
+        var runLock = new RunLock(harness.FileSystem, harness.Output, harness.Identity);
+        var own = Copy(temp, variant, 100);
+
+        await using var held = await runLock.AcquireAsync(
+            new HarnessLayout(own, own),
+            MutationWorkers.SweepLock(HostId.Local, own, variant, RunId.New(), MutationService.CommandName),
+            TestContext.Current.CancellationToken);
+
+        var (_, leg) = await CleanAsync(temp, harness, config, runLock: runLock);
+        var detail = leg.GetProperty("detail").GetString()!;
+
+        Assert.Equal("refused-locked", leg.GetProperty("verdict").GetString());
+        Assert.Contains($"its copy '{own}' was left, as a run holds it: ", detail, StringComparison.Ordinal);
+        Assert.Contains(held.Entry.Holder.RunId, detail, StringComparison.Ordinal);
+        Assert.True(Directory.Exists(own));
+    }
+
+    /// <summary>
     /// A directory under the name of a copy its legs work in that no sync made is somebody's: a clean leaves it, and what
     /// is in it, and says so - as a dry run says the clean would.
     /// </summary>
@@ -1259,13 +1744,15 @@ public sealed class CleanServiceTests
     };
 
     /// <summary>This machine as it is, and the ssh host as a Linux arm64 machine that answers.</summary>
-    private static RecordingInspector OnTheHost() => new(host => new HostReport
-    {
-        Host = host,
-        Os = "linux",
-        Processor = "arm64",
-        Session = new HostSession(new HostConnection { Host = host, Address = "192.0.2.10" }, ".dotnet/tools/dssharness"),
-    });
+    private static RecordingInspector OnTheHost() => new(host => host.Kind == HostKind.Local
+        ? new HostReport { Host = host, Os = new HarnessFactory().Platform.PlatformKey, Processor = new HarnessFactory().Platform.Processor }
+        : new HostReport
+        {
+            Host = host,
+            Os = "linux",
+            Processor = "arm64",
+            Session = new HostSession(new HostConnection { Host = host, Address = "192.0.2.10" }, ".dotnet/tools/dssharness"),
+        });
 
     /// <summary>The build directory the one leg of <paramref name="config"/> has on this machine.</summary>
     private static string BuildDirectory(TempDirectory temp, HarnessFactory harness, HarnessConfig config)
@@ -1312,9 +1799,15 @@ public sealed class CleanServiceTests
         bool copyThere = true,
         ISyncTransportFactory? transports = null,
         IReadOnlyList<string>? legs = null,
-        IFileSystem? fileSystem = null)
+        IFileSystem? fileSystem = null,
+        IRepositoryTrees? trees = null,
+        bool formerWorkers = false,
+        string? mainCheckout = null,
+        CancellationToken? cancellationToken = null,
+        HostId? here = null)
     {
-        var (outcome, cleaned) = await CleanEveryLegAsync(temp, harness, config, inspector, runLock, hosts, dryRun, copyThere, transports, legs, fileSystem);
+        var (outcome, cleaned) = await CleanEveryLegAsync(
+            temp, harness, config, inspector, runLock, hosts, dryRun, copyThere, transports, legs, fileSystem, trees, formerWorkers, mainCheckout, cancellationToken, here);
 
         return (outcome, Assert.Single(cleaned));
     }
@@ -1331,14 +1824,20 @@ public sealed class CleanServiceTests
         bool copyThere = true,
         ISyncTransportFactory? transports = null,
         IReadOnlyList<string>? legs = null,
-        IFileSystem? fileSystem = null)
+        IFileSystem? fileSystem = null,
+        IRepositoryTrees? trees = null,
+        bool formerWorkers = false,
+        string? mainCheckout = null,
+        CancellationToken? cancellationToken = null,
+        HostId? here = null)
     {
-        var loader = HostDoubles.Loader(config, temp.Path);
+        var loader = HostDoubles.Loader(config, temp.Path, mainCheckout);
 
         if (transports is null)
         {
             var transport = Substitute.For<ISyncTransport>();
             transport.RootExistsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(copyThere);
+            transport.ListCopiesAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Array.Empty<HostCopyFound>());
             transport.RemoveWorkersAsync(Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<CancellationToken>()).Returns(WorkersRemoval.None);
             transports = Substitute.For<ISyncTransportFactory>();
             transports.For(Arg.Any<HostReport>()).Returns(transport);
@@ -1361,9 +1860,12 @@ public sealed class CleanServiceTests
             harness.Identity,
             fileSystem ?? harness.FileSystem,
             harness.Platform,
-            harness.Output);
+            harness.Output,
+            trees ?? new KnownTrees());
 
-        var outcome = await service.RunAsync(new CleanRequest(temp.Path, legs, dryRun, Json: true), TestContext.Current.CancellationToken);
+        var outcome = await service.RunAsync(
+            new CleanRequest(temp.Path, legs, dryRun, Json: true, here) { FormerWorkers = formerWorkers },
+            cancellationToken ?? TestContext.Current.CancellationToken);
 
         using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
 

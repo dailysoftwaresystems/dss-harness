@@ -29,7 +29,7 @@ public sealed class CommandLineInputsTests
     [Theory]
     [InlineData(new[] { "root" }, "--input 'root' is not name=value.")]
     [InlineData(new[] { "=corpus" }, "--input '=corpus' names no input.")]
-    [InlineData(new[] { "root=" }, "--input 'root=' gives 'root' no value; leave it out to use the runner's .env value or the input's default.")]
+    [InlineData(new[] { "root=" }, "--input 'root=' gives 'root' no value; leave it out to use the value the input has without it.")]
     [InlineData(new[] { "root=a", "root=b" }, "--input gives 'root' a value more than once.")]
     [InlineData(new[] { "root=a", "root=b", "root=c", "x" }, "--input gives 'root' a value more than once; --input 'x' is not name=value.")]
     public void Parse_Refuses_APairThatGivesNoValueOrOneTwice(string[] pairs, string expected)

@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
@@ -746,6 +747,31 @@ public sealed class LegsServiceTests
     }
 
     /// <summary>
+    /// A command whose legs on a host work in a copy of their own there - a sweep - asks that host about the build
+    /// directories in that copy, kept in the .legs of the host's copy, never about the host's copy's own: the room is
+    /// reckoned for the tree the build is in.
+    /// </summary>
+    [Fact]
+    public async Task ACommandWhoseHostLegsWorkInACopyOfTheirOwn_AsksAboutTheBuildDirectoriesInThatCopy()
+    {
+        var fixture = Create(
+            new() { ["arm"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", BuildSpaceGiB = 1 } },
+            rooms: (_, path) => Room(path, exists: false, recorded: null, free: 8));
+
+        var report = await fixture.Service.CheckAsync(Root, null, MutationService.Workload, here: null, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.True(report.CopyOnHosts);
+        Assert.True(Assert.Single(report.Placements).Runnable);
+
+        var asked = fixture.Inspector.RoomAsked.Single(entry => entry.Host == HostId.Ssh("pi")).Room;
+
+        // The leg's own build, and its first worker's, in its copy; the host's copy's build of the variant is asked only as
+        // what a build of it came to there.
+        Assert.Contains(asked.Builds, build => Regex.IsMatch(build, @"^/home/pi/repo/\.legs/[0-9a-f]{7}/build/arm64-none-debug$"));
+        Assert.Contains(asked.Builds, build => Regex.IsMatch(build, @"^/home/pi/repo/\.legs/[0-9a-f]{7}/\.mutations/[0-9a-f]{7}w-1/build/arm64-none-debug$"));
+    }
+
+    /// <summary>
     /// A command that builds the legs of some systems alone - a step naming {buildDir} limited by runOn - asks about the
     /// build directory of a leg of those systems, and of no other: a leg it does not build needs no room. The system is
     /// matched ignoring case, as a leg's os is everywhere else.
@@ -780,7 +806,8 @@ public sealed class LegsServiceTests
     [Fact]
     public async Task ASweep_IsPlacedByTheRoomItsFirstWorkersBuildStillNeeds()
     {
-        const string Worker = "/home/pi/repo/.mutations/aa1fa54w-1/build/arm64-none-debug";
+        // Kept in the copy of its own the sweep works in on the host, in the .legs of the host's copy.
+        const string Worker = "/home/pi/repo/.legs/aa1fa54/.mutations/aa1fa54w-1/build/arm64-none-debug";
 
         var fixture = Create(
             new() { ["arm"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", Ssh = "pi", BuildSpaceGiB = 6 } },
@@ -790,6 +817,14 @@ public sealed class LegsServiceTests
 
         Assert.Contains(Worker, fixture.Inspector.RoomAsked.Last(entry => entry.Host == HostId.Ssh("pi")).Room.Builds);
         Assert.True(Assert.Single(sweeping.Placements).Runnable, Assert.Single(sweeping.Placements).Reason);
+
+        // The 2 GiB that worker's build still needs, which a host with 1 GiB free has not.
+        var cramped = Create(
+            new() { ["arm"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", Ssh = "pi", BuildSpaceGiB = 6 } },
+            rooms: (_, path) => path == Worker ? Room(path, exists: true, recorded: 4L << 30, free: 1) : Room(path, exists: false, recorded: null, free: 1));
+        var refused = await cramped.Service.CheckAsync(Root, null, MutationService.Workload, here: null, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.False(Assert.Single(refused.Placements).Runnable);
 
         var building = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, cancellationToken: TestContext.Current.CancellationToken);
 

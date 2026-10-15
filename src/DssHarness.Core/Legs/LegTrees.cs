@@ -24,7 +24,11 @@ public enum LocalTrees
 /// <param name="Here">The tree the leg acts on here: the worktree it names, or the tree the command was typed in.</param>
 /// <param name="Work">The tree the work happens in, on the machine it happens on.</param>
 /// <param name="LocalCopy">Whether <paramref name="Work"/> is a copy of <paramref name="Here"/> kept in its .legs on this machine.</param>
-public sealed record LegTree(string Here, string Work, bool LocalCopy);
+/// <param name="KeptIn">
+/// The host's copy of <paramref name="Here"/> that <paramref name="Work"/> is kept in, in its .legs, where the leg works in
+/// a copy of its own on another machine (<see cref="LegWorkload.CopyOnHosts"/>); <see langword="null"/> otherwise.
+/// </param>
+public sealed record LegTree(string Here, string Work, bool LocalCopy, string? KeptIn = null);
 
 /// <summary>The tree a leg acts on here, and the tree its work happens in on the machine that runs it.</summary>
 /// <remarks>
@@ -82,6 +86,10 @@ public static class LegTrees
     /// </param>
     /// <param name="comparison">How this machine compares paths.</param>
     /// <param name="local">Where this run's own legs work.</param>
+    /// <param name="copyOnHosts">
+    /// Whether a leg another machine runs works in a copy of its own there, kept in the .legs of that machine's copy of
+    /// its tree (<see cref="LegWorkload.CopyOnHosts"/>), rather than in that copy.
+    /// </param>
     public static LegTree For(
         HarnessContext context,
         LegConfig leg,
@@ -89,7 +97,8 @@ public static class LegTrees
         HostId host,
         HostId? here,
         StringComparison comparison,
-        LocalTrees local)
+        LocalTrees local,
+        bool copyOnHosts = false)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(leg);
@@ -100,7 +109,11 @@ public static class LegTrees
 
         if (host.Kind != HostKind.Local)
         {
-            return new LegTree(tree, On(context, host, tree, comparison), LocalCopy: false);
+            var shared = On(context, host, tree, comparison);
+
+            return copyOnHosts
+                ? new LegTree(tree, LegCopies.PathOf(shared, variant), LocalCopy: false, KeptIn: shared)
+                : new LegTree(tree, shared, LocalCopy: false);
         }
 
         var copy = InLocalCopy(context, leg, here, local);

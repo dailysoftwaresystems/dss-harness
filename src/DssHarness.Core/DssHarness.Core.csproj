@@ -17,9 +17,9 @@
          that loses its last line still runs. -->
     <PackageReference Include="YamlDotNet" Version="18.1.0" />
 
-    <!-- For CommandLineParser.SplitCommandLine, which turns one line of an action file into a
-         program and its arguments without a shell. The CLI project already depends on this package;
-         the splitter is needed here, where action files are read. -->
+    <!-- For CommandLineParser.SplitCommandLine, which turns one command line - of an action file, or a
+         set-up's up or down - into a program and its arguments without a shell (CommandLineText). The CLI
+         project already depends on this package; the splitter is needed here, where those lines are read. -->
     <PackageReference Include="System.CommandLine" Version="2.0.12" />
   </ItemGroup>
 

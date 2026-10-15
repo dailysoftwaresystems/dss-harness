@@ -52,7 +52,7 @@ public static class CommandLineInputs
 
             if (separator == pair.Length - 1)
             {
-                problems.Add($"{Option} '{pair}' gives '{name}' no value; leave it out to use the runner's .env value or the input's default");
+                problems.Add($"{Option} '{pair}' gives '{name}' no value; leave it out to use the value the input has without it");
                 continue;
             }
 

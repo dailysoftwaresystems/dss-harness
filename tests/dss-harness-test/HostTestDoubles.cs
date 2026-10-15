@@ -639,6 +639,8 @@ internal static class HostDoubles
         var loader = Substitute.For<IHarnessContextLoader>();
         loader.LoadAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new HarnessContext(new HarnessLayout(root, mainCheckoutRoot ?? root), config) { IsSyncedCopy = syncedCopy }));
+        loader.RepositoryOfAsync(Arg.Any<HarnessContext>(), Arg.Any<CancellationToken>())
+            .Returns(call => Task.FromResult(Path.TrimEndingDirectorySeparator(Path.GetFullPath(call.Arg<HarnessContext>().Layout.MainCheckoutRoot))));
         return loader;
     }
 

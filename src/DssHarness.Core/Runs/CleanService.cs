@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using DssHarness.Core.Build;
 using DssHarness.Core.Configuration;
@@ -29,7 +30,14 @@ public sealed record CleanRequest(
     IReadOnlyList<string>? LegNames,
     bool DryRun = false,
     bool Json = false,
-    HostId? Here = null);
+    HostId? Here = null)
+{
+    /// <summary>
+    /// Whether the clean removes the workers an earlier version of this tool kept beside the repository's trees
+    /// (<see cref="CleanService.FormerWorkersOption"/>), on each machine a selected leg runs on, and nothing else.
+    /// </summary>
+    public bool FormerWorkers { get; init; }
+}
 
 /// <summary>
 /// Removes each selected leg's build directory wherever the leg runs - this machine, a WSL distribution's
@@ -77,13 +85,20 @@ public sealed class CleanService(
     IProcessIdentity identity,
     IFileSystem fileSystem,
     IHostPlatform platform,
-    IHarnessOutput output)
+    IHarnessOutput output,
+    IRepositoryTrees trees)
 {
     /// <summary>The command, as it is typed and as it reports.</summary>
     public const string CommandName = "clean";
 
     /// <summary>The option that measures and removes nothing, passed on to a host as it was given here.</summary>
     public const string DryRunOption = "--dry-run";
+
+    /// <summary>
+    /// The option that removes the workers an earlier version of this tool kept beside the repository's trees, and
+    /// nothing else, passed on to a host as it was given here.
+    /// </summary>
+    public const string FormerWorkersOption = "--former-workers";
 
     private readonly IHarnessContextLoader _contextLoader = contextLoader;
     private readonly LegsService _legsService = legsService;
@@ -95,6 +110,7 @@ public sealed class CleanService(
     private readonly IHostPlatform _platform = platform;
     private readonly IHarnessOutput _output = output;
     private readonly LocalSyncTransport _localTransport = localTransport;
+    private readonly IRepositoryTrees _trees = trees;
     private readonly WorkerCopies _workers = new(syncService, localTransport, fileSystem, output, identity, CommandName);
 
     /// <summary>Removes, or measures, every selected leg's build directory, and reports the ledger.</summary>
@@ -130,6 +146,9 @@ public sealed class CleanService(
 
         LegExecution execution;
 
+        // The machines whose former workers a leg of this clean has taken, each by the first leg that runs there.
+        var machines = new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
+
         // Through the executor every leg-running command uses, so each leg ends with a line of its own: a host
         // that stops answering skips its own legs and no other's, and an interrupted clean still says what it
         // had removed, naming the legs it left.
@@ -144,6 +163,7 @@ public sealed class CleanService(
                                 context,
                                 placed.Single(leg => string.Equals(leg.Name, plan.Name, StringComparison.Ordinal)),
                                 request,
+                                machines,
                                 token)
                             .ConfigureAwait(false),
                     },
@@ -168,9 +188,22 @@ public sealed class CleanService(
     }
 
     /// <summary>Removes, or measures, one leg's build directory where the leg runs.</summary>
-    private async Task<LegEntry> CleanAsync(HarnessContext context, PlacedLeg leg, CleanRequest request, CancellationToken cancellationToken)
+    private async Task<LegEntry> CleanAsync(
+        HarnessContext context,
+        PlacedLeg leg,
+        CleanRequest request,
+        ConcurrentDictionary<string, string> machines,
+        CancellationToken cancellationToken)
     {
         var started = Stopwatch.GetTimestamp();
+
+        if (request.FormerWorkers)
+        {
+            return await FormerWorkersAsync(context, leg, request, machines, cancellationToken).ConfigureAwait(false) with
+            {
+                Duration = Stopwatch.GetElapsedTime(started),
+            };
+        }
 
         // The lock a build of this leg takes, so a build holding it is seen, and a build about to take it is kept out.
         var building = leg.BuildLock(RunId.New(), CommandName);
@@ -202,7 +235,9 @@ public sealed class CleanService(
         // A run started on this machine that is building the leg there holds this machine's lock too, for as
         // long as it runs: asked here first - on a dry run as well, so it ends as the clean would - the host is never
         // sent a command a run of this machine's holds off.
-        if (_runLock.HeldBy(context.Layout, building) is { } held)
+        // So does a sweep of the leg there, in the copy of its own it is swept in, which that host's clean removes.
+        if ((_runLock.HeldBy(context.Layout, building)
+                ?? _runLock.HeldBy(context.Layout, LegCopies.Whole(LegCopies.PathOf(leg.HostTreeRoot, leg.Variant), CommandName, leg.Host.Host))) is { } held)
         {
             return leg.Entry(LegVerdict.RefusedLocked, held) with { Duration = Stopwatch.GetElapsedTime(started) };
         }
@@ -222,6 +257,157 @@ public sealed class CleanService(
             .RunAsync(CommandName, leg, request.DryRun ? [DryRunOption] : [], cancellationToken: cancellationToken)
             .ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// Removes, or measures, the workers an earlier version of this tool kept beside each tree of the repository on the
+    /// machine <paramref name="leg"/> runs on, once a machine, by the first leg that runs there: here, beside the main
+    /// checkout, every worktree git records, and each worktree gone since that workers were left beside; on a host, asked
+    /// of it from its home, beside its copy of the main checkout and each worktree's copy beside it, there still or
+    /// removed since. No version kept one beside a leg's copy of a tree, so none is looked for there; where the trees
+    /// cannot all be listed, those beside the trees that are known go, and the leg fails, saying why.
+    /// </summary>
+    private async Task<LegEntry> FormerWorkersAsync(
+        HarnessContext context,
+        PlacedLeg leg,
+        CleanRequest request,
+        ConcurrentDictionary<string, string> machines,
+        CancellationToken cancellationToken)
+    {
+        var first = machines.GetOrAdd(leg.Named.ToString(), leg.Name);
+
+        if (!string.Equals(first, leg.Name, StringComparison.Ordinal))
+        {
+            return leg.Entry(LegVerdict.Passed, $"the workers an earlier version kept on {Said(leg)} are {(request.DryRun ? "measured" : "cleaned")} with leg '{first}'");
+        }
+
+        var removal = WorkersRemoval.None;
+        var unlisted = new List<string>();
+        string looked;
+
+        try
+        {
+            if (leg.Dispatched)
+            {
+                // Asked of the host from its home, where its copies are kept together: every copy of the repository there
+                // may be gone - an agent's, removed by a version that removed only the workers kept in it - and the
+                // workers beside them still there.
+                var main = HostCopies.RepositoryPathOf(context.Config, leg.Host.Host);
+
+                looked = $"'{main}' or a copy beside it";
+                removal = await _transports
+                    .For(leg.Host)
+                    .RemoveFormerWorkersBesideCopiesAsync(main, request.DryRun, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            else
+            {
+                // The leg's own tree first: known where the others cannot be listed. Then each tree gone since that workers
+                // were left beside. Each where its workers are, once: one tree reached by two spellings - a link along the
+                // way, a separator spelt otherwise - would have its workers measured twice.
+                var found = await _trees.HereAsync(context, request.Here, cancellationToken).ConfigureAwait(false);
+                var known = found.Trees.Where(tree => !tree.LegCopy).Select(tree => tree.Root).Prepend(leg.TreeRoot).DistinctBy(WorkersOf, _platform.PathComparer()).ToList();
+                IReadOnlyList<string> gone;
+
+                if (found.Unlisted is { } why)
+                {
+                    unlisted.Add($"the worktrees beside the main checkout could not be listed, so none beside them was looked for: {why}");
+                }
+
+                try
+                {
+                    gone = [.. FormerTreesGone(context)];
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    gone = [];
+                    unlisted.Add($"the worktrees deleted since could not be looked for, so none beside them was: {ex.Message.TrimEnd('.')}");
+                }
+
+                looked = ReportText.Listed([.. known.Select(tree => $"'{tree}'")]);
+
+                foreach (var tree in known.Concat(gone).DistinctBy(WorkersOf, _platform.PathComparer()))
+                {
+                    removal = removal.And(await _localTransport.RemoveFormerWorkersAsync(tree, request.DryRun, cancellationToken).ConfigureAwait(false));
+
+                    if (removal.Interrupted)
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+        catch (HarnessException ex) when (ex.ExitCode == HarnessExit.CommandFailed)
+        {
+            return leg.Entry(LegVerdict.Failed, $"{ex.Message.TrimEnd('.')}{Removed(removal, request.DryRun)}") with
+            {
+                Space = WorkersAlone(leg.BuildDirectory) with { WorkerBytes = removal.Bytes },
+            };
+        }
+
+        var said = new List<string>
+        {
+            removal.Removed.Count == 0
+                ? $"no worker an earlier version kept beside {looked} is there"
+                : Removed(removal, request.DryRun).TrimStart(';', ' '),
+        };
+
+        said.AddRange(removal.Left.Select(worker => worker.Told()));
+
+        if (removal.Interrupted)
+        {
+            said.Add(LocalSyncTransport.StoppedPartWay);
+        }
+
+        said.AddRange(unlisted);
+
+        return leg.Entry(Verdicts.Worst([removal.Verdict, unlisted.Count == 0 ? LegVerdict.Passed : LegVerdict.Failed]), string.Join("; ", said)) with
+        {
+            Space = WorkersAlone(leg.BuildDirectory) with { WorkerBytes = removal.Bytes },
+        };
+
+        // What went, or would go, after what is said before it; nothing where nothing does.
+        static string Removed(WorkersRemoval removal, bool dryRun) => removal.Removed.Count == 0
+            ? string.Empty
+            : $"; {(dryRun ? string.Empty : "removed ")}{ReportText.Counted(removal.Removed.Count, "worker")} an earlier version kept beside "
+                + $"its trees, {DiskSpace.Size(removal.Bytes)}: {string.Join(", ", removal.Removed.Select(worker => $"'{worker.Path}'"))}";
+    }
+
+    /// <summary>
+    /// Where the workers an earlier version kept beside <paramref name="tree"/> are, with the links to the directory they
+    /// are in followed: the one place two spellings of the tree name alike. The tree itself is not followed, since what
+    /// was kept beside a link is beside the link. Spelt as given where it cannot be followed.
+    /// </summary>
+    private string WorkersOf(string tree)
+    {
+        var whole = Path.TrimEndingDirectorySeparator(Path.GetFullPath(tree));
+
+        try
+        {
+            return Path.GetDirectoryName(whole) is { Length: > 0 } parent ? Path.Combine(_fileSystem.ResolveLinks(parent), Path.GetFileName(whole)) : whole;
+        }
+        catch (IOException)
+        {
+            return whole;
+        }
+    }
+
+    /// <summary>
+    /// The worktrees of the repository on this machine that are gone, beside which an earlier version kept workers that
+    /// are still there: in the worktrees root or a directory of it, which hold the repository's worktrees alone.
+    /// </summary>
+    /// <exception cref="IOException">The worktrees root, or a directory of it, could not be looked in.</exception>
+    /// <exception cref="UnauthorizedAccessException">The same, for want of leave.</exception>
+    private IEnumerable<string> FormerTreesGone(HarnessContext context)
+    {
+        var root = context.Layout.WorktreesDirectoryUnder(context.Config.Worktrees.Root);
+
+        return _fileSystem.DirectoryExists(root)
+            ? [.. new[] { root }.Concat(_fileSystem.EnumerateDirectories(root)).SelectMany(directory => _localTransport.FormerWorkerTrees(directory, _ => true))]
+            : [];
+    }
+
+    /// <summary>The machine a leg runs on, as a line says it.</summary>
+    private static string Said(PlacedLeg leg) => leg.Named.Kind == HostKind.Local ? "this machine" : leg.Named.ToString();
 
     /// <summary>
     /// The space of a leg whose build directory was not measured - a link, locked, or not removable - which says its
@@ -544,7 +730,7 @@ public sealed class CleanService(
             try
             {
                 var held = made
-                    .Select(copy => (Copy: copy, Holder: _runLock.HeldBy(context.Layout, LegCopies.Whole(copy.Path, CommandName))))
+                    .Select(copy => (Copy: copy, Holder: LegCopies.HeldBy(_runLock, context.Layout, copy.Path, CommandName)))
                     .Where(held => held.Holder is not null)
                     .ToList();
 
@@ -583,7 +769,7 @@ public sealed class CleanService(
             // Each copy under the lock a run takes on it: one a run holds is kept, saying who.
             foreach (var copy in made)
             {
-                var holder = _runLock.HeldBy(context.Layout, LegCopies.Whole(copy.Path, CommandName), () =>
+                var holder = LegCopies.HeldBy(_runLock, context.Layout, copy.Path, CommandName, () =>
                 {
                     if (_fileSystem.DirectoryExists(copy.Path))
                     {

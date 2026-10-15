@@ -197,9 +197,23 @@ public static class LegPrograms
 
         starts.AddRange(workload.Programs.Select(program => (program, false)));
         starts.AddRange(workload.UnderOwnPath.Select(program => (program, true)));
+        starts.AddRange(SetUpPrograms(config, leg, workload).Select(program => (program, false)));
 
         return starts.Where(start => Surveyable(start.Program, leg.Os));
     }
+
+    /// <summary>
+    /// The programs the set-ups <paramref name="leg"/> brings up start, both ways, on its own system, as written: a
+    /// tool a line names is one its host must have before the leg is placed there, never one its first line finds
+    /// missing once the leg's tree is synced and its work about to start.
+    /// </summary>
+    private static IEnumerable<string> SetUpPrograms(HarnessConfig config, LegConfig leg, LegWorkload workload)
+        => workload.SetUpsOf(config, leg)
+            .Where(use => config.SetUp.ContainsKey(use.Name))
+            .SelectMany(use => Enum.GetValues<SetUpDirection>().Select(direction => config.SetUp[use.Name].Line(direction).For(leg.Os)))
+            .OfType<string>()
+            .Select(line => CommandLineText.Split(line, out var arguments) is null ? arguments[0] : null)
+            .OfType<string>();
 
     /// <summary>
     /// What building <paramref name="leg"/> starts, when it builds anything, and whether under an

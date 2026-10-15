@@ -1891,6 +1891,51 @@ public sealed partial class CliEndToEndTests
     }
 
     /// <summary>
+    /// clean --former-workers, through the real binary, removes the workers an earlier version of this tool kept beside
+    /// the tree it is typed in, and leaves the leg's build directory - what a clean without it removes - as it was.
+    /// </summary>
+    [Fact]
+    public async Task Clean_WithFormerWorkers_RemovesOnlyThem()
+    {
+        using var temp = new TempDirectory();
+        await PrepareRunnerAsync(temp);
+
+        var harness = new HarnessFactory();
+        var platform = harness.Platform;
+        var leg = new LegConfig { Os = platform.PlatformKey, Processor = platform.Processor, Config = "debug" };
+        var directory = VariantKey
+            .For(new HarnessConfig { BuildConfigs = { ["debug"] = new BuildConfiguration() }, Legs = { ["native"] = leg } }, leg, platform.PlatformKey)
+            .DirectoryUnder(temp.Path);
+        var former = temp.Path + Core.Mutations.MutationWorkers.FormerFamily + "357e24cw-1";
+
+        temp.WriteFile(Path.Combine(Path.GetRelativePath(temp.Path, directory), "obj", "a.o"), new string('a', 300));
+
+        try
+        {
+            await SyncKit.Transport(harness).CreateRootAsync(former, Core.Sync.CopyMark.Complete, TestContext.Current.CancellationToken);
+            File.WriteAllText(Path.Combine(former, "main.c"), "int main;");
+
+            var result = await CliRunner.RunAsync(["clean", "--legs", "native", "--former-workers", "--json", "-C", temp.Path], TestContext.Current.CancellationToken);
+
+            Assert.Equal(HarnessExit.Success, result.ExitCode);
+
+            using var document = JsonDocument.Parse(result.StandardOutput);
+            var line = Assert.Single(document.RootElement.GetProperty("legs").EnumerateArray());
+
+            Assert.StartsWith("removed 1 worker(s) an earlier version kept beside its trees, ", line.GetProperty("detail").GetString(), StringComparison.Ordinal);
+            Assert.False(Directory.Exists(former));
+            Assert.True(File.Exists(Path.Combine(directory, "obj", "a.o")));
+        }
+        finally
+        {
+            if (Directory.Exists(former))
+            {
+                Directory.Delete(former, recursive: true);
+            }
+        }
+    }
+
+    /// <summary>
     /// clean, dispatched here by another machine, leaves that machine the lines it says for itself - that the legs are
     /// starting, where each starts, and each one's verdict - since it relays every line said here: said here too, a
     /// consumer saw each leg's line twice, and a start line for every leg beside the run's own. The leg's line still

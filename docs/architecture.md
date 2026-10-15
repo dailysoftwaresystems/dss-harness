@@ -18,7 +18,8 @@ Implemented today: `init`, `verify-git`, `create-worktree`, `delete-worktree`,
 `fold-agent`, `delete-agent`), `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
 `read-anchor`, `read-anchors`, `check-anchor-balance`, `check-anchor-citations`),
 `fix-line-endings`, `check-ci-legs`, `legs`, `host-exec`, `install-missing-tools`,
-`update-tool`, `sync`, `build`, `test`, `run`, `check-mutations`, `clean` and `help`.
+`update-tool`, `sync`, `build`, `test`, `run`, `check-mutations`, `clean`, `up`, `down` and
+`help`.
 
 Every section of this document now describes code that exists. Where a rule is stated in
 the present tense it is enforced, and a gap between the two is a defect in the tool rather
@@ -146,7 +147,9 @@ at once, with the line it concerns where the parser knows it:
   left out. A list whose empty form means none - such as `sync.neverTransfer`, `sync.exclude` or
   `contention.buildTools` - takes `[]` as that.
 - A key nothing reads is refused, saying so: a test section's `configs`, which `init` once wrote
-  and nothing ever read - each leg builds and tests the one config its `config` names.
+  and nothing ever read - each leg builds and tests the one config its `config` names - and `exec`,
+  whose named commands no command ever ran: each is a set-up's line under `setUp` now, saying so.
+  Refused even empty, since the file plainly appears to declare commands.
 - References are resolved: a leg naming an undeclared host or emulator, an emulator that
   runs programs for another processor than the leg's, a success pattern that does not
   compile, a commit template placeholder no variable declares.
@@ -307,7 +310,10 @@ depend on either answer: it withholds the configured root, `.orchestrators`, `.m
 withheld path that stopped being ignored takes each placeholder, untracked until it is committed,
 as the harness's own - any other untracked file there still refuses, named as the worktrees root,
 or the slot whose ignore rule init writes, it is. The root may not be `.git`, `.orchestrators`,
-`.mutations` or `.legs`, or inside any of them.
+`.mutations` or `.legs`, or inside any of them. Each copy kept in `.mutations` or `.legs` is a whole
+copy of the tree, so a repository's own program that walks the tree from its root must leave out
+what the managed block ignores, as git does - `help layout` says so - or it reads every file again
+for each copy kept there.
 
 `init` leaves hand-written `.gitignore` rules alone, so a repository that already ignored one of
 these paths by hand keeps its rule beside the managed one. A block an earlier build wrote under the
@@ -659,9 +665,9 @@ it, forced or not: below the directory named for an orchestrator, every director
 counts, and below any other directory with none of its own only what git records - a husk's submodules are its own
 contents, which `--force` deletes with it. A directory with a `.git` of its own below an orchestrator's that git records
 no worktree at is what a removal left when git's record went and something in it could not, or a mutation worker an
-earlier version of this tool kept beside an agent's worktree: nothing here can tell what it holds, so `list-worktree`
-says it as a person's to look in and delete, and delete-orchestrator refuses, exit 13, changing nothing, until it is
-gone. Where git cannot list its worktrees, nothing is deleted. delete-orchestrator removes
+earlier version of this tool kept beside an agent's worktree, which `clean --former-workers` removes: nothing else here
+can tell what it holds, so `list-worktree` says it as a person's to look in and delete, and delete-orchestrator
+refuses, exit 13, changing nothing, until it is gone. Where git cannot list its worktrees, nothing is deleted. delete-orchestrator removes
 every record last - each agent's after the rest of that agent, the orchestrator's after its agents - so a removal that
 stops part way (exit 21) leaves only records that read, and run again it finishes. list-orchestrator counts an
 orchestrator's open agents as create-agent does (`OrchestrationRules.OpenAgents`), and says where each agent's
@@ -1399,8 +1405,11 @@ leg another machine sent here, or one typed in a copy a sync made, already works
 named none. A copy whose build would pass this machine's path limit refuses the run before
 anything starts, with the numbers and the way out; a tree whose `.legs` git does not ignore
 refuses it naming `init`, as a sweep's workers do, before the run claims its directory of records,
-so nothing is left for the next run to call abandoned. `check-mutations` makes no copy of its own -
-its workers are already copies of one reading - and `clean` and `sync` place nothing in one.
+so nothing is left for the next run to call abandoned. `check-mutations` makes no copy of its own
+on this machine - its workers are already copies of one reading - and `clean` and `sync` place
+nothing in one. On another machine a sweep works in a copy of its own (`LegWorkload.CopyOnHosts`),
+kept in the `.legs` of that machine's copy of the tree and synced from this machine's reading as
+that copy is (see "Locks, records and hosts").
 
 ### Emulators
 
@@ -1869,7 +1878,8 @@ even if its tests failed, because what failed was a tree that never existed.
 **A leg that reached no verdict is never counted among the legs that passed.** A skip is not a
 failure — a switched-off machine is normal — and nor is a stopped build, but neither is a pass,
 and a run carrying one exits `21` (`Incomplete`) rather than `0`, naming the legs that did not
-report: those that did no work, and those stopped before finishing. The verdict table
+report: those that did no work, and those stopped before finishing. So does a run where nothing
+failed whose leg left a set-up it brought up running (see Set-ups). The verdict table
 already ranks a skip above a pass so that such a run summarises as the warning; the summary now
 reads that ranking instead of reporting the number of rows in the ledger as the number that
 passed. A gate comparing two runs reads exactly this line, and "8 leg(s) passed" for eight legs
@@ -2219,8 +2229,8 @@ tool replaces, where a green result had quietly stopped meaning anything.
 - Every other command asked for `--json` that stops before it has anything of its own to say
   answers in its own document's shape, never the ledger's: the agent verbs with the agent
   document, empty; `list-orchestrator`, `list-worktree`, `legs`, `install-missing-tools`,
-  `check-ci-legs`, `check-anchor-citations`, `check-anchor-balance` and `fix-line-endings` with
-  their own document holding nothing, after `exitCode` and `summary` (`ReportJson.Stopped`);
+  `check-ci-legs`, `check-anchor-citations`, `check-anchor-balance`, `fix-line-endings`, `up` and
+  `down` with their own document holding nothing, after `exitCode` and `summary` (`ReportJson.Stopped`);
   `check-mutations --list` with its listing, no legs; and `read-anchor` and `read-anchors`,
   whose document is an array, with that array empty - the process's exit code and the line it
   ends on say the rest. Each command registers which where it is wired (`CommandRunner.Wire`,
@@ -3465,6 +3475,119 @@ An expected exception may carry `runChecks`, and until every one passes it excus
   genuine-looking failures to the tool under test on a loaded machine and excusing them on a quiet
   one, on the same day; a sample taken before a run says only what the machine was doing then.
 
+## Set-ups
+
+What a repository's work needs running beside it - a database, a container stack, a fake service -
+is declared once under `setUp`, by name, as an `up` and a `down` command line:
+
+```json
+"setUp": {
+  "e2e": {
+    "up": "docker compose -f e2e/compose.yml up -d --wait",
+    "down": { "windows": "scripts/e2e-down.cmd", "all": "./scripts/e2e-down.sh" },
+    "shared": "machine"
+  }
+}
+```
+
+`up <name>` runs a set-up's `up` line at the root of the tree it is given, on this machine, and
+`down <name>` its `down` line; each streams the line's output, exits `0` where the line exits `0`
+and `20` otherwise, and under `--json` answers with the line, the values its inputs were given, its
+exit code and how long it took. The name is matched ignoring case, and one `setUp` does not declare
+is a usage error, `10`.
+
+**A set-up's lines take inputs.** A set-up declares the values its lines name under `inputs`, each
+with an optional `default` and a `description`; a line names one as `{name}` in any argument, and
+`{{`/`}}` are braces. Each argument is filled in apart (`LegPathNames.Fill`, the one filler a leg's
+paths use too), so a value holding a space is still the one argument it was written as. `--input
+name=value` gives one on `up` and `down` (`CommandLineInputs`, the parser `run` reads its inputs
+with), and what names the set-up gives them as `{ "name": "db", "with": { "profile": "ci" } }`,
+each over the input's default. One reading of the values serves the file, the commands and a leg
+(`SetUpValues.Resolve`): a value for an input the set-up does not declare, and an input left with
+no value and no default, are refused - when the file is read for what names a set-up, and as a usage
+error, `10`, for `--input` - and a brace no input fills is refused when the file is read. A set-up
+is brought down with the values it was brought up with.
+
+**A line is a program and its arguments, never a shell string**, split as an action file's run
+line is (`CommandLineText`, the one splitter both read): double quotes keep a word whole, nothing
+escapes, and a line with an unbalanced quote is refused when the file is read. A pipe, a
+redirection, a variable or a wildcard is the program's argument as written, so what needs a shell
+is a script the line names. Its first word is held to the run lines' rule (`ActionToolPolicy`): a
+tool declared under `tools`, or a path inside the repository, a relative one read against the
+tree's root, where the line runs - anything else is refused, `13`, before anything starts. Either
+line may differ by platform, as a map of `windows`, `linux`, `macos` and `all` (`PerPlatformText`,
+the shape `buildOutputs` takes too), `all` serving every platform the map does not name; a
+platform it serves none of has no line, and the set-up is refused there, `13`, nothing run. A
+program that cannot start is `14`.
+
+**A run brings set-ups up only when asked.** A test invocation and a predefined runner name the
+set-ups their work needs, under their own `setUp`; a platform's test section replaces the `all`
+section's list, as its other keys do. `test --set-up` and `run --set-up` bring up, for each leg,
+what its work names - for `test` its test invocation's, for `run` its runner's and its run checks'
+runners' - and nothing without the option, so naming a set-up changes no run until a run asks for
+it: a stack a developer keeps running by hand is never brought down under them. The option on a
+run whose selected legs name no set-up is refused, `10`, since it would change nothing while the
+command line says it did; and every line a leg would run, both ways, is resolved for that leg's
+system before any host is measured (`LegSetUps.Require`, through the one `ISetUpService.Resolve`
+the commands use): no line for its platform, a program not allowed, values its inputs cannot be
+given, or one set-up a leg names twice with other values is refused, `13`, every one named with
+its leg - none is found out once a leg's tree is synced and its earlier set-ups are up. A host is
+handed `--set-up` only for a leg whose work names a set-up, and asked for each line's program in
+the survey (`LegPrograms`), so a leg is never placed where its set-up cannot start. `build` and
+`check-mutations` bring up nothing: neither runs what a set-up serves.
+
+**A set-up runs where the leg's work does.** On the machine that runs the leg - a host is handed
+`--set-up` with the rest of the command line - in the tree the leg works in there: the tree, its
+copy in `.legs`, or a host's copy - as the configuration that tree holds declares them. The set-ups come up in the order named, before the leg's build,
+and go down in the reverse order after its work, whatever its verdict, as one may stand on another.
+Each line runs as a phase of the leg (`PhaseRunner`): in the leg's environment, under
+`defaults.stallSeconds`, its log `set-up <name> up` or `set-up <name> down` among the leg's
+records. One that does not come up fails the leg, its work never started, and every set-up the leg
+brought up is brought down, the one that failed among them - unless its line never started, which
+brought nothing up. One that does not come down - its line failed, it stalled, or the grace cut it
+off - is said on the leg's line and carried in `--json` as the leg's `setUps`, and the run's last
+line and its document's `setUpsLeftRunning` name the set-up, the leg and the `down` command, with
+its values, that brings it down; where nothing failed the run exits `21`: what it started may
+still run, and is a change begun and not finished. A leg stopped with no line of its own still says
+what it did with its set-ups (`LegLedger.SetUpsEnded`), in the run's last line, or beneath the
+refusal that ended the run, and a host's leg in that state tells this machine as its host's ledger
+names it (`RemoteLegRunner`). A run asked to set up passes a point of no return
+(`PointOfNoReturn.Holds`), here and on a host (`HostAgentService`): interrupted - while its work
+runs or while a set-up comes up - its legs bring down what they brought up until shortly before
+the command line stops waiting, counted from the interruption (`PointOfNoReturn.StoppedAfter`, as
+an interrupted deletion stops), so a down line still running then is stopped and its set-up said
+as not brought down before the process ends.
+
+**Legs sharing a set-up share it.** A set-up in one tree of one machine is held by every leg using
+it, in one run or several - or, where it says `"shared": "machine"` (`SetUpConfig.Shared`), in any
+tree of the repository on the machine: what a machine holds once, a container's name or a port,
+brought up by tree would be brought down by the first tree to end under every other. By tree is the
+default, since a set-up serving one tree's own build shared with a leg in another would run that
+leg's work against the other tree's code. Another repository's set-up of the name is another, its
+lines its own: each hold records the repository its tree is of, as its main checkout - or the copy
+of it a host keeps - is spelt there (`IHarnessContextLoader.RepositoryOfAsync`), the same whether a
+run works in the tree or `down` is typed in it. A hold that says the machine shares it meets every
+leg of the repository holding that set-up on the machine, whichever way theirs said (`SetUpHolds`).
+Each set-up as it is up is an instance, named as it comes up and held by every leg joining it, and
+the last leg holding the instance brings it down, whichever legs each shares with; a leg sharing it
+with two instances up apart - two trees' legs that each brought it up by tree - waits until it
+meets one. Holds are recorded in `<user data>/dssharness/setups-<machine id>.json`
+(`SetUpHolds`), beside the admission record, each change made under the file's machine-wide lock
+(`MachineWideList`). The first leg
+brings it up; a leg finding it coming up or going down waits until it is up or down, since its work
+would otherwise run against services not there yet or about to go; one finding it up with the
+values it gives joins, and one giving other values waits until the legs using it let it go, then
+brings it up with its own; and the last to let go brings it down. A leg holds every set-up it
+names before any comes up, in the order of their names - two legs naming two in opposite orders
+with other values would otherwise each hold one and wait for the other for ever - and the values a
+use gives are read as the inputs take them (`LegWorkload.SetUpsOf`), so one set-up named twice
+with the same values, however each is written, is one. A hold is its process's, so one whose process has ended is let
+go of when the record is next read, and said so. A run killed before bringing a set-up down leaves
+it up, and the next leg brings it up again over it - so a set-up's lines must be safe to run twice.
+`down <name>` is refused, `13`, while a live leg holds that set-up in that tree - or in any of the
+repository's, where the machine shares it - naming each: brought down under them, their work would
+fail for a reason nothing of theirs says.
+
 ## Mutation testing
 
 `check-mutations` is the mechanical proof that a repository's tests can fail. For every selected
@@ -3638,8 +3761,23 @@ and the lines of a sweep and of a `clean` say which leg a worker is. Two variant
 tree whose names came to one key would share their workers and their lock, and neither would be
 judged on the other's: each sweep syncs a worker again by content and builds in its own variant's
 directory within it. Workers an earlier version of this tool kept beside a tree,
-`<tree>.mutation-<key><mark>-<n>`, are known to nothing here: nothing lists, counts or removes
-them, and they are a person's to delete. One below an orchestrator's directory is said as any
+`<tree>.mutation-<key><mark>-<n>` (`MutationWorkers.FormerFamily`), are no workers to a sweep:
+nothing counts them, and `clean --former-workers` alone removes them - beside each tree of the
+repository on each machine a selected leg runs on, once a machine, and beside each tree deleted
+since, whose workers show its name (`LocalSyncTransport.FormerWorkerTrees`). Here that is the main
+checkout and every worktree git records (`IRepositoryTrees.HereAsync`), and the worktrees root and
+each directory of it, which hold the repository's worktrees alone; each tree once, by where its
+workers are with the links to that directory followed, so two spellings of one are one. On a host
+it is asked of the host from its home (`ISyncTransport.RemoveFormerWorkersBesideCopiesAsync`),
+beside its copy of the main checkout and each worktree copy beside it, under that copy's name or a
+worktree copy's, there still or removed since - whatever copy the host holds, none even. Each goes
+as workers kept in a tree are removed (`LocalSyncTransport.RemoveFormerWorkersAsync`, the one
+removal of copies kept together): by its marker, a dry run listing each with its size, one that
+version's sweep still claims kept by the claim file beside it, refused-locked, and one no sync made
+said and left. Where the worktrees, or the trees deleted since, cannot be listed, those beside the
+trees that are known are dealt with and the leg fails, saying so; a leg's copy of a tree is no tree
+any version kept one beside.
+Until then, one below an orchestrator's directory is said as any
 directory there holding a `.git` of its own that git records no worktree at, and keeps the
 orchestrator from being deleted until it is gone; one beside a host's worktree copy is spelt as no
 copy's name, so a listing of the host's worktree copies never holds it. A sweep runs
@@ -3835,6 +3973,28 @@ A sweep of a leg takes a lock of its own: its workers' key, whole, on the leg's 
 another sweep of the leg's variant, `refused-locked`, and a `clean` of its workers, and never meets
 a build, test or sync of the leg, keyed by its tree, which a sweep of hours must never hold off.
 `--force-lock` takes it, and a worker a live sweep claims.
+
+**On another machine a sweep works in a copy of its own**, so neither holds the other off in either
+direction. A host's copy of the tree is synced, taken whole, by every command whose leg lands there,
+and a test holds it shared for as long as it runs: a sweep that synced that copy was refused for as
+long as a test ran on it, and a test asked while a sweep synced it was refused in turn. Instead the
+sweep's leg works in `<host's copy>/.legs/<key>` (`LegTrees.For`, asked by placement and by the room
+a host is asked about alike), synced from this machine's reading of the tree as the host's copy is,
+never adoptable, its workers kept in it - and a sync of the host's copy never deletes it, as no sync
+deletes a copy's own copies. The sweep holds that copy whole (`MutationWorkers.SweepLock`), so a
+second sweep of the variant there is refused-locked before its sync rewrites the copy; a build, a
+test or a sync of the host's copy never meets it, nor it them. Where the host's copy is not there
+yet as a copy this tool finished, the run syncs the tree to it first (`LegRunService.SyncHolderAsync`),
+as any command would - a directory this tool did not make refused as any sync refuses one -
+once a run however many legs keep their copies in it, under the lock any sync of that copy takes,
+so another run's sync of it is never run beside this one and refuses these legs, refused-locked:
+a clean, a test or a deletion there finds the tree, never a directory holding nothing but the copy
+kept in it. The host's agent serving a sync of a copy kept in a tree's slot starts in the tree,
+since a sync withholds the slot and the first copy kept there makes it. The DssHarness on the host runs in that
+copy, a repository of its own whose lock is its own: so whatever removes a copy kept in a tree's
+`.legs` asks that copy's lock as well as the tree's (`LegCopies.HeldBy`), `clean` of the leg here
+asks this machine's lock for the copy before the host is sent anything, and a removal of a host's
+copy meets the workers in each copy kept in it (`RemoveWorkersAsync`), a claimed one keeping it.
 
 Each arm's records are written as it ends, in `<run>/<leg>/arms/<arm>/`: `arm.json`, its line as
 the ledger carries it, beside the logs of its build and its run, and of a paired control's build in
@@ -4222,7 +4382,7 @@ with "the harness could not run", because the remedies differ.
 | 14 | A required tool is missing, or could not be started |
 | 15 | A host could not be reached, DssHarness could not run there, or a command run there never reported how it finished |
 | 20 | The wrapped command ran and failed |
-| 21 | Ran with nothing failing, but a leg reached no verdict, or a deletion, a fold, a hand-over or a move of an agent's base stopped part way; it is not a pass, and running it again, once what it names is dealt with, finishes it |
+| 21 | Ran with nothing failing, but a leg reached no verdict or left a set-up it brought up running, or a deletion, a fold, a hand-over or a move of an agent's base stopped part way; it is not a pass, and running it again, once what it names is dealt with, finishes it |
 | 70 | The harness itself failed unexpectedly (a defect in the tool) |
 | 130 | The run was interrupted before it finished; what it had already done is still reported |
 

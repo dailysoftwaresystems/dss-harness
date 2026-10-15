@@ -70,6 +70,10 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
     /// </param>
     /// <param name="run">The run the leg is part of; <see langword="null"/> for a command that runs no leg of a run.</param>
     /// <param name="onNote">Told each whole note the host's command writes while it runs, as it arrives; never relayed; <see langword="null"/> where this reads none.</param>
+    /// <param name="setUpsLeftRunning">
+    /// Told each set-up the leg left running on the host where it ended there with no line to carry it, so this run
+    /// says it as the host's did; <see langword="null"/> where nothing is told.
+    /// </param>
     /// <param name="cancellationToken">Stops the command on the host as well as here.</param>
     /// <exception cref="HarnessException">
     /// The host could not be reached - its transport would not start - or never reported how the
@@ -85,6 +89,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
         IReadOnlyList<HostArgument> arguments,
         RunId? run = null,
         Action<string, string>? onNote = null,
+        Action<IReadOnlyList<SetUps.SetUpFact>>? setUpsLeftRunning = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(commandName);
@@ -237,7 +242,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
                 $"{leg.Host.Host}: {HostProbes.NeverFinished($"'{commandName}' for leg '{leg.Name}'", result, session.Connection)}");
         }
 
-        return Read(ledger.ToString(), leg, session.Connection, commandName, finished, failure.Count == 0 ? null : string.Join(Environment.NewLine, failure));
+        return Read(ledger.ToString(), leg, session.Connection, commandName, finished, failure.Count == 0 ? null : string.Join(Environment.NewLine, failure), setUpsLeftRunning);
     }
 
     /// <summary>Shows each line <paramref name="held"/> holds, in order, and holds none after.</summary>
@@ -265,12 +270,20 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
     /// <param name="commandName">The command the host ran.</param>
     /// <param name="exitCode">How that command finished.</param>
     /// <param name="failure">What its failure line said, and every line after it, when it wrote one.</param>
+    /// <param name="setUpsLeftRunning">Told each set-up the leg left running there where it ended with no line.</param>
     /// <exception cref="HarnessException">
     /// The host wrote no entry for the leg. A refusal of the whole run there is raised as that same
     /// refusal; anything else as a host that said nothing about the leg. A refusal that came with an
     /// entry is no exception here: the entry carries it.
     /// </exception>
-    private static LegEntry Read(string output, PlacedLeg leg, HostConnection connection, string commandName, int exitCode, string? failure)
+    private static LegEntry Read(
+        string output,
+        PlacedLeg leg,
+        HostConnection connection,
+        string commandName,
+        int exitCode,
+        string? failure,
+        Action<IReadOnlyList<SetUps.SetUpFact>>? setUpsLeftRunning = null)
     {
         var document = output.Trim();
 
@@ -291,6 +304,13 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
         }
 
         var entry = ledger?.Legs?.FirstOrDefault();
+
+        // A set-up the leg left running there, where it ended with no line to carry it: it runs on after both runs, so
+        // this run says it as the host's did, whatever this machine makes of the rest.
+        if (entry is null && ledger?.SetUpsLeftRunning?.Where(left => string.Equals(left.Leg, leg.Name, StringComparison.OrdinalIgnoreCase)).ToList() is { Count: > 0 } left)
+        {
+            setUpsLeftRunning?.Invoke([.. left.Select(setUp => new SetUps.SetUpFact(setUp.SetUp, setUp.Up ?? SetUps.SetUpFact.BroughtUp, SetUps.SetUpFact.Failed, setUp.Detail, setUp.Inputs))]);
+        }
 
         if (entry is null)
         {
@@ -374,6 +394,9 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
             Compilers = [.. entry.Compilers ?? []],
             DeveloperEnvironment = entry.DeveloperEnvironment,
 
+            // What the leg did there with each set-up its work named: they came up and went down on that host.
+            SetUps = [.. entry.SetUps ?? []],
+
             // How that host's machine took the leg, as it measured itself.
             Admission = entry.Admission,
 
@@ -436,11 +459,26 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
     /// The verdict of the host's run, which a run that reported on its legs names; <see langword="null"/> where
     /// something other than its legs ended it, as <see cref="LedgerReport"/> writes such a run.
     /// </param>
+    /// <param name="SetUpsLeftRunning">Each set-up a leg of the host's run left running, where one did.</param>
     private sealed record RemoteLedger(
         [property: JsonPropertyName("legs")] IReadOnlyList<RemoteLedgerLeg>? Legs,
         [property: JsonPropertyName("runDirectory")] string? RunDirectory = null,
         [property: JsonPropertyName("runId")] string? RunId = null,
-        [property: JsonPropertyName("verdict")] string? Verdict = null);
+        [property: JsonPropertyName("verdict")] string? Verdict = null,
+        [property: JsonPropertyName("setUpsLeftRunning")] IReadOnlyList<RemoteSetUpLeft>? SetUpsLeftRunning = null);
+
+    /// <summary>A set-up a leg of the host's run left running, as the host's ledger names it.</summary>
+    /// <param name="Leg">The leg.</param>
+    /// <param name="SetUp">The set-up.</param>
+    /// <param name="Up">How it came up for the leg.</param>
+    /// <param name="Inputs">The values it was brought up with.</param>
+    /// <param name="Detail">Why it did not come down.</param>
+    private sealed record RemoteSetUpLeft(
+        [property: JsonPropertyName("leg")] string Leg,
+        [property: JsonPropertyName("setUp")] string SetUp,
+        [property: JsonPropertyName("up")] string? Up = null,
+        [property: JsonPropertyName("inputs")] IReadOnlyDictionary<string, string>? Inputs = null,
+        [property: JsonPropertyName("detail")] string? Detail = null);
 
     /// <summary>One leg's line of a host's ledger.</summary>
     private sealed record RemoteLedgerLeg(
@@ -466,7 +504,8 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
         string? Records = null,
         IReadOnlyList<PhaseLogFile>? Logs = null,
         PendingSweep? PendingSweep = null,
-        IReadOnlyList<RemoteLedgerControl>? Controls = null);
+        IReadOnlyList<RemoteLedgerControl>? Controls = null,
+        IReadOnlyList<SetUps.SetUpFact>? SetUps = null);
 
     /// <summary>One control of a host's sweep that did not pass, beneath its leg's line.</summary>
     private sealed record RemoteLedgerControl(

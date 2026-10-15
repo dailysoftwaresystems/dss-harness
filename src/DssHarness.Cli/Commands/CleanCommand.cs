@@ -19,6 +19,11 @@ internal static class CleanCommand
         Description = "Say what each leg's build directory, workers and copies hold and the room left on its filesystem, remove nothing, and exit as the clean would: 13 where a run holds the leg, a sweep its workers or a run its copy.",
     };
 
+    private static readonly Option<bool> FormerWorkersOption = new(CleanService.FormerWorkersOption)
+    {
+        Description = "Remove only the mutation workers an earlier version of this tool kept beside the repository's trees, as <tree>.mutation-<key><mark>-<n>, on each machine a selected leg runs on - with --dry-run, list them with their sizes. One a sweep of that version still claims is kept, refused-locked.",
+    };
+
     private static readonly Option<bool> JsonOption = new("--json")
     {
         Description = "Write the per-leg ledger as JSON.",
@@ -32,6 +37,7 @@ internal static class CleanCommand
 
         command.Options.Add(LegsOption);
         command.Options.Add(DryRunOption);
+        command.Options.Add(FormerWorkersOption);
         command.Options.Add(JsonOption);
         command.Options.Add(DispatchOptions.Here);
         GlobalOptions.AddTo(command);
@@ -51,7 +57,10 @@ internal static class CleanCommand
                         legs,
                         arguments.GetValue(DryRunOption),
                         context.Json,
-                        arguments.GetValue(DispatchOptions.Here)),
+                        arguments.GetValue(DispatchOptions.Here))
+                    {
+                        FormerWorkers = arguments.GetValue(FormerWorkersOption),
+                    },
                     cancellationToken)
                 .ConfigureAwait(false);
         }, JsonAnswer.Ledger(JsonOption));

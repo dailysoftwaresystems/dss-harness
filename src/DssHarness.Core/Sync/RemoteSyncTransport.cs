@@ -4,6 +4,7 @@ using DssHarness.Core.Git;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Output;
 using DssHarness.Core.Processes;
+using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 
 namespace DssHarness.Core.Sync;
@@ -149,6 +150,23 @@ public sealed class RemoteSyncTransport(
             ?? throw new HarnessException(
                 HarnessExit.HostUnavailable,
                 $"{Host} did not answer which mutation workers in '{root}' it removed.");
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Asked from the home directory, as a copy's removal is: every copy of the repository there may be gone, and the
+    /// workers an earlier version kept beside them still there.
+    /// </remarks>
+    public async Task<WorkersRemoval> RemoveFormerWorkersBesideCopiesAsync(string repositoryPath, bool measureOnly = false, CancellationToken cancellationToken = default)
+        => (await AskAsync<SyncWorkersAnswer>(
+                    SyncServe.RemoveFormerWorkers,
+                    repositoryPath,
+                    measureOnly ? [SyncServe.MeasureOnly] : [],
+                    cancellationToken,
+                    HomeDirectory)
+                .ConfigureAwait(false))?.Workers
+            ?? throw new HarnessException(
+                HarnessExit.HostUnavailable,
+                $"{Host} did not answer which workers an earlier version kept beside its copies of '{repositoryPath}' it removed.");
 
     /// <inheritdoc/>
     public async Task<SyncManifest> ReadManifestAsync(
@@ -475,13 +493,17 @@ public sealed class RemoteSyncTransport(
 
     /// <summary>
     /// The directory the agent starts in. A first sync creates the copy, so the agent cannot start
-    /// inside it; its parent is where the operation is served from instead.
+    /// inside it; its parent is where the operation is served from instead - or, for a copy kept in a
+    /// slot of a tree (<see cref="HarnessLayout.InSlot"/>), the tree: a sync withholds the slot, so the
+    /// first copy kept there makes it, and the tree, synced first, is there.
     /// </summary>
     private static string ParentOf(string root)
     {
-        var trimmed = root.Replace('\\', '/').TrimEnd('/');
-        var slash = trimmed.LastIndexOf('/');
+        var parent = Up(root.Replace('\\', '/').TrimEnd('/'));
+        var slot = parent[(parent.LastIndexOf('/') + 1)..];
 
-        return slash <= 0 ? trimmed : trimmed[..slash];
+        return slot is HarnessLayout.LegsDirectoryName or HarnessLayout.MutationsDirectoryName ? Up(parent) : parent;
+
+        static string Up(string path) => path.LastIndexOf('/') is var slash and > 0 ? path[..slash] : path;
     }
 }

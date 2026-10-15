@@ -39,6 +39,12 @@ public sealed record LegsReport(IReadOnlyList<LegPlacement> Placements, IReadOnl
     public LocalTrees LocalTrees { get; init; }
 
     /// <summary>
+    /// Whether a leg another machine runs works in a copy of its own there (<see cref="LegWorkload.CopyOnHosts"/>): as the
+    /// command's workload says, beside <see cref="LocalTrees"/>, so placement and room agree.
+    /// </summary>
+    public bool CopyOnHosts { get; init; }
+
+    /// <summary>
     /// Whether the check passed. A leg named with <c>--legs</c> that cannot run fails it, because it
     /// was asked for; one that was merely declared does not, because a switched-off machine is normal.
     /// Either way at least one leg must be able to run, or nothing would - and a leg turned away
@@ -169,7 +175,7 @@ public sealed class LegsService(
             _output.Warn(CommandName, $"leg '{placement.Leg.Name}' cannot run: {placement.Reason}");
         }
 
-        return new LegsReport(placements, [.. reports.Values], selection.Named) { Here = here, LocalTrees = local };
+        return new LegsReport(placements, [.. reports.Values], selection.Named) { Here = here, LocalTrees = local, CopyOnHosts = workload.CopyOnHosts };
     }
 
     /// <summary>

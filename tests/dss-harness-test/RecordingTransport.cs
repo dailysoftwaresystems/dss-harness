@@ -252,4 +252,7 @@ internal sealed class RecordingTransport(
 
     public Task<WorkersRemoval> RemoveWorkersAsync(string root, bool measureOnly = false, CancellationToken cancellationToken = default)
         => inner.RemoveWorkersAsync(root, measureOnly, cancellationToken);
+
+    public Task<WorkersRemoval> RemoveFormerWorkersBesideCopiesAsync(string repositoryPath, bool measureOnly = false, CancellationToken cancellationToken = default)
+        => inner.RemoveFormerWorkersBesideCopiesAsync(repositoryPath, measureOnly, cancellationToken);
 }

@@ -50,6 +50,8 @@ public sealed class StoppedDocumentTests
         ["run"] = Ledger,
         ["check-mutations"] = Ledger,
         ["clean"] = ["exitCode", "summary", "passed", "cancelled", "unfinished", "complete", "legs"],
+        ["up"] = ["exitCode", "summary", "direction"],
+        ["down"] = ["exitCode", "summary", "direction"],
     };
 
     /// <summary>
@@ -414,8 +416,8 @@ public sealed class StoppedDocumentTests
         Assert.Contains(
             "Every other command asked for `--json` that stops before it has anything of its own to say answers in its own document's "
                 + "shape, never the ledger's: the agent verbs with the agent document, empty; `list-orchestrator`, `list-worktree`, `legs`, "
-                + "`install-missing-tools`, `check-ci-legs`, `check-anchor-citations`, `check-anchor-balance` and `fix-line-endings` with "
-                + "their own document holding nothing, after `exitCode` and `summary` (`ReportJson.Stopped`); `check-mutations --list` with "
+                + "`install-missing-tools`, `check-ci-legs`, `check-anchor-citations`, `check-anchor-balance`, `fix-line-endings`, `up` "
+                + "and `down` with their own document holding nothing, after `exitCode` and `summary` (`ReportJson.Stopped`); `check-mutations --list` with "
                 + "its listing, no legs; and `read-anchor` and `read-anchors`, whose document is an array, with that array empty - the "
                 + "process's exit code and the line it ends on say the rest. Each command registers which where it is wired "
                 + "(`CommandRunner.Wire`, `JsonAnswer`), so the plumbing answers for it without choosing by its name: where the parser "

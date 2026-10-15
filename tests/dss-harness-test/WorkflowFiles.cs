@@ -59,7 +59,8 @@ internal static class WorkflowFiles
     }
 
     /// <summary>The lines of <paramref name="workflow"/>, as written.</summary>
-    private static string[] Lines(string workflow)
+    /// <param name="workflow">The workflow's file name, under <c>.github/workflows</c>.</param>
+    public static string[] Lines(string workflow)
     {
         using var held = typeof(WorkflowFiles).Assembly.GetManifestResourceStream("workflows/" + workflow);
 

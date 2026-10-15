@@ -16,6 +16,8 @@ using DssHarness.Core.Platform;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 using DssHarness.Core.Runners;
+using DssHarness.Core.Runs;
+using DssHarness.Core.SetUps;
 using DssHarness.Core.Sync;
 using DssHarness.Core.Tools;
 
@@ -64,6 +66,7 @@ internal static class HelpCommand
         new("secrets", ["hosts-secrets"], "Where each host's connection data lives", RenderSecrets),
         new("tools", [], "What install-missing-tools installs, and where", RenderTools),
         new("runners", ["runner", "actions"], "Predefined runners, action files and excused failures", RenderRunners),
+        new("setups", ["setup", "set-up", "set-ups", "up", "down"], "Set-ups a run brings up around its work, and down after", RenderSetUps),
         new("verdicts", ["verdict"], "What each leg verdict means, and what to do about it", RenderVerdicts),
         new("mutations", ["mutation", "check-mutations", "arms", "self-test"], "Mutation testing: the registry, its workers, and the self-test", RenderMutations),
         new("ci", ["check-ci-legs"], "How check-ci-legs finds a workflow's legs and budgets", RenderCi),
@@ -739,6 +742,104 @@ internal static class HelpCommand
         builder.AppendLine(line.ToString());
     }
 
+    private static string RenderSetUps()
+    {
+        var builder = new StringBuilder();
+
+        builder.AppendLine("Set-ups: what a repository brings up for its work, and down after");
+        builder.AppendLine();
+        builder.AppendLine("config.json names each set-up under setUp, with an up and a down command line:");
+        builder.AppendLine();
+        builder.AppendLine("  \"setUp\": {");
+        builder.AppendLine("    \"e2e\": {");
+        builder.AppendLine("      \"up\": \"docker compose -f e2e/compose.yml up -d --wait\",");
+        builder.AppendLine("      \"down\": { \"windows\": \"scripts/e2e-down.cmd\", \"all\": \"./scripts/e2e-down.sh\" },");
+        builder.AppendLine("      \"shared\": \"machine\"");
+        builder.AppendLine("    }");
+        builder.AppendLine("  }");
+        builder.AppendLine();
+        builder.AppendLine("A line is a program and its arguments, split as an action file's run line is: at");
+        builder.AppendLine("spaces, a double-quoted word kept whole, and no shell between - no pipes, no");
+        builder.AppendLine("redirection, no variables, no wildcards. What needs a shell is a script the line");
+        builder.AppendLine("names. Its program is a tool declared under tools, or a path inside the repository");
+        builder.AppendLine("('help tools'), and a relative path is read against the root of the tree the");
+        builder.AppendLine("line runs in. Either line may be a map of windows, linux, macos and all, where all");
+        builder.AppendLine("serves every platform the map does not name; a platform it serves none of has no");
+        builder.AppendLine("line, and the set-up is refused there, nothing run.");
+        builder.AppendLine();
+        builder.AppendLine("A set-up may declare inputs its lines name in braces, each with an optional default:");
+        builder.AppendLine();
+        builder.AppendLine("  \"db\": {");
+        builder.AppendLine("    \"up\": \"docker compose --profile {profile} up -d --wait\",");
+        builder.AppendLine("    \"down\": \"docker compose --profile {profile} down\",");
+        builder.AppendLine("    \"inputs\": { \"profile\": { \"default\": \"dev\", \"description\": \"which services\" } }");
+        builder.AppendLine("  }");
+        builder.AppendLine();
+        builder.AppendLine("Each {name} in an argument is filled in with that input's value, the argument staying");
+        builder.AppendLine("one argument whatever the value holds; {{ and }} are braces. An input with no default");
+        builder.AppendLine("must be given a value by whatever runs the set-up; a brace no input fills is refused");
+        builder.AppendLine("when the file is read.");
+        builder.AppendLine();
+        builder.AppendLine($"  {ToolPackage.Command} {SetUpService.UpCommand} <name>      run its up line at the root of the tree, on this machine");
+        builder.AppendLine($"  {ToolPackage.Command} {SetUpService.DownCommand} <name>    run its down line there");
+        builder.AppendLine();
+        builder.AppendLine($"{CommandLineInputs.Option} name=value gives an input its value, once per input, over its default;");
+        builder.AppendLine("an input is named ignoring case, so two values for one name in two cases are refused.");
+        builder.AppendLine("A set-up is brought down with the values it was brought up with. Each command streams");
+        builder.AppendLine("the line's output and exits 0 where it exits 0, and 20 where it exits anything else;");
+        builder.AppendLine("10 for a name setUp does not declare or a value that cannot be given, 13 where this");
+        builder.AppendLine("platform has no line or the program is not allowed, 14 where the program cannot start.");
+        builder.AppendLine("--json answers with the line that ran, the values it was given, its exit code and how");
+        builder.AppendLine("long it took. down is refused, 13, while a leg of a run on this machine still uses the");
+        builder.AppendLine("set-up in that tree, or in any of the repository's where the machine shares it: the last");
+        builder.AppendLine("of them brings it down as it ends.");
+        builder.AppendLine();
+        builder.AppendLine("Around a run");
+        builder.AppendLine();
+        builder.AppendLine("A test invocation and a predefined runner name the set-ups their work needs, each by");
+        builder.AppendLine("name, or with the values it gives the set-up's inputs:");
+        builder.AppendLine();
+        builder.AppendLine("  \"projects\": [ { \"name\": \"core\", \"test\": { \"all\": { \"setUp\": [\"e2e\"] } } } ]");
+        builder.AppendLine("  \"predefinedRunners\": { \"corpus\": { \"setUp\": [\"e2e\", { \"name\": \"db\", \"with\": { \"profile\": \"ci\" } }], ... } }");
+        builder.AppendLine();
+        builder.AppendLine($"test and run bring them up only when given {LegSetUps.Option}; without it a run runs as it");
+        builder.AppendLine("did. With it, each leg brings up what its work names - for test its test invocation's,");
+        builder.AppendLine("for run its runner's and its run checks' runners' - on the machine that runs the leg,");
+        builder.AppendLine("in the tree it works in there: the tree, its copy, or a host's copy. They come up in");
+        builder.AppendLine("the order named, before the leg's build, and go down in the reverse order after its");
+        builder.AppendLine("work, however that ended. Interrupted, what came up comes down until shortly before");
+        builder.AppendLine("the command line stops waiting, as long as for a deletion, counted from the interruption;");
+        builder.AppendLine("one still coming down then is stopped, and said as not brought down.");
+        builder.AppendLine("Legs sharing a set-up share it: those working in one tree of a machine, or, where it");
+        builder.AppendLine("says \"shared\": \"machine\", every leg of the repository on the machine whatever tree it");
+        builder.AppendLine("works in - for what a machine holds once, as a container's name or a port, which a tree");
+        builder.AppendLine("of its own would bring down under the others; another repository's set-up of the name");
+        builder.AppendLine("is another. The first brings it up, the others wait until it is up and use it, and the");
+        builder.AppendLine("last of them to end, in whichever tree, brings it down. A leg sharing it with legs that");
+        builder.AppendLine("each brought it up apart, as two trees' legs sharing it by tree, waits until it meets");
+        builder.AppendLine("one. A leg");
+        builder.AppendLine("giving its inputs other values waits until the legs using it let it go, then brings it");
+        builder.AppendLine("up with its own. A run killed before bringing one down leaves it up, and the next leg");
+        builder.AppendLine("brings it up again, so a line must be safe to run twice. A leg holds every set-up it");
+        builder.AppendLine("names before any comes up, in the order of their names, so two legs naming two in");
+        builder.AppendLine("opposite orders never each wait for the other. A set-up named twice with the values its");
+        builder.AppendLine("inputs take, however each writes them, is brought up once.");
+        builder.AppendLine();
+        builder.AppendLine("A line around a run runs as a phase of the leg, in the leg's environment and under");
+        builder.AppendLine("defaults.stallSeconds, its log 'set-up <name> up' or 'set-up <name> down' among the");
+        builder.AppendLine("leg's records. One that does not come up fails the leg before its work starts, and is");
+        builder.AppendLine("brought down unless its line never started. One that does not come down is said on");
+        builder.AppendLine("the leg's line, or beneath a refusal that ended the run, and in the run's last line,");
+        builder.AppendLine("and as setUpsLeftRunning in --json, with the command that brings it down, and");
+        builder.AppendLine($"the run exits 21 where nothing failed. {LegSetUps.Option} is refused, 10, where nothing the");
+        builder.AppendLine("selected legs run names a set-up, and 13 where a line a leg would run could not run on");
+        builder.AppendLine("its system - no line for its platform, a program not allowed, a value its inputs");
+        builder.AppendLine("cannot be given, one set-up named twice with other values - every one named before");
+        builder.AppendLine("anything runs.");
+
+        return builder.ToString();
+    }
+
     private static string RenderVerdicts()
     {
         var builder = new StringBuilder();
@@ -756,8 +857,8 @@ internal static class HelpCommand
         }
 
         builder.AppendLine();
-        builder.AppendLine($"A run where nothing failed but some leg reached no verdict exits {HarnessExit.Incomplete}, not 0, and");
-        builder.AppendLine("names the legs that did not report. A leg that never ran proves nothing about the");
+        builder.AppendLine("A run where nothing failed but some leg reached no verdict, or left a set-up it brought up");
+        builder.AppendLine($"running ('help setups'), exits {HarnessExit.Incomplete}, not 0, and names the legs that did not report. A leg that never ran proves nothing about the");
         builder.AppendLine("code, and nor does a build something stopped from outside before it finished, so");
         builder.AppendLine("counting either among the legs that passed reports evidence nobody gathered. A");
         builder.AppendLine("CMake build under ninja that fails with ninja saying nothing of why - which it says");
@@ -989,11 +1090,12 @@ internal static class HelpCommand
             + "sweep each is synced again from one reading of the tree, by content - so its build stays warm, and a site a "
             + "killed sweep left mutated is put back - and built whole before it drives an arm. Of the tree itself a sweep "
             + $"reads every file and writes none: its workers, and the claims on them, are in {HarnessLayout.MutationsDirectoryName}, "
-            + $"and its run's records in {HarnessLayout.DirectoryName}, as every run's are. A sweep makes no copy of its own "
-            + "even where the leg's localCopy "
+            + $"and its run's records in {HarnessLayout.DirectoryName}, as every run's are. On this machine a sweep makes no copy "
+            + "of its own even where the leg's localCopy "
             + $"or the repository's default ({HarnessLayout.LegsDirectoryName}) says one - its workers are already copies of "
             + "one reading - and reads the dependency sources the leg's build fetched from where the configuration places "
-            + "that build: the copy's build directory, where the leg works in one.");
+            + "that build: the copy's build directory, where the leg works in one. On another machine it works in a copy of "
+            + $"its own there, <host's copy>/{HarnessLayout.LegsDirectoryName}/<key>, with its workers in it (see the locks below).");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -1030,8 +1132,11 @@ internal static class HelpCommand
             + "with the worktree, or the host's copy, as everything else in it does, and is said. No copy of a tree carries "
             + "its workers, and a sync into a host's "
             + "copy never deletes that copy's own. Workers an earlier version of this tool kept beside a tree, as "
-            + "<tree>.mutation-<key><mark>-<n>, are no workers to anything here: nothing counts or removes one as a worker, and "
-            + "they are yours to delete. Each holds a .git of its own that git records no worktree at, so one below the "
+            + "<tree>.mutation-<key><mark>-<n>, are no workers to a sweep: nothing counts one, and clean --former-workers "
+            + "alone removes them - beside each tree of the repository on each machine a selected leg runs on, here and on "
+            + "hosts, and beside each one deleted since, a dry run listing each with its size - keeping one a sweep of that "
+            + "version still claims by the claim "
+            + "file beside it. Each holds a .git of its own that git records no worktree at, so until then one below the "
             + "worktrees root is said as any such directory: list-worktree warns of it, and delete-orchestrator, and "
             + $"delete-worktree of an orchestrator's directory with or without --force, refuse ({HarnessExit.Refused}) while one "
             + "is below it.");
@@ -1077,6 +1182,19 @@ internal static class HelpCommand
             "A sweep of a leg takes a lock of its own, keyed by its workers: it refuses another sweep of the leg's variant, "
             + "refused-locked, and never holds off a build, test or sync of the leg. --force-lock takes it, and a worker "
             + "another live sweep claims.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "On another machine a sweep never shares the host's copy of the tree, which every command whose leg lands there "
+            + "syncs, and a test holds for as long as it runs: it works in a copy of its own, kept in that copy's "
+            + $"{HarnessLayout.LegsDirectoryName} as <host's copy>/{HarnessLayout.LegsDirectoryName}/<key>, synced from this machine's reading of "
+            + "the tree as the host's copy is, and holds it whole. So a test or build of the host's copy never holds a sweep "
+            + "off, nor a sweep them, in either direction; a second sweep of the variant there is refused-locked before its "
+            + "sync rewrites the copy; and where the host's copy is not there yet, or a sync of it did not finish, the tree is synced to it first, as any "
+            + "command would, so every command finds the tree there - once a run, refused-locked while another run syncs it. "
+            + "Its first sweep builds the variant there from clean. clean of the leg "
+            + "removes the copy with its workers, and is refused-locked here while a sweep of this machine's holds it; "
+            + "delete-worktree and delete-agent remove it with the host's copy, a worker a live sweep claims keeping that copy.");
         builder.AppendLine();
         builder.AppendLine("How a runner is started");
         builder.AppendLine();
@@ -1480,6 +1598,7 @@ internal static class HelpCommand
         builder.AppendLine($"  {ToolPackage.Command} run <runner>            Run a predefined runner across its legs");
         builder.AppendLine($"  {ToolPackage.Command} check-mutations         Prove each selected leg's tests can fail, arm by arm");
         builder.AppendLine($"  {ToolPackage.Command} clean                   Remove legs' builds, mutation workers and copies");
+        builder.AppendLine($"  {ToolPackage.Command} up <name>               Bring a set-up up; '{ToolPackage.Command} down <name>' brings it down");
         builder.AppendLine($"  {ToolPackage.Command} list-worktree           Show worktrees and the copies hosts keep of them");
         builder.AppendLine($"  {ToolPackage.Command} list-orchestrator       Show orchestrators and where each agent stands");
         builder.AppendLine($"  {ToolPackage.Command} read-anchors            List the deferred work recorded as anchors");
@@ -1957,7 +2076,19 @@ internal static class HelpCommand
         builder.AppendLine($"its legs work in, in the tree's {HarnessLayout.LegsDirectoryName} slot, go the same way - the leg's own variant's and");
         builder.AppendLine("those of a variant no leg builds any more, whatever the configuration says now -");
         builder.AppendLine("each under the lock a run takes on it: one a run is building in, or replacing, is");
-        builder.AppendLine("kept and said. A host holding no copy of the tree holds nothing of it to remove.");
+        builder.AppendLine("kept and said - on a host, the copy a sweep works in there among them, with its");
+        builder.AppendLine("workers. A host holding no copy of the tree holds nothing of it to remove.");
+        builder.AppendLine();
+        builder.AppendLine($"clean {CleanService.FormerWorkersOption} removes only the workers an earlier version of this tool");
+        builder.AppendLine("kept beside the repository's trees, as <tree>.mutation-<key><mark>-<n>, once a machine:");
+        builder.AppendLine("here beside the main checkout, every worktree, and each worktree deleted since in the");
+        builder.AppendLine("worktrees root; on each host a selected leg runs on, asked of it from its home, beside");
+        builder.AppendLine("its copy of the main checkout and each worktree's copy beside it, there still or removed");
+        builder.AppendLine("since, whatever copy the host holds. With --dry-run it lists each with its size. One a");
+        builder.AppendLine("sweep of that version still claims, by the claim file beside it, is kept,");
+        builder.AppendLine("refused-locked; one no sync made is said and left. Where the worktrees, or those");
+        builder.AppendLine("deleted since, cannot be listed, the leg fails, saying so, once the workers beside the");
+        builder.AppendLine("trees it knows are dealt with.");
         builder.AppendLine();
         builder.AppendLine($"  {ToolPackage.Command} clean --legs linux-arm64-debug,linux-arm64-release");
         builder.AppendLine($"  {ToolPackage.Command} clean --legs linux-arm64-debug --dry-run");
@@ -2066,8 +2197,8 @@ internal static class HelpCommand
             + "made by create-agent with its records, never by create-worktree. list-worktree lists each as orchestrator/agent, "
             + "and delete-worktree takes that address. The directory named for an orchestrator is never deleted as one while "
             + "worktrees are below it, or a directory holding a .git of its own that git records no worktree at - what a "
-            + "removal left, or a worker an earlier version of this tool kept beside an agent's worktree, a person's to look "
-            + $"in and delete - --force or not ({HarnessExit.Refused}), nor any directory with no .git of its own while git "
+            + "removal left, a person's to look in and delete, or a worker an earlier version of this tool kept beside an "
+            + $"agent's worktree, which clean --former-workers removes - --force or not ({HarnessExit.Refused}), nor any directory with no .git of its own while git "
             + $"cannot list its worktrees ({HarnessExit.CommandFailed}); a worktree's own submodules are never taken for worktrees. "
             + "A plain worktree cannot take an orchestrator's name. An agent's copies on hosts are kept under "
             + "orchestrator--agent, so two orchestrators' agents of one name keep theirs apart.");
@@ -2746,7 +2877,10 @@ internal static class HelpCommand
         builder.AppendLine($"the orchestrators directory, {HarnessLayout.MutationsDirectoryName} and {HarnessLayout.LegsDirectoryName} are kept in git by their");
         builder.AppendLine("placeholders, so each reads as not ignored itself while everything made in it is,");
         builder.AppendLine("and none can be a link: init names one it finds, and writes nothing through it.");
-        builder.AppendLine("Sync withholds each by name.");
+        builder.AppendLine("Sync withholds each by name. Each copy in them is a whole copy of the tree, so a");
+        builder.AppendLine("program of the repository's own that walks the tree from its root - a census, a");
+        builder.AppendLine("guard over every file - must leave out what the block ignores, as git does, or it");
+        builder.AppendLine("reads every file once more for each copy kept there.");
         builder.AppendLine();
         builder.AppendLine("A block an earlier build wrote under the markers of the tool's former name");
         builder.AppendLine($"('{GitIgnoreManager.RetiredBeginMarker}') is the managed block too: init");
@@ -2812,7 +2946,9 @@ internal static class HelpCommand
         builder.AppendLine("  tools          external tools to verify and install");
         builder.AppendLine("  predefinedRunners  multi-phase procedures such as a corpus test or a benchmark;");
         builder.AppendLine("                     one whose steps change the tree says writesTree ('help legs')");
-        builder.AppendLine($"  exec           named commands to run through '{ToolPackage.Command} exec'");
+        builder.AppendLine("  setUp          what a run brings up around its work and down after, by name: an up");
+        builder.AppendLine($"                 and a down command line for '{ToolPackage.Command} up' and '{ToolPackage.Command} down', which");
+        builder.AppendLine("                 take inputs; a test invocation's and a runner's setUp name them ('help setups')");
         builder.AppendLine("  commit         commit template and sign-off policy");
         builder.AppendLine("  sync           what the tree mirror carries, and what it must never carry; history,");
         builder.AppendLine("                 how much git history a copy is given: 'head' (the commit HEAD names,");

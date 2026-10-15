@@ -10,6 +10,7 @@ using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
+using DssHarness.Core.SetUps;
 using DssHarness.Core.Sync;
 using DssHarness.Core.Worktrees;
 
@@ -158,7 +159,8 @@ public sealed class LegRunService(
     IFilePermissions filePermissions,
     IHostPlatform platform,
     IHarnessOutput output,
-    CommandOrigin? origin = null)
+    CommandOrigin? origin = null,
+    LegSetUps? setUps = null)
 {
     private readonly IHarnessContextLoader _contextLoader = contextLoader;
     private readonly LegsService _legsService = legsService;
@@ -182,6 +184,9 @@ public sealed class LegRunService(
 
     /// <summary>Who the command runs for: on a host, the run of the machine that asked, which its legs' slots are recorded under.</summary>
     private readonly CommandOrigin _origin = origin ?? CommandOrigin.Typed;
+
+    /// <summary>What brings a leg's set-ups up and down, where its run is asked to set up.</summary>
+    private readonly LegSetUps? _setUps = setUps;
 
     /// <summary>
     /// Runs <paramref name="work"/> on every selected leg and reports the ledger.
@@ -208,6 +213,14 @@ public sealed class LegRunService(
 
         var context = await _contextLoader.LoadAsync(request.Directory, cancellationToken).ConfigureAwait(false);
 
+        // Asked of the legs the command line selects, before any host is measured: a run asked to set up that nothing it
+        // runs names a set-up for, or with a line a leg's system cannot start, would otherwise be found out leg by leg,
+        // each after its tree was synced and its earlier set-ups brought up.
+        if (request.Workload.SetUp)
+        {
+            SetUpsOrRefuse().Require(context.Config, context.Layout.RepositoryRoot, LegSelection.Resolve(context.Config, request.LegNames).Legs, request.Workload);
+        }
+
         // Hosts are measured before anything runs, and DssHarness on each is brought to this
         // machine's build there, so a leg never starts on a host that turns out not to answer. A leg
         // goes where a sync puts its tree whatever this command starts, so a run on what is already
@@ -224,7 +237,7 @@ public sealed class LegRunService(
             var nothing = LegRunPlan.NothingRuns(skipped, request.NothingRunsExit);
 
             // Before the run has a directory: there is none to name.
-            return Stopped(request, runId, nothing.ExitCode, nothing.Message, skipped, factor, nothing.Details ?? [], runDirectory: null);
+            return Stopped(request, runId, nothing.ExitCode, nothing.Message, LedgerReport.From(skipped, factor), nothing.Details ?? [], runDirectory: null);
         }
 
         // Before any copy is made: a tree whose .legs git does not ignore would have every copy a run made there committed
@@ -273,8 +286,7 @@ public sealed class LegRunService(
                 runId,
                 LegExit.LogHeld,
                 held,
-                [.. skipped, .. placed.Select(leg => leg.Entry(LegVerdict.LogHeld, held))],
-                factor,
+                LedgerReport.From([.. skipped, .. placed.Select(leg => leg.Entry(LegVerdict.LogHeld, held))], factor),
                 [$"logs: {runDirectory}"],
                 runDirectory);
         }
@@ -282,6 +294,9 @@ public sealed class LegRunService(
         // Trees another run holds, by tree: a verdict for the legs that need one, as a variant
         // another run holds is, and no end to the legs that do not.
         var lockedTrees = new ConcurrentDictionary<string, string>(LegPlan.TreeKeyComparer);
+
+        // The hosts' copies of the tree the legs' own copies are kept in, each synced once a run where it is not there yet.
+        var holders = new ConcurrentDictionary<string, Lazy<Task<string?>>>(LegPlan.TreeKeyComparer);
 
         // Each tree as it was read for its copies, where any leg works in one.
         IReadOnlyDictionary<string, Task<SyncSource>>? sources = null;
@@ -303,7 +318,7 @@ public sealed class LegRunService(
             {
                 var read = sources = await ReadSourcesAsync(placed, commandName, cancellationToken).ConfigureAwait(false);
 
-                syncTree = (treeKey, token) => SyncTreeAsync(context, placed, treeKey, runId, request.ForceLock, read, lockedTrees, token);
+                syncTree = (treeKey, token) => SyncTreeAsync(context, placed, treeKey, runId, request.ForceLock, read, lockedTrees, holders, token);
             }
 
             LegExecution execution;
@@ -330,7 +345,7 @@ public sealed class LegRunService(
                 // The ledger is reported first, then the refusal. A leg that finished before another
                 // leg's configuration turned out to be unsatisfiable still reached a verdict, and
                 // throwing it away would make the reader run everything again to learn what they
-                // already knew. The exit code is still the refusal's own.
+                // already knew. The exit code is still the refusal's own. What a leg with no line left running is said too.
                 var reached = ledger.Build(factor);
 
                 return Stopped(
@@ -338,8 +353,7 @@ public sealed class LegRunService(
                     runId,
                     ex.ExitCode,
                     ex.Message,
-                    ledger.Entries,
-                    factor,
+                    reached,
                     [.. reached.Render(), .. Logs(runDirectory, reached, placed)],
                     runDirectory);
             }
@@ -403,6 +417,7 @@ public sealed class LegRunService(
         bool force,
         IReadOnlyDictionary<string, Task<SyncSource>> sources,
         ConcurrentDictionary<string, string> lockedTrees,
+        ConcurrentDictionary<string, Lazy<Task<string?>>> holders,
         CancellationToken cancellationToken)
     {
         var leg = placed.First(candidate => LegPlan.TreeKeyComparer.Equals(candidate.TreeKey, treeKey));
@@ -417,6 +432,21 @@ public sealed class LegRunService(
         // name over the main checkout's sources. A tree that could not be read raises its failure here, in the sync of
         // each copy made from it, where that copy's legs report it.
         var source = await sources[leg.TreeRoot].ConfigureAwait(false);
+
+        // A copy of the leg's own on a host is kept in the host's copy of the tree, which every command working in that
+        // copy - a clean, a test, a deletion - expects to hold the tree: synced first where it is not there yet, once a
+        // run however many legs keep their copies in it.
+        if (leg.KeptIn is { } keptIn
+            && await holders
+                .GetOrAdd(
+                    CompositeKey.Of(leg.Host.Host.ToString(), keptIn),
+                    _ => new(() => SyncHolderAsync(context, leg, keptIn, source, runId, force, cancellationToken)))
+                .Value
+                .ConfigureAwait(false) is { } holderHeld)
+        {
+            lockedTrees[treeKey] = holderHeld;
+            return;
+        }
 
         var attempt = await _runLock
             .TryAcquireAsync(
@@ -457,9 +487,85 @@ public sealed class LegRunService(
             // holds this run's reading. A leg's own copy on this machine is never taken over: a directory this tool did
             // not make at its path is refused naming what a person can do, not --adopt.
             await _syncService
-                .SyncAsync(source, _transportFactory.For(leg.Host), leg.HostTreeRoot, new SyncOptions { Run = runId, Adoptable = !leg.LocalCopy }, cancellationToken)
+                .SyncAsync(
+                    source,
+                    _transportFactory.For(leg.Host),
+                    leg.HostTreeRoot,
+                    new SyncOptions { Run = runId, Adoptable = !leg.LocalCopy && leg.KeptIn is null, KeptIn = leg.KeptIn },
+                    cancellationToken)
                 .ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// Syncs the tree to <paramref name="keptIn"/>, the host's copy of it <paramref name="leg"/>'s own copy is kept in,
+    /// where it is not there yet as a copy this tool finished - under the lock every sync of that copy takes, so no run's
+    /// sync of it runs beside this one - and answers who holds that copy where another run does, or <see langword="null"/>.
+    /// </summary>
+    /// <remarks>
+    /// One that is there, finished, is left as it is, and no lock taken: it may be in use, by a run whose tree a sync would
+    /// move under it - the reason the leg works in a copy of its own. One a sync began and did not finish is synced as any
+    /// command would; and one a takeover began, or a directory this tool did not make, is refused as any sync of a host's
+    /// copy refuses it, naming --adopt, rather than having a copy made inside it.
+    /// </remarks>
+    private async Task<string?> SyncHolderAsync(
+        HarnessContext context,
+        PlacedLeg leg,
+        string keptIn,
+        SyncSource source,
+        RunId runId,
+        bool force,
+        CancellationToken cancellationToken)
+    {
+        var transport = _transportFactory.For(leg.Host);
+
+        var found = await transport.InspectAsync(keptIn, cancellationToken: cancellationToken).ConfigureAwait(false);
+
+        if (found is { Exists: true, Mark: CopyMark.Complete })
+        {
+            return null;
+        }
+
+        var attempt = await _runLock
+            .TryAcquireAsync(
+                context.Layout,
+                new LockRequest
+                {
+                    Host = leg.Host.Host.ToString(),
+                    Tree = keptIn,
+                    Scope = LockScope.TreeExclusive,
+                    RunId = runId,
+                    Command = SyncService.CommandName,
+                    Force = force,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        if (attempt.Handle is not { } handle)
+        {
+            return attempt.HeldBy!;
+        }
+
+        await using (handle)
+        {
+            // Said where the sync goes on to write: a directory a takeover began, or this tool did not make, it refuses,
+            // and that refusal says what it is.
+            if (!found.Exists || found.Mark == CopyMark.Unfinished)
+            {
+                _output.Info(
+                    SyncService.CommandName,
+                    $"{leg.Host.Host}: '{keptIn}' {(found.Exists ? "is a copy whose last sync did not finish" : "is not there yet")}, so the tree is "
+                    + "synced to it first, to keep the legs' own copies in");
+            }
+
+            // The host's copy, which --adopt takes over as any sync of it does: a directory this tool did not make there is
+            // refused naming that, never the remedy of a leg's own copy on this machine.
+            await _syncService
+                .SyncAsync(source, transport, keptIn, new SyncOptions { Run = runId }, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -512,8 +618,9 @@ public sealed class LegRunService(
     /// <param name="runId">The run, which its document names whatever ended it.</param>
     /// <param name="exitCode">What the process exits with.</param>
     /// <param name="message">The line it ends on.</param>
-    /// <param name="entries">The legs' lines so far.</param>
-    /// <param name="factor">The duration warning factor the ledger is built with.</param>
+    /// <param name="reached">
+    /// The ledger so far: the legs' lines, and what a leg with none left running, which the table form says after them.
+    /// </param>
     /// <param name="details">What the table form says beneath the line.</param>
     /// <param name="runDirectory">
     /// Where the run keeps its records, once it has a directory; <see langword="null"/> before.
@@ -529,16 +636,15 @@ public sealed class LegRunService(
         RunId runId,
         int exitCode,
         string message,
-        IReadOnlyList<LegEntry> entries,
-        double factor,
+        LedgerReport reached,
         IReadOnlyList<string> details,
         string? runDirectory)
         => request.Json
             ? new CommandOutcome(exitCode, message)
             {
-                Data = [LedgerReport.From(entries, factor).ToJson(exitCode, message, runDirectory, _output.Shown, runId, request.MutationRecord)],
+                Data = [reached.ToJson(exitCode, message, runDirectory, _output.Shown, runId, request.MutationRecord)],
             }
-            : CommandOutcome.Failed(exitCode, message, details);
+            : CommandOutcome.Failed(exitCode, message, [.. details, .. reached.LeftRunningSaid]);
 
     /// <summary>
     /// Where a run's records are, as its text form says it: this run's directory, then each leg's own directory of
@@ -831,6 +937,18 @@ public sealed class LegRunService(
     private static LegEntry Ended(PlacedLeg leg, LegVerdict verdict, string detail, long started)
         => leg.Entry(verdict, detail) with { Duration = Stopwatch.GetElapsedTime(started) };
 
+    /// <summary>What brings a leg's set-ups up and down: given to every service a run asked to set up is made with.</summary>
+    private LegSetUps SetUpsOrRefuse()
+        => _setUps ?? throw new InvalidOperationException("A run asked to set up was given nothing to set up with.");
+
+    /// <summary>
+    /// <see cref="LegSetUps.Option"/> for a dispatched leg whose work names a set-up, where the run is asked to set up:
+    /// the host brings them up, around the work it runs. Never for one whose work names none - its host would refuse an
+    /// option that changes nothing for it.
+    /// </summary>
+    private static string[] SetUpOption(HarnessContext context, PlacedLeg leg, LegRunRequest request)
+        => request.Workload.SetUpsOf(context.Config, leg.Leg).Count > 0 ? [LegSetUps.Option] : [];
+
     /// <summary>What <paramref name="leg"/> does once its lock is taken and, where it is heavy, its machine has taken it.</summary>
     private async Task<LegEntry> RunTakenLegAsync(
         HarnessContext context,
@@ -858,9 +976,10 @@ public sealed class LegRunService(
                 .RunAsync(
                     commandName,
                     leg,
-                    [.. request.RemoteArguments ?? [], .. own],
+                    [.. request.RemoteArguments ?? [], .. SetUpOption(context, leg, request), .. own],
                     runId,
                     onNote,
+                    facts => ledger.SetUpsEnded(leg.Name, facts),
                     cancellationToken)
                 .ConfigureAwait(false);
 
@@ -937,15 +1056,35 @@ public sealed class LegRunService(
             runsIn = _contextLoader.ForCopy(context, working.HostTreeRoot);
         }
 
-        var entry = await work(
-                new LegWork(runsAs, runsIn, runId, runDirectory, request.Time)
-                {
-                    AdmitUnit = (unit, token) => AskAsync(context, runsAs, request, runId, ledger, $"{runsAs.Name}/{unit.Unit}", unit.Room, unit.Settle, token),
-                    Progress = message => ledger.Transition(runsAs.Name, message),
-                    DeveloperEnvironment = setUp?.Fact,
-                },
-                cancellationToken)
-            .ConfigureAwait(false);
+        Task<LegEntry> Work(CancellationToken token) => work(
+            new LegWork(runsAs, runsIn, runId, runDirectory, request.Time)
+            {
+                AdmitUnit = (unit, admitted) => AskAsync(context, runsAs, request, runId, ledger, $"{runsAs.Name}/{unit.Unit}", unit.Room, unit.Settle, admitted),
+                Progress = message => ledger.Transition(runsAs.Name, message),
+                DeveloperEnvironment = setUp?.Fact,
+            },
+            token);
+
+        // A leg's set-ups come up in the tree its work runs in, on this machine - the copy, the host's copy, the tree -
+        // before that work starts, and go down after it, whatever it ended with: as the configuration of the reading its
+        // work runs by declares them.
+        var setUps = request.Workload.SetUpsOf(runsIn.Config, working.Leg);
+        var entry = setUps.Count == 0
+            ? await Work(cancellationToken).ConfigureAwait(false)
+            : await SetUpsOrRefuse()
+                .AroundAsync(
+                    runsIn.Config,
+                    working,
+                    setUps,
+                    runId,
+                    runDirectory,
+                    await _contextLoader.RepositoryOfAsync(runsIn, cancellationToken).ConfigureAwait(false),
+                    message => ledger.Transition(working.Name, message),
+                    (verdict, detail) => Ended(working, verdict, detail, started),
+                    facts => ledger.SetUpsEnded(working.Name, facts),
+                    Work,
+                    cancellationToken)
+                .ConfigureAwait(false);
 
         entry = setUp is null ? entry : entry with { DeveloperEnvironment = setUp.Fact };
 

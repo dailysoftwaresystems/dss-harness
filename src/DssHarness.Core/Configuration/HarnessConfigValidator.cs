@@ -63,7 +63,8 @@ public static partial class HarnessConfigValidator
         ValidateLegs(config, problems);
         ValidateTools(config, problems);
         ValidateToolSearchDirectories(config, problems);
-        ValidateRunnersAndExec(config, problems);
+        ValidateRunners(config, problems);
+        ValidateSetUp(config, problems);
         ValidateCommit(config.Commit, problems);
         ValidateSync(config.Sync, problems);
         ValidateContention(config.Contention, problems);
@@ -560,12 +561,7 @@ public static partial class HarnessConfigValidator
 
             foreach (var (platform, toolchain) in project.DefaultToolchain)
             {
-                if (!PlatformKeys.Contains(platform, StringComparer.OrdinalIgnoreCase))
-                {
-                    problems.Add(
-                        $"project '{project.Name}' defaultToolchain has key '{platform}'; "
-                        + $"expected one of {string.Join(", ", PlatformKeys)}");
-                }
+                RequirePlatformKey(platform, $"project '{project.Name}' defaultToolchain has key '{platform}'", problems);
 
                 if (!config.Toolchains.ContainsKey(toolchain))
                 {
@@ -595,7 +591,7 @@ public static partial class HarnessConfigValidator
             }
 
             ValidateBuildOutputs(config, project, problems);
-            ValidateTest(project.Test, $"project '{project.Name}'", problems);
+            ValidateTest(config, project.Test, $"project '{project.Name}'", problems);
         }
     }
 
@@ -617,18 +613,13 @@ public static partial class HarnessConfigValidator
         var owner = $"project '{project.Name}' buildOutputs";
 
         RequireRelativePaths(
-            project.BuildOutputs.SelectMany(output => output.Paths.Values),
+            project.BuildOutputs.SelectMany(output => output.Values.Values),
             owner,
             problems);
 
-        foreach (var platform in project.BuildOutputs.SelectMany(output => output.Paths.Keys))
+        foreach (var platform in project.BuildOutputs.SelectMany(output => output.Values.Keys))
         {
-            if (!PlatformKeys.Contains(platform, StringComparer.OrdinalIgnoreCase))
-            {
-                problems.Add(
-                    $"{owner} has an entry for '{platform}'; "
-                    + $"expected one of {string.Join(", ", PlatformKeys)}");
-            }
+            RequirePlatformKey(platform, $"{owner} has an entry for '{platform}'", problems);
         }
 
         foreach (var output in project.BuildOutputs.Where(output => output.Plain is null))
@@ -728,12 +719,7 @@ public static partial class HarnessConfigValidator
 
             foreach (var platform in toolchain.Platforms)
             {
-                if (!PlatformKeys.Contains(platform, StringComparer.OrdinalIgnoreCase))
-                {
-                    problems.Add(
-                        $"toolchain '{name}' lists platform '{platform}'; "
-                        + $"expected one of {string.Join(", ", PlatformKeys)}");
-                }
+                RequirePlatformKey(platform, $"toolchain '{name}' lists platform '{platform}'", problems);
             }
 
             foreach (var (language, id) in toolchain.CompilerId)
@@ -1025,14 +1011,128 @@ public static partial class HarnessConfigValidator
     private static bool IsBlankCommand(IReadOnlyList<string> command) => command.Count == 0 || string.IsNullOrWhiteSpace(command[0]);
 
     /// <summary>
-    /// Rejects a leg or leg set name that <c>--legs</c> could never select. Its value is split at commas,
-    /// and the command line at spaces, so a name holding either, or no name at all, is unreachable.
+    /// Rejects a name the command line could never select: a leg's or a leg set's by <c>--legs</c>, a set-up's after
+    /// <c>up</c> and <c>down</c>. A list of names is split at commas, and the command line at spaces, so a name holding
+    /// either, or no name at all, is unreachable.
     /// </summary>
-    private static void CheckSelectableName(string name, string owner, List<string> problems)
+    /// <param name="name">The name as declared.</param>
+    /// <param name="owner">What declares it, as a refusal names it.</param>
+    /// <param name="problems">Where a refusal is added.</param>
+    /// <param name="selectedWith">What selects it on the command line.</param>
+    private static void CheckSelectableName(string name, string owner, List<string> problems, string selectedWith = "--legs")
     {
         if (name.Length == 0 || name.Any(character => character == ',' || char.IsWhiteSpace(character)))
         {
-            problems.Add($"{owner} cannot be selected with --legs; use a name with no commas or spaces");
+            problems.Add($"{owner} cannot be selected with {selectedWith}; use a name with no commas or spaces");
+        }
+    }
+
+    /// <summary>
+    /// Whether <paramref name="platform"/> is a key a per-platform value takes - a platform's name or
+    /// <see cref="PlatformScope.Every"/> - refusing it after <paramref name="subject"/> where it is not.
+    /// </summary>
+    /// <param name="platform">The key as written.</param>
+    /// <param name="subject">What wrote it, as the start of the refusal.</param>
+    /// <param name="problems">Where a refusal is added.</param>
+    private static bool RequirePlatformKey(string platform, string subject, List<string> problems)
+    {
+        if (PlatformKeys.Contains(platform, StringComparer.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        problems.Add($"{subject}; expected one of {string.Join(", ", PlatformKeys)}");
+
+        return false;
+    }
+
+    /// <summary>
+    /// Refuses a set-up the command line cannot name, an input its lines could not name in braces, a platform its lines
+    /// name that no host can be, a line that would run nothing or run with arguments missing, and a name in braces no
+    /// input of its fills in.
+    /// </summary>
+    /// <remarks>
+    /// A line is read as it will run (<see cref="CommandLineText"/>), each argument filled in by the grammar every
+    /// configured string is (<see cref="LegPathNames.Fill"/>), so one refused here is never started in part. Whether its
+    /// program may run - a declared tool, or a path inside the repository - is asked of the values a run gives it, and
+    /// where it runs, since only there is the repository's root known.
+    /// </remarks>
+    private static void ValidateSetUp(HarnessConfig config, List<string> problems)
+    {
+        foreach (var (name, setUp) in config.SetUp)
+        {
+            CheckSelectableName(name, $"setUp '{name}'", problems, "up and down");
+
+            if (setUp.Shared is not (SetUpConfig.SharedByTree or SetUpConfig.SharedByMachine))
+            {
+                problems.Add(
+                    $"setUp '{name}' shared must be '{SetUpConfig.SharedByTree}' (the legs working in one tree of a machine share it) or "
+                    + $"'{SetUpConfig.SharedByMachine}' (every leg of the repository on the machine shares it), found '{setUp.Shared}'");
+            }
+
+            foreach (var input in setUp.Inputs.Keys.Where(input => !LegPathNames.IsName(input)))
+            {
+                problems.Add($"setUp '{name}' input '{input}' cannot be named in braces: a name {LegPathNames.NameRule}");
+            }
+
+            var names = setUp.Inputs.Keys.ToDictionary(input => input, _ => "x", StringComparer.OrdinalIgnoreCase);
+
+            foreach (var direction in Enum.GetValues<SetUpDirection>())
+            {
+                var owner = $"setUp '{name}' {SetUpConfig.KeyOf(direction)}";
+
+                foreach (var (platform, line) in setUp.Line(direction).Values)
+                {
+                    RequirePlatformKey(platform, $"{owner} has an entry for '{platform}'", problems);
+
+                    if (CommandLineText.Split(line, out var arguments) is { } problem)
+                    {
+                        problems.Add($"{owner} '{line}' {problem}");
+                        continue;
+                    }
+
+                    foreach (var argument in arguments)
+                    {
+                        try
+                        {
+                            _ = LegPathNames.Fill(argument, names, $"{owner} '{line}'");
+                        }
+                        catch (HarnessException ex)
+                        {
+                            problems.Add(ex.Message);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Refuses a set-up <paramref name="owner"/> names that <c>setUp</c> does not declare, one it names twice, and values
+    /// its inputs cannot be given (<see cref="SetUpValues.Resolve"/>). A list given empty names none, which is what
+    /// leaving it out means too: a platform's section saying so replaces <c>all</c>'s list.
+    /// </summary>
+    /// <param name="config">The configuration whose <c>setUp</c> declares the names.</param>
+    /// <param name="uses">The set-ups named, or <see langword="null"/> where none are.</param>
+    /// <param name="owner">What names them, as a refusal names it.</param>
+    /// <param name="problems">Where a refusal is added.</param>
+    private static void ValidateSetUpUses(HarnessConfig config, IReadOnlyList<SetUpUse>? uses, string owner, List<string> problems)
+    {
+        foreach (var use in uses ?? [])
+        {
+            if (DeclaredName.In(config.SetUp.Keys, use.Name) is not { } declared)
+            {
+                problems.Add($"{owner} names set-up '{use.Name}', which is not declared under setUp");
+                continue;
+            }
+
+            _ = SetUpValues.Resolve(declared, config.SetUp[declared], use.With, owner, out var refused);
+            problems.AddRange(refused);
+        }
+
+        foreach (var twice in (uses ?? []).GroupBy(use => use.Name, StringComparer.OrdinalIgnoreCase).Where(group => group.Count() > 1))
+        {
+            problems.Add($"{owner} names set-up '{twice.Key}' twice");
         }
     }
 
@@ -1087,7 +1187,7 @@ public static partial class HarnessConfigValidator
                 problems.Add($"{owner} buildSpaceGiB must be a positive number of GiB, found {Number(room)}");
             }
 
-            ValidateTest(leg.Test, owner, problems);
+            ValidateTest(config, leg.Test, owner, problems);
         }
 
         foreach (var (setName, legs) in config.LegSets)
@@ -1194,11 +1294,8 @@ public static partial class HarnessConfigValidator
     {
         foreach (var (platform, directories) in config.ToolSearchDirectories)
         {
-            if (!PlatformKeys.Contains(platform, StringComparer.OrdinalIgnoreCase))
+            if (!RequirePlatformKey(platform, $"toolSearchDirectories names platform '{platform}'", problems))
             {
-                problems.Add(
-                    $"toolSearchDirectories names platform '{platform}'; "
-                    + $"expected one of {string.Join(", ", PlatformKeys)}");
                 continue;
             }
 
@@ -1269,12 +1366,7 @@ public static partial class HarnessConfigValidator
 
             foreach (var platform in tool.Platforms ?? [])
             {
-                if (!PlatformKeys.Contains(platform, StringComparer.OrdinalIgnoreCase))
-                {
-                    problems.Add(
-                        $"tool '{tool.Name}' lists platform '{platform}'; "
-                        + $"expected one of {string.Join(", ", PlatformKeys)}");
-                }
+                RequirePlatformKey(platform, $"tool '{tool.Name}' lists platform '{platform}'", problems);
             }
 
             RequireDeclared(tool, "toolchain", tool.Toolchains ?? [], name => config.Toolchains.ContainsKey(name), "is not declared under toolchains", problems);
@@ -1308,12 +1400,7 @@ public static partial class HarnessConfigValidator
 
             foreach (var (platform, install) in tool.Install)
             {
-                if (!PlatformKeys.Contains(platform, StringComparer.OrdinalIgnoreCase))
-                {
-                    problems.Add(
-                        $"tool '{tool.Name}' has an install entry for '{platform}'; "
-                        + $"expected one of {string.Join(", ", PlatformKeys)}");
-                }
+                RequirePlatformKey(platform, $"tool '{tool.Name}' has an install entry for '{platform}'", problems);
 
                 // An entry with neither a package manager nor a command is a step that
                 // silently does nothing when the tool turns out to be missing.
@@ -1333,11 +1420,12 @@ public static partial class HarnessConfigValidator
         }
     }
 
-    private static void ValidateRunnersAndExec(HarnessConfig config, List<string> problems)
+    private static void ValidateRunners(HarnessConfig config, List<string> problems)
     {
         foreach (var (name, runner) in config.PredefinedRunners)
         {
             RefuseGivenEmpty(runner.Legs, $"predefined runner '{name}' legs", "name the legs it runs", "every declared leg", problems);
+            ValidateSetUpUses(config, runner.SetUp, $"predefined runner '{name}' setUp", problems);
 
             foreach (var leg in (runner.Legs ?? []).Where(leg => !config.Legs.ContainsKey(leg)))
             {
@@ -1445,10 +1533,6 @@ public static partial class HarnessConfigValidator
             }
         }
 
-        foreach (var (name, _) in config.Exec.Where(entry => string.IsNullOrWhiteSpace(entry.Value.Command)))
-        {
-            problems.Add($"exec '{name}' has an empty command");
-        }
     }
 
     /// <summary>
@@ -1752,7 +1836,7 @@ public static partial class HarnessConfigValidator
     }
 
     /// <summary>Checks the parts of a test section that can be wrong without being malformed.</summary>
-    private static void ValidateTest(TestConfig? test, string owner, List<string> problems)
+    private static void ValidateTest(HarnessConfig config, TestConfig? test, string owner, List<string> problems)
     {
         if (test is null)
         {
@@ -1785,6 +1869,7 @@ public static partial class HarnessConfigValidator
             var setting = $"{owner} test.{section}";
 
             RequireAtLeastOne(invocation.Cores, $"{setting}.cores", problems);
+            ValidateSetUpUses(config, invocation.SetUp, $"{setting}.setUp", problems);
 
             CheckPattern(invocation.SuccessPattern, $"{setting}.successPattern", problems);
             CheckGroupPattern(invocation.CountPattern, $"{setting}.countPattern", "total", "to capture how many tests ran", problems);

@@ -262,6 +262,23 @@ public sealed class ToolResolutionTests
         Assert.DoesNotContain("tclsh", LegPrograms.For(config, config.Legs["lin"], LegWorkload.BuildAndTest, NoSettings));
     }
 
+    /// <summary>
+    /// A run asked to set up asks each host for the programs the set-ups its legs bring up start, both ways, on the leg's
+    /// system, so no leg is placed where its set-up cannot start; a run not asked to set up asks for none of them.
+    /// </summary>
+    [Fact]
+    public void ALegSettingUp_AsksForWhatItsSetUpsStart_BothWays()
+    {
+        var config = Configured(generator: "Ninja", cc: "gcc", cxx: "g++");
+
+        config.SetUp["db"] = new SetUpConfig { Up = "docker compose up -d", Down = "podman down" };
+
+        Assert.Equal(
+            ["cmake", "ninja", "gcc", "g++", "ctest", "docker", "podman"],
+            LegPrograms.For(config, config.Legs["lin"], LegWorkload.BuildAndTest with { SetUp = true, SetUps = ["db"] }, NoSettings));
+        Assert.DoesNotContain("docker", LegPrograms.For(config, config.Legs["lin"], LegWorkload.BuildAndTest with { SetUps = ["db"] }, NoSettings));
+    }
+
     /// <summary>Another generator starts another build tool, which is cmake's to find and to report.</summary>
     [Fact]
     public void ANonNinjaGenerator_AddsNoNinja()

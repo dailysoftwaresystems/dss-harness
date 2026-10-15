@@ -855,7 +855,9 @@ public sealed class WorktreeService(
     {
         // The workers first: a sweep's are asked about as they always were, through the transport - which on a host
         // serving a removal is that host's own. The leg copies never leave this machine, so they are asked of the local
-        // slot directly, by the run lock that holds them.
+        // slot directly, by the run lock that holds them - a sweep in one holding it whole - and each goes whole, with
+        // whatever it keeps: so the workers asked about here are the worktree's own, and a leg copy that cannot be looked
+        // for is said as the leg copies.
         var workers = await RemoveWorkersAsync(name, path, measureOnly, cancellationToken).ConfigureAwait(false);
 
         if (workers.Failure is not null)
@@ -915,14 +917,7 @@ public sealed class WorktreeService(
 
         // Neither keeps the worktree: the two removals' verdicts apart, their counts and what went merge, so what the
         // deletion says covers both families.
-        static WorkersRemoval? Merge(WorkersRemoval? workers, WorkersRemoval copies)
-            => workers is null ? copies
-                : new WorkersRemoval(
-                    [.. workers.Removed, .. copies.Removed],
-                    [.. workers.Left, .. copies.Left])
-                {
-                    Interrupted = workers.Interrupted || copies.Interrupted,
-                };
+        static WorkersRemoval? Merge(WorkersRemoval? workers, WorkersRemoval copies) => workers is null ? copies : workers.And(copies);
     }
 
     /// <summary>
@@ -941,7 +936,7 @@ public sealed class WorktreeService(
 
         try
         {
-            removal = await _local.RemoveWorkersAsync(path, measureOnly, cancellationToken).ConfigureAwait(false);
+            removal = await _local.RemoveWorkersInTreeAsync(path, measureOnly, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or HarnessException)
         {
@@ -1211,7 +1206,7 @@ public sealed class WorktreeService(
                 $"Deleting worktree '{name}' is under way and may be left half done; "
                 + $"if it is, run '{ToolPackage.Command} {DeleteCommand} {name} --force' to finish it.");
 
-            stopping.CancelAfter(InterruptionGrace - TimeSpan.FromTicks(Math.Min(TimeSpan.FromSeconds(10).Ticks, InterruptionGrace.Ticks / 4)));
+            stopping.CancelAfter(PointOfNoReturn.StoppedAfter(InterruptionGrace));
         });
 
     /// <summary>A deletion stopped because the command line was about to stop waiting for it.</summary>

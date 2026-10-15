@@ -81,6 +81,7 @@ internal static class TestCommand
         command.Options.Add(LocalCopyOption);
         command.Options.Add(InPlaceOption);
         command.Options.Add(DispatchOptions.Here);
+        command.Options.Add(DispatchOptions.SetUp);
         GlobalOptions.AddTo(command);
 
         CommandRunner.Wire(command, async (context, run, cancellationToken) =>
@@ -117,7 +118,7 @@ internal static class TestCommand
                         TestService.RemoteArguments(filter, excludes, labels, skipBuild, time))
                     {
                         // Built first unless told not to, and tested either way.
-                        Workload = new LegWorkload(Build: !skipBuild, Test: true, []),
+                        Workload = new LegWorkload(Build: !skipBuild, Test: true, []) { SetUp = arguments.GetValue(DispatchOptions.SetUp) },
                         LocalTrees = DispatchOptions.WhereWorkRuns(arguments),
                     },
                     (work, token) => RunLegAsync(builds, tests, context.Get<CMakeToolchainReader>(), work, filter, excludes, labels, skipBuild, token),

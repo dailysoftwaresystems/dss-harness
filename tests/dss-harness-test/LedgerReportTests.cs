@@ -4,6 +4,7 @@ using DssHarness.Core.FileSystem;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Results;
+using DssHarness.Core.SetUps;
 using DssHarness.Core.Testing;
 
 namespace DssHarness.Tests;
@@ -778,6 +779,91 @@ public sealed class LedgerReportTests
 
     /// <summary>An arm's line: the verdict it reached on its leg, and why.</summary>
     private static ArmEntry Arm(string arm, LegVerdict verdict, string detail) => new() { Arm = arm, Verdict = verdict, Detail = detail };
+
+    /// <summary>
+    /// A leg that brought a set-up up and did not bring it down leaves the run incomplete whatever its verdict - what it
+    /// started may still run - and the run's last line names the leg, the set-up and how to bring it down; the leg's line
+    /// says what it did with each set-up, and the document carries it. A set-up another leg went on using, or one brought
+    /// down, leaves nothing to finish.
+    /// </summary>
+    [Fact]
+    public void ALegThatLeftASetUpRunning_LeavesTheRunIncomplete_NamingHowToBringItDown()
+    {
+        var report = LedgerReport.From(
+        [
+            Entry("win", LegVerdict.Passed, TimeSpan.FromSeconds(1), "4 tests") with
+            {
+                SetUps = [new SetUpFact("e2e", SetUpFact.BroughtUp, SetUpFact.Failed, "'down.cmd' exited 1", new Dictionary<string, string> { ["region"] = "eu west", ["profile"] = "ci" })],
+            },
+            Entry("lin", LegVerdict.Passed, TimeSpan.FromSeconds(1), "4 tests") with
+            {
+                SetUps = [new SetUpFact("db", SetUpFact.Joined, SetUpFact.LeftUp), new SetUpFact("cache", SetUpFact.BroughtUp, SetUpFact.BroughtDown)],
+            },
+        ],
+        durationWarningFactor: 0);
+
+        Assert.True(report.Passed, "nothing failed, so this is not a red run");
+        Assert.False(report.Complete);
+        Assert.Empty(report.WithoutVerdict);
+        Assert.Equal(HarnessExit.Incomplete, report.ExitCode);
+        Assert.Equal(
+            "2 of 2 leg(s) passed; win did not bring set-up 'e2e' down; 'dssharness down e2e --input profile=ci --input \"region=eu west\"', "
+                + "run in the tree the leg worked in, brings it down",
+            report.Summarize(cancelled: false, []));
+
+        var rows = report.Render();
+
+        Assert.EndsWith("4 tests; set-up 'e2e' (profile=ci, region=eu west) brought up, not brought down: 'down.cmd' exited 1", rows[1], StringComparison.Ordinal);
+        Assert.EndsWith("4 tests; set-up 'db' joined, left for other legs; set-up 'cache' brought up, brought down", rows[2], StringComparison.Ordinal);
+
+        using var document = JsonDocument.Parse(report.ToJson(cancelled: false, unfinished: []));
+        var legs = document.RootElement.GetProperty("legs").EnumerateArray().ToList();
+        var left = Assert.Single(legs[0].GetProperty("setUps").EnumerateArray());
+
+        Assert.False(document.RootElement.GetProperty("complete").GetBoolean());
+        Assert.Equal(
+            ["e2e", "brought-up", "failed", "'down.cmd' exited 1"],
+            new[] { "name", "up", "down", "detail" }.Select(name => left.GetProperty(name).GetString()));
+        Assert.Equal(["db", "cache"], legs[1].GetProperty("setUps").EnumerateArray().Select(setUp => setUp.GetProperty("name").GetString()));
+
+        var leftRunning = Assert.Single(document.RootElement.GetProperty("setUpsLeftRunning").EnumerateArray());
+
+        Assert.Equal(
+            ["win", "e2e", "'down.cmd' exited 1", "'dssharness down e2e --input profile=ci --input \"region=eu west\"', run in the tree the leg worked in, brings it down"],
+            new[] { "leg", "setUp", "detail", "remedy" }.Select(name => leftRunning.GetProperty(name).GetString()));
+        Assert.Equal("eu west", leftRunning.GetProperty("inputs").GetProperty("region").GetString());
+
+        using var finished = JsonDocument.Parse(LedgerReport.From([Entry("lin", LegVerdict.Passed, TimeSpan.FromSeconds(1), "4 tests") with
+        {
+            SetUps = [new SetUpFact("cache", SetUpFact.BroughtUp, SetUpFact.BroughtDown)],
+        }], durationWarningFactor: 0).ToJson(cancelled: false, unfinished: []));
+
+        Assert.False(finished.RootElement.TryGetProperty("setUpsLeftRunning", out _), "a run that left no set-up running names none");
+    }
+
+    /// <summary>
+    /// A set-up left running is named whatever else ended the run - a leg failing, or the run interrupted - since what
+    /// it started runs on after the run either way; the code stays the failure's, or the interruption's.
+    /// </summary>
+    [Fact]
+    public void ASetUpLeftRunning_IsNamed_WhenALegFailed_OrTheRunWasInterrupted()
+    {
+        var report = LedgerReport.From(
+        [
+            Entry("win", LegVerdict.Failed, TimeSpan.FromSeconds(1), "1 test failed") with
+            {
+                SetUps = [new SetUpFact("e2e", SetUpFact.BroughtUp, SetUpFact.Failed, "stopped before it came down")],
+            },
+        ],
+        durationWarningFactor: 0);
+
+        const string Left = "win did not bring set-up 'e2e' down; 'dssharness down e2e', run in the tree the leg worked in, brings it down";
+
+        Assert.Equal(HarnessExit.CommandFailed, report.ExitCode);
+        Assert.Equal($"failed: 1 of 1 leg(s); {Left}", report.Summarize(cancelled: false, []));
+        Assert.Equal(HarnessExit.Cancelled, report.ExitCodeGiven(cancelled: true, []));
+        Assert.Equal($"interrupted after 1 leg(s); {Left}", report.Summarize(cancelled: true, []));
+    }
 
     /// <summary>
     /// A leg that did no work is not a leg that passed. The verdict table already ranks a skip

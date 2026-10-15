@@ -324,16 +324,24 @@ public static class SyncServe
     /// </summary>
     public const string RemoveWorkers = "remove-workers";
 
-    /// <summary>What follows the root where <see cref="RemoveWorkers"/> is only to measure.</summary>
+    /// <summary>
+    /// Removes the workers an earlier version kept beside the copies of a repository kept together, there still or
+    /// removed since, the main checkout's copy its root names: <c>remove-former-workers &lt;repositoryPath&gt;</c>, and
+    /// <see cref="MeasureOnly"/> after it to say what would go and remove nothing.
+    /// </summary>
+    public const string RemoveFormerWorkers = "remove-former-workers";
+
+    /// <summary>What follows the root where <see cref="RemoveWorkers"/> or <see cref="RemoveFormerWorkers"/> is only to measure.</summary>
     public const string MeasureOnly = "measure";
 
-    /// <summary>Whether a <see cref="RemoveWorkers"/> request asks only to measure.</summary>
+    /// <summary>Whether a <see cref="RemoveWorkers"/> or <see cref="RemoveFormerWorkers"/> request asks only to measure.</summary>
+    /// <param name="operation">The operation asked.</param>
     /// <param name="arguments">The request's arguments, the tree's root first.</param>
     /// <exception cref="HarnessException">
     /// The request carries something else after its root: the two ends are different builds, and one that removed where
     /// the other asked for something it does not know would remove what nobody asked it to.
     /// </exception>
-    public static bool MeasuresOnly(IReadOnlyList<string> arguments)
+    public static bool MeasuresOnly(string operation, IReadOnlyList<string> arguments)
     {
         ArgumentNullException.ThrowIfNull(arguments);
 
@@ -346,7 +354,7 @@ public static class SyncServe
             ? true
             : throw new HarnessException(
                 HarnessExit.UsageError,
-                $"sync operation '{RemoveWorkers}' takes '{MeasureOnly}' after its root, or nothing; it was given '{arguments[1]}'.");
+                $"sync operation '{operation}' takes '{MeasureOnly}' after its root, or nothing; it was given '{arguments[1]}'.");
     }
 
     /// <summary>The most characters one string holds, however much memory is free: 1,073,741,791.</summary>
@@ -691,6 +699,19 @@ public sealed record WorkersRemoval(IReadOnlyList<WorkerRemoved> Removed, IReadO
     /// <summary>What the workers removed held together.</summary>
     [JsonIgnore]
     public long Bytes => Removed.Sum(worker => worker.Bytes);
+
+    /// <summary>
+    /// This removal and <paramref name="then"/> as one: what each removed and left, this one's first, and stopped where
+    /// either was - so a removal stopped part way is never said as finished for one that came after it and found
+    /// nothing to stop in.
+    /// </summary>
+    /// <param name="then">The removal that came after this one.</param>
+    public WorkersRemoval And(WorkersRemoval then)
+    {
+        ArgumentNullException.ThrowIfNull(then);
+
+        return new WorkersRemoval([.. Removed, .. then.Removed], [.. Left, .. then.Left]) { Interrupted = Interrupted || then.Interrupted };
+    }
 
     /// <summary>
     /// What became of the workers, as the one verdict every command that removes them reads: refused-locked where a

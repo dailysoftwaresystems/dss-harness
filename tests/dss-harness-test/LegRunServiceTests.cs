@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
 using NSubstitute;
@@ -16,6 +17,7 @@ using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 using DssHarness.Core.Runners;
 using DssHarness.Core.Runs;
+using DssHarness.Core.SetUps;
 using DssHarness.Core.Sync;
 using DssHarness.Core.Worktrees;
 
@@ -61,6 +63,287 @@ public sealed class LegRunServiceTests
             TestContext.Current.CancellationToken);
 
         var verdicts = await RunAsync(temp, harness, TwoLegs(harness), SshAndLocal(harness), new LegRunRequest(temp.Path, null, Json: true) { Workload = LegWorkload.Copy }, runLock, sync);
+
+        Assert.Equal("passed", verdicts["native"].Verdict);
+        Assert.Equal("refused-locked", verdicts["arm"].Verdict);
+        Assert.Contains(held.Entry.Holder.RunId, verdicts["arm"].Detail, StringComparison.Ordinal);
+        await sync.DidNotReceiveWithAnyArgs().SyncAsync(default!, default!, default!, default!, TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>
+    /// A leg of a command whose legs on a host work in a copy of their own there - a sweep - is synced from this run's
+    /// reading into that copy, kept in the .legs of the host's copy, and works there: a run building in the host's copy,
+    /// of its own variant even, holds none of it off, and the host's copy is made where it is not there yet.
+    /// </summary>
+    [Fact]
+    public async Task ALegThatWorksInACopyOfItsOwnOnAHost_IsNotHeldOffByARunInTheHostsCopy()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var sync = SyncKit.ServiceDouble();
+        var runLock = new RunLock(harness.FileSystem, harness.Output, harness.Identity);
+        var config = TwoLegs(harness);
+        var variant = VariantKey.For(config, config.Legs["arm"], "linux");
+        var copy = LegCopies.PathOf(HostTree, variant);
+
+        await using var held = await runLock.AcquireAsync(
+            new HarnessLayout(temp.Path, temp.Path),
+            PlacedLeg.BuildLock(HostId.Ssh(HostName), HostTree, variant, RunId.New(), "test"),
+            TestContext.Current.CancellationToken);
+
+        HostCommand? sent = null;
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            sent = command;
+            ScriptedHostCommands.Answer(command, """{"legs": [{"leg": "arm", "verdict": "passed", "durationSeconds": 1, "commandSeconds": 1}]}""");
+
+            return HostResults.Finished(command, 0);
+        });
+
+        var verdicts = Verdicts(await OutcomeAsync(
+            temp,
+            harness,
+            config,
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, ["arm"], Json: true) { Workload = LegWorkload.Copy with { CopyOnHosts = true } },
+            runLock,
+            sync,
+            hosts: hosts));
+
+        Assert.True(verdicts["arm"].Verdict == "passed", $"{verdicts["arm"].Verdict}: {verdicts["arm"].Detail}");
+        Assert.StartsWith(HostTree + "/.legs/", copy, StringComparison.Ordinal);
+        Assert.Equal(copy, JsonSerializer.Deserialize<HostAgentRequest>(sent!.StandardInput.Read(), HostAgentProtocol.JsonOptions)!.Directory);
+        await sync.Received(1).SyncAsync(
+            Arg.Any<SyncSource>(),
+            Arg.Any<ISyncTransport>(),
+            copy,
+            Arg.Is<SyncOptions>(options => options.KeptIn == HostTree && !options.Adoptable),
+            Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// The host's copy of the tree that legs keep their own copies in has the tree synced to it first where it is not there
+    /// yet as a copy this tool finished - not there, part-made, or a directory this tool did not make, which the sync
+    /// refuses as any sync does - once a run, however many legs keep theirs in it, so every command working in the
+    /// host's copy finds the tree there; each leg's own copy is synced as kept in it.
+    /// </summary>
+    [Theory]
+    [InlineData(false, CopyMark.None, "is not there yet")]
+    [InlineData(true, CopyMark.Unfinished, "is a copy whose last sync did not finish")]
+    [InlineData(true, CopyMark.None, null)]
+    public async Task TheHostsCopyLegsKeepTheirCopiesIn_IsSyncedFirst_OnceARun_WhereItIsNotThereYet(bool there, CopyMark mark, string? said)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var sync = SyncKit.ServiceDouble();
+        var config = TwoLegs(harness);
+
+        config.BuildConfigs["release"] = new BuildConfiguration();
+        config.Legs["arm-release"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "release", Ssh = HostName };
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            var arguments = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput.Read(), HostAgentProtocol.JsonOptions)!.Arguments;
+            var leg = arguments.Any(argument => argument.Text == "arm-release") ? "arm-release" : "arm";
+
+            ScriptedHostCommands.Answer(command, $$"""{"legs": [{"leg": "{{leg}}", "verdict": "passed", "durationSeconds": 1, "commandSeconds": 1}]}""");
+
+            return HostResults.Finished(command, 0);
+        });
+
+        // The host's copy found not there by every leg that asks, as legs asking at once each would find it: synced once all
+        // the same. Each leg's own copy holds this run's reading once synced.
+        var copy = Substitute.For<ISyncTransport>();
+        var transports = Substitute.For<ISyncTransportFactory>();
+        var run = RunId.New();
+
+        copy.InspectAsync(Arg.Any<string>(), Arg.Any<GitHistoryWanted?>(), Arg.Any<CancellationToken>())
+            .Returns(call => call.ArgAt<string>(0) == HostTree
+                ? new SyncInspectAnswer(there, mark)
+                : new SyncInspectAnswer(true, CopyMark.Complete) { Reading = new CopyReading(run.Value, null, 0) });
+        transports.For(Arg.Any<HostReport>()).Returns(copy);
+
+        var verdicts = Verdicts(await OutcomeAsync(
+            temp,
+            harness,
+            config,
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, ["arm", "arm-release"], Json: true) { Workload = LegWorkload.Copy with { CopyOnHosts = true } },
+            sync: sync,
+            hosts: hosts,
+            transports: transports,
+            runId: run));
+
+        Assert.All(verdicts.Values, verdict => Assert.True(verdict.Verdict == "passed", $"{verdict.Verdict}: {verdict.Detail}"));
+        // Said only where the sync goes on to write: one it refuses says why itself.
+        var output = harness.StandardOutput.ToString() + harness.StandardError.ToString();
+
+        if (said is null)
+        {
+            Assert.DoesNotContain("so the tree is synced to it first", output, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Contains($"'{HostTree}' {said}, so the tree is synced to it first", output, StringComparison.Ordinal);
+        }
+        await sync.Received(1).SyncAsync(
+            Arg.Any<SyncSource>(),
+            Arg.Any<ISyncTransport>(),
+            HostTree,
+            Arg.Is<SyncOptions>(options => options.KeptIn == null && options.Adoptable),
+            Arg.Any<CancellationToken>());
+        await sync.Received(2).SyncAsync(
+            Arg.Any<SyncSource>(),
+            Arg.Any<ISyncTransport>(),
+            Arg.Is<string>(root => root.StartsWith(HostTree + "/.legs/", StringComparison.Ordinal)),
+            Arg.Is<SyncOptions>(options => options.KeptIn == HostTree),
+            Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// The host's copy legs keep their own copies in, not there yet while another run holds it - syncing it - refuses
+    /// those legs, naming that run, and nothing is synced under it.
+    /// </summary>
+    [Fact]
+    public async Task TheHostsCopyLegsKeepTheirCopiesIn_NotThereYet_WhileAnotherRunHoldsIt_RefusesThoseLegs()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var sync = SyncKit.ServiceDouble();
+        var runLock = new RunLock(harness.FileSystem, harness.Output, harness.Identity);
+
+        await using var held = await runLock.AcquireAsync(
+            new HarnessLayout(temp.Path, temp.Path),
+            new LockRequest
+            {
+                Host = HostId.Ssh(HostName).ToString(),
+                Tree = HostTree,
+                Scope = LockScope.TreeExclusive,
+                RunId = RunId.New(),
+                Command = SyncService.CommandName,
+            },
+            TestContext.Current.CancellationToken);
+
+        var verdicts = await RunAsync(
+            temp,
+            harness,
+            TwoLegs(harness),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = LegWorkload.Copy with { CopyOnHosts = true } },
+            runLock,
+            sync,
+            transports: SyncKit.CopiesSyncedBy(sync));
+
+        Assert.Equal("passed", verdicts["native"].Verdict);
+        Assert.Equal("refused-locked", verdicts["arm"].Verdict);
+        Assert.Contains(held.Entry.Holder.RunId, verdicts["arm"].Detail, StringComparison.Ordinal);
+        await sync.DidNotReceiveWithAnyArgs().SyncAsync(default!, default!, default!, default!, TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>
+    /// The host's copy legs keep their own copies in, not there yet while another run holds it, is taken with
+    /// --force-lock, as any lock of a tree is, and synced.
+    /// </summary>
+    [Fact]
+    public async Task TheHostsCopyLegsKeepTheirCopiesIn_NotThereYet_WhileAnotherRunHoldsIt_IsTakenWithForceLock()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var sync = SyncKit.ServiceDouble();
+        var runLock = new RunLock(harness.FileSystem, harness.Output, harness.Identity);
+
+        await using var held = await runLock.AcquireAsync(
+            new HarnessLayout(temp.Path, temp.Path),
+            new LockRequest
+            {
+                Host = HostId.Ssh(HostName).ToString(),
+                Tree = HostTree,
+                Scope = LockScope.TreeExclusive,
+                RunId = RunId.New(),
+                Command = SyncService.CommandName,
+            },
+            TestContext.Current.CancellationToken);
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            ScriptedHostCommands.Answer(command, """{"legs": [{"leg": "arm", "verdict": "passed", "durationSeconds": 1, "commandSeconds": 1}]}""");
+            return HostResults.Finished(command, 0);
+        });
+
+        var verdicts = Verdicts(await OutcomeAsync(
+            temp,
+            harness,
+            TwoLegs(harness),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, ["arm"], Json: true, ForceLock: true) { Workload = LegWorkload.Copy with { CopyOnHosts = true } },
+            runLock,
+            sync,
+            hosts: hosts,
+            transports: SyncKit.CopiesSyncedBy(sync)));
+
+        Assert.True(verdicts["arm"].Verdict == "passed", $"{verdicts["arm"].Verdict}: {verdicts["arm"].Detail}");
+        await sync.Received(1).SyncAsync(
+            Arg.Any<SyncSource>(),
+            Arg.Any<ISyncTransport>(),
+            HostTree,
+            Arg.Is<SyncOptions>(options => options.KeptIn == null && options.Adoptable),
+            Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// A sync of the host's copy legs keep their own copies in that fails ends those legs with its failure, and no leg's
+    /// own copy is synced into a copy that never became one.
+    /// </summary>
+    [Fact]
+    public async Task TheHostsCopyLegsKeepTheirCopiesIn_ThatCannotBeSynced_EndsThoseLegs_NoCopyOfTheirsMade()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var sync = SyncKit.ServiceDouble();
+
+        sync.SyncAsync(Arg.Any<SyncSource>(), Arg.Any<ISyncTransport>(), HostTree, Arg.Any<SyncOptions>(), Arg.Any<CancellationToken>())
+            .ThrowsAsync(new HarnessException(HarnessExit.CommandFailed, "the host's disk is full"));
+
+        var verdicts = await RunAsync(
+            temp,
+            harness,
+            TwoLegs(harness),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = LegWorkload.Copy with { CopyOnHosts = true } },
+            sync: sync,
+            transports: SyncKit.CopiesSyncedBy(sync));
+
+        Assert.Equal("passed", verdicts["native"].Verdict);
+        Assert.NotEqual("passed", verdicts["arm"].Verdict);
+        Assert.Contains("the host's disk is full", verdicts["arm"].Detail, StringComparison.Ordinal);
+        await sync.DidNotReceive().SyncAsync(
+            Arg.Any<SyncSource>(),
+            Arg.Any<ISyncTransport>(),
+            Arg.Is<string>(root => root.StartsWith(HostTree + "/.legs/", StringComparison.Ordinal)),
+            Arg.Any<SyncOptions>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// A second run of a variant whose leg works in a copy of its own on a host, while the first holds that copy - a
+    /// sweep still running - is refused-locked before its sync rewrites the copy, naming the run holding it.
+    /// </summary>
+    [Fact]
+    public async Task ACopyOfItsOwnOnAHostThatARunHolds_RefusesTheLeg_BeforeItsSyncRewritesIt()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var sync = SyncKit.ServiceDouble();
+        var runLock = new RunLock(harness.FileSystem, harness.Output, harness.Identity);
+        var config = TwoLegs(harness);
+        var copy = LegCopies.PathOf(HostTree, VariantKey.For(config, config.Legs["arm"], "linux"));
+
+        await using var held = await runLock.AcquireAsync(
+            new HarnessLayout(temp.Path, temp.Path),
+            LegCopies.Whole(copy, MutationService.CommandName, HostId.Ssh(HostName)),
+            TestContext.Current.CancellationToken);
+
+        var verdicts = await RunAsync(temp, harness, config, SshAndLocal(harness), new LegRunRequest(temp.Path, null, Json: true) { Workload = LegWorkload.Copy with { CopyOnHosts = true } }, runLock, sync);
 
         Assert.Equal("passed", verdicts["native"].Verdict);
         Assert.Equal("refused-locked", verdicts["arm"].Verdict);
@@ -2570,6 +2853,800 @@ public sealed class LegRunServiceTests
             => path.EndsWith(LogOwnership.OwnerSuffix, StringComparison.Ordinal) ? Owner : base.ReadAllText(path);
     }
 
+    /// <summary>
+    /// A run asked to set up brings each set-up its leg's work names up before that work starts, in the order named, at
+    /// the root of the tree the leg works in, and down after it in the reverse order; each line runs as a phase of the
+    /// leg, its log among the leg's records, and the leg's line and document say what it did with each.
+    /// </summary>
+    [Fact]
+    public async Task ARunAskedToSetUp_BringsEachUpBeforeTheWork_AndDownAfterIt_InReverse()
+    {
+        using var temp = new TempDirectory();
+        using var state = new TempDirectory();
+        var harness = new HarnessFactory();
+        var config = SetUpConfig(harness, ("a", SetUpScripts.SetUp("a")), ("b", SetUpScripts.SetUp("b")));
+        var (setUps, holds) = SetUpsFor(harness, state);
+        IReadOnlyList<string>? duringWork = null;
+        IReadOnlyList<SetUpPhase>? heldDuringWork = null;
+
+        SetUpScripts.Write(temp.Path);
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            config,
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, ["native"], Json: true) { Workload = SetUpWorkload("a", "b") with { SetUp = true } },
+            work: leg =>
+            {
+                duringWork = SetUpScripts.Logged(temp.Path);
+                heldDuringWork = [.. holds.HeldOn("a", temp.Path).Concat(holds.HeldOn("b", temp.Path)).Select(hold => hold.Phase)];
+                return new LegEntry { Leg = leg.Leg.Name, Verdict = LegVerdict.Passed };
+            },
+            setUps: setUps);
+
+        Assert.True(HarnessExit.Success == outcome.ExitCode, $"the run ended {outcome.ExitCode}: {outcome.Message}");
+        Assert.Equal<string>(["up-a", "up-b"], duringWork!);
+
+        // Up while the work runs, so another leg finding it joins rather than waits.
+        Assert.Equal([SetUpPhase.Standing, SetUpPhase.Standing], heldDuringWork!);
+        Assert.Equal<string>(["up-a", "up-b", "down-b", "down-a"], SetUpScripts.Logged(temp.Path));
+        Assert.Equal(
+            [("a", "brought-up", "brought-down"), ("b", "brought-up", "brought-down")],
+            SetUpFacts(outcome));
+        Assert.Contains("test: native: bringing set-up 'a' up", harness.StandardOutput.ToString() + harness.StandardError.ToString(), StringComparison.Ordinal);
+        Assert.Single(Directory.EnumerateFiles(Path.Combine(temp.Path, ".harness-config"), "set-up b down.*", SearchOption.AllDirectories));
+    }
+
+    /// <summary>Naming set-ups changes no run that is not asked to set up: nothing is brought up or down.</summary>
+    [Fact]
+    public async Task ARunNotAskedToSetUp_BringsNothingUp()
+    {
+        using var temp = new TempDirectory();
+        using var state = new TempDirectory();
+        var harness = new HarnessFactory();
+
+        SetUpScripts.Write(temp.Path);
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            SetUpConfig(harness, ("a", SetUpScripts.SetUp("a"))),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, ["native"], Json: true) { Workload = SetUpWorkload("a") },
+            setUps: SetUpsFor(harness, state).SetUps);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Empty(SetUpScripts.Logged(temp.Path));
+        Assert.Empty(SetUpFacts(outcome));
+    }
+
+    /// <summary>
+    /// A set-up that does not come up fails the leg before its work starts, saying which and where its log is - and
+    /// every set-up the leg brought up is brought down, the one that failed among them, in the reverse order. One named
+    /// after it was held but never tried: it did nothing, and the leg says nothing of it.
+    /// </summary>
+    [Fact]
+    public async Task ASetUpThatDoesNotComeUp_FailsTheLegBeforeItsWork_AndWhatCameUpIsBroughtDown()
+    {
+        using var temp = new TempDirectory();
+        using var state = new TempDirectory();
+        var harness = new HarnessFactory();
+
+        SetUpScripts.Write(temp.Path);
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            SetUpConfig(harness, ("a", SetUpScripts.SetUp("a")), ("b", SetUpScripts.SetUp("b", upExit: 5)), ("c", SetUpScripts.SetUp("c"))),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, ["native"], Json: true) { Workload = SetUpWorkload("a", "b", "c") with { SetUp = true } },
+            work: _ => throw new InvalidOperationException("the leg's work started after a set-up did not come up"),
+            setUps: SetUpsFor(harness, state).SetUps);
+
+        var leg = Verdicts(outcome)["native"];
+
+        Assert.Equal(HarnessExit.CommandFailed, outcome.ExitCode);
+        Assert.Equal("failed", leg.Verdict);
+        Assert.StartsWith("set-up 'b' did not come up: 'scripts/mark.", leg.Detail, StringComparison.Ordinal);
+        Assert.EndsWith(" up-b 5' exited 5; its log is 'set-up b up.log' among the leg's records", leg.Detail, StringComparison.Ordinal);
+        Assert.Equal<string>(["up-a", "up-b", "down-b", "down-a"], SetUpScripts.Logged(temp.Path));
+        Assert.Equal([("a", "brought-up", "brought-down"), ("b", "failed", "brought-down")], SetUpFacts(outcome));
+    }
+
+    /// <summary>
+    /// A set-up that does not come down leaves the run incomplete, 21, though the leg passed: what it started may still
+    /// run, and the run's last line says which leg left it and how to bring it down.
+    /// </summary>
+    [Fact]
+    public async Task ASetUpThatDoesNotComeDown_LeavesTheRunIncomplete_SayingHowToBringItDown()
+    {
+        using var temp = new TempDirectory();
+        using var state = new TempDirectory();
+        var harness = new HarnessFactory();
+
+        SetUpScripts.Write(temp.Path);
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            SetUpConfig(harness, ("a", SetUpScripts.SetUp("a", downExit: 6))),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, ["native"], Json: true) { Workload = SetUpWorkload("a") with { SetUp = true } },
+            setUps: SetUpsFor(harness, state).SetUps);
+
+        Assert.Equal(HarnessExit.Incomplete, outcome.ExitCode);
+        Assert.Equal("passed", Verdicts(outcome)["native"].Verdict);
+        Assert.Contains("native did not bring set-up 'a' down; 'dssharness down a', run in the tree the leg worked in, brings it down", outcome.Message, StringComparison.Ordinal);
+        Assert.Equal([("a", "brought-up", "failed")], SetUpFacts(outcome));
+    }
+
+    /// <summary>
+    /// A run interrupted while its leg works still brings down what the leg brought up, given as long as an interrupted
+    /// deletion is - a down that takes a while is let finish: a set-up left up runs on after every run that used it.
+    /// </summary>
+    [Fact]
+    public async Task AnInterruptedRun_StillBringsDownWhatItsLegBroughtUp()
+    {
+        using var temp = new TempDirectory();
+        using var state = new TempDirectory();
+        using var stop = new CancellationTokenSource();
+        var harness = new HarnessFactory();
+
+        SetUpScripts.Write(temp.Path);
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            SetUpConfig(harness, ("a", SetUpScripts.SetUp("a", downSeconds: 2))),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, ["native"], Json: true) { Workload = SetUpWorkload("a") with { SetUp = true } },
+            workAsync: async (leg, token) =>
+            {
+                await stop.CancelAsync();
+                await Task.Delay(Timeout.Infinite, token);
+                return new LegEntry { Leg = leg.Leg.Name, Verdict = LegVerdict.Passed };
+            },
+            setUps: SetUpsFor(harness, state).SetUps,
+            cancellationToken: stop.Token);
+
+        Assert.Equal(HarnessExit.Cancelled, outcome.ExitCode);
+        Assert.Equal<string>(["up-a", "down-a"], SetUpScripts.Logged(temp.Path));
+        Assert.DoesNotContain("did not come down", harness.StandardOutput.ToString() + harness.StandardError.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A run stopped while its leg waits for a set-up another leg is bringing up lets go of the one it had joined already,
+    /// leaving it up for the leg that still uses it, and brings nothing up or down: it held the later one never.
+    /// </summary>
+    [Fact]
+    public async Task ARunStoppedWhileItsLegWaitsForASetUp_LetsGoOfWhatItHeld_AndRunsNoLine()
+    {
+        using var temp = new TempDirectory();
+        using var state = new TempDirectory();
+        using var stop = new CancellationTokenSource();
+        var harness = new HarnessFactory();
+        var (setUps, holds) = SetUpsFor(harness, state, wait: async (_, token) =>
+        {
+            await stop.CancelAsync();
+            await Task.Delay(Timeout.Infinite, token);
+        });
+        var token = TestContext.Current.CancellationToken;
+
+        SetUpScripts.Write(temp.Path);
+        Assert.Equal(SetUpTurn.BringUp, await holds.TakeAsync("a", new Dictionary<string, string>(), temp.Path, "another-run", "other", _ => { }, token));
+        holds.Stood("a", temp.Path, "another-run", "other");
+        Assert.Equal(SetUpTurn.BringUp, await holds.TakeAsync("b", new Dictionary<string, string>(), temp.Path, "another-run", "other", _ => { }, token));
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            SetUpConfig(harness, ("a", SetUpScripts.SetUp("a")), ("b", SetUpScripts.SetUp("b"))),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, ["native"], Json: true) { Workload = SetUpWorkload("a", "b") with { SetUp = true } },
+            work: _ => throw new InvalidOperationException("the leg's work started while it waited for a set-up"),
+            setUps: setUps,
+            cancellationToken: stop.Token);
+
+        IReadOnlyList<string> held = [.. holds.HeldOn("a", temp.Path).Select(hold => hold.Leg)];
+
+        Assert.Equal(HarnessExit.Cancelled, outcome.ExitCode);
+        Assert.Empty(SetUpScripts.Logged(temp.Path));
+        Assert.Equal<string>(["other"], held);
+        Assert.Equal(SetUpPhase.Rising, Assert.Single(holds.HeldOn("b", temp.Path)).Phase);
+    }
+
+    /// <summary>
+    /// A leg finding a set-up up for another leg in its tree uses it and leaves it up for that leg, which brings it down:
+    /// it runs neither line.
+    /// </summary>
+    [Fact]
+    public async Task ALegFindingASetUpUpForAnotherLeg_UsesIt_AndLeavesItForThatLeg()
+    {
+        using var temp = new TempDirectory();
+        using var state = new TempDirectory();
+        var harness = new HarnessFactory();
+        var (setUps, holds) = SetUpsFor(harness, state);
+
+        SetUpScripts.Write(temp.Path);
+        Assert.Equal(SetUpTurn.BringUp, await holds.TakeAsync("a", new Dictionary<string, string>(), temp.Path, "another-run", "other", _ => { }, TestContext.Current.CancellationToken));
+        holds.Stood("a", temp.Path, "another-run", "other");
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            SetUpConfig(harness, ("a", SetUpScripts.SetUp("a"))),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, ["native"], Json: true) { Workload = SetUpWorkload("a") with { SetUp = true } },
+            setUps: setUps);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Empty(SetUpScripts.Logged(temp.Path));
+        Assert.Equal([("a", "joined", "left-for-other-legs")], SetUpFacts(outcome));
+        Assert.Equal("other", Assert.Single(holds.HeldOn("a", temp.Path)).Leg);
+    }
+
+    /// <summary>
+    /// A leg finding a set-up the machine shares up for a leg in another tree uses it, and leaves it up for that leg: legs in
+    /// two trees never each bring up, and bring down under the other, what the machine holds once. The leg works in a
+    /// worktree, whose repository is its main checkout's.
+    /// </summary>
+    [Fact]
+    public async Task ALegFindingASetUpTheMachineSharesUpForALegInAnotherTree_UsesIt()
+    {
+        using var temp = new TempDirectory();
+        using var state = new TempDirectory();
+        var harness = new HarnessFactory();
+        var (setUps, holds) = SetUpsFor(harness, state);
+        var elsewhere = Path.Combine(temp.Path, "..", "elsewhere-" + Guid.NewGuid().ToString("N")[..8]);
+        var shared = SetUpScripts.SetUp("a");
+        IReadOnlyList<string>? holding = null;
+        var repository = Path.TrimEndingDirectorySeparator(Path.GetFullPath(temp.Path));
+        var worktree = Directory.CreateDirectory(Path.Combine(temp.Path, "worktree")).FullName;
+
+        SetUpScripts.Write(worktree);
+        Assert.Equal(SetUpTurn.BringUp, await holds.TakeAsync(
+            "a", new Dictionary<string, string>(), elsewhere, "another-run", "other", _ => { }, TestContext.Current.CancellationToken,
+            new SetUpSharing(repository, MachineWide: true)));
+        holds.Stood("a", elsewhere, "another-run", "other");
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            SetUpConfig(harness, ("a", new Core.Configuration.SetUpConfig { Up = shared.Up, Down = shared.Down, Shared = Core.Configuration.SetUpConfig.SharedByMachine })),
+            SshAndLocal(harness),
+            new LegRunRequest(worktree, ["native"], Json: true) { Workload = SetUpWorkload("a") with { SetUp = true } },
+            tree: worktree,
+            work: leg =>
+            {
+                // Asked from the other tree as a leg of the repository there sharing it by tree asks: the leg here holds
+                // it as the machine's too.
+                holding = [.. holds.HeldOn("a", elsewhere, new SetUpSharing(repository, MachineWide: false)).Select(hold => hold.Leg)];
+                return new LegEntry { Leg = leg.Leg.Name, Verdict = LegVerdict.Passed };
+            },
+            setUps: setUps);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Empty(SetUpScripts.Logged(worktree));
+        Assert.Equal([("a", "joined", "left-for-other-legs")], SetUpFacts(outcome));
+        Assert.Equal<string>(["other", "native"], holding!);
+    }
+
+    /// <summary>
+    /// A run asked to set up whose selected legs name no set-up is refused before any host is measured, nothing run: the
+    /// option would change nothing while the command line says it did.
+    /// </summary>
+    [Fact]
+    public async Task ARunAskedToSetUp_WhereNothingNamesOne_IsRefusedBeforeAnythingRuns()
+    {
+        using var temp = new TempDirectory();
+        using var state = new TempDirectory();
+        var harness = new HarnessFactory();
+        var inspector = SshAndLocal(harness);
+
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => OutcomeAsync(
+            temp,
+            harness,
+            SetUpConfig(harness, ("a", SetUpScripts.SetUp("a"))),
+            inspector,
+            new LegRunRequest(temp.Path, ["native"], Json: true) { Workload = SetUpWorkload() with { SetUp = true } },
+            work: _ => throw new InvalidOperationException("a leg ran for a run refused before anything ran"),
+            setUps: SetUpsFor(harness, state).SetUps));
+
+        Assert.Equal(HarnessExit.UsageError, refused.ExitCode);
+        Assert.StartsWith("--set-up was given, but nothing the selected legs run names a set-up", refused.Message, StringComparison.Ordinal);
+        Assert.Empty(inspector.Inspected);
+    }
+
+    /// <summary>
+    /// A leg another machine runs brings its set-ups up there, never here: the run hands --set-up to the host with the
+    /// rest of its command line, and brings nothing up on this machine for that leg.
+    /// </summary>
+    [Fact]
+    public async Task ALegAHostRuns_IsHandedTheOption_AndNothingIsBroughtUpHereForIt()
+    {
+        using var temp = new TempDirectory();
+        using var state = new TempDirectory();
+        var harness = new HarnessFactory();
+        HostCommand? sent = null;
+        var config = TwoLegs(harness);
+
+        config.SetUp["a"] = SetUpScripts.SetUp("a");
+        SetUpScripts.Write(temp.Path);
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            sent = command;
+            ScriptedHostCommands.Answer(command, """{"legs": [{"leg": "arm", "verdict": "passed", "durationSeconds": 1, "commandSeconds": 1}]}""");
+
+            return HostResults.Finished(command, 0);
+        });
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            config,
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, ["arm"], Json: true) { Workload = SetUpWorkload("a") with { SetUp = true } },
+            hosts: hosts,
+            setUps: SetUpsFor(harness, state).SetUps);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+
+        var arguments = JsonSerializer.Deserialize<HostAgentRequest>(sent!.StandardInput.Read(), HostAgentProtocol.JsonOptions)!.Arguments.Select(argument => argument.Text);
+
+        Assert.Contains(LegSetUps.Option, arguments);
+        Assert.Empty(SetUpScripts.Logged(temp.Path));
+    }
+
+    /// <summary>
+    /// A leg brings a set-up up with the values what names it gives its inputs, over their defaults, and brings it down
+    /// with the same; its line and document say them.
+    /// </summary>
+    [Fact]
+    public async Task ASetUpNamedWithValues_IsBroughtUpAndDownWithThem()
+    {
+        using var temp = new TempDirectory();
+        using var state = new TempDirectory();
+        var harness = new HarnessFactory();
+        var setUp = new SetUpConfig
+        {
+            Up = SetUpScripts.Line("up-{profile}-{port} 0"),
+            Down = SetUpScripts.Line("down-{profile}-{port} 0"),
+            Inputs = { ["profile"] = new SetUpInput { Default = "dev" }, ["port"] = new SetUpInput { Default = "1" } },
+        };
+
+        SetUpScripts.Write(temp.Path);
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            SetUpConfig(harness, ("a", setUp)),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, ["native"], Json: true) { Workload = SetUpWorkload(new SetUpUse { Name = "A", With = { ["PROFILE"] = "ci" } }) with { SetUp = true } },
+            setUps: SetUpsFor(harness, state).SetUps);
+
+        Assert.True(HarnessExit.Success == outcome.ExitCode, $"the run ended {outcome.ExitCode}: {outcome.Message}");
+        Assert.Equal<string>(["up-ci-1", "down-ci-1"], SetUpScripts.Logged(temp.Path));
+        Assert.Contains("test: native: bringing set-up 'a' (port=1, profile=ci) up", harness.StandardOutput.ToString() + harness.StandardError.ToString(), StringComparison.Ordinal);
+
+        using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
+        var fact = Assert.Single(Assert.Single(document.RootElement.GetProperty("legs").EnumerateArray()).GetProperty("setUps").EnumerateArray());
+
+        Assert.Equal("ci", fact.GetProperty("inputs").GetProperty("profile").GetString());
+    }
+
+    /// <summary>
+    /// A run interrupted while a set-up comes up brings it down all the same - what its line started part way may be
+    /// running - and the leg's work never starts.
+    /// </summary>
+    [Fact]
+    public async Task AnInterruptedRun_WhileASetUpComesUp_StillBringsItDown()
+    {
+        using var temp = new TempDirectory();
+        using var state = new TempDirectory();
+        using var stop = new CancellationTokenSource();
+        var harness = new HarnessFactory();
+
+        SetUpScripts.Write(temp.Path);
+        stop.CancelAfter(TimeSpan.FromMilliseconds(700));
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            SetUpConfig(harness, ("a", SetUpScripts.SetUp("a", upSeconds: 4))),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, ["native"], Json: true) { Workload = SetUpWorkload("a") with { SetUp = true } },
+            work: _ => throw new InvalidOperationException("the leg's work started while its set-up came up"),
+            setUps: SetUpsFor(harness, state).SetUps,
+            cancellationToken: stop.Token);
+
+        Assert.Equal(HarnessExit.Cancelled, outcome.ExitCode);
+        Assert.Equal<string>(["down-a"], SetUpScripts.Logged(temp.Path));
+        Assert.DoesNotContain("did not bring set-up", outcome.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The time a set-up has to come down after an interruption counts from the interruption, as the command line's wait
+    /// does, not from when the leg's work let go: one whose turn comes after that time is said as not brought down.
+    /// </summary>
+    [Fact]
+    public async Task TheTimeASetUpHasToComeDown_CountsFromTheInterruption()
+    {
+        using var temp = new TempDirectory();
+        using var state = new TempDirectory();
+        using var stop = new CancellationTokenSource();
+        var harness = new HarnessFactory();
+        var (setUps, holds) = SetUpsFor(harness, state, grace: TimeSpan.FromMilliseconds(400));
+
+        SetUpScripts.Write(temp.Path);
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            SetUpConfig(harness, ("a", SetUpScripts.SetUp("a"))),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, ["native"], Json: true) { Workload = SetUpWorkload("a") with { SetUp = true } },
+            workAsync: async (leg, _) =>
+            {
+                await stop.CancelAsync();
+                await Task.Delay(TimeSpan.FromSeconds(1.5), CancellationToken.None);
+                return new LegEntry { Leg = leg.Leg.Name, Verdict = LegVerdict.Passed };
+            },
+            setUps: setUps,
+            cancellationToken: stop.Token);
+
+        Assert.Equal(HarnessExit.Cancelled, outcome.ExitCode);
+        Assert.Contains("native did not bring set-up 'a' down", outcome.Message, StringComparison.Ordinal);
+        Assert.Empty(holds.HeldOn("a", temp.Path));
+    }
+
+    /// <summary>
+    /// Every set-up a leg names is held before any comes up, in the order of their names, and they come up in the order
+    /// named: a leg waiting for one another leg has up with other values holds none named after it, so two legs naming
+    /// two set-ups in opposite orders never each hold one and wait for the other.
+    /// </summary>
+    [Fact]
+    public async Task ALegHoldsItsSetUpsInTheOrderOfTheirNames_BeforeAnyComesUp()
+    {
+        using var temp = new TempDirectory();
+        using var state = new TempDirectory();
+        var harness = new HarnessFactory();
+        var (setUps, holds) = SetUpsFor(harness, state);
+        var token = TestContext.Current.CancellationToken;
+
+        SetUpScripts.Write(temp.Path);
+        Assert.Equal(SetUpTurn.BringUp, await holds.TakeAsync("a", new Dictionary<string, string> { ["v"] = "other" }, temp.Path, "another-run", "other", _ => { }, token));
+        holds.Stood("a", temp.Path, "another-run", "other");
+
+        var running = OutcomeAsync(
+            temp,
+            harness,
+            SetUpConfig(harness, ("a", SetUpScripts.SetUp("a")), ("b", SetUpScripts.SetUp("b"))),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, ["native"], Json: true) { Workload = SetUpWorkload("b", "a") with { SetUp = true } },
+            setUps: setUps);
+
+        var waited = Stopwatch.StartNew();
+
+        while (!(harness.StandardOutput.ToString() + harness.StandardError.ToString()).Contains("waiting for set-up 'a'", StringComparison.Ordinal))
+        {
+            Assert.True(waited.Elapsed < TimeSpan.FromSeconds(30) && !running.IsCompleted, "the leg never waited for set-up 'a'");
+            await Task.Delay(50, token);
+        }
+
+        Assert.Empty(SetUpScripts.Logged(temp.Path));
+        Assert.Empty(holds.HeldOn("b", temp.Path));
+
+        Assert.True(holds.Leave("a", temp.Path, "another-run", "other"));
+        holds.Gone("a", temp.Path, "another-run", "other");
+
+        var outcome = await running;
+
+        Assert.True(HarnessExit.Success == outcome.ExitCode, $"the run ended {outcome.ExitCode}: {outcome.Message}");
+        Assert.Equal<string>(["up-b", "up-a", "down-a", "down-b"], SetUpScripts.Logged(temp.Path));
+    }
+
+    /// <summary>
+    /// A set-up left running by a leg whose work a refusal of the whole run ended, with no line of its own, is said with
+    /// the refusal: in the document, and beneath the line the refusal ends on.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ASetUpLeftRunning_ByALegARefusalEnded_IsSaidWithTheRefusal(bool json)
+    {
+        using var temp = new TempDirectory();
+        using var state = new TempDirectory();
+        var harness = new HarnessFactory();
+
+        SetUpScripts.Write(temp.Path);
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            SetUpConfig(harness, ("a", SetUpScripts.SetUp("a", downExit: 1))),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, ["native"], Json: json) { Workload = SetUpWorkload("a") with { SetUp = true } },
+            work: _ => throw new HarnessException(HarnessExit.Refused, "an action file this run cannot read. Nothing has run."),
+            setUps: SetUpsFor(harness, state).SetUps);
+
+        Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
+
+        if (json)
+        {
+            using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
+            var left = Assert.Single(document.RootElement.GetProperty("setUpsLeftRunning").EnumerateArray());
+
+            Assert.Equal(("native", "a"), (left.GetProperty("leg").GetString(), left.GetProperty("setUp").GetString()));
+        }
+        else
+        {
+            Assert.Contains(
+                "native did not bring set-up 'a' down; 'dssharness down a', run in the tree the leg worked in, brings it down",
+                outcome.Details ?? []);
+        }
+    }
+
+    /// <summary>
+    /// A set-up whose down line outlasts the time an interrupted run gives it is said as stopped before it came down, with
+    /// the command that brings it down, and the leg still lets go of every set-up it held: none of its holds is left to
+    /// keep another leg from bringing one up, or a person from bringing one down.
+    /// </summary>
+    [Fact]
+    public async Task ASetUpStoppedComingDown_AfterAnInterruption_IsSaidSo_AndEveryHoldIsLetGo()
+    {
+        using var temp = new TempDirectory();
+        using var state = new TempDirectory();
+        using var stop = new CancellationTokenSource();
+        var harness = new HarnessFactory();
+        var (setUps, holds) = SetUpsFor(harness, state, grace: TimeSpan.FromMilliseconds(500));
+
+        SetUpScripts.Write(temp.Path);
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            SetUpConfig(harness, ("a", SetUpScripts.SetUp("a")), ("b", SetUpScripts.SetUp("b", downSeconds: 30))),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, ["native"], Json: true) { Workload = SetUpWorkload("a", "b") with { SetUp = true } },
+            work: leg =>
+            {
+                stop.Cancel();
+                return new LegEntry { Leg = leg.Leg.Name, Verdict = LegVerdict.Passed };
+            },
+            setUps: setUps,
+            cancellationToken: stop.Token);
+
+        Assert.Equal(HarnessExit.Cancelled, outcome.ExitCode);
+        Assert.Contains(
+            "native did not bring set-up 'b' down; 'dssharness down b', run in the tree the leg worked in, brings it down",
+            outcome.Message,
+            StringComparison.Ordinal);
+        Assert.Empty(holds.HeldOn("a", temp.Path));
+        Assert.Empty(holds.HeldOn("b", temp.Path));
+    }
+
+    /// <summary>
+    /// A set-up whose up line could not start brought nothing up, so nothing is brought down: the leg fails saying why,
+    /// and the set-ups before it are brought down.
+    /// </summary>
+    [Fact]
+    public async Task ASetUpWhoseUpLineCouldNotStart_IsNotBroughtDown()
+    {
+        using var temp = new TempDirectory();
+        using var state = new TempDirectory();
+        var harness = new HarnessFactory();
+        var missing = new SetUpConfig { Up = "scripts/missing-up", Down = SetUpScripts.Line("down-b 0") };
+
+        SetUpScripts.Write(temp.Path);
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            SetUpConfig(harness, ("a", SetUpScripts.SetUp("a")), ("b", missing)),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, ["native"], Json: true) { Workload = SetUpWorkload("a", "b") with { SetUp = true } },
+            work: _ => throw new InvalidOperationException("the leg's work started after a set-up did not come up"),
+            setUps: SetUpsFor(harness, state).SetUps);
+
+        Assert.Equal(HarnessExit.CommandFailed, outcome.ExitCode);
+        Assert.StartsWith("set-up 'b' did not come up: 'scripts/missing-up' could not start: ", Verdicts(outcome)["native"].Detail, StringComparison.Ordinal);
+        Assert.Equal<string>(["up-a", "down-a"], SetUpScripts.Logged(temp.Path));
+        Assert.Equal([("a", "brought-up", "brought-down"), ("b", "failed", null)], SetUpFacts(outcome));
+    }
+
+    /// <summary>
+    /// A leg stopped with no line still says what it left running: the run's last line and its document name the
+    /// set-up whose down failed, and how to bring it down.
+    /// </summary>
+    [Fact]
+    public async Task AStoppedLeg_ThatLeftASetUpRunning_IsNamedInTheRunsLastLine()
+    {
+        using var temp = new TempDirectory();
+        using var state = new TempDirectory();
+        using var stop = new CancellationTokenSource();
+        var harness = new HarnessFactory();
+
+        SetUpScripts.Write(temp.Path);
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            SetUpConfig(harness, ("a", SetUpScripts.SetUp("a", downExit: 6))),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, ["native"], Json: true) { Workload = SetUpWorkload("a") with { SetUp = true } },
+            workAsync: async (leg, token) =>
+            {
+                await stop.CancelAsync();
+                await Task.Delay(Timeout.Infinite, token);
+                return new LegEntry { Leg = leg.Leg.Name, Verdict = LegVerdict.Passed };
+            },
+            setUps: SetUpsFor(harness, state).SetUps,
+            cancellationToken: stop.Token);
+
+        Assert.Equal(HarnessExit.Cancelled, outcome.ExitCode);
+        Assert.Contains("native did not bring set-up 'a' down; 'dssharness down a', run in the tree the leg worked in, brings it down", outcome.Message, StringComparison.Ordinal);
+
+        using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
+        var left = Assert.Single(document.RootElement.GetProperty("setUpsLeftRunning").EnumerateArray());
+
+        Assert.Equal(["native", "a"], new[] { "leg", "setUp" }.Select(name => left.GetProperty(name).GetString()));
+        Assert.Equal("'dssharness down a', run in the tree the leg worked in, brings it down", left.GetProperty("remedy").GetString());
+    }
+
+    /// <summary>
+    /// A leg another machine runs is handed --set-up only where its work names a set-up: one whose work names none is
+    /// run as it would be without it, while this machine's leg brings its own up.
+    /// </summary>
+    [Fact]
+    public async Task ALegAHostRunsThatNamesNoSetUp_IsNotHandedTheOption()
+    {
+        using var temp = new TempDirectory();
+        using var state = new TempDirectory();
+        var harness = new HarnessFactory();
+        HostCommand? sent = null;
+        var config = new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Hosts = new HostsConfig { Ssh = { [HostName] = new SshHostConfig { RepositoryPath = HostTree } } },
+            SetUp = { ["a"] = SetUpScripts.SetUp("a") },
+            Projects =
+            {
+                new ProjectConfig { Name = "set", Type = "cmake", Test = new TestConfig { All = new TestInvocation { Runner = "ctest", SuccessPattern = "passed", SetUp = ["a"] } } },
+                new ProjectConfig { Name = "plain", Type = "cmake", Test = new TestConfig { All = new TestInvocation { Runner = "ctest", SuccessPattern = "passed" } } },
+            },
+            Legs =
+            {
+                ["native"] = new LegConfig { Os = harness.Platform.PlatformKey, Processor = harness.Platform.Processor, Config = "debug", Project = "set" },
+                ["arm"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", Ssh = HostName, Project = "plain" },
+            },
+        };
+
+        SetUpScripts.Write(temp.Path);
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            sent = command;
+            ScriptedHostCommands.Answer(command, """{"legs": [{"leg": "arm", "verdict": "passed", "durationSeconds": 1, "commandSeconds": 1}]}""");
+
+            return HostResults.Finished(command, 0);
+        });
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            config,
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, ["native", "arm"], Json: true) { Workload = new LegWorkload(Build: false, Test: true, []) { SetUp = true } },
+            hosts: hosts,
+            setUps: SetUpsFor(harness, state).SetUps);
+
+        Assert.True(HarnessExit.Success == outcome.ExitCode, $"the run ended {outcome.ExitCode}: {outcome.Message}");
+
+        var arguments = JsonSerializer.Deserialize<HostAgentRequest>(sent!.StandardInput.Read(), HostAgentProtocol.JsonOptions)!.Arguments.Select(argument => argument.Text);
+
+        Assert.DoesNotContain(LegSetUps.Option, arguments);
+        Assert.Equal<string>(["up-a", "down-a"], SetUpScripts.Logged(temp.Path));
+    }
+
+    /// <summary>
+    /// A set-up a host's leg left running there, where the host's run ended with no line for the leg, is said by this run
+    /// as the host's said it: it runs on after both runs.
+    /// </summary>
+    [Fact]
+    public async Task ASetUpAHostsLegLeftRunning_WithNoLineThere_IsSaidHere()
+    {
+        using var temp = new TempDirectory();
+        using var state = new TempDirectory();
+        var harness = new HarnessFactory();
+        var config = new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Hosts = new HostsConfig { Ssh = { [HostName] = new SshHostConfig { RepositoryPath = HostTree } } },
+            SetUp = { ["a"] = SetUpScripts.SetUp("a") },
+            Projects = { new ProjectConfig { Name = "set", Type = "cmake", Test = new TestConfig { All = new TestInvocation { Runner = "ctest", SuccessPattern = "passed", SetUp = ["a"] } } } },
+            Legs = { ["arm"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", Ssh = HostName, Project = "set" } },
+        };
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            ScriptedHostCommands.Answer(
+                command,
+                """{"exitCode":13,"summary":"refused","legs":[],"setUpsLeftRunning":[{"leg":"arm","setUp":"a","up":"brought-up","detail":"'down' exited 1"}]}""");
+
+            return HostResults.Finished(command, HarnessExit.Refused);
+        });
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            config,
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, ["arm"], Json: false) { Workload = new LegWorkload(Build: false, Test: true, []) { SetUp = true } },
+            hosts: hosts,
+            setUps: SetUpsFor(harness, state).SetUps);
+
+        Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
+        Assert.Contains("arm did not bring set-up 'a' down; 'dssharness down a', run in the tree the leg worked in, brings it down", outcome.Details ?? []);
+    }
+
+    /// <summary>A leg on this machine whose run names the set-ups given, for a run asked to set up.</summary>
+    private static HarnessConfig SetUpConfig(HarnessFactory harness, params (string Name, SetUpConfig SetUp)[] setUps)
+    {
+        var config = new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Legs = { ["native"] = HostDoubles.Leg(harness.Platform.PlatformKey, harness.Platform.Processor) },
+        };
+
+        foreach (var (name, setUp) in setUps)
+        {
+            config.SetUp[name] = setUp;
+        }
+
+        return config;
+    }
+
+    /// <summary>A command that starts nothing of its own and names <paramref name="setUps"/>, as a runner's do.</summary>
+    private static LegWorkload SetUpWorkload(params SetUpUse[] setUps) => new(Build: false, Test: false, []) { SetUps = setUps };
+
+    /// <summary>What brings a leg's set-ups up and down, its record of who holds which kept in <paramref name="state"/>.</summary>
+    private static (LegSetUps SetUps, SetUpHolds Holds) SetUpsFor(
+        HarnessFactory harness,
+        TempDirectory state,
+        TimeSpan? grace = null,
+        Func<TimeSpan, CancellationToken, Task>? wait = null)
+    {
+        var holds = new SetUpHolds(harness.FileSystem, harness.Output, harness.Identity, harness.Platform, () => state.Combine("setups.json"), wait: wait);
+        var service = new SetUpService(
+            harness.ContextLoader,
+            harness.ProcessRunner,
+            harness.Platform,
+            new ActionToolPolicy(harness.Platform),
+            new LocalProgramResolver(harness.Platform, FilePermissionsFactory.Create()),
+            holds,
+            harness.Output);
+
+        return (
+            new LegSetUps(service, holds, new PhaseRunner(harness.ProcessRunner, harness.FileSystem, harness.Output))
+            {
+                InterruptionGrace = grace ?? WorktreeService.DefaultInterruptionGrace,
+            },
+            holds);
+    }
+
+    /// <summary>What the one leg of <paramref name="outcome"/> did with each set-up, as its document says.</summary>
+    private static List<(string? Name, string? Up, string? Down)> SetUpFacts(CommandOutcome outcome)
+    {
+        using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
+        var leg = Assert.Single(document.RootElement.GetProperty("legs").EnumerateArray());
+
+        return leg.TryGetProperty("setUps", out var setUps)
+            ? [.. setUps.EnumerateArray().Select(setUp => (setUp.GetProperty("name").GetString(), setUp.GetProperty("up").GetString(), setUp.TryGetProperty("down", out var down) ? down.GetString() : null))]
+            : [];
+    }
+
     /// <summary>A leg on this machine and one on the ssh host.</summary>
     private static HarnessConfig TwoLegs(HarnessFactory harness) => new()
     {
@@ -3114,7 +4191,8 @@ public sealed class LegRunServiceTests
         IRepositoryTrees? trees = null,
         CancellationToken? cancellationToken = null,
         RunId? runId = null,
-        IHarnessContextLoader? loader = null)
+        IHarnessContextLoader? loader = null,
+        LegSetUps? setUps = null)
     {
         var loading = loader ?? HostDoubles.Loader(config, tree ?? temp.Path, temp.Path);
         var run = runId ?? RunId.New();
@@ -3143,7 +4221,8 @@ public sealed class LegRunServiceTests
             harness.FilePermissions,
             harness.Platform,
             harness.Output,
-            origin);
+            origin,
+            setUps);
 
         return await service.RunAsync(
             "test",

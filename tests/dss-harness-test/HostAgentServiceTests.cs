@@ -929,6 +929,49 @@ public sealed class HostAgentServiceTests
     }
 
     /// <summary>
+    /// A run asked to set up goes on once cancelled too, for its legs to bring down what they brought up: a host gives it
+    /// the time a command past its point of no return is given, and ends nothing meanwhile.
+    /// </summary>
+    [Theory]
+    [InlineData("test", "--legs", "a", "--set-up")]
+    [InlineData("run", "corpus", "--set-up")]
+    public async Task ARunAskedToSetUp_IsGivenTheTimeToBringItsSetUpsDown_OnceCancelled(params string[] commandLine)
+    {
+        using var copy = new TempDirectory();
+        using var input = new BeatingReader(RunRequest(copy.Path, commandLine));
+        using var error = new StringWriter();
+        var lastResort = new RecordingLastResort();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        var serving = Service(lastResort: lastResort, patience: new HostAgentPatience { Unwind = TimeSpan.FromMilliseconds(100), Finishing = TimeSpan.FromMinutes(5) })
+            .ServeAsync(
+                input,
+                new StringWriter(),
+                error,
+                async (_, _, _, token) =>
+                {
+                    var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+                    await using var registration = token.Register(() => cancelled.TrySetResult());
+
+                    started.SetResult();
+                    await cancelled.Task;
+
+                    // Brings its set-ups down, well past the time a run not asked to set up is given to stop in.
+                    await Task.Delay(TimeSpan.FromMilliseconds(700), CancellationToken.None);
+                    return HarnessExit.Cancelled;
+                },
+                cancellationToken);
+
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+        input.End();
+
+        Assert.Equal(HarnessExit.Cancelled, await serving.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken));
+        Assert.False(lastResort.Asked, "What the run started was ended while its legs brought their set-ups down.");
+    }
+
+    /// <summary>
     /// The time a command past its point of no return is given is a bound all the same, and its own: one that never
     /// finishes is ended once it is up, whatever any other command would have been given, and the time said is that one.
     /// </summary>

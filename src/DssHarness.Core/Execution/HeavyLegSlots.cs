@@ -185,26 +185,14 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
     /// <param name="output">Says the record is named by the machine's name, where it is.</param>
     /// <exception cref="DirectoryNotFoundException">No directory of this user's own could be named.</exception>
     public static string PathFor(IHostPlatform platform, IHarnessOutput output)
-    {
-        ArgumentNullException.ThrowIfNull(platform);
-        ArgumentNullException.ThrowIfNull(output);
-
-        var machine = platform.MachineId;
-
-        if (machine.ByName is { } why)
-        {
-            output.Info(
-                CommandName,
-                $"This machine's heavy legs are recorded under its name, '{machine.Id}', since {why}; a command started after "
-                + "that name changes keeps a record of its own, and admits its heavy legs beside the ones recorded under the old.");
-        }
-
-        return UserState.File(FileNameFor(machine.Id));
-    }
+        => UserState.MachineFile(platform, output, CommandName, FilePrefix, "heavy legs", "admits its heavy legs beside the ones recorded under the old");
 
     /// <summary>The record's file name for the machine <paramref name="machineId"/> tells apart.</summary>
     /// <param name="machineId">What tells the machine from every other.</param>
-    public static string FileNameFor(string machineId) => $"admission-{FileNames.SafeFor(machineId)}.json";
+    public static string FileNameFor(string machineId) => UserState.MachineFileName(FilePrefix, machineId);
+
+    /// <summary>What the record's file name begins with.</summary>
+    private const string FilePrefix = "admission";
 
     /// <summary>The record of the room admitted legs claim, beside the slots' record at <paramref name="slots"/>.</summary>
     /// <param name="slots">The slots' record.</param>

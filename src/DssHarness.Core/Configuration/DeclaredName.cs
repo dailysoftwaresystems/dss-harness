@@ -19,4 +19,23 @@ public static class DeclaredName
 
         return names.FirstOrDefault(name => string.Equals(name, typed, StringComparison.OrdinalIgnoreCase));
     }
+
+    /// <summary>
+    /// The refusal of <paramref name="typed"/> where <paramref name="section"/> declares no such name:
+    /// <c>'x' is not declared under predefinedRunners. Declared: a, b.</c>
+    /// </summary>
+    /// <param name="typed">The name as the command line gave it.</param>
+    /// <param name="section">The section of <c>config.json</c> its names are declared in.</param>
+    /// <param name="names">The names declared there.</param>
+    public static string NotDeclared(string typed, string section, IEnumerable<string> names)
+    {
+        ArgumentNullException.ThrowIfNull(typed);
+        ArgumentNullException.ThrowIfNull(section);
+        ArgumentNullException.ThrowIfNull(names);
+
+        var declared = names.Order(StringComparer.Ordinal).ToList();
+
+        return $"'{typed}' is not declared under {section}. "
+            + (declared.Count == 0 ? "Nothing is declared there." : $"Declared: {string.Join(", ", declared)}.");
+    }
 }

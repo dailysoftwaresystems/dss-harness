@@ -17,7 +17,7 @@ internal static class Prose
     public static string Document(params string[] path) => Words(File.ReadAllText(Path.Combine([RepositoryRoot(), .. path])));
 
     /// <summary>The repository this test was built from: the first directory above it holding the solution.</summary>
-    private static string RepositoryRoot()
+    public static string RepositoryRoot()
     {
         for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
         {

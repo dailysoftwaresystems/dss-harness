@@ -118,6 +118,38 @@ public sealed class MutationWorkersTests
     }
 
     /// <summary>
+    /// A sweep of a leg in a copy of its own on a host holds that copy whole, so a second sweep of the variant there is
+    /// refused before its sync rewrites it; one in the host's copy holds its workers' key, as a sweep here does.
+    /// </summary>
+    [Fact]
+    public void ASweepInACopyOfItsOwnOnAHost_HoldsThatCopyWhole()
+    {
+        const string tree = "/home/pi/repo";
+        var host = HostId.Ssh("pi");
+        var copy = LegCopies.PathOf(tree, Variant);
+        var run = RunId.New();
+
+        PlacedLeg Leg(string works) => new(
+            "arm",
+            new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", Ssh = "pi" },
+            new HostReport { Host = host, Os = "linux", Processor = "arm64" },
+            null,
+            Variant,
+            "/here/repo",
+            works,
+            Variant.DirectoryOn(host, works),
+            new LocalHostConfig(),
+            Emulated: false);
+
+        Assert.Equal(
+            LegCopies.Whole(copy, "check-mutations", host) with { RunId = run },
+            MutationWorkers.SweepLock(Leg(copy) with { KeptIn = tree }, run, "check-mutations"));
+        Assert.Equal(
+            MutationWorkers.SweepLock(host, tree, Variant, run, "check-mutations"),
+            MutationWorkers.SweepLock(Leg(tree), run, "check-mutations"));
+    }
+
+    /// <summary>
     /// A family's name is spelt one way: a key of seven hexadecimal digits in lower case, then the mark of the variant's
     /// own workers or of its self-test's. Any other is no family's - a variant's name spelt out, above all.
     /// </summary>
