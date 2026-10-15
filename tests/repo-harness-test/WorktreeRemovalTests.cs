@@ -1190,6 +1190,12 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
     /// <summary>Runs before each checkout of paths at a commit, with the paths it asks git to write.</summary>
     public Action<IReadOnlyList<string>>? BeforeCheckOut { get; init; }
 
+    /// <summary>
+    /// A path a checkout of paths cannot write: asked for it among others, git writes the others, then fails naming it, as
+    /// one that cannot remove a file another program holds open does.
+    /// </summary>
+    public string? CheckOutStopsAt { get; init; }
+
     /// <summary>Runs before each listing of names, with the arguments it asks git with.</summary>
     public Action<IReadOnlyList<string>>? BeforeListNames { get; init; }
 
@@ -1311,11 +1317,19 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
         return inner.IndexExactlyAsync(directory, paths, Token(cancellationToken));
     }
 
-    public Task CheckOutAtAsync(string directory, string commit, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
+    public async Task CheckOutAtAsync(string directory, string commit, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
     {
         BeforeEveryCall?.Invoke();
         BeforeCheckOut?.Invoke(paths);
-        return inner.CheckOutAtAsync(directory, commit, paths, Token(cancellationToken));
+
+        if (CheckOutStopsAt is { } held && paths.Contains(held, StringComparer.Ordinal))
+        {
+            await inner.CheckOutAtAsync(directory, commit, [.. paths.Where(path => path != held)], Token(cancellationToken)).ConfigureAwait(false);
+
+            throw new HarnessException(HarnessExit.CommandFailed, $"git could not write what {commit} holds into '{directory}': error: unable to unlink old '{held}': Invalid argument");
+        }
+
+        await inner.CheckOutAtAsync(directory, commit, paths, Token(cancellationToken)).ConfigureAwait(false);
     }
 
     public Task<IReadOnlySet<string>> ListHeldAsAtAsync(string directory, string commit, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)

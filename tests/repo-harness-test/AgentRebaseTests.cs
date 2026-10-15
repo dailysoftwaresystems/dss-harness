@@ -1705,7 +1705,7 @@ public sealed class AgentRebaseTests
         var renaming = $"  'A.txt': the main tree committed it since the agent's base {at}, renaming 'a.txt' in case alone, ";
         var writtenOver = $"{renaming}and the agent's worktree finds both names as one file, so writing it would write over 'a.txt', ";
         var refreshFirst = $"{writtenOver}which the agent shares with the main tree: refresh-agent hands it what the main tree holds at 'A.txt' first";
-        var deletion = $"{renaming}which the agent deleted - a rename and a deletion of one file, which a move cannot both keep: ";
+        var deletion = $"{renaming}which the agent's worktree no longer holds - a rename and a deletion of one file, which a move cannot both keep: ";
 
         var refused = await RebaseAsync(kit, apply: true, kept == "settled" ? ["a.txt"] : []);
 
@@ -1715,7 +1715,7 @@ public sealed class AgentRebaseTests
             {
                 "settled" => $"{writtenOver}declared settled: fold it into the main tree first, and run again without --settled for it",
                 "shared" => refreshFirst,
-                "deleted" => $"{deletion}put it back with git checkout HEAD -- 'a.txt' in the agent's worktree, run again, then delete 'A.txt'",
+                "deleted" => $"{deletion}put it back with git checkout HEAD -- 'a.txt' in the agent's worktree and run again, and only where the agent's session deleted it, delete 'A.txt' once the base has moved",
                 "deletedShared" => $"{deletion}fold the deletion into the main tree, commit it there, and run again",
                 _ => $"{writtenOver}which the agent changed: fold it into the main tree first, and run again",
             },
@@ -1834,13 +1834,13 @@ public sealed class AgentRebaseTests
 
         Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
         Assert.False(File.Exists(Path.Combine(worktree, "a.txt")), "The old name was not removed before the move stopped.");
-        Assert.True(kit.Record("ag").MovingWritten);
+        Assert.Equal(["a.txt"], kit.Record("ag").MovingRemoved);
 
         var finished = await RebaseAsync(kit, apply: true);
 
         Assert.True(finished.Succeeded, OrchestrationKit.Describe(finished));
         Assert.Equal(to, kit.Record("ag").Base);
-        Assert.DoesNotContain("movingWritten", File.ReadAllText(kit.Layout.AgentRecordFile("ag")), StringComparison.Ordinal);
+        Assert.DoesNotContain("movingRemoved", File.ReadAllText(kit.Layout.AgentRecordFile("ag")), StringComparison.Ordinal);
         Assert.Equal(["A.txt"], Directory.EnumerateFiles(worktree, "?.txt").Select(Path.GetFileName).Where(name => string.Equals(name, "a.txt", StringComparison.OrdinalIgnoreCase)));
         Assert.Equal("one\n", OrchestrationKit.Read(worktree, "A.txt"));
         Assert.Empty((await kit.Harness.RunGitAsync(worktree, ["status", "--porcelain"], Token)).StandardOutput.Trim());
@@ -1849,7 +1849,7 @@ public sealed class AgentRebaseTests
     /// <summary>
     /// A move of a file the main tree renamed in case alone that stopped before git wrote anything - the agent's session
     /// deleted the old name once the move was weighed, from disk or with git rm, which leaves the index and the disk as the
-    /// move's checkout would - never takes that deletion for the move's own: its record says the move wrote nothing yet, so
+    /// move's checkout would - never takes that deletion for the move's own: its record names no old name the move removed, so
     /// running it again, as its stop says, refuses it as a rename and a deletion of one file, and doing what that says
     /// moves the base and folds the deletion.
     /// </summary>
@@ -1890,16 +1890,12 @@ public sealed class AgentRebaseTests
         Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
         Assert.EndsWith($"run '{ToolPackage.Command} rebase-agent o1 ag --apply' again once that is dealt with, and it finishes it.", stopped.Message, StringComparison.Ordinal);
         Assert.NotNull(kit.Record("ag").Moving);
-        Assert.Null(kit.Record("ag").MovingWritten);
+        Assert.Null(kit.Record("ag").MovingRemoved);
 
         var again = await RebaseAsync(kit, apply: true);
 
         Assert.Equal(HarnessExit.Refused, again.ExitCode);
-        Assert.Contains(
-            $"  'A.txt': the main tree committed it since the agent's base {at}, renaming 'a.txt' in case alone, which the agent deleted - a rename and a "
-                + "deletion of one file, which a move cannot both keep: put it back with git checkout HEAD -- 'a.txt' in the agent's worktree, run again, then "
-                + "delete 'A.txt'",
-            again.Details!);
+        Assert.Contains(PutTheOldNameBack(at), again.Details!);
         Assert.False(File.Exists(Path.Combine(worktree, "a.txt")), "The session's deletion of the old name was undone.");
 
         await kit.GitAsync(worktree, "checkout", "HEAD", "--", "a.txt");
@@ -1913,6 +1909,136 @@ public sealed class AgentRebaseTests
         Assert.True(folded.Succeeded, OrchestrationKit.Describe(folded));
         Assert.False(File.Exists(Path.Combine(kit.Main, "A.txt")), "The main tree holds the file the agent deleted.");
     }
+
+    /// <summary>
+    /// A move of a file the main tree renamed in case alone whose first checkout stops part way - git took the old name out
+    /// of the agent's index and its disk, then could not write another path, as where an editor holds a file open - is
+    /// finished by running it again: the old name it removed is recorded as its own removal once git ends, failed or not,
+    /// never taken for a deletion of the agent's, and nothing is lost - the agent's fold then leaves the main tree's
+    /// renamed file as it is.
+    /// </summary>
+    [Fact]
+    public async Task AMoveOfARenameOfCaseAlone_WhoseFirstCheckoutStopsPartWay_IsFinishedByRunningItAgain_TheMainTreesFileKept()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        Assert.SkipUnless(await kit.Harness.GitClient.IgnoresCaseAsync(kit.Main, Token), "Only a repository that ignores case holds a rename of case alone as the same file.");
+        var worktree = await kit.CreateAgentAsync("ag");
+        await kit.GitAsync(kit.Main, "mv", "a.txt", "A.txt");
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\ncommitted\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "a sibling's rename, and an edit", Token);
+        var to = await HeadAsync(kit.Main);
+        var git = new InterceptingGitClient(kit.Harness.GitClient) { CheckOutStopsAt = "b.txt" };
+
+        var stopped = await kit.Harness.Agents(kit.Harness.FileSystem, kit.Harness.AnchorRegistryService, git).RebaseAsync(kit.Main, "o1", "ag", new RebaseRequest(), apply: true, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
+        Assert.Contains("unable to unlink old 'b.txt'", stopped.Message, StringComparison.Ordinal);
+        Assert.False(File.Exists(Path.Combine(worktree, "a.txt")), "The old name was not removed before the move stopped.");
+        Assert.Equal(["a.txt"], kit.Record("ag").MovingRemoved);
+
+        var finished = await RebaseAsync(kit, apply: true);
+
+        Assert.True(finished.Succeeded, OrchestrationKit.Describe(finished));
+        Assert.Equal(to, kit.Record("ag").Base);
+        Assert.Equal("one\n", OrchestrationKit.Read(worktree, "A.txt"));
+        Assert.Equal("two\ncommitted\n", OrchestrationKit.Read(worktree, "b.txt"));
+
+        var folded = await kit.FoldAsync("ag", apply: true);
+
+        Assert.True(folded.Succeeded, OrchestrationKit.Describe(folded));
+        Assert.Equal("one\n", OrchestrationKit.Read(kit.Main, "A.txt"));
+    }
+
+    /// <summary>
+    /// A move of a file the main tree renamed in case alone that stopped after its first checkout removed the old name and
+    /// before its record said so - as a move killed between git and the record would - costs a refusal, never a file: run
+    /// again, it is refused as a rename and a deletion of one file in words that put the old name back and run it again,
+    /// deleting the new name after only where the agent's session deleted the old; done so, the base moves, and the
+    /// agent's fold leaves the main tree's renamed file as it is.
+    /// </summary>
+    [Fact]
+    public async Task AMoveOfARenameOfCaseAlone_StoppedBeforeItsRecordSaysWhatItRemoved_IsRefusedInWordsThatLoseNothing()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        Assert.SkipUnless(await kit.Harness.GitClient.IgnoresCaseAsync(kit.Main, Token), "Only a repository that ignores case holds a rename of case alone as the same file.");
+        var worktree = await kit.CreateAgentAsync("ag");
+        var at = ReportText.Commit(kit.Record("ag").Base!);
+        await kit.GitAsync(kit.Main, "mv", "a.txt", "A.txt");
+        await kit.Harness.CommitAllAsync(kit.Main, "a sibling's rename", Token);
+        var agents = kit.Harness.Agents(new UnwritableFileSystem(kit.Harness.FileSystem, kit.Layout.AgentRecordFile("ag"), "\"movingRemoved\""), kit.Harness.AnchorRegistryService);
+
+        var stopped = await agents.RebaseAsync(kit.Main, "o1", "ag", new RebaseRequest(), apply: true, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
+        Assert.False(File.Exists(Path.Combine(worktree, "a.txt")), "The old name was not removed before the move stopped.");
+
+        var refused = await RebaseAsync(kit, apply: true);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(PutTheOldNameBack(at), refused.Details!);
+
+        // The agent's session deleted nothing: the old name is put back, and the move run again.
+        await kit.GitAsync(worktree, "checkout", "HEAD", "--", "a.txt");
+        var moved = await RebaseAsync(kit, apply: true);
+
+        Assert.True(moved.Succeeded, OrchestrationKit.Describe(moved));
+        Assert.Equal("one\n", OrchestrationKit.Read(worktree, "A.txt"));
+
+        var folded = await kit.FoldAsync("ag", apply: true);
+
+        Assert.True(folded.Succeeded, OrchestrationKit.Describe(folded));
+        Assert.Equal("one\n", OrchestrationKit.Read(kit.Main, "A.txt"));
+    }
+
+    /// <summary>
+    /// A move of a file the main tree renamed in case alone whose first checkout stops before git wrote anything leaves the
+    /// old name in the agent's index, and records nothing of it: a git rm of the agent's session afterwards is still its
+    /// deletion, refused as a rename and a deletion of one file when the move is run again.
+    /// </summary>
+    [Fact]
+    public async Task AMoveOfARenameOfCaseAlone_WhoseFirstCheckoutWritesNothing_StillRefusesTheSessionsGitRmOfTheOldName()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        Assert.SkipUnless(await kit.Harness.GitClient.IgnoresCaseAsync(kit.Main, Token), "Only a repository that ignores case holds a rename of case alone as the same file.");
+        var worktree = await kit.CreateAgentAsync("ag");
+        var at = ReportText.Commit(kit.Record("ag").Base!);
+        await kit.GitAsync(kit.Main, "mv", "a.txt", "A.txt");
+        await kit.Harness.CommitAllAsync(kit.Main, "a sibling's rename", Token);
+        var git = new InterceptingGitClient(kit.Harness.GitClient)
+        {
+            BeforeCheckOut = paths =>
+            {
+                if (paths.Contains("a.txt"))
+                {
+                    throw new HarnessException(HarnessExit.CommandFailed, "fatal: Unable to create 'index.lock': File exists.");
+                }
+            },
+        };
+
+        var stopped = await kit.Harness.Agents(kit.Harness.FileSystem, kit.Harness.AnchorRegistryService, git).RebaseAsync(kit.Main, "o1", "ag", new RebaseRequest(), apply: true, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
+        Assert.True(File.Exists(Path.Combine(worktree, "a.txt")), "The old name was removed though git wrote nothing.");
+        Assert.Null(kit.Record("ag").MovingRemoved);
+
+        await kit.GitAsync(worktree, "rm", "--quiet", "--", "a.txt");
+        var refused = await RebaseAsync(kit, apply: true);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(PutTheOldNameBack(at), refused.Details!);
+        Assert.False(File.Exists(Path.Combine(worktree, "a.txt")), "The session's deletion of the old name was undone.");
+    }
+
+    /// <summary>
+    /// The refusal of a move over the old name 'a.txt' of a file the main tree renamed to 'A.txt' since the agent's base
+    /// <paramref name="at"/>, where the agent's worktree no longer holds it, and shares nothing for it.
+    /// </summary>
+    private static string PutTheOldNameBack(string at)
+        => $"  'A.txt': the main tree committed it since the agent's base {at}, renaming 'a.txt' in case alone, which the agent's worktree no longer holds - a "
+            + "rename and a deletion of one file, which a move cannot both keep: put it back with git checkout HEAD -- 'a.txt' in the agent's worktree and run again, and only where the agent's session deleted it, delete 'A.txt' once the base has moved";
 
     /// <summary>
     /// A file the move takes that the agent's session writes after it was weighed is never written over: the move stops
@@ -1981,6 +2107,20 @@ public sealed class AgentRebaseTests
         => kit.Harness.AgentService.RebaseAsync(kit.Main, "o1", "ag", request, apply, Token);
 
     private static async Task<string> HeadAsync(string tree) => (await new HarnessFactory().GitClient.ResolveCommitAsync(tree, "HEAD", Token))!;
+
+    /// <summary>The real file system, except that writing <paramref name="file"/> holding <paramref name="holding"/> fails, as a full disk would, writing nothing.</summary>
+    private sealed class UnwritableFileSystem(IFileSystem inner, string file, string holding) : PassThroughFileSystem(inner)
+    {
+        public override void WriteAllTextAtomic(string path, string contents)
+        {
+            if (string.Equals(Path.GetFullPath(path), Path.GetFullPath(file), StringComparison.OrdinalIgnoreCase) && contents.Contains(holding, StringComparison.Ordinal))
+            {
+                throw new IOException("There is not enough space on the disk.");
+            }
+
+            base.WriteAllTextAtomic(path, contents);
+        }
+    }
 
     /// <summary>The real file system, which runs <paramref name="meanwhile"/> once, right after it first writes <paramref name="file"/> holding <paramref name="holding"/>.</summary>
     private sealed class WrittenMeanwhileFileSystem(IFileSystem inner, string file, string holding, Action meanwhile) : PassThroughFileSystem(inner)

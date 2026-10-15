@@ -859,12 +859,15 @@ removal of the old name would take it. It comes in only with its old name: where
 declared settled, shared with the main tree, or its own change - the new name refuses the move, naming both, since
 writing it would write over that; a shared file the agent changed is to be folded first, since no refresh hands a path
 the agent changed, and one it did not to be refreshed under the new name, which records the file it holds as shared
-there. Where it holds nothing at the old name, the agent deleted it, and the new name refuses the move as a rename and
-a deletion of one file - to be put back with `git checkout HEAD`, or, shared, folded and committed in the main tree -
-unless the move being finished removed it, the new name written last, as its record says (`MovingWritten`, marked
-once the checkout of what the move writes first returns): git leaves the index and the disk alike after that checkout
-and after a `git rm` of the agent's session. The record names where the move goes (`Moving`) before anything is
-written; then each
+there. Where it holds nothing at the old name, the new name refuses the move as a rename and a deletion of one file -
+its old name to be put back with `git checkout HEAD` and the move run again, the new name deleted after only where the
+agent's session deleted the old, or, shared, never taken by a move and so the agent's deletion, folded and committed in
+the main tree - unless the move being finished removed it, the new name written last, as its record says
+(`MovingRemoved`: the old names the agent's index no longer holds once the git checking out what the move writes first
+ends, having written it all or stopped part way). git leaves the index and the disk alike after that checkout and after
+a `git rm` of the agent's session; a removal of the move's its record missed - a move killed between git and its
+record - is refused so, costing a refusal, never a file. The record names where the move goes (`Moving`) before
+anything is written; then each
 path the move takes is asked to hold what was measured there (`RebasePlan.Held`, `AgentFold.RequireTakenAsync`), so a
 file the agent's session wrote since stops the move, exit 21, before git writes anything, never written over; then the new
 base's paths are written, HEAD and the index move (`git reset --mixed`), then the record and the worktree's base ref

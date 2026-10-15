@@ -1,3 +1,4 @@
+using System.Runtime.ExceptionServices;
 using System.Text.Json;
 using RepoHarness.Core.Anchors;
 using RepoHarness.Core.Configuration;
@@ -1069,12 +1070,32 @@ public sealed class AgentService(
                 // What git writes over or removes is what was weighed under the hold: a file the agent's session wrote since
                 // stops the move here, before git writes anything.
                 await _fold.RequireTakenAsync(path, plan!).ConfigureAwait(false);
-                await _gitClient.CheckOutAtAsync(path, to, plan!.Written, CancellationToken.None).ConfigureAwait(false);
 
-                // Recorded before what is written last: an old name of a file renamed in case alone that checkout removed is
-                // the move's doing when it is run again, where git alone could not tell it from a git rm of the session's.
-                _store.UpdateAgent(layout, record.Name, current => current with { MovingWritten = true });
-                await _gitClient.CheckOutAtAsync(path, to, plan.WrittenLast, CancellationToken.None).ConfigureAwait(false);
+                // The old names of files renamed in case alone that the first checkout took out of the agent's index are
+                // recorded once its git ends, whether it wrote everything or stopped part way: run again, the move takes
+                // such a name for its own removal only where so recorded, git leaving the index and the disk alike after it
+                // and after a git rm of the agent's session.
+                ExceptionDispatchInfo? stoppedAt = null;
+
+                try
+                {
+                    await _gitClient.CheckOutAtAsync(path, to, plan!.Written, CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (Unfinished(ex))
+                {
+                    stoppedAt = ExceptionDispatchInfo.Capture(ex);
+                }
+
+                if (await _fold.RemovedByTheMoveAsync(path, plan!).ConfigureAwait(false) is { Count: > 0 } removed)
+                {
+                    _store.UpdateAgent(
+                        layout,
+                        record.Name,
+                        current => current with { MovingRemoved = [.. (current.MovingRemoved ?? []).Union(removed, StringComparer.Ordinal)] });
+                }
+
+                stoppedAt?.Throw();
+                await _gitClient.CheckOutAtAsync(path, to, plan!.WrittenLast, CancellationToken.None).ConfigureAwait(false);
 
                 // Each merge over the agent's file as it was weighed, before HEAD moves: stopped after, a run again finds the
                 // path both changed still, and merges it again to the same bytes.
@@ -1084,7 +1105,7 @@ public sealed class AgentService(
                 }
 
                 await _gitClient.ResetToAsync(path, to, CancellationToken.None).ConfigureAwait(false);
-                _store.UpdateAgent(layout, record.Name, current => current with { Base = to, Moving = null, MovingWith = null, MovingWritten = null });
+                _store.UpdateAgent(layout, record.Name, current => current with { Base = to, Moving = null, MovingWith = null, MovingRemoved = null });
             }
             catch (Exception ex) when (Unfinished(ex))
             {
@@ -1122,7 +1143,7 @@ public sealed class AgentService(
             try
             {
                 measured = await _fold.MeasureRebaseAsync(
-                        path, from, to, seed, request.Settled, policy, Changes(context, layout, record.Name, keeping: false), finishing, record.MovingWritten is true, token)
+                        path, from, to, seed, request.Settled, policy, Changes(context, layout, record.Name, keeping: false), finishing, record.MovingRemoved ?? [], token)
                     .ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

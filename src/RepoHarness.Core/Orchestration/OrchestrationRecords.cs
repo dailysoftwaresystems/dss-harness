@@ -113,13 +113,13 @@ public sealed record AgentRecord
     public IReadOnlyList<string>? MovingWith { get; init; }
 
     /// <summary>
-    /// Whether the move <see cref="Moving"/> names wrote the paths it writes first (<see cref="RebasePlan.Written"/>), the
-    /// checkout of them returned: true once it has; null before it has, where no move stands, and in a record a build that
-    /// kept no such mark wrote. Only then is the old name of a file renamed in case alone, which that checkout removes,
-    /// missing by the move's doing: git leaves the index and the disk alike after it and after a git rm of the agent's
-    /// session.
+    /// The old names of files renamed in case alone that the move <see cref="Moving"/> names took out of the agent's git
+    /// index (<see cref="RebasePlan.RenamedFrom"/>), recorded once the git that checks out what it writes first ends - having
+    /// written it all or stopped part way. Only such a name is missing by the move's doing: git leaves the index and the
+    /// disk alike after that checkout and after a git rm of the agent's session. Null before any is, where no move stands,
+    /// and in a record a build that kept none wrote.
     /// </summary>
-    public bool? MovingWritten { get; init; }
+    public IReadOnlyList<string>? MovingRemoved { get; init; }
 
     /// <summary>The Claude session the agent runs as - a session's id or a subagent's - where it was given.</summary>
     public string? Session { get; init; }
@@ -201,11 +201,11 @@ public sealed record AgentRecord
                 : "it records what the move of its base was told as nothing, or with an empty word";
         }
 
-        if (MovingWritten is { } written && (Moving is null || !written))
+        if (MovingRemoved is not null && (Moving is null || MovingRemoved.Count == 0 || MovingRemoved.Any(string.IsNullOrEmpty)))
         {
             return Moving is null
-                ? "it records what a move of its base wrote first, and no move of it"
-                : "it records what the move of its base wrote first as not written";
+                ? "it records what a move of its base removed, and no move of it"
+                : "it records what the move of its base removed as nothing, or with an empty name";
         }
 
         return State switch

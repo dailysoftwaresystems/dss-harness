@@ -144,6 +144,13 @@ public sealed record RebasePlan
     public required IReadOnlyList<string> WrittenLast { get; init; }
 
     /// <summary>
+    /// The old names, among <see cref="Written"/>, of files the new base renamed in case alone whose new names are in
+    /// <see cref="WrittenLast"/>: what the first checkout removes that a move run again must know it removed
+    /// (<see cref="AgentFold.RemovedByTheMoveAsync"/>).
+    /// </summary>
+    public required IReadOnlyList<string> RenamedFrom { get; init; }
+
+    /// <summary>
     /// What the agent's worktree held at each taken path when it was measured - the file whole, its digest and its bit, or
     /// null where it held none: what git may write over or remove, and nothing else (<see cref="AgentFold.RequireTakenAsync"/>).
     /// A path where it holds anything else - a directory, a link - is not in it (<see cref="AgentFold.HoldingAsync"/>).
@@ -1832,6 +1839,29 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     }
 
     /// <summary>
+    /// Which of the old names of files renamed in case alone that <paramref name="plan"/> writes first
+    /// (<see cref="RebasePlan.RenamedFrom"/>) the agent's git index no longer holds, asked once the git that checks them out
+    /// ends - having written them or stopped part way: what the move removed, for its record. None, and nothing asked, where
+    /// it removes none.
+    /// </summary>
+    /// <param name="worktree">The agent's worktree.</param>
+    /// <param name="plan">The move measured.</param>
+    /// <exception cref="HarnessException">git could not list the index.</exception>
+    public async Task<IReadOnlyList<string>> RemovedByTheMoveAsync(string worktree, RebasePlan plan)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+
+        if (plan.RenamedFrom.Count == 0)
+        {
+            return [];
+        }
+
+        var indexed = (await _gitClient.ListIndexAsync(worktree, CancellationToken.None).ConfigureAwait(false)).Select(entry => entry.Path).ToHashSet(StringComparer.Ordinal);
+
+        return [.. plan.RenamedFrom.Where(old => !indexed.Contains(old))];
+    }
+
+    /// <summary>
     /// Stops a move of the agent's base before git writes anything where a path it takes no longer holds what was measured
     /// there (<see cref="RebasePlan.Held"/>): a file the agent's session wrote since is never written over or removed.
     /// </summary>
@@ -1906,8 +1936,9 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     /// is measured and said, and a clean one is taken where <paramref name="policy"/> names it. What comes in never goes
     /// over anything of the agent's: a file or a link where the new base needs a directory, anything in a directory where
     /// it holds a file, and the old name of a file it renamed in case alone, where the worktree finds a name in any case,
-    /// refuse the move too - its own, settled, or shared alike, and the agent's deletion of that old name, unless the move
-    /// being finished removed it (<paramref name="wroteFirst"/>). What each path it takes holds is measured with it
+    /// refuse the move too - its own, settled, or shared alike - and so does that old name where the worktree no longer
+    /// holds it, unless the move being finished removed it (<paramref name="removedByTheMove"/>). What each path it takes
+    /// holds is measured with it
     /// (<see cref="RebasePlan.Held"/>), so git writes over nothing that was not weighed.
     /// </summary>
     /// <param name="worktree">The agent's worktree.</param>
@@ -1923,9 +1954,9 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     /// Otherwise such a file is the agent's own - unless it is the very file <paramref name="to"/> holds there, read and
     /// compared, which is held as <paramref name="to"/> holds it whether a move is being finished or not.
     /// </param>
-    /// <param name="wroteFirst">
-    /// Whether the move being finished wrote the paths it writes first, as its record says (<see cref="AgentRecord.MovingWritten"/>):
-    /// the old name of a file renamed in case alone that it took is then missing by its doing, and otherwise by the agent's.
+    /// <param name="removedByTheMove">
+    /// The old names of files renamed in case alone that the move being finished took out of the agent's index, as its
+    /// record says (<see cref="AgentRecord.MovingRemoved"/>): missing by its doing, where any other is missing by another's.
     /// </param>
     /// <param name="cancellationToken">Stops the measuring.</param>
     /// <exception cref="HarnessException">git could not answer, or names a path that is not UTF-8.</exception>
@@ -1938,7 +1969,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         TwoChangePolicy policy,
         TwoChanges changes,
         bool finishing,
-        bool wroteFirst,
+        IReadOnlyCollection<string> removedByTheMove,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(seed);
@@ -2195,8 +2226,11 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         // A file renamed in case alone comes in only with its old name, which git removes as it writes the new. Where the
         // agent's worktree holds the old name and the agent keeps it - declared settled, shared, or its own change, a shared
         // file it changed among them, which no refresh hands it - writing the new name would write over it, both names
-        // being one file there. Where it holds nothing there, the agent deleted it, and writing the new name would undo
-        // that - unless the move being finished removed it, writing the new name last, as its record says.
+        // being one file there. Where it holds nothing there - unless the move being finished removed it, writing the new
+        // name last, as its record says - the two are a rename and a deletion of one file: said in words that put the old
+        // name back, deleting the new after only where the agent's session deleted the old, so a removal of the move's the
+        // record missed - a move killed between git and its record - costs a refusal, never a file. A shared old name is
+        // never taken, so never removed by a move: missing, it is the agent's deletion.
         var renamedOver = renamed.Where(rename => takenPaths.Contains(rename.Key) && !takenPaths.Contains(rename.Value)).ToList();
         var sharedChanged = (await EditedAsync(worktree, from, seed, [.. renamedOver.Select(rename => rename.Value).Where(old => shared.Of(old) is not null)], cancellationToken)
             .ConfigureAwait(false)).ToHashSet(StringComparer.Ordinal);
@@ -2212,11 +2246,12 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
                         : shared.Of(old) is not null && !sharedChanged.Contains(old) ? $"which the agent shares with the main tree: refresh-agent hands it what the main tree holds at '{path}' first"
                         : "which the agent changed: fold it into the main tree first, and run again")));
             }
-            else if (!wroteFirst)
+            else if (!removedByTheMove.Contains(old))
             {
-                refused.Add((path, $"{renaming}, which the agent deleted - a rename and a deletion of one file, which a move cannot both keep: "
+                refused.Add((path, $"{renaming}, which the agent's worktree no longer holds - a rename and a deletion of one file, which a move cannot both keep: "
                     + (shared.Of(old) is not null ? "fold the deletion into the main tree, commit it there, and run again"
-                        : $"put it back with git checkout HEAD -- '{old}' in the agent's worktree, run again, then delete '{path}'")));
+                        : $"put it back with git checkout HEAD -- '{old}' in the agent's worktree and run again, and only where the agent's session deleted it, "
+                            + $"delete '{path}' once the base has moved")));
             }
         }
 
@@ -2254,6 +2289,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             Mergeable = mergeable,
             Written = [.. taken.Except(last, StringComparer.Ordinal)],
             WrittenLast = last,
+            RenamedFrom = [.. renamed.Where(rename => takenPaths.Contains(rename.Key) && takenPaths.Contains(rename.Value)).Select(rename => rename.Value)],
             Held = await HoldingAsync(worktree, taken, cancellationToken).ConfigureAwait(false),
         };
     }

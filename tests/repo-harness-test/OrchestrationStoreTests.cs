@@ -24,8 +24,8 @@ public sealed class OrchestrationStoreTests
     [InlineData("a move of its base to no commit")]
     [InlineData("what a move of its base was told, and no move")]
     [InlineData("what a move of its base was told, with an empty word")]
-    [InlineData("a move's first writes, and no move")]
-    [InlineData("a move's first writes, as not made")]
+    [InlineData("what a move of its base removed, and no move")]
+    [InlineData("what a move of its base removed, with an empty name")]
     public async Task AnAgentRecordThatDoesNotRead_IsRefused_NamingItsFile(string how)
     {
         using var temp = new TempDirectory();
@@ -58,10 +58,13 @@ public sealed class OrchestrationStoreTests
                 "\"state\": \"live\"",
                 "\"state\": \"live\",\n  \"moving\": \"0123456789abcdef0123456789abcdef01234567\",\n  \"movingWith\": [ \"--merge\", \"\" ]",
                 StringComparison.Ordinal),
-            "a move's first writes, and no move" => text.Replace("\"state\": \"live\"", "\"state\": \"live\",\n  \"movingWritten\": true", StringComparison.Ordinal),
-            "a move's first writes, as not made" => text.Replace(
+            "what a move of its base removed, and no move" => text.Replace(
                 "\"state\": \"live\"",
-                "\"state\": \"live\",\n  \"moving\": \"0123456789abcdef0123456789abcdef01234567\",\n  \"movingWritten\": false",
+                "\"state\": \"live\",\n  \"movingRemoved\": [ \"a.txt\" ]",
+                StringComparison.Ordinal),
+            "what a move of its base removed, with an empty name" => text.Replace(
+                "\"state\": \"live\"",
+                "\"state\": \"live\",\n  \"moving\": \"0123456789abcdef0123456789abcdef01234567\",\n  \"movingRemoved\": [ \"\" ]",
                 StringComparison.Ordinal),
             _ => text.Replace("\"session\": \"sess1\"", "\"session\": \"sess1\\n\"", StringComparison.Ordinal),
         });
