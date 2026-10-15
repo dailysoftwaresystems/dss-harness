@@ -50,8 +50,8 @@ public interface IGitClient
     /// <summary>
     /// Porcelain status entries, one per changed path; a rename or copy is one entry, with its new path and the one it
     /// was made from. Untracked files and changed submodules are listed even where configuration would hide them; an
-    /// untracked directory is one entry, and an ignored file is none. Where the tree's file system finds a name in any case,
-    /// a file is one entry whatever core.ignorecase says, though the disk spells it otherwise than the index.
+    /// untracked directory is one entry, and an ignored file is none. A file the disk spells otherwise than the index is
+    /// one entry, under the index's name (<see cref="IndexedInAnotherCaseAsync"/>).
     /// </summary>
     /// <exception cref="HarnessException">git could not read the status.</exception>
     Task<IReadOnlyList<GitStatusEntry>> GetStatusAsync(string directory, CancellationToken cancellationToken = default);
@@ -60,8 +60,8 @@ public interface IGitClient
     /// Every path the work tree at <paramref name="directory"/> changes, as git names it: modified, staged or deleted;
     /// each file of an untracked directory, git's ignore rules followed - which a walk of the directory would not
     /// follow; and both the new and the old path of a rename or a copy. Asked with <c>-z</c>, so no path is ever
-    /// quoted, and without git's optional locks, so asking writes nothing. Where the tree's file system finds a name in
-    /// any case, a file is named once whatever core.ignorecase says, though the disk spells it otherwise than the index.
+    /// quoted, and without git's optional locks, so asking writes nothing. A file the disk spells otherwise than the index
+    /// is named once, under the index's name (<see cref="IndexedInAnotherCaseAsync"/>).
     /// </summary>
     /// <exception cref="HarnessException">git could not read the status.</exception>
     Task<IReadOnlyList<GitStatusEntry>> ReadStatusAsync(string directory, CancellationToken cancellationToken = default);
@@ -349,6 +349,17 @@ public interface IGitClient
     /// </summary>
     /// <exception cref="HarnessException">git could not read the configuration.</exception>
     Task<bool> IgnoresCaseAsync(string directory, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Which of <paramref name="untracked"/> - files git status called untracked, by their paths from the top of the tree -
+    /// the index holds under another spelling, where the tree at <paramref name="directory"/> finds a name in any case and
+    /// its core.ignorecase says it does not: there git lists a file the disk spells otherwise than its index twice, changed
+    /// under the index's name and untracked under the disk's, though the tree holds one file. Empty anywhere else: where
+    /// the repository says it ignores case, git already finds such a name in its index. An untracked directory, named as one
+    /// entry, is never among them. git's ignore rules are left as the repository has them.
+    /// </summary>
+    /// <exception cref="HarnessException">git could not read the configuration or the index.</exception>
+    Task<IReadOnlySet<string>> IndexedInAnotherCaseAsync(string directory, IReadOnlyCollection<string> untracked, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Which rule decides each of <paramref name="paths"/> in the work tree at

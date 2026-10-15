@@ -122,7 +122,10 @@ public sealed class RootLitterService(
             .OrderBy(entry => entry, StringComparer.Ordinal)
             .ToList();
 
-        return new RootLitterReport(root, untracked, FindMalformed(root));
+        // A tracked file the disk spells otherwise than the index is that file, never litter to move or delete.
+        var tracked = await _gitClient.IndexedInAnotherCaseAsync(root, untracked, cancellationToken).ConfigureAwait(false);
+
+        return new RootLitterReport(root, [.. untracked.Where(entry => !tracked.Contains(entry))], FindMalformed(root));
     }
 
     /// <summary>

@@ -34,6 +34,38 @@ public sealed class PathCaseTests
     }
 
     /// <summary>
+    /// The directory itself is asked, by a name it holds: one made case-sensitive under folders that are not - found under
+    /// its own path in another case, never under a name of its own in another case - compares exactly, as does one that
+    /// holds a name in both cases; one that finds a name of its own in another case ignores case, whatever the folders
+    /// above it do.
+    /// </summary>
+    [Fact]
+    public void TheDirectoryItself_IsAskedByANameItHolds_NotTheFoldersAboveIt()
+    {
+        var sensitiveInside = Substitute.For<IFileSystem>();
+        sensitiveInside.DirectoryExists(Arg.Any<string>()).Returns(true);
+        sensitiveInside.EnumerateDirectories("/work/repo").Returns([]);
+        sensitiveInside.EnumerateFiles("/work/repo", false).Returns(["/work/repo/a.txt"]);
+        sensitiveInside.KindOf(Path.Combine("/work/repo", "A.TXT")).Returns(PathKind.None);
+
+        var both = Substitute.For<IFileSystem>();
+        both.DirectoryExists(Arg.Any<string>()).Returns(true);
+        both.EnumerateDirectories("/work/repo").Returns([]);
+        both.EnumerateFiles("/work/repo", false).Returns(["/work/repo/a.txt", "/work/repo/A.TXT"]);
+        both.KindOf(Arg.Any<string>()).Returns(PathKind.File);
+
+        var foldingInside = Substitute.For<IFileSystem>();
+        foldingInside.DirectoryExists("/work/repo").Returns(true);
+        foldingInside.EnumerateDirectories("/work/repo").Returns(["/work/repo/.git"]);
+        foldingInside.EnumerateFiles("/work/repo", false).Returns([]);
+        foldingInside.KindOf(Path.Combine("/work/repo", ".GIT")).Returns(PathKind.Directory);
+
+        Assert.Same(StringComparer.Ordinal, PathCase.In(sensitiveInside, "/work/repo"));
+        Assert.Same(StringComparer.Ordinal, PathCase.In(both, "/work/repo"));
+        Assert.Same(StringComparer.OrdinalIgnoreCase, PathCase.In(foldingInside, "/work/repo"));
+    }
+
+    /// <summary>
     /// On this machine's own file system the answer is the one a file there gives: found by its name
     /// in another case on Windows and on macOS's default volume, and not on Linux.
     /// </summary>

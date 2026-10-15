@@ -11,8 +11,10 @@ public static class PathCase
     /// <remarks>
     /// Asked of the file system rather than decided by the operating system: macOS's default volume
     /// finds a file by its name in any case where one of its case-sensitive volumes does not, and a
-    /// directory on Windows can be made case-sensitive. A path with no letter whose case can change
-    /// compares exactly.
+    /// directory on Windows - or on Linux, folded - can be made case-sensitive, or not, apart from the
+    /// folders above it. So the directory itself is asked, by a name it holds, in another case, that
+    /// it does not hold so spelled as well; only where it holds no such name is its own path asked of
+    /// the folder above it. A path with no letter whose case can change compares exactly.
     /// </remarks>
     /// <param name="fileSystem">The file system to ask.</param>
     /// <param name="directory">A directory that exists, whose file system is asked.</param>
@@ -21,16 +23,70 @@ public static class PathCase
         ArgumentNullException.ThrowIfNull(fileSystem);
         ArgumentNullException.ThrowIfNull(directory);
 
-        var otherCase = directory.ToUpperInvariant();
-
-        if (otherCase == directory)
+        if (Asked(fileSystem, directory) is { } inside)
         {
-            otherCase = directory.ToLowerInvariant();
+            return inside ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
         }
 
-        return otherCase != directory && fileSystem.DirectoryExists(otherCase)
+        return OtherCase(directory) is { } otherCase && fileSystem.DirectoryExists(otherCase)
             ? StringComparer.OrdinalIgnoreCase
             : StringComparer.Ordinal;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="directory"/> finds a name it holds in another case, asked by one it holds whose other case
+    /// it does not hold as well - a directory holding both spellings tells them apart; null where it holds no name to ask
+    /// by, or cannot be listed.
+    /// </summary>
+    private static bool? Asked(IFileSystem fileSystem, string directory)
+    {
+        List<string> names;
+
+        try
+        {
+            if (!fileSystem.DirectoryExists(directory))
+            {
+                return null;
+            }
+
+            names = [.. fileSystem.EnumerateDirectories(directory).Concat(fileSystem.EnumerateFiles(directory, recursive: false)).Select(Path.GetFileName).OfType<string>()];
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+
+        var held = names.ToHashSet(StringComparer.Ordinal);
+
+        foreach (var name in names)
+        {
+            if (OtherCase(name) is not { } other)
+            {
+                continue;
+            }
+
+            if (held.Contains(other))
+            {
+                return false;
+            }
+
+            return fileSystem.KindOf(Path.Combine(directory, other)) != PathKind.None;
+        }
+
+        return null;
+    }
+
+    /// <summary><paramref name="name"/> in upper case, or in lower case where it is all upper already; null where it has no letter whose case can change.</summary>
+    private static string? OtherCase(string name)
+    {
+        var other = name.ToUpperInvariant();
+
+        if (other == name)
+        {
+            other = name.ToLowerInvariant();
+        }
+
+        return other == name ? null : other;
     }
 
     /// <summary>

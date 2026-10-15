@@ -86,6 +86,30 @@ public sealed class GitClientTests
         Assert.Equal(["a.txt"], (await harness.GitClient.GetStatusAsync(temp.Path, cancellationToken)).SelectMany(entry => entry.Paths).Select(name => name.Text));
     }
 
+    /// <summary>
+    /// The repository's ignore rules are read as it has them, whatever its file system finds: where core.ignorecase says
+    /// it heeds case, a rule spelled in one case leaves a new file under a directory spelled in another untracked and
+    /// listed, as git status and git add list it - never hidden, and so never left out of what a tree changes.
+    /// </summary>
+    [Fact]
+    public async Task Status_ReadsTheIgnoreRulesAsTheRepositorySpellsThem_WhereTheFileSystemFindsANameInAnyCase()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
+        Assert.SkipUnless(PathCase.In(harness.FileSystem, temp.Path).Equals("a", "A"), "Only a file system that finds a name in any case could match a rule to a name in another case.");
+        File.WriteAllText(temp.Combine(".gitignore"), "build/\n");
+        Directory.CreateDirectory(temp.Combine("src", "Build"));
+        File.WriteAllText(temp.Combine("src", "Build", "Old.cs"), "old\n");
+        await harness.RunGitAsync(temp.Path, ["config", "core.ignorecase", "false"], cancellationToken);
+        await harness.CommitAllAsync(temp.Path, "a directory a rule in another case would cover", cancellationToken);
+        File.WriteAllText(temp.Combine("src", "Build", "New.cs"), "new\n");
+
+        Assert.Equal(["src/Build/New.cs"], (await harness.GitClient.ReadStatusAsync(temp.Path, cancellationToken)).SelectMany(entry => entry.Paths).Select(name => name.Text));
+        Assert.True(await harness.GitClient.IsDirtyAsync(temp.Path, cancellationToken));
+    }
+
     [Fact]
     public async Task GetRepositoryRootAsync_FindsTheRoot_FromASubdirectory()
     {

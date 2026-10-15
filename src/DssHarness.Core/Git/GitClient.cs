@@ -242,26 +242,69 @@ public sealed partial class GitClient(
     /// discard it. <c>--no-optional-locks</c> keeps the question from writing anything: status otherwise refreshes the
     /// index and writes it back whenever it can take the lock.
     /// <para>
-    /// Where the tree's file system finds a name in any case, git is asked as a repository that ignores case, whatever
-    /// core.ignorecase says - as git sets it where it makes a repository on such a file system. Told it heeds case, git
-    /// lists a file spelled on disk otherwise than its index twice: changed under the index's name, and untracked under
-    /// the disk's, one file read as two. Measured: a write put in place over such a file keeps the old spelling on macOS
-    /// and takes the new one on Windows, so a fold of the one file wrote it, then stopped part way at its other name.
+    /// An untracked file the index holds under another spelling is not listed (<see cref="IndexedInAnotherCaseAsync"/>):
+    /// where the tree finds a name in any case and core.ignorecase says it does not, git lists a file the disk spells
+    /// otherwise than its index twice, changed under the index's name and untracked under the disk's. Measured: a write
+    /// put in place over such a file keeps the old spelling on macOS and takes the new one on Windows, so a fold of the
+    /// one file wrote it, then stopped part way at its other name.
     /// </para>
     /// </remarks>
     private async Task<IReadOnlyList<GitStatusEntry>> StatusAsync(string directory, string untracked, CancellationToken cancellationToken)
     {
-        IReadOnlyList<string> inAnyCase = PathCase.In(_fileSystem, directory).Equals("a", "A") ? ["-c", "core.ignorecase=true"] : [];
         var result = await RunForBytesAsync(
             directory,
-            [.. inAnyCase, "--no-optional-locks", "status", "--porcelain", "-z", $"--untracked-files={untracked}", "--ignore-submodules=none"],
+            ["--no-optional-locks", "status", "--porcelain", "-z", $"--untracked-files={untracked}", "--ignore-submodules=none"],
             cancellationToken).ConfigureAwait(false);
 
         // An empty list must mean "nothing changed", never "the question failed": a caller reads it as a clean tree and
         // proceeds over uncommitted work.
         Ensure(result, "read the repository status");
 
-        return ParseStatus(result.StandardOutput);
+        var entries = ParseStatus(result.StandardOutput);
+        var indexed = await IndexedInAnotherCaseAsync(
+                directory,
+                [.. entries.Where(entry => entry is { Index: '?', WorkTree: '?', Path.IsUtf8: true }).Select(entry => entry.Path.Text)],
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return indexed.Count == 0
+            ? entries
+            : [.. entries.Where(entry => entry is not { Index: '?', WorkTree: '?', Path.IsUtf8: true } || !indexed.Contains(entry.Path.Text))];
+    }
+
+    public async Task<IReadOnlySet<string>> IndexedInAnotherCaseAsync(
+        string directory,
+        IReadOnlyCollection<string> untracked,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(untracked);
+
+        var indexed = new HashSet<string>(StringComparer.Ordinal);
+
+        // A directory git names as one untracked entry may hold a new file beside the tracked one, so it stays listed.
+        var files = untracked.Where(path => !path.EndsWith('/')).ToList();
+
+        // Where the repository says it ignores case, git already finds an untracked name in the index in any case.
+        if (files.Count == 0
+            || !PathCase.In(_fileSystem, directory).Equals("a", "A")
+            || await IgnoresCaseAsync(directory, cancellationToken).ConfigureAwait(false))
+        {
+            return indexed;
+        }
+
+        // The whole index, by the names git keeps from the top of the tree, as status names every path.
+        var result = await RunForBytesAsync(directory, ["ls-files", "-z", "--cached", "--full-name", "--", ":/"], cancellationToken).ConfigureAwait(false);
+
+        Ensure(result, "read the index");
+
+        var held = Records(result.StandardOutput)
+            .Select(GitName.FromBytes)
+            .Where(name => name.IsUtf8)
+            .Select(name => name.Text)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        indexed.UnionWith(files.Where(held.Contains));
+        return indexed;
     }
 
     public async Task<IReadOnlyDictionary<string, GitHeld>> HeldAtAsync(

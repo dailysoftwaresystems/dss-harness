@@ -1,4 +1,5 @@
 using DssHarness.Core.Configuration;
+using DssHarness.Core.FileSystem;
 using DssHarness.Core.Results;
 using DssHarness.Core.Worktrees;
 
@@ -134,6 +135,37 @@ public sealed class RootLitterServiceTests
 
         Assert.Equal(HarnessExit.CommandFailed, failure.ExitCode);
         Assert.Contains("is unknown", failure.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A tracked file the disk spells otherwise than the index - which git lists as untracked under the disk's spelling
+    /// where the file system finds a name in any case and core.ignorecase says it does not - is that file, never litter
+    /// whose remedy is to move or delete it.
+    /// </summary>
+    /// <param name="ignoresCase">Whether the repository says it ignores case.</param>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ATrackedFileTheDiskSpellsOtherwise_IsNotLitter(bool ignoresCase)
+    {
+        using var temp = new TempDirectory();
+        var (harness, service) = await PrepareAsync(temp);
+        var cancellationToken = TestContext.Current.CancellationToken;
+        Assert.SkipUnless(PathCase.In(harness.FileSystem, temp.Path).Equals("a", "A"), "Only a file system that finds a name in any case holds one file under two spellings.");
+
+        await File.WriteAllTextAsync(Path.Combine(temp.Path, "README.md"), "x\n", cancellationToken);
+        await harness.CommitAllAsync(temp.Path, "a readme", cancellationToken);
+        await harness.RunGitAsync(temp.Path, ["config", "core.ignorecase", ignoresCase ? "true" : "false"], cancellationToken);
+        File.Move(Path.Combine(temp.Path, "README.md"), Path.Combine(temp.Path, "respelling"));
+        File.Move(Path.Combine(temp.Path, "respelling"), Path.Combine(temp.Path, "readme.md"));
+
+        var report = await service.CheckAsync(temp.Path, cancellationToken);
+
+        Assert.True(report.IsClean, string.Join(", ", report.All));
+
+        await File.WriteAllTextAsync(Path.Combine(temp.Path, "probe.out"), "x\n", cancellationToken);
+
+        Assert.Equal("probe.out", Assert.Single((await service.CheckAsync(temp.Path, cancellationToken)).Untracked));
     }
 
     private static async Task<(HarnessFactory Harness, IRootLitterService Service)> PrepareAsync(TempDirectory temp)

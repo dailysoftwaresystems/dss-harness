@@ -1249,6 +1249,9 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
     public Task<bool> IgnoresCaseAsync(string directory, CancellationToken cancellationToken = default)
         => Call(() => inner.IgnoresCaseAsync(directory, Token(cancellationToken)));
 
+    public Task<IReadOnlySet<string>> IndexedInAnotherCaseAsync(string directory, IReadOnlyCollection<string> untracked, CancellationToken cancellationToken = default)
+        => Call(() => inner.IndexedInAnotherCaseAsync(directory, untracked, Token(cancellationToken)));
+
     public Task<IReadOnlyList<GitStatusEntry>> ReadStatusAsync(string directory, CancellationToken cancellationToken = default)
         => Call(() =>
         {
