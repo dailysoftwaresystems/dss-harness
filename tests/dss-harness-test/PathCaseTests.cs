@@ -1,0 +1,84 @@
+using NSubstitute;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Platform;
+
+namespace DssHarness.Tests;
+
+/// <summary>
+/// How paths compare is asked of the file system, never assumed from the operating system: macOS's
+/// default volume finds a file by its name in any case, and Linux's do not.
+/// </summary>
+public sealed class PathCaseTests
+{
+    /// <summary>
+    /// A file system that finds a directory by its name in another case compares paths ignoring
+    /// case - asked in lower case of one named all in upper case - and one that does not compares
+    /// them exactly, as does a path with no letter to change.
+    /// </summary>
+    [Fact]
+    public void PathsCompare_AsTheFileSystemFindsADirectoryByItsNameInAnotherCase()
+    {
+        var folding = Substitute.For<IFileSystem>();
+        folding.DirectoryExists(Arg.Any<string>()).Returns(true);
+
+        var exact = Substitute.For<IFileSystem>();
+        exact.DirectoryExists("/work/Build").Returns(true);
+
+        var upper = Substitute.For<IFileSystem>();
+        upper.DirectoryExists("/work/build").Returns(true);
+
+        Assert.Same(StringComparer.OrdinalIgnoreCase, PathCase.In(folding, "/work/Build"));
+        Assert.Same(StringComparer.OrdinalIgnoreCase, PathCase.In(upper, "/WORK/BUILD"));
+        Assert.Same(StringComparer.Ordinal, PathCase.In(exact, "/work/Build"));
+        Assert.Same(StringComparer.Ordinal, PathCase.In(folding, "/1/2"));
+    }
+
+    /// <summary>
+    /// The directory itself is asked, by a name it holds: one made case-sensitive under folders that are not - found under
+    /// its own path in another case, never under a name of its own in another case - compares exactly, as does one that
+    /// holds a name in both cases; one that finds a name of its own in another case ignores case, whatever the folders
+    /// above it do.
+    /// </summary>
+    [Fact]
+    public void TheDirectoryItself_IsAskedByANameItHolds_NotTheFoldersAboveIt()
+    {
+        var sensitiveInside = Substitute.For<IFileSystem>();
+        sensitiveInside.DirectoryExists(Arg.Any<string>()).Returns(true);
+        sensitiveInside.EnumerateDirectories("/work/repo").Returns([]);
+        sensitiveInside.EnumerateFiles("/work/repo", false).Returns(["/work/repo/a.txt"]);
+        sensitiveInside.KindOf(Path.Combine("/work/repo", "A.TXT")).Returns(PathKind.None);
+
+        var both = Substitute.For<IFileSystem>();
+        both.DirectoryExists(Arg.Any<string>()).Returns(true);
+        both.EnumerateDirectories("/work/repo").Returns([]);
+        both.EnumerateFiles("/work/repo", false).Returns(["/work/repo/a.txt", "/work/repo/A.TXT"]);
+        both.KindOf(Arg.Any<string>()).Returns(PathKind.File);
+
+        var foldingInside = Substitute.For<IFileSystem>();
+        foldingInside.DirectoryExists("/work/repo").Returns(true);
+        foldingInside.EnumerateDirectories("/work/repo").Returns(["/work/repo/.git"]);
+        foldingInside.EnumerateFiles("/work/repo", false).Returns([]);
+        foldingInside.KindOf(Path.Combine("/work/repo", ".GIT")).Returns(PathKind.Directory);
+
+        Assert.Same(StringComparer.Ordinal, PathCase.In(sensitiveInside, "/work/repo"));
+        Assert.Same(StringComparer.Ordinal, PathCase.In(both, "/work/repo"));
+        Assert.Same(StringComparer.OrdinalIgnoreCase, PathCase.In(foldingInside, "/work/repo"));
+    }
+
+    /// <summary>
+    /// On this machine's own file system the answer is the one a file there gives: found by its name
+    /// in another case on Windows and on macOS's default volume, and not on Linux.
+    /// </summary>
+    [Fact]
+    public void ThisMachinesFileSystem_AnswersAsAFileOnItDoes()
+    {
+        using var temp = new TempDirectory();
+        temp.WriteFile("probe.txt", "probe");
+
+        var folds = File.Exists(temp.Combine("PROBE.TXT"));
+
+        Assert.Same(
+            folds ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal,
+            PathCase.In(new PhysicalFileSystem(FilePermissionsFactory.Create()), temp.Path));
+    }
+}

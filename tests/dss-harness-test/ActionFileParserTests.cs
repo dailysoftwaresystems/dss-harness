@@ -1,0 +1,1253 @@
+using System.Diagnostics;
+using System.Text.RegularExpressions;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Output;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Results;
+using DssHarness.Core.Runners;
+
+namespace DssHarness.Tests;
+
+/// <summary>What a runner's action file may say, and what it is refused for saying.</summary>
+public sealed class ActionFileParserTests
+{
+    [Fact]
+    public void Parse_ReadsAWholeFile()
+    {
+        var action = Parse("""
+            name: corpus
+            description: builds and runs the corpus
+            inputs:
+              corpusRoot:
+                default: corpus
+                required: true
+                description: where the corpus lives
+            steps:
+              - name: fetch
+                uses: harness/checkout
+                ref: main
+              - name: build
+                run: cmake --build build
+                workingDirectory: sub
+                env:
+                  CC: clang
+                successPattern: "^Built target"
+                stallSeconds: 300
+                continueOnError: true
+            """);
+
+        Assert.Equal("corpus", action.Name);
+        Assert.Equal("builds and runs the corpus", action.Description);
+
+        var input = Assert.Single(action.Inputs);
+        Assert.Equal("corpusRoot", input.Name);
+        Assert.Equal("corpus", input.Default);
+        Assert.True(input.Required);
+
+        Assert.Equal(2, action.Steps.Count);
+        Assert.Equal(PredefinedAction.Checkout, action.Steps[0].Uses);
+        Assert.Equal("main", action.Steps[0].Reference);
+        Assert.Empty(action.Steps[0].Commands);
+
+        var build = action.Steps[1];
+        Assert.Equal(PredefinedAction.None, build.Uses);
+        Assert.Equal(["cmake", "--build", "build"], Assert.Single(build.Commands).Arguments);
+        Assert.Equal("sub", build.WorkingDirectory);
+        Assert.Equal("clang", build.Env["CC"]);
+        Assert.Equal("^Built target", build.SuccessPattern);
+        Assert.Equal(300, build.StallSeconds);
+        Assert.True(build.ContinueOnError);
+    }
+
+    [Fact]
+    public void Parse_TrimsEveryLineAndSkipsBlanksAndComments_SoIndentationCannotChangeWhatRuns()
+    {
+        var action = Parse("""
+            steps:
+              - name: build
+                run: |
+                  cmake --build build
+
+                      # the comment is not a program
+
+                        cmake --install build
+            """);
+
+        var commands = Assert.Single(action.Steps).Commands;
+
+        Assert.Equal(2, commands.Count);
+        Assert.Equal(["cmake", "--build", "build"], commands[0].Arguments);
+        Assert.Equal(["cmake", "--install", "build"], commands[1].Arguments);
+    }
+
+    [Fact]
+    public void Parse_KeepsAQuotedArgumentWhole_AndStripsTheQuotes()
+    {
+        var action = Parse("""
+            steps:
+              - name: build
+                run: cmake --build "my build dir" --target all
+            """);
+
+        Assert.Equal(
+            ["cmake", "--build", "my build dir", "--target", "all"],
+            Assert.Single(Assert.Single(action.Steps).Commands).Arguments);
+    }
+
+    [Fact]
+    public void Parse_LeavesSingleQuotesLiteral_BecauseTheSplitterHonoursDoubleQuotesOnly()
+    {
+        // Measured on System.CommandLine 2.0.12: 'my dir' splits to ['my and dir'. The quotes are
+        // ordinary characters, so a single-quoted path is two arguments, neither of them a path.
+        var action = Parse("""
+            steps:
+              - name: build
+                run: cmake --build 'my dir'
+            """);
+
+        Assert.Equal(
+            ["cmake", "--build", "'my", "dir'"],
+            Assert.Single(Assert.Single(action.Steps).Commands).Arguments);
+    }
+
+    [Fact]
+    public void Parse_Refuses_AnUnbalancedDoubleQuote_RatherThanLettingTheLineBeTruncated()
+    {
+        // The measurement this refusal exists for: SplitCommandLine returns [dotnet, build] for
+        // this line and drops '-c Release' with no error, so the build would run, exit zero, and
+        // have built the wrong configuration.
+        Assert.Equal(
+            ["dotnet", "build"],
+            System.CommandLine.Parsing.CommandLineParser
+                .SplitCommandLine("""dotnet build "unterminated -c Release""")
+                .ToArray());
+
+        var exception = Refused("""
+            steps:
+              - name: build
+                run: |
+                  dotnet build "unterminated -c Release
+            """);
+
+        Assert.Equal(HarnessExit.ConfigInvalid, exception.ExitCode);
+        Assert.Contains(
+            """line 4: 'dotnet build "unterminated -c Release' has an unbalanced double quote.""",
+            exception.Message,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "drops everything after an unterminated quote without a word",
+            exception.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Parse_Refuses_AnUnknownTopLevelKey()
+    {
+        var exception = Refused("""
+            runs-on: ubuntu-latest
+            steps:
+              - name: build
+                run: cmake --build build
+            """);
+
+        Assert.Contains("'runs-on' is not a top-level key", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("Known: 'name', 'description', 'inputs', 'steps'", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Parse_Refuses_AnUnknownStepKey_BecauseAnIgnoredKeyIsARuleNobodyApplied()
+    {
+        var exception = Refused("""
+            steps:
+              - name: build
+                run: cmake --build build
+                working-directory: sub
+            """);
+
+        Assert.Contains("'working-directory' is not a step key", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("'workingDirectory'", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Parse_Refuses_AStepThatDeclaresBothUsesAndRun()
+    {
+        var exception = Refused("""
+            steps:
+              - name: build
+                uses: harness/checkout
+                run: cmake --build build
+            """);
+
+        Assert.Contains("declares both 'uses' and 'run'", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Parse_Refuses_AStepThatDeclaresNeither()
+    {
+        var exception = Refused("""
+            steps:
+              - name: nothing
+                workingDirectory: sub
+            """);
+
+        Assert.Contains("declares neither 'uses' nor 'run'", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Parse_Refuses_AnUnknownUses_NamingWhatIsAvailable()
+    {
+        var exception = Refused("""
+            steps:
+              - name: fetch
+                uses: actions/checkout@v4
+            """);
+
+        Assert.Contains("'actions/checkout@v4' is not a predefined action", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("'harness/checkout', 'harness/read-inputs'", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Parse_Refuses_ARefOnAnActionThatDoesNotTakeOne()
+    {
+        var exception = Refused("""
+            steps:
+              - name: values
+                uses: harness/read-inputs
+                ref: main
+            """);
+
+        Assert.Contains("'ref' applies only to 'harness/checkout'", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Parse_Refuses_EmptyOrMissingSteps()
+    {
+        Assert.Contains("'steps' is empty", Refused("steps: []").Message, StringComparison.Ordinal);
+        Assert.Contains("declares no 'steps'", Refused("name: nothing").Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Parse_Refuses_ARunBlockWithNoCommandInIt()
+    {
+        var exception = Refused("""
+            steps:
+              - name: build
+                run: |
+                  # only a comment
+
+            """);
+
+        Assert.Contains("holds no command", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Parse_Refuses_ASuccessPatternThatIsEmptyOrDoesNotCompile()
+    {
+        Assert.Contains(
+            "'successPattern' is empty",
+            Refused("""
+                steps:
+                  - name: build
+                    run: cmake --build build
+                    successPattern: ""
+                """).Message,
+            StringComparison.Ordinal);
+
+        Assert.Contains(
+            "'successPattern' does not compile",
+            Refused("""
+                steps:
+                  - name: build
+                    run: cmake --build build
+                    successPattern: "Built ([0-9]+"
+                """).Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Parse_Refuses_ANegativeOrNonNumericStallBound()
+    {
+        Assert.Contains(
+            "a stall bound is never negative",
+            Refused("""
+                steps:
+                  - name: build
+                    run: cmake --build build
+                    stallSeconds: -1
+                """).Message,
+            StringComparison.Ordinal);
+
+        Assert.Contains(
+            "not a whole number of seconds",
+            Refused("""
+                steps:
+                  - name: build
+                    run: cmake --build build
+                    stallSeconds: soon
+                """).Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Parse_ReportsEveryProblemTogether()
+    {
+        var exception = Refused("""
+            runs-on: ubuntu-latest
+            steps:
+              - name: one
+                run: cmake --build "build
+              - name: two
+                stallSeconds: -5
+                run: cmake --install build
+            """);
+
+        Assert.Contains("has 3 problem(s)", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("'runs-on'", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("unbalanced double quote", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("never negative", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Parse_Refuses_YamlThatDoesNotParse()
+    {
+        var exception = Refused("steps:\n  - name: build\n   run: x\n");
+
+        Assert.Equal(HarnessExit.ConfigInvalid, exception.ExitCode);
+        Assert.Contains("not valid YAML", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ToPhases_CarriesEveryFieldThePhaseContractDependsOn()
+    {
+        // An action file replaces 'phases', so a field that could not survive this conversion is a
+        // field the verdict contract silently lost.
+        var action = Parse("""
+            steps:
+              - name: build
+                run: |
+                  cmake --build build
+                  cmake --install build
+                workingDirectory: sub
+                env:
+                  CC: clang
+                successPattern: "^Built"
+                stallSeconds: 120
+                continueOnError: true
+            """);
+
+        var phases = action.ToPhases();
+
+        Assert.Equal(2, phases.Count);
+        Assert.Equal("build (1/2)", phases[0].Name);
+        Assert.Equal("build (2/2)", phases[1].Name);
+
+        foreach (var phase in phases)
+        {
+            Assert.Equal("sub", phase.WorkingDirectory);
+            Assert.Equal("clang", phase.Env["CC"]);
+            Assert.Equal(120, phase.StallSeconds);
+            Assert.True(phase.ContinueOnError);
+        }
+
+        // The witness belongs to the step, so it is checked against the step's last command: the one
+        // whose finishing means the step did its work. Copied to every line, a step would have to
+        // make each of its commands print the same evidence, which no honest sequence does.
+        Assert.Null(phases[0].SuccessPattern);
+        Assert.Equal("^Built", phases[1].SuccessPattern);
+
+        Assert.Equal(["cmake", "--build", "build"], phases[0].Command);
+        Assert.Equal("build", Assert.Single(Parse("""
+            steps:
+              - name: build
+                run: cmake --build build
+            """).ToPhases()).Name);
+    }
+
+    /// <summary>
+    /// The measured default, kept: a step with neither key runs where every step ran before this
+    /// layout existed. The new directory reads as though a step ran beside its own file, and a
+    /// default that quietly became that would have broken every root-relative line already written.
+    /// </summary>
+    [Fact]
+    public void AStepThatNamesNoRoot_StillRunsAtTheTreeRoot()
+    {
+        var phase = Assert.Single(Parse("""
+            steps:
+              - name: build
+                run: cmake --build build
+            """).ToPhases());
+
+        Assert.Null(phase.WorkingDirectory);
+    }
+
+    [Fact]
+    public void AStepThatNamesNoRoot_KeepsItsOwnPathRelativeToTheTree()
+    {
+        var phase = Assert.Single(Parse("""
+            steps:
+              - name: build
+                workingDirectory: sub
+                run: cmake --build build
+            """).ToPhases());
+
+        Assert.Equal("sub", phase.WorkingDirectory);
+    }
+
+    [Theory]
+    [InlineData("tree", null, null)]
+    [InlineData("tree", "sub", "sub")]
+    [InlineData("harness", null, ".harness-config")]
+    [InlineData("harness", "sub", ".harness-config/sub")]
+    [InlineData("action", null, ".harness-config/runner/actions/compile")]
+    [InlineData("action", "lib", ".harness-config/runner/actions/compile/lib")]
+    public void AStepResolvesItsWorkingDirectoryAgainstTheRootItNames(string root, string? path, string? expected)
+    {
+        var declared = path is null ? string.Empty : $"\n    workingDirectory: {path}";
+
+        var phase = Assert.Single(Parse($"""
+            steps:
+              - name: build
+                workingDirectoryRoot: {root}{declared}
+                run: cmake --build build
+            """).ToPhases());
+
+        // Compared with separators normalised: the value is built with the platform's own, and what
+        // matters is which directory it names, not which slash this machine writes it with.
+        Assert.Equal(expected, phase.WorkingDirectory?.Replace('\\', '/'));
+    }
+
+    /// <summary>
+    /// A rooted second argument makes <c>Path.Combine</c> discard the first, so a step could name a
+    /// root, be composed against it, and run somewhere else entirely with nothing refusing it.
+    /// </summary>
+    [Theory]
+    [InlineData("C:\\Windows\\System32", "absolute path")]
+    [InlineData("/etc", "absolute path")]
+    [InlineData("\\\\server\\share", "absolute path")]
+    [InlineData("../../../../Windows", "climbs out")]
+    [InlineData("lib/../../../elsewhere", "climbs out")]
+    public void Parse_Refuses_AWorkingDirectoryThatLeavesTheRootItNames(string path, string expected)
+    {
+        var exception = Refused($"""
+            steps:
+              - name: build
+                workingDirectoryRoot: action
+                workingDirectory: {path}
+                run: cmake --build build
+            """);
+
+        Assert.Equal(HarnessExit.ConfigInvalid, exception.ExitCode);
+        Assert.Contains(expected, exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The same rule with no root declared, where the default tree root is the one being left.
+    /// </summary>
+    [Fact]
+    public void Parse_Refuses_AWorkingDirectoryThatLeavesTheTreeRoot()
+    {
+        var exception = Refused("""
+            steps:
+              - name: build
+                workingDirectory: ../../elsewhere
+                run: cmake --build build
+            """);
+
+        Assert.Contains("climbs out", exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A predefined action is performed by the harness, never started as a program, so it has no
+    /// working directory. Accepted silently, the key would be a rule nobody applied — the same
+    /// reason 'ref' is refused on an action that does not take one.
+    /// </summary>
+    [Theory]
+    [InlineData("workingDirectory: sub")]
+    [InlineData("workingDirectoryRoot: action")]
+    public void Parse_Refuses_AWorkingDirectoryOnAStepThatUsesAPredefinedAction(string declared)
+    {
+        var exception = Refused($"""
+            steps:
+              - name: checkout
+                uses: harness/checkout
+                ref: main
+                {declared}
+            """);
+
+        Assert.Equal(HarnessExit.ConfigInvalid, exception.ExitCode);
+        Assert.Contains("applies only to a step's 'run' block", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("harness/checkout", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Parse_Refuses_AWorkingDirectoryRootThatIsNotOne_NamingWhatIsAvailable()
+    {
+        var exception = Refused("""
+            steps:
+              - name: build
+                workingDirectoryRoot: repository
+                run: cmake --build build
+            """);
+
+        Assert.Equal(HarnessExit.ConfigInvalid, exception.ExitCode);
+        Assert.Contains("'repository' is not a working directory root", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("'tree', 'harness', 'action'", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task LoadAsync_ReadsAnActionFromItsOwnDirectory()
+    {
+        using var temp = new TempDirectory();
+        temp.WriteFile(
+            Path.Combine("compile", "compile.yml"),
+            "steps:\n  - name: build\n    run: cmake --build build\n");
+
+        var action = await CreateParser()
+            .LoadAsync(temp.Path, "compile/compile.yml", TestContext.Current.CancellationToken);
+
+        Assert.Equal("build", Assert.Single(action.Steps).Name);
+        Assert.Equal("compile", action.DirectoryName);
+    }
+
+    [Fact]
+    public async Task LoadAsync_ReadsAnActionSpelledWithTheOtherExtension()
+    {
+        using var temp = new TempDirectory();
+        temp.WriteFile(
+            Path.Combine("compile", "compile.yaml"),
+            "steps:\n  - name: build\n    run: cmake --build build\n");
+
+        var action = await CreateParser()
+            .LoadAsync(temp.Path, "compile/compile.yaml", TestContext.Current.CancellationToken);
+
+        Assert.Equal("build", Assert.Single(action.Steps).Name);
+    }
+
+    /// <summary>
+    /// The layout this replaced. Refused rather than accepted alongside the new one: two spellings
+    /// would mean two places to look for one action, and the supporting files a flat directory
+    /// cannot own are the reason the directory exists.
+    /// </summary>
+    [Fact]
+    public async Task LoadAsync_Refuses_TheFlatSpelling_NamingThePathItExpected()
+    {
+        using var temp = new TempDirectory();
+        temp.WriteFile("compile.yml", "steps:\n  - name: build\n    run: cmake --build build\n");
+
+        var exception = await Refused(temp, "compile.yml");
+
+        Assert.Contains("compile/compile.yml", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task LoadAsync_Refuses_AFileThatDoesNotCarryItsDirectorysName_NamingBoth()
+    {
+        using var temp = new TempDirectory();
+        temp.WriteFile(
+            Path.Combine("probe", "steps.yml"),
+            "steps:\n  - name: build\n    run: cmake --build build\n");
+
+        var exception = await Refused(temp, "probe/steps.yml");
+
+        Assert.Contains("'probe'", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("'steps.yml'", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("probe/probe.yml", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("../outside.yml")]
+    [InlineData("a/../../outside.yml")]
+    [InlineData("../actions-evil/x.yml")]
+    [InlineData("compile/nested/compile.yml")]
+    [InlineData("compile/compile.txt")]
+    [InlineData("./compile/compile.yml")]
+    public async Task LoadAsync_Refuses_APathThatDoesNotNameAnActionInsideTheDirectory(string action)
+    {
+        using var temp = new TempDirectory();
+
+        _ = await Refused(temp, action);
+    }
+
+    [Fact]
+    public async Task LoadAsync_Refuses_AnAbsolutePath()
+    {
+        using var temp = new TempDirectory();
+        var elsewhere = temp.WriteFile(
+            Path.Combine("elsewhere", "steal.yml"),
+            "steps:\n  - name: build\n    run: cmake --build build\n");
+
+        _ = await Refused(temp, elsewhere);
+    }
+
+    /// <summary>
+    /// A sibling directory whose name merely starts with the actions directory's, reached the only
+    /// way a legal spelling can reach anything outside: through a link.
+    /// </summary>
+    /// <remarks>
+    /// Spelled with '..' this never reaches the containment check at all — the spelling rule refuses
+    /// it first, and the test would then pass with that check deleted. A link is what makes the
+    /// boundary do the work: 'actions-evil' shares every character of 'actions' and differs only
+    /// after it, so a prefix test that did not stop at a directory separator would call this file
+    /// contained, and it is one nobody reviewing the actions directory ever sees.
+    /// </remarks>
+    [Fact]
+    public async Task LoadAsync_Refuses_ALinkLeadingToASiblingDirectorySharingThePrefix()
+    {
+        using var temp = new TempDirectory();
+        var actions = temp.Combine("actions");
+        var outside = temp.WriteFile(
+            Path.Combine("actions-evil", "probe.yml"),
+            "steps:\n  - name: build\n    run: cmake --build build\n");
+
+        Directory.CreateDirectory(Path.Combine(actions, "probe"));
+
+        TestLinks.OrSkip(() => File.CreateSymbolicLink(Path.Combine(actions, "probe", "probe.yml"), outside));
+
+        var exception = await Assert.ThrowsAsync<HarnessException>(
+            () => CreateParser().LoadAsync(
+                actions,
+                "probe/probe.yml",
+                TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, exception.ExitCode);
+        Assert.Contains("actions-evil", exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The spelling is legal and the file is where it should be; only following the link says
+    /// otherwise. Nothing but the file system knows this, which is why the check survives into the
+    /// parser rather than living only in the configuration reader.
+    /// </summary>
+    [Fact]
+    public async Task LoadAsync_Refuses_ALinkInsideTheDirectory_ThatLeadsOutOfIt()
+    {
+        using var temp = new TempDirectory();
+        var outside = temp.WriteFile(
+            Path.Combine("outside", "probe.yml"),
+            "steps:\n  - name: build\n    run: cmake --build build\n");
+
+        Directory.CreateDirectory(temp.Combine("actions", "probe"));
+
+        TestLinks.OrSkip(() => File.CreateSymbolicLink(temp.Combine("actions", "probe", "probe.yml"), outside));
+
+        var exception = await Assert.ThrowsAsync<HarnessException>(
+            () => CreateParser().LoadAsync(
+                temp.Combine("actions"),
+                "probe/probe.yml",
+                TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, exception.ExitCode);
+        Assert.Contains("outside", exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A step asks for the guards the build and test verbs carry, and gets them off unless it does.
+    /// </summary>
+    [Fact]
+    public void AStepAsksForItsGuards_AndHasNoneUnlessItDoes()
+    {
+        var asked = Parse("""
+            name: build
+            steps:
+              - name: compile
+                run: |
+                  cmake --build .
+                watchContention: true
+                requireInputsUnmoved: true
+            """).Steps[0];
+
+        Assert.True(asked.WatchContention);
+        Assert.True(asked.RequireInputsUnmoved);
+
+        var silent = Parse("""
+            name: build
+            steps:
+              - name: compile
+                run: |
+                  cmake --build .
+            """).Steps[0];
+
+        Assert.False(silent.WatchContention);
+        Assert.False(silent.RequireInputsUnmoved);
+    }
+
+    /// <summary>
+    /// Anything that is not exactly true or false is refused, never read as false. These keys turn
+    /// guards on, so a misspelling read as "off" is a step that looks guarded in the file and is
+    /// not — which is the failure the guards exist to make impossible.
+    /// </summary>
+    [Theory]
+    [InlineData("watchContention")]
+    [InlineData("requireInputsUnmoved")]
+    public void AGuardKeyThatSaysSomethingElse_IsRefused_NotReadAsOff(string key)
+    {
+        var refusal = Refused($"""
+            name: build
+            steps:
+              - name: compile
+                run: |
+                  cmake --build .
+                {key}: yes
+            """);
+
+        Assert.Contains(key, refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("'true', 'false'", refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A step's runOn names the operating systems it runs on, each read once; a step naming none
+    /// runs on every leg.
+    /// </summary>
+    [Fact]
+    public void Parse_ReadsRunOn_EachSystemOnce()
+    {
+        var steps = Parse("""
+            name: build
+            steps:
+              - name: msvc
+                run: |
+                  cl /nologo
+                runOn: [windows, linux, windows]
+              - name: everywhere
+                run: |
+                  cmake --build .
+            """).Steps;
+
+        Assert.Equal(["windows", "linux"], steps[0].RunOn);
+        Assert.Empty(steps[1].RunOn);
+        Assert.Equal(["msvc", "everywhere"], Parse("""
+            name: build
+            steps:
+              - name: msvc
+                run: |
+                  cl /nologo
+                runOn: [windows]
+              - name: everywhere
+                run: |
+                  cmake --build .
+            """).StepsOn("windows").Select(step => step.Name));
+    }
+
+    /// <summary>
+    /// A leg's operating system is read ignoring case, as it is everywhere else: a leg declaring
+    /// Windows runs the steps runOn gives windows, and the run it is in is not refused as running none.
+    /// </summary>
+    [Fact]
+    public void RunOn_ReadsALegsSystemIgnoringCase()
+    {
+        var file = Parse("""
+            name: build
+            steps:
+              - name: msvc
+                run: |
+                  cl /nologo
+                runOn: [windows]
+            """);
+
+        Assert.Equal(["msvc"], file.StepsOn("Windows").Select(step => step.Name));
+        file.RequireAStepOn("build", [("win", "Windows")]);
+    }
+
+    /// <summary>
+    /// A leg left with only predefined steps runs nothing of the file's own, and is named in the
+    /// refusal; a file of predefined steps alone runs no program on any leg, and is not refused.
+    /// </summary>
+    [Fact]
+    public void RequireAStepOn_CountsOnlyTheStepsThatRunPrograms_WhereTheFileHasAny()
+    {
+        var mixed = Parse("""
+            name: build
+            steps:
+              - name: at
+                uses: harness/checkout
+                ref: main
+              - name: msvc
+                run: |
+                  cl /nologo
+                runOn: [windows]
+            """);
+
+        var refusal = Assert.Throws<HarnessException>(() => mixed.RequireAStepOn("build", [("win", "windows"), ("lin", "linux")]));
+
+        Assert.Contains("leg 'lin' (linux)", refusal.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("'win'", refusal.Message, StringComparison.Ordinal);
+
+        Parse("""
+            name: build
+            steps:
+              - name: at
+                uses: harness/checkout
+                ref: main
+            """).RequireAStepOn("build", [("lin", "linux")]);
+    }
+
+    /// <summary>
+    /// A runOn naming a system this tool does not know, naming none, or given as anything but a
+    /// list is refused: read as every system, the step runs where the file says it does not, and
+    /// read as none, a step the file says runs is dropped without a word.
+    /// </summary>
+    [Theory]
+    [InlineData("runOn: [Windows]", "'Windows' is not an operating system runOn can name. Available: 'windows', 'linux', 'macos'.")]
+    [InlineData("runOn: [windows, solaris]", "'solaris' is not an operating system runOn can name.")]
+    [InlineData("runOn: []", "names no operating system, so the step would never run")]
+    [InlineData("runOn: windows", "a step's 'runOn' is a list of the operating systems it runs on: 'windows', 'linux', 'macos'.")]
+    public void Parse_Refuses_ARunOnThatNamesNoSystemItKnows(string line, string expected)
+    {
+        var refusal = Refused($"""
+            name: build
+            steps:
+              - name: msvc
+                run: |
+                  cl /nologo
+                {line}
+            """);
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.Contains(expected, refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A step may be manual, need steps declared before it, and declare inputs of its own, beside the
+    /// action's; each is read as written.
+    /// </summary>
+    [Fact]
+    public void AManualStep_WithWhatItNeeds_AndInputsOfItsOwn_IsRead()
+    {
+        var action = Parse("""
+            name: compile
+            inputs:
+              root:
+                default: corpus
+            steps:
+              - name: build
+                run: |
+                  cmake --build build
+              - name: bench
+                manual: true
+                needs: [build]
+                inputs:
+                  size:
+                    description: how large a run
+                    default: '25'
+                  repeats:
+                    required: true
+                successPattern: '^markdown : '
+                run: |
+                  python3 bench.py --size {size}
+            """);
+
+        var build = action.Steps[0];
+        Assert.False(build.Manual);
+        Assert.Empty(build.Needs);
+        Assert.Empty(build.Inputs);
+
+        var bench = action.Steps[1];
+        Assert.True(bench.Manual);
+        Assert.Equal(["build"], bench.Needs);
+        Assert.Equal(
+            [new ActionInput("size", "25", false, "how large a run"), new ActionInput("repeats", null, true, null)],
+            bench.Inputs);
+
+        // The action's own inputs are the action's alone; a step's are not added to them.
+        Assert.Equal(["root"], action.Inputs.Select(input => input.Name));
+    }
+
+    /// <summary>
+    /// What a manual step, its needs and its inputs cannot say, refused when the file is read and with
+    /// nothing run: each a way for a run to run what nobody named, or to pass on work it never witnessed.
+    /// </summary>
+    [Theory]
+    [InlineData("manual-without-witness", "step 'bench' is manual and declares no 'successPattern'")]
+    [InlineData("manual-predefined", "step 'fetch' is 'harness/checkout', which cannot be manual")]
+    [InlineData("inputs-on-predefined", "'inputs' applies only to a step's 'run' block")]
+    [InlineData("needs-unknown", "step 'bench' needs 'biuld', and no step declared before it has that name")]
+    [InlineData("needs-later", "step 'build' needs 'bench', and no step declared before it has that name")]
+    [InlineData("needs-itself", "step 'bench' needs itself")]
+    [InlineData("needs-empty", "step 'bench' 'needs' names no step")]
+    [InlineData("needs-scalar", "step 'bench' 'needs' is a list")]
+    [InlineData("needs-twice", "step 'bench' names 'build' under 'needs' more than once")]
+    [InlineData("automatic-needs-manual", "step 'report' runs in every run of the action and needs 'bench', which is manual")]
+    [InlineData("input-shadows-action", "step 'bench' declares input 'root', which the action declares too")]
+    [InlineData("needs-where-it-does-not-run", "step 'bench' needs 'setup', which does not run on macos: a leg there would run 'bench' without it")]
+    [InlineData("needs-from-everywhere", "step 'bench' needs 'setup', which does not run on windows or macos")]
+    [InlineData("manual-shares-a-name", "step 'bench' is manual, and a step declared before it by that name is not")]
+    public void WhatAManualStepCannotSay_IsRefused(string shape, string expected)
+    {
+        var steps = shape switch
+        {
+            "manual-without-witness" => """
+                  - name: bench
+                    manual: true
+                    run: |
+                      python3 bench.py
+                """,
+            "manual-predefined" => """
+                  - name: fetch
+                    uses: harness/checkout
+                    ref: main
+                    manual: true
+                """,
+            "inputs-on-predefined" => """
+                  - name: fetch
+                    uses: harness/checkout
+                    ref: main
+                    inputs:
+                      size:
+                        default: '1'
+                """,
+            "needs-unknown" => """
+                  - name: build
+                    run: |
+                      cmake --build build
+                  - name: bench
+                    manual: true
+                    needs: [biuld]
+                    successPattern: '^done'
+                    run: |
+                      python3 bench.py
+                """,
+            "needs-later" => """
+                  - name: build
+                    needs: [bench]
+                    run: |
+                      cmake --build build
+                  - name: bench
+                    run: |
+                      python3 bench.py
+                """,
+            "needs-itself" => """
+                  - name: bench
+                    needs: [bench]
+                    run: |
+                      python3 bench.py
+                """,
+            "needs-empty" => """
+                  - name: bench
+                    needs: []
+                    run: |
+                      python3 bench.py
+                """,
+            "needs-scalar" => """
+                  - name: build
+                    run: |
+                      cmake --build build
+                  - name: bench
+                    needs: build
+                    run: |
+                      python3 bench.py
+                """,
+            "needs-twice" => """
+                  - name: build
+                    run: |
+                      cmake --build build
+                  - name: bench
+                    needs: [build, build]
+                    run: |
+                      python3 bench.py
+                """,
+            "automatic-needs-manual" => """
+                  - name: bench
+                    manual: true
+                    successPattern: '^done'
+                    run: |
+                      python3 bench.py
+                  - name: report
+                    needs: [bench]
+                    run: |
+                      python3 report.py
+                """,
+            "input-shadows-action" => """
+                  - name: bench
+                    inputs:
+                      root:
+                        default: other
+                    run: |
+                      python3 bench.py
+                """,
+            "needs-where-it-does-not-run" => """
+                  - name: setup
+                    runOn: [linux]
+                    run: |
+                      ./setup.sh
+                  - name: bench
+                    manual: true
+                    runOn: [linux, macos]
+                    needs: [setup]
+                    successPattern: '^done'
+                    run: |
+                      ./bench.sh
+                """,
+            "needs-from-everywhere" => """
+                  - name: setup
+                    runOn: [linux]
+                    run: |
+                      ./setup.sh
+                  - name: bench
+                    manual: true
+                    needs: [setup]
+                    successPattern: '^done'
+                    run: |
+                      ./bench.sh
+                """,
+            "manual-shares-a-name" => """
+                  - name: bench
+                    runOn: [windows]
+                    run: |
+                      bench.exe
+                  - name: bench
+                    manual: true
+                    runOn: [linux]
+                    successPattern: '^done'
+                    run: |
+                      ./bench.sh
+                """,
+            _ => throw new ArgumentOutOfRangeException(nameof(shape), shape, null),
+        };
+
+        var refusal = Refused($"""
+            name: compile
+            inputs:
+              root:
+                default: corpus
+            steps:
+            {steps}
+            """);
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.Contains(expected, refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A step's inputs read the same in YAML's flow style as in its block style - one line each, as a step
+    /// with several is most readably written - and a value holding spaces reaches the step whole.
+    /// </summary>
+    [Fact]
+    public void AStepsInputs_ReadTheSameInFlowStyle()
+    {
+        var action = Parse("""
+            name: compile
+            steps:
+              - name: bench
+                manual: true
+                workingDirectoryRoot: action
+                inputs:
+                  size:     { description: 'how large a run', default: '25' }
+                  repeats:  { description: 'timed runs per arm', default: '5' }
+                  arms:     { description: 'worker counts, space-separated', default: '1 4' }
+                run: |
+                  python3 ./bench.py --size {size} --repeats {repeats} --arms "{arms}" --out "{stepBuild}"
+                outputs: [bench.md, bench.json]
+                persist: true
+                successPattern: '^markdown : '
+            """);
+
+        var bench = Assert.Single(action.Steps);
+
+        Assert.True(bench.Manual);
+        Assert.Equal(["size", "repeats", "arms"], bench.Inputs.Select(input => input.Name));
+        Assert.Equal("1 4", bench.Inputs[2].Default);
+        Assert.Equal(["bench.md", "bench.json"], bench.Outputs);
+        Assert.Equal(
+            ["python3", "./bench.py", "--size", "{size}", "--repeats", "{repeats}", "--arms", "{arms}", "--out", "{stepBuild}"],
+            Assert.Single(bench.Commands).Arguments);
+    }
+
+    /// <summary>
+    /// What a step needs may be steps of one name for different systems, so long as together they run on
+    /// every system the step does; and steps of one name may all be manual, one for each system.
+    /// </summary>
+    [Fact]
+    public void NeedsMetOnEverySystemTheStepRunsOn_AndManualStepsOfOneName_AreRead()
+    {
+        var action = Parse("""
+            name: compile
+            steps:
+              - name: setup
+                runOn: [linux]
+                run: |
+                  ./setup.sh
+              - name: setup
+                runOn: [macos]
+                run: |
+                  ./setup-mac.sh
+              - name: bench
+                manual: true
+                runOn: [linux]
+                needs: [setup]
+                successPattern: '^done'
+                run: |
+                  ./bench.sh
+              - name: bench
+                manual: true
+                runOn: [macos]
+                needs: [setup]
+                successPattern: '^done'
+                run: |
+                  ./bench-mac.sh
+            """);
+
+        Assert.Equal(["setup", "setup", "bench", "bench"], action.Steps.Select(step => step.Name));
+    }
+
+    /// <summary>A step's input is named with its step when it is wrong, so it is never taken for the action's.</summary>
+    [Fact]
+    public void AProblemInAStepsInput_NamesItsStep()
+    {
+        var refusal = Refused("""
+            name: compile
+            steps:
+              - name: bench
+                inputs:
+                  size:
+                    default: '1'
+                    shape: wide
+                run: |
+                  python3 bench.py
+            """);
+
+        Assert.Contains("key of step 'bench' inputs.size", refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Every key the list of an action file's keys names is one the parser reads, at every level: a
+    /// key listed and read by nothing would be one a file sets and nothing obeys, which the parser
+    /// reports as its own defect. Each value here may well be refused; what matters is that the key
+    /// was read.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(ListedKeys))]
+    public void EveryListedKey_IsRead(string where, string key)
+    {
+        var listed = Record.Exception(() => Parse(WithKey(where, key)));
+        var unlisted = Record.Exception(() => Parse(WithKey(where, "unlisted")));
+
+        // Checked against a key that is refused as unknown, so a change to the words it is refused in
+        // fails here, rather than letting every listed key pass whether it was read or not.
+        Assert.True(RefusedAsUnknown(unlisted, "unlisted"), $"an unlisted key was not refused as one: {unlisted?.Message}");
+        Assert.IsNotType<UnreachableException>(listed);
+        Assert.False(RefusedAsUnknown(listed, key), $"'{key}' is listed and was refused as unknown: {listed?.Message}");
+    }
+
+    /// <summary>
+    /// Whether <paramref name="failure"/> refuses <paramref name="key"/> as no key of the file's, which
+    /// names every key that is: a value refused for its shape says it is not a mapping, and no more.
+    /// </summary>
+    private static bool RefusedAsUnknown(Exception? failure, string key)
+        => failure is not null && Regex.IsMatch(failure.Message, $"'{Regex.Escape(key)}' is not a [^.]+\\. Known: '");
+
+    /// <summary>
+    /// A file holding <paramref name="key"/> where <paramref name="where"/> says, with a value it may well
+    /// refuse: what matters is whether the key was read.
+    /// </summary>
+    private static string WithKey(string where, string key)
+    {
+        const string Steps = "steps:\n  - name: build\n    run: cmake --build build\n";
+
+        return (where, key) switch
+        {
+            ("file", "steps") => Steps,
+            ("file", _) => $"{key}: x\n{Steps}",
+            ("input", _) => $"inputs:\n  size:\n    {key}: x\n{Steps}",
+            ("step", "name") => "steps:\n  - name: x\n    run: cmake --build build\n",
+            ("step", "run") => "steps:\n  - name: build\n    run: x\n",
+            _ => $"steps:\n  - name: build\n    run: cmake --build build\n    {key}: x\n",
+        };
+    }
+
+    /// <summary>
+    /// A step that performs a predefined action runs no program, so each key only a run block reads is
+    /// refused on it, by name: accepted, it would be a rule nobody applied.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(RunBlockKeys))]
+    public void AStepThatUsesAPredefinedAction_IsRefusedWithAKeyOnlyARunBlockReads(string key)
+    {
+        var exception = Refused($"steps:\n  - name: fetch\n    uses: harness/checkout\n    ref: main\n    {key}: x\n");
+
+        Assert.Contains($"'{key}' applies only to a step's 'run' block; 'harness/checkout' is performed", exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>A step that performs a predefined action still takes what it reads: its name, action, ref, systems and needs.</summary>
+    [Fact]
+    public void AStepThatUsesAPredefinedAction_TakesWhatItReads()
+    {
+        var file = Parse("""
+            steps:
+              - name: build
+                run: cmake --build build
+              - name: fetch
+                uses: harness/checkout
+                ref: main
+                runOn: [linux]
+                needs: [build]
+            """);
+
+        var fetch = file.Steps[1];
+        Assert.Equal(PredefinedAction.Checkout, fetch.Uses);
+        Assert.Equal(["linux"], fetch.RunOn);
+        Assert.Equal(["build"], fetch.Needs);
+    }
+
+    /// <summary>Each key only a run block reads.</summary>
+    public static TheoryData<string> RunBlockKeys()
+    {
+        var data = new TheoryData<string>();
+
+        foreach (var key in ActionFileKeys.RunBlock)
+        {
+            data.Add(key.Name);
+        }
+
+        return data;
+    }
+
+    /// <summary>Each key an action file, a declared input and a step take, by where it is written.</summary>
+    public static TheoryData<string, string> ListedKeys()
+    {
+        var data = new TheoryData<string, string>();
+
+        foreach (var (where, keys) in new[] { ("file", ActionFileKeys.File), ("input", ActionFileKeys.Input), ("step", ActionFileKeys.Step) })
+        {
+            foreach (var key in keys)
+            {
+                data.Add(where, key.Name);
+            }
+        }
+
+        return data;
+    }
+
+    /// <summary>
+    /// A value spelling half a character - an escape of a lone surrogate - is refused as the file, with
+    /// its line, as config.json refuses one: no text can hold it.
+    /// </summary>
+    [Fact]
+    public void AValueSpellingHalfACharacter_IsRefusedAsTheFile()
+    {
+        var exception = Refused("steps:\n  - name: \"b\\ud800\"\n    run: cmake --build build\n");
+
+        Assert.Contains("line 2, column 11: the file is not valid YAML", exception.Message, StringComparison.Ordinal);
+    }
+
+    private static ActionFileParser CreateParser() => ActionKit.Parser();
+
+    private static ActionFile Parse(string text)
+        => CreateParser().Parse(Path.Combine("actions", "compile", "compile.yml"), text);
+
+    private static HarnessException Refused(string text)
+        => Assert.Throws<HarnessException>(() => Parse(text));
+
+    /// <summary>
+    /// Asserts <paramref name="action"/> is refused when read from <paramref name="temp"/>, and
+    /// returns the refusal so a caller can assert on what it said.
+    /// </summary>
+    private static async Task<HarnessException> Refused(TempDirectory temp, string action)
+    {
+        var exception = await Assert.ThrowsAsync<HarnessException>(
+            () => CreateParser().LoadAsync(temp.Path, action, TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, exception.ExitCode);
+
+        return exception;
+    }
+}

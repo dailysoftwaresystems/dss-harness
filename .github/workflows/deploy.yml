@@ -50,7 +50,7 @@ concurrency:
   queue: max
 
 env:
-  PROJECT: src/RepoHarness.Cli/RepoHarness.Cli.csproj
+  PROJECT: src/DssHarness.Cli/DssHarness.Cli.csproj
 
 jobs:
   plan:

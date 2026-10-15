@@ -1,0 +1,546 @@
+using DssHarness.Core.Build;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Legs;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
+using DssHarness.Core.Sync;
+using DssHarness.Core.Worktrees;
+
+namespace DssHarness.Core.Runs;
+
+/// <summary>One placed leg, with everything decided before anything starts.</summary>
+/// <param name="Name">The leg's name.</param>
+/// <param name="Leg">What it declares.</param>
+/// <param name="Host">The host it runs on.</param>
+/// <param name="Project">The project it builds, or null when it builds nothing.</param>
+/// <param name="Variant">What makes its build different from every other leg's.</param>
+/// <param name="TreeRoot">
+/// The tree it acts on <em>here</em>: the main checkout or a worktree. This is what a sync reads,
+/// and for a leg that landed on another machine it is never where the work happens.
+/// </param>
+/// <param name="HostTreeRoot">
+/// The tree the work happens in, on the machine it happens on: the same as <paramref name="TreeRoot"/>
+/// for a leg this machine runs in its tree, and a copy of that tree for every other - a host's own, or
+/// one kept in the tree's own .legs here (<see cref="LocalCopy"/>). Every path that describes the work
+/// derives from this one, because a path derived from <paramref name="TreeRoot"/> for a leg that works
+/// in a copy names a directory the work never touches: on a host, one on the machine that typed the
+/// command rather than on the one being measured.
+/// </param>
+/// <param name="BuildDirectory">Its variant-keyed build directory below <paramref name="HostTreeRoot"/>.</param>
+/// <param name="HostSettings">
+/// What the host it landed on declares for itself: its core counts, what it keeps awake, where its
+/// compiler cache lives. Resolved with the leg rather than looked up at each use, so a machine that
+/// declares four cores is not built on with the count of the machine that typed the command.
+/// </param>
+/// <param name="Emulated">Whether it runs through an emulator, so its timings are never compared with a native leg's.</param>
+public sealed record PlacedLeg(
+    string Name,
+    LegConfig Leg,
+    HostReport Host,
+    ProjectConfig? Project,
+    VariantKey Variant,
+    string TreeRoot,
+    string HostTreeRoot,
+    string BuildDirectory,
+    HostSettings HostSettings,
+    bool Emulated)
+{
+    /// <summary>The operating system the leg runs on: its host's, as measured, else the one the leg declares.</summary>
+    public string Os => Host.Os ?? Leg.Os;
+
+    /// <summary>The host and tree this leg shares a sync with, so a tree is synced once, not once per leg.</summary>
+    /// <remarks>
+    /// Keyed by the tree on the host, never by the tree here. Each tree has a copy of its own on a
+    /// host, but two worktrees kept under one name would write into one: keyed by their sources they
+    /// would look like two trees, be synced twice one over the other, and the leg that lost would
+    /// build sources the other was halfway through replacing.
+    /// </remarks>
+    public string TreeKey => CompositeKey.Of(Host.Host.ToString(), HostTreeRoot);
+
+    /// <summary>Whether the leg works in a copy of its tree kept in the tree's own .legs on this machine.</summary>
+    public bool LocalCopy { get; init; }
+
+    /// <summary>Whether another machine's process runs the leg's work: a WSL distribution's, or an ssh host's.</summary>
+    public bool Dispatched => Host.Host.Kind != HostKind.Local;
+
+    /// <summary>Whether this machine makes the tree the leg works in, by a sync from the run's reading of <see cref="TreeRoot"/>.</summary>
+    public bool Synced => Dispatched || LocalCopy;
+
+    /// <summary>
+    /// Whether the tree the work happens in is a copy a sync made, whichever machine made it: so also on the host a leg
+    /// was sent to, which is this machine to itself and <see cref="Named"/> as the host it is to the one that sent it.
+    /// </summary>
+    public bool InCopy => Named.Kind != HostKind.Local || LocalCopy;
+
+    /// <summary>
+    /// The host as the machine that typed the command names it: the one this leg landed on, or, where
+    /// a host runs a leg another machine dispatched to it, the name that machine knows it by.
+    /// </summary>
+    /// <remarks>
+    /// What the leg is called wherever a reader sees its host - a <c>{host}</c> a label records, the
+    /// progress a dispatching machine shows - and what its settings were read under. Never what it
+    /// is locked by: that is the machine the work physically runs on, which to itself is always this
+    /// one. It is what says the leg runs in a WSL distribution, there as on the machine that sent it:
+    /// that machine takes such a leg whole, its units asking nothing in the distribution, and a sweep
+    /// of it runs one worker - none of which the host it runs on, this one, could tell.
+    /// </remarks>
+    public HostId Named
+    {
+        get => _named ?? Host.Host;
+        init => _named = value;
+    }
+
+    private readonly HostId? _named;
+
+    /// <summary>
+    /// What the leg's build still needs on its host, as it was placed there: what its admission claims of the room on
+    /// that machine; <see langword="null"/> where nothing says, or the command does not build the leg.
+    /// </summary>
+    public RoomNeed? Need { get; init; }
+
+    /// <summary>
+    /// The least room the leg's builds leave free on each filesystem they fill, on the machine that runs them, below which
+    /// each is stopped; <see langword="null"/> until its work starts there, and where nothing stops them for room.
+    /// </summary>
+    public RoomFloor? Floor { get; init; }
+
+    /// <summary>
+    /// The repository's other trees on the machine that runs the leg's work - every tree but the leg's own - as they were
+    /// listed as its work began there; <see langword="null"/> until then. Whose build directory a process found beside the
+    /// leg works in is told by them.
+    /// </summary>
+    public RepositoryTreesFound? Beside { get; init; }
+
+    /// <summary>
+    /// What the developer environment the leg's toolchain names set up for it, on the machine that runs
+    /// it: empty until it is set up there, and for a leg whose toolchain names none.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> DeveloperEnvironment { get; init; } = new Dictionary<string, string>();
+
+    /// <summary>
+    /// The environment every process the leg starts is given beneath its command's own: what its host
+    /// declares under <c>env</c>, with its <see cref="DeveloperEnvironment"/> over it.
+    /// </summary>
+    /// <remarks>
+    /// Over the host's rather than beneath it, because it was set up under the host's: a PATH it put
+    /// Visual Studio's directories ahead of already holds the one the host declares, and ranked beneath
+    /// it that PATH would lose them.
+    /// </remarks>
+    public IReadOnlyDictionary<string, string> Environment
+        => PhaseEnvironment.Layered(HostSettings.Env, DeveloperEnvironment)
+            .ToDictionary(pair => pair.Key, pair => pair.Value!, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The build this leg runs, with what its host declares for it.</summary>
+    /// <param name="config">The whole configuration.</param>
+    /// <param name="runDirectory">Where this run's logs go.</param>
+    /// <param name="time">Whether to report the profile timing.</param>
+    /// <remarks>
+    /// Made here once, for every command that builds a leg - a build, a test that builds first, a run
+    /// that builds first - so what the host declares reaches every one of them or none.
+    /// </remarks>
+    /// <exception cref="HarnessException">The leg builds nothing; see <see cref="BuildableProject"/>.</exception>
+    public BuildRequest BuildRequestFor(HarnessConfig config, string runDirectory, bool time = false)
+        => BuildRequestFor(config, runDirectory, BuildableProject(), time);
+
+    /// <summary>
+    /// A build of <paramref name="project"/> as this leg builds, with what its host declares for it: its variant, its
+    /// cores, its host's programs and environment.
+    /// </summary>
+    /// <param name="config">The whole configuration.</param>
+    /// <param name="runDirectory">Where this run's logs go.</param>
+    /// <param name="project">The project built: the leg's own, as a sweep's workers build it, or another one built the leg's way.</param>
+    /// <param name="time">Whether to report the profile timing.</param>
+    public BuildRequest BuildRequestFor(HarnessConfig config, string runDirectory, ProjectConfig project, bool time = false)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        ArgumentNullException.ThrowIfNull(project);
+
+        return new BuildRequest(
+            Name,
+            HostTreeRoot,
+            project,
+            Variant,
+            Host.Os ?? string.Empty,
+            CoreCounts.Resolve(null, HostSettings.BuildCores, config.Defaults.BuildCores).Value,
+            runDirectory,
+            time)
+        {
+            ProgramDirectories = Host.ProgramDirectories,
+            HostEnvironment = Environment,
+            Floor = Floor,
+            Beside = Beside,
+            CopyOf = LocalCopy ? TreeRoot : null,
+        };
+    }
+
+    /// <summary>
+    /// The project this leg builds, or a refusal naming what is missing.
+    /// </summary>
+    /// <exception cref="HarnessException">
+    /// The leg names no project, or no toolchain for the host it landed on. Asked only where a
+    /// command builds the leg, so a leg that only runs a runner which builds nothing never has to
+    /// declare either. A run refuses such a leg it would build before any host is measured.
+    /// </exception>
+    public ProjectConfig BuildableProject()
+        => Variant.CanBuild(Name, Project, Os, out var why)
+            ? Project
+            : throw new HarnessException(HarnessExit.ConfigInvalid, why);
+
+    /// <summary>
+    /// Who this leg is, in the words a configured command can spell.
+    /// </summary>
+    /// <param name="runId">The run this work belongs to.</param>
+    /// <remarks>
+    /// Derived here and nowhere else, so a benchmark's label and a build directory's name cannot
+    /// come to disagree about which processor a leg targets. The processor is the leg's own, not the
+    /// host's: under emulation those differ, and what a measurement was taken *of* is the target.
+    /// </remarks>
+    public Execution.LegIdentity IdentityFor(string runId) => new(
+        Leg: Name,
+        Os: Os,
+        Processor: Variant.Processor,
+        Toolchain: Variant.Toolchain,
+        Config: Variant.Config,
+        Variant: Variant.DirectoryName,
+        Host: Named.ToString(),
+        RunId: runId);
+
+    /// <summary>
+    /// The one file this leg's build is declared to produce, and why there is none when there is
+    /// not.
+    /// </summary>
+    /// <param name="buildDirectory">
+    /// The build directory the caller is handing this same work, so the product and
+    /// <c>{buildDir}</c> cannot come from two different tree roots. They do differ: a leg placed on
+    /// another machine has a host tree root that is not this machine's, and a run re-invoked there
+    /// resolves its own.
+    /// </param>
+    /// <remarks>A single answer or none; <see cref="ProjectConfig.Product"/> says why.</remarks>
+    public (string? Path, string? Problem) ProductFor(string buildDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(buildDirectory);
+
+        if (Project is null)
+        {
+            return (null, $"leg '{Name}' builds nothing, so it has no product");
+        }
+
+        var (product, problem) = Project.Product(Os);
+
+        return product is null ? (null, problem) : (Path.Combine(buildDirectory, product), null);
+    }
+
+    /// <summary>
+    /// This leg's line, reaching <paramref name="verdict"/> for <paramref name="detail"/>, as a command writes one for a
+    /// leg it decides itself: one refused, one its machine would not take, one whose directory it removed.
+    /// </summary>
+    /// <param name="verdict">The verdict.</param>
+    /// <param name="detail">Why, as the line says it.</param>
+    public LegEntry Entry(LegVerdict verdict, string detail)
+        => new() { Leg = Name, Verdict = verdict, Detail = detail, Emulated = Emulated };
+
+    /// <summary>The lock a build of this leg takes: the tree it works in shared, and its variant its own.</summary>
+    /// <param name="runId">The run taking it.</param>
+    /// <param name="command">The command taking it.</param>
+    /// <remarks>
+    /// One key for every command that builds in, or removes, the leg's build directory: a clean keyed apart
+    /// from the build would not see one running, and would move its directory away under it.
+    /// </remarks>
+    public LockRequest BuildLock(RunId runId, string command) => BuildLock(Host.Host, HostTreeRoot, Variant, runId, command);
+
+    /// <summary>The lock a build of a leg of <paramref name="variant"/> in <paramref name="hostTreeRoot"/> on <paramref name="host"/> takes.</summary>
+    /// <param name="host">The host the leg builds on.</param>
+    /// <param name="hostTreeRoot">The tree it builds in there.</param>
+    /// <param name="variant">Its variant.</param>
+    /// <param name="runId">The run taking it.</param>
+    /// <param name="command">The command taking it.</param>
+    public static LockRequest BuildLock(HostId host, string hostTreeRoot, VariantKey variant, RunId runId, string command)
+    {
+        ArgumentNullException.ThrowIfNull(host);
+        ArgumentNullException.ThrowIfNull(variant);
+
+        return new LockRequest
+        {
+            Host = host.ToString(),
+            Tree = hostTreeRoot,
+            Variant = variant.DirectoryName,
+            Scope = LockScope.TreeShared,
+            RunId = runId,
+            Command = command,
+        };
+    }
+
+    /// <summary>What the executor needs to schedule this leg.</summary>
+    /// <remarks>
+    /// A leg whose tree no sync makes carries no tree key: the executor announces a transfer
+    /// for every leg that has one, and a leg working in the tree the command was typed in would
+    /// otherwise report a transfer that never happened.
+    /// </remarks>
+    public LegPlan ToPlan() => new()
+    {
+        Name = Name,
+        BuildDirectory = BuildDirectory,
+        TreeKey = Synced ? TreeKey : string.Empty,
+        Tree = Synced ? $"'{HostTreeRoot}' on {Named}" : string.Empty,
+        Emulated = Emulated,
+        MachineKey = Host.Host.MachineKey,
+        Host = Named.ToString(),
+        Named = Named,
+
+        // Where this machine's leg works, as its starting line says it; a host's leg says nothing of it, since the
+        // machine that sent it says where.
+        WorksIn = !Dispatched
+            ? LocalCopy ? $", in its copy '{HostTreeRoot}'" : $", in '{TreeRoot}' itself"
+            : string.Empty,
+    };
+}
+
+/// <summary>
+/// Turns a leg selection and the hosts that were measured into placed legs, refusing before anything
+/// starts what cannot run.
+/// </summary>
+public static class LegRunPlan
+{
+    /// <summary>
+    /// Builds the placed legs for a report, with the legs no host can run recorded as skipped.
+    /// </summary>
+    /// <param name="context">The repository and its configuration.</param>
+    /// <param name="report">Where each selected leg can run.</param>
+    /// <param name="platform">Supplies how paths compare on this machine.</param>
+    /// <param name="skipped">Receives one ledger entry per leg that cannot run.</param>
+    /// <exception cref="HarnessException">
+    /// Two selected legs resolve to the same build directory. Refused before either starts, because
+    /// by the time the second reached its build directory the first would already have been
+    /// reconfigured out from under itself, and both would report on objects neither alone produced.
+    /// </exception>
+    public static IReadOnlyList<PlacedLeg> From(
+        HarnessContext context,
+        LegsReport report,
+        IHostPlatform platform,
+        out IReadOnlyList<LegEntry> skipped)
+        => From(context, report, platform, null, out skipped);
+
+    /// <summary>
+    /// Builds the placed legs for a report, with the legs no host can run recorded as skipped, refusing before anything
+    /// starts a leg whose copy would pass this machine's path limit.
+    /// </summary>
+    /// <param name="context">The repository and its configuration.</param>
+    /// <param name="report">Where each selected leg can run, and where this run's own legs work.</param>
+    /// <param name="platform">Supplies how paths compare on this machine.</param>
+    /// <param name="pathBudget">
+    /// Reckons a copy's paths against this machine's limit; <see langword="null"/> where the command makes no copies.
+    /// </param>
+    /// <param name="skipped">Receives one ledger entry per leg that cannot run.</param>
+    /// <exception cref="HarnessException">
+    /// Two selected legs resolve to the same build directory, or a leg is to work in a copy whose build passes this
+    /// machine's path limit. Refused before either starts, because by the time the second reached its build directory the
+    /// first would already have been reconfigured out from under itself, and both would report on objects neither alone
+    /// produced.
+    /// </exception>
+    public static IReadOnlyList<PlacedLeg> From(
+        HarnessContext context,
+        LegsReport report,
+        IHostPlatform platform,
+        IPathBudget? pathBudget,
+        out IReadOnlyList<LegEntry> skipped)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(report);
+        ArgumentNullException.ThrowIfNull(platform);
+
+        var placed = new List<PlacedLeg>();
+        var notRun = new List<LegEntry>();
+
+        foreach (var placement in report.Placements)
+        {
+            if (placement.Host is null || !placement.Runnable)
+            {
+                notRun.Add(new LegEntry
+                {
+                    Leg = placement.Leg.Name,
+                    Verdict = placement.Verdict,
+                    Detail = placement.Reason ?? "no host can run it",
+                });
+
+                continue;
+            }
+
+            placed.Add(Place(context, placement.Leg, placement.Host, report.Here, report.LocalTrees, platform.PathComparison) with { Need = placement.Need });
+        }
+
+        RefuseSharedBuildDirectories(placed, platform);
+        RefuseSharedHostCopies(placed, platform);
+        RefusePathsTooLong(context, placed, pathBudget);
+
+        skipped = notRun;
+        return placed;
+    }
+
+    /// <summary>
+    /// What a command reports when no selected leg can run: why each could not, under the verdict the
+    /// run would have recorded for it.
+    /// </summary>
+    /// <param name="skipped">The line each leg would have had.</param>
+    /// <param name="unavailable">
+    /// What the command exits with where no failure turned a leg away (<see cref="LegRunRequest.NothingRunsExit"/>).
+    /// </param>
+    /// <remarks>
+    /// A leg turned away by a defect in this tool keeps that defect's exit code even though nothing
+    /// ran: "no selected leg can run" and nothing else would send the reader to the hosts.
+    /// </remarks>
+    public static CommandOutcome NothingRuns(IReadOnlyList<LegEntry> skipped, int unavailable = LegsExit.Unavailable)
+    {
+        ArgumentNullException.ThrowIfNull(skipped);
+
+        var worst = Verdicts.Describe(Verdicts.Worst(skipped.Select(entry => entry.Verdict)));
+
+        return CommandOutcome.Failed(
+            worst.IsFailure ? worst.ExitCode : unavailable,
+            "no selected leg can run",
+            [.. skipped.Select(entry => $"{entry.Leg}: {Verdicts.Display(entry.Verdict)}: {entry.Detail}")]);
+    }
+
+    private static PlacedLeg Place(HarnessContext context, SelectedLeg selected, HostReport host, HostId? here, LocalTrees local, StringComparison comparison)
+    {
+        var config = context.Config;
+        var leg = selected.Leg;
+
+        // Neither is required here. A leg whose run builds nothing - its runner neither requires the
+        // build nor runs a step or phase naming {product}, {buildDir} or a compiler - compiles nothing, and making
+        // it declare a project it has no use for would be a demand the tool invents. The commands that
+        // do build refuse a leg with no project, naming what is missing: a run before any host is
+        // measured, a build and a test as the build starts.
+        var project = VariantKey.ProjectFor(config, leg);
+        var variant = VariantKey.For(config, leg, host.Os ?? string.Empty);
+
+        // Where the work happens, on every machine alike: in the tree, in a host's copy of it, or in a copy of it kept
+        // in the tree's own .legs where this machine runs the leg and this run has it work in one. One answer, asked
+        // here, so a path derived from the work's tree never names a directory the work never touches - and the room the
+        // leg is placed by is reckoned for the tree its build is in.
+        var tree = LegTrees.For(context, leg, variant, host.Host, here, comparison, local);
+
+        // Read under the name the reader knows the host by. A host running a leg another machine
+        // dispatched to it is 'local' to itself, and 'local' in the configuration the two share is
+        // the machine that dispatched it: that machine's cores and environment were the ones the leg
+        // ran with.
+        var named = here ?? host.Host;
+
+        return new PlacedLeg(
+            selected.Name,
+            leg,
+            host,
+            project,
+            variant,
+            tree.Here,
+            tree.Work,
+            variant.DirectoryOn(host.Host, tree.Work),
+            config.Hosts.SettingsFor(named),
+            leg.Emulator is { Length: > 0 })
+        {
+            Named = named,
+            LocalCopy = tree.LocalCopy,
+        };
+    }
+
+    /// <summary>
+    /// Refuses a leg whose copy would pass this machine's path limit, before anything starts: a copy whose build passes
+    /// it fails as compile errors in files nobody touched, so it is never made.
+    /// </summary>
+    private static void RefusePathsTooLong(HarnessContext context, IReadOnlyList<PlacedLeg> placed, IPathBudget? budget)
+    {
+        if (budget is null)
+        {
+            return;
+        }
+
+        foreach (var leg in placed.Where(leg => leg.LocalCopy))
+        {
+            var settings = context.Config.Worktrees;
+            var reckoned = CopyPathBudget.Check(budget, settings, leg.HostTreeRoot, leg.Variant, settings.PathBudgetReserve);
+
+            if (!reckoned.IsWithinBudget && reckoned.Limit is { } limit)
+            {
+                throw new HarnessException(
+                    HarnessExit.Refused,
+                    $"Leg '{leg.Name}' is to work in a copy of '{leg.TreeRoot}', kept at '{leg.HostTreeRoot}', where its build "
+                    + $"needs paths of {reckoned.RequiredLength} characters, as worktrees.pathBudgetReserve and pathBudgetMargin "
+                    + $"reckon them, and every path must stay under {limit}. Keep the tree at a shorter path, set worktrees.pathLimit "
+                    + "where every tool its build runs takes longer ones, or run it with --in-place. Nothing was run.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Refuses two legs that would carry different trees into one copy on one host.
+    /// </summary>
+    /// <remarks>
+    /// Each tree has a copy of its own on a host, kept under its directory's name, so two trees share
+    /// one only where two worktrees are kept under one name - two directories called 'feature', say.
+    /// Both would sync into it, the second over the first, and whichever leg ran second would measure
+    /// a tree the other one put there. Caught here because after the sync there is nothing left to
+    /// notice: both legs find exactly the tree they asked for, one of them just finds it some time
+    /// after it stopped being true.
+    /// </remarks>
+    private static void RefuseSharedHostCopies(List<PlacedLeg> placed, IHostPlatform platform)
+    {
+        var comparer = platform.PathComparer();
+
+        var contested = placed
+            .Where(leg => leg.Synced)
+            .GroupBy(leg => leg.TreeKey, LegPlan.TreeKeyComparer)
+            .Where(group => group.Select(leg => leg.TreeRoot).Distinct(comparer).Count() > 1)
+            .Select(group =>
+                $"{string.Join(" and ", group.Select(leg => $"'{leg.Name}'"))} would each put a different tree in "
+                + $"'{group.First().HostTreeRoot}' on {group.First().Named}: "
+                + string.Join(", ", group.Select(leg => leg.TreeRoot).Distinct(comparer)))
+            .ToList();
+
+        if (contested.Count == 0)
+        {
+            return;
+        }
+
+        throw new HarnessException(
+            HarnessExit.Refused,
+            $"Selected legs disagree about what a host's copy should hold: {string.Join("; ", contested)}. "
+            + "Nothing was run. Rename one of the worktrees, or run them separately.");
+    }
+
+    /// <summary>
+    /// Refuses two legs that would build in one directory, before either starts.
+    /// </summary>
+    /// <remarks>
+    /// Caught here rather than by the build directory guard, which would only notice once the second
+    /// leg reached it — by which time the first has already been reconfigured out from under itself,
+    /// and both legs report on objects neither of them alone produced.
+    /// </remarks>
+    private static void RefuseSharedBuildDirectories(List<PlacedLeg> placed, IHostPlatform platform)
+    {
+        var comparer = platform.PathComparer();
+
+        var byDirectory = placed
+            .GroupBy(
+                leg => CompositeKey.Of(leg.Host.Host.ToString(), Path.TrimEndingDirectorySeparator(leg.BuildDirectory)),
+                comparer)
+            .Where(group => group.Count() > 1)
+            .ToList();
+
+        if (byDirectory.Count == 0)
+        {
+            return;
+        }
+
+        var described = byDirectory.Select(group =>
+            $"{string.Join(" and ", group.Select(leg => $"'{leg.Name}'"))} both build in "
+            + $"'{group.First().BuildDirectory}' on {group.First().Named}");
+
+        throw new HarnessException(
+            HarnessExit.Refused,
+            $"Selected legs share a build directory: {string.Join("; ", described)}. Nothing was run. "
+            + "Give them different processors, toolchains, build configurations or sanitizers, or "
+            + "select one of each pair.");
+    }
+}

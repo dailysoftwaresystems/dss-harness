@@ -1,0 +1,184 @@
+using DssHarness.Core.Configuration;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Git;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Results;
+
+namespace DssHarness.Core.Repository;
+
+/// <summary>Everything a command needs to know about where it is running.</summary>
+/// <param name="Layout">Resolved paths for this repository.</param>
+/// <param name="Config">Parsed configuration.</param>
+public sealed record HarnessContext(HarnessLayout Layout, HarnessConfig Config)
+{
+    /// <summary>
+    /// The file <see cref="Config"/> was read from: the tree's own, or the main checkout's for a
+    /// worktree that has none of its own.
+    /// </summary>
+    /// <remarks>
+    /// Recorded because something else has to send the same file: a sync places the configuration
+    /// a leg on a host will run with, and placing any file but the one this command read is how a
+    /// worktree's remote legs came to run with the main checkout's configuration.
+    /// </remarks>
+    public string ConfigFile { get; init; } = Layout.ConfigFile;
+
+    /// <summary>
+    /// Whether this tree is a copy the harness synced to a host, rather than a checkout somebody works in:
+    /// whether it holds the marker a sync leaves (<see cref="HarnessLayout.SyncedCopyMarkerFile"/>).
+    /// </summary>
+    /// <remarks>
+    /// Read once, where the context is, because more than one answer turns on it. A leg naming another
+    /// host is placed by the machine that syncs here, not from here; a sync from here reaches nothing,
+    /// for want of connection data that is never synced; and the DssHarness running here is updated by
+    /// that machine, on its next dispatch, and may trail it until then.
+    /// </remarks>
+    public bool IsSyncedCopy { get; init; }
+}
+
+/// <summary>
+/// Resolves the repository and its configuration. Every command begins this way,
+/// so the checks and their error messages exist once rather than per command.
+/// </summary>
+public interface IHarnessContextLoader
+{
+    /// <summary>
+    /// Loads the context for <paramref name="startDirectory"/>.
+    /// </summary>
+    /// <exception cref="HarnessException">
+    /// git is missing, the directory is not a repository, or the repository has not
+    /// been initialised.
+    /// </exception>
+    Task<HarnessContext> LoadAsync(string startDirectory, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The context for work that happens in <paramref name="copy"/>: <paramref name="of"/>'s layout over the copy, and the
+    /// configuration the copy holds - the reading's, which a sync places there as it makes the copy.
+    /// </summary>
+    /// <param name="of">The context the command loaded, whose machine state the work keeps.</param>
+    /// <param name="copy">The copy of the tree the work happens in.</param>
+    /// <exception cref="HarnessException">The copy holds no configuration (<see cref="HarnessExit.NotInitialized"/>).</exception>
+    HarnessContext ForCopy(HarnessContext of, string copy);
+}
+
+/// <inheritdoc cref="IHarnessContextLoader"/>
+public sealed class HarnessContextLoader(
+    IRepositoryLocator repositoryLocator,
+    IConfigStore configStore,
+    IGitClient gitClient,
+    IFileSystem fileSystem,
+    Platform.IHostPlatform platform,
+    Output.IHarnessOutput output,
+    SyncedCopyToolCheck copyTool) : IHarnessContextLoader
+{
+    private readonly IRepositoryLocator _repositoryLocator = repositoryLocator;
+    private readonly IConfigStore _configStore = configStore;
+    private readonly IGitClient _gitClient = gitClient;
+    private readonly IFileSystem _fileSystem = fileSystem;
+    private readonly Platform.IHostPlatform _platform = platform;
+    private readonly Output.IHarnessOutput _output = output;
+    private readonly SyncedCopyToolCheck _copyTool = copyTool;
+
+    public async Task<HarnessContext> LoadAsync(
+        string startDirectory,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(startDirectory);
+
+        if (!_gitClient.IsInstalled())
+        {
+            throw new HarnessException(HarnessExit.ToolMissing, "git is not installed or not on PATH.");
+        }
+
+        var layout = await _repositoryLocator
+            .LocateAsync(startDirectory, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (layout is null)
+        {
+            throw new HarnessException(
+                HarnessExit.Refused,
+                $"'{startDirectory}' is not inside a git repository.");
+        }
+
+        // Read from the tree being acted on, which for a worktree is that worktree. config.json
+        // is tracked, so a worktree has its own and a branch may legitimately change it: a leg it
+        // adds, a runner it declares, a project it renames. Read from the main checkout instead —
+        // which is what this did — a worktree could not run anything it had just written, and nothing
+        // said so: the tree's own file was read by nobody and no message named the file that was.
+        //
+        // State stays where it was. Locks and connection data are gitignored and shared, so they
+        // resolve against MainCheckoutRoot through the layout and are unaffected by this. The rule is
+        // the one the runner directory already follows: what git tracks belongs to the tree, what git
+        // ignores belongs to the checkout that owns the repository - with one exception, a run's
+        // records, which belong to the tree that ran it (HarnessLayout.RunsDirectory).
+        var configFile = layout.ConfigFile;
+
+        if (!_fileSystem.FileExists(configFile))
+        {
+            // A worktree of a branch that predates the harness has no tracked copy to read. The
+            // main checkout's is then the only configuration there is, and using it silently would
+            // be the same silence this rule exists to end.
+            var fallback = Path.Combine(layout.MainHarnessDirectory, HarnessLayout.ConfigFileName);
+
+            if (layout.IsWorktree(_platform) && _fileSystem.FileExists(fallback))
+            {
+                _output.Warn(
+                    "config",
+                    $"this worktree has no '{HarnessLayout.ConfigFileRelative}', "
+                    + $"so the main checkout's is being used: '{fallback}'. Anything this tree changes "
+                    + "about its configuration is not what is running.");
+
+                return await CheckedAsync(
+                        new HarnessContext(layout, _configStore.Load(fallback))
+                        {
+                            ConfigFile = fallback,
+                            IsSyncedCopy = _fileSystem.FileExists(layout.SyncedCopyMarkerFile),
+                        },
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            throw new HarnessException(
+                HarnessExit.NotInitialized,
+                $"No harness configuration at '{configFile}'. Run '{ToolPackage.Command} init' first.");
+        }
+
+        return await CheckedAsync(
+                new HarnessContext(layout, _configStore.Load(configFile))
+                {
+                    IsSyncedCopy = _fileSystem.FileExists(layout.SyncedCopyMarkerFile),
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// <paramref name="context"/>, once a command typed in a synced copy has been told whether the
+    /// DssHarness running it trails the newest one published.
+    /// </summary>
+    private async Task<HarnessContext> CheckedAsync(HarnessContext context, CancellationToken cancellationToken)
+    {
+        await _copyTool.WarnWhenBehindAsync(context, cancellationToken).ConfigureAwait(false);
+        return context;
+    }
+
+    /// <inheritdoc/>
+    public HarnessContext ForCopy(HarnessContext of, string copy)
+    {
+        ArgumentNullException.ThrowIfNull(of);
+        ArgumentException.ThrowIfNullOrWhiteSpace(copy);
+
+        // The copy keeps the main checkout of the context it was made from, so values, secrets and the lock resolve where
+        // this machine keeps them, while the tree the work happens in - the actions it runs, the runs directory its records
+        // would take - is the copy's. The tool check is not asked: a run made the copy, and its reading said already.
+        var layout = of.Layout with { RepositoryRoot = copy };
+        var configFile = layout.ConfigFile;
+
+        return _fileSystem.FileExists(configFile)
+            ? new HarnessContext(layout, _configStore.Load(configFile)) { ConfigFile = configFile, IsSyncedCopy = true }
+            : throw new HarnessException(
+                HarnessExit.NotInitialized,
+                $"'{copy}' holds no harness configuration at '{configFile}', so work cannot run by the reading it was made from. "
+                + "Sync it again.");
+    }
+}

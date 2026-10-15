@@ -27,12 +27,12 @@ than a section still waiting to be written.
 ## Layering
 
 ```
-RepoHarness.Cli        Program.cs: argument parsing and dependency wiring only
-RepoHarness.Core       domain, services, abstractions
-repo-harness-test      tests
+DssHarness.Cli        Program.cs: argument parsing and dependency wiring only
+DssHarness.Core       domain, services, abstractions
+dss-harness-test      tests
 
-(RepoHarness.Adapters was planned for the build adapters; they arrived in
-RepoHarness.Core instead, beside the build service that is their only caller, and the
+(DssHarness.Adapters was planned for the build adapters; they arrived in
+DssHarness.Core instead, beside the build service that is their only caller, and the
 project was not created.)
 ```
 
@@ -41,12 +41,15 @@ boundary rather than by discipline.
 
 ### The platform layer
 
-`HostPlatform`, `FilePermissionsFactory` and `ProcessTableFactory` are the **only**
-types that observe the operating system. Everything else depends on `IHostPlatform`,
-`IFilePermissions`, `IProcessTable`, `IProcessRunner` and `IFileSystem`.
+`HostPlatform`, `FilePermissionsFactory` and `ProcessTableFactory` are where the tool learns
+which operating system it runs on and builds what differs by it. Everything above them depends
+on `IHostPlatform`, `IFilePermissions`, `IProcessTable`, `IProcessRunner` and `IFileSystem`.
+Below that seam a few primitives ask the runtime for one fact each, where nothing else is
+asked - `PhysicalFileSystem`, `ProcessRunner`, `DetachedProcessLauncher`, `UserState`,
+`WslDiskImages`, `CMakeToolchainReader` and the command that holds a host awake.
 
 A platform-specific implementation is created only where behaviour genuinely
-differs. Today that is two families of behaviour.
+differs. Today that is three families of behaviour.
 
 **File permissions**: making a file readable only by its owner, deciding whether a file
 is a program at all, and whether other users can read or change a file. Unix answers
@@ -58,6 +61,12 @@ its start time and its command line, which is what a leg's contention check read
 Windows publishes it through WMI, Linux through `/proc`, macOS through `ps`. Behind the
 seam so that nothing above it branches on the operating system to find out, and so a test
 can say what the machine was running without the machine having to be running it.
+
+**The input watch**: what a leg's work hears change among its inputs while it runs. On
+Linux every watch of a process goes through one inotify instance the process calls itself
+(`InotifyHub`); elsewhere, and on a Linux whose C library does not give those calls, through
+.NET's watcher (`FileSystemWatcherKind`), each watched directory then taking an instance of
+its own on Linux. `WatchKinds` chooses, in one place, from `IHostPlatform`.
 
 ### Process execution
 
@@ -282,7 +291,9 @@ worktrees where nothing withholds or ignores them, and an entry would protect no
 
 **The root is kept in git by a placeholder, and everything made in it is ignored.** `init` writes
 `/<root>/*` and `!/<root>/.gitkeep` for it and creates the placeholder, as it does for the
-orchestrators directory, `.orchestrators`, and for the harness directories a person fills by hand
+orchestrators directory, `.orchestrators`, for the slots every tree keeps its own copies in,
+`.mutations` for a sweep's workers and `.legs` for the copies its legs work in, and for the harness
+directories a person fills by hand
 — `sshItems`, `wslDistros`, `runner/.env`, `runner/.secrets` — so a clone arrives with each
 directory in place. A configuration `init` writes names `.worktrees` as the root; one that names
 none keeps `.harness-config/worktrees`, so worktrees made before stay where they are. The root
@@ -291,14 +302,21 @@ accepted now: a directory holding a tracked file never reads as ignored itself, 
 check-ignore <root>` answers *not ignored* while every worktree inside it is ignored, and the root
 can no longer be kept on another disk through a link, which git would list as an untracked entry
 and keep nothing behind; `init` names such a link and writes nothing through it. Sync does not
-depend on either answer: it withholds the configured root and `.orchestrators` by name, whatever
-git says, and its guard against a withheld path that stopped being ignored takes the root's
-placeholder, untracked until it is committed, as the harness's own - any other untracked file
-there still refuses, named as the worktrees root it is. The root may not be `.git` or
-`.orchestrators`, or inside either.
+depend on either answer: it withholds the configured root, `.orchestrators`, `.mutations` and
+`.legs` by name, whatever git says, and never deletes them in a copy, and its guard against a
+withheld path that stopped being ignored takes each placeholder, untracked until it is committed,
+as the harness's own - any other untracked file there still refuses, named as the worktrees root,
+or the slot whose ignore rule init writes, it is. The root may not be `.git`, `.orchestrators`,
+`.mutations` or `.legs`, or inside any of them.
 
 `init` leaves hand-written `.gitignore` rules alone, so a repository that already ignored one of
-these paths by hand keeps its rule beside the managed one. What `init` reports is git's own answer,
+these paths by hand keeps its rule beside the managed one. A block an earlier build wrote under the
+markers of the tool's former name (`GitIgnoreManager.RetiredBeginMarker` / `RetiredEndMarker`, read
+for ever and never written) is the managed block too: markers pair by position, whatever their
+spelling, so `init` rewrites it in place under the current ones and says so, and the check of
+hand-written rules never reads its lines as the repository's own. The machine-wide locks are named
+for the tool too (`Global\dss-harness-...`), so a process of a build from before the rename and one
+of this build do not exclude each other: update while no `dssharness` runs on the machine. What `init` reports is git's own answer,
 never a reading of how the rules are spelled. Each managed rule carries a path it decides - the
 file it names, or a name inside the directory it rules on - and `git check-ignore -v --no-index`
 says which rule decides each of those paths in the tree. A rule deciding one against the block is
@@ -344,10 +362,14 @@ the rule re-including the nearest of them, at the line the tree's file has it on
 `.git/info/exclude` and every excludes file a configuration names, so a re-include undoing the block
 is in one of them; were none named even there, init says git does not ignore the path and names no
 rule, never where one might be. A path git will not answer about - one beyond a symbolic link, which
-git never looks past, ends a whole `check-ignore` with exit 128 - is asked again on its own, named
-with git's reason, and every other path is still answered. A scratch repository that cannot be
-written is a note that git could not be asked; one that cannot be removed afterwards is a warning,
-and the answer stands.
+git never looks past, ends a whole `check-ignore` with exit 128 - is named with git's reason, and
+every other path is still answered: git is asked about the tree's root, which it answers about
+wherever it can answer at all - only where it cannot is the question refused, at once - and the
+question is halved until each part is answered or is that one path, a few processes for each such
+path however many are asked. Each path is asked after `./`, so a name beginning with a colon is never
+read as pathspec magic, which `check-ignore` refuses even under `--literal-pathspecs`. A scratch
+repository that cannot be written is a note that git could not be asked; one that cannot be removed
+afterwards is a warning, and the answer stands.
 
 `init` writes the tree it runs in, a worktree's own included: its configuration, its `.gitignore`
 and the placeholders that keep each directory in git. A worktree adopting the harness adopts it on
@@ -387,7 +409,9 @@ hook — or from a shell someone left in another checkout — would otherwise re
 repository nobody named: measured with `GIT_COMMON_DIR` naming another repository, deleting a
 worktree was refused and left it registered. Settings passed that way do not reach the harness's
 git either. A caller that deliberately wants a different index still gets one: the inherited value
-is cleared first and the requested one set after. An answer that does not name `GIT_DIR` is not
+is cleared first and the requested one set after. So does one that has git store a file only to read
+it back: it is given an object directory of its own, with the repository's beside it to read from,
+so nothing it stores reaches the repository. An answer that does not name `GIT_DIR` is not
 taken, and the command fails without running git.
 
 An orchestrator's agents' worktrees sit below the directory named for it,
@@ -453,15 +477,20 @@ worktree, names everything it found on one line, each with its remedy, and exits
 - **Held, on Windows.** Looked at last, once every check above has passed: a worktree something
   holds part of is refused on its own, since git's removal would stop part way on it.
   [Removal](#removal) says what holds one.
-- **A mutation worker kept.** The workers kept beside the worktree (see *Mutation testing*) go
-  before it, once every check above has passed, and are asked about before any goes: one a sweep
-  still running holds keeps the worktree, exit 13, and one that cannot be removed, or told for the
-  harness's - its marker cannot be read - keeps it as a failure, exit 20, as workers that cannot be
-  looked for do; nothing is removed. A sweep that takes one between the asking and the removal keeps
-  the worktree as well, and so does one whose removal then fails, the others gone by then, which is
-  said. An interruption as they go says which went and that the worktree is whole, exit 130.
-  `--force` deletes the worktree and leaves a worker that is held or could not be removed, saying
-  so, and deleting the worktree again removes it once nothing keeps it.
+- **A copy kept in it.** The workers kept in the worktree's `.mutations` (see *Mutation
+  testing*) go before it, and are asked about before anything of it is removed or looked through
+  for what holds it: one a sweep still running holds keeps the worktree, exit 13, and one that
+  cannot be removed, or told for the harness's - its marker cannot be read - keeps it as a failure,
+  exit 20, as workers that cannot be looked for do; nothing is removed. A sweep that takes one
+  between the asking and the removal keeps the worktree as well, and so does one whose removal then
+  fails, the others gone by then, which is said. An interruption as they go says which went and
+  that nothing else of the worktree was removed, exit 130. `--force` deletes the worktree with every
+  worker in it, one held or one that could not be removed among them, saying which went with it. A
+  directory there under a worker's name that no sync made goes with the worktree, as everything
+  else in it does, and is said. The copies its legs work in, kept in its `.legs`, are asked about
+  the same way after the workers, each under the lock a run takes on it: one a run is building in
+  or replacing keeps the worktree, exit 13, one that cannot be removed keeps it as a failure, exit
+  20, and `--force` deletes them with it.
 
 Without `--force`, when the check cannot be finished, because git cannot answer, a record cannot
 be read or its directory found, or, on Windows, a directory in it cannot be looked through for
@@ -546,14 +575,93 @@ never replaces what the command did; the command says so instead. Once a command
 it as long as a deletion expects (`PointOfNoReturn`, the one list the command line reads), and what stops it from there
 on is exit 21, naming what is in and how running it again finishes.
 
+**What a dry run answers.** A dry run of refresh-agent, rebase-agent, fold-agent or delete-agent exits with what its
+`--apply`, given the same arguments, would exit with at that moment: 0 only where that `--apply` would go through.
+`DryRuns.Answer` is the one place that decides it: each verb composes its dry run's outcome - its summary and its
+lines, or the refusal or failure it met - and hands it over with how the request stands (`RequestStanding`: sound, a
+consent nobody gave, or refused; none where what it weighs could not be read) and with who holds what its `--apply`
+takes (`TreeHeld`, as `TreeHolders.Read` reads it), and it answers the code and how the request stands as that code
+says it (`DryAnswer`), which `--json` reports. Read downwards, the first case that
+applies gives the code: delete-agent run from inside the worktree it removes is refused (13), nothing read; what the
+command weighs that cannot be read - for a live agent's deletion, which git worktree it is (`StampOf`, the one read
+both make) - fails it (20); a path, a row or an option that is refused - or, for a deletion, a record of the copies
+hosts keep that cannot be read, which its `--apply` reads before it writes anything (`AgentService.HostCopiesOf`, the
+lines weighed kept) - 13, save a usage error, 10, which its `--apply` answers before it takes anything; cells of the
+rows that need a consent nobody gave (`--accept-lost`, `--accept-over`), 13 - the same summary and lines, the line 'to
+write them:' (delete-agent's 'to do it:') among them,
+since a plan of rows still shows every such cell (`AnchorBatchMode.Plan`) and the rule is the command's, not the
+anchors' service's; a run holding a tree the `--apply` takes, or a lock file that cannot be read, 13 - save where what
+the command weighs could not be read, or the request is a usage error, either of which keeps its own code from above
+and still names the holder on its lines -
+the summary of a sound request ending in `TreeHolders.Blocked`, one sentence that says waiting is all there is to do,
+and a refused request or a consent ending in the one clause that says a run also holds what the `--apply` needs; a
+closed agent whose directory is no
+longer a git worktree, 21, as every `--apply` of it is (`Husk`, the one sentence both say); a sound dry run of a
+deletion whose copies kept in the worktree the removal cannot take as they stand - a copy that cannot be told or
+removed, or copies that cannot be looked for - 21, its request refused, since every `--apply` leaves the removal there
+until that is put right, which no waiting does (`KeptCopyLine.Stops`, the summary ending in `DryRuns.Unremovable`),
+over a copy a run or a sweep holds as well, while a directory there that no sync made goes with the worktree and is
+only said; one that only a run or a sweep holding a copy of the worktree keeps, 21 (`TreeHolders.RemovalHeld`), since
+its `--apply` would go as far as the removal and leave it unfinished; otherwise 0. Neither of those two is reached
+where a lock file cannot be read or a run holds a tree the `--apply` takes, which refuse that `--apply` at its hold, so
+a dry run never says the `--apply` would go as far as the removal where it would not. Every line a dry run
+prints stays: only its code, and with it where its summary is printed, follows the rule. What an `--apply` learns only
+by doing its work - a file changed after it was weighed, a write or a copy that fails, transcripts or evidence that
+cannot be kept - is not in a dry run, so 0 says that nothing known now stops the `--apply`, never that it will finish.
+
+**Who holds the tree.** Each dry run asks the run lock, last, the question its `--apply` asks first, with the very
+requests the apply takes (`AgentService.Holds`, the one spelling of them, shared with the hold the apply takes): the
+main tree and the agent's worktree for a fold, a refresh and a live agent's deletion; the worktree alone for a rebase,
+and for the deletion of an agent already closed or whose worktree is gone. Every live
+holder in the way is printed on a `held now:` line (`RunLock.Holders`, read as `HeldBy` reads: nothing reclaimed,
+nothing written), said with where that run's leg stands, from this machine's record of heavy legs (`HeavyLegSlots.Line`,
+joined by `TreeHolders`, the one sentence: it waits in line with how many are ahead, or it holds a slot, or a leg on
+an ssh host's own record says; a run that asked for no slot is said by the lock's own words alone, `running
+'<command>'`, and so is every run of a leg of this machine - a WSL distribution's among them, whose slot this machine's
+record holds - where that record cannot be read, which one line then says, while a leg on an ssh host asks that host
+for its slot whatever this machine's record holds, and that record is read only where a holder's leg is one of this
+machine's, so no line says it cannot be read where none is). A run holding a leg copy
+or a host's copy of the worktree is
+not named by a fold's, a refresh's or a rebase's dry run, and their `--apply` is not refused for it: a copy is not the
+worktree. delete-agent, which removes every copy with the worktree, names a copy a run holds - a host's through the
+lock, asked in the one reading of it that asks for the trees (`IHostCopyRemover.RemovalLocks`, the same `RemovalLock`
+the removal takes, asked by `TreeHolders.Read`, so a lock that cannot be read is said by the one row for it, a host's
+copy recorded or not), a leg copy's or a mutation worker's
+through the measure-only question its removal asks (`WorktreeService.CopiesHeldAsync`), each in its family's own
+words, and asks them on every state the agent may stand in - live, closed or gone - since the removal that asks them
+is the same; its dry run asks that host's `.legs` nothing, as its removal asks nothing of them. Each line the two
+families say is one of three (`KeptCopyLine`): a copy a run or a sweep holds, whose holder that line names - a leg
+copy's asked of the lock as its removal asks it (`LegCopies.Whole`), in that same one reading, so every holder is named
+from it, a worker's named by its sweep's claim - and no `held now:` line names again; what the removal cannot take as it stands; or what is only said. The refusal an `--apply`
+gives where a run holds what it needs ends with the same words the `held now:` lines say, and seed-agent's, which has
+no dry run and so takes the trees at once, does too. `--json` on the four verbs answers with one document
+(`OrchestrationReports.Document`), the whole of standard output: the outcome as data - `exitCode`, `summary`,
+`applied`, `lines` - with `request`, which tells the three meanings of 13 apart, and `heldNow`, every holder that
+decides the code, with `holds` tree or copy - each a `held now:` line names, and each holding a copy kept in the
+worktree, its `said` the line its family says of it - its `processId`, `run` and `since` as the lock's entry records
+them or, where a claim of the copy's family rather than the lock names its holder, as that claim records them
+(`CopyHolder`), and what only a lock entry says, `command`, `variant` and `standing`, null for such a holder;
+`standing` is null too for a leg of this machine where this machine's record of heavy legs cannot be read - and
+`heldUnread`, why the lock file could not be read. An `--apply` refused at its hold answers the same document,
+`applied` true, its `request` `sound` and the run it met in `heldNow`, said as a dry run at that moment says it
+(`TreeHolders.Refused`, the one sentence and holder both take, handed up by the hold to the verb's answer), so a
+script waits on it as on its dry run. A command stopped before
+anything is weighed - a command line the parser refuses, a `--directory` that is not there, a repository not
+initialised, another usage error, or a refusal met before then, an agent that is not there among them - answers with
+the same document, empty (`OrchestrationReports.Stopped`): `applied` false, `request`, `heldNow` and `heldUnread` null, no `lines`, its
+`exitCode` and `summary` the code it exits with and the line it ends on.
+
 An agent's worktree is `<worktrees.root>/<orchestrator>/<agent>`, addressed `orchestrator/agent` by list-worktree
 and delete-worktree, its host copies named `orchestrator--agent` (`WorktreeAddress`). The directory named for an
 orchestrator under the root is shared with plain worktrees' names, so create-worktree refuses an orchestrator's
 name and create-orchestrator a worktree's, and delete-worktree never deletes a directory holding worktrees below
 it, forced or not: below the directory named for an orchestrator, every directory with a `.git` of its own
-counts - but for a mutation worker kept beside an agent's worktree, a copy of it, which goes with its agent -
-and below any other directory with none of its own only what git records - a husk's submodules are its own contents,
-which `--force` deletes with it. Where git cannot list its worktrees, nothing is deleted. delete-orchestrator removes
+counts, and below any other directory with none of its own only what git records - a husk's submodules are its own
+contents, which `--force` deletes with it. A directory with a `.git` of its own below an orchestrator's that git records
+no worktree at is what a removal left when git's record went and something in it could not, or a mutation worker an
+earlier version of this tool kept beside an agent's worktree: nothing here can tell what it holds, so `list-worktree`
+says it as a person's to look in and delete, and delete-orchestrator refuses, exit 13, changing nothing, until it is
+gone. Where git cannot list its worktrees, nothing is deleted. delete-orchestrator removes
 every record last - each agent's after the rest of that agent, the orchestrator's after its agents - so a removal that
 stops part way (exit 21) leaves only records that read, and run again it finishes. list-orchestrator counts an
 orchestrator's open agents as create-agent does (`OrchestrationRules.OpenAgents`), and says where each agent's
@@ -562,11 +670,17 @@ worktree is from its own record, the worktrees root it was made under.
 ### Seeding and folding
 
 The seed is the main tree's uncommitted state handed to the agent when it is made - every path git status lists,
-less `TreeFloor`: `.git`, `.orchestrators` and the worktrees root, asserted where the copying happens rather than left
+less `TreeFloor`: `.git`, `.orchestrators`, `.mutations`, `.legs` and the worktrees root, asserted where the copying
+happens rather than left
 to ignore rules a repository can edit away - each changed file copied into its worktree, with the copy's SHA-256 and,
 where the platform has one, its execute bit, and each deletion made there too and recorded as absent. `seed.json` is
 then what the agent shares with the main tree, path by path. An untracked directory git will not look into - a
-repository of its own - is named and not handed, since a fold never moves one. A symbolic link is refused rather than
+repository of its own - is named and not handed, since a fold never moves one, and a path in a submodule the agent's
+worktree records - at or below a gitlink its index holds, or for a worktree not made yet the main tree's HEAD, where
+the main tree turned one into files of its own - refuses create-agent before the worktree is made, and seed-agent and
+refresh-agent before anything is written (`AgentFold.InSubmodulesAsync`): a hand-over never writes into another
+repository, and rebase-agent, whose move takes the index along, brings in what the main tree committed there. A
+symbolic link is refused rather than
 handed over as the file it leads to, before the worktree is made, so the refusal leaves nothing behind. seed-agent
 counts as the agent's own only a change of what it shares that it made itself. What the main tree holds later is
 weighed against what the agent shares (`AgentFold.MovedAsync`), never against git status alone, which forgets a path
@@ -575,12 +689,47 @@ tree's copy is not the one its seed records, and any other once the main tree's 
 what the agent's base holds, asked of git as a fold asks it. refresh-agent hands over every such path under the paths
 it is given - or anywhere in the tree, off the floor, with `--all` (`RefreshRequest`), which names no prefix and takes
 no path beside it - refused, copying nothing, where the agent changed or deleted one of them (`EditedAsync`, the same
-comparison asked of the agent's worktree). The refusal names each such path and the arguments that leave them:
-`--except <path>`, once for each, takes that path out of what is handed, so the rest goes over and it stays the agent's
-change, weighed by its fold against what the main tree holds; it is listed in each report of what was handed, would be,
-or needed no handing, and one naming a path the refresh would not have refused is refused as a stray `--settled` is. A
-refresh that stops part way says the line that asks for it again with everything it was asked (`RefreshRequest.Arguments`):
-its paths or `--all`, and each `--except`. What is left out is still weighed as in the way of
+comparison asked of the agent's worktree). What it does is measured in one place, beside the fold's and the move's
+(`AgentFold.MeasureRefreshAsync`, a `RefreshPlan`): a path the agent already holds as the main tree does - the same file,
+or no file in either, a directory of the agent's own files there included - is recorded as shared at what both held
+when it was measured, the file whole with its bit, its bytes kept from the agent's copy (`AgentFold.AlikeAsync`),
+listed, and written only with `--apply`, so its record says
+what it holds and the next move of the main tree hands it; dropped unrecorded, as before, the agent's copy read as its
+change from then on. `--stale <path>` hands the main tree's copy over a path the agent changed only where its copy is
+proved the main tree's own at an earlier commit (`AgentFold.StaleAtAsync`, asked once for every path a refusal or a
+`--stale` names): the agent's copy as `git add` would record it in its worktree (`ListStagedIdsAsync`, read as the
+merge's versions are, below), so a copy that differs from a commit's file only by a line-ending conversion is that
+commit's file, one committed with carriage returns keeps them as git keeps them, and an edit is its own bytes wherever
+git leaves files unexamined (`core.ignoreStat`), against the blobs the main tree's
+history held at the path (`ListHeldInHistoryAsync` from its HEAD, `rev-list --full-history` so a version a merge dropped
+is still its history's, at most `TwoChanges.MostCommits` commits, each run of equal blobs named by its newest commit).
+Bytes that history holds are the main tree's own there, so replacing them loses nothing it does not keep; the bound
+limits the cost only, and is said where it is reached. A proved copy is handed and recorded like the rest
+(`RefreshPlan.Stale`), listed apart with its commit; one not proved, or a deletion, is refused, nothing copied; one the
+main tree did not move is weighed too, where the agent's copy is not the main tree's, and one the main tree holds a link
+or a directory git will not look into at is named as itself among what is not handed, never a copy to prove stale. The
+refusal over the agent's changes names each changed path - with the commit whose bytes a qualifying copy holds beside it
+(`RefreshChange.StaleAt`) - and the arguments that take each out of what is handed: `--stale` for a proved one, and
+`--except <path>`, once for each, which leaves a path as the agent changed it, so the rest goes over and it stays the
+agent's change, weighed by its fold against what the main tree holds; it is listed in each report of what was handed,
+would be, or needed no handing, and one naming a path the refresh would not have refused is refused as a stray
+`--settled` is. A path the agent changed that the main tree moved too, each tree holding a file there, is weighed in
+full as a fold weighs one (`TwoChanges`, from what the seed records or the agent's base holds, found as git spells the
+path; the main tree's file the side merged into) - two such paths that differ in case alone, one file in the agent's
+worktree where it finds a name in any case, once, under the name the main tree's git index spells the file by, from the
+base's entry found in any case, the others - one left as the agent changed it among them - no file of the main tree's,
+whatever its file system finds under them: what a merge gives stands beside the path
+in the refusal (`RefreshChange.Merge`, the offer's clause
+without the way on a fold names, `TwoChangeOffer.Gives`), the conflicts are shown, and the `--merge` arguments that take
+the clean ones are named. A clean merge `--merge` names - or the arm registry's, merged by arm unasked and judged as a
+registry of the agent's worktree as the refresh leaves it, with each path it hands read from the main tree
+(`TreeAfter.Copied`) - is written into the worktree once everything else is handed, over only what was weighed
+(`AgentFold.MergeRefreshAsync`), and the path recorded as shared at the main tree's bytes, kept from its file: the
+agent's copy differs from that, so it is its change, which its fold writes, and it is what that copy descends from, so
+the next merge starts there. A `--merge` naming no path under the paths refreshed is refused as a misspelling; one
+naming a path with nothing left to merge is let stand, so a line that ran once runs again. A refresh that stops part
+way says the line that asks for it again with everything it was asked (`RefreshRequest.Arguments`): its paths or
+`--all`, and each `--except`, `--stale` and `--merge`. What is left out is still weighed as in the way of
 what is handed. seed-agent hands the same paths besides the main tree's uncommitted state. A
 symbolic link the main tree committed is named and never handed; one it has not committed refuses the hand-over. What a
 commit holds at a path is told apart - a file, a directory, a submodule's entry, or nothing (`IGitClient.HeldAtAsync`,
@@ -593,17 +742,108 @@ and the directory's files, and a directory it turned into a file as the files' d
 made first, with the directories it empties, then every file copied. What the agent holds of its own where a hand-over
 needs room refuses it, forced or not, before anything is written (`AgentFold.InTheWayOfHanding`): a file or a link at
 a part of a handed file's path, which a copy would stop at or write through, out of its worktree, and anything in a
-directory where a handed file goes that the hand-over does not delete. Neither hands anything while a move of the
+directory where a handed file goes that the hand-over does not delete. What the agent's worktree holds at each path
+handed is measured with the rest (`AgentFold.HoldingAsync`) - the file whole, its digest and whether it could be run -
+and the hand-over writes over or removes only that (`AgentFold.HandAsync`, asked before each path): a file the agent's
+session wrote since - or made runnable, where the platform keeps such a bit - stops it there, exit 21, naming
+it, with what it handed recorded, for a run again to weigh anew - seed-agent's forced hand-over included; create-agent's,
+into a worktree just made, asks nothing. Neither hands anything while a move of the
 agent's base stands stopped part way, or its HEAD is off its base. Both say when the agent's base is not the main
 tree's HEAD, seed-agent --empty too. A path named otherwise than in UTF-8, committed or not, refuses any hand-over,
 named as git's quoting writes it: no file opens here by such a name.
+
+Every path recorded as shared - handed, folded, or found already in the main tree - is recorded by one recorder
+(`SharedLedger`), which keeps the bytes it records as well (`SharedCopies`): a plain file under the agent's
+`shared/`, named by the SHA-256 the seed already records for the path, read from the tree's own file, required to
+hash to that digest and written anew as a file of the agent's own - never read-only, never one that can be run,
+whatever the file it was read from - and proved (`VerifiedFileCopy.WriteAsync`), so no copy is kept that is not the
+bytes recorded. A digest whose copy still holds its bytes is kept already, and is not written again. They are what
+both trees held at a shared path, kept to merge from. `seed.json` gains no member for them - it names digests, and a digest
+names a file - so a seed written before any copy was kept reads as it did, and has none; a copy is read back by
+hashing it again, and counts only where it still hashes to its name. A command writes in one order: the trees, the
+kept copies, the seed, and then the prune of the copies to what that seed names (`AgentService.WriteSeed`, the one
+place a seed is written). Stopped anywhere, the seed never names a path the trees do not hold as recorded, and a copy
+the seed does not name goes at the next write. A file above 16 MiB (`TwoChanges.MostBytes`) is recorded and not
+kept. A copy that cannot be kept or pruned never fails the command that met it: the path is recorded all the same,
+and one line says so however many paths it was - which, as many as a line names, how many more, and why - since a
+full disk would otherwise say it for every file a command records. Deleting an agent keeps the copies of what its fold
+writes as any fold does, and what a history search finds: a deletion that stops after its fold leaves the agent live,
+its seed naming bytes only those copies hold, and a later fold of a path both trees then change merges from them. What
+is said of a copy not kept is said only where the agent outlives the command; once it is closed they go with it.
+Every command that writes an agent's records names where they are on each way out once it has -
+`record`, `seed`, `shared <directory>` where the agent keeps any, `applied rows` - each that is there
+(`AgentService.Records`). list-orchestrator `--json` names the directory as each agent's `shared`.
+
+Merging two changes of one file is git's work, never a comparison of lines made here (`GitClient.Merge.cs`). Each of
+the three versions - what both held, and each side's - is first read as git would store it at the path
+(`IGitClient.ReadStagedAsync`), as `git add` would record it there: a blob as it is, and a file or bytes in hand as
+the file at the path would be (`git hash-object -w --path=<path>` run at the work tree's root, then `cat-file
+--batch`). The path's clean filters run from the root, as git add runs them, and its attributes and line-ending rules
+apply: a file one tree checked out with other line endings merges as `git merge` would merge it, and one committed
+with carriage returns, under `core.autocrlf` or a `text=auto` attribute, keeps them on every side, as git keeps them,
+so a merge git makes clean is clean. git stores a file to read it so, and what it stores goes to an object directory
+of the question's own - a temporary directory as `GIT_OBJECT_DIRECTORY`, the repository's own as
+`GIT_ALTERNATE_OBJECT_DIRECTORIES`, quoted so a path holding the character that parts that list is still one entry -
+discarded with the answer: neither the repository's objects nor its index are written by a merge that was only
+measured. What git would record for a file is asked in one place (`GitClient.StoredIdsAsync`), of `hash-object` at the
+work tree's root, told the two things `git add` reads in the index and hash-object does not (`GitClient.StoringAsync`).
+Where `git ls-files --eol` says the path's entry holds carriage returns (`i/crlf`, `i/mixed`) and its line endings are
+converted only as git sees fit (no attribute under `core.autocrlf`, or `text=auto`), git leaves that conversion out,
+and hash-object is told to as well: `core.autocrlf` off; the bytes as they stand, where nothing else converts the
+file; or, where a clean filter, `ident` or `working-tree-encoding` still does, the path's attributes declared whole
+with `text` unset, in a tree of the question's own git reads attributes from instead (`--attr-source`, git 2.41's). A
+path below an attribute file the work tree lacks, which git reads from the index, has its attributes declared so too.
+An older git, which refuses that option as unknown and has no other way to be told, is refused before it is asked
+anything for the file, naming git 2.41 and the version installed, which is asked of git once
+(`GitClient.InstalledVersionAsync`). info/attributes outranks that tree: where it says otherwise of the path, the question is refused, said, never guessed.
+Nothing is staged, so no index is written and no mark on an entry stands for a file's bytes; every index the tool does
+write of its own is written with `core.ignoreStat` off, in one place (`GitClient.RunCoreAsync`), so no comparison made
+with it reads an edited file as its entry's blob. `GitClient.HashAsync` is the one caller of `hash-object`, told what
+differs - written or not, filtered or not, as which path, what git is told first, into which directory.
+The three are merged by `git merge-file -p --diff3` (`MergeTextAsync`), outside any repository. Its exit code is the
+answer and is read as one, never as success or failure: 0 is a clean merge, whose output is the merged bytes; 1 to
+127 is that many conflicts, 127 standing for as many or more; anything else is no merge - a binary file, for one -
+kept in git's own words. `--diff3` is passed so no configuration changes what a conflict shows, and the markers are
+made one longer than the longest line of the three that could be read as one, so a file that holds such lines is
+merged like any other. A conflict is shown from its opening marker to its closing one, six of them and forty lines of
+each at most. How many hunks each side brought is git's count too (`git diff --no-index -U0` of each side against
+what both held). The merged bytes are brought to what a checkout would write (`ReadCheckedOutAsync`: `cat-file
+--filters --path=<path>`) and written as a copy between trees is - beside the destination, read back, compared by
+SHA-256, put in place in one step (`VerifiedFileCopy.WriteAsync`) - with the execute bit asked for
+(`IFilePermissions.SetExecutable`, which changes nothing on Windows, where no such bit is kept), not the bit of the
+file replaced. What a history held at a path is asked with `git rev-list --full-history` (`ListHeldInHistoryAsync`),
+since a version a merge dropped was still that history's, for one more commit than its bound, which is how a history
+cut short is told from one read whole, its paths taken literally (`--literal-pathspecs`), so `[id].tsx` is that file
+and never a pattern; and what git's attributes declare for a path is asked of `git check-attr`
+(`ReadAttributesAsync`), by this and by fix-line-endings alike, whose refusal where git cannot answer reads as it
+always has: `git check-attr failed, so the declared policy could not be read and nothing was rewritten: <git's
+words>`. Every answer read as bytes - a blob, a merge, a checkout, a listing of names - is decoded from its first byte
+under the encoding asked for (`ProcessRunner`): bytes that begin as a byte order mark does are the file's, or the
+name's, never taken to say how the rest is written.
 
 rebase-agent moves an agent's base to the main tree's HEAD (`AgentFold.MeasureRebaseAsync`). Each path the two commits
 hold differently (`git diff --name-only`, commit to commit) is shared - kept as its seed records it, since the seed,
 not the base, is what a shared path is weighed against - or held as the new base holds it already, or held as the old
 base holds it, and comes in as git holds it (`git checkout --no-overlay <commit>`, the paths on standard input and read
 literally), or changed by the agent - asked of git against both commits, with anything where the old base holds
-nothing its own, untracked, ignored or staged - which refuses the move unless `--settled` names it. One thing the agent
+nothing its own, untracked, ignored or staged - which refuses the move unless `--settled` names it. A file the agent
+changed that the main tree committed a change to is two changes of one file, resolved where a fold resolves one
+(`TwoChanges`): what both held is the old base's blob, ours the new base's, theirs the agent's file, merged in the
+agent's worktree's forms, and the bit from the two bases' entries and the agent's file (`ListEntriesAtAsync`, which says
+too where a base holds a link). A link among the versions - a base's entry, or the agent's file where it is one or is
+reached through one along its path (`LinkPaths.LeadsElsewhere`), its directory turned into a link - is offered no merge,
+decided where a fold's is (`TwoChanges.OfferAsync`, from `TwoChangeSide.Link` and `TwoChangeAncestor.Committed.Link`),
+so nothing is read or written through it. Its refusal says what the merge gives and names the command
+that takes the clean ones; `--merge` takes one, listed before what comes in, written over the agent's file as weighed
+(`AgentFold.WriteMergeAsync`, the one writer of a merge) once git has written the rest and before HEAD moves, and
+recorded nowhere: on the new base it is the agent's own change, which its fold weighs. A `--merge` naming a path the two
+commits hold alike is refused as a misspelling, and one naming any other path they changed is let stand, so the command
+that finishes a stopped move runs again; a path named with both `--merge` and `--settled` is a usage error, exit 10. The arm registry is merged by arm as a fold merges it (below): what both
+held is the old base's blob as git stores it, or nothing where the agent made the registry the new base brings; ours is
+the new base's blob as a checkout into the agent's worktree writes it (`CommittedBytes.CheckedOutAsync`, the one reader
+of a commit's blob in that form, which `TreeAfter.Moved` reads through too), so the merge ends its
+lines as that checkout would; and the merged text is judged by the worktree as the move leaves it, each path the move
+takes read from its blob when the validation asks for it (`TreeAfter.Moved`). One thing the agent
 made is not its change: a file that is the very file the new base holds there, which is held as the new base holds it
 already (`IGitClient.ListHeldAsAtAsync`: the new base's entry for each such file put in an index of the question's own,
 and `git diff` asked against it, so the content is compared through the clean filters and the line-ending rules and the
@@ -618,41 +858,178 @@ move unless it is the old base's own, coming in with the rest - the agent's own,
 what to do. A file or a submodule's entry where the old base held a directory is written last
 (`RebasePlan.WrittenLast`), once what was below it is: written first, git removes that, with the directories it leaves
 empty, where asked for both at once it finds that gone and stops, and a submodule's entry written first leaves it in
-place, hidden from git. The record names where the move goes (`Moving`) before anything is written, then the new
+place, hidden from git. Where the worktree's file system finds a name in any case, a file the new base renamed in case
+alone is that one file (`AgentFold.RenamedInCase`): what the worktree holds at the new name is the file at the old one,
+never a file the agent made there, and the new name is written last, once the old is removed - written first, the
+removal of the old name would take it. It comes in only with its old name: where the agent keeps what it holds there -
+declared settled, shared with the main tree, or its own change - the new name refuses the move, naming both, since
+writing it would write over that; a shared file the agent changed is to be folded first, since no refresh hands a path
+the agent changed, and one it did not to be refreshed under the new name, which records the file it holds as shared
+there. Where it holds nothing at the old name, the new name refuses the move as a rename and a deletion of one file -
+its old name to be put back with `git checkout HEAD` and the move run again, the new name deleted after only where the
+agent's session deleted the old, or, shared, never taken by a move and so the agent's deletion, folded and committed in
+the main tree - unless the move being finished removed it, the new name written last, as its record says
+(`MovingRemoved`: the old names the agent's index no longer holds once the git checking out what the move writes first
+ends, having written it all or stopped part way). git leaves the index and the disk alike after that checkout and after
+a `git rm` of the agent's session; a removal of the move's its record missed - a move killed between git and its
+record - is refused so, costing a refusal, never a file. The record names where the move goes (`Moving`) before
+anything is written; then each
+path the move takes is asked to hold what was measured there (`RebasePlan.Held`, `AgentFold.RequireTakenAsync`), so a
+file the agent's session wrote since stops the move, exit 21, before git writes anything, never written over; then the new
 base's paths are written, HEAD and the index move (`git reset --mixed`), then the record and the worktree's base ref
 name the new base: a move that stopped part way, exit 21, is finished where it was going by running rebase-agent
-again - whatever the main tree committed since, and with what it wrote held as the new base holds it, a file the old
-base lacked included - and fold-agent, delete-agent, seed-agent and refresh-agent refuse the agent until then, saying
-so. Only a move its record names is ever finished, and only from its base or where it goes: a HEAD anywhere else was
+again - the command its last words name, with every `--merge` and `--settled` the move was given, a merge it wrote
+merged again to the same bytes - whatever the main tree committed since, and with what it wrote held as the new base holds it, a file the old
+base lacked included - and fold-agent, delete-agent, seed-agent and refresh-agent refuse the agent until then, naming
+that same command, which the record keeps beside where the move goes (`MovingWith`). Only a move its record names is ever finished, and only from its base or where it goes: a HEAD anywhere else was
 moved by hand - back, forward or beside its base, a move under way or not - or names no commit, and each command
 refuses it, saying how to put it back; one past its base that the main tree's history does not hold is a commit made
 inside the agent. Where git cannot say which a HEAD is, each fails, exit 20, saying so, never guessing.
 
 An agent's contribution is a measurement (`AgentFold`): its worktree's status, and every path it shares with the
 main tree whether its status lists it or not, less the shared paths left as they were. Each path goes in exactly one
-list - its own, deleted, inherited, already in the main tree, settled - or is refused, and one refusal refuses the whole
+list - its own, deleted, inherited, already in the main tree, merged, settled - or is refused, and one refusal refuses the whole
 fold before anything is written. A shared path is compared with what both trees held - a file, or its absence; any
 other with the blob at the agent's own base (`cat-file --batch-check`, one process), never the main tree's HEAD, which a
 sibling's committed fold moves, and the main tree is asked whether it moved from that base as git status would answer
 (`git diff --name-only` against the base, one process): through the index's line-ending rules, so a file only checked
 out with other line endings is no change, and with its mode, so a sibling's changed execute bit is one. A fold records
-what it wrote, removed and found already in as shared, so a later fold - after a review sends the agent back - weighs
+what it wrote, removed and found already in as shared - each at what the agent's worktree held when it was measured,
+the file whole with its bit, so a bit its session changes after the weighing is the agent's own change to fold, never
+silently absorbed - so a later fold - after a review sends the agent back - weighs
 those paths against what the fold left, never against the base: the agent putting a path back as it was is its change
-to fold. A refusal of a changed main-tree path says whether a commit or an uncommitted edit changed it, since the two
-are reconciled differently. A deletion needs the same baseline proof a copy does. A directory with no `.git` of its own
+to fold. A refusal of a main-tree path the agent shares nothing for, made, changed, made a directory of or removed since
+the agent's base, says whether a commit, an uncommitted edit or a commit and then an edit did it, since each is
+reconciled differently: a commit alone where the main tree's HEAD already holds what the main tree holds there now,
+which `git status` - untracked files listed, its paths compared in any case where the main tree's file system finds a
+name in any case, so a rename of case alone is the commit's - answers by listing nothing at the path, below it, or in a
+directory above it that it folds into one
+entry, as it folds an untracked repository nested in the tree (one process a fold, asked only where a commit moved a
+path or neither HEAD nor the base holds one); an uncommitted edit alone where HEAD holds what the base holds, each entry
+compared as git compares a commit, so a commit of a mode alone is a commit; and both otherwise, each said with what it
+did - the edit after what the commit did where the edit made what the main tree holds of another kind than HEAD's, and
+the commit then the edit's change where the commit already made it of that kind. A file of the main tree in the way of
+the agent's - where one of its files needs a directory, or in a directory one replaces - is a file the fold does not
+remove, said made or changed since the base where the main tree did either, the same way, and a file git ignores
+where neither HEAD nor the base holds one - as `git check-ignore` says, asked only of what status lists nothing at
+where HEAD holds nothing and no submodule holds the path, never read from what status leaves out - is said ignored by
+git, with no word of when it came. A file of a submodule of the main tree's in the way - below a gitlink its index
+holds, where git looks at nothing and `check-ignore` answers nothing - came as that record did: by a commit where HEAD
+holds it, then changed by an uncommitted edit where status lists the record, and by an uncommitted edit where only the
+index holds it (`Came`, the one wording of how a path came to be held, and `Since`, of what the main tree did, both
+decided once). The base's entry and HEAD's are found alike, as git spells the path and, where the main tree's file
+system finds a name in any case, in any case, whatever `core.ignorecase` says, so a rename of case alone is the
+commit's that made it, and none other's. Each tree's status is read alike: where `core.ignorecase` says the
+repository heeds case, an untracked name the index holds under another spelling is dropped only where every
+directory the two spell differently lists the untracked spelling alone, finds it in another case it does not list,
+and reaches something by the index's spelling, and the part they spell differently is ASCII - decided file by file,
+as each directory compares names, since a tree may hold a directory that tells names apart below one that does not
+(`GitClient.IndexedInAnotherCaseAsync`, read by the one status question and by `check-root-litter`). So a file the
+disk spells otherwise than the index - as a write put in place over it leaves it on macOS, which keeps the old
+spelling where Windows takes the new - is one file, never changed under one name and untracked under the other,
+while a new file beside a tracked one a directory tells apart, or beside a tracked one deleted, stays listed. Left as
+it is: where the part spelled otherwise holds a character outside ASCII, the name is kept, on every system - a disk
+may hold it composed otherwise in Unicode than git gives it, and the invariant culture this build reads names in
+composes nothing - so with `core.ignorecase` false such a file is listed under both spellings, a fold of it stops
+part way at the second, and `check-root-litter` names it. git is never told to ignore case: that would match the
+repository's ignore rules in any case too, and hide a new file they do not ignore as it spells them. Whether a
+directory finds a name in any case is asked of the directory itself, by a name it holds in another case
+(`PathCase.In`): one made case-sensitive under folders that are not compares exactly. A shared path's
+refusal says the main tree changed it after the agent was last handed it or folded, which the seed records alike. A deletion needs the same baseline proof a copy does. A directory with no `.git` of its own
 holds no file at its path, so a file the agent turned into a directory folds as the file's deletion and the directory's
 files, and a directory it turned into a file as the files' deletions and the file: every removal is made first, with
 the directories it empties, then every file written. A path reached through a link in either tree, a repository of
-its own - a submodule, or the agent's own - what the main tree holds in the way of the agent's files (a file where one
-needs a directory, or files the agent did not delete in a directory one replaces), a HEAD off the base and a move of
+its own - a submodule, or the agent's own - a path in a submodule of the main tree's - at or below a gitlink its index
+holds, said made by a commit or staged by an uncommitted edit, and left out where settled by hand, since nothing a fold
+wrote there could be committed in the main tree - what the main tree holds in the way of the agent's files (a file
+where one needs a directory, or files the fold does not remove in a directory one replaces), a HEAD off the base and a move of
 the base stopped part way are refused, and so is an anchor registry the agent changed as a file: its rows go in through its rows directory, weighed
-against the registry the fold would otherwise have written over. `--settled` is the one way out of a path's refusal, asked before the deletion branch so a
-deletion can be settled too; a settled path the fold does not weigh is refused as a misspelling. A path the main
-tree already holds as the agent does is already in, so a fold run again finds its own writes. A path this process
+against the registry the fold would otherwise have written over. `--settled` is the way out of any path's refusal -
+`--merge` only of a path whose merge is clean - and a deletion can be settled too; a settled path the fold does not
+weigh is refused as a misspelling. So is a `--merge`
+naming no path the fold weighs, while one naming a path it weighs with nothing left to merge is let stand, so the
+command line of a fold that stopped part way runs again. A path named with both `--merge` and `--settled` is a usage
+error, exit 10, before anything is read, and a `--merge` naming an anchor registry or the arm registry is refused. A path the main
+tree already holds as the agent does is already in, so a fold run again finds its own writes. Where the agent's
+worktree finds a name in any case, two paths it changes that differ in case alone are one file there; where its git
+index spells that file otherwise than its base does, found in any case, the agent renamed it in case alone, and
+each path is read only where a tree spells the file so (`AgentFold.Spellings`) - as its git index does, where it holds
+the file under one spelling, since a rename git makes in the index alone leaves a directory's name on disk as it was,
+and otherwise as its file system does (`PathCase.Spelled`) - never as the other. Where the main tree's git index spells
+that file otherwise, each tree holding it, and the main tree finds a name in any case too, a fold cannot
+write the rename - the main tree's git would go on naming the file as before - so it is refused by name, saying to run
+`git mv -f` there, forced since git finds the new name taken where the repository does not say it ignores case; once
+that is run, the old name is already in, absent from both. Every path the agent shares nothing for is weighed against
+the base's entry found as git spells it, as `Came` finds it, so a file renamed in case alone is weighed against the
+base's under its old name: an edit made with the rename merges with the main tree's, and a removal of the file in the
+main tree refuses it, never undone. A path this process
 cannot look at is never read as absent, which would take the agent's file for its deletion: the fold fails before
 anything is written. A file of either tree that changed after it was weighed is never written over: the agent's copy is
 refused where it no longer holds the SHA-256 weighed (`VerifiedFileCopy`), and the main tree's file is weighed again
 before each write and each removal. The fold stops there, exit 21, for a run again to weigh it anew.
+
+A path named with `--settled` was reconciled in the main tree by hand, and the fold acts on it (`AgentFold.MeasureAsync`,
+in this order): one leading out of the main tree is refused, as any is; one reached through a link in either tree, or a
+directory git will not look into in either, is left out and said to be (`FoldPlan.LeftOut`), since a fold never reads
+or writes it; one both trees and the seed agree on is inherited, so the line that ran once runs again; one the two
+trees hold alike is already in, and recorded; one where the main tree holds other than what the agent last shared - or,
+for a path it shares nothing for, than its base - is handed (`FoldPlan.Handed`); and one only the agent changed is
+refused, since nothing was reconciled there and handing the main tree's copy would undo its work. What is handed is
+sorted as any hand-over sorts what the main tree holds, asked what of the agent's own it would go over or through
+(`InTheWayOfHanding`), and measured in the agent's worktree; `ApplyAsync` hands it last, after every write of the main
+tree, through the one loop every hand-over takes - deletions, then files, each asked first to be what was weighed - and
+`FoldedAsync` records it through the ledger. Both trees and the seed then agree, so the agent's next fold starts from
+the reconciliation, and delete-agent's proof that nothing is left to fold holds without being told which paths were
+settled. rebase-agent's `--settled` is another option: there the person reconciled the agent's copy, which stays as its
+change on the new base.
+
+A path both trees changed - each holds a file there, neither is what the two last agreed on, and they differ - is
+resolved in one place, whichever command meets it (`TwoChanges`, made for each command with that command's
+`TwoChangePolicy`: the arm registry's path, the anchor registries' and the paths named with `--merge`). Every such
+path is weighed in full before anything is written, asked for or not, and what a three-way merge of it gives ends
+the path's refusal: clean, with the hunks each side brought; conflicting, with the conflicts shown under the
+refusals; or none offered, with why - one of a closed list (`NoMerge`) that owns each reason's sentence, so no
+command words one itself. The refusal then names the command that takes the clean ones. Asking, `--merge <path>`
+once for each, changes one thing: a clean merge is taken. None is offered for a deletion against a change, a path
+both trees made with nothing either held there before, a version that is a link or is reached through one, a file
+above 16 MiB (`TwoChanges.MostBytes`, the bound a kept copy has too, asked by one owner for every rule - of the files on
+disk before anything is read, and of every version once read, since a blob's size is known only then:
+`TwoChanges.WithinBoundAsync`), one whose `merge` attribute asks for another merge than git's own of text, or one git
+reads as binary or will not merge; and an anchor registry, which changes only through the rows an agent files, and the arm
+registry are never merged by line. The arm registry - the configured `mutations.registry` - is merged by arm instead,
+with no option given (`TwoChangeRule.Arms`): its three versions go to `MutationRegistryMerge.Merge` as the bytes each
+tree holds, nothing staged and nothing git merges, so the merge ends its lines as the main tree's file does; what both
+held is found as for any path, and is nothing only where neither tree held a registry before - shared bytes that cannot
+be found offer no merge, since a merge from nothing takes an arm one side removed for the other's addition. A clean
+merge is taken only once its text (`Merged.Text`) reads as a registry of the tree the command leaves
+(`TwoChanges.JudgedAsync`, through `MutationRegistryValidation.ValidateAsync` with the configuration the command
+loaded): `TreeAfter` makes that tree an `OverlaidRegistryFiles` over `TreeRegistryFiles.OfAsync` of the tree the
+registry is written into, each path the command writes there read only when the validation asks for it - a fold's from
+the agent's files, its merges from the bytes in hand, and what it removes gone - so a fold of hundreds of paths reads the
+few the registry cites. Arms the two changed differently (`ArmConflict`, shown under the refusals), a version that cannot
+be read as a registry, and a merged text that does not read as one - every problem listed as `check-mutations` words it,
+`as the fold would write it` - refuse the path, and `--merge` naming the registry is refused: it is never merged by line.
+Run again after a fold that wrote it into one tree only, the merge of its own result gives that result again. What both held is, for a path the agent shares, the bytes kept under the digest
+its seed records, used only where they still hash to it; where the seed was written by a build that kept none, the
+versions of the path in the main tree's history are read (`ListHeldInHistoryAsync`, at most 64 among the last 512
+commits that changed it), each as its commit holds it and then as a checkout writes it, and the first that hashes
+to the recorded digest is taken - kept by a fold that goes on to write, so it is looked for once, and never by a dry
+run. A version git cannot check out - a filter that fails on it - is passed over and said with the rest: the path is
+offered no merge, and nothing else of the fold depends on it. For any other path it is the blob at the agent's base. Nothing is merged against a guess: where neither gives
+it, no merge is offered, and the line says why. A fold merges in the main tree's forms, since the same bytes go to
+both trees and one digest is then true of both. Whether a file can be run is merged with its content
+(`TwoChanges.MergedBit`): the merged bit is the one that differs from what both held, where either side's does. A
+bit has two values, so two sides that both changed it changed it alike, and it never conflicts by itself - where
+something was held before: a registry both trees made, merged by arm from nothing, whose two copies differ in the bit
+is offered no merge (`NoMerge.BitBothMade`), since with nothing before neither bit is a change. What both
+held is the seed's record of the bit for a shared path - whichever source gave the bytes, since a kept copy is bytes
+under a digest and holds no bit - and the base's entry for any other (`ListEntriesAtAsync`, for those paths alone);
+each side's is its file's. Where the platform keeps no such bit, as on Windows, none is read, merged or set. A merged
+path is written after the fold's own writes: both trees' copies are asked to be what was weighed - the content, and
+the bit where the platform keeps one (`MergedPath.Into`, each `MergeTarget` with what it was when weighed) - before either is written, the main tree's is written first, and the path is recorded as shared, at the merged bytes and bit, only once
+both hold it. Stopped between the two, the main tree holds the merge, the agent its own copy and the seed what both
+held before; the same command run again merges those again, and since every change of the agent's is already in the
+merge, comes to the same bytes. A tree that already holds what the merge gives is not written again.
 
 The rows an agent files (`AgentRows`) are read strictly - a directory for each anchor, a file for each cell, read
 as write-anchor reads a cell file - and applied through `IAnchorRegistryService.ApplyAsync`, which composes each
@@ -668,11 +1045,22 @@ empty one (`AnchorCellComparison`) - only where the request accepts it (`--accep
 refuses before its files are written. Every refusal of a row is collected, so one run names them all. The directories a
 fold makes at the top of the tree are handed to the batch (`AnchorBatchRequest.Roots`), so its rows are judged the same
 before its files are written and after. The rows a fold applied are recorded as declared
-then (`applied-rows.json`): one the agent declares as it did then is never applied again, so a change the registries
-took since - the orchestrator closing the row, a sibling's cross-reference - stands; one it declares anew over it is
-refused where the registries no longer hold what the fold applied (`DifferencesAsync`, which holds a row to no rule a
-write is held to: one applied before a rule it breaks is still the row that was applied), as a file the main tree
-changed is.
+then (`applied-rows.json`), and every row the agent declares is sent with that record (`AnchorBatchRequest.Earlier`):
+one it declares as it did then is `Untouched` - never judged, never written, and not among the rows the batch's
+others may cite - so a change the registries took since, the orchestrator closing the row or a sibling's
+cross-reference, stands. One it declares anew over it is weighed cell by cell inside `ApplyAsync`, under the lock its
+write takes, so it is decided against the registries as they are written (`AnchorCellMerge`): each of its five cells -
+priority, status, trigger, closing, cross-refs - three ways, the earlier declaration the ancestor. A cell only the
+agent changed is written; one only the registries changed is kept, said, and kept again at each fold until the agent
+changes it, since the record stays the declaration rather than what the registries held - recording theirs would make
+the agent's unchanged file read as its change; one both changed alike is left; one both changed otherwise is shown
+with its three texts and written only where `--accept-over` names it, which consents too to what the registries'
+text loses. The row the registries are to hold (`AnchorRowOutcome.Effective`) is composed and judged by the same code
+as any change, so every rule about a status, a closure or a move between the registries judges it, and the rows read
+back are compared with it, not with what was declared. A declared cell is compared with a stored one through one
+`AnchorRowCells`, as a row stores it. A row an earlier fold applied that the registries no longer hold is refused, to
+be set by hand. The fold never writes the agent's row files: its report tells the agent, once, to write the
+registries' text into a kept cell's file before it changes it.
 
 ### Deleting an agent
 
@@ -690,7 +1078,10 @@ same path does not share) and every path it held with its digest. It deletes the
 what was kept - one that cannot be deleted is named and left, and stops the removal - and asks delete-worktree for
 the removal - never forced, its evidence check kept, so a file written after the copy was read back stops it rather
 than going with it - then proves the removal: directory gone, git's record gone, no copy recorded on a host. A
-question it cannot answer is named as that, never read as nothing left. An agent made under a worktrees root the
+question it cannot answer is named as that, never read as nothing left. Once its record says it is deleted, the bytes
+kept of what it shared go (`SharedCopies.Remove`): nothing merges from them any more, and they are not evidence, so
+delete-orchestrator asks no `--delete-evidence` for them; where they cannot be removed a line says so, and the
+deletion stands. An agent made under a worktrees root the
 configuration no longer names is refused with nothing touched, since delete-worktree looks under the root the
 configuration names.
 
@@ -926,7 +1317,7 @@ Three concepts that are frequently conflated, kept separate here:
 | Concept | Question it answers | Values |
 |---|---|---|
 | **Host** | Where does this run, and how is it reached? | this machine, a WSL distribution, an ssh host |
-| **Tree** | Which checkout am I acting on? | main checkout, a worktree, a host's copy |
+| **Tree** | Which checkout am I acting on? | main checkout, a worktree, a host's copy, a leg's own copy in the tree's `.legs` |
 | **Leg** | One unit of work with a verdict | `(os, processor, emulator?, project, toolchain, config, sanitizer?)` |
 
 A worktree is **not** a host. It is a tree, and it composes with any host. Keeping
@@ -971,6 +1362,45 @@ Where it runs is measured before anything starts, never declared:
 
 A native run and an emulated run are different legs. Neither their timings nor their
 failures compare.
+
+A leg's work happens in a tree, and which tree is not where it runs: a leg a host runs works in
+that host's copy of its tree, whatever anything else says. A leg this machine runs itself works
+where the first of these says anything: `--local-copy` or `--in-place` on the command, for that
+run of `build`, `test` or `run`; a runner's `writesTree`, which works in place; the leg's own
+`localCopy`, `true` or `false`; the repository's `defaults.localCopy`; and, where none says, its
+tree itself. A runner that writes the tree is refused before any host is measured where a host
+would run its leg, and with `--local-copy`, since what it wrote in a copy the next sync would make
+the tree again; a run check whose runner writes the tree runs within the leg's own work, and is
+refused wherever the leg it checks would work in a copy (`LegTrees.InLocalCopy`, the rule the
+placement places a leg by). The key is refused
+when the configuration is read on a leg that names a host, whichever value it gives, since a
+host's leg always works in that host's copy; the default never is, for it says nothing of such a
+leg. Where
+the leg works in a copy, the copy is kept in the tree's own `.legs` slot, one per tree and
+variant and named by the variant's key, made from the run's one reading of the tree as a host's
+copy is and kept warm between runs: its build directory is the variant's own within it, and a
+write the tree receives while the leg runs - a fold, a commit, an edit - ends nothing of the
+leg's, which ends on the tree its run read. A leg naming a worktree gets a copy of that worktree,
+of its own. The first build in a copy starts from nothing, said on the leg's line, for a build
+directory holds absolute paths of the tree it was configured in; files git ignores are not in a
+copy, by the one rule that withholds them from every copy; and the room a leg needs is reckoned
+for the tree its build is in, so a copy's first build is measured by what the variant came to in
+the tree and in every other copy, leg copies included among the trees a host is asked about. Each
+tree this machine holds is listed with its leg copies after it, named as its - `the main
+checkout's leg copy`, `worktree o1/xa's leg copy` - so a compiler working in one is named as that
+copy's and never as nobody's. A copy is a repository of its own, as every copy a sync makes is,
+and holds the tree's HEAD and a `.git` of its own; the leg works by the configuration and the
+actions the reading carried, while values, secrets and the run lock are read where this machine
+keeps them, and its records stay in the run's own directory. Its starting line names where it
+works - `starting on local, in its copy '<path>'`, or `, in '<tree>' itself` - and a leg in place
+that ends `inputs-moved` names the remedy, the key, the default or the option that would have run
+it on a copy, where the placement's own rule (`LegTrees.InLocalCopy`) could have put it in one: a
+leg another machine sent here, or one typed in a copy a sync made, already works in a copy and is
+named none. A copy whose build would pass this machine's path limit refuses the run before
+anything starts, with the numbers and the way out; a tree whose `.legs` git does not ignore
+refuses it naming `init`, as a sweep's workers do, before the run claims its directory of records,
+so nothing is left for the next run to call abandoned. `check-mutations` makes no copy of its own -
+its workers are already copies of one reading - and `clean` and `sync` place nothing in one.
 
 ### Emulators
 
@@ -1233,9 +1663,12 @@ PowerShell there, which all read a leading `~` as the home.
 - **Every line of DssHarness's own**, whatever the command: a leg's reason, a lock or
   free-space message, a refusal, a failure line quoting git or the system, and under
   `--verbose` a defect's report.
-- **The paths in its ledger**: `runDirectory`, a leg's `detail` and `space`, what a timing
-  pattern matched, and the instance a developer environment was set up from. The machine that
-  asked prints that `runDirectory` in its `logs of <leg> on <host>:` line. A survey's answer
+- **The paths in its ledger**: `runDirectory` and `mutationRecord`, a leg's `detail`, `tree`,
+  `records`, each of its `logs` and its `space`, an arm's and a control's `records`, the admission's
+  record and room, what a timing pattern matched, and the instance a developer environment was set
+  up from. The machine
+  that asked names each leg's own `records` in its `logs of` lines; the host's `runDirectory`
+  reaches it as `--json` alone. A survey's answer
   names where each program is, the mount of a filesystem, and every reason the same way. The
   directories the programs were found in stay whole, because the machine that asked hands them
   back for a hold there to look for its command in; so does each build directory it asked
@@ -1378,10 +1811,10 @@ from the report.
 | `passed` | Ran to completion, succeeded, and its success pattern matched | no |
 | `failed` | Ran to completion and reported failure; or a mutation arm's build failed at a step that is no object depending on its site - a link, another object - or named no step that failed | **yes** |
 | `unwitnessed` | Exited 0, but its success pattern never matched; or a mutation arm's build, or its paired control's, passed with an object that depends on a site not rebuilt | **yes** |
-| `inputs-moved` | Files the tests read changed while they ran; or, for a leg on another machine, a file its host's copy needed changed or was removed after the run began, before it was carried there, and nothing of the leg ran | **yes** |
-| `unmeasured` | Whether those files held still could not be established; or what a phase printed could not be read back from its log where a verdict was to be read from it; or ninja's log could not be read around a mutation arm's build, so nothing witnessed what it rebuilt; or the report a mutation arm's run wrote, or its binary's unmutated run, could not be read from its file | **yes** |
+| `inputs-moved` | Files the tests read changed while they ran; or, for a leg on a copy of its tree - a host's, or its own in the tree's `.legs` - a file was written, appeared or went while the tree was read, a file to carry changed after it was read, another command synced the copy between this run's sync and the leg taking it, or under `--use-staged` the copy is part made, absent or not this tool's; and nothing of the leg ran | **yes** |
+| `unmeasured` | Whether those files held still could not be established - where they could not be watched at all, with none of the leg's work run; or what a phase printed could not be read back from its log where a verdict was to be read from it; or ninja's log could not be read around a mutation arm's build, so nothing witnessed what it rebuilt; or the report a mutation arm's run wrote, or its binary's unmutated run, could not be read from its file | **yes** |
 | `contended` | Another process used the leg's build directory while it ran | **yes** |
-| `skipped-not-selected` | Filtered out by `--legs`; or a mutation arm `--arms`, or its S row, leaves out of the leg, and a leg whose sweep drives no arm | no |
+| `skipped-not-selected` | Filtered out by `--legs`; or a mutation arm `--arms`, or its S row, leaves out of the leg, or `--pending` leaves out because its `passed` holds, and a leg whose sweep drives no arm | no |
 | `skipped-unavailable` | No host can take the leg; its host or its tree could not be reached; whether a program it starts is there could not be established; git could not answer in its tree; or no worker of its sweep fits the room left or the path limit, and every arm of the leg with it | warning |
 | `skipped-tool-missing` | A required tool is not installed | warning |
 | `refused-locked` | Another run holds the lock for this leg, or its host's tree | **yes** |
@@ -1713,7 +2146,8 @@ tool replaces, where a green result had quietly stopped meaning anything.
 
 - The exit code is read from the process itself, never through a pipe or a wrapper.
 - Every test invocation declares a `successPattern`, checked on the platform section
-  merged over `all`. It is matched against the runner's own output and never against
+  merged over `all` - a section found by the leg's `os` however it is spelled, as every
+  per-system setting is read. It is matched against the runner's own output and never against
   anything the harness wrote: a log header that echoes the command line contains the
   pattern whenever the command does. An empty pattern matches anything and is refused
   when the file is read.
@@ -1776,12 +2210,37 @@ tool replaces, where a green result had quietly stopped meaning anything.
   its directory reaches that PATH, and never required. One that will not start once the leg is
   running fails the leg, naming the program and the reason the system gave: never a skip, and never
   `poisoned`.
-- A leg-running command asked for `--json` answers with its ledger whatever ended it, once its
-  command line was read: a refusal before any leg was placed, a selection no host could take, a
+- A leg-running command asked for `--json` answers with its ledger whatever ended it: a command
+  line the parser refuses, a refusal before any leg was placed, a selection no host could take, a
   log another run holds, a refusal while the legs ran - each is the document too, with the code
   the process exits with and the line it ends on. An interruption is said as one: `cancelled`,
   with exit 130, so a script never reads it as red. A machine that dispatched a leg reads the
   host's answer this way, so a host's refusal arrives as that refusal, in the host's words.
+- Every other command asked for `--json` that stops before it has anything of its own to say
+  answers in its own document's shape, never the ledger's: the agent verbs with the agent
+  document, empty; `list-orchestrator`, `list-worktree`, `legs`, `install-missing-tools`,
+  `check-ci-legs`, `check-anchor-citations`, `check-anchor-balance` and `fix-line-endings` with
+  their own document holding nothing, after `exitCode` and `summary` (`ReportJson.Stopped`);
+  `check-mutations --list` with its listing, no legs; and `read-anchor` and `read-anchors`,
+  whose document is an array, with that array empty - the process's exit code and the line it
+  ends on say the rest. Each command registers which where it is wired (`CommandRunner.Wire`,
+  `JsonAnswer`), so the plumbing answers for it without choosing by its name: where the parser
+  refuses its command line, the first error the line it ends on, wherever the parser itself read
+  `--json` as that command's own and set - never as another option's value, after `--`, before
+  the command's name or given twice with a value each (`CommandRunner.UnparsedAsync`); where it
+  stops the command itself; and where the body answers with no document - a usage error or a
+  refusal returned before anything is weighed (`CommandRunner.Report`): a command asked for
+  `--json` answers with one document on every exit save its usage and a `--json` given twice
+  with a value each.
+- One reader reads a command line's flags wherever the parser may have refused it
+  (`CommandFlags`): whether `--json` is set, and each flag a stopped document says -
+  `fix-line-endings`' `check`, `install-missing-tools`' `dryRun`, and whether `check-mutations`
+  answers with its listing. It never throws: a flag whose own value the parser refused, given
+  twice with a value each, reads as not given. A command's body reads `--json` as that reader
+  read it where the command was wired (`CommandContext.Json`), never from the option again.
+- The one exit of a command asked for `--json` without its document is its usage: `--help`, `-h`
+  or `-?` prints it instead, exit 0, whatever else the command line holds, even what the parser
+  would otherwise refuse - the parser answers it before any command's action, its errors cleared.
 - An emulated leg's emulator has passed its witness on that host before the leg starts.
 
 ### Inputs that hold still
@@ -1811,32 +2270,97 @@ undone before word of it is looked at, and one of the same size undone in place 
 tool that also puts the old time back. The times are compared for equality alone, never
 ordered.
 
-The watch goes only as deep as the inputs: each directory holding one - the root among
-them - is watched for its own files only. A directory tracked for a placeholder, as init
-keeps the worktrees root and `.orchestrators`, costs one shallow watch, and other trees
-building below it are never heard. Measured: watched all the way down, an agent's build
-below the worktrees root overflowed the operating system's buffer, and a run in the main
-tree that only read its own inputs ended `unmeasured`. Past 64 watches, the top-level
-directories holding the most directories of inputs are watched all the way down instead,
-until the rest fit, and a tree whose inputs lie in more than 64 top-level directories -
-the root counted among them where it holds one itself - is watched whole, other trees'
-builds below the worktrees root heard with the rest.
+The watch goes only as deep as the inputs: each directory holding one is watched for its
+own files only, and each directory above one - the root among them - for the names of the
+directories in it alone. A directory tracked for a placeholder, as init keeps the
+worktrees root, `.orchestrators`, `.mutations` and `.legs`, costs one shallow watch, and
+other trees building below it - an agent's worktree, a sweep's worker, a leg's copy - are
+never heard. Measured: watched all the way down, an agent's build below the
+worktrees root overflowed the operating system's buffer, and a run in the main tree that
+only read its own inputs ended `unmeasured`. Past 64 directories besides the root's own -
+each holding inputs and each above them, watched for names alone, counted alike - the
+top-level directories watching the most of them are watched all the way down instead, until
+the rest fit, each hearing the directories inside it through its own watch, and a tree whose
+inputs lie in more top-level directories than 64 is watched whole, other trees' builds below
+the worktrees root heard with the rest. Inputs in exactly 64 top-level directories still keep
+a watch each. The bound is the watcher's, not the watch's: each one .NET makes is a handle,
+a buffer and a thread, and on Linux, where it stands in, an inotify instance of a user's 128.
 
-A leg on another machine tests that machine's copy, which holds still under it; what can
-move is the tree here, before the copy is made of it. So a run reads each tree its hosts'
-copies are made of once, as it begins and before any leg's work, and every copy is made from
+On Linux there is no such bound. Every directory that holds an input is watched for its
+own entries, each above one for the names of the directories in it, and none all the way
+down, through one inotify instance the process makes at its first watch and keeps until it
+ends - or until reading it fails, which ends every watch on it `unmeasured`, and the next watch
+makes another - read by one thread. .NET's watcher takes an
+instance for each directory it watches, and measured, three legs at once in one
+distribution held 120 of a user's 128; through the one instance they hold three. The
+kernel gives one watch for a directory however often it is named, so spans watching the
+same directory share it, and it is removed when the last of them ends; a span watching it
+for names alone is told only of what the kernel marks as a directory. The instance is made
+close-on-exec, so no program a leg starts holds it. The instance's calls are bound from the
+C library by name - `libc.so.6`, then `libc.so`, then `libc` - and where none of them has
+them, .NET's watcher stands in, as on Windows and macOS, and the process warns once
+(`watch: WARN - inotify could not be called directly on this machine ...`). A limit met is
+never a reason to fall back. All of this goes when the floor this tool runs on is a .NET
+whose own watcher shares one instance (.NET 11); the seam it stands behind - which
+directories to watch, decided once, apart from what watches them - stays, and so do the
+rules below.
+
+A directory counts for the inputs in or below it. One that holds inputs, or lies above
+some, going, arriving or changing its name counts every input in or below it, under both
+names of a rename: each went or arrived with it, and a directory moved aside and put back
+reads the same at both ends, as a file does. It is heard on every system however deep the
+inputs lie, since the directory it lies in is watched for the names in it - the root
+among them, so a directory of inputs that is not there when the work begins is heard
+arriving. A directory merely written to - as one is each time a file is made in it -
+counts none, or a build writing beside sources would count every source above it. On
+Windows a directory above a watched one cannot go or change its name while the watch
+holds it: the system refuses whoever tries, as it does any directory with a handle open
+below it, so there the rule holds by the move never happening.
+
+A watch that cannot start stops the work before it begins. The leg ends `unmeasured` at
+once, exit 3, with no phase run - a runner's segment not begun, a build's record not
+written - saying `the inputs could not be watched, so none of this work was run:` and the
+machine's reason, and whatever the watch had taken is released before the refusal leaves.
+Run first and called `unmeasured` after, as it was, the whole of the work was spent to
+learn what was known before it began. A build that had decided to start from clean has
+deleted its directory by then; the decision stands for the next build. A watch that
+started and is lost while the work runs - its buffer or its queue overflowed, its
+directory gone - still ends the leg `unmeasured`, as the work ends. The remedy for a watch
+that could not start is the machine's, not the tree's settling: free or raise what the
+reason names, or put back the tree the watch was to be put on, then run again. A run
+check whose own runner's watch cannot start was not run, and confirms nothing ([The
+gate](#the-gate)).
+
+On Linux the reason can be one of two limits, each said with what `/proc` shows of it:
+this user's inotify instances all taken - `fs.inotify.max_user_instances is 128, and
+/proc shows 128 held: 51 by pid 4242 (dssharness), ...` and `This process needs one, however many legs it runs.` - or its
+watches run out - `fs.inotify.max_user_watches is 8192; this work watches 3120
+directory(ies) - those its inputs lie in and those above them - one watch each, and /proc
+shows 6011 held: ...`. The holders are this
+user's processes, the most first, three named and the rest counted; where `/proc` cannot
+be read the sentence ends at the limit. The leg does not wait for an instance, and
+admission does not count them: at one instance a process this tool is not what holds
+them, and another program's hold ends on no schedule this tool can read. What the person
+can act on is who holds them, which is what the leg says.
+
+A leg on another machine tests that machine's copy, and a leg here that works in a copy of
+its tree tests that copy; each holds still under it, and what can move is the tree, before the
+copy is made of it. So a run reads each tree its copies are made of - its hosts' and its legs'
+own here - once, as it begins and before any leg's work, and every copy is made from
 that reading, as [Syncing a tree](#syncing-a-tree) says: an edit put back before a host's
 sync comes round leaves no trace there, and where a file to be carried no longer holds what
 was read - edited, or removed - the legs on that copy are `inputs-moved`, naming it, with
-nothing of them run, while the legs on other copies still report. A file that goes while the
-tree is being read does the same to every copy of it. Measured: an edit a mutation-testing
+nothing of them run, while the legs on other copies still report. A reading confirms itself: a
+file written, appearing or going while the tree is being read does the same to every copy of
+it, naming the path. The run says which commit it read the tree at, and each leg on a copy says
+it again with its verdict. Measured: an edit a mutation-testing
 tool left in the tree for 7.3 seconds of a run, and put back, was built and tested on a Mac
 and reported `failed`, while the tree was the same at the run's start and end. A run with
-`--use-staged` reads nothing, and tests whatever the copies hold. A leg on this machine is
-held to its own guards instead, which watch its inputs while it builds and while it tests: an
-edit made after the run began and left in place reaches a leg here that starts after it, which
-builds and tests the edited tree from start to end, never a mix of two - so one run's legs
-here and on hosts can have tested different trees.
+`--use-staged` reads nothing, and tests whatever the copies hold. A leg that works in its tree
+itself on this machine is held to its own guards instead, which watch its inputs while it builds
+and while it tests: an edit made after the run began and left in place reaches such a leg that
+starts after it, which builds and tests the edited tree from start to end, never a mix of two -
+so one run's legs in their trees here and its legs on copies can have tested different trees.
 
 ### Clocks are never trusted to order anything
 
@@ -1936,9 +2460,15 @@ while a gate ran turned a green suite red, with four test processes live at once
   `/proc/stat`'s `btime` to ticks-since-boot produces — moves for every live process the
   moment the clock steps, and every live holder then reads as a recycled id at once. On a
   host whose clock steps by about 25 seconds every few seconds, that is not an edge case.
-- What sampling cannot see is stated in the report: a tool started from inside the
-  build directory with a relative path, since another process's working directory
-  cannot be read, and processes that do not expose their command line.
+- What sampling cannot see is stated in the report, and said under `--verbose` one line
+  each, as `sampling cannot see` and the limit. Two hold on every machine: a tool started
+  from inside the build directory by a relative path, since no process's working
+  directory is read; and the command line of a process that does not expose it,
+  so such a process is counted and never matched against the build directory. Where no
+  process sampled had a command line that could be read, it cannot see any command line
+  on this machine, so nothing was matched against the build directory; and where some
+  had no start time, when some processes on this machine started, so a process id
+  reused during the leg is reported as one process.
 - Selecting two legs that resolve to the same build directory is refused before either
   starts.
 
@@ -2021,20 +2551,24 @@ while a gate ran turned a green suite red, with four test processes live at once
   same name - made by hand, or by another tool, outside the worktrees root - still holds: synced by
   both, each would replace the tree the other put there. Deleting a worktree asks each host that
   holds one of its copies to remove it, only where the harness made it, and no other host - and
-  first the mutation workers kept beside it, asked about before any goes, as beside the worktree
-  itself: one a sweep still running there holds keeps the copy, still recorded, as does one that
-  cannot be removed or told, and a copy kept once some had gone says which went (see *Mutation
-  testing*). A host is
+  first the mutation workers kept in it, asked about before any goes, as in the worktree itself:
+  one a sweep still running there holds keeps the copy, still recorded, as does one that cannot be
+  removed or told, and a copy kept once some had gone says which went (see *Mutation testing*). A
+  host is
   reached through the worktree's own configuration, read before it goes - its branch may declare a
   host the configuration the command runs in does not - or else through that one; a host neither
   declares is not asked, and its copy is forgotten, named. Each copy is removed under the lock a leg
-  this machine runs there takes, the record read again once it is held, so a copy another worktree
+  this machine runs there takes, taken with everything kept inside the copy (`RunLock.RemovalCommand`,
+  on `HostCopyRemover.RemovalLock`), so a sweep this machine runs there - its key in the copy's
+  `.mutations` - keeps the copy as a run in it does, and the dry run of a deletion names it as one,
+  while no sweep takes a key there once the removal holds the copy;
+  the record is read again once the lock is held, so a copy another worktree
   of the name has claimed since is left for it; it is forgotten before that lock is let go, and its
   marker goes last, so a removal that stops part way leaves the rest marked as the harness's. The
   host is asked from its home directory, which is there when the directory the copy was kept in is
   not, so a copy whose directory is gone is answered as not there, and forgotten.
   A copy that cannot be removed then stays recorded, and the deletion fails naming it though the
-  worktree is gone, with the highest code a copy was left with - 13 where a run holds one or it was
+  worktree is gone, with the highest code a copy was left with - 13 where a run or a sweep holds one or it was
   refused, 15 where its host is unreachable, 20 where the removal failed there - so whoever deleted
   it learns something of it is left; deleting the worktree again finishes the job, and for a name
   whose worktree is gone removes what any worktree of that name left, never the copies of one that
@@ -2129,12 +2663,38 @@ tree exclusively, since it rewrites files every variant reads. Building or testi
 the tree shared and its own variant exclusively, so variants build side by side but never
 while their sources are being replaced. A lock is released only by the run that took it.
 A sweep of a leg's mutation arms builds in workers of its own, never in the tree, and takes
-their key exclusively instead - spelt as one more copy beside the tree, which no copy is - so
+their key exclusively instead - spelt as one more copy in the tree's `.mutations`, which no copy is - so
 it meets another sweep of the leg's variant and a `clean` of its workers, and never a build,
-test or sync of the leg (see *Mutation testing*).
+test or sync of the leg (see *Mutation testing*). A leg that works in a copy of its tree holds
+only the copy: its sync takes `'<tree>/.legs/<key>' on local` whole, and it then holds that copy
+shared with its variant, as a host's leg holds the host's copy - so a fold, a rebase, a refresh,
+a commit or an edit in the tree meets no lock of the leg's, and the leg ends on the tree its run
+read. A fold that lands while the run is still reading the tree ends the legs on its copies
+`inputs-moved` with nothing run - seconds, at the run's start - and the same run started again
+reads the folded tree.
 
 - A held lock **refuses immediately**. It never waits: silently blocking for
   hours is worse than a refusal that names the holder.
+- A tree on this machine is **one key however it is reached** (`RunLock.Key`): its full path with
+  every link and junction along it followed, as git spells a tree, told whenever the lock is read -
+  by a run, a dry run, a clean or a deletion alike - for each entry and each request, once a
+  reading. An entry keeps its tree as its run spelled it, so a build before this one, which
+  compares trees as spelled, still meets what it spelled alike, and this one meets whatever it
+  spelled: a worktree kept on another disk through a worktrees root that is a link, or a copy kept
+  through a `.legs` or `.mutations` that is one (`init` allows it), is spelled through the link from
+  the main checkout and as git resolves it by a run inside it; compared as spelled, a deletion, a
+  clean or a sync asking for a copy one way missed a run holding it the other, and removed or
+  replaced it under that run. A request whose links cannot be followed is refused before anything
+  is written, never keyed as spelled; a host's tree, whose links this machine cannot follow, is the
+  key it is spelled as. An agent's trees are taken as git names them (`AgentService.Holds`), as
+  builds before this one took them.
+- A **removal** takes the tree with everything kept inside it: a tree taken whole under
+  `delete-worktree` (`RunLock.RemovalCommand`), as every removal of a host's copy is recorded, by
+  this build and those before it, rather than by a field of its own, which an older build would
+  refuse the lock file over. Asked for, an entry on that host for anything inside the tree - a
+  sweep's key in a host's copy - is in its way, as one for the tree is; standing, its entry is in
+  the way of whatever is asked inside the tree, so no sweep starts in a copy while it is removed.
+  A sync, a build or a test of the tree still meets only what is on the tree itself.
 - A holder is named by its process, run and start - `pid 12, run R, since T` - never by its
   machine's name, which only its record keeps, to tell a holder here from one elsewhere: a host's
   lines reach the machine that sent it work, and wherever that machine's output goes, and a
@@ -2195,9 +2755,15 @@ too (see *Mutation testing*). Each names its run from its first line, `run <id>`
 `--json`, on every exit: the run is begun before anything can refuse it, so a run refused before
 it had a directory - a leg nobody declared, a selection no host could take - is named too. It
 keeps no records, and its id is all there is to cite it by. A command line the parser itself
-refuses never started, and names none. A leg another host ran was run there under a run of its own, and its
-line names that host's directory, as `logs of <leg> on <host>: <directory>` and as the leg's own
-`runDirectory`, with the host's home written as `~` (see "A host's home is `~`").
+refuses never started, and names none. Each leg that kept records has a `logs of` line of its own,
+said as its verdict is and again in the run's closing lines - the same sentence, one owner
+(`LegRecords.Said`) - naming the leg's own directory and the phase logs in it by name, in the
+order of their names; `--json` holds them as the leg's `records` and `logs`. A leg that kept none -
+refused, not admitted, skipped - has no line. A leg another host ran was run there under a run of
+its own: the dispatcher names it once, `<leg>: run <id> on <host>`, never relaying the host's own
+run line (a later one of that shape is a program's own output, and is relayed as it came), the
+leg's `--json` holds the id as `hostRunId`, and its records and logs arrive as the host spelled
+them, its home written as `~` (see "A host's home is `~`").
 
 ## Disk space
 
@@ -2225,24 +2791,35 @@ removes from before it has removed - no sync, no lock entry, no run records.
   removing the link would free nothing and have the next build fill this disk instead.
 - **Said per leg.** Each leg's line says what was removed and the room left on its filesystem,
   or, with `--dry-run`, what it holds, removing nothing; `--json` carries both as the leg's
-  `space`. A leg on a host is asked of the DssHarness there, in the copy - once the copy is known
-  to be there, so a tree never synced to a host has nothing removed rather than a host refusing it.
-- **A leg's mutation workers go with it.** The workers its sweeps keep beside its tree are removed
+  `space`. A dry run ends as the clean would: a leg a run is building, whose workers a sweep
+  holds, or whose copy a run holds, is `refused-locked` in the dry run too, exit 13, the holder
+  named - with what each holds still said, and still measured, for the dry run asks every
+  question the clean asks and moves nothing. A leg on a host is asked of the DssHarness there, in
+  the copy - once the copy is known to be there, so a tree never synced to a host has nothing
+  removed rather than a host refusing it, and asked here first on a dry run as in a clean, so the
+  host is sent nothing a run of this machine's holds off.
+- **A leg's mutation workers go with it.** The workers its sweeps keep in its tree are removed
   the same way, and first, so the room its line says is the room once they are gone: its own
   variant's, its self-test's, and those of a variant no leg of that host and tree builds any more,
   which nothing else would ever remove - another leg's are that leg's. Each variant's go under the
   lock a sweep of it takes rather than its build's, and are said on the leg's line with what they
   held, which `--json` carries as `space.workerBytes` - what was removed of them, 0 where every one
   there was kept, or in a dry run what is there - wherever anything named as a worker of the leg's
-  was found: a leg whose build directory was not measured, a link, locked, not removable or on a
-  host holding no copy of the tree, carries a `space` saying its workers alone. A worker a live
-  sweep still claims is kept, the leg `refused-locked`, as is one whose claim cannot be read; one
-  that cannot be removed fails the leg, whose line still says what went, and counts it; one whose
-  sweep died holding it is released first, and said; and a directory under a worker's name that no
-  sync made is said and left. Where a host holds no copy of the tree, nothing there can run a
-  clean, and the host is asked instead to remove the workers left beside where the copy was (see
-  *Mutation testing*): one a sweep holds there leaves the leg `refused-locked`, one that could not
-  be removed `failed`, and a removal that was stopped `stopped`.
+  was found: a leg whose build directory was not measured, a link, locked or not removable,
+  carries a `space` saying its workers alone. A worker a live sweep still claims is kept, the leg
+  `refused-locked`, as is one whose claim cannot be read; one that cannot be removed fails the leg,
+  whose line still says what went, and counts it; one whose sweep died holding it is released
+  first, and said; and a directory under a worker's name that no sync made is said and left. A host
+  holding no copy of the tree holds none of its workers either, since they were kept in the copy:
+  it is asked nothing. What `clean` measures of a build directory never reaches a slot.
+- **The copies its legs work in go too.** The copies of the tree kept in its `.legs` slot are
+  removed the same way - the leg's own variant's, and those of a variant no leg builds any more,
+  whatever the configuration says now, for a copy made under a setting since changed is still the
+  leg's - each under the lock a run takes on it, so one a run is building in, or replacing, is
+  kept and said, the leg `refused-locked`. `--json` carries what they held as `space.copyBytes`,
+  beside the workers' `workerBytes`, and a leg whose build directory was not measured carries a
+  `space` saying its workers and copies alone, where any is there. `delete-worktree` removes them
+  with the worktree, asked about before anything of it goes, as it asks the workers.
 
 A host whose DssHarness is older than this machine's is brought to this build first, as it is by
 every command that asks it anything, and that write needs room. A host that is both full and
@@ -2263,7 +2840,7 @@ heavy leg also claims its room as it is let start, held against every other comm
   naming whose - less what the directory already holds. A build records what its directory came
   to in its `.harness-build`, summed from the walk it already makes of the directory as it
   finishes. The other copies are the main checkout's and every worktree's, an agent's or a plain
-  one: a consumer's leg, placed where neither its own tree's copy nor the main checkout's had built
+  one, and each tree's leg copies after it: a consumer's leg, placed where neither its own tree's copy nor the main checkout's had built
   its variant, filled a 47 GiB disk under two other legs while three worktrees' copies beside them
   had each recorded about 11.4 GiB. The most of them, since one variant comes to about as much in
   every tree, and a need said over keeps a leg out until there is room where one said under fills
@@ -2286,7 +2863,7 @@ heavy leg also claims its room as it is let start, held against every other comm
 - **Only a leg its command builds.** `sync`, `clean` and a run's leg it does not build need no
   room: clean is how room is made. A run builds a leg as its runner, its steps and its run checks
   need, on that leg's system: a step limited by `runOn` asks only about the legs of its systems.
-- **A sweep fills its first worker.** A sweep of a leg's mutation arms builds in workers beside
+- **A sweep fills its first worker.** A sweep of a leg's mutation arms builds in workers kept in
   its tree, never in the leg's own build directory, and is placed by the room its first worker's
   build still needs - the least it runs with; each worker is then measured as it is planned. A
   self-test builds no tree of the leg's at all, and no host is asked about its room.
@@ -2317,17 +2894,51 @@ directory here cannot drift apart.
   indexed, given its configuration, verified, marked complete or marked adopted: what it carried
   before stopping stays on the host. `sync` fails, exit 20, saying so, and a run's legs on that copy
   are `inputs-moved`.
+- **A reading confirms itself.** One pass hashes each file at its own moment, so a write that
+  begins and ends while the tree is read gave a reading holding some files as they were before it
+  and some as after - and a warm copy, which already held the earlier files, was carried only the
+  later ones, and verified against a tree that never existed. So the reading notes how each file
+  stands - its length, and when it was last written and created - before hashing it, and once every
+  file is hashed it lists the tree again and looks at each file, reading no byte: the same files,
+  each standing as it did, or the reading is refused, `inputs-moved`, `'<tree>' changed while it was
+  read: '<path>' was written` (or `appeared`, or `went`) `. Let it settle, then run again.` A
+  reading that passes is the tree as it stood the instant the hashing ended. The times are
+  compared for equality alone; what the second look cannot see is a rewrite of the same length
+  that puts the old times back. A host reading its own copy's manifest makes no second look: that
+  copy holds still under the sync that asks.
+- **A finished copy records which reading it holds.** The reading says the commit the tree's HEAD
+  named and how many of the paths it carries git calls changed; the marker a finished sync writes
+  records both, and the run that read the tree, as `commit`, `uncommittedChanges` and `readBy`, the
+  names a leg's `tree` gives them - also where nothing else of the copy changed, since what it holds
+  is then that run's reading. A copy a sync begins writing records none. A run's sync releases the
+  copy before its legs take it, and another command's sync can run in between, so each leg asks the
+  copy, under its own lock, whose reading it holds: another's ends the leg `inputs-moved`, `'<copy>'
+  on <host> was synced again by run <id> after this run made it the tree it read, so it no longer
+  holds that tree.`, with nothing of it run; and so does a copy gone, part made or unmarked by then,
+  `'<copy>' on <host> no longer holds the tree this run read into it: it is not there, or no sync of
+  this tool finished it.` - or, for one part made, what its marker says of it. A build from before
+  this one refuses a marker carrying a reading as unreadable, as it refuses any member it does not
+  know, so it reads no copy this one finished. Only going back to such a build meets that - a host
+  is brought to the build of the machine that asks it, and one ahead of that machine is refused -
+  and the remedy is to update again, never to delete the marker, which would leave the copy one to
+  take over.
+  The run says each reading as it is made - `'<tree>' was read at commit <12> with 2 uncommitted
+  change(s)`, or `with no commit yet` - and each leg on a copy says which it tested with its
+  verdict, `tree read at <12>`, or under `--use-staged` what the copy records, `tree staged at
+  <12> by run <id>`. In `--json` each leg's `tree` holds `path`, the tree it worked in as its
+  machine spells it, and for a copy `copyOf` and, where known, `commit`, `uncommittedChanges` and
+  `readBy`: a leg in its tree has `path` alone.
 - **A copy a sync is writing is marked unfinished**, before its first write or deletion - or its
   configuration, where that changes - and complete once it is verified, as a takeover is marked
   begun and finished. A sync that stops part way - a tree that moved, a connection that dropped, a
   verification that failed - leaves part of one tree and part of another, which no run began with.
   Marked so, the legs of a run with `--use-staged` on that copy are `inputs-moved`, read by the
-  machine that would have synced it, and `sync --artifact` carries nothing into it, until a sync
+  machine that would have synced it - as are those on a copy that is not there, or that no sync of
+  this tool marked - and `sync --artifact` carries nothing into it, until a sync
   finishes it. The next ordinary sync, which plans from what the copy holds, puts it right; marking
   a copy again keeps when, and by which machine, it was made. The mark is written into the marker
-  only while it holds, so a copy every sync finished carries the marker a build from before it
-  reads; such a build refuses an unfinished one as unreadable, and the remedy is to upgrade, never
-  to delete the marker, which would turn the copy into one taken over.
+  only while it holds, so a finished copy's marker never says it; a build from before the mark
+  refuses an unfinished one as unreadable, with the same remedy.
 - **The copy is the tool's.** Sync creates it, records that it did, and refuses to write into a
   directory it did not create. It deletes whatever the source does not have, so taking over a
   checkout somebody made by hand could delete work nothing here knows about, on a machine whose
@@ -2343,15 +2954,18 @@ directory here cannot drift apart.
   every host, so a flag meaning "go ahead" would take over whatever unexpected directory is found
   at another host's `repositoryPath`, a mistyped one included, without being asked again. A host
   nobody named is refused exactly as it would have been without the flag, and told which spelling
-  would take it.
+  would take it. A directory on this machine - a leg's copy - is never taken over: no command
+  that reaches one takes an adopt list for it, so its refusal names what a person can do, to move
+  it away or run the leg with `--in-place`.
 - **It says what that is about to cost before it starts** — not only in the refusal, because
   somebody who reads the flag in the help and types it never sees a refusal.
 - **The marker records which it was.** Afterwards a copy taken over and one the tool made are the
   same directory, and only one of them deleted somebody's files; the marker is the only thing left
   that can say so.
 - **What survives an adoption is narrower than it looks.** Its `.git` and so every commit, branch
-  and tag in it, the rest of `.harness-config`, the worktrees root and whatever `sync.neverTransfer`
-  names are protected from the deletion — though `config.json` there is replaced with this tree's,
+  and tag in it, its `.orchestrators`, `.mutations` and `.legs`, the rest of `.harness-config` save
+  the runner's actions, the worktrees root and whatever `sync.neverTransfer` names are protected
+  from the deletion — though `config.json` and the actions there are replaced with this tree's,
   and its git HEAD is moved, detached, to this tree's commit where it names another, both of which the refusal says. The ignore list is *not* read from that host: it is this tree's, listed by asking
   git which ignored files exist **here**. A directory only the host has — a build tree under a name
   `sync.neverTransfer` does not carry, a `node_modules`, a virtual environment — is ignored by
@@ -2374,10 +2988,14 @@ directory here cannot drift apart.
   behind a linked directory is outside any list a plan can build. Reported rather than guarded
   against: a build directory pointed at another volume is ordinary, and refusing to write through
   one would refuse `--pull build/...` — a path the reader named, inside the tree they named.
-- **`--dry-run` shows the plan instead of refusing,** for a directory the tool did not create and
-  for one whose deletions are over the bound. A preview changes nothing, so there is nothing for
-  either refusal to protect — and the bound's own message says to run with `--dry-run` to see the
-  list it was until now refusing to show.
+- **`--dry-run` shows the plan, and exits as the sync would.** For a directory the tool did not
+  create, for one whose deletions are over the bound, and for a worktree's copy another worktree
+  of the same name still holds, the dry run lists what the sync would do - the bound's own message
+  says to run with `--dry-run` to see the list - and exits 13 with each refusal the sync would
+  make, in its own words: both, for a directory not made here that is over the bound too. Who holds
+  a worktree's copy is read, and nothing recorded. A dry run is the answer to "would this go
+  through": a code of 0 says only that nothing known at that moment stops it, as every dry run's
+  does (see *What a dry run answers*).
 - **The copy is created, with its parents,** when the declared `repositoryPath` is not there, so
   the first sync to a fresh host needs no hand-made clone. A path that exists and is not a
   directory, or that cannot be created, is a named failure — never a silent fallback to
@@ -2478,8 +3096,9 @@ directory here cannot drift apart.
   sync. A copy that only ever gains files is not a copy of the tree: a deleted source file keeps
   compiling, a deleted test keeps running, and a renamed file exists twice, so the leg's verdict
   describes a tree that no longer exists.
-- **The never-transfer floor is also a never-delete floor.** `.git`, `.harness-config`, the
-  worktrees root and everything under `sync.neverTransfer` are neither written nor deleted. A
+- **The never-transfer floor is also a never-delete floor.** `.git`, `.orchestrators`,
+  `.mutations`, `.legs`, the worktrees root, everything under `sync.neverTransfer`, and all of
+  `.harness-config` but `config.json` and the runner's actions are neither written nor deleted. A
   path the harness will not write is one it cannot know the source lacks, so deleting it would
   remove the host's own state rather than a file the source gave up — including the build
   directories that make an incremental build possible. `sync.exclude` is different: the source
@@ -2504,17 +3123,20 @@ directory here cannot drift apart.
   20,000-directory budget before it reached most of the tree, and said so on every sync. The
   harness's own directory is searched all the same, though git ignores most of it by design,
   because a `.secrets` there is what the search was written to find - save what the harness writes
-  there as it works, each run's records, the record of host copies and each action's own `build`
-  and `artifacts`: the run state of whichever machine made it, which no sync carries and no one
-  edits by hand, where a name neither counts nor is looked for below. Counted, a fresh worktree's
+  there as it works, each run's records, the record of host copies, the record of mutation verdicts,
+  the dependency sources a mutation worker is given and each action's own `build` and `artifacts`: the run state of whichever machine made it, which no
+  sync carries and no one edits by hand, where a name neither counts nor is looked for below. Counted, a fresh worktree's
   first run, its own `build` not made yet, was told the `build` entry `init` writes protected
   nothing, having found an action's working space, and to write `**/build`, which would withhold
   every source directory of that name too. A search that still runs out says so; it never reads as
   having found none.
-- **The copy gets `.harness-config/config.json`, and nothing else from that directory.** A leg
-  placed on a host runs DssHarness there, and DssHarness in a directory holding no configuration
-  refuses as not initialised — so without it the copy is a tree no leg can run in. The rest of the
-  directory is connection data, credentials, locks and logs, each local to a machine by design.
+- **The copy gets `.harness-config/config.json` and the runner's actions, and nothing else from
+  that directory.** A leg placed on a host runs DssHarness there, and DssHarness in a directory
+  holding no configuration refuses as not initialised — so without it the copy is a tree no leg can
+  run in. The actions cross as any file of the tree does - never what git ignores, never an
+  action's own `build` or `artifacts` - since a leg there reads its runner's action file from the
+  copy. The rest of the directory is connection data, credentials, runner values, locks and run
+  state, each local to a machine by design.
 - **Deletion is bounded.** A sync that would delete more than `sync.maxDeleteFraction` of the
   copy stops and changes nothing. A mistyped repository path makes the source look empty, which
   is indistinguishable from a source that deleted everything, and without the bound that empties
@@ -2655,7 +3277,8 @@ from that host's own copy of the tree — the host reads `config.json` and the r
 from it — so the tree is put there whether or not anything is compiled. A runner that skipped the
 sync because it compiles nothing would find no configuration on the host and fail saying so.
 `--use-staged` is how a run says the copy there is already current - which it is not after a sync
-that stopped part way, or failed its verification; a copy so marked makes its legs `inputs-moved`.
+that stopped part way, or failed its verification; a copy so marked makes its legs `inputs-moved`,
+as does one that is not there, or that no sync of this tool marked.
 
 Runners are keyed by name because a name is how one is selected — by `run`, and by the checks
 below. An unnamed entry in a list could not be selected at all.
@@ -2833,6 +3456,9 @@ An expected exception may carry `runChecks`, and until every one passes it excus
 - The runner a check names is never the one carrying it, and a runner reached that way may carry
   no checks of its own, so a check is one level deep and cannot recurse.
 - **Unconfirmed, the failure stays genuine.** That is the whole point of the gate.
+- A check that could not be run - refused, or its runner's inputs not watched - confirms
+  nothing and says why: `could not be run (...), so nothing confirms the entry`. The run it
+  gates was run, so its failure stays genuine, never `unmeasured`.
 - **The window is the failing unit's own** — its output up to its verdict line — never a
   once-per-run sample. A failure is excused only when at least `minStepsInFailureWindow` steps of
   at least `minStepSeconds` fall inside that window. A once-per-run sample was measured charging
@@ -2847,7 +3473,8 @@ arm's target, proves every object that depends on the site was rebuilt, runs the
 whole, judges what reddened against the declaration as an exact set, and puts the site back,
 checked by its hash. A BUILD-RED arm must instead stop the build at an object that depends on its
 site, and its paired positive control must build. All of it happens in worker copies of the leg's
-tree, never in the tree itself, which is only ever read. A leg's verdict is the worst of its own -
+tree, kept in the tree's `.mutations`, never in the tree's own files, which a sweep only ever
+reads. A leg's verdict is the worst of its own -
 its workers' builds and its test binaries' controls - and its arms' (see *Verdict vocabulary*).
 
 ### The registry
@@ -2879,6 +3506,88 @@ directory must be cited by some row; what lies below it is not listed, and a fil
 withholds - one git ignores, as a desktop's or an editor's leftover is, or one the configuration
 keeps from a sync - is no text: no copy of the tree holds it, so nobody could drive it.
 
+The registry's text has one reader, `RegistryText`. It keeps every line with the ending that line
+has, a line ending exactly where `string.ReplaceLineEndings` reads one - the one set of endings
+this tool divides lines at (`TextLines`), which a phase's last lines are divided by too - so a
+problem's line number is the one an editor shows whichever way the checkout ends its lines; and it
+says of each line whether it is blank, a comment or a row, and cuts a row into its kind and its
+fields (`RegistryLine`), which is the one place a row is trimmed and split and what the parser
+reads through. A row of any kind belongs to the arm its second field names. Read from the bytes a
+tree holds, the text is UTF-8 and nothing else (`Utf8Text`, the one strict reader, which an anchor's
+cell file is read by too) - a byte that forms no character is why it is not read, never a character
+put in its place - a byte order mark at its start is noted and is no part of its first line, a
+line that opens with another is why it is not read, since standing first it would be read as the
+text's own, and the text is written back as the bytes it was read from.
+
+What makes a text a registry a sweep can read has one owner too,
+`MutationRegistryValidation.ValidateAsync`: the rows and each arm's shape, the cover of the text
+directory, each cited text, and each scope's legs. It reads a tree through a view of its files
+(`IRegistryFiles`), never the file system itself. `TreeRegistryFiles` is a tree as it stands, and
+is made one way (`OfAsync`), which asks what a sync of that tree withholds, once.
+`OverlaidRegistryFiles` is a tree with some paths written and some removed: each written path is
+given as what reads its bytes when they are asked for, so nothing is read that no row needs read,
+and nothing twice, and a written path is there, listed in its directory and not withheld, whatever
+stood under it before. So a text nobody has written yet can be judged by the tree it would stand in, with the
+sentences `check-mutations` refuses a registry in (`RegistryValidation.Refusal`), and
+`MutationService.ReadAsync` keeps what is about the file itself - that it is configured, a file,
+readable and carried - before the validation, and weighs `--arms` and the report arguments after it.
+
+A registry two sides both changed is merged by arm, never line against line
+(`MutationRegistryMerge.Merge`, which a fold, a rebase and a refresh call with no option given -
+see *Seeding and folding*): a function of three texts' bytes - what both sides last held, where
+they held one, the main tree's and an agent's - that reads no file, no clock and no configuration.
+Each text is read, through the one reader, as the lines above its first row down to their last blank
+line, its segments - each one row with the comment and blank lines directly above it - and the
+lines below its last row. An arm is the segments naming it, wherever they stand, ids compared
+ignoring case, and two versions of an arm are the same where each line's text is, the blank lines
+that open each segment left out: they only part it from what stands above it, so an arm removed or
+added beside another changes nothing of that one. How a line ends is no part of it either, so a
+checkout with other line endings changes nothing. Each arm is taken from the
+side that alone added, removed or changed it, and one both changed alike is one. An arm each changed
+its own way, one a side removed and the other changed, or one both added differently - under ids
+that differ only in case, among them - is a conflict (`ArmConflict`), said with each side's lines
+that the versions do not all hold and each line's number, the three texts called what the caller
+calls them (`MergeSides`). With no text both held, an arm one side has is kept: its removal by the
+other could not be told from its addition. The lines above the first row, and those below the last,
+are each weighed the same way, as one. A text that is not UTF-8, holds a row naming no arm, or holds
+a line that opens with a byte order mark - which the one reader refuses, since standing first it
+would be read as the text's own - is not merged at all, and the result says which of the three and
+why.
+
+The merged text is the main tree's, line for line, changed only where the agent contributed. The
+main tree's segments stay where they stand. An arm taken from the agent in place of the main tree's
+lies over the main tree's segments of it, one for one, each below the blank lines the main tree parts
+it from what stands above it with: where the agent has more, the rest follow the last, and where it
+has fewer, the main tree's remaining places go. A segment of an arm only the agent has stands after
+the nearest segment above it in the agent's text that the merged text holds - a segment of an arm
+kept from the main tree stands as the main tree's like it, or as the arm's last where no later
+segment of the arm is held; where the main tree's version holds none like it, it stands as the main
+tree's segment in its place among the arm's - the arm's last for the agent's last - since the main
+tree reworded it, unless that version holds fewer segments of the arm, having dropped it, and then
+it is not held - and past what the main
+tree alone holds there, so two sides adding at one place come out the main tree's addition first,
+then the agent's; the agent's first segment stands first, past what the main tree alone holds there;
+one above which the merged text holds nothing goes after the last segment; and none stands above an
+earlier segment of its own arm. The segment that comes to stand first is written without the blank
+lines that open it. Each of the main tree's lines is written as
+the main tree holds it, each of the agent's with the ending of the main tree's first line, behind a
+byte order mark where the main tree's text has one and with an ending on the last line where the
+main tree's has one.
+
+So a text merged with itself is itself, and a merge in which the agent changed nothing is the main
+tree's text, each byte for byte; one in which the main tree changed nothing holds the agent's arms in
+the main tree's order, with its line endings and its byte order mark. A merge run again with its own
+result on either side gives that result, byte for byte - what a command needs that wrote the result
+to one tree and was stopped before the other. That holds because a merge is offered only where its
+text reads back as it was merged. Where the lines
+above the first row end is a matter of where a blank line stands, so a segment that keeps a blank
+line above its row and would come to stand first is a conflict of its own
+(`ArmConflictKind.WouldOpenTheText`), as lines with a blank one among them are where no row would be
+left above them; an empty last line is ended whatever the main tree's is; and an empty line that
+would follow a lone carriage return is ended by a carriage return and a line feed. What the merge
+offers is a text: whether it is a registry a sweep can read, in the tree it would stand in, is the
+validation's to say.
+
 The whole registry is read, with every text it cites, before any host is touched, and every
 problem is listed with its line, exit 12: a sweep refused from inside a leg would end the run once
 its hosts were measured and its slots taken. What a sync withholds is in no copy of the tree, and a
@@ -2894,7 +3603,8 @@ leg's own tree, project and variant; sync's exclusions; the variant's configure;
 sources the leg's own build fetched; and ninja's records. A leg built by anything but CMake with the
 Ninja generator is refused too, naming the fix: only ninja's records say, for one configuration
 alone, which objects a mutation rebuilt. `--arms` selects arms as `--legs` selects legs, and an arm
-it leaves out, or whose S row leaves the leg out, is `skipped-not-selected` on that leg. It is
+it leaves out, or whose S row leaves the leg out, is `skipped-not-selected` on that leg, as is one
+`--pending` leaves out because its `passed` holds. It is
 weighed against the registry only once the registry can be swept (`MutationService.ReadAsync`): the
 S rows' legs are resolved with the rest of the registry's problems, so a scope naming neither a leg
 nor a leg set is listed beside them in one refusal, exit 12, whatever `--arms` names - an arm the
@@ -2907,30 +3617,40 @@ them all.
 
 ### Workers
 
-A leg's workers are copies of its tree kept beside it, `<tree>.mutation-<key>w-<n>`, a family
-of copies of their own. The key is the first 7 hexadecimal digits of the SHA-256 of the leg's
+A leg's workers are copies of its tree kept in it, `<tree>/.mutations/<key>w-<n>`, a family
+of copies of their own in the slot `init` keeps for them: in git by its placeholder, with
+everything made in it ignored, withheld by every sync and never deleted in a copy, and passed
+over by every reader of a tree - the reading a sync or a sweep makes, the input watch, the count
+of uncommitted changes, what `clean` measures, and a fold's weighing of an agent. Each worker is a
+repository of its own, as every copy a sync makes is, its HEAD the tree's and its index what the
+sync carried, so git and the harness asked in a worker answer for the worker, never for the tree
+around it. A sweep, or a self-test, in a tree whose git does not ignore what it would make in
+`.mutations` - a branch whose rules predate `init`'s - is refused, exit 13, naming `init`, with
+nothing made: asked on the machine that makes the workers, so a host answers for its own copy. The key is the first 7 hexadecimal digits of the SHA-256 of the leg's
 variant, as its build directory is named, so the machine that dispatches a leg and the host that
 sweeps it name its workers alike - and a key, never the variant's name. A worker is a second tree,
 built as deep as the first, so where paths are bounded every character its name adds is one the
 tree's own path must leave free; spelt out, a variant's name stood in a worker's path twice, in
 its name and in the build directory within it, and a repository whose path budget is reckoned to
-the character had room for neither. A worker's name adds twenty characters whatever its variant is
-called, and the lines of a sweep and of a `clean` say which leg a worker is. Two variants of one
+the character had room for neither. Its first worker adds twenty-two characters to the tree's path
+whatever its variant is called - two more than one kept beside the tree did, the slot's separators -
+and the lines of a sweep and of a `clean` say which leg a worker is. Two variants of one
 tree whose names came to one key would share their workers and their lock, and neither would be
 judged on the other's: each sweep syncs a worker again by content and builds in its own variant's
-directory within it. No worktree's copy is named into the family, since a copy's name holds no dot; and
-a worker kept beside a worktree's copy on a host, `<repositoryPath>.worktree-<name>.mutation-...`,
-is spelt as no copy's name, so a listing of the host's worktree copies never holds it. Nor is a
-worker kept beside a worktree taken for a worktree, though it holds a repository of its own:
-`list-worktree` passes over it, and it is no worktree below an orchestrator's directory. A sweep
-runs `mutations.workers` of them (2),
+directory within it. Workers an earlier version of this tool kept beside a tree,
+`<tree>.mutation-<key><mark>-<n>`, are known to nothing here: nothing lists, counts or removes
+them, and they are a person's to delete. One below an orchestrator's directory is said as any
+directory there holding a `.git` of its own that git records no worktree at, and keeps the
+orchestrator from being deleted until it is gone; one beside a host's worktree copy is spelt as no
+copy's name, so a listing of the host's worktree copies never holds it. A sweep runs
+`mutations.workers` of them (2),
 never more than the leg has arms to drive, and one in a WSL distribution, whose sweep this machine
 admits whole. The tree is read once, as a sync reads it, and every worker is synced from that one
 reading, so every arm measures the same tree however long the sweep takes, and an edit made
 meanwhile reaches none of them. A worker stays between sweeps and is synced again by content - so
 its build directory stays warm, and a site a killed sweep left mutated is put back - and built
 whole as the leg builds before it drives an arm. A worker is claimed while
-a sweep uses it, in `<worker>.claim.json` beside it, by the claim a run takes on its log directory,
+a sweep uses it, in `<worker>.claim.json` beside it in `.mutations`, by the claim a run takes on its log directory,
 which never makes the copy it claims: the sync that makes a copy refuses a directory it did not
 make. A claim whose sweep died is released and said; the copy it held is synced again, as every
 worker is before it drives an arm.
@@ -2951,27 +3671,23 @@ limit, or both. Workers an earlier sweep left beyond `mutations.workers` are
 removed before a sweep plans, so lowering it frees the room they held; a directory under a worker's
 name that no sync made is said and left.
 
-The workers go with their tree, since nothing would remove them once it is gone. `clean` removes a
-leg's with its build directory (see *Disk space*). `delete-worktree`, and so `delete-agent`,
-removes the workers kept beside the worktree before the worktree itself, and each host removes
-those kept beside its copy before the copy (`remove-workers`, served as every sync operation is):
-each worker a sync made, of whichever variant, with what an unfinished removal left aside - only
-what is named as a worker's, since a name is all that is left to tell one by. Each worker answers
+The workers go with their tree, kept in it. `clean` removes a leg's with its build directory (see
+*Disk space*). `delete-worktree`, and so `delete-agent`, removes the workers kept in the worktree
+before the worktree itself, and each host removes those kept in its copy before the copy
+(`remove-workers`, served as every sync operation is): each worker a sync made, of whichever
+variant, with what an unfinished removal left aside - looked for in the tree's own slot alone, and
+only what is named as a worker's there. Each worker answers
 for itself: one that cannot be removed is left, saying why, and the others still go; one gone by
 the time it is reached was somebody else's to count; and a removal that is stopped answers with
 what it had done. A worker a sweep still running holds says its tree is in use: the worktree is
 not deleted, nothing of it removed, and a host's copy stays, still recorded - and one that cannot
 be removed, or told for the harness's, keeps its tree as well, as a failure rather than a tree in
-use - or `--force` deletes the worktree and leaves that worker, said, which deleting the worktree
-again removes once nothing keeps it, as it removes whatever a worktree already gone left. A claim a
-sweep took while its worker was being removed is that sweep's, and stays. A worktree whose own
-removal then fails, or is stopped, says which workers went before it. `list-worktree` says a
-worker whose worktree is gone, with the `delete-worktree` that removes it; `delete-agent` removes
-those left beside an agent whose worktree is gone already, and leaves the agent undeleted where
-they cannot be looked for; and `delete-orchestrator` takes those left beside agents that are gone,
-refusing where they cannot be looked for and, once the orchestrator is deleted, saying beside the
-deletion whatever kept any - interrupted as they go, it names each agent whose workers are still
-to be removed.
+use - or `--force` deletes the worktree with every worker in it, said. A directory in the slot
+under a worker's name that no sync made goes with the worktree, or the host's copy, as everything
+else in it does, and is said. A claim a sweep took while its worker was being removed is that
+sweep's, and stays. A worktree whose own removal then fails, or is stopped, says which workers went
+before it. A worktree already gone, an agent whose worktree is gone, and a host holding no copy of
+the tree hold no worker: they went with it.
 
 ### Fetched sources
 
@@ -2982,10 +3698,13 @@ worker the network cannot reach still configures. One not found is fetched by th
 would fetch it.
 
 They are carried into each worker rather than pointed at where they are. They sit in the leg's own
-build directory, which the sweep's lock deliberately leaves to a `clean` or a `build` of the leg:
-pointed at in place, a clean mid-sweep failed every later arm's build, and a build that fetched
-again measured later arms against other sources than the arms before them - each blamed on the arm.
-So they are read once, as the tree is, by size and hash, and each worker is given its own copy by
+build directory - where the leg's configuration places that build for this machine: the copy of
+its tree it works in where its `localCopy` key or the repository's default says one, its tree
+itself where neither does - and the sweep's lock deliberately leaves it to a `clean` or a `build`
+of the leg: pointed at in place, a clean mid-sweep failed every later arm's build, and a build
+that fetched again measured later arms against other sources than the arms before them - each
+blamed on the arm. So they are read once, as the tree is, by size and hash, and each worker is
+given its own copy by
 content, in `<worker>/.harness-config/deps/<name>`: the harness's own directory, which no sync of
 the tree carries or deletes and no build from clean removes, under no longer a path than a build
 directory keeps them under. A file that moved since the reading stops that worker being made, as a
@@ -3033,7 +3752,8 @@ why, since no mutation of it could prove anything. Its run bounds theirs (see *T
 5. is witnessed: a build that failed is read for the steps ninja said failed, and one that passed
    is held to ninja's log, read before and after, for every object depending on a site;
 6. is run whole with `mutations.reportArgs`, its JUnit report a new file for every run, or for a
-   BUILD-RED arm, has its paired control applied to the site as it was and built;
+   BUILD-RED arm, has its paired control applied to the site as it was and built. The sweep starts
+   the binary itself, never through ctest: see below;
 7. has every site put back and checked against the reading of the tree by its hash, whatever
    happened - never stopped, so a sweep stopped part way still puts its sites back, and each site
    on its own, so one that cannot be written keeps no other from it. A site that cannot be put
@@ -3051,9 +3771,45 @@ file - another process still holding it as the run ends - is read again, five ti
 and then `unmeasured`, saying why: that is this tool's failure to read, and what the file holds
 may name every case. The same holds of a binary's unmutated run, whose arms are then stopped.
 
+A runner is started by the sweep itself, never by ctest: the program the runner's target builds,
+in the worker's build directory, given `mutations.reportArgs` alone, in the directory the leg's
+tests start in (`test.workingDirectory`, filled for the worker, else the worker's root) with the
+environment they start with - the host's declared `env`, the developer environment the toolchain
+names, `test.env` over both, the host's program directories on `PATH` (`MutationLegRunner.RunRequest`).
+Nothing else of the test settings is applied - not the runner, its args, a filter, an exclusion, a
+label, the core count or the success pattern - and nothing of a test's ctest entry: not the
+`add_test` command line, its launcher or its arguments; not `ENVIRONMENT` or
+`ENVIRONMENT_MODIFICATION`; not `WORKING_DIRECTORY`; not a fixture (`FIXTURES_REQUIRED`,
+`FIXTURES_SETUP`, `FIXTURES_CLEANUP`), `DEPENDS`, `REQUIRED_FILES`, `RESOURCE_LOCK` or `RUN_SERIAL`;
+not `TIMEOUT` - a mutated run is bounded by `mutations.runTimeFactor`, an unmutated one by
+`defaults.stallSeconds` alone; and not what ctest reads a result by - `WILL_FAIL`,
+`PASS_REGULAR_EXPRESSION`, `FAIL_REGULAR_EXPRESSION`, `SKIP_REGULAR_EXPRESSION`,
+`SKIP_RETURN_CODE`, `DISABLED`. A case is red where the binary's own report says so, so a test
+that is green under ctest for what ctest sets up around it can be red in its binary's unmutated
+run.
+
+Where that happens, each arm the control stops names the control's run log on its line, and the
+binary's own line names what ctest registers for the red cases that a sweep does not apply
+(`CtestEntries`, `CtestDescription`): the command the test command of the same settings makes,
+`--show-only=json-v1` appended, started as that command starts in the worker whose build ran the
+control, bounded by two minutes, once per runner per sweep - as the control itself is - and only
+where the leg's tests run through ctest. The red cases are matched to the tests the description
+registers for the binary - the one test that starts it; the test a case names, by its name or an
+argument; no way to tell, counting what the tests declare; or no test at all - and what of the
+matched test's entry a sweep does not apply is said with it, an environment by its variables,
+never their values, a working directory only where it is another than the sweep's own. What ctest
+could not say is said as that and changes no verdict; beneath the leg, `--json` carries each
+control that did not pass as `controls` - its runner, verdict, detail, reds, records, and the
+match as `ctest`.
+
+A mutated build is a build of its own. Each mutation is configured and built again in its worker,
+so whatever a project derives from its sources as it builds - a stamp that digests them, a version
+header, a cache named for either - is another in every mutant than in the unmutated build. A case
+that depends on such state is red under every arm of its runner, and no arm declares it.
+
 Whatever fails is kept to what it failed in, so one failure never costs the arms already judged. A
 worker that cannot be made - its copy, its whole build - is retired alone, saying why, and the
-workers beside it drive every arm; only where none could be made are their failures the leg's own.
+other workers drive every arm; only where none could be made are their failures the leg's own.
 An arm whose driving ends in a failure is given the verdict that failure comes to, as a leg whose
 work ends so is: the verdict a refusal names, `failed` for a program that will not start, and
 `poisoned` where nobody named it - its worker then retired, since nothing vouches for its copy,
@@ -3086,12 +3842,247 @@ the ledger carries it, beside the logs of its build and its run, and of a paired
 `<run>/<leg>/workers/<n>/`. A leg's line counts its arms by verdict; below the table an ARMS block
 names each selected arm that did not pass, and why; `--json` carries every arm beneath its leg - `arm`,
 `verdict`, `failure`, `detail`, `durationSeconds`, `worker`, `cases`, `declaredCases`, `reds`,
-`declaredReds`, `records` - a skipped one included.
+`declaredReds`, `records`, `key` - a skipped one included, and each control that did not pass as
+`controls`, with what ctest registered for its red cases.
 
 A leg on a host is swept there, by the DssHarness there, on its own copy - with its own workers,
 its own admission and the arms `--arms` named - and its arms travel back beneath its line, their
 records staying on that host and its home written as `~`, as a leg's are (see "A host's home is
 `~`"); the answer changed shape, which raised the host-agent protocol to 6.
+
+### What an arm is judged on
+
+Each arm's line carries its `key`: the SHA-256 of what it was judged on (`JudgedOn`), ten parts
+written as canonical JSON - the options every state file is written with, on one line, each map
+sorted by its keys as ordinal strings. Where all ten are what they were, nothing this tool reads
+that the verdict rests on has moved. That is not to say nothing it rests on has: what a test binary
+reads at run time that `mutations.runReads` does not name - a data file, a plugin it opens - is
+read by no part, so editing it moves no key, and a recorded `passed` it would change still holds.
+
+- `judge`: `ArmJudge.Revision`, raised by hand whenever a change could give another verdict for the
+  same inputs - in the arm's judge, the unmutated run's, the pre-flight, how a site is edited, how
+  a rebuild is witnessed, how a report is read or a diagnostic looked for - or changes what a key
+  is made of. A test holds it to a digest of both judges' verdicts over a fixed table of
+  observations, so a rule of theirs cannot change with the number left as it was.
+- `rows`: one digest to each kind of row the sweep and the judge read - A; C and G sorted, as the
+  judge compares them as sets; B; M in the order declared, as each text is found in that order.
+  Never a why, a comment, a line's number, the letter case of the id, or the S row, which says
+  where an arm runs, while what it was judged on is kept leg by leg.
+- `texts` and `sites`: what the sweep's one reading of the tree says each text the arm cites and
+  each site it mutates holds, found as the tree's file system compares names, or nothing where it
+  holds none - a text the arm cites that the reading does not hold leaves it no key, since what it
+  was judged on was not read whole. No file is hashed a second time.
+- `built`: the digest of the table of each target the arm's build builds (below).
+- `compilers`: each compiler CMake identified in the worker's build - its id, version, program and
+  the words it is run with.
+- `developerEnvironment`: the leg's, as it was set up, where its toolchain names one.
+- `settings`: three digests (`SweepSettings`) - what the build is given (the variant's name, the
+  environment its overlay and its host give it), how the run starts (the working directory and
+  the environment the test settings declare for the leg's system, the report arguments), and what
+  the judge is given (`mutations.runTimeFactor`, `defaults.stallSeconds`). Every other value either
+  cannot change a verdict - the workers, the cores, admission, the path limits, the clock's
+  tolerance - or reaches an arm through another part: the cache variables, the build type and the
+  generator through the build lines, `sync.*` through the reading, the tool search directories
+  through the compilers, `mutations.runReads` through the files it names.
+- `runReads`: each file of the tree the arm's runner reads at run time, as `mutations.runReads`
+  names them for that runner - a path, everything below a directory, or `**/name` at any depth, as
+  every list of paths reads them (`PathPatterns`), and found as the tree's file system compares
+  names - with what the sweep's reading holds of each; nothing for a BUILD-RED arm, which runs
+  nothing. Declared, never found: what a binary opens at run
+  time is said by no record a build keeps, and every file of the tree in every key would make every
+  arm pending after every edit. A file that joins or leaves what the entries cover moves the key, as
+  one that holds something else does - and each is named by the path the reading spells, so a file
+  renamed by case alone, where the tree's file system folds case, is one that left and one that
+  joined, compared as the key spells them, never as the tree finds them (`KeyDifference`), as a file
+  of a target's table spelt otherwise changes what it is built from; an entry that covers no file of
+  the reading leaves the arm no key, naming the entry, as a text it cites that the reading lacks
+  does. A runner no TEST-RED row of
+  the registry names, one given no file, an entry outside the tree, one holding a `*` anywhere but a
+  leading `**/`, and one naming the whole tree, are refused - the runner when the registry is read,
+  the rest when the configuration is.
+- `host`: the host the leg ran on, as the machine that dispatched it names it.
+
+A target's table (`BuiltFromTable`) is what the build of it read, never what that was generated
+from: its build lines - the manifest's closure of the target, and each line making a file they
+read that the closure does not reach, as a header a command generates, which a compile is only
+ordered after - and every file those lines read as ninja's records say, by the walk that says which
+objects a mutation rebuilds. A file a build line makes is left out: what it is made from is read
+already. A file of the tree is taken as the reading holds it, found as the tree's file system
+compares names and named as the reading spells it. A file of a dependency's sources the worker was
+given stands as the whole dependency, its name and the digest of the sources as the sweep read
+them. A file the worker's configure made, and one outside the worker - a system's header, a library
+a link names - is hashed where it is, once a sweep, and counted and digested with the others of its
+directory. So a list file edited for another target moves nothing of this one, and a source a glob
+finds joins the table once a configure finds it, as a worker's does on each of its builds.
+
+Every worker of every tree of a leg must come to one table for the same content, so the worker's
+own root is told - replaced by `{tree}` - wherever it stands in a build line or in a file its
+configure made: as its machine spells a path, with `/` throughout, with each `\` doubled, and with
+its drive's letter in either case (`WorkerPath`). A file that holds the path another way never
+compares equal across workers, which is the safe direction. No part of a key is a commit, a date, a
+run, a worker or a tree: a worker made again after a `clean`, or a tree of the same content kept
+elsewhere, comes to the same key.
+
+The first worker made reads every arm's key, after its configure and build and before it drives an
+arm, so what an earlier mutation's configure left in a worker never reaches one. A part that cannot
+be read - a file gone or unreadable, a directory a build line depends on, whose files no line names,
+a text it cites that the reading does not hold, a compiler's record unread - leaves the arm no key,
+and its verdict as reached. A key is made one way (`ArmKey.Of`): what each target is built from is
+the digest of the table read of it, so the key and the tables it names never disagree. The key travels back from a host beneath the arm's line, which raised the
+host-agent protocol to 10.
+
+### What holds, and what is pending
+
+A sweep records each arm's verdict on each leg together with what it was judged on. A recorded
+`passed` holds where what the arm would be judged on now, computed in full on the leg's machine, is
+what the record says; every other arm is pending.
+
+Beside the key, never in it, each verdict keeps the causes of the leg's build lines (`JudgedCauses`):
+each file of the tree the manifest is generated from - the inputs of the build line that makes
+`build.ninja` the reading holds, with what each holds - and a digest of what the configuration gives
+the configure: the generator, the build type, the cache variables and the project's path. In the key,
+every arm of a leg would be pending after every edit of any list file, which in a round of several
+agents is every fold: the coarseness a consumer rejected for a commit id. The key holds their effects
+on each target instead, and the causes are kept so what moved can be named.
+
+The record is `.harness-config/mutation-record/` in the main checkout (`ArmVerdictRecord`, resolved
+from `HarnessLayout.MainHarnessDirectory`), whichever tree swept: so an agent's sweep of its own
+worktree counts for the main checkout wherever nothing an arm was judged on differs, and a deleted
+worktree takes none of its verdicts with it. Kept in each tree, that would not hold; kept per user,
+it would need a name for the repository, which only its path gives. It ignores itself, and
+`HarnessDirectorySync.IsRunState` names it, so no sync carries or deletes it. One file to a leg,
+`<leg>.json` - a sweep of one leg never rewrites another's verdicts, and a file that cannot be read
+loses one leg - and beside them `built/<leg>/<digest>.json`, each table an entry names, written once
+under its digest. An entry holds the verdict and its detail, the run, when, which tree swept it
+(`sweptIn`, as a line names a tree: told, never compared), the key and its parts - or no key and
+why - the causes, and the last sweep that found it holding (`verified`); the file indexes each table
+by the digests of its parts, so which part differs can be named without opening it.
+
+An arm keeps one entry to a key on a leg. A later verdict on a key replaces the entry, whatever
+either was: a `passed` followed by anything else on the same key is no longer a `passed`. A verdict
+with no key replaces the arm's entry with none. At most eight are kept (`ArmVerdictRecord.KeptPerArm`),
+the oldest by its place in the file going first, never by its date: this tool serves hosts whose
+clocks step. Each change is one read, merge and write under the file's machine-wide mutex: the
+tables the entry names are written where absent, the entry merged, those beyond the bound dropped,
+the file written whole, and each table no entry names any more removed - so a table is never written
+ahead of an entry naming it, and two sweeps of one leg from two trees lose neither's verdicts and
+remove neither's tables.
+
+The sweep hands each verdict to its sink (`IArmRecordSink`) as the arm ends, so a sweep stopped part
+way keeps what it had judged. Recorded: every verdict reached by observing the arm, and an arm
+stopped because its runner's unmutated control did not pass - the newest evidence on that key says
+the binary is not green. Not recorded: an arm its machine did not admit, one the sweep's own stop or
+a refusal of the run ended, one no worker reached, a skipped one - nothing was observed of those, and
+the record keeps what it held; recording wherever `arm.json` is written would let a machine that
+stops admitting arms turn every recorded `passed` into `not-admitted`. Never: a self-test, whose
+subject has no sink. A leg swept on a host writes no record there - its copy keeps none - but tells
+the machine that dispatched it: each verdict, and the tables it names, as notes on the host's
+standard error (`NoteSink`, `HostNotes`), lines of the form `host-agent: note <nonce> <kind>
+<more|last> <base64>` carrying the text as base64 pieces of at most `NotePiece` bytes - each small
+enough that its whole line fits what that machine hands lines on in as it reads the host's standard
+error kept as a tail (`ProcessRunner.LongestLine`), so no piece is cut in two on the way - which that
+machine reads as they arrive and never relays (`HostAgentLines.Error` hands each whole note to
+`RemoteLegRunner.RunAsync`'s `onNote`, fed from `LegRunRequest.HostNotes`), into the same
+record-writing sink a leg swept here feeds. So each arm is recorded on the dispatcher as it ends on
+the host - a sweep stopped part way, or cut off, keeps what it had judged - and the host's final
+answer carries the arms as today and no record material: it travels one way only. A sweep typed by
+hand in a copy the harness synced (`HarnessContext.IsSyncedCopy`) - a host's - has no machine to tell
+and records nothing (`MutationService.RunAsync`): the record is the main checkout's on the machine
+the copy was synced from, and one kept in the copy would hold what that machine never sees and decide
+what a later sweep typed there holds. It says so once, as a warning, and names no record; under
+`--pending` it holds nothing, and sweeps every selected arm. A leg such a sweep dispatches to a host
+still has its notes written there, and they are dropped as they arrive: a note line carrying the
+request's own nonce is never relayed, read or not (`HostAgentLines`, given no `onNote`). These
+shapes are the host-agent protocol's rise to 10.
+
+A record that cannot be read - not JSON, a member this build does not know, or a hand's damage: a
+null where entries or tables go, an entry with a key and nothing it was judged on, a null inside what
+an entry was judged on (a target named by no digest, a run-time read named by no hash, a compiler
+that is no compiler) - or one a newer build wrote (its `format` above this build's) is never written:
+every arm of its leg is pending, a sweep
+of that leg says so once as a warning naming the file - delete it to start again, or update the tool
+- and once on the leg's line, and records none; so is a record that cannot be written. Either is the
+record's, never the arm's: its verdict stands as reached. A sweep typed on this machine names the
+record once, in its lines and in its ledger's document (`mutationRecord`), as a listing does.
+`clean`, a deleted worktree and a removed
+host copy leave the record as it was: it is outside every build directory, worker and copy, and no
+part of a key names a tree, a worker or a build directory, so a worker made again after a `clean`
+comes to the same key and the recorded `passed` holds. Deleting the record is the one way to forget
+it, and `git clean -x` in the main checkout does, as it deletes every ignored file.
+
+`check-mutations --list` (`MutationService.ListAsync`, `MutationListing`) says, without sweeping,
+each selected arm's last verdict on each selected leg its S row names, and whether anything it was
+judged on that this machine reads has moved since. It reads and verifies the registry exactly as a
+sweep does - any problem is the sweep's refusal, every problem listed, so a listing is the door that
+validates a registry and stops - resolves `--legs` and `--arms` as a sweep does, reads each leg's
+tree once (`ReadSourceAsync`) and each leg's record, and prints a row to every arm on every leg. It
+asks no host, takes no lock, begins no run and writes nothing: `CommandRunner` decides per command
+line whether a run begins, and a listing begins none. Nor does it need what only a sweep needs -
+`reportArgs`, a leg built with Ninja, a selection that drives an arm: a leg that cannot be swept is
+said once, above the rows, and every arm on it is pending, so a listing can be asked of any
+configuration a sweep would read.
+
+The verdict a row shows is the newest entry nothing read here moved for, else the newest; the
+listing compares by the sweep's own rules (`KeyDifference.Listed` beside `KeyDifference.Between`,
+sharing every comparison), reading each table by its digest and each file it names in the tree's one
+reading, as the tree compares names. An arm is pending for a closed list of reasons
+(`PendingReason`), the first that applies said on its row and every one under `--json`: its record
+cannot be read, or a newer build wrote it; its leg cannot be swept; it was never swept on the leg;
+the verdict shown is no `passed`; it was swept with no key; or the judge's revision, its rows, a
+text it cites, a site it mutates, a file of the tree its targets are built from (one gone said as
+gone), a file its runner reads at run time, what of the configuration its build, run or judge is
+given, or the host its leg names changed. A leg that names no host is read as though swept where
+its verdict was judged - which host a sweep would place it on is not read here, so the host is taken
+as recorded - and the environment its build is given is the one that host declares now
+(`HostsConfig.SettingsFor`), as the sweep that judged it was given what that host declared; a host
+the record spells as none declares nothing. Every other arm is *unmoved here*, never said to hold:
+a listing reads the rows, the texts, the tree's files and the settings, and never how a target is built, a file the build makes, the
+dependency sources it fetched, a file outside the tree it reads, the compilers or the developer
+environment - only a sweep on the leg's machine reads those, and nine reasons are a sweep's alone
+for that. An arm unmoved here whose build is generated from a file that moved since, or whose
+configure would be given something else, says so: the causes kept beside the key name it. A
+listing exits `0` whatever is pending - a listing is no gate - and otherwise as a sweep gives it:
+`12` for the registry or the configuration, `10` for the command line, `20` where git could not say
+what a tree ignores, and `3` where a tree changed while it was read. It is refused with `--pending`,
+`--self-test`, `--force-lock`, `--use-staged`, `--here` and the hidden `--held`, each in one sentence:
+it sweeps nothing.
+
+`check-mutations --pending` drives, on each leg, only the arms with no recorded `passed` that holds
+(`MutationLegRunner`, `ArmHolding`); `--arms` narrows the arms it weighs, and a sweep without it
+drives every selected arm, as ever, and records each verdict. Held is decided by one rule, in one
+place, on the machine that sweeps the leg: the key of what the arm would be judged on now, read in
+full there, is the key of a recorded `passed`. A listing never decides it - it reads no compiler,
+build line or file a build makes. So the first worker is made alone - claimed, synced, built whole,
+its graph read - and every arm's key is read from its build before any arm is mutated: a worker
+between two arms holds what the last mutation's configure made, and nothing could be said of the
+leg before the sweep was under way. The sweep is given what the record holds of the arms it drives
+(`ArmVerdictRecord.ArmsOf`, `RecordedArms`): every entry of each, and each table the newest names.
+A host sweeping one leg of a run is given the same thing for that leg alone, as bytes in a hidden
+`--held` of its own command line (`LegRunRequest.RemoteArgumentsOf`, the one way a dispatched leg is
+given an argument no other leg has; `--pending` travels among the run's arguments) - refused without
+`--here` - and decides held and pending by the one rule there, from its own reading of its copy and
+its own worker. A record this machine cannot read, or one a newer build wrote, crosses as that
+(`RecordUnread`, read back by its one constructor), and every arm of the leg is pending there for it.
+A host given `--pending` and no `--held` holds nothing and sweeps every selected arm.
+An arm whose key is a recorded `passed`'s is held: it is not driven, its line is
+`skipped-not-selected` - the vocabulary kept, its detail naming the run whose `passed` holds and
+when - with `held` beneath it, and the record is told, in one change for every arm held, that this
+run verified it (`verified`). Every other arm is pending, its first reason said on its progress
+line and as `pending` beneath it, compared with the entry a listing would show - the newest on the
+key read now, which is then no `passed`, else the newest - by the comparisons every reader of a key
+shares (`KeyDifference.Between`), so the nine reasons a listing cannot give are a sweep's here - the
+last, `key-moved`, closing the list where the key is not the entry's and nothing else says how
+(`KeyDifference.Closed`): no arm is pending for nothing, and two keys that differ are never said to
+be one, a self-test's workers' among them. The
+pending arms are queued, the workers they need beyond the first made (`WorkerRoom.Wanted` of their
+count), and the sweep goes on as ever, the first worker driving with the graph it read. With nothing
+pending, no other worker is made, the first is given back, and the leg reaches `passed` as its own
+verdict: it verified each arm, and the tree asks nothing more of it - so "nothing is pending" exits
+`0`, and is the proof a round is closed with. The leg's line counts the arms swept by verdict,
+those that held and those not selected, and carries `pendingSweep`. A first worker that cannot be
+made is the leg's failure, as any worker's is where none is made, and its line says nothing was
+verified. The refusal of a selection that drives no arm stands under `--pending`, and a self-test
+under it is refused: nothing of a self-test is ever recorded.
 
 ### Self-test
 
@@ -3113,16 +4104,24 @@ repository's own project, and hold each arm to the same design.
 The fixture is written where this tool keeps its own data (see *Heavy legs share a machine*), as
 `<user data>/dssharness/mutation-fixture`, each file only where it differs and under a lock every
 process on the machine takes: one fixture for every repository on the machine. Its workers are
-kept apart from it, beside the tree of the leg self-tested, in a family of their own -
-`<tree>.mutation-<key>s-<n>`, a few megabytes each. Kept beside the fixture they were
-every repository's at once, one's toolchain refusing the build directory another's had made, with
-nothing to remove them; beside the leg's tree they are that repository's, counted by its room,
+kept apart from it, in the tree of the leg self-tested, in a family of their own -
+`<tree>/.mutations/<key>s-<n>`, a few megabytes each, each a repository of its own holding the
+fixture's files, so what git tracks there is the fixture and never the tree around it. Kept beside
+the fixture they were every repository's at once, one's toolchain refusing the build directory
+another's had made, with nothing to remove them; in the leg's tree they are that repository's, counted by its room,
 removed by a `clean` of the leg, and with its worktree or its host's copy. A self-test asks no
 host about the room a build of the leg's tree needs, and is placed by none; its workers are
 measured where they are planned, and their paths reckoned by the fixture's own longest, in place of
 the leg's reserve. It takes the leg's sweep lock, as a sweep of the leg does, and its binary runs
 in its worker with what the leg's host gives it, nothing of the leg's tests. A leg on a host is
 self-tested there, with the fixture that host's DssHarness carries.
+
+Every worker a self-test makes reads each arm's key from its own build, and the self-test compares
+them arm by arm, so each leg's own toolchain proves that two workers come to one key: a key two
+workers read otherwise, or one a worker could not read, fails the leg as `violated`, naming the
+arm, the workers and the first part that differs (`KeyDifference`); one worker alone says it
+compared its keys with no other's. A self-test's keys are on no line: nothing of a self-test is
+kept.
 
 ## Reporting
 
@@ -3133,7 +4132,11 @@ says for itself - that the legs are starting, where each starts, and each one's 
 said on both, each read twice. So the dispatcher keeps, rather than relays, the line a host's
 command ends on where it ended badly, with what follows it: it says how the leg ended itself, by
 the leg's line, or in the refusal it raises from what the host said, and a host's summary of its
-one leg would otherwise read as the run's own. Such a line is kept with at most 200 lines after
+one leg would otherwise read as the run's own. So too the first line of the host's command that
+reads as its own run line: the dispatcher says it once as the leg's, `<leg>: run <id> on <host>`,
+and never relays it - one command says one run of its own, not two - where a later line of that
+shape is a program's own output, a suite that runs this tool among them, and is relayed as it
+came. Such a line is kept with at most 200 lines after
 it: a command's failure is the last thing it says and never runs that long, so a line shaped as
 one with more after it was printed by the command's own work, and is shown, with what followed
 it, as it comes.
@@ -3178,9 +4181,10 @@ lin-gcc-release       inputs-moved      3m51s  2 inputs changed: config/c.lang.j
 vps-arm64-gcc-rel     skipped-unavailable      ssh vps: ssh could not connect
 ```
 
-Beneath it, `logs:` names where the run's records are, and each leg another host ran names
-that host's own; `--json` carries the same as `runDirectory`, at the top and on such a leg (see
-"Where a run's records live").
+Beneath it, `logs:` names where the run's records are, and each leg that kept records names its
+own directory and the logs in it; `--json` carries the run's directory as `runDirectory`, at the
+top and on such a leg, and the leg's own as `records` and `logs` (see "Where a run's records
+live").
 
 ## CI legs
 
@@ -3227,7 +4231,8 @@ with "the harness could not run", because the remedies differ.
 or when no selected leg can, and `70` when whether a leg can run was never established, through
 a defect in this tool. `build`, `test`, `run` and `clean` exit `1` too when no selected leg can
 run and no failure turned one away, each leg's line saying why it cannot; `check-mutations`
-exits `21` there (see below). `install-missing-tools` exits `1` when a tool is missing, out of
+exits `21` there (see below), and `check-mutations --list` exits `0` whatever is pending - a
+listing is no gate - as `check-mutations --pending` does where nothing is pending. `install-missing-tools` exits `1` when a tool is missing, out of
 date or could not be installed, and `15` when a host could not be reached: a tool that is not
 there and a host that did not answer call for different things. `check-anchor-balance` and
 `check-anchor-citations` exit `1` on a finding, which is what they were asked to look for rather

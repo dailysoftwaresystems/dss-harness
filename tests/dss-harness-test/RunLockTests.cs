@@ -1,0 +1,924 @@
+using System.Diagnostics;
+using System.Globalization;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
+using DssHarness.Core.Sync;
+using DssHarness.Core.Worktrees;
+
+namespace DssHarness.Tests;
+
+/// <summary>
+/// The lock is what keeps two runs off one tree. A held lock refuses immediately and names its
+/// holder, staleness is decided by liveness rather than by a timeout, and a lock is released by the
+/// run that took it. Each of those is a different way for two runs to corrupt each other's results.
+/// </summary>
+public sealed class RunLockTests
+{
+    [Fact]
+    public async Task AHeldLock_RefusesAtOnce_AndNamesItsHolder()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runLock = new RunLock(factory.FileSystem, factory.Output, factory.Identity);
+        var layout = Layout(temp);
+
+        await using var held = await runLock.AcquireAsync(layout, Request(LockScope.TreeExclusive, "sync"), TestContext.Current.CancellationToken);
+
+        var watch = Stopwatch.StartNew();
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => runLock.AcquireAsync(
+            layout,
+            Request(LockScope.TreeExclusive, "build"),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+
+        // Named by its process and run, never by this machine's name, which only the lock file keeps.
+        Assert.Contains(
+            string.Create(CultureInfo.InvariantCulture, $"is held by pid {Environment.ProcessId}, run {held.Entry.Holder.RunId}, since "),
+            refusal.Message,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(Environment.MachineName, refusal.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("running 'sync'", refusal.Message, StringComparison.Ordinal);
+
+        // It never waits: blocking for hours is worse than a refusal somebody can act on.
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(2), $"the refusal took {watch.Elapsed}");
+    }
+
+    /// <summary>
+    /// A lock another run holds is an answer, returned as one and written nowhere, which a caller can
+    /// turn into a verdict for the legs on that tree; a lock file nobody can use is not, and is still
+    /// raised, since it stops every run on every tree alike.
+    /// </summary>
+    [Fact]
+    public async Task AHeldLock_IsAnAnswer_AndALockFileNobodyCanUse_IsNot()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runLock = new RunLock(factory.FileSystem, factory.Output, factory.Identity);
+        var layout = Layout(temp);
+
+        await using (var held = await runLock.AcquireAsync(layout, Request(LockScope.TreeExclusive, "sync"), TestContext.Current.CancellationToken))
+        {
+            var before = File.ReadAllText(layout.LockFile);
+
+            var attempt = await runLock.TryAcquireAsync(layout, Request(LockScope.TreeExclusive, "build"), TestContext.Current.CancellationToken);
+
+            Assert.Null(attempt.Handle);
+            Assert.Contains(held.Entry.Holder.RunId, attempt.HeldBy, StringComparison.Ordinal);
+            Assert.Equal(before, File.ReadAllText(layout.LockFile));
+        }
+
+        File.WriteAllText(layout.LockFile, "not a lock file");
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => runLock.TryAcquireAsync(
+            layout,
+            Request(LockScope.TreeExclusive, "build"),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+
+        // The parser's reason is joined into the sentence, not closed twice.
+        Assert.DoesNotContain("..", refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A lock file that cannot be written stops every run on every tree alike: raised as the refusal
+    /// it is, naming the file, rather than escaping as an error the leg executor records as a defect
+    /// in this tool.
+    /// </summary>
+    [Fact]
+    public async Task ALockFileThatCannotBeWritten_IsARefusal_NamingIt()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runLock = new RunLock(factory.FileSystem, factory.Output, factory.Identity);
+
+        // Where the directory holding the lock file belongs, a file: nothing can be written there.
+        temp.WriteFile(".harness-config", "not a directory");
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => runLock.TryAcquireAsync(
+            Layout(temp),
+            Request(LockScope.TreeExclusive, "build"),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+        Assert.Contains("could not be written", refusal.Message, StringComparison.Ordinal);
+
+        // The system's reason is joined into the sentence, not closed twice.
+        Assert.DoesNotContain("..", refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A lock that could not be given up is said, and never stands in for the verdict of the work it
+    /// guarded: the entry names this process, and is reclaimed once this run has ended.
+    /// </summary>
+    [Fact]
+    public async Task ALockThatCouldNotBeReleased_IsSaid_AndNotRaised()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runLock = new RunLock(factory.FileSystem, factory.Output, factory.Identity);
+        var layout = Layout(temp);
+
+        var handle = (await runLock.TryAcquireAsync(layout, Request(LockScope.TreeExclusive, "build"), TestContext.Current.CancellationToken)).Handle!;
+
+        // The lock file replaced by a directory: nothing can be written where it was.
+        File.Delete(layout.LockFile);
+        Directory.CreateDirectory(layout.LockFile);
+
+        await handle.DisposeAsync();
+
+        Assert.Contains("could not be released", factory.StandardError.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A lock this run could not release - a full disk - never refuses this run's own later legs, which would otherwise
+    /// be refused by a lock their own run has done with; it leaves the lock file with the next change this run makes.
+    /// </summary>
+    [Fact]
+    public async Task ALockThatCouldNotBeReleased_NeverRefusesThisRunsOwnLaterLegs()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var disk = new FullDiskFileSystem(factory.FileSystem);
+        var runLock = new RunLock(disk, factory.Output, factory.Identity);
+        var layout = Layout(temp);
+
+        var sync = (await runLock.TryAcquireAsync(layout, Request(LockScope.TreeExclusive, "sync"), TestContext.Current.CancellationToken)).Handle!;
+        disk.Full = true;
+        await sync.DisposeAsync();
+        disk.Full = false;
+
+        Assert.Contains("could not be released", factory.StandardError.ToString(), StringComparison.Ordinal);
+        Assert.Equal("sync", Assert.Single(runLock.Read(layout)).Holder.Command);
+
+        var build = await runLock.TryAcquireAsync(layout, Request(LockScope.TreeShared, "build") with { Variant = "debug" }, TestContext.Current.CancellationToken);
+
+        Assert.Null(build.HeldBy);
+        Assert.Equal("build", Assert.Single(runLock.Read(layout)).Holder.Command);
+        await build.Handle!.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task ARecycledProcessId_IsNotMistakenForALiveHolder()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runLock = new RunLock(factory.FileSystem, factory.Output, factory.Identity);
+        var layout = Layout(temp);
+
+        // This process's own id, recorded with a start time it cannot have: exactly what a run sees
+        // after the operating system has handed the id out again.
+        Write(layout, Entry(Environment.MachineName, Environment.ProcessId, "some-other-process"));
+
+        await using var taken = await runLock.AcquireAsync(layout, Request(LockScope.TreeExclusive, "sync"), TestContext.Current.CancellationToken);
+
+        Assert.Single(runLock.Read(layout));
+        Assert.Equal(Environment.ProcessId, runLock.Read(layout).Single().Holder.ProcessId);
+        Assert.Contains("Reclaimed", factory.StandardOutput.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ADeadHolderOnThisMachine_IsReclaimedAndTheReclaimIsReported()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runLock = new RunLock(factory.FileSystem, factory.Output, factory.Identity);
+        var layout = Layout(temp);
+
+        // An id no process on any platform carries.
+        Write(layout, Entry(Environment.MachineName, int.MaxValue - 1, "a-process-that-has-gone"));
+
+        await using var taken = await runLock.AcquireAsync(layout, Request(LockScope.TreeExclusive, "sync"), TestContext.Current.CancellationToken);
+
+        Assert.Single(runLock.Read(layout));
+        Assert.Contains("Reclaimed", factory.StandardOutput.ToString(), StringComparison.Ordinal);
+        Assert.Contains("no longer running", factory.StandardOutput.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Everywhere else this tool reads JSON, a shape it does not recognise is a hard failure rather
+    /// than silent data loss. This file is no exception: a member nobody declared is a file written
+    /// by something else, or by a build from the future, and quietly dropping half of it is how a
+    /// lock gets judged on what survived the read.
+    /// </summary>
+    [Fact]
+    public async Task ALockFileWithAMemberThisBuildDoesNotKnow_IsRefused_RatherThanPartlyRead()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runLock = new RunLock(factory.FileSystem, factory.Output, factory.Identity);
+        var layout = Layout(temp);
+
+        Write(layout, LegacyEntry(Environment.MachineName, int.MaxValue - 1).Replace(
+            "\"command\": \"test\"",
+            "\"command\": \"test\", \"somethingNobodyDeclared\": 1",
+            StringComparison.Ordinal));
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => runLock.AcquireAsync(
+            layout,
+            Request(LockScope.TreeExclusive, "sync"),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+    }
+
+    /// <summary>
+    /// A lock file this tool wrote before it stopped recording a wall-clock start time. The field it
+    /// held is gone and nothing replaces it, so the entry can only be judged by whether anything at
+    /// all carries its id — which is the check the stamp exists to retire. Kept while something does,
+    /// because taking what a live run holds is the worse of the two mistakes.
+    /// </summary>
+    [Fact]
+    public async Task AnEntryFromAnOlderBuild_IsKeptWhileItsIdIsCarried_AndSaysWhySoItCanBeForced()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runLock = new RunLock(factory.FileSystem, factory.Output, factory.Identity);
+        var layout = Layout(temp);
+
+        Write(layout, LegacyEntry(Environment.MachineName, Environment.ProcessId));
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => runLock.AcquireAsync(
+            layout,
+            Request(LockScope.TreeExclusive, "sync"),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+
+        // Told apart from an ordinary holder, because waiting for this one could mean waiting for a
+        // run that finished before the upgrade.
+        Assert.Contains("recorded by an older build", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("--force-lock", refusal.Message, StringComparison.Ordinal);
+
+        await using var forced = await runLock.AcquireAsync(
+            layout,
+            Request(LockScope.TreeExclusive, "sync") with { Force = true },
+            TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task AnEntryFromAnOlderBuild_WhoseIdNothingCarries_IsStillReclaimed()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runLock = new RunLock(factory.FileSystem, factory.Output, factory.Identity);
+        var layout = Layout(temp);
+
+        Write(layout, LegacyEntry(Environment.MachineName, int.MaxValue - 1));
+
+        await using var taken = await runLock.AcquireAsync(
+            layout,
+            Request(LockScope.TreeExclusive, "sync"),
+            TestContext.Current.CancellationToken);
+
+        Assert.Contains("Reclaimed", factory.StandardOutput.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AHolderOnThisMachineThatStillReadsAlive_CanStillBeForced()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runLock = new RunLock(factory.FileSystem, factory.Output, factory.Identity);
+        var layout = Layout(temp);
+
+        // Held by this very process under this very process's stamp, so it is alive by every test
+        // this machine can apply and is never reclaimed on its own. Without a way to force it, an id
+        // that has come back around to something live holds a tree for ever and only editing the
+        // file by hand recovers it.
+        Write(layout, Entry(Environment.MachineName, factory.Identity.CurrentId, factory.Identity.Current));
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => runLock.AcquireAsync(
+            layout,
+            Request(LockScope.TreeExclusive, "sync"),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+
+        await using var forced = await runLock.AcquireAsync(
+            layout,
+            Request(LockScope.TreeExclusive, "sync") with { Force = true },
+            TestContext.Current.CancellationToken);
+
+        Assert.Contains("--force-lock was given", factory.StandardError.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AHolderOnAnotherMachine_StandsUntilItIsForced()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runLock = new RunLock(factory.FileSystem, factory.Output, factory.Identity);
+        var layout = Layout(temp);
+
+        // Dead by every test this machine can apply, and still not reclaimed: nothing here can ask
+        // that machine whether the run is still going.
+        Write(layout, Entry("another-machine", int.MaxValue - 1, "a-process-elsewhere"));
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => runLock.AcquireAsync(
+            layout,
+            Request(LockScope.TreeExclusive, "sync"),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+
+        // Said to be another machine's, never named: the record keeps the name, which is how the two are told apart. A
+        // machine renamed since - a Mac, by the network it joined - reads as another: the reader is told the way out.
+        Assert.Contains($"is held by pid {int.MaxValue - 1} on another machine, run ", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            "(that machine - or this one, under an earlier name - cannot be asked whether it still runs; --force-lock takes it)",
+            refusal.Message,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("another-machine", refusal.Message, StringComparison.Ordinal);
+
+        await using var forced = await runLock.AcquireAsync(
+            layout,
+            Request(LockScope.TreeExclusive, "sync") with { Force = true },
+            TestContext.Current.CancellationToken);
+
+        Assert.Single(runLock.Read(layout));
+        Assert.Contains($"from pid {int.MaxValue - 1} on another machine, run ", factory.StandardError.ToString(), StringComparison.Ordinal);
+        Assert.Contains("--force-lock", factory.StandardError.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("another-machine", factory.StandardError.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ForcingALock_TakesOnlyTheOneInTheWay()
+    {
+        // --force-lock says "this lock is stale, take it", about the lock that is refusing this
+        // run. Taking every other machine's lock as well would drop holds on trees and variants
+        // this run never asked about — including one another run is part way through syncing.
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runLock = new RunLock(factory.FileSystem, factory.Output, factory.Identity);
+        var layout = Layout(temp);
+
+        Write(layout, Entry("another-machine", int.MaxValue - 1, "a-process-elsewhere", tree: "/other-repo"));
+
+        await using var forced = await runLock.AcquireAsync(
+            layout,
+            Request(LockScope.TreeExclusive, "sync") with { Force = true },
+            TestContext.Current.CancellationToken);
+
+        var kept = runLock.Read(layout);
+
+        Assert.Equal(2, kept.Count);
+        Assert.Contains(kept, entry => entry.Tree == "/other-repo");
+        Assert.DoesNotContain("--force-lock", factory.StandardError.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task VariantsShareATree_ButNeverTheSameVariant()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runLock = new RunLock(factory.FileSystem, factory.Output, factory.Identity);
+        var layout = Layout(temp);
+
+        await using var msvc = await runLock.AcquireAsync(
+            layout,
+            Request(LockScope.TreeShared, "build") with { Variant = "x86_64-msvc-release" },
+            TestContext.Current.CancellationToken);
+
+        // Another variant of the same tree builds beside it: each has its own build directory.
+        await using var gcc = await runLock.AcquireAsync(
+            layout,
+            Request(LockScope.TreeShared, "build") with { Variant = "x86_64-gcc-release" },
+            TestContext.Current.CancellationToken);
+
+        await Assert.ThrowsAsync<HarnessException>(() => runLock.AcquireAsync(
+            layout,
+            Request(LockScope.TreeShared, "test") with { Variant = "x86_64-msvc-release" },
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(2, runLock.Read(layout).Count);
+    }
+
+    [Fact]
+    public async Task ASyncTakesTheWholeTree_AndABuildKeepsASyncOut()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runLock = new RunLock(factory.FileSystem, factory.Output, factory.Identity);
+        var layout = Layout(temp);
+
+        await using (await runLock.AcquireAsync(layout, Request(LockScope.TreeExclusive, "sync"), TestContext.Current.CancellationToken))
+        {
+            // Nothing may build while its sources are being replaced.
+            await Assert.ThrowsAsync<HarnessException>(() => runLock.AcquireAsync(
+                layout,
+                Request(LockScope.TreeShared, "build") with { Variant = "x86_64-msvc-release" },
+                TestContext.Current.CancellationToken));
+        }
+
+        await using var build = await runLock.AcquireAsync(
+            layout,
+            Request(LockScope.TreeShared, "build") with { Variant = "x86_64-msvc-release" },
+            TestContext.Current.CancellationToken);
+
+        await Assert.ThrowsAsync<HarnessException>(() => runLock.AcquireAsync(
+            layout,
+            Request(LockScope.TreeExclusive, "sync"),
+            TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task ALockIsReleasedOnlyByTheRunThatTookIt()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runLock = new RunLock(factory.FileSystem, factory.Output, factory.Identity);
+        var layout = Layout(temp);
+
+        // Another run, on another machine, holding another variant of the same tree.
+        Write(layout, Entry("another-machine", 4321, "a-process-elsewhere", variant: "x86_64-gcc-release", scope: "TreeShared"));
+
+        var handle = await runLock.AcquireAsync(
+            layout,
+            Request(LockScope.TreeShared, "build") with { Variant = "x86_64-msvc-release" },
+            TestContext.Current.CancellationToken);
+
+        await handle.ReleaseAsync(TestContext.Current.CancellationToken);
+
+        var remaining = runLock.Read(layout).Single();
+        Assert.Equal("another-machine", remaining.Holder.Machine);
+        Assert.Equal("x86_64-gcc-release", remaining.Variant);
+
+        // Releasing twice is not an error, and takes nothing else with it.
+        await handle.ReleaseAsync(TestContext.Current.CancellationToken);
+        Assert.Single(runLock.Read(layout));
+    }
+
+    [Fact]
+    public async Task ALockFileThatCannotBeRead_IsNeverReadAsFree()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runLock = new RunLock(factory.FileSystem, factory.Output, factory.Identity);
+        var layout = Layout(temp);
+
+        Directory.CreateDirectory(Path.GetDirectoryName(layout.LockFile)!);
+        await File.WriteAllTextAsync(layout.LockFile, "{ this is not the lock file }", TestContext.Current.CancellationToken);
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => runLock.AcquireAsync(
+            layout,
+            Request(LockScope.TreeExclusive, "sync"),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+    }
+
+    [Fact]
+    public async Task TwoRunsAskingAtOnce_LeaveExactlyOneHolder()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var layout = Layout(temp);
+
+        // Separate instances, as two processes would be: the file is read, decided and written as
+        // one step, or both would read "free" and both would write themselves in.
+        var attempts = Enumerable.Range(0, 8).Select(index => Task.Run(async () =>
+        {
+            var runLock = new RunLock(factory.FileSystem, factory.Output, factory.Identity);
+
+            try
+            {
+                await runLock.AcquireAsync(layout, Request(LockScope.TreeExclusive, $"sync {index}"), TestContext.Current.CancellationToken);
+                return true;
+            }
+            catch (HarnessException)
+            {
+                return false;
+            }
+        }));
+
+        var taken = await Task.WhenAll(attempts);
+
+        Assert.Equal(1, taken.Count(success => success));
+        Assert.Single(new RunLock(factory.FileSystem, factory.Output, factory.Identity).Read(layout));
+    }
+
+    [Fact]
+    public async Task ASharedLockWithNoVariant_IsRefused()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runLock = new RunLock(factory.FileSystem, factory.Output, factory.Identity);
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => runLock.AcquireAsync(
+            Layout(temp),
+            Request(LockScope.TreeShared, "build"),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+    }
+
+    /// <summary>
+    /// Asking which run holds a lock writes nothing - no lock file, no directory for one - and does what
+    /// it was given to do while nothing holds it: what removes a build directory from a full disk asks this.
+    /// </summary>
+    [Fact]
+    public void AskingWhoHoldsALock_WritesNothing_AndDoesTheWork_WhereNothingHoldsIt()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runLock = new RunLock(factory.FileSystem, factory.Output, factory.Identity);
+        var layout = Layout(temp);
+        var done = false;
+
+        Assert.Null(runLock.HeldBy(layout, Building("x86_64-gcc-debug"), () => done = true));
+
+        Assert.True(done);
+        Assert.False(File.Exists(layout.LockFile));
+        Assert.False(Directory.Exists(Path.GetDirectoryName(layout.LockFile)));
+    }
+
+    /// <summary>
+    /// A variant a run holds is named as a refusal names it, and nothing is done under it; another variant
+    /// of the same tree is free. The lock file is left exactly as it was.
+    /// </summary>
+    [Fact]
+    public async Task AskingWhoHoldsALock_NamesTheRunHoldingIt_AndDoesNothingUnderIt()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runLock = new RunLock(factory.FileSystem, factory.Output, factory.Identity);
+        var layout = Layout(temp);
+
+        await using var held = await runLock.AcquireAsync(layout, Building("x86_64-gcc-debug") with { Command = "build" }, TestContext.Current.CancellationToken);
+        var before = File.ReadAllText(layout.LockFile);
+        var done = false;
+
+        var holder = runLock.HeldBy(layout, Building("x86_64-gcc-debug"), () => done = true);
+
+        Assert.NotNull(holder);
+        Assert.Contains(held.Entry.Holder.RunId, holder, StringComparison.Ordinal);
+        Assert.Contains("'build'", holder, StringComparison.Ordinal);
+        Assert.False(done);
+
+        Assert.Null(runLock.HeldBy(layout, Building("x86_64-gcc-release"), () => done = true));
+        Assert.True(done);
+        Assert.Equal(before, File.ReadAllText(layout.LockFile));
+    }
+
+    /// <summary>
+    /// The entry of a run that has ended holds nothing, and is passed over without a word and left in the
+    /// file: taking it back, as a run taking the lock does, would write the file.
+    /// </summary>
+    [Fact]
+    public void AskingWhoHoldsALock_PassesOverADeadHoldersEntry_AndLeavesIt()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runLock = new RunLock(factory.FileSystem, factory.Output, factory.Identity);
+        var layout = Layout(temp);
+
+        Write(layout, Entry(Environment.MachineName, int.MaxValue - 1, "a-process-that-has-gone"));
+        var before = File.ReadAllText(layout.LockFile);
+
+        Assert.Null(runLock.HeldBy(layout, Building("x86_64-gcc-debug")));
+
+        Assert.Equal(before, File.ReadAllText(layout.LockFile));
+        Assert.DoesNotContain("Reclaimed", factory.StandardOutput.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// What is done while nothing holds the lock is done before any run can take it: a run asking for it
+    /// meanwhile waits for the work to end, and takes it after.
+    /// </summary>
+    [Fact]
+    public async Task ARunAskingForALock_WaitsForWhatIsDoneWhileNothingHoldsIt()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runLock = new RunLock(factory.FileSystem, factory.Output, factory.Identity);
+        var layout = Layout(temp);
+        Task<LockAttempt>? taking = null;
+
+        Assert.Null(runLock.HeldBy(layout, Building("x86_64-gcc-debug"), () =>
+        {
+            taking = Task.Run(() => runLock.TryAcquireAsync(layout, Building("x86_64-gcc-debug"), CancellationToken.None));
+
+            // Held off for as long as the work runs.
+            Assert.False(taking.Wait(TimeSpan.FromMilliseconds(500)), "a run took the lock while the work under it ran");
+        }));
+
+        var attempt = await taking!;
+
+        Assert.NotNull(attempt.Handle);
+        await attempt.Handle.ReleaseAsync(TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>Nothing is taken, so there is nothing to take over: a forced request is a mistake of the caller's.</summary>
+    [Fact]
+    public void AskingWhoHoldsALock_CannotBeForced()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runLock = new RunLock(factory.FileSystem, factory.Output, factory.Identity);
+
+        Assert.Throws<ArgumentException>(() => runLock.HeldBy(Layout(temp), Building("x86_64-gcc-debug") with { Force = true }));
+    }
+
+    /// <summary>
+    /// A tree on this machine is one key however it is reached: an entry written through a link - as a worktree under a
+    /// worktrees root that is a junction to another disk is spelled from the main checkout - and a request spelled as
+    /// git spells it, every link followed, meet, whichever writes and whichever asks, and the entry records the tree as
+    /// it was spelled.
+    /// </summary>
+    [Fact]
+    public async Task ATreeReachedThroughALink_IsOneKeyWithTheTreeItLeadsTo()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runLock = new RunLock(factory.FileSystem, factory.Output, factory.Identity);
+        var layout = Layout(temp);
+        var reached = Directory.CreateDirectory(temp.Combine("elsewhere", "o1--ag")).FullName;
+        TestLinks.DirectoryLink(temp.Combine("linked"), temp.Combine("elsewhere"));
+        var linked = temp.Combine("linked", "o1--ag");
+        var copy = Path.Combine(linked, ".legs", "357e24c");
+        var copyReached = Path.Combine(reached, ".legs", "357e24c");
+
+        await using (var throughTheLink = await runLock.AcquireAsync(layout, Whole(copy), TestContext.Current.CancellationToken))
+        {
+            Assert.Equal(copy, throughTheLink.Entry.Tree);
+            Assert.False((await runLock.TryAcquireAsync(layout, Whole(copyReached), TestContext.Current.CancellationToken)).Taken);
+            Assert.StartsWith($"'{copyReached}' on local is held by pid ", runLock.HeldBy(layout, Whole(copyReached)), StringComparison.Ordinal);
+        }
+
+        await using (await runLock.AcquireAsync(layout, Whole(copyReached), TestContext.Current.CancellationToken))
+        {
+            Assert.False((await runLock.TryAcquireAsync(layout, Whole(copy), TestContext.Current.CancellationToken)).Taken);
+            Assert.NotNull(runLock.HeldBy(layout, Whole(copy)));
+        }
+    }
+
+    /// <summary>
+    /// Only this machine's trees are keyed by where they lead: a host's - a WSL distribution's or an ssh host's - whose links
+    /// this machine cannot follow, is the key it is spelled as, though a link of this machine's lies along that spelling.
+    /// And asked for several things at once, the lock tells each live entry to every request it is in the way of, and to no
+    /// other: the same tree whole, and a removal of a tree it is kept inside, but never another tree or another variant.
+    /// </summary>
+    [Fact]
+    public async Task OnlyThisMachinesTreesAreKeyedByWhereTheyLead_AndEachEntryIsToldToWhatItIsInTheWayOf()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runLock = new RunLock(factory.FileSystem, factory.Output, factory.Identity);
+        var layout = Layout(temp);
+        var reached = Directory.CreateDirectory(temp.Combine("elsewhere", "tree")).FullName;
+        TestLinks.DirectoryLink(temp.Combine("linked"), temp.Combine("elsewhere"));
+        var tree = temp.Combine("linked", "tree");
+
+        Assert.Equal(tree, runLock.Key("ssh pi", tree));
+        Assert.Equal(tree, runLock.Key("wsl ubuntu", tree));
+        Assert.Equal(reached, runLock.Key("local", tree));
+
+        await using var held = await runLock.AcquireAsync(layout, Whole(tree) with { Scope = LockScope.TreeShared, Variant = "debug" }, TestContext.Current.CancellationToken);
+
+        var whole = Whole(tree);
+        var removing = Whole(temp.Combine("linked")) with { Command = RunLock.RemovalCommand };
+        var holding = Assert.Single(runLock.Holders(
+            layout,
+            [Whole(temp.Combine("elsewhere")), whole, Whole(reached) with { Scope = LockScope.TreeShared, Variant = "release" }, removing]));
+
+        Assert.Equal(held.Entry, holding.Entry);
+        Assert.Equal([whole, removing], holding.Of);
+    }
+
+    /// <summary>
+    /// Where the links along a tree on this machine cannot be followed - they form a cycle - the lock cannot key it, so it
+    /// refuses, naming the tree, rather than key it as spelled and miss a run holding it by another spelling.
+    /// </summary>
+    [Fact]
+    public async Task ATreeWhoseLinksCannotBeFollowed_IsRefused_NeverKeyedAsSpelled()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runLock = new RunLock(factory.FileSystem, factory.Output, factory.Identity);
+        TestLinks.DirectoryLink(temp.Combine("one"), temp.Combine("two"));
+        TestLinks.DirectoryLink(temp.Combine("two"), temp.Combine("one"));
+        var tree = temp.Combine("one", "tree");
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => runLock.TryAcquireAsync(Layout(temp), Whole(tree), TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+        Assert.StartsWith($"The run lock keys '{tree}' by where it leads, and that cannot be told: ", refusal.Message, StringComparison.Ordinal);
+        Assert.False(File.Exists(Layout(temp).LockFile), "a request the lock cannot key writes nothing");
+    }
+
+    /// <summary>
+    /// A removal of a host's copy takes it with everything kept inside it: a sweep holding its key there - one more copy
+    /// in the copy's <c>.mutations</c> - is in the way of removing that copy, on that host only, and of nothing beside it
+    /// whose name only begins the same; while a sync or a build of the copy, which a sweep never holds off, still takes it.
+    /// </summary>
+    [Fact]
+    public async Task ARemovalOfAHostsCopy_IsHeldByASweepInsideIt_OnThatHostOnly()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runLock = new RunLock(factory.FileSystem, factory.Output, factory.Identity);
+        var layout = Layout(temp);
+        var copy = "/home/pi/repo--wt--o1--ag";
+        var sweep = new LockRequest { Host = "ssh pi", Tree = copy + "/.mutations/357e24c", Scope = LockScope.TreeExclusive, RunId = RunId.New(), Command = "check-mutations" };
+
+        await using var swept = await runLock.AcquireAsync(layout, sweep, TestContext.Current.CancellationToken);
+
+        var refused = await runLock.TryAcquireAsync(layout, HostCopyRemover.RemovalLock(HostId.Ssh("pi"), copy, RunId.New()), TestContext.Current.CancellationToken);
+
+        Assert.False(refused.Taken);
+        Assert.Equal(swept.Entry, refused.Holder);
+        Assert.StartsWith($"'{copy}' on ssh pi is held by pid ", refused.HeldBy, StringComparison.Ordinal);
+        Assert.Contains("running 'check-mutations'", refused.HeldBy, StringComparison.Ordinal);
+        Assert.NotNull(runLock.HeldBy(layout, HostCopyRemover.RemovalLock(HostId.Ssh("pi"), copy + "/", RunId.New())));
+
+        Assert.Null(runLock.HeldBy(layout, HostCopyRemover.RemovalLock(HostId.Ssh("other"), copy, RunId.New())));
+        Assert.Null(runLock.HeldBy(layout, HostCopyRemover.RemovalLock(HostId.Wsl("pi"), copy, RunId.New())));
+        Assert.Null(runLock.HeldBy(layout, HostCopyRemover.RemovalLock(HostId.Ssh("pi"), copy + "-2", RunId.New())));
+
+        await using (await runLock.AcquireAsync(
+            layout,
+            new LockRequest { Host = "ssh pi", Tree = copy, Scope = LockScope.TreeExclusive, RunId = RunId.New(), Command = "sync" },
+            TestContext.Current.CancellationToken))
+        {
+        }
+    }
+
+    /// <summary>
+    /// An entry keeps the tree as its run spelled it, and is told from a request by where each leads only when the lock is
+    /// read - so a copy recorded through a slot that is a link to another disk, as a build before this one records it, and
+    /// a request for it spelled where it leads, meet, and the other way round; and one recorded through the slot is kept as
+    /// spelled, so a build before this one, which compares trees as spelled, meets it asking as its run spelled it.
+    /// </summary>
+    [Fact]
+    public async Task AnEntryKeepsItsRunsSpelling_AndMeetsARequestSpelledEitherWay_ThroughASlotThatIsALink()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runLock = new RunLock(factory.FileSystem, factory.Output, factory.Identity);
+        var layout = Layout(temp);
+        var tree = Directory.CreateDirectory(temp.Combine("tree")).FullName;
+        var disk = Directory.CreateDirectory(temp.Combine("disk", "legs")).FullName;
+        var spelled = Path.Combine(tree, ".legs", "357e24c");
+        var reached = Path.Combine(disk, "357e24c");
+
+        await using (await runLock.AcquireAsync(layout, Whole(spelled), TestContext.Current.CancellationToken))
+        {
+            TestLinks.DirectoryLink(Path.Combine(tree, ".legs"), disk);
+            Directory.CreateDirectory(reached);
+
+            Assert.Equal(spelled, Assert.Single(runLock.Read(layout)).Tree);
+            Assert.False((await runLock.TryAcquireAsync(layout, Whole(reached), TestContext.Current.CancellationToken)).Taken);
+            Assert.NotNull(runLock.HeldBy(layout, Whole(reached)));
+        }
+
+        await using (await runLock.AcquireAsync(layout, Whole(reached), TestContext.Current.CancellationToken))
+        {
+            Assert.False((await runLock.TryAcquireAsync(layout, Whole(spelled), TestContext.Current.CancellationToken)).Taken);
+            Assert.NotNull(runLock.HeldBy(layout, Whole(spelled)));
+        }
+
+        await using (var throughTheSlot = await runLock.AcquireAsync(layout, Whole(spelled), TestContext.Current.CancellationToken))
+        {
+            Assert.Equal(spelled, throughTheSlot.Entry.Tree);
+            Assert.Equal(spelled, Assert.Single(runLock.Read(layout)).Tree);
+        }
+    }
+
+    /// <summary>
+    /// A removal's entry - a host's copy taken whole by its removal - holds off whatever is asked inside the copy while it
+    /// stands, as a removal asked is held off by whatever is held inside it: a sweep cannot take its key in the copy's
+    /// <c>.mutations</c>, and is named the removal; on that host only, and nothing beside the copy whose name only begins
+    /// the same; and a copy taken whole by anything but a removal - a sync - holds off nothing kept inside it.
+    /// </summary>
+    [Fact]
+    public async Task ARemovalsEntry_HoldsOffWhateverIsAskedInsideItsTree_OnThatHostOnly()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runLock = new RunLock(factory.FileSystem, factory.Output, factory.Identity);
+        var layout = Layout(temp);
+        var copy = "/home/pi/repo" + HostCopies.WorktreeSuffix + "o1--ag";
+        var sweep = new LockRequest { Host = "ssh pi", Tree = copy + "/.mutations/357e24c", Scope = LockScope.TreeExclusive, RunId = RunId.New(), Command = "check-mutations" };
+
+        await using (var removing = await runLock.AcquireAsync(layout, HostCopyRemover.RemovalLock(HostId.Ssh("pi"), copy, RunId.New()), TestContext.Current.CancellationToken))
+        {
+            var refused = await runLock.TryAcquireAsync(layout, sweep, TestContext.Current.CancellationToken);
+
+            Assert.False(refused.Taken);
+            Assert.Equal(removing.Entry, refused.Holder);
+            Assert.StartsWith($"'{sweep.Tree}' on ssh pi is held by pid ", refused.HeldBy, StringComparison.Ordinal);
+            Assert.Contains($"running '{WorktreeService.DeleteCommand}'", refused.HeldBy, StringComparison.Ordinal);
+            Assert.NotNull(runLock.HeldBy(layout, sweep));
+            Assert.Equal(removing.Entry, Assert.Single(runLock.Holders(layout, [sweep])).Entry);
+
+            await using (await runLock.AcquireAsync(layout, sweep with { Host = "ssh other" }, TestContext.Current.CancellationToken))
+            await using (await runLock.AcquireAsync(layout, sweep with { Tree = copy + "-2/.mutations/357e24c" }, TestContext.Current.CancellationToken))
+            {
+            }
+        }
+
+        await using (await runLock.AcquireAsync(
+            layout,
+            new LockRequest { Host = "ssh pi", Tree = copy, Scope = LockScope.TreeExclusive, RunId = RunId.New(), Command = "sync" },
+            TestContext.Current.CancellationToken))
+        await using (await runLock.AcquireAsync(layout, sweep, TestContext.Current.CancellationToken))
+        {
+        }
+    }
+
+    /// <summary>A leg's copy on this machine, taken whole.</summary>
+    private static LockRequest Whole(string copy) => new()
+    {
+        Host = "local",
+        Tree = copy,
+        Scope = LockScope.TreeExclusive,
+        RunId = RunId.New(),
+        Command = "test",
+    };
+
+    private static LockRequest Building(string variant) => new()
+    {
+        Host = "local",
+        Tree = "/repo",
+        Variant = variant,
+        Scope = LockScope.TreeShared,
+        RunId = RunId.New(),
+        Command = "clean",
+    };
+
+    private static HarnessLayout Layout(TempDirectory temp) => new(temp.Path, temp.Path);
+
+    private static LockRequest Request(LockScope scope, string command) => new()
+    {
+        Host = "local",
+        Tree = "/repo",
+        Scope = scope,
+        RunId = RunId.New(),
+        Command = command,
+    };
+
+    /// <summary>A lock file holding one entry, written as another run would have left it.</summary>
+    private static void Write(
+        HarnessLayout layout,
+        string entry)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(layout.LockFile)!);
+        File.WriteAllText(layout.LockFile, "[" + entry + "]");
+    }
+
+    /// <summary>
+    /// One entry exactly as the release before the process stamp wrote it: a wall-clock start time
+    /// under its old name, and no stamp at all.
+    /// </summary>
+    private static string LegacyEntry(string machine, int processId)
+    {
+        var stamp = DateTimeOffset.UtcNow.AddHours(-1).ToString("O", CultureInfo.InvariantCulture);
+        var id = processId.ToString(CultureInfo.InvariantCulture);
+
+        return "{ \"host\": \"local\", \"tree\": \"/repo\", \"scope\": \"TreeExclusive\", "
+            + "\"holder\": { \"machine\": \"" + machine + "\", \"processId\": " + id + ", "
+            + "\"processStartedUtc\": \"" + stamp + "\", \"runId\": \"20250101-120000-deadbeef\", "
+            + "\"takenUtc\": \"" + stamp + "\", \"command\": \"test\" } }";
+    }
+
+    private static string Entry(
+        string machine,
+        int processId,
+        string? processStamp,
+        string? variant = null,
+        string scope = "TreeExclusive",
+        string tree = "/repo")
+    {
+        var taken = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture);
+        var id = processId.ToString(CultureInfo.InvariantCulture);
+        var variantField = variant is null ? string.Empty : $"\"variant\": \"{variant}\",";
+        var stampField = processStamp is null ? string.Empty : "\"processStamp\": \"" + processStamp + "\", ";
+
+        return "{ \"host\": \"local\", \"tree\": \"" + tree + "\", " + variantField + " \"scope\": \"" + scope + "\", "
+            + "\"holder\": { \"machine\": \"" + machine + "\", \"processId\": " + id + ", "
+            + stampField + "\"runId\": \"20250101-120000-deadbeef\", "
+            + "\"takenUtc\": \"" + taken + "\", \"command\": \"test\" } }";
+    }
+}
+
+/// <summary>
+/// Takes a lock, or refuses naming its holder: how these tests ask for one, where a held lock is the
+/// refusal a test is about.
+/// </summary>
+internal static class RunLockTaking
+{
+    public static async Task<RunLockHandle> AcquireAsync(
+        this RunLock runLock,
+        HarnessLayout layout,
+        LockRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var attempt = await runLock.TryAcquireAsync(layout, request, cancellationToken);
+
+        return attempt.Handle ?? throw new HarnessException(HarnessExit.Refused, attempt.HeldBy!);
+    }
+}

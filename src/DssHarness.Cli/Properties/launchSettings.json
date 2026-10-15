@@ -1,0 +1,16 @@
+{
+  "profiles": {
+    "dssharness --help": {
+      "commandName": "Project",
+      "commandLineArgs": "--help"
+    },
+    "dssharness verify-git": {
+      "commandName": "Project",
+      "commandLineArgs": "verify-git"
+    },
+    "dssharness init": {
+      "commandName": "Project",
+      "commandLineArgs": "init"
+    }
+  }
+}

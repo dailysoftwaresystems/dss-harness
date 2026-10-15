@@ -55,7 +55,7 @@ concurrency:
   queue: max
 
 env:
-  PROJECT: src/RepoHarness.Cli/RepoHarness.Cli.csproj
+  PROJECT: src/DssHarness.Cli/DssHarness.Cli.csproj
   PACKAGE_ID: DssHarness
   PACKAGE_DIRECTORY: build/package
 
@@ -270,7 +270,7 @@ jobs:
         # since, such as a new advisory, and leave the release unable to finish.
         if: env.ON_NUGET != 'true'
         run: >
-          dotnet build RepoHarness.slnx --configuration Release
+          dotnet build DssHarness.slnx --configuration Release
           -p:Version=${{ env.PACKAGE_VERSION }}
 
       - name: Test
@@ -289,7 +289,7 @@ jobs:
           # As the test matrix sets it: a test that really builds fails where the runner lacks cmake, ninja or a
           # compiler, rather than being skipped green. This runner's image carries all three.
           DSSHARNESS_TESTS_REQUIRE_BUILD_TOOLS: "1"
-        run: dotnet test --project tests/repo-harness-test/repo-harness-test.csproj --configuration Release --no-build
+        run: dotnet test --project tests/dss-harness-test/dss-harness-test.csproj --configuration Release --no-build
 
       - name: Pack
         if: env.ON_NUGET != 'true'

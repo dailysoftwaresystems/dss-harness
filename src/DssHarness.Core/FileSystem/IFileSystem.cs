@@ -1,0 +1,255 @@
+namespace DssHarness.Core.FileSystem;
+
+/// <summary>
+/// File system access. A seam rather than a full abstraction: services that do
+/// real file work are tested against real temporary directories, while services
+/// that merely consult the file system are tested with a substitute.
+/// </summary>
+public interface IFileSystem
+{
+    /// <summary>Whether a file exists at <paramref name="path"/>.</summary>
+    bool FileExists(string path);
+
+    /// <summary>Whether a directory exists at <paramref name="path"/>.</summary>
+    bool DirectoryExists(string path);
+
+    /// <summary>
+    /// What is at <paramref name="path"/> itself - a file, a directory, a link or junction, or nothing - raised where
+    /// that cannot be told. <see cref="FileExists"/> and <see cref="DirectoryExists"/> answer false for a path this process
+    /// may not look at, and a caller deciding from that what may be deleted, or skipped as empty, reads "cannot tell" as
+    /// "nothing there".
+    /// </summary>
+    /// <param name="path">The path to look at.</param>
+    /// <exception cref="IOException">What is there could not be asked.</exception>
+    /// <exception cref="UnauthorizedAccessException">This process may not ask.</exception>
+    PathKind KindOf(string path);
+
+    /// <summary>
+    /// <paramref name="path"/> as an absolute path with every symbolic link and junction along it
+    /// followed, the form git reports paths in. The part of the path that does not exist is kept
+    /// as spelled.
+    /// </summary>
+    /// <exception cref="IOException">A link could not be read, or the links form a cycle.</exception>
+    string ResolveLinks(string path);
+
+    /// <summary>Creates a directory and any missing parents. No-op when it exists.</summary>
+    void CreateDirectory(string path);
+
+    /// <summary>Deletes a file, one git or anyone else marked read only included. No-op when it is already absent.</summary>
+    void DeleteFile(string path);
+
+    /// <summary>Copies a file to a new file in the temporary directory, and returns the copy's path.</summary>
+    string CopyToTemporaryFile(string path);
+
+    /// <summary>Copies <paramref name="source"/> to <paramref name="destination"/>.</summary>
+    /// <param name="source">The file to copy.</param>
+    /// <param name="destination">Where the copy goes. Its directory must exist.</param>
+    /// <param name="overwrite">Whether an existing file there is replaced.</param>
+    void CopyFile(string source, string destination, bool overwrite = false);
+
+    /// <summary>
+    /// Puts the file at <paramref name="source"/> in place of <paramref name="destination"/> in one step - a rename over
+    /// whatever is there - so a reader never sees a file half written. Windows refusing for a moment, while another
+    /// process holds the destination, is tried again a few times before it is reported.
+    /// </summary>
+    /// <param name="source">A file written beside the destination, on the same volume.</param>
+    /// <param name="destination">The file it replaces, or where it goes.</param>
+    void ReplaceFile(string source, string destination);
+
+    /// <summary>
+    /// Deletes a directory and everything under it, including files git has marked
+    /// read only, and never anything a link or junction under it leads to. No-op when absent.
+    /// </summary>
+    void DeleteDirectory(string path);
+
+    /// <summary>
+    /// Moves the directory at <paramref name="source"/> to <paramref name="destination"/>, on the same
+    /// volume: a rename, which writes no file's contents and so needs no room the volume does not have.
+    /// </summary>
+    /// <param name="source">The directory to move.</param>
+    /// <param name="destination">Where it goes, which must not exist.</param>
+    void MoveDirectory(string source, string destination);
+
+    /// <summary>
+    /// Whether <paramref name="path"/> is itself a link or a junction, whatever the directories above it are;
+    /// false where nothing is there.
+    /// </summary>
+    /// <param name="path">The path to look at.</param>
+    bool IsLink(string path);
+
+    /// <summary>
+    /// How many bytes the files under <paramref name="path"/> hold: each link counted as itself, and none
+    /// walked, and a directory this user cannot read counted as nothing. Zero where it does not exist.
+    /// </summary>
+    /// <param name="path">The directory to measure.</param>
+    long DirectorySize(string path);
+
+    /// <summary>
+    /// The room on the filesystem <paramref name="path"/> is on - or would be on, measured at the nearest
+    /// directory on the way up to it that exists, as for a copy not made yet.
+    /// </summary>
+    /// <param name="path">The path to measure the filesystem of.</param>
+    /// <exception cref="IOException">The filesystem could not be asked.</exception>
+    DiskSpace SpaceAt(string path);
+
+    /// <summary>Enumerates files under <paramref name="path"/>, recursively when asked.</summary>
+    /// <remarks>
+    /// A directory reached through a link or a junction is never walked: a link inside a tree leads
+    /// out of it, or back into it and round again. <see cref="EnumerateDirectoryLinks"/> names the
+    /// ones a walk passed over, for a caller whose reader has to be told.
+    /// </remarks>
+    IEnumerable<string> EnumerateFiles(string path, bool recursive);
+
+    /// <summary>
+    /// Every file under <paramref name="path"/>, recursively, with when it was last written, as
+    /// <see cref="EnumerateFiles"/> walks: never through a directory link, and a link dated as itself.
+    /// A file removed while the walk runs never fails it: on Windows, whose listing carries each file's
+    /// time, it is given as the listing saw it; on Linux and macOS, where its time is asked of the file
+    /// itself, it is left out, as a directory removed then is.
+    /// </summary>
+    /// <param name="path">The directory to walk.</param>
+    /// <exception cref="IOException">A directory under it, or the date of a file still in it, could not be read.</exception>
+    /// <exception cref="UnauthorizedAccessException">This process may not read a directory under it, or a file's date.</exception>
+    /// <remarks>
+    /// One walk for both, where asking each file its date afterwards would stat every file twice: a
+    /// build directory can hold a hundred thousand of them, and it is walked at the end of every build.
+    /// </remarks>
+    IEnumerable<WrittenFile> EnumerateWrittenFiles(string path);
+
+    /// <summary>
+    /// The directory links and junctions anywhere under <paramref name="path"/>: exactly the
+    /// directories a recursive <see cref="EnumerateFiles"/> does not walk.
+    /// </summary>
+    /// <param name="path">The directory to look under.</param>
+    IEnumerable<string> EnumerateDirectoryLinks(string path);
+
+    /// <summary>
+    /// Removes every directory junction anywhere under <paramref name="path"/>, each as the link it is, never what
+    /// it leads to: git for Windows leaves a junction when it removes the tree around it, and the runtime's
+    /// recursive delete reports one as refused. Symbolic links are left, as are directories reached only through a
+    /// link. Nothing on Linux and macOS, which have no junctions, and nothing where the directory is not there or is
+    /// itself a link.
+    /// </summary>
+    /// <param name="path">The directory to look under.</param>
+    /// <returns>The junctions removed, in the order they were.</returns>
+    /// <exception cref="JunctionRemovalException">
+    /// One could not be removed, or is a volume mounted on a directory, which is never unmounted; it names those
+    /// removed before it.
+    /// </exception>
+    /// <exception cref="IOException">A directory under it could not be read.</exception>
+    /// <exception cref="UnauthorizedAccessException">This process may not read a directory under it.</exception>
+    IReadOnlyList<string> RemoveJunctions(string path);
+
+    /// <summary>
+    /// What another program holds under <paramref name="path"/>, itself included, so that Windows would not delete
+    /// it: a directory that is a process's current directory, a file or directory open without sharing its
+    /// deletion, and a file a program is running from. Each entry is opened as a deletion opens it and let go at
+    /// once, and nothing is changed; a link is asked about as itself and never walked. Empty on Linux and macOS,
+    /// where none of these stops a deletion, and empty where the directory is not there.
+    /// </summary>
+    /// <param name="path">The directory to look through.</param>
+    /// <param name="cancellationToken">Stops the looking, between one entry and the next.</param>
+    /// <exception cref="IOException">A directory under it could not be read.</exception>
+    /// <exception cref="UnauthorizedAccessException">This process may not read a directory under it.</exception>
+    IReadOnlyList<HeldEntry> FindHeld(string path, CancellationToken cancellationToken = default);
+
+    /// <summary>Enumerates immediate subdirectories of <paramref name="path"/>.</summary>
+    IEnumerable<string> EnumerateDirectories(string path);
+
+    /// <summary>Reads a whole file as UTF-8 text.</summary>
+    string ReadAllText(string path);
+
+    /// <summary>Reads a whole file's bytes, as they are.</summary>
+    /// <param name="path">The file.</param>
+    byte[] ReadAllBytes(string path);
+
+    /// <summary>Reads a whole file's bytes, as they are, stopping between one block and the next when asked.</summary>
+    /// <param name="path">The file.</param>
+    /// <param name="cancellationToken">Stops the read.</param>
+    Task<byte[]> ReadAllBytesAsync(string path, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Opens a file for reading its bytes. Streamed rather than read whole, because a tree sync
+    /// hashes every file in a repository and holding one in memory per file bounds nothing.
+    /// </summary>
+    /// <param name="path">The file to open.</param>
+    Stream OpenRead(string path);
+
+    /// <summary>
+    /// When <paramref name="path"/> was last written, in UTC.
+    /// </summary>
+    /// <param name="path">The file to ask about.</param>
+    /// <exception cref="FileNotFoundException">Nothing, or a directory, is at the path.</exception>
+    /// <exception cref="IOException">The path could not be looked up, whether or not a file is there.</exception>
+    /// <exception cref="UnauthorizedAccessException">This process may not look the path up, whether or not a file is there.</exception>
+    /// <remarks>
+    /// Behind the seam with everything else, and it raises rather than answering with a sentinel:
+    /// the runtime returns the year 1601 for a path that is not there, and a caller comparing that
+    /// against a build output concludes the file is older than everything and stops looking.
+    /// <para>
+    /// A link is dated as itself, when it was made, and never as what it points at, on every
+    /// platform: a link a build made to a file in the source tree was written when the build made
+    /// it, and the source file's own date is not one the build wrote.
+    /// </para>
+    /// </remarks>
+    DateTime LastWriteTimeUtc(string path);
+
+    /// <summary>
+    /// How the file at <paramref name="path"/> stands now - its length, and when it was last written and created - read
+    /// in one look (<see cref="FileStanding.Of"/>); <see langword="null"/> where no file is there.
+    /// </summary>
+    /// <param name="path">The file.</param>
+    /// <exception cref="IOException">It could not be looked up.</exception>
+    /// <exception cref="UnauthorizedAccessException">This process may not look it up.</exception>
+    FileStanding? StandingOf(string path);
+
+    /// <summary>When the file at <paramref name="path"/> was created, in UTC.</summary>
+    /// <param name="path">The file.</param>
+    /// <exception cref="FileNotFoundException">Nothing is there, or what is there is a directory.</exception>
+    /// <exception cref="UnauthorizedAccessException">This process may not look the path up, whether or not a file is there.</exception>
+    /// <remarks>Raised and dated as <see cref="LastWriteTimeUtc"/> is, and for the same reasons.</remarks>
+    DateTime CreationTimeUtc(string path);
+
+    /// <summary>Dates the file at <paramref name="path"/> as last written at <paramref name="writtenUtc"/>.</summary>
+    /// <param name="path">The file to date.</param>
+    /// <param name="writtenUtc">When it is to read as last written, in UTC.</param>
+    /// <exception cref="FileNotFoundException">Nothing, or a directory, is at the path.</exception>
+    /// <exception cref="UnauthorizedAccessException">This process may not date the file.</exception>
+    /// <remarks>
+    /// For a file whose bytes the harness itself just wrote into a tree it builds, so that an incremental build, which
+    /// orders timestamps, cannot read the file as older than an object built from what it held before: a mutation
+    /// sweep writes a site and puts it back within seconds - inside the resolution some file systems date a file to,
+    /// and on a machine whose clock steps - and each write is dated past everything the build made. Only a file:
+    /// nothing here dates a directory, and a directory's date is no file's.
+    /// </remarks>
+    void SetLastWriteTimeUtc(string path, DateTime writtenUtc);
+
+    /// <summary>
+    /// Writes bytes to a sibling temporary file and renames it over the target, so a reader never
+    /// observes a half-written file and an interruption never truncates one.
+    /// </summary>
+    /// <param name="path">The file to write.</param>
+    /// <param name="contents">The bytes to write.</param>
+    /// <param name="cancellationToken">Stops the write.</param>
+    /// <remarks>
+    /// A file whose content is unchanged is never rewritten by a caller, so its modification time
+    /// does not move: an incremental build decides what is stale by ordering timestamps, and a sync
+    /// that touched every file would either rebuild everything or, worse, leave a source looking
+    /// older than the object built from it.
+    /// </remarks>
+    Task WriteAllBytesAtomicAsync(string path, byte[] contents, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Writes UTF-8 text, without a byte order mark, to a sibling temporary file and
+    /// renames it over the target, so a reader never observes a half-written file and
+    /// a crash never truncates one.
+    /// </summary>
+    void WriteAllTextAtomic(string path, string contents);
+
+    /// <summary>
+    /// Restricts a file to the current user: mode 0600 on Unix, which SSH requires of
+    /// a private key, and an owner-only access list on Windows, with inherited
+    /// permissions removed.
+    /// </summary>
+    void ProtectSecretFile(string path);
+}

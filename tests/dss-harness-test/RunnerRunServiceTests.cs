@@ -1,0 +1,2936 @@
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Processes;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
+using DssHarness.Core.Runners;
+
+namespace DssHarness.Tests;
+
+/// <summary>
+/// A predefined runner gets the same witnesses, bounds and verdicts every other leg-running command
+/// gets. These pin the three places that stop being true quietly: a program nobody declared running
+/// halfway through a file, a credential reaching a log or an argument list, and an excusal that
+/// nothing re-measured turning a regression green.
+/// </summary>
+public sealed class RunnerRunServiceTests
+{
+    private const string Leg = "lin-gcc-release";
+    private const string RunId = "20260916-100000-0a1b2c3d";
+    private const string Secret = "not-a-real-credential-9f3a";
+
+    [Fact]
+    public async Task AnActionFileNamingAnUndeclaredProgram_IsRefusedWithNothingRun()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            steps:
+              - name: first
+                run: |
+                  dotnet --version
+              - name: second
+                run: |
+                  curl https://example.invalid
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            config,
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+        Assert.Contains("curl", refusal.Message, StringComparison.Ordinal);
+
+        // The refusal covers the whole file, so the first step — which is allowed — never ran
+        // either. A file that fails on its fourth step has already changed the tree.
+        Assert.False(Directory.Exists(temp.Combine(".harness-config", "runs", RunId)));
+    }
+
+    /// <summary>
+    /// A phase derived from another was rebuilt member by member, and the two guard keys were not
+    /// among the members copied — so an action file that declared inputs ran with both guards off
+    /// while its own text said they were on. Nothing said they had been skipped.
+    /// </summary>
+    /// <remarks>
+    /// Observed through the refusal a step asking for contention gets when the run reaches no leg:
+    /// that refusal can only fire if the key survived the copy. Drop it again and this run is
+    /// allowed, having watched nothing.
+    /// </remarks>
+    [Fact]
+    public async Task AGuardedStep_KeepsItsGuard_ThroughAnActionThatDeclaresInputs()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            inputs:
+              corpusRoot:
+                default: corpus
+            steps:
+              - name: read
+                uses: harness/read-inputs
+              - name: measure
+                watchContention: true
+                run: |
+                  dotnet --version
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            config,
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.UsageError, refusal.ExitCode);
+        Assert.Contains("watchContention", refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The same file without inputs, which took a different path through the code: this is the one
+    /// that always worked, and it is here so the pair says which half was broken.
+    /// </summary>
+    [Fact]
+    public async Task AGuardedStep_KeepsItsGuard_WithNoInputsDeclared()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            steps:
+              - name: measure
+                watchContention: true
+                run: |
+                  dotnet --version
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            config,
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.UsageError, refusal.ExitCode);
+    }
+
+    /// <summary>
+    /// A run line using the shell is an ordinary action file, and this tool owns none of its braces.
+    /// Refusing them turned working files away at load, before the first step.
+    /// </summary>
+    [Fact]
+    public async Task AnActionFileUsingShellVariables_IsNotRefused()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            steps:
+              - name: measure
+                run: |
+                  dotnet --version ${HOME}
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        // Runs, rather than being refused over a brace group belonging to the shell. Whether the
+        // child succeeds is not what this pins.
+        var result = await Service(factory).RunAsync(
+            config,
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }),
+            TestContext.Current.CancellationToken);
+
+        Assert.NotNull(result);
+    }
+
+    /// <summary>
+    /// A step produces something, a later step consumes it by name, what the run asked to keep
+    /// survives, and the working space goes. Without this an action is a wrapper around one
+    /// program: a round trip whose first half runs here and second half elsewhere has nowhere to
+    /// put the thing being carried.
+    /// </summary>
+    [Fact]
+    public async Task AStepsOutput_IsThereForTheNextStep_Persisted_AndItsWorkingSpaceRemoved()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, $$"""
+            name: corpus
+            steps:
+              - name: pack
+                outputs:
+                  - payload.txt
+                persist: true
+                run: |
+                  "{{Child}}" "{{Exec}}" "{{Assembly}}" "{stepBuild}/payload.txt" carried
+              - name: consume
+                run: |
+                  "{{Child}}" "{{Exec}}" "{{Assembly}}" "{actionBuild}/pack/copied.txt" seen
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = Child });
+
+        var runner = new RunnerConfig
+        {
+            Action = "corpus/corpus.yml",
+            Env = new Dictionary<string, string> { [TestHost.ChildModeVariable] = "write-file" },
+        };
+
+        var result = await Service(factory).RunAsync(
+            config,
+            Request(temp, runner),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+
+        var action = Path.Combine(temp.Path, ".harness-config", "runner", "actions", "corpus");
+
+        // Kept, under the run and the step that produced it.
+        var kept = Path.Combine(action, "artifacts", RunId, Leg, "pack", "payload.txt");
+        Assert.True(File.Exists(kept), $"expected '{kept}' to have been kept");
+        Assert.Equal("carried", await File.ReadAllTextAsync(kept, TestContext.Current.CancellationToken));
+
+        // And named on the leg's line as sync --pull takes it: relative to the tree, with forward slashes.
+        Assert.Equal(
+            [$".harness-config/runner/actions/corpus/artifacts/{RunId}/{Leg}/pack/payload.txt"],
+            result.Entry.KeptOutputs);
+
+        // And the working space is gone, including what the second step wrote there and never
+        // asked to keep.
+        Assert.False(
+            Directory.Exists(Path.Combine(action, "build", RunId, Leg)),
+            "this run's working directory should have been removed");
+    }
+
+    /// <summary>
+    /// A step that produced exactly what it declared and then failed keeps nothing. Carrying
+    /// evidence out of work that did not pass is the misattribution this tool exists to refuse: a
+    /// later step, on another host, would read a payload from a leg that never succeeded and have no
+    /// way to know.
+    /// </summary>
+    [Fact]
+    public async Task AStepThatFailed_KeepsNothing_EvenThoughItWroteWhatItDeclared()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        // Writes payload.txt, then exits 7. The file is on disk; the step is not one that passed.
+        await WriteActionAsync(factory, temp, $$"""
+            name: corpus
+            steps:
+              - name: pack
+                outputs:
+                  - payload.txt
+                persist: true
+                run: |
+                  "{{Child}}" "{{Exec}}" "{{Assembly}}" "{stepBuild}/payload.txt" carried 7
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = Child });
+
+        var runner = new RunnerConfig
+        {
+            Action = "corpus/corpus.yml",
+            Env = new Dictionary<string, string> { [TestHost.ChildModeVariable] = "write-file" },
+        };
+
+        var result = await Service(factory).RunAsync(
+            config,
+            Request(temp, runner),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Failed, result.Verdict.Verdict);
+
+        var action = Path.Combine(temp.Path, ".harness-config", "runner", "actions", "corpus");
+
+        Assert.False(
+            File.Exists(Path.Combine(action, "artifacts", RunId, Leg, "pack", "payload.txt")),
+            "a step that failed should have kept nothing, although it wrote the file");
+
+        // And the working space is gone either way, so the file is not reachable there either.
+        Assert.False(Directory.Exists(Path.Combine(action, "build", RunId, Leg)));
+    }
+
+    /// <summary>
+    /// A run refuses to write its scratch where git would commit it, before a single step runs. The
+    /// rules were written by init and nothing checked them afterwards, so a repository whose
+    /// .gitignore predated them wrote a run's kept output where git status showed it. Both
+    /// directories are asked about, and only the one git would not ignore is named.
+    /// </summary>
+    [Theory]
+    [InlineData(false, false, "'build/' and 'artifacts/'")]
+    [InlineData(true, false, "'artifacts/'")]
+    [InlineData(false, true, "'build/'")]
+    public async Task AnActionWhoseScratchGitWouldCommit_IsRefused_BeforeAnythingRuns(
+        bool ignoreBuild,
+        bool ignoreArtifacts,
+        string named)
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(
+            factory,
+            temp,
+            $$"""
+            name: corpus
+            steps:
+              - name: pack
+                run: |
+                  "{{Child}}" "{{Exec}}" "{{Assembly}}" 0
+            """,
+            ignoreBuild,
+            ignoreArtifacts);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = Child });
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            config,
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+        Assert.Contains($"does not ignore this action's {named}", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("init", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("Nothing has run", refusal.Message, StringComparison.Ordinal);
+
+        // And nothing did: no working space was made for the run.
+        Assert.False(Directory.Exists(Path.Combine(temp.Path, ".harness-config", "runner", "actions", "corpus", "build")));
+    }
+
+    /// <summary>
+    /// A step that exits zero having written nothing it declared is unwitnessed, not passed. An
+    /// exit code alone cannot tell that apart from work that was done.
+    /// </summary>
+    [Fact]
+    public async Task AStepThatDeclaredAnOutputAndProducedNothing_IsUnwitnessed()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, $$"""
+            name: corpus
+            steps:
+              - name: pack
+                outputs:
+                  - payload.txt
+                run: |
+                  "{{Child}}" "{{Exec}}" "{{Assembly}}" 0
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = Child });
+
+        var runner = new RunnerConfig
+        {
+            Action = "corpus/corpus.yml",
+            Env = new Dictionary<string, string> { [TestHost.ChildModeVariable] = "exit" },
+        };
+
+        var result = await Service(factory).RunAsync(
+            config,
+            Request(temp, runner),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Unwitnessed, result.Verdict.Verdict);
+        Assert.Contains("without producing payload.txt", result.Verdict.Detail, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A question git cannot answer is no answer either way, and no verdict on the code. It is about
+    /// this leg's tree - a copy git will not trust, a worktree whose link is broken - so the leg cannot
+    /// run there, before anything starts, in git's own words, which name the fix themselves; the legs
+    /// on other trees still report. Raised as a refusal of the run, it ended every leg over one tree.
+    /// </summary>
+    [Fact]
+    public async Task AnIgnoreQuestionGitCannotAnswer_LeavesTheLegUnavailable_InGitsOwnWords()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        // No repository at all, so git cannot say what it would ignore.
+        WriteActionFile(temp, """
+            name: corpus
+            steps:
+              - name: pack
+                run: |
+                  dotnet --version
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            config,
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.HostUnavailable, refusal.ExitCode);
+        Assert.Equal(LegVerdict.SkippedUnavailable, Verdicts.ForRefusal(refusal.ExitCode));
+        Assert.StartsWith("git could not say whether it ignores '.harness-config/runner/actions/corpus/build/", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("so whether what this run writes in this action's 'build/' would be committed is unknown", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("Nothing has run", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("not a git repository", refusal.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.False(Directory.Exists(Path.Combine(temp.Path, ".harness-config", "runner", "actions", "corpus", "build")));
+    }
+
+    /// <summary>
+    /// A kept directory holding a link keeps what it holds, and names the link it did not follow: a
+    /// link can lead anywhere, and following it could copy half a disk or go round for ever, but a
+    /// kept copy missing what its links led to - and saying nothing - is an incomplete copy a later
+    /// sync carries to every host as if it were whole.
+    /// </summary>
+    [Fact]
+    public async Task AKeptDirectoryHoldingALink_KeepsWhatItHolds_AndNamesTheLinkItDidNotFollow()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var outside = temp.WriteFile(Path.Combine("outside", "elsewhere.txt"), "x");
+        var target = Path.GetDirectoryName(outside)!;
+
+        TestLinks.OrSkip(() => Directory.CreateSymbolicLink(temp.Combine("can-link"), target));
+
+        await WriteActionAsync(factory, temp, $$"""
+            name: corpus
+            steps:
+              - name: pack
+                outputs:
+                  - runs
+                persist: true
+                run: |
+                  "{{Child}}" "{{Exec}}" "{{Assembly}}" "{stepBuild}/runs" "{{target}}"
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = Child });
+
+        var runner = new RunnerConfig
+        {
+            Action = "corpus/corpus.yml",
+            Env = new Dictionary<string, string> { [TestHost.ChildModeVariable] = "link-directory" },
+        };
+
+        var result = await Service(factory).RunAsync(config, Request(temp, runner), TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+
+        var kept = Path.Combine(temp.Path, ".harness-config", "runner", "actions", "corpus", "artifacts", RunId, Leg, "pack", "runs");
+
+        Assert.True(File.Exists(Path.Combine(kept, "kept.txt")), "what the directory itself holds is kept");
+        Assert.False(File.Exists(Path.Combine(kept, "latest", "elsewhere.txt")), "the link was followed");
+        Assert.Contains(
+            "'pack' asked to keep 'runs', which holds 1 directory link(s) that were not followed, so what they lead to is not in the kept copy: 'latest'",
+            factory.StandardError.ToString(),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A program named by a relative path is the leg's own tree's, as the policy that allowed it read
+    /// it. Read against wherever this process started, it was the main checkout's copy for a leg on a
+    /// worktree - or, as here, no file at all.
+    /// </summary>
+    [Fact]
+    public async Task ARelativeProgram_IsReadFromTheLegsOwnTree_NotFromWhereThisProcessStarted()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        TestHost.StartableProgram(temp.Combine("tools"), "own-probe");
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            steps:
+              - name: own
+                run: |
+                  tools/own-probe
+            """);
+
+        var result = await Service(factory).RunAsync(
+            Config(),
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+    }
+
+    /// <summary>
+    /// And from the directory its step runs in, where the policy that allowed it read it too:
+    /// './own-probe' in a step that runs in 'tools' is 'tools/own-probe'. Read from the tree root, it
+    /// was a file that is not there - or somebody else's.
+    /// </summary>
+    [Fact]
+    public async Task ARelativeProgram_IsReadFromTheDirectoryItsStepRunsIn()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        TestHost.StartableProgram(temp.Combine("tools"), "own-probe");
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            steps:
+              - name: own
+                workingDirectory: tools
+                run: |
+                  ./own-probe
+            """);
+
+        var result = await Service(factory).RunAsync(
+            Config(),
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+    }
+
+    /// <summary>
+    /// A step's directory is judged where the run will really start the step, its placeholders
+    /// filled in: './tool' in a step whose workingDirectory '{where}' is '../elsewhere' is outside
+    /// the repository, and refused, saying where it was read. Read as written, it passed, and the
+    /// step then started a program from wherever the input pointed.
+    /// </summary>
+    [Fact]
+    public async Task AProgramInADirectoryAnInputNames_IsJudgedWhereItReallyIs()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            inputs:
+              where:
+                default: ../elsewhere
+            steps:
+              - name: outside
+                workingDirectory: "{where}"
+                run: |
+                  ./tool
+            """);
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            Config(),
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+        Assert.Contains("'./tool' (read as '../elsewhere/tool') is not declared under 'tools' and is not a path inside the repository", refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// And the other way: a program the text alone would place outside the repository is allowed
+    /// where the filled-in directory keeps it inside, and starts from there.
+    /// </summary>
+    [Fact]
+    public async Task AProgramReadFromADeeperDirectoryAnInputNames_IsAllowed_AndStarts()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        TestHost.StartableProgram(temp.Combine("tools"), "own-probe");
+        Directory.CreateDirectory(temp.Combine("a", "b"));
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            inputs:
+              where:
+                default: a/b
+            steps:
+              - name: deep
+                workingDirectory: "{where}"
+                run: |
+                  ../../tools/own-probe
+            """);
+
+        var result = await Service(factory).RunAsync(
+            Config(),
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+    }
+
+    /// <summary>
+    /// A program an input names is judged as the program that starts. Read as written,
+    /// '{dir}/tool' was a path inside the repository while the step started one outside it.
+    /// </summary>
+    [Fact]
+    public async Task AProgramAnInputNames_IsJudgedAsTheProgramThatStarts()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            inputs:
+              dir:
+                default: ../elsewhere
+            steps:
+              - name: outside
+                run: |
+                  {dir}/tool
+            """);
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            Config(),
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+        Assert.Contains("'{dir}/tool' (read as '../elsewhere/tool') is not declared under 'tools' and is not a path inside the repository", refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// And an input naming a declared tool starts that tool: judged as written, '{runner}' was a
+    /// program nothing declared.
+    /// </summary>
+    [Fact]
+    public async Task AProgramAnInputNames_ThatIsADeclaredTool_Runs()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            inputs:
+              runner:
+                default: dotnet
+            steps:
+              - name: version
+                run: |
+                  {runner} --version
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        var result = await Service(factory).RunAsync(
+            config,
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+    }
+
+    /// <summary>
+    /// A line whose names fill in to nothing - an empty value in the runner's .env - starts no program
+    /// at all: refused before anything runs, naming the line, rather than handed to the start as a
+    /// program with no name, which read as a defect in this tool.
+    /// </summary>
+    [Fact]
+    public async Task ALineThatFillsInToNothing_IsRefused_NamingTheLine()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        temp.WriteFile(Path.Combine(".harness-config", "runner", ".env", "ci.env"), "WRAPPER=\n");
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            steps:
+              - name: bench
+                run: |
+                  {WRAPPER} ./bench
+            """);
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            Config(),
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+        Assert.Contains("'{WRAPPER}' starts nothing once its names are filled in", refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// And a runner's own phase whose program fills in to nothing is refused the same way, before the
+    /// first step: it has no policy to judge its lines, and reached the start as a program with no
+    /// name, which read as a defect in this tool.
+    /// </summary>
+    [Fact]
+    public async Task ARunnersOwnPhaseThatFillsInToNothing_IsRefused_BeforeAnythingRuns()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        temp.WriteFile(Path.Combine(".harness-config", "runner", ".env", "ci.env"), "WRAPPER=\n");
+
+        var runner = new RunnerConfig
+        {
+            Phases = [new RunnerPhase { Name = "bench", Command = ["{WRAPPER}", "./bench"] }],
+        };
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            Config(),
+            Request(temp, runner),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.Contains("'bench' of runner 'corpus' starts nothing once its names are filled in", refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A step whose directory fills in to nothing, or whose names hold a character no path can, is
+    /// refused naming the step before the first one runs: read as a path, either raised an error
+    /// that read as a defect in this tool.
+    /// </summary>
+    [Theory]
+    [InlineData("{WORKDIR}", "./bench", "runs in no directory once its names are filled in")]
+    [InlineData(null, "./be\0nch", "holding a NUL character")]
+    [InlineData("sub\0dir", "./bench", "holding a NUL character")]
+    public async Task AStepNamingWhatNoPathCanHold_IsRefused_BeforeAnythingRuns(string? workingDirectory, string program, string expected)
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        temp.WriteFile(Path.Combine(".harness-config", "runner", ".env", "ci.env"), "WORKDIR=\n");
+
+        var runner = new RunnerConfig
+        {
+            Phases = [new RunnerPhase { Name = "bench", Command = [program], WorkingDirectory = workingDirectory }],
+        };
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            Config(),
+            Request(temp, runner),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.Contains("'bench' of runner 'corpus'", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains(expected, refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A host's own environment reaches every step, beneath everything the runner declares: a name
+    /// only the host sets is the host's, and one the runner's values, its own environment or the
+    /// step's also set is theirs.
+    /// </summary>
+    [Fact]
+    public async Task TheHostsEnvironment_ReachesEveryStep_BeneathWhatTheRunnerDeclares()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        temp.WriteFile(Path.Combine(".harness-config", "runner", ".env", "ci.env"), "RH_VALUE=value\n");
+
+        var step = Phase("step", "print-env", ["RH_STEP"], successPattern: "^step$");
+        step.Env["RH_STEP"] = "step";
+
+        var runner = new RunnerConfig
+        {
+            Env = { ["RH_RUNNER"] = "runner" },
+            Phases =
+            [
+                Phase("host", "print-env", ["RH_HOST"], successPattern: "^host$"),
+                Phase("value", "print-env", ["RH_VALUE"], successPattern: "^value$"),
+                Phase("runner", "print-env", ["RH_RUNNER"], successPattern: "^runner$"),
+                step,
+            ],
+        };
+
+        var result = await Service(factory).RunAsync(
+            Config(),
+            Request(temp, runner) with
+            {
+                HostEnvironment = new Dictionary<string, string>
+                {
+                    ["RH_HOST"] = "host",
+                    ["RH_VALUE"] = "host",
+                    ["RH_RUNNER"] = "host",
+                    ["RH_STEP"] = "host",
+                },
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.Equal(4, result.Phases.Count);
+    }
+
+    /// <summary>
+    /// The program a step's line starts this assembly with: dotnet, by the name 'tools' declares, as an action's line has
+    /// to name a program nothing in the repository ships. Named by the path of the dotnet running this suite - as it is
+    /// where the suite was started through it, not through its own program - the line named a program nothing declared,
+    /// and was refused before it ran; the leg finds it by name, as <see cref="Request"/> says where.
+    /// </summary>
+    private const string Child = "dotnet";
+
+    private const string Exec = "exec";
+
+    private static string Assembly => TestHost.AssemblyPath;
+
+    [Fact]
+    public async Task AStepThatPutsASecretInItsArguments_IsRefusedWithoutQuotingIt()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        WriteSecret(temp);
+
+        var runner = new RunnerConfig
+        {
+            Phases =
+            [
+                Phase("harmless", "echo-args", ["one"]),
+                Phase("leak", "echo-args", [Secret]),
+            ],
+        };
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            Config(),
+            Request(temp, runner),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+
+        // Checked over the whole runner, so the harmless step before it never ran either: a run
+        // that refuses on its second step has already changed the tree.
+        Assert.False(Directory.Exists(temp.Combine(".harness-config", "runs", RunId)));
+
+        // The argument list reaches the log header, the machine's process table and every error
+        // that quotes the command. A refusal that named the value would be the leak it prevents.
+        Assert.DoesNotContain(Secret, refusal.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(Secret, factory.StandardOutput.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(Secret, factory.StandardError.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ASecretACommandPrinted_ReachesTheChildAndNothingElse()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        WriteSecret(temp);
+
+        // The child prints the variable it was handed, which is the one path a secret can still
+        // take into a log: a harness cannot stop a program echoing its own environment.
+        var runner = new RunnerConfig
+        {
+            Phases = [Phase("print", "print-env", ["HARNESS_TOKEN"], successPattern: "nothing matches this")],
+        };
+
+        var result = await Service(factory).RunAsync(
+            Config(),
+            Request(temp, runner),
+            TestContext.Current.CancellationToken);
+
+        var log = await File.ReadAllTextAsync(result.Phases[0].LogFile, TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain(Secret, log, StringComparison.Ordinal);
+        Assert.Contains(ActionValues.Mask, log, StringComparison.Ordinal);
+        Assert.DoesNotContain(Secret, factory.StandardOutput.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(Secret, factory.StandardError.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(Secret, result.Outcome.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(Secret, result.Verdict.Detail, StringComparison.Ordinal);
+
+        // Nor the leg's line, whose last lines of the step that did not pass are masked as its log is.
+        Assert.Contains(result.Entry.LogTail, line => line.Contains(ActionValues.Mask, StringComparison.Ordinal));
+        Assert.DoesNotContain(result.Entry.LogTail, line => line.Contains(Secret, StringComparison.Ordinal));
+
+        // The child did receive the real value; a masked credential would fail later and somewhere
+        // else, where the failure says nothing about what was wrong.
+        Assert.DoesNotContain("<unset>", log, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A failing step's output is read from its log, a line at a time, for the exception it names and for what an expected
+    /// exception recognises: found on the last of thousands of lines, and never held as text.
+    /// </summary>
+    [Fact]
+    public async Task AFailingStepsOutput_IsReadFromItsLog_ForWhatAnExpectedExceptionRecognises()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var printed = temp.WriteFile(
+            "printed.txt",
+            string.Concat(Enumerable.Range(0, 20_000).Select(line => $"case {line} ok\n")) + "Unhandled: System.IO.IOException: fopen: resource busy\n");
+
+        var runner = new RunnerConfig
+        {
+            Phases = [Phase("measure", "print-file", [printed], successPattern: "all cases passed")],
+            ExpectedExceptions =
+            [
+                new ExpectedException
+                {
+                    ExceptionType = "IOException",
+                    Messages = ["^Unhandled: .*resource busy$"],
+                    Success = true,
+                    Warning = true,
+                    ResultCode = 0,
+                    Message = "a known confound",
+                    EarnedOn = "lin-gcc-release",
+                    EarnedAt = "2026-09-16",
+                    Mechanism = "the fixture server refuses the seventh connection of a session",
+                    Anchor = "D-TEST-RUNNER-GATE",
+                },
+            ],
+        };
+
+        var result = await Service(factory).RunAsync(Config(), Request(temp, runner), TestContext.Current.CancellationToken);
+
+        Assert.NotNull(result.ExpectedException);
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.Equal("a known confound", result.Outcome.Message);
+    }
+
+    [Fact]
+    public async Task AnExpectedExceptionWhoseCheckIsNotConfirmed_LeavesTheFailureGenuine()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        var runner = Excusable();
+        var request = Request(temp, runner) with
+        {
+            InvokeRunner = (_, _) => Task.FromResult(RunOutcome.Failed(20, "the other runner failed too")),
+        };
+
+        var result = await Service(factory).RunAsync(Config(), request, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(result.ExpectedException);
+        Assert.NotNull(result.Gate);
+        Assert.False(result.Gate.Confirmed);
+
+        // Unconfirmed, the failure stays genuine. An unconditional excusal hides the regression it
+        // was written to explain, and hides it best on the day that regression appears.
+        Assert.Equal(LegVerdict.Failed, result.Verdict.Verdict);
+        Assert.False(result.Outcome.Success);
+        Assert.DoesNotContain("a known confound", result.Verdict.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AnExpectedExceptionWhoseCheckConfirmsIt_ReportsTheDeclaredOutcome()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        var request = Request(temp, Excusable()) with
+        {
+            InvokeRunner = (_, _) => Task.FromResult(RunOutcome.Ok("the other runner reproduced it")),
+        };
+
+        var result = await Service(factory).RunAsync(Config(), request, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(result.Gate);
+        Assert.True(result.Gate.Confirmed, string.Join("; ", result.Gate.Reasons));
+        Assert.False(result.Gate.Unconditional);
+
+        // The step counted is the failing step's own, inside its own window. A once-per-run sample
+        // was measured excusing and charging the same failure on the same day.
+        Assert.Contains("inside the window", result.Gate.Reasons[0], StringComparison.Ordinal);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.True(result.Outcome.Success);
+        Assert.True(result.Outcome.Warning);
+        Assert.Equal("a known confound", result.Outcome.Message);
+    }
+
+    /// <summary>
+    /// A run whose every step ran, and whose expected exception's check could not watch its own inputs, is failed - the
+    /// check not run, so nothing confirms the entry - and never unmeasured, which would say none of its work was run.
+    /// </summary>
+    [Fact]
+    public async Task AnExpectedExceptionWhoseCheckCouldNotWatchItsInputs_LeavesTheFailureGenuine_NeverUnmeasured()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        var request = Request(temp, Excusable()) with
+        {
+            InvokeRunner = (_, _) => throw InputsUnwatchedException.BySystem(new IOException(ScriptedWatchKind.SystemsWords)),
+        };
+
+        var result = await Service(factory).RunAsync(Config(), request, TestContext.Current.CancellationToken);
+
+        Assert.False(result.Gate!.Confirmed);
+        Assert.Equal(
+            $"reproduce: could not be run ({ScriptedWatchKind.Refused}), so nothing confirms the entry",
+            Assert.Single(result.Gate.Reasons));
+        Assert.Equal(LegVerdict.Failed, result.Verdict.Verdict);
+    }
+
+    [Fact]
+    public async Task AnExpectedExceptionWithNothingWiredToInvokeItsCheck_ExcusesNothing()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        // No InvokeRunner: the check cannot be run, so it cannot pass, so the failure stays genuine.
+        var result = await Service(factory).RunAsync(
+            Config(),
+            Request(temp, Excusable()),
+            TestContext.Current.CancellationToken);
+
+        Assert.False(result.Gate!.Confirmed);
+        Assert.Equal(LegVerdict.Failed, result.Verdict.Verdict);
+    }
+
+    [Fact]
+    public async Task ARunResumedInASecondSegment_ReportsTheUnionAcrossBoth()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var service = Service(factory);
+        var token = TestContext.Current.CancellationToken;
+
+        var aborting = new RunnerConfig
+        {
+            Phases =
+            [
+                Phase("step-1", "echo-args", ["one"]),
+                Phase("step-2", "exit", ["7"]),
+                Phase("step-3", "echo-args", ["three"]),
+            ],
+        };
+
+        var first = await service.RunAsync(Config(), Request(temp, aborting), token);
+
+        Assert.Equal(LegVerdict.Failed, first.Verdict.Verdict);
+        Assert.Equal(2, first.Phases.Count);
+
+        // The second attempt skips what the first carried to an outcome, failures included: a suite
+        // that ran two thirds of itself, aborted and finished the rest did the whole suite once.
+        var second = await service.RunAsync(
+            Config(),
+            Request(temp, aborting) with { SegmentId = "s2" },
+            token);
+
+        Assert.Single(second.Phases);
+        Assert.Equal("step-3", second.Phases[0].Phase);
+
+        Assert.Equal(["step-1", "step-2", "step-3"], second.Union.Keys.Order(StringComparer.Ordinal));
+        Assert.True(second.Union["step-1"].Success);
+        Assert.False(second.Union["step-2"].Success);
+        Assert.True(second.Union["step-3"].Success);
+
+        // Every step this attempt ran passed, and the run is still red: reporting only the third of
+        // the suite that happened to run last is how a resumed run reports a failure as green.
+        Assert.Equal(LegVerdict.Failed, second.Verdict.Verdict);
+        Assert.Contains("step-2", second.Verdict.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AnActionFilesStepsRun_AndItsPredefinedActionsAreNamedRatherThanPassedOver()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        // The program is the bare name of a declared tool; the assembly it runs is an argument, and
+        // it is quoted because the splitter honours double quotes and nothing else, so a path with a
+        // space in it stays one token.
+        await WriteActionAsync(factory, temp, $"""
+            name: corpus
+            steps:
+              - name: fetch
+                uses: harness/checkout
+              - name: measure
+                successPattern: measured
+                run: |
+                  dotnet exec "{TestHost.AssemblyPath.Replace('\\', '/')}" measured
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        var runner = new RunnerConfig
+        {
+            Action = "corpus/corpus.yml",
+            Env = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                [TestHost.ChildModeVariable] = "echo-args",
+            },
+        };
+
+        var result = await Service(factory).RunAsync(config, Request(temp, runner), TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.Single(result.Phases);
+        Assert.Equal(["fetch (harness/checkout)"], result.PerformedActions);
+    }
+
+    /// <summary>
+    /// A runner that reads the build - requiring it, or by a phase naming {product} or {buildDir} - is run as its leg
+    /// stands where the run built the leg: whether a leg is built is the run command's to decide, from the runner, the
+    /// steps it runs and its run checks, and a service that built the leg itself would rebuild it for each run check it
+    /// starts, replacing what the failure being explained came from. Where the run did not build it, it is refused before
+    /// anything changes the tree - its cleanDirectories untouched, no record begun - naming everything that reads the
+    /// build: started, it read whatever the last build left.
+    /// </summary>
+    [Fact]
+    public async Task ARunnerThatReadsTheBuild_IsRunAsItsLegStands_WhereTheRunBuiltIt_AndRefusedWhereItDidNot()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var scratch = Directory.CreateDirectory(temp.Combine("scratch")).FullName;
+
+        List<RunnerPhase> phases =
+        [
+            Phase("measure", "echo-args", ["measured"], successPattern: "measured"),
+            Phase("report", "echo-args", ["{buildDir}"]),
+        ];
+
+        var runner = new RunnerConfig { RequireBuild = true, CleanDirectories = ["scratch"], Phases = phases };
+
+        var request = Request(temp, runner) with { BuildDirectory = temp.Combine("build", "x86_64-gcc-release") };
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            Config(),
+            request,
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+        Assert.Equal(
+            $"Leg '{Leg}' was not built by this run, and runner 'corpus' reads the build - the runner requires the build; "
+            + "phase 'report' names {buildDir} - so nothing was run: unbuilt, it would read whatever the last build left there.",
+            refusal.Message);
+        Assert.True(Directory.Exists(scratch), "nothing was cleaned for a run that did not start");
+        Assert.False(Directory.Exists(temp.Combine(".harness-config", "runs", RunId)));
+
+        // A phase alone, with the runner requiring nothing, is refused the same way.
+        var named = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            Config(),
+            request with { Runner = new RunnerConfig { CleanDirectories = ["scratch"], Phases = phases } },
+            TestContext.Current.CancellationToken));
+
+        Assert.Contains("runner 'corpus' reads the build - phase 'report' names {buildDir} - so nothing", named.Message, StringComparison.Ordinal);
+
+        var result = await Service(factory).RunAsync(Config(), request with { Built = true }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.Equal(["measure", "report"], result.Phases.Select(phase => phase.Phase));
+        Assert.False(Directory.Exists(scratch), "a run that started cleaned its directories");
+
+        // A runner that reads nothing of the build runs on a leg the run did not build.
+        var reads = new RunnerConfig { Phases = [Phase("measure", "echo-args", ["measured"], successPattern: "measured")] };
+
+        Assert.Equal(
+            LegVerdict.Passed,
+            (await Service(factory).RunAsync(Config(), Request(temp, reads) with { SegmentId = "s2" }, TestContext.Current.CancellationToken)).Verdict.Verdict);
+    }
+
+    /// <summary>
+    /// A step of an action naming what the build makes is refused on a leg the run did not build, before its action's
+    /// predefined actions or its cleanDirectories touch the tree; a step limited by runOn to another system is not asked
+    /// about, since this leg does not run it.
+    /// </summary>
+    [Fact]
+    public async Task AnActionStepNamingTheBuild_OnALegTheRunDidNotBuild_IsRefusedBeforeAnythingChanges()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var config = new HarnessConfig { Defaults = new HarnessDefaults { StallSeconds = 0 }, Tools = { new ToolConfig { Name = "dotnet" } } };
+        var other = factory.Platform.PlatformKey == "linux" ? "windows" : "linux";
+        var scratch = Directory.CreateDirectory(temp.Combine("scratch")).FullName;
+
+        temp.WriteFile(
+            Path.Combine(".harness-config", "runner", "actions", "corpus", "corpus.yml"),
+            $$"""
+            name: corpus
+            steps:
+              - name: version
+                run: dotnet --version
+              - name: elsewhere
+                runOn: [{{other}}]
+                run: dotnet --version --out={product}
+              - name: measure
+                workingDirectory: '{buildDir}'
+                run: dotnet --version
+            """);
+
+        var request = Request(temp, new RunnerConfig { Action = "corpus/corpus.yml", CleanDirectories = ["scratch"] }) with
+        {
+            BuildDirectory = temp.Combine("build", "x86_64-gcc-release"),
+            Identity = new Core.Execution.LegIdentity(Leg, factory.Platform.PlatformKey, "x86_64", "gcc", "release", "x86_64-gcc-release", "local", RunId),
+        };
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            config,
+            request,
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+        Assert.Equal(
+            $"Leg '{Leg}' was not built by this run, and runner 'corpus' reads the build - step 'measure' names {{buildDir}} - so "
+            + "nothing was run: unbuilt, it would read whatever the last build left there.",
+            refusal.Message);
+        Assert.True(Directory.Exists(scratch), "nothing was cleaned for a run that did not start");
+    }
+
+    /// <summary>
+    /// A leg whose step did not pass carries the last lines that step printed - what a reader whose log
+    /// is on another host has - and a leg whose steps passed carries none.
+    /// </summary>
+    [Fact]
+    public async Task AStepThatDidNotPass_LeavesItsLastLinesOnTheLegsLine()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        var runner = new RunnerConfig
+        {
+            Phases =
+            [
+                Phase("prepare", "echo-args", ["prepared"], successPattern: "prepared"),
+                Phase("measure", "echo-args", ["fixture drifted", "3 of 4 checks held"], successPattern: "all checks held"),
+            ],
+        };
+
+        using var another = new TempDirectory();
+
+        var failed = await Service(factory).RunAsync(Config(), Request(temp, runner), TestContext.Current.CancellationToken);
+        var passed = await Service(factory).RunAsync(
+            Config(),
+            Request(another, new RunnerConfig { Phases = [Phase("measure", "echo-args", ["measured"], successPattern: "measured")] }),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Unwitnessed, failed.Verdict.Verdict);
+        Assert.Equal(["[fixture drifted]", "[3 of 4 checks held]"], failed.Entry.LogTail);
+        Assert.Empty(passed.Entry.LogTail);
+    }
+
+    /// <summary>
+    /// Of two steps that did not pass - one the runner went on past, then one it stopped at - the leg
+    /// carries the last's lines: where it ended, not where it first stumbled.
+    /// </summary>
+    [Fact]
+    public async Task OfTwoStepsThatDidNotPass_TheLegCarriesTheLastsLines()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        var runner = new RunnerConfig
+        {
+            Phases =
+            [
+                Phase("fixture", "echo-args", ["fixture drifted"], successPattern: "fixture held", continueOnError: true),
+                Phase("measure", "echo-args", ["3 of 4 checks held"], successPattern: "all checks held"),
+            ],
+        };
+
+        var result = await Service(factory).RunAsync(Config(), Request(temp, runner), TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Unwitnessed, result.Verdict.Verdict);
+        Assert.Equal(["[3 of 4 checks held]"], result.Entry.LogTail);
+    }
+
+    [Fact]
+    public async Task TwoStepsSharingAName_AreRefused()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        var runner = new RunnerConfig
+        {
+            Phases =
+            [
+                Phase("measure", "echo-args", ["one"]),
+                Phase("measure", "echo-args", ["two"]),
+            ],
+        };
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            Config(),
+            Request(temp, runner),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.Contains("measure", refusal.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AStepNamedWithASlash_StillWritesItsOwnLogFile()
+    {
+        // A step whose run block holds several lines is named "step (1/2)", and that slash is a
+        // directory separator on every platform this tool runs on.
+        Assert.Equal("build (1-2)", RunnerRunService.LogNameFor("build (1/2)"));
+        Assert.Equal("build (2-2)", RunnerRunService.LogNameFor("build (2/2)"));
+    }
+
+    [Fact]
+    public void AFailureThatNamedNoException_CarriesANameAnEntryCanDeclare()
+    {
+        Assert.Equal(RunnerRunService.StepFailureType, RunnerRunService.FailureTypeIn(PhaseOutput.Of("ctest exited 7")));
+        Assert.Equal("System.IO.IOException", RunnerRunService.FailureTypeIn(PhaseOutput.Of("Unhandled: System.IO.IOException: gone")));
+        Assert.Equal(
+            "TimeoutException",
+            RunnerRunService.FailureTypeIn(PhaseOutput.Of("running\r\ncase 4 failed: TimeoutException after 30s\nthen an IOException\n")));
+
+        // Read no further than the first line naming one: a step's output can be larger than any text the harness could hold.
+        Assert.Equal(
+            "TimeoutException",
+            RunnerRunService.FailureTypeIn(
+                new PhaseOutputTests.ReadUpTo(
+                    line => line.Contains("TimeoutException", StringComparison.Ordinal),
+                    "running",
+                    "case 4 failed: TimeoutException after 30s",
+                    "then an IOException")));
+    }
+
+    /// <summary>
+    /// The production half of matching a run check against what a step printed. Without this the
+    /// gate has nothing to match and the feature does nothing.
+    /// </summary>
+    [Fact]
+    public async Task APassingRun_CarriesWhatItsStepsPrinted_OnItsOutcome()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            steps:
+              - name: measure
+                run: |
+                  dotnet --version
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        var result = await Service(factory).RunAsync(
+            config,
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.NotNull(result.Outcome.Output);
+
+        var printed = result.Outcome.Output!.Lines().ToList();
+
+        Assert.NotEmpty(printed);
+        Assert.Equal([result.Outcome.Message, .. printed], result.Outcome.Texts);
+    }
+
+    /// <summary>
+    /// A step naming runOn runs on a leg of a system it names, and on no other. Left out, it is left
+    /// out before anything reads it - here a program nobody declared, which the policy refuses the
+    /// whole file over where the step runs - and the leg says so as it runs and on its line.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AStepNamingRunOn_RunsOnlyOnTheSystemsItNames(bool onThisSystem)
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            steps:
+              - name: everywhere
+                run: |
+                  dotnet --version
+              - name: fetch
+                runOn: [windows, macos]
+                run: |
+                  curl https://example.invalid
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        var request = Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }) with
+        {
+            Identity = Identity(onThisSystem ? "windows" : "linux"),
+        };
+
+        if (onThisSystem)
+        {
+            var refusal = await Assert.ThrowsAsync<HarnessException>(
+                () => Service(factory).RunAsync(config, request, TestContext.Current.CancellationToken));
+
+            Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+            Assert.Contains("curl", refusal.Message, StringComparison.Ordinal);
+
+            return;
+        }
+
+        var result = await Service(factory).RunAsync(config, request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.Equal(["fetch"], result.Entry.SkippedSteps);
+        Assert.Contains(
+            $"run: {Leg}: skipped 'fetch', which runs on windows, macos only",
+            factory.StandardOutput.ToString(),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A step asking for its inputs to be held still, in a tree git tracks nothing in - as a copy a sync
+    /// made was, its files written and none staged - is told its guard watches nothing, rather than having
+    /// it pass over in silence: a guard that is off must never be off quietly.
+    /// </summary>
+    [Fact]
+    public async Task AGuardWithNothingToWatch_IsSaidAsThat()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            steps:
+              - name: build
+                requireInputsUnmoved: true
+                run: |
+                  dotnet --version
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        var result = await Service(factory).RunAsync(
+            config,
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.Contains(
+            $"run: WARN - {Leg}: git tracks no file in '{temp.Path}', so requireInputsUnmoved watches nothing",
+            factory.StandardError.ToString(),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A step that asked for its inputs to be held still, on a machine that cannot watch them, is not run, and nor is
+    /// any other step of its action: the refusal leaves before the first, saying why, with no segment of the run begun -
+    /// one begun would say an attempt was made, and the next run would resume from it - and with nothing said of steps
+    /// starting. The same action runs, and records its segment, where the watch starts.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AStepWhoseInputsCannotBeWatched_RunsNothing_AndBeginsNoSegmentOfTheRun(bool refused)
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            steps:
+              - name: prepare
+                run: |
+                  dotnet --version
+              - name: build
+                requireInputsUnmoved: true
+                run: |
+                  dotnet --version
+            """);
+
+        temp.WriteFile("src/tracked.txt", "tracked");
+        await factory.RunGitAsync(temp.Path, ["add", "src/tracked.txt"], TestContext.Current.CancellationToken);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+        var request = Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" });
+        var kind = refused ? ScriptedWatchKind.Refusing() : new ScriptedWatchKind();
+        var steps = new CountingSteps();
+        var service = Service(factory, steps, watch: kind);
+
+        if (!refused)
+        {
+            var result = await service.RunAsync(config, request, TestContext.Current.CancellationToken);
+
+            Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+            Assert.Equal(2, steps.Started);
+            Assert.True(File.Exists(RunSegments.RecordPath(request.RunDirectory, Leg)));
+            Assert.Equal((1, 1), (kind.Starts, kind.Stops));
+            return;
+        }
+
+        var refusal = await Assert.ThrowsAsync<InputsUnwatchedException>(
+            () => service.RunAsync(config, request, TestContext.Current.CancellationToken));
+
+        Assert.Equal(ScriptedWatchKind.Refused, refusal.Message);
+        Assert.Equal(ReachedVerdict.Of(LegVerdict.Unmeasured, ScriptedWatchKind.Refused), Verdicts.ForFailure(refusal));
+        Assert.Equal(0, steps.Started);
+        Assert.False(File.Exists(RunSegments.RecordPath(request.RunDirectory, Leg)));
+        Assert.Empty(new LegRecords(request.RunDirectory, Leg).Logs(factory.FileSystem));
+        Assert.DoesNotContain("starting", factory.StandardOutput.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>A runner that starts nothing, counts the steps it was asked to run, and passes each.</summary>
+    private sealed class CountingSteps : IProcessRunner
+    {
+        private int _started;
+
+        /// <summary>How many steps it was asked to run.</summary>
+        public int Started => Volatile.Read(ref _started);
+
+        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _started);
+
+            return Task.FromResult(new ProcessResult(0, string.Empty, string.Empty, TimeSpan.Zero, TimedOut: false));
+        }
+
+        public string? FindExecutable(string command) => command;
+    }
+
+    /// <summary>
+    /// A run that names no step leaves a manual one out before anything reads it - here a program nobody
+    /// declared, which the policy refuses the whole file over where the step runs - and says so as it runs
+    /// and on the leg's line, so a plain run is never read as having done the manual work.
+    /// </summary>
+    [Fact]
+    public async Task APlainRun_LeavesAManualStepOut_AndSaysSo()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            steps:
+              - name: build
+                run: |
+                  dotnet --version
+              - name: bench
+                manual: true
+                successPattern: '^done'
+                run: |
+                  curl https://example.invalid
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        var result = await Service(factory).RunAsync(
+            config,
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.Equal(["build"], result.Entry.RanSteps);
+        Assert.Equal(["bench"], result.Entry.UnselectedSteps);
+        Assert.Empty(result.Entry.ManualSteps);
+        Assert.Contains(
+            $"run: {Leg}: skipped manual step 'bench', which this run did not name",
+            factory.StandardOutput.ToString(),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A manual step named runs with only what it needs - never the steps a plain run runs, here one no
+    /// policy would let start - and reads its own input, given for this run over its default. Marked
+    /// manual on the leg's line, beside the steps the run left out.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AManualStepNamed_RunsWithWhatItNeeds_ReadingItsOwnInput(bool namedOnTheCommandLine)
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, $$"""
+            name: corpus
+            steps:
+              - name: prepare
+                run: |
+                  "{{Child}}" "{{Exec}}" "{{Assembly}}" prepared
+              - name: build
+                run: |
+                  curl https://example.invalid
+              - name: bench
+                manual: true
+                needs: [prepare]
+                inputs:
+                  size:
+                    default: '25'
+                successPattern: '^\[markdown : 7\]$'
+                run: |
+                  "{{Child}}" "{{Exec}}" "{{Assembly}}" "markdown : {size}"
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = Child });
+
+        // Named on the command line, or declared as the runner's own steps: the same selection either way.
+        var runner = new RunnerConfig
+        {
+            Action = "corpus/corpus.yml",
+            Steps = namedOnTheCommandLine ? null : ["bench"],
+            Env = new Dictionary<string, string> { [TestHost.ChildModeVariable] = "echo-args" },
+        };
+
+        var request = Request(temp, runner) with
+        {
+            ManualSteps = namedOnTheCommandLine ? ["bench"] : [],
+            Inputs = new Dictionary<string, string>(StringComparer.Ordinal) { ["size"] = "7" },
+        };
+
+        var result = await Service(factory).RunAsync(config, request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.Equal(["prepare", "bench"], result.Entry.Phases.Select(phase => phase.Phase));
+        Assert.Equal(["prepare", "bench"], result.Entry.RanSteps);
+        Assert.Equal(["bench"], result.Entry.ManualSteps);
+        Assert.Equal(["build"], result.Entry.UnselectedSteps);
+        Assert.Contains($"run: {Leg}: skipped 'build', which this run did not select", factory.StandardOutput.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A step's own input is its alone: another step naming it names something nothing fills in, and is
+    /// refused before the first step runs rather than handed the text as written.
+    /// </summary>
+    [Fact]
+    public async Task AStepsOwnInput_IsNotAnotherSteps()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, $$"""
+            name: corpus
+            steps:
+              - name: build
+                run: |
+                  "{{Child}}" "{{Exec}}" "{{Assembly}}" "{size}"
+              - name: bench
+                inputs:
+                  size:
+                    default: '25'
+                run: |
+                  "{{Child}}" "{{Exec}}" "{{Assembly}}" "{size}"
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = Child });
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            config,
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.Contains("'build' run line", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("{size}", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("which nothing here can fill in", refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A step's required input with no value anywhere is refused before anything runs, named with its step -
+    /// but only where the run runs that step: a plain run leaving it out owes it nothing.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ARequiredStepInput_IsOwedOnlyByARunThatRunsTheStep(bool runsIt)
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            steps:
+              - name: build
+                run: |
+                  dotnet --version
+              - name: bench
+                manual: true
+                inputs:
+                  size:
+                    required: true
+                successPattern: '^done'
+                run: |
+                  dotnet --info
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        var request = Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }) with
+        {
+            ManualSteps = runsIt ? ["bench"] : [],
+        };
+
+        if (!runsIt)
+        {
+            var result = await Service(factory).RunAsync(config, request, TestContext.Current.CancellationToken);
+
+            Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+            return;
+        }
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(
+            () => Service(factory).RunAsync(config, request, TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.Contains("requires input(s) size (step 'bench')", refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>A runner of phases has no step that could be manual, so a manual step named for it is refused, not ignored.</summary>
+    [Fact]
+    public async Task AManualStepNamed_ForARunnerOfPhases_IsRefused()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        var runner = new RunnerConfig { Phases = [Phase("go", "exit", ["0"])] };
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            Config(),
+            Request(temp, runner) with { ManualSteps = ["bench"] },
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.UsageError, refusal.ExitCode);
+        Assert.Contains("only an action's steps can be manual", refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A leg on whose system no step runs would pass having run nothing, so it is refused with
+    /// nothing run, naming the leg and its system. <c>run</c> refuses it before any host is
+    /// measured; this is the same refusal where a leg reaches the runner anyway.
+    /// </summary>
+    [Fact]
+    public async Task ALegOnWhoseSystemNoStepRuns_IsRefused_NotPassed()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            steps:
+              - name: msvc
+                runOn: [windows]
+                run: |
+                  dotnet --version
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            config,
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }) with { Identity = Identity("linux") },
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+        Assert.Contains($"leg '{Leg}' (linux)", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("would run nothing and pass", refusal.Message, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(temp.Combine(".harness-config", "runs", RunId)));
+    }
+
+    /// <summary>
+    /// A leg on which none of the steps the run named runs is refused with nothing run, naming the leg:
+    /// it would run only what they need and pass, with the step named run nowhere. <c>run</c> refuses it
+    /// before any host is measured; this is the same refusal where a leg reaches the runner anyway.
+    /// </summary>
+    [Fact]
+    public async Task ALegOnWhichNoNamedStepRuns_IsRefused_NotPassed()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            steps:
+              - name: build
+                run: |
+                  dotnet --version
+              - name: bench
+                manual: true
+                runOn: [windows]
+                needs: [build]
+                successPattern: '^done'
+                run: |
+                  dotnet --info
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            config,
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }) with { Identity = Identity("linux"), ManualSteps = ["bench"] },
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+        Assert.Contains($"leg '{Leg}' (linux)", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("would run only what they need there and pass", refusal.Message, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(temp.Combine(".harness-config", "runs", RunId)));
+    }
+
+    /// <summary>
+    /// Two steps of one name that both run on a leg are refused as that, naming them, before anything
+    /// keys the steps by their names: with inputs of their own, they ended the run as a defect in this
+    /// tool - an item already added - rather than as the mistake in the file it was.
+    /// </summary>
+    [Fact]
+    public async Task TwoStepsOfOneNameOnALeg_WithInputsOfTheirOwn_AreRefusedAsTheFilesMistake()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            steps:
+              - name: bench
+                inputs:
+                  size:
+                    default: '1'
+                run: |
+                  dotnet --version
+              - name: bench
+                inputs:
+                  size:
+                    default: '2'
+                run: |
+                  dotnet --info
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            config,
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.Contains("names step(s) bench more than once", refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Two steps whose names differ, and are kept as one log - every character a file name cannot carry is kept as a
+    /// hyphen, and a file's name is told apart whatever its case - are refused before any step runs, naming both and the
+    /// log: the second wrote the first's log over, and what the first printed was read from the second's.
+    /// </summary>
+    [Fact]
+    public async Task TwoStepsWhoseNamesAreKeptAsOneLog_AreRefused_NamingBothAndTheLog()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            steps:
+              - name: 'bench: fast'
+                run: |
+                  dotnet --version
+              - name: other
+                run: |
+                  dotnet --version
+              - name: 'Bench/ fast'
+                run: |
+                  dotnet --info
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            config,
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.Equal(
+            "Runner 'corpus' names steps that would keep one log between them: 'bench: fast' and 'Bench/ fast' as 'bench- fast.log'. "
+            + "A character a file name cannot carry is kept as '-', and a file's name is told apart whatever its case, so each would "
+            + "write the other's log over, and what one printed be read as the other's. Rename one.",
+            refusal.Message);
+    }
+
+    /// <summary>
+    /// A runner's own phases are held to the same: the file is read refusing only one name given twice, so two phases
+    /// kept as one log are refused here, where the phases a leg runs are counted, before any of them runs.
+    /// </summary>
+    [Fact]
+    public async Task TwoPhasesOfARunnersOwn_KeptAsOneLog_AreRefused()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runner = new RunnerConfig { Phases = [Phase("bench: fast", "exit", ["0"]), Phase("Bench/ fast", "exit", ["0"])] };
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(Config(), Request(temp, runner), TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.StartsWith(
+            "Runner 'corpus' names steps that would keep one log between them: 'bench: fast' and 'Bench/ fast' as 'bench- fast.log'. ",
+            refusal.Message,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A step of several lines is a phase to each, named with its place among them - and one of those names can be kept
+    /// as the log of a step named much like it, which no two steps' names alone would say: refused where the phases are
+    /// counted.
+    /// </summary>
+    [Fact]
+    public async Task ALineOfAStep_KeptAsTheLogOfAnotherStep_IsRefused()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            steps:
+              - name: bench
+                run: |
+                  dotnet --version
+                  dotnet --info
+              - name: 'bench (1-2)'
+                run: |
+                  dotnet --version
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            config,
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.StartsWith(
+            "Runner 'corpus' names steps that would keep one log between them: 'bench (1/2)' and 'bench (1-2)' as 'bench (1-2).log'. ",
+            refusal.Message,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Two steps of one name that run on different systems are one step to each leg, which runs only its own: the
+    /// Linux leg runs its own, and is not refused for the Windows one's, as a leg is refused for no step it does not run.
+    /// </summary>
+    [Fact]
+    public async Task TwoStepsOfOneName_ForDifferentSystems_AreOneStepToEachLeg()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            steps:
+              - name: measure
+                runOn: [windows]
+                run: |
+                  dotnet --version
+              - name: measure
+                runOn: [linux, macos]
+                run: |
+                  dotnet --info
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        var result = await Service(factory).RunAsync(
+            config,
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }) with { Identity = Identity("linux") },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.Equal(["measure"], result.Entry.SkippedSteps);
+    }
+
+    /// <summary>
+    /// A leg left with only predefined steps runs nothing of the action's own: reading inputs settles
+    /// what the steps after it run, and runs none. Refused like a leg left with no step at all, where
+    /// it passed on "0 step(s) passed".
+    /// </summary>
+    [Fact]
+    public async Task ALegLeftWithOnlyPredefinedSteps_IsRefused_NotPassed()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            inputs:
+              corpusRoot:
+                default: corpus
+            steps:
+              - name: read
+                uses: harness/read-inputs
+              - name: msvc
+                runOn: [windows]
+                run: |
+                  dotnet --version
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            config,
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }) with { Identity = Identity("linux") },
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+        Assert.Contains($"leg '{Leg}' (linux)", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("would run nothing and pass", refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A step naming runOn needs a leg's operating system to be chosen by, and a run reaching no leg
+    /// has none: refused rather than guessed, as a step asking for contention is.
+    /// </summary>
+    [Fact]
+    public async Task AStepNamingRunOn_IsRefused_WhereTheRunReachesNoLeg()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            steps:
+              - name: measure
+                runOn: [linux]
+                run: |
+                  dotnet --version
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            config,
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.UsageError, refusal.ExitCode);
+        Assert.Contains("names runOn", refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A value given with --input wins over the runner's .env, as the .env wins over the input's own
+    /// default. Each names a different program, so the program the policy was asked about is the
+    /// value that won.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AnInputGivenOnTheCommandLine_WinsOverTheRunnersValues_AndTheDefault(bool given)
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        temp.WriteFile(Path.Combine(".harness-config", "runner", ".env", "ci.env"), "runner=wget\n");
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            inputs:
+              runner:
+                default: curl
+            steps:
+              - name: version
+                run: |
+                  {runner} --version
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        var request = Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }) with
+        {
+            Inputs = given ? new Dictionary<string, string> { ["runner"] = "dotnet" } : new Dictionary<string, string>(),
+        };
+
+        if (!given)
+        {
+            var refusal = await Assert.ThrowsAsync<HarnessException>(
+                () => Service(factory).RunAsync(config, request, TestContext.Current.CancellationToken));
+
+            Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+            Assert.Contains("'wget'", refusal.Message, StringComparison.Ordinal);
+
+            return;
+        }
+
+        var result = await Service(factory).RunAsync(config, request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+    }
+
+    /// <summary>
+    /// A required input with no value anywhere is refused before the first step, naming every place
+    /// a value could have come from - --input among them - and one given with --input runs.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ARequiredInput_IsSatisfiedByTheCommandLine_AndRefusedWithoutAnyValue(bool given)
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            inputs:
+              runner:
+                required: true
+            steps:
+              - name: version
+                run: |
+                  {runner} --version
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        var request = Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }) with
+        {
+            Inputs = given ? new Dictionary<string, string> { ["runner"] = "dotnet" } : new Dictionary<string, string>(),
+        };
+
+        if (given)
+        {
+            var result = await Service(factory).RunAsync(config, request, TestContext.Current.CancellationToken);
+
+            Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+
+            return;
+        }
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(
+            () => Service(factory).RunAsync(config, request, TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.Contains(
+            $"requires input(s) runner, and none was given with --input, found in {request.Layout.RunnerEnvDirectory} "
+            + "or declared as a default",
+            refusal.Message,
+            StringComparison.Ordinal);
+        Assert.False(Directory.Exists(temp.Combine(".harness-config", "runs", RunId)));
+    }
+
+    /// <summary>
+    /// A value for an input the action does not declare, or given to a runner of phases, which has
+    /// none, is refused with nothing run. 'run' refuses both before any leg starts; this is the same
+    /// refusal where a leg reaches the runner anyway.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AnInputNothingDeclares_IsRefused_WithNothingRun(bool action)
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            steps:
+              - name: measure
+                run: |
+                  dotnet --version
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        var runner = action
+            ? new RunnerConfig { Action = "corpus/corpus.yml" }
+            : new RunnerConfig { Phases = [new RunnerPhase { Name = "measure", Command = ["dotnet", "--version"] }] };
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            config,
+            Request(temp, runner) with { Inputs = new Dictionary<string, string> { ["corpusRoot"] = "corpus" } },
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.UsageError, refusal.ExitCode);
+        Assert.Contains(action ? "--input names 'corpusRoot'" : "runs phases of its own", refusal.Message, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(temp.Combine(".harness-config", "runs", RunId)));
+    }
+
+    /// <summary>
+    /// The stall bound a phase runs under is its own stallSeconds, else its runner's, else the
+    /// repository's default, and 0 as the first of them set means none - as 'help runners' says. Pinned
+    /// by where a phase that goes quiet is stopped. One that must be stopped lives thirty times the
+    /// bound, as the phase runner's own stall tests allow, and every bound not meant to apply is longer
+    /// still, so one applied by mistake lets it run out and pass; one that must not be stopped lives three
+    /// times a bound applied by mistake, and passes only if none was.
+    /// </summary>
+    [Theory]
+    [InlineData(1, 60, 60, 1)]
+    [InlineData(null, 1, 60, 1)]
+    [InlineData(null, null, 1, 1)]
+    [InlineData(0, 1, 1, null)]
+    [InlineData(null, 0, 1, null)]
+    public async Task AStallBound_IsThePhasesOwn_ElseItsRunners_ElseTheDefault(int? phase, int? runner, int defaults, int? stoppedAt)
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var config = new HarnessConfig { Defaults = new HarnessDefaults { StallSeconds = defaults } };
+        var runnerConfig = new RunnerConfig
+        {
+            Phases = [Phase("measure", "exit", ["0"]) with { StallSeconds = phase }],
+            StallSeconds = runner,
+        };
+
+        var result = await Service(factory, new QuietProcessRunner(TimeSpan.FromSeconds(stoppedAt is null ? 3 : 30))).RunAsync(
+            config,
+            Request(temp, runnerConfig),
+            TestContext.Current.CancellationToken);
+
+        if (stoppedAt is { } seconds)
+        {
+            Assert.Contains($"hung: no output for {seconds}s", result.Verdict.Detail, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        }
+    }
+
+    /// <summary>
+    /// A runner's own phase that names a step is reported under that step in ranSteps, once however many
+    /// of its phases name it; one that names none is its own step.
+    /// </summary>
+    [Fact]
+    public async Task APhasesStepName_IsTheStepItIsReportedUnder()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runner = new RunnerConfig
+        {
+            Phases =
+            [
+                Phase("warm", "exit", ["0"]) with { StepName = "measure" },
+                Phase("time", "exit", ["0"]) with { StepName = "measure" },
+                Phase("go", "exit", ["0"]),
+            ],
+        };
+
+        var result = await Service(factory).RunAsync(Config(), Request(temp, runner), TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.Equal(["measure", "go"], result.Entry.RanSteps);
+    }
+
+    /// <summary>
+    /// An action's inputs, read by harness/read-inputs, reach its steps as INPUT_&lt;NAME&gt; over the
+    /// runner's own environment and beneath a step's: the order 'help config' gives.
+    /// </summary>
+    [Fact]
+    public async Task AnActionsInputs_ReachItsSteps_OverTheRunnersEnvironment_AndBeneathAStepsOwn()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, $$"""
+            name: corpus
+            inputs:
+              size:
+                default: '7'
+            steps:
+              - name: read
+                uses: harness/read-inputs
+              - name: input
+                successPattern: '^7$'
+                run: |
+                  "{{Child}}" "{{Exec}}" "{{Assembly}}" INPUT_SIZE
+              - name: own
+                env:
+                  INPUT_SIZE: step
+                successPattern: '^step$'
+                run: |
+                  "{{Child}}" "{{Exec}}" "{{Assembly}}" INPUT_SIZE
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = Child });
+
+        var runner = new RunnerConfig
+        {
+            Action = "corpus/corpus.yml",
+            Env = new Dictionary<string, string> { [TestHost.ChildModeVariable] = "print-env", ["INPUT_SIZE"] = "runner" },
+        };
+
+        var result = await Service(factory).RunAsync(config, Request(temp, runner), TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.Equal(["input", "own"], result.Entry.RanSteps);
+    }
+
+    /// <summary>
+    /// A step naming an input the file declares, to which the run gave no value, is refused naming that
+    /// input as declared - the step's own, or the action's - and how it can have one, before the first
+    /// step runs, rather than as a name nothing fills in: RefuseInputsWithNoValue says why. A program
+    /// written as one is refused so too, not as a program nobody declared.
+    /// </summary>
+    [Theory]
+    [InlineData(".", "dotnet {only}", "run line", "only", "the step's own input")]
+    [InlineData(".", "dotnet {area}", "run line", "area", "an input of the action")]
+    [InlineData("{only}", "dotnet --version", "workingDirectory", "only", "the step's own input")]
+    [InlineData("{area}", "dotnet --version", "workingDirectory", "area", "an input of the action")]
+    [InlineData(".", "{only} --version", "run line", "only", "the step's own input")]
+    public async Task AStepNamingADeclaredInputWithNoValue_IsRefused_SayingHowItCanHaveOne(
+        string workingDirectory,
+        string runLine,
+        string setting,
+        string name,
+        string owner)
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, $$"""
+            name: corpus
+            inputs:
+              area:
+                description: where the rows are staged
+            steps:
+              - name: first
+                run: |
+                  dotnet --version
+              - name: stage
+                inputs:
+                  only:
+                    description: the one table to stage
+                workingDirectory: '{{workingDirectory}}'
+                run: |
+                  {{runLine}}
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        var request = Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }) with { NamedOnCommandLine = true };
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(
+            () => Service(factory).RunAsync(config, request, TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.Equal(
+            $"'stage' {setting} names '{{{name}}}', {owner}, which has no value: give it one with --input {name}=<value> "
+            + $"or in {request.Layout.RunnerEnvDirectory}, or declare a default for it.",
+            refusal.Message);
+
+        // Over the whole file, so the step before it never ran either.
+        Assert.False(Directory.Exists(temp.Combine(".harness-config", "runs", RunId)));
+    }
+
+    /// <summary>
+    /// A runner a run check starts is given no --input, so its refusal of an input with no value offers
+    /// only what reaches it: following an offer of --input, the named runner's command line refuses the
+    /// name, or hands the value to the wrong runner.
+    /// </summary>
+    [Fact]
+    public async Task AnInputWithNoValue_OnARunnerARunCheckStarts_IsNotOfferedTheCommandLine()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            inputs:
+              area:
+                description: where the rows are staged
+            steps:
+              - name: stage
+                run: |
+                  dotnet {area}
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        var request = Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" });
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(
+            () => Service(factory).RunAsync(config, request, TestContext.Current.CancellationToken));
+
+        Assert.Equal(
+            "'stage' run line names '{area}', an input of the action, which has no value: give it one in "
+            + $"{request.Layout.RunnerEnvDirectory}, or declare a default for it. A run check started this runner, "
+            + "and --input reaches only the runner the command line names.",
+            refusal.Message);
+    }
+
+    /// <summary>
+    /// An input named like one of the runner's secrets has no value from it, since a secret never fills a
+    /// run line. The refusal says so, and offers neither the command line, which would put the secret in
+    /// the process table, nor the plain values, which refuse a name the secrets hold.
+    /// </summary>
+    [Fact]
+    public async Task AnInputWithNoValue_NamedLikeASecret_IsToldASecretNeverFillsARunLine()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        WriteSecret(temp);
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            inputs:
+              HARNESS_TOKEN:
+                description: the credential
+            steps:
+              - name: stage
+                run: |
+                  dotnet {HARNESS_TOKEN}
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            config,
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }) with { NamedOnCommandLine = true },
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(
+            "'stage' run line names '{HARNESS_TOKEN}', an input of the action, which has no value: 'HARNESS_TOKEN' is "
+            + "one of the runner's secrets, and a secret never fills a run line, where the process table shows it to "
+            + "anything on the machine. Its step reads it from its environment, as HARNESS_TOKEN.",
+            refusal.Message);
+    }
+
+    /// <summary>
+    /// A value the runner's .env holds under another spelling is not the input's, since a name is matched
+    /// exactly: the refusal says which spelling it found, rather than asking for a value already there.
+    /// </summary>
+    [Fact]
+    public async Task AnInputWithNoValue_SpeltOtherwiseInTheRunnersEnv_IsToldTheSpellingFound()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        temp.WriteFile(Path.Combine(".harness-config", "runner", ".env", "ci.env"), "AREA=rows\n");
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            inputs:
+              area:
+                description: where the rows are staged
+            steps:
+              - name: stage
+                run: |
+                  dotnet {area}
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        var request = Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }) with { NamedOnCommandLine = true };
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(
+            () => Service(factory).RunAsync(config, request, TestContext.Current.CancellationToken));
+
+        Assert.EndsWith(
+            $"or in {request.Layout.RunnerEnvDirectory}, or declare a default for it. That directory holds 'AREA', "
+            + "which is not 'area' as written.",
+            refusal.Message,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Only a step this leg runs is refused for naming an input with no value: a manual step the run did
+    /// not name and a step for another system never run here, so a run leaving them out owes them
+    /// nothing, and an input no step it runs names may have none.
+    /// </summary>
+    [Theory]
+    [InlineData("manual: true")]
+    [InlineData("runOn: [windows]")]
+    public async Task AStepThisLegDoesNotRun_NamingAnInputWithNoValue_IsNotRefused(string leftOut)
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, $$"""
+            name: corpus
+            inputs:
+              area:
+                description: where the rows are staged
+            steps:
+              - name: build
+                run: |
+                  dotnet --version
+              - name: bench
+                {{leftOut}}
+                successPattern: '^done'
+                inputs:
+                  size:
+                    description: how many rows
+                run: |
+                  dotnet --info {size} {area}
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        var result = await Service(factory).RunAsync(
+            config,
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }) with { Identity = Identity("linux") },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.Equal(["build"], result.Entry.RanSteps);
+    }
+
+    /// <summary>
+    /// A misspelt name is refused as one nothing fills in, and the refusal lists the declared inputs with
+    /// no value this run apart from the names it can fill: left out, the input the name meant read as
+    /// one nobody declared.
+    /// </summary>
+    [Fact]
+    public async Task AMisspeltName_IsRefused_SayingWhichDeclaredInputsHaveNoValue()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            inputs:
+              area:
+                description: where the rows are staged
+            steps:
+              - name: stage
+                inputs:
+                  only:
+                    description: the one table to stage
+                run: |
+                  dotnet {onlyy}
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            config,
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.StartsWith("'stage' run line names '{onlyy}', which nothing here can fill in.", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("; {area}, {only} are declared as well, with no value this run.", refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A name this leg has nothing for, in an argument of a later step - {product} on a leg built with no
+    /// product - is refused before the first step runs: found only when its own step began, the steps
+    /// before it had already run.
+    /// </summary>
+    [Fact]
+    public async Task ANameThisLegHasNothingFor_InALaterStepsArgument_IsRefusedBeforeAnythingRuns()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        var runner = new RunnerConfig
+        {
+            Phases =
+            [
+                Phase("harmless", "echo-args", ["one"]),
+                Phase("late", "echo-args", ["--into", "{product}"]),
+            ],
+        };
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            Config(),
+            Request(temp, runner) with { Built = true },
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.Equal("'late' run line names '{product}', and this leg has no build product.", refusal.Message);
+        Assert.False(Directory.Exists(temp.Combine(".harness-config", "runs", RunId)));
+    }
+
+    /// <summary>
+    /// Each step writes its log among the leg's records, in the directory of the run it was given, as their one owner
+    /// names a phase's log: what lists a leg's logs finds every one, with the name its step's log goes by, and the
+    /// leg's record of what it has done lies beside them, in that same run directory.
+    /// </summary>
+    [Fact]
+    public async Task EachStepsLog_IsFoundAmongTheLegsRecords_InTheRunDirectoryItWasGiven()
+    {
+        using var temp = new TempDirectory();
+        using var elsewhere = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runs = elsewhere.Combine("runs", RunId);
+
+        var runner = new RunnerConfig
+        {
+            Phases = [Phase("measure", "echo-args", ["one"]), Phase("census: all", "echo-args", ["two"])],
+        };
+
+        var result = await Service(factory).RunAsync(
+            Config(),
+            Request(temp, runner) with { RunDirectory = runs },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+
+        var records = new LegRecords(runs, Leg);
+
+        Assert.Equal(
+            [.. result.Phases.Select(phase => new PhaseLogFile(RunnerRunService.LogNameFor(phase.Phase), phase.LogFile)).OrderBy(log => log.Phase, StringComparer.Ordinal)],
+            records.Logs(factory.FileSystem));
+        Assert.Equal(2, records.Logs(factory.FileSystem).Count);
+        Assert.True(File.Exists(RunSegments.RecordPath(runs, Leg)));
+
+        // Nothing of the run is kept under the layout's own runs directory: the run directory is the one the work was given.
+        Assert.False(Directory.Exists(temp.Combine(".harness-config", "runs")));
+    }
+
+    /// <summary>
+    /// A run line naming one of the leg's compilers is filled in with the program the leg's build identified, in an
+    /// argument and as the line's own program alike: a runner's phase starts it as it starts any program, and its log
+    /// names the whole path that ran.
+    /// </summary>
+    [Fact]
+    public async Task ARunLineNamingTheLegsCompiler_IsFilledInWithWhatItsBuildIdentified()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var gxx = Path.Combine(temp.Path, "toolchain", "bin", "g++");
+
+        var runner = new RunnerConfig
+        {
+            Phases =
+            [
+                Phase("census", "echo-args", ["--cxx", "{compiler_CXX}"], successPattern: System.Text.RegularExpressions.Regex.Escape(gxx)),
+                new RunnerPhase { Name = "version", Command = ["{compiler_C}", "--version"] },
+            ],
+        };
+
+        var result = await Service(factory).RunAsync(
+            Config(),
+            Request(temp, runner) with
+            {
+                Built = true,
+                BuildDirectory = temp.Combine("build", "x86_64-gcc-release"),
+                Compilers = LegCompilers.Of(new Dictionary<string, LegCompiler>
+                {
+                    ["C"] = LegCompiler.Of(TestHost.DotnetExecutable),
+                    ["CXX"] = LegCompiler.Of(gxx),
+                }),
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.Equal(["[--cxx]", $"[{gxx}]"], result.Phases[0].Output.Lines());
+        Assert.Contains(
+            $"# command {TestHost.DotnetExecutable} --version",
+            File.ReadAllLines(temp.Combine(".harness-config", "runs", RunId, Leg, "version.log")).Select(line => line.Replace("\"", string.Empty, StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// A step of an action written as the leg's compiler alone starts it though nothing declares it under 'tools' - the
+    /// build that identified it ran it - where the run built the leg. Where it did not, the step is refused as any step
+    /// reading the build is, naming it, and nothing a build left there earlier is read to fill the name in.
+    /// </summary>
+    [Fact]
+    public async Task AStepStartingTheLegsCompiler_RunsWhereTheRunBuiltTheLeg_AndIsRefusedWhereItDidNot()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var config = new HarnessConfig { Defaults = new HarnessDefaults { StallSeconds = 0 } };
+        var reads = 0;
+
+        await WriteActionAsync(
+            factory,
+            temp,
+            """
+            name: corpus
+            steps:
+              - name: census
+                run: '{compiler_C} --version'
+            """);
+
+        var request = Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }) with
+        {
+            BuildDirectory = temp.Combine("build", "x86_64-gcc-release"),
+            Compilers = LegCompilers.ReadBy(() =>
+            {
+                reads++;
+
+                return new Dictionary<string, LegCompiler> { ["C"] = LegCompiler.Of(TestHost.DotnetExecutable) };
+            }),
+        };
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(config, request, TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+        Assert.Equal(
+            $"Leg '{Leg}' was not built by this run, and runner 'corpus' reads the build - step 'census' names {{compiler_C}} - so "
+            + "nothing was run: unbuilt, it would read whatever the last build left there.",
+            refusal.Message);
+        Assert.Equal(0, reads);
+
+        var result = await Service(factory).RunAsync(config, request with { Built = true }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.Equal(["census"], result.Phases.Select(phase => phase.Phase));
+        Assert.Equal(1, reads);
+    }
+
+    /// <summary>
+    /// A compiler's name nothing fills in - here one the build runs with a launcher's words after it - is refused before
+    /// the first step runs, naming the line and why, as is one nothing was given to read: found when its own step began,
+    /// the steps before it had already run.
+    /// </summary>
+    [Theory]
+    [InlineData(true, "'late' run line names '{compiler_CXX}', and its build runs its CXX compiler as '/usr/bin/ccache' followed by 'g++'.")]
+    [InlineData(false, "'late' run line names '{compiler_CXX}', and nothing here reads which compiler the leg's build identified: only a run line and a test invocation are filled in with one.")]
+    public async Task ACompilersNameNothingFillsIn_IsRefusedBeforeAnythingRuns_SayingWhy(bool read, string said)
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        var runner = new RunnerConfig
+        {
+            Phases =
+            [
+                Phase("harmless", "echo-args", ["one"]),
+                Phase("late", "echo-args", ["--cxx", "{compiler_CXX}"]),
+            ],
+        };
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            Config(),
+            Request(temp, runner) with
+            {
+                Built = true,
+                BuildDirectory = temp.Combine("build", "x86_64-gcc-release"),
+                Compilers = read
+                    ? LegCompilers.Of(new Dictionary<string, LegCompiler>
+                    {
+                        ["CXX"] = LegCompiler.None("its build runs its CXX compiler as '/usr/bin/ccache' followed by 'g++'"),
+                    })
+                    : null,
+            },
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.Equal(said, refusal.Message);
+        Assert.False(Directory.Exists(temp.Combine(".harness-config", "runs", RunId)));
+    }
+
+    /// <summary>
+    /// A secret a name fills in is refused as one written out, before the first step runs: the argument
+    /// list the log header and the process table hold is the filled-in one, and the guard read it as
+    /// written, where it held only the name.
+    /// </summary>
+    [Fact]
+    public async Task ASecretANameFillsIn_IsRefusedAsOneWrittenOut()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        WriteSecret(temp);
+        temp.WriteFile(Path.Combine(".harness-config", "runner", ".env", "ci.env"), $"DB_URL=https://reader:{Secret}@db\n");
+
+        var runner = new RunnerConfig
+        {
+            Phases =
+            [
+                Phase("harmless", "echo-args", ["one"]),
+                Phase("leak", "echo-args", ["{DB_URL}"]),
+            ],
+        };
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            Config(),
+            Request(temp, runner),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+        Assert.Contains("Step 'leak' of runner 'corpus' puts a secret in its argument list", refusal.Message, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(temp.Combine(".harness-config", "runs", RunId)));
+        Assert.DoesNotContain(Secret, refusal.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(Secret, factory.StandardOutput.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(Secret, factory.StandardError.ToString(), StringComparison.Ordinal);
+    }
+
+    private static LegIdentity Identity(string os)
+        => new(Leg, os, "x86_64", "gcc", "release", "gcc-release", "local", RunId);
+
+    /// <summary>
+    /// A step's contention watch knows the repository's other trees on the machine, as a build's does: a shared tool working
+    /// in another tree's build directory of this leg's variant while the step runs is named as that tree's leg's, never
+    /// warned of as one no declared leg accounts for.
+    /// </summary>
+    [Fact]
+    public async Task ASharedToolWorkingInAnotherTreesBuildDirectory_IsNamedAsThatTreesLeg_WhileAStepRuns()
+    {
+        using var temp = new TempDirectory();
+        using var other = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, $"""
+            name: corpus
+            steps:
+              - name: measure
+                watchContention: true
+                run: |
+                  {Child} --version
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = Child });
+        config.BuildConfigs["release"] = new BuildConfiguration();
+        config.Legs[Leg] = new LegConfig { Os = factory.Platform.PlatformKey, Processor = factory.Platform.Processor, Config = "release" };
+        config.Contention.SharedResourceTools.Add("toolcc");
+        var variant = Core.Build.VariantKey.For(config, config.Legs[Leg], factory.Platform.PlatformKey);
+        var theirs = variant.DirectoryUnder(other.Path);
+        var table = new QuietProcessTable(new Core.Platform.SampledProcess(7001, 9999, "toolcc", DateTimeOffset.UnixEpoch, $"toolcc \"{Path.Combine(theirs, "a.o")}\""));
+
+        var result = await Service(factory, processTable: table).RunAsync(
+            config,
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }) with
+            {
+                BuildDirectory = variant.DirectoryUnder(temp.Path),
+                Beside = new Core.Worktrees.RepositoryTreesFound([new Core.Worktrees.RepositoryTree(other.Path, "worktree o1/xa")]),
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.Contains($"working in the build directory of worktree o1/xa's leg '{Leg}'", factory.StandardError.ToString(), StringComparison.Ordinal);
+    }
+
+    private static RunnerRunService Service(
+        HarnessFactory factory,
+        IProcessRunner? phases = null,
+        Core.Platform.IProcessTable? processTable = null,
+        IWatchKind? watch = null)
+        => new(
+            new PhaseRunner(phases ?? factory.ProcessRunner, factory.FileSystem, factory.Output),
+            new ActionFileParser(factory.FileSystem, factory.Output, factory.Platform),
+            new ActionToolPolicy(factory.Platform),
+            new ActionValuesReader(factory.FileSystem, factory.Output),
+            new ExpectedExceptionMatcher(factory.Output),
+            new RunCheckGate(factory.Output),
+            new RunSegments(factory.FileSystem, factory.Output),
+            new PredefinedActionRunner(factory.GitClient, factory.Output),
+
+            // This machine's own watcher, unless a test says what watches: one that will not start, say.
+            watch is null
+                ? new InputFingerprint(factory.FileSystem, factory.Platform, factory.Output)
+                : new InputFingerprint(factory.FileSystem, factory.Platform, watch),
+            new ProcessSampler(processTable ?? factory.ProcessTable, factory.Platform, factory.Output),
+            factory.GitClient,
+            factory.Platform,
+            factory.FileSystem,
+            factory.Output);
+
+    private static HarnessConfig Config() => new()
+    {
+        Defaults = new HarnessDefaults { StallSeconds = 0 },
+    };
+
+    /// <summary>
+    /// A run of <paramref name="runner"/> on the one leg, in <paramref name="temp"/>, whose host keeps its programs - as a
+    /// host's report says where they are, after its PATH - in the directory of the dotnet running this suite, so a line
+    /// naming <see cref="Child"/> starts that one where no PATH names any.
+    /// </summary>
+    private static RunnerRunRequest Request(TempDirectory temp, RunnerConfig runner) => new()
+    {
+        RunnerName = "corpus",
+        Runner = runner,
+        Leg = Leg,
+        Layout = new HarnessLayout(temp.Path, temp.Path),
+        RunId = RunId,
+        RunDirectory = new HarnessLayout(temp.Path, temp.Path).RunDirectory(RunId),
+        SegmentId = "s1",
+        TreeRoot = temp.Path,
+        ResolvedLegs = [Leg],
+        ProgramDirectories = Path.IsPathFullyQualified(TestHost.DotnetExecutable) ? [Path.GetDirectoryName(TestHost.DotnetExecutable)!] : [],
+    };
+
+    /// <summary>
+    /// A phase that runs this assembly as a child in <paramref name="mode"/>, exactly as the process
+    /// tests do, so what the step says and what it exits with are what the test decided.
+    /// </summary>
+    private static RunnerPhase Phase(
+        string name,
+        string mode,
+        IReadOnlyList<string> arguments,
+        string? successPattern = null,
+        bool continueOnError = false)
+        => new()
+        {
+            Name = name,
+            ContinueOnError = continueOnError,
+            Command = [TestHost.DotnetExecutable, "exec", TestHost.AssemblyPath, .. arguments],
+            Env = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                [TestHost.ChildModeVariable] = mode,
+            },
+            SuccessPattern = successPattern,
+        };
+
+    /// <summary>
+    /// A runner carrying an entry for the failure its only step produces, gated on one check.
+    /// </summary>
+    private static RunnerConfig Excusable() => new()
+    {
+        Phases = [Phase("measure", "exit", ["7"])],
+        ExpectedExceptions =
+        [
+            new ExpectedException
+            {
+                ExceptionType = RunnerRunService.StepFailureType,
+                Messages = ["exited 7"],
+                Success = true,
+                Warning = true,
+                ResultCode = 0,
+                Message = "a known confound",
+                EarnedOn = "lin-gcc-release",
+                EarnedAt = "2026-09-16",
+                Mechanism = "the fixture server refuses the seventh connection of a session",
+                Anchor = "D-TEST-RUNNER-GATE",
+                RunChecks =
+                [
+                    new RunCheck
+                    {
+                        PredefinedRunner = "reproduce",
+                        Expects = new RunCheckExpectation { Success = true },
+                        MinStepsInFailureWindow = 1,
+                        MinStepSeconds = 0,
+                    },
+                ],
+            },
+        ],
+    };
+
+    private static async Task WriteActionAsync(
+        HarnessFactory factory,
+        TempDirectory temp,
+        string yaml,
+        bool ignoreBuild = true,
+        bool ignoreArtifacts = true)
+    {
+        WriteActionFile(temp, yaml);
+        await RepositoryAsync(factory, temp, ignoreBuild, ignoreArtifacts);
+    }
+
+    private static void WriteActionFile(TempDirectory temp, string yaml)
+        => temp.WriteFile(Path.Combine(".harness-config", "runner", "actions", "corpus", "corpus.yml"), yaml);
+
+    /// <summary>
+    /// Makes <paramref name="temp"/> a repository that ignores what a run writes, as init leaves one
+    /// - or leaves out a rule, for a test about a repository whose .gitignore predates it. A run
+    /// asks git before it writes an action's scratch, and a run always happens inside a repository.
+    /// </summary>
+    private static async Task RepositoryAsync(HarnessFactory factory, TempDirectory temp, bool ignoreBuild, bool ignoreArtifacts)
+    {
+        if (!Directory.Exists(temp.Combine(".git")))
+        {
+            await factory.RunGitAsync(temp.Path, ["init", "--quiet", "."], TestContext.Current.CancellationToken);
+        }
+
+        var rules = new List<string>();
+
+        if (ignoreBuild)
+        {
+            rules.Add(HarnessLayout.ActionScratchIgnoreRule(HarnessLayout.ActionBuildDirectoryName));
+        }
+
+        if (ignoreArtifacts)
+        {
+            rules.Add(HarnessLayout.ActionScratchIgnoreRule(HarnessLayout.ActionArtifactsDirectoryName));
+        }
+
+        temp.WriteFile(".gitignore", string.Join("\n", rules) + "\n");
+    }
+
+    private static void WriteSecret(TempDirectory temp)
+        => temp.WriteFile(
+            Path.Combine(".harness-config", "runner", ".secrets", "ci.env"),
+            $"HARNESS_TOKEN={Secret}\n");
+}

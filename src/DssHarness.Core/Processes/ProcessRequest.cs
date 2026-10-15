@@ -1,0 +1,115 @@
+namespace DssHarness.Core.Processes;
+
+/// <summary>
+/// A child process to run. Arguments are passed as a list and never as a single
+/// command line: the harness must behave identically regardless of what quoting
+/// or escaping a host shell would have applied.
+/// </summary>
+public sealed record ProcessRequest
+{
+    /// <summary>
+    /// The program: a name, looked up in the PATH directories and nowhere else, or a path, used as given.
+    /// </summary>
+    public required string FileName { get; init; }
+
+    /// <summary>Arguments, one element per argument. Never pre-quoted.</summary>
+    public IReadOnlyList<string> Arguments { get; init; } = [];
+
+    /// <summary>Working directory, or <see langword="null"/> to inherit the current one.</summary>
+    public string? WorkingDirectory { get; init; }
+
+    /// <summary>
+    /// Environment overrides applied on top of the inherited environment.
+    /// A <see langword="null"/> value removes the variable.
+    /// </summary>
+    public IReadOnlyDictionary<string, string?> Environment { get; init; }
+        = new Dictionary<string, string?>(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Directories added to the end of the child's PATH, after <see cref="Environment"/> has been
+    /// applied. The program itself is looked up on that same PATH.
+    /// </summary>
+    /// <remarks>
+    /// Appended, never prepended: every name the PATH already answers for keeps that answer, and only a
+    /// name it does not know becomes findable. This is how a program found off the PATH of a command
+    /// run without a login shell — cmake in /opt/homebrew/bin — is started, and how the programs it
+    /// starts by name in turn, ninja and the compilers, are found where it was. Appended after an
+    /// environment that sets a PATH of its own, too: a program a survey found is then still found by
+    /// the run, which would otherwise look for it only where that environment says.
+    /// </remarks>
+    public IReadOnlyList<string> AppendToPath { get; init; } = [];
+
+    /// <summary>
+    /// What is written to the child's standard input - text, or what a writer writes as it makes it - which is then closed
+    /// so the child sees its end; <see langword="null"/> gives it an input that ends at once. A child is never connected
+    /// to this process's own input.
+    /// </summary>
+    public ChildInput? StandardInput { get; init; }
+
+    /// <summary>
+    /// How the child's standard output is decoded, or <see langword="null"/> for UTF-8. Latin-1 turns
+    /// each byte into one character, for output a caller has to split by a byte count - git's batch
+    /// answers name each object's size in bytes, which UTF-8 text cannot be cut by. An encoding named
+    /// here decodes every byte from the first, those that begin as a byte order mark does among them,
+    /// so it must be one that writes no mark of its own - <see cref="System.Text.Encoding.Latin1"/>, or
+    /// UTF-8 made without one: a reader drops an encoding's own mark from the start of what it reads,
+    /// whatever it is told, and an encoding that has one is refused.
+    /// </summary>
+    public System.Text.Encoding? StandardOutputEncoding { get; init; }
+
+    /// <summary>
+    /// Keeps standard input open after <see cref="StandardInput"/> is written, until the child exits,
+    /// instead of closing it at once. A child that acts on what it read and then watches for the end of
+    /// its input learns from that end that this process has gone. A child that reads to the end before
+    /// acting would wait forever, so only a child that watches this way is started with it.
+    /// </summary>
+    public bool HoldStandardInputOpen { get; init; }
+
+    /// <summary>
+    /// What is written to the child's standard input again and again once <see cref="StandardInput"/> is written, for as
+    /// long as <see cref="HoldStandardInputOpen"/> holds it open; <see langword="null"/> to write nothing more. For a
+    /// child that takes this process to have gone when the beats stop, as well as when its input ends.
+    /// </summary>
+    public InputBeat? StandardInputBeat { get; init; }
+
+    /// <summary>
+    /// Called once the child is running, before any of its output can arrive. What a caller bounding
+    /// a phase by silence needs: the time spent starting a process is this tool's, not the child
+    /// being quiet, and counting it as the child's is how a slow launch reads as a hung command.
+    /// </summary>
+    public Action? OnStarted { get; init; }
+
+    /// <summary>
+    /// Invoked for each stdout line as it arrives, in addition to capture.
+    /// Raised on background threads, so implementations must be thread safe. One that throws is handed no more lines,
+    /// and what it threw is raised once the child has gone.
+    /// </summary>
+    public Action<string>? OnOutputLine { get; init; }
+
+    /// <summary>Invoked for each stderr line as it arrives, in addition to capture, as <see cref="OnOutputLine"/> is.</summary>
+    public Action<string>? OnErrorLine { get; init; }
+
+    /// <summary>
+    /// How much of stdout <see cref="ProcessResult.StandardOutput"/> keeps: all of it unless the caller, taking its lines
+    /// through <see cref="OnOutputLine"/>, keeps what it needs of them itself.
+    /// </summary>
+    public StreamKept OutputKept { get; init; }
+
+    /// <summary>How much of stderr <see cref="ProcessResult.StandardError"/> keeps, as <see cref="OutputKept"/> says of stdout.</summary>
+    public StreamKept ErrorKept { get; init; }
+
+    /// <summary>
+    /// Where a line of a stream kept as a <see cref="StreamKept.Tail"/> is cut once it has run to
+    /// <see cref="ProcessRunner.LongestLine"/> characters, given those characters, or <see langword="null"/> to cut it after all
+    /// of them. What is left is the start of the next piece.
+    /// </summary>
+    /// <remarks>
+    /// For a caller that reads each piece as a line of its own and needs something whole in one: a phase that masks the
+    /// secrets it carries in each line it keeps cuts where none of them is parted, since a secret cut in two is masked in
+    /// neither piece.
+    /// </remarks>
+    public Func<string, int>? CutLine { get; init; }
+
+    /// <summary>Wall clock budget, or <see langword="null"/> for no limit.</summary>
+    public TimeSpan? Timeout { get; init; }
+}

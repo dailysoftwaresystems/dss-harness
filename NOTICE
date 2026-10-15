@@ -1,11 +1,11 @@
-repo-harness
+DssHarness
 
 Copyright 2026-present Daily Software Systems LTDA.
 
 This product includes software developed by Daily Software Systems LTDA.
 (https://github.com/dailysoftwaresystems).
 
-  - repo-harness — a cross-platform repository harness CLI: worktrees, builds,
+  - DssHarness — a cross-platform repository harness CLI: worktrees, builds,
     tests and cross-host work for any repository, declared entirely in
     .harness-config/config.json rather than compiled into the tool.
 

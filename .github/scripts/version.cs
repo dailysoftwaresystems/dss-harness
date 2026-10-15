@@ -5,8 +5,8 @@
 // the .NET SDK, so this needs no language the repository does not otherwise use,
 // and it can be run locally exactly as CI runs it:
 //
-//     dotnet run .github/scripts/version.cs read   src/RepoHarness.Cli/RepoHarness.Cli.csproj
-//     dotnet run .github/scripts/version.cs bump   src/RepoHarness.Cli/RepoHarness.Cli.csproj [1.2.3]
+//     dotnet run .github/scripts/version.cs read   src/DssHarness.Cli/DssHarness.Cli.csproj
+//     dotnet run .github/scripts/version.cs bump   src/DssHarness.Cli/DssHarness.Cli.csproj [1.2.3]
 //     dotnet run .github/scripts/version.cs suffix 1.2.3 beta
 //
 // Inline shell was the alternative, and the quoting it needs is the kind that only

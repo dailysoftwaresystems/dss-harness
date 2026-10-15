@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>DssHarness.Core</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The registry document's edits are internal: each takes the row positions read when the
+         file was parsed, which only the service that just parsed it can vouch for. -->
+    <InternalsVisibleTo Include="dss-harness-test" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- A runner's action file is YAML, so the core reads YAML. Written rather than taken from a
+         library, even a small subset of it would need block scalars, quoting styles and comments,
+         which is the part of YAML that is easy to get subtly wrong and hard to notice: a run block
+         that loses its last line still runs. -->
+    <PackageReference Include="YamlDotNet" Version="18.1.0" />
+
+    <!-- For CommandLineParser.SplitCommandLine, which turns one line of an action file into a
+         program and its arguments without a shell. The CLI project already depends on this package;
+         the splitter is needed here, where action files are read. -->
+    <PackageReference Include="System.CommandLine" Version="2.0.12" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The skeleton init writes for a new anchor registry. Embedded so it travels inside the
+         assembly and can never be missing or out of step with the code that reads it. -->
+    <None Remove="Anchors/Templates/anchor-registry.md" />
+    <EmbeddedResource Include="Anchors/Templates/anchor-registry.md"
+                      LogicalName="DssHarness.Core.Anchors.Templates.anchor-registry.md" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The fixture check-mutations sweeps for its self-test, and the end-to-end tests sweep: kept
+         beside the tests, and embedded whole, each file under its path in the fixture, so every
+         build of the tool carries the very fixture its own tests swept. -->
+    <EmbeddedResource Include="../../tests/mutation-fixture/**/*"
+                      LogicalName="DssHarness.Core.MutationFixture/%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
+</Project>

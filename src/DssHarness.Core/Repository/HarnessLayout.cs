@@ -1,0 +1,457 @@
+namespace DssHarness.Core.Repository;
+
+/// <summary>
+/// Where every piece of harness state lives, derived from one repository.
+/// </summary>
+/// <param name="RepositoryRoot">
+/// Root of the tree the command is acting on. For a linked worktree this is the
+/// worktree's own root.
+/// </param>
+/// <param name="MainCheckoutRoot">
+/// Root of the originating checkout. Equals <paramref name="RepositoryRoot"/> unless
+/// the command is running inside a worktree.
+/// </param>
+public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoot)
+{
+    /// <summary>Name of the harness directory, at the root of a repository.</summary>
+    public const string DirectoryName = ".harness-config";
+
+    /// <summary>Name of the worktrees directory inside the harness directory.</summary>
+    public const string WorktreesDirectoryName = "worktrees";
+
+    /// <summary>Name of the directory holding one subdirectory per ssh host's connection data.</summary>
+    public const string SshItemsDirectoryName = "sshItems";
+
+    /// <summary>Name of the directory holding one subdirectory per WSL distribution's connection data.</summary>
+    public const string WslDistrosDirectoryName = "wslDistros";
+
+    /// <summary>Name of the marker a sync leaves in the copy of a tree it makes on a host.</summary>
+    public const string SyncedCopyMarkerName = "synced-copy.json";
+
+    /// <summary>Name of the file holding one item's connection settings, as <c>NAME=value</c> lines.</summary>
+    public const string ItemEnvFileName = ".env";
+
+    /// <summary>Name of the file holding an ssh item's private key.</summary>
+    public const string ItemKeyFileName = ".key";
+
+    /// <summary>Name of the file holding the host keys ssh will accept for an item.</summary>
+    public const string ItemKnownHostsFileName = "known_hosts";
+
+    /// <summary>Name of the directory holding runner action files and the values they read.</summary>
+    public const string RunnerDirectoryName = "runner";
+
+    /// <summary>Name of the directory holding runner action files. Tracked by git.</summary>
+    public const string RunnerActionsDirectoryName = "actions";
+
+    /// <summary>Name of the directory holding values actions read. Gitignored.</summary>
+    public const string RunnerEnvDirectoryName = ".env";
+
+    /// <summary>Name of the directory holding secret values actions read. Gitignored.</summary>
+    public const string RunnerSecretsDirectoryName = ".secrets";
+
+    /// <summary>Name of the directory holding one subdirectory per run, with its logs. Gitignored.</summary>
+    public const string RunsDirectoryName = "runs";
+
+    /// <summary>
+    /// Name of the directory an action's steps write into while they run. Gitignored, and emptied
+    /// when the action finishes.
+    /// </summary>
+    public const string ActionBuildDirectoryName = "build";
+
+    /// <summary>
+    /// Name of the directory an action's persisted outputs are kept in. Gitignored, and what
+    /// survives a run.
+    /// </summary>
+    public const string ActionArtifactsDirectoryName = "artifacts";
+
+    /// <summary>Name of the configuration file.</summary>
+    public const string ConfigFileName = "config.json";
+
+    /// <summary>
+    /// Where the configuration is relative to a tree's root, with a forward slash: as a copy on another machine is given
+    /// it and its index names it, and as a message names it.
+    /// </summary>
+    public const string ConfigFileRelative = DirectoryName + "/" + ConfigFileName;
+
+    /// <summary>Name of the run lock file.</summary>
+    public const string LockFileName = "lock.json";
+
+    /// <summary>Name of the directory holding the record of which hosts hold a copy of which worktree.</summary>
+    public const string HostCopiesDirectoryName = "host-copies";
+
+    /// <summary>Name of the directory holding each leg's recorded verdicts of its mutation arms.</summary>
+    public const string MutationRecordDirectoryName = "mutation-record";
+
+    /// <summary>
+    /// Name of the directory a mutation worker keeps the dependency sources its leg's own build fetched in, one
+    /// directory to each: never carried by a sync, nor deleted by one, nor removed by a build from clean.
+    /// </summary>
+    public const string DependencySourcesDirectoryName = "deps";
+
+    /// <summary>
+    /// Where one run of an action writes while it runs, relative to a tree root.
+    /// </summary>
+    /// <param name="actionDirectory">The action's own directory, relative to the actions directory.</param>
+    /// <param name="runId">The run this work belongs to.</param>
+    /// <param name="leg">The leg doing it.</param>
+    /// <remarks>
+    /// Keyed by the run <em>and the leg</em>, never written into directly, and laid out exactly as
+    /// this run's logs are. One run places many legs and they share its id, so keyed by the run
+    /// alone two legs running one action on one machine would write into one directory and each
+    /// would measure what the other left behind — which is the collision this keying exists to
+    /// prevent, not an instance of it.
+    /// </remarks>
+    public static string ActionBuildRelative(string actionDirectory, string runId, string leg)
+        => ActionScratchRelative(actionDirectory, ActionBuildDirectoryName, runId, leg);
+
+    /// <summary>
+    /// Where one run of an action's persisted outputs are kept, relative to a tree root.
+    /// </summary>
+    /// <param name="actionDirectory">The action's own directory, relative to the actions directory.</param>
+    /// <param name="runId">The run this work belongs to.</param>
+    /// <param name="leg">The leg doing it.</param>
+    public static string ActionArtifactsRelative(string actionDirectory, string runId, string leg)
+        => ActionScratchRelative(actionDirectory, ActionArtifactsDirectoryName, runId, leg);
+
+    /// <summary>
+    /// The ignore rule that keeps every action's <paramref name="kind"/> directory out of git, at
+    /// whatever depth the action is grouped.
+    /// </summary>
+    /// <param name="kind"><see cref="ActionBuildDirectoryName"/> or <see cref="ActionArtifactsDirectoryName"/>.</param>
+    /// <remarks>
+    /// Spelled here once, for init to write and for a run that finds it missing to quote, so the line
+    /// somebody is told to add is exactly the line init would have added.
+    /// </remarks>
+    public static string ActionScratchIgnoreRule(string kind)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(kind);
+
+        return $"/{RunnerActionsDirectoryRelative}/**/{kind}/";
+    }
+
+    /// <summary>One of an action's two run-keyed directories, relative to a tree root.</summary>
+    private static string ActionScratchRelative(string actionDirectory, string kind, string runId, string leg)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actionDirectory);
+        ArgumentException.ThrowIfNullOrWhiteSpace(runId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(leg);
+
+        return Path.Combine(RunnerActionDirectoryRelative(actionDirectory), kind, runId, leg);
+    }
+
+    /// <summary>Placeholder that keeps an otherwise-ignored directory in git.</summary>
+    public const string GitKeepFileName = ".gitkeep";
+
+    /// <summary>The directory at the root of a tree where every orchestrator keeps what it holds.</summary>
+    public const string OrchestratorsDirectoryName = ".orchestrators";
+
+    /// <summary>
+    /// The directory at the root of a tree where its mutation workers are kept: each a copy of the tree a sweep of one of
+    /// its legs made, <c>&lt;tree&gt;/.mutations/&lt;key&gt;&lt;mark&gt;-&lt;n&gt;</c>, which goes with the tree.
+    /// </summary>
+    public const string MutationsDirectoryName = ".mutations";
+
+    /// <summary>
+    /// The directory at the root of a tree where the copies of it its legs work in are kept,
+    /// <c>&lt;tree&gt;/.legs/&lt;key&gt;</c>, which go with the tree.
+    /// </summary>
+    public const string LegsDirectoryName = ".legs";
+
+    /// <summary>
+    /// The directories at the root of a tree whose contents git ignores while a <see cref="GitKeepFileName"/> keeps
+    /// each in git, relative to the root with forward separators: where worktrees are made, where orchestrators keep
+    /// what they hold, and where the tree's own copies are kept - its mutation workers, and the copies its legs work in.
+    /// A clone then arrives with each in place, and nothing made in them is ever committed.
+    /// </summary>
+    /// <param name="worktreesRoot">The configured worktrees root.</param>
+    public static IReadOnlyList<string> RootSlots(string worktreesRoot)
+    {
+        ArgumentNullException.ThrowIfNull(worktreesRoot);
+
+        return
+        [
+            .. new[] { PathPatterns.Normalize(worktreesRoot), OrchestratorsDirectoryName, MutationsDirectoryName, LegsDirectoryName }
+                .Distinct(StringComparer.Ordinal),
+        ];
+    }
+
+    /// <summary>
+    /// Where the copy kept under <paramref name="name"/> in the slot <paramref name="slot"/> of <paramref name="tree"/>
+    /// is: <c>&lt;tree&gt;/&lt;slot&gt;/&lt;name&gt;</c>, joined by the separator the tree's own path is spelt with, so a
+    /// tree another machine keeps names its copies as that machine spells a path.
+    /// </summary>
+    /// <param name="tree">The tree, as the machine that keeps it spells it.</param>
+    /// <param name="slot">The slot: <see cref="MutationsDirectoryName"/> or <see cref="LegsDirectoryName"/>.</param>
+    /// <param name="name">The name the copy is kept under there.</param>
+    public static string InSlot(string tree, string slot, string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tree);
+        ArgumentException.ThrowIfNullOrWhiteSpace(slot);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+
+        var root = tree.TrimEnd('/', '\\');
+        var separator = root.Contains('/', StringComparison.Ordinal) ? '/'
+            : root.Contains('\\', StringComparison.Ordinal) ? '\\'
+            : Path.DirectorySeparatorChar;
+
+        return root + separator + slot + separator + name;
+    }
+
+    /// <summary>
+    /// The directories under <see cref="DirectoryName"/> that carry a <see cref="GitKeepFileName"/>,
+    /// relative to it: the two connection-data slots, the actions, and the two value slots.
+    /// </summary>
+    /// <remarks>
+    /// Every tree tracks them, a worktree's included, so a clone of any branch arrives with each
+    /// directory in place. What the ignored ones hold is read from the main checkout whichever tree
+    /// asks: <see cref="SshItemsDirectory"/> and the others resolve there.
+    /// </remarks>
+    public static IReadOnlyList<string> PlaceholderDirectories { get; } =
+    [
+        SshItemsDirectoryName,
+        WslDistrosDirectoryName,
+        Path.Combine(RunnerDirectoryName, RunnerActionsDirectoryName),
+        Path.Combine(RunnerDirectoryName, RunnerEnvDirectoryName),
+        Path.Combine(RunnerDirectoryName, RunnerSecretsDirectoryName),
+    ];
+
+    /// <summary>
+    /// Whether the command is running inside a linked worktree.
+    /// </summary>
+    /// <param name="platform">
+    /// Supplies how paths compare. Hardcoding case-insensitivity here would report
+    /// two genuinely different directories on Linux as the same tree.
+    /// </param>
+    public bool IsWorktree(Platform.IHostPlatform platform)
+    {
+        ArgumentNullException.ThrowIfNull(platform);
+
+        return !string.Equals(
+            Path.TrimEndingDirectorySeparator(RepositoryRoot),
+            Path.TrimEndingDirectorySeparator(MainCheckoutRoot),
+            platform.PathComparison);
+    }
+
+    /// <summary>The harness directory of the tree being acted on.</summary>
+    public string HarnessDirectory => Path.Combine(RepositoryRoot, DirectoryName);
+
+    /// <summary>
+    /// Configuration file of the tree being acted on. Tracked by git.
+    /// </summary>
+    /// <remarks>
+    /// The one every command reads, a worktree's included: a branch may change its own
+    /// configuration, and each runs what its own tree says. Only a worktree whose branch has none
+    /// falls back to the main checkout's, and is warned that it does.
+    /// </remarks>
+    public string ConfigFile => Path.Combine(HarnessDirectory, ConfigFileName);
+
+    /// <summary>
+    /// The harness directory of the main checkout. Gitignored state lives here and
+    /// nowhere else: a worktree's checkout contains the tracked parts of
+    /// <c>.harness-config</c> but never the ignored ones.
+    /// </summary>
+    public string MainHarnessDirectory => Path.Combine(MainCheckoutRoot, DirectoryName);
+
+    /// <summary>
+    /// Where every orchestrator keeps what it holds: in the main checkout, whichever tree asks, as the worktrees its
+    /// agents work in belong to the main checkout.
+    /// </summary>
+    public string OrchestratorsDirectory => Path.Combine(MainCheckoutRoot, OrchestratorsDirectoryName);
+
+    /// <summary>
+    /// Worktrees live under the main checkout, never under another worktree, so
+    /// running <c>create-worktree</c> from inside a worktree cannot nest them.
+    /// </summary>
+    /// <remarks>
+    /// The default root. A configuration naming its own is resolved by
+    /// <see cref="WorktreesDirectoryUnder"/>, which every command uses: the root spends path budget
+    /// before a worktree's own name, and on Windows the difference decides whether any name fits.
+    /// </remarks>
+    public string WorktreesDirectory => Path.Combine(MainHarnessDirectory, WorktreesDirectoryName);
+
+    /// <summary>The worktrees root a configuration declares, resolved against the main checkout.</summary>
+    /// <param name="root">The configured root, relative to the main checkout.</param>
+    public string WorktreesDirectoryUnder(string root)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(root);
+
+        return Path.GetFullPath(Path.Combine(MainCheckoutRoot, root));
+    }
+
+    /// <summary>
+    /// The ssh items directory, resolved against the main checkout because the connection data it
+    /// holds is gitignored and therefore absent from every worktree's checkout.
+    /// </summary>
+    public string SshItemsDirectory => Path.Combine(MainHarnessDirectory, SshItemsDirectoryName);
+
+    /// <summary>
+    /// The marker a sync leaves here when this tree is the copy of one it made on a host, rather than a
+    /// checkout somebody works in.
+    /// </summary>
+    /// <remarks>
+    /// Read to tell the two apart where what is missing from a tree is missing by design. Connection data is
+    /// gitignored and never synced, so a copy on a host holds none: what reads as a setup step left undone in a
+    /// checkout is the arrangement working as intended in a copy.
+    /// </remarks>
+    public string SyncedCopyMarkerFile => Path.Combine(MainHarnessDirectory, SyncedCopyMarkerName);
+
+    /// <summary>The WSL distributions directory, resolved against the main checkout for the same reason.</summary>
+    public string WslDistrosDirectory => Path.Combine(MainHarnessDirectory, WslDistrosDirectoryName);
+
+    /// <summary>One ssh host's directory, holding its <c>.env</c>, its key and its known hosts.</summary>
+    /// <param name="item">The item name, as <c>sshItems</c> declares it.</param>
+    public string SshItemDirectory(string item) => Path.Combine(SshItemsDirectory, item);
+
+    /// <summary>One WSL distribution's directory, holding its <c>.env</c>.</summary>
+    /// <param name="item">The distribution name, as <c>wslDistros</c> declares it.</param>
+    public string WslDistroDirectory(string item) => Path.Combine(WslDistrosDirectory, item);
+
+    /// <summary>The runner directory of the tree being acted on: action files, and the values they read.</summary>
+    /// <remarks>
+    /// Resolved against the tree rather than the main checkout: action files are tracked, so a
+    /// worktree has its own, and a runner must act on the tree it was asked about.
+    /// </remarks>
+    public string RunnerDirectory => Path.Combine(HarnessDirectory, RunnerDirectoryName);
+
+    /// <summary>Where a runner's action directories live. Tracked by git.</summary>
+    public string RunnerActionsDirectory => Path.Combine(RunnerDirectory, RunnerActionsDirectoryName);
+
+    /// <summary>
+    /// One action's own directory, holding its file and everything that file runs, relative to a
+    /// tree root.
+    /// </summary>
+    /// <remarks>
+    /// Relative on purpose. A step that runs in its action's directory is resolved against the leg's
+    /// own tree, which is a worktree whenever the leg names one; an absolute path built here would
+    /// be the tree the command was typed in, and every leg on a worktree would run the wrong copy.
+    /// </remarks>
+    /// <param name="name">The action's directory name.</param>
+    public static string RunnerActionDirectoryRelative(string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+
+        return Path.Combine(DirectoryName, RunnerDirectoryName, RunnerActionsDirectoryName, name);
+    }
+
+    /// <summary>The harness directory, relative to a tree root.</summary>
+    public static string HarnessDirectoryRelative => DirectoryName;
+
+    /// <summary>The runner directory, relative to a tree root, with forward separators.</summary>
+    public const string RunnerDirectoryRelative = DirectoryName + "/" + RunnerDirectoryName;
+
+    /// <summary>
+    /// The actions directory, relative to a tree root, with forward separators: how a sync, an ignore
+    /// rule and a message name it, whichever machine reads it.
+    /// </summary>
+    public const string RunnerActionsDirectoryRelative = RunnerDirectoryRelative + "/" + RunnerActionsDirectoryName;
+
+    /// <summary>The runs directory, relative to a tree root, with forward separators.</summary>
+    public const string RunsDirectoryRelative = DirectoryName + "/" + RunsDirectoryName;
+
+    /// <summary>The host copies' record directory, relative to the main checkout's root, with forward separators.</summary>
+    public const string HostCopiesDirectoryRelative = DirectoryName + "/" + HostCopiesDirectoryName;
+
+    /// <summary>The record of mutation verdicts, relative to the main checkout's root, with forward separators.</summary>
+    public const string MutationRecordDirectoryRelative = DirectoryName + "/" + MutationRecordDirectoryName;
+
+    /// <summary>A mutation worker's dependency sources directory, relative to the worker's root, with forward separators.</summary>
+    public const string DependencySourcesDirectoryRelative = DirectoryName + "/" + DependencySourcesDirectoryName;
+
+    /// <summary>
+    /// Where the values actions read live, resolved against the main checkout because they are
+    /// gitignored and therefore absent from a worktree's checkout.
+    /// </summary>
+    public string RunnerEnvDirectory
+        => Path.Combine(MainHarnessDirectory, RunnerDirectoryName, RunnerEnvDirectoryName);
+
+    /// <summary>Where the secret values actions read live, resolved against the main checkout.</summary>
+    public string RunnerSecretsDirectory
+        => Path.Combine(MainHarnessDirectory, RunnerDirectoryName, RunnerSecretsDirectoryName);
+
+    /// <summary>
+    /// Where a run's records live: in the tree that ran it, a worktree's own included, so a worktree
+    /// reads what it judged without leaving it.
+    /// </summary>
+    /// <remarks>
+    /// Resolved against the main checkout instead, a worktree's runs landed beside the main
+    /// checkout's, where a caller confined to the worktree could not reach them. Nothing is shared
+    /// across runs here: each writes only a directory named by its own id, which no other run can
+    /// hold. What two runs from different trees do contend over is the lock, which stays in the main
+    /// checkout (<see cref="LockFile"/>). It ignores itself (<see cref="RunsIgnoreFile"/>), so its
+    /// records never show in git status, whatever the tree's own .gitignore says; no sync carries it,
+    /// as none carries any of the harness's own state; and deleting a worktree deletes its records
+    /// with it.
+    /// </remarks>
+    public string RunsDirectory => Path.Combine(HarnessDirectory, RunsDirectoryName);
+
+    /// <summary>
+    /// The ignore file the runs directory holds for itself, whose one rule, <see cref="SelfIgnoreRule"/>,
+    /// keeps everything in that directory - itself included - out of git.
+    /// </summary>
+    /// <remarks>
+    /// Written by the run about to write there, rather than left to the tree's .gitignore: a worktree
+    /// of a branch that predates the harness runs on the main checkout's configuration and holds no
+    /// rule for the directory, so its records showed in git status, would be committed by the next
+    /// 'git add -A', and made delete-worktree refuse over the harness's own logs.
+    /// </remarks>
+    public string RunsIgnoreFile => Path.Combine(RunsDirectory, ".gitignore");
+
+    /// <summary>
+    /// What a directory of the harness's own state holds in its ignore file - <see cref="RunsIgnoreFile"/>,
+    /// <see cref="HostCopiesIgnoreFile"/> or <see cref="MutationRecordIgnoreFile"/> - so that it keeps itself, and all it
+    /// holds, out of git.
+    /// </summary>
+    public const string SelfIgnoreRule = "*\n";
+
+    /// <summary>One run's directory, named by its id.</summary>
+    /// <param name="runId">The run's id.</param>
+    public string RunDirectory(string runId) => Path.Combine(RunsDirectory, runId);
+
+    /// <summary>
+    /// The run lock, resolved against the main checkout so that a run started from
+    /// inside a worktree and one started from the root contend over the same file.
+    /// </summary>
+    public string LockFile => Path.Combine(MainHarnessDirectory, LockFileName);
+
+    /// <summary>
+    /// Where this machine records which hosts hold a copy of which worktree: in the main checkout, as the lock is.
+    /// </summary>
+    /// <remarks>
+    /// One record for every tree, because a worktree's syncs write it and the command that deletes the worktree -
+    /// run from any tree - reads it; and at a place no configuration moves, where the worktrees root is wherever a
+    /// branch's configuration puts it, so a record kept there by one branch's sync would be missed by another's
+    /// deletion. It ignores itself (<see cref="HostCopiesIgnoreFile"/>), as the runs directory does, so it never
+    /// shows in git status whatever the tree's own .gitignore says, and no sync carries it.
+    /// </remarks>
+    public string HostCopiesDirectory => Path.Combine(MainHarnessDirectory, HostCopiesDirectoryName);
+
+    /// <summary>The ignore file <see cref="HostCopiesDirectory"/> holds for itself: <see cref="SelfIgnoreRule"/>.</summary>
+    public string HostCopiesIgnoreFile => Path.Combine(HostCopiesDirectory, ".gitignore");
+
+    /// <summary>
+    /// Where each leg's verdicts of its mutation arms are recorded, with what each was judged on: in the main checkout, as
+    /// the lock is, whichever tree swept.
+    /// </summary>
+    /// <remarks>
+    /// One record for every tree of the repository, so an agent's sweep of its own worktree counts for the main checkout
+    /// wherever nothing an arm was judged on differs, and a deleted worktree takes none of its verdicts with it. Outside
+    /// every build directory, worker and host copy, so a clean, a deleted worktree and a removed copy leave it as it was.
+    /// It ignores itself (<see cref="MutationRecordIgnoreFile"/>), as the runs directory does, and no sync carries it.
+    /// </remarks>
+    public string MutationRecordDirectory => Path.Combine(MainHarnessDirectory, MutationRecordDirectoryName);
+
+    /// <summary>The ignore file <see cref="MutationRecordDirectory"/> holds for itself: <see cref="SelfIgnoreRule"/>.</summary>
+    public string MutationRecordIgnoreFile => Path.Combine(MutationRecordDirectory, ".gitignore");
+
+    /// <summary>
+    /// Directory of one named worktree under the default root. Callers validate the name first; the
+    /// worktree service also checks containment before it deletes anything beneath this path.
+    /// </summary>
+    public string WorktreePath(string name) => Path.Combine(WorktreesDirectory, name);
+
+    /// <summary>Directory of one named worktree under a configured root.</summary>
+    /// <param name="root">The configured worktrees root, relative to the main checkout.</param>
+    /// <param name="name">The worktree's name, already validated by the caller.</param>
+    public string WorktreePathUnder(string root, string name)
+        => Path.Combine(WorktreesDirectoryUnder(root), name);
+}

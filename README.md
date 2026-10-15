@@ -66,17 +66,17 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `init [--install-tools]` | Create `.harness-config` in the tree it runs in, a worktree's included, seed `config.json`, add ignore rules; installs tools only when asked |
 | `verify-git` | Check git is installed and this is a repository |
 | `create-worktree <name>` | Create a worktree (`--random` generates the name) |
-| `delete-worktree <name> [--force]` | Remove a worktree and everything under it, its copies on hosts, and the mutation workers kept beside each; refuses one holding work that would be lost, a locked one, one whose evidence directories hold measurements, or one with a mutation worker beside it that a sweep still running holds or that cannot be removed, without `--force` |
+| `delete-worktree <name> [--force]` | Remove a worktree and everything under it, its copies on hosts, and the copies kept in each - the mutation workers in `.mutations`, and on this machine the leg copies in `.legs`; refuses one holding work that would be lost, a locked one, one whose evidence directories hold measurements, or one with a copy in it that a sweep or a run still holds or that cannot be removed, without `--force` |
 | `list-worktree [--hosts] [--json]` | List existing worktrees with the commit each was made from, the copies hosts keep of them, and the copies left by worktrees that are gone; `--hosts` also asks each host what it keeps, and how large each copy is |
 | `create-orchestrator <o> --model <id> [--parallel N]` | Create an orchestrator under `.orchestrators`; `--parallel` (4 unless given) is the most agents with a worktree at once |
 | `create-agent <o> <a> --model <id> [--empty]` | Create an agent: its record, its worktree at `<worktrees.root>/<o>/<a>`, and its seed, the main tree's uncommitted state handed to it |
-| `seed-agent <o> <a> [--empty] [--force]` | Seed a live agent again, with every path the main tree holds otherwise than the agent shares it, committed or not; refused over changes of its own without `--force` |
-| `refresh-agent <o> <a> [<path>... \| --all] [--except <path>]... [--apply]` | Copy into a live agent every path under the paths - the anchor registries' directory by default, anywhere in the tree with `--all` - that the main tree holds otherwise than the agent shares it, committed or not, recorded as handed to it; refused over a path the agent changed, naming each, unless `--except` leaves it as the agent changed it |
-| `rebase-agent <o> <a> [--apply] [--settled <path>]` | Move a live agent's base to the main tree's HEAD: what the main tree committed since comes in as git holds it, its own changes and what it was handed stay; refused over a path both changed unless `--settled`, and over anything of its own what comes in would go over; run again after one that stopped part way, it finishes it |
-| `fold-agent <o> <a> [--apply] [--settled <path>] [--new <ID>] [--accept-lost <ID>:<cell>]` | Fold an agent's own work into the main tree and apply the rows it filed, every refusal named before anything is written and the rows all or nothing; a row is made only where `--new` names it, and a cell that does not keep its stored text written only where `--accept-lost` names it; its worktree is kept |
-| `delete-agent <o> <a> [--apply] [--settled <path>] [--new <ID>] [--accept-lost <ID>:<cell>] [--discard-uncommitted]` | Fold what is left and apply its rows, keep its evidence and transcripts, then remove its worktree and its copies on hosts |
+| `seed-agent <o> <a> [--empty] [--force]` | Seed a live agent again, with every path the main tree holds otherwise than the agent shares it, committed or not; refused over changes of its own without `--force`; a file written after it was weighed stops it, exit 21, never written over |
+| `refresh-agent <o> <a> [<path>... \| --all] [--except <path>]... [--stale <path>]... [--merge <path>]... [--apply] [--json]` | Copy into a live agent every path under the paths - the anchor registries' directory by default, anywhere in the tree with `--all` - that the main tree holds otherwise than the agent shares it, committed or not, recorded as handed to it; a path the agent already holds as the main tree does is recorded as shared; refused over a path the agent changed, naming each, unless `--except` leaves it as the agent changed it, `--stale` hands it the main tree's copy where the main tree's history holds the agent's very bytes at that path, or `--merge` writes a clean three-way merge of the two into its worktree as its change, the path recorded as handed the main tree's copy; the arm registry both changed is merged by arm, unasked, and taken where the result reads as a registry; a file the agent's session wrote after it was weighed stops it, exit 21, never written over |
+| `rebase-agent <o> <a> [--apply] [--json] [--merge <path>] [--settled <path>]` | Move a live agent's base to the main tree's HEAD: what the main tree committed since comes in as git holds it, its own changes and what it was handed stay; a path both changed is refused with what a three-way merge of it gives, unless `--merge` names it and its merge is clean - written into the worktree as the agent's own change on the new base - or `--settled` keeps the copy reconciled by hand; the arm registry is merged by arm, unasked, and taken where the result reads as a registry; refused over anything of its own what comes in would go over, a file renamed in case alone over the agent's copy at its old name, or its deletion of it, among it; a file the agent's session wrote after it was weighed stops it, exit 21, never written over; run again after one that stopped part way - the command its last words name - it finishes it |
+| `fold-agent <o> <a> [--apply] [--json] [--merge <path>] [--settled <path>] [--new <ID>] [--accept-lost <ID>:<cell>] [--accept-over <ID>:<cell>]` | Fold an agent's own work into the main tree and apply the rows it filed, every refusal named before anything is written and the rows all or nothing; a path both trees changed is refused with what a three-way merge of it gives, and a clean merge written into both trees only where `--merge` names it - the arm registry is merged by arm, unasked, and taken where the result reads as a registry; a path reconciled in the main tree by hand and named with `--settled` is handed to the agent as the main tree holds it and recorded as shared; a row is made only where `--new` names it, and a cell that does not keep its stored text written only where `--accept-lost` names it; a row an earlier fold applied is weighed cell by cell against what the registries took since - their change kept where the agent made none, and a cell both changed otherwise written only where `--accept-over` names it; a rename of case alone the agent made is refused, saying to `git mv -f` it in the main tree, and once made there is weighed against the base's file under its old name; its worktree is kept |
+| `delete-agent <o> <a> [--apply] [--json] [--merge <path>] [--settled <path>] [--new <ID>] [--accept-lost <ID>:<cell>] [--accept-over <ID>:<cell>] [--discard-uncommitted]` | Fold what is left and apply its rows, keep its evidence and transcripts, then remove its worktree and its copies on hosts |
 | `list-orchestrator [<o>] [--json]` | List orchestrators, their agents and where each stands |
-| `delete-orchestrator <o> [--delete-evidence]` | Delete an orchestrator once every agent of it is deleted |
+| `delete-orchestrator <o> [--delete-evidence]` | Delete an orchestrator once every agent of it is deleted and nothing is left below its directory under the worktrees root - no worktree, and no directory with a `.git` of its own, each named and refused (13) until then; its agents' evidence and transcripts go only with `--delete-evidence` |
 | `check-root-litter` | Report files left loose at the root of the checkout, ignored ones included |
 | `write-anchor <id> --priority P --trigger TEXT` | Add an anchor: to the pending registry, or to done when closed |
 | `set-anchor <id>` | Change an anchor; changing its status moves it between registries |
@@ -89,12 +89,12 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `legs [--legs a,b]` | Measure the hosts and show where each leg can run, or why it cannot |
 | `install-missing-tools [--legs a,b] [--dry-run]` | Install or update what each configured leg's host is missing; `--dry-run` names each command and runs none |
 | `update-tool [--wait] [--tool-path <directory>]` | Update this machine's installed DssHarness to the newest release, only while no other `dssharness` process runs here: refused naming each (13), or waited for with `--wait`; on Windows run it from beside the installed tool, as above (`help legs`) |
-| `sync` | Put a host's copy of this tree in step with it, deletions included: each worktree has a copy of its own; `--pull <path>` instead brings a file back from it, or every file below a directory named with a `/` at its end |
+| `sync` | Put a host's copy of this tree in step with it, deletions included: each worktree has a copy of its own; `--dry-run` lists what it would write and delete and exits as the sync would; `--pull <path>` instead brings a file back from it, or every file below a directory named with a `/` at its end |
 | `build [--legs a,b] [--time]` | Build every selected leg, in its own variant-keyed build directory |
 | `test [--legs a,b] [--time]` | Build and test every selected leg, with a witness for each verdict |
 | `run <runner> [--legs a,b] [--time] [--input name=value]` | Run a predefined runner across the legs it declares, giving its action's inputs values for this run. A run line names what only the tool knows of a leg - its build directory, the file its build makes, and the compiler its build identified, `{compiler_C}` or `{compiler_CXX}`, which is gcc on one leg and cl on another - and a step naming one of those has its leg built first (`help runners`) |
-| `check-mutations [--legs a,b] [--arms a,b] [--self-test]` | Prove each selected leg's tests can fail: in worker copies of its tree, mutate each arm the registry declares, build it, witness every object depending on the site rebuilt, run its test binary whole and judge what reddened; `--self-test` sweeps the fixture the tool carries instead, through each leg's toolchain (`help mutations`) |
-| `clean [--legs a,b] [--dry-run]` | Remove each selected leg's build directory, and the mutation workers its sweeps and self-tests keep beside its tree, wherever the leg runs, so a full disk can be freed (`help space`) |
+| `check-mutations [--legs a,b] [--arms a,b] [--self-test] [--list] [--pending]` | Prove each selected leg's tests can fail: in worker copies of its tree, mutate each arm the registry declares, build it, witness every object depending on the site rebuilt, run its test binary whole and judge what reddened; `--self-test` sweeps the fixture the tool carries instead, through each leg's toolchain; `--list` says, without sweeping, each arm's last verdict on each leg and whether anything it was judged on has moved - of what a test binary reads at run time, only the files `mutations.runReads` names for its runner; `--pending` sweeps only the arms with no passed that still holds, and with nothing pending passes, sweeping nothing (`help mutations`) |
+| `clean [--legs a,b] [--dry-run]` | Remove each selected leg's build directory, the mutation workers its sweeps and self-tests keep in its tree, and the copies of its tree it works in on this machine (`.legs`), wherever the leg runs, so a full disk can be freed; `--dry-run` says what each holds and exits as the clean would (`help space`) |
 | `host-exec --ssh <name> \| --wsl [<distro>] -- <command>` | Run a DssHarness command on an ssh host or in a WSL distribution |
 | `help [topic]` | Explain exit codes, configuration, legs, disk space, heavy-leg admission, worktrees, orchestrators, anchors, layout, secrets, tools, runners, verdicts, mutation testing and CI legs |
 
@@ -105,7 +105,19 @@ some leg never reported exits `21` and names those legs: a leg that did no work 
 about the code, so it is never counted among the legs that passed. A command that changes an
 orchestrator or an agent exits `21` too when it stops part way - an agent closed and its worktree
 not yet removed, a fold or a hand-over half written, a move of an agent's base half made, an
-orchestrator half deleted; run again, it finishes.
+orchestrator half deleted; run again, it finishes. Without `--apply`, `refresh-agent`,
+`rebase-agent`, `fold-agent` and `delete-agent` are dry runs, and a dry run exits as its `--apply`
+would: `0` only when that `--apply` would go through, `10` where its arguments are a usage error,
+which that `--apply` answers before it takes anything, `13` where it would be refused - a consent
+nobody gave, or a run holding what the `--apply` needs, included - and `21` where a deletion's
+`--apply` would go as far as the removal and leave it unfinished, over a copy a run or a sweep
+holds or copies kept in the worktree it cannot remove as they stand. A run holding a tree the
+`--apply` takes, or a host's copy of the worktree, is named on a `held now:` line, and one holding
+a leg copy or a mutation worker kept in the worktree in that copy's own words; `--json` answers
+with one document whose `request` member says what is wanted of you - `sound` (nothing; wait
+where `heldNow` names a holder), `needs-consent` or `refused` - and whose `heldNow` holds each
+holder, those copies' among them. An `--apply` refused at its hold answers the same document,
+`sound`, with the run it met in `heldNow`. Either way a dry run still prints all it weighed.
 `dssharness help orchestrators` explains seeding, rebasing, folding and deleting agents.
 
 `--time` pulls each phase's own timing marks out of its output, using `buildTimingRegex`,
@@ -198,9 +210,13 @@ in `config.json`.
 .orchestrators/<o>/logs/<name>.jsonl         ignored; a line for each run that reached it or one of its agents, refusals included; a dry run writes none
 .orchestrators/<o>/plans/<name>/             ignored; its plans, and each agent's
 .orchestrators/<o>/work/<agent>/             ignored; an agent's scratch and task files
-.orchestrators/<o>/agents/<agent>/           ignored; an agent's record, seed, rows, the rows applied, kept evidence
+.orchestrators/<o>/agents/<agent>/           ignored; an agent's record, seed, the bytes it shares, rows, the rows applied, kept evidence
+.mutations/                                  contents ignored, .gitkeep tracked; the tree's mutation workers, in every tree
+.mutations/<key><mark>-<n>/                  ignored; a worker, a repository of its own, and its claim beside it
+.legs/                                       contents ignored, .gitkeep tracked; the copies of the tree its legs work in, in every tree
 .harness-config/runs/                        ignored; one directory of logs per run
 .harness-config/lock.json                    ignored; records in-progress runs
+.harness-config/mutation-record/             ignores itself; each leg's verdicts of its mutation arms, with what each was judged on
 .plans/_deferred-anchor-registry.md          tracked; live anchors
 .plans/_deferred-anchor-registry-done.md     tracked; closed anchors
 ```
@@ -209,9 +225,24 @@ The worktrees root is `worktrees.root` in `config.json`, shown here as `init` wr
 configuration that names none keeps worktrees under `.harness-config/worktrees`, which spends
 15 more characters of the path budget before a worktree's own name.
 
-Ignored state lives only in the main checkout. A worktree receives the tracked part
-of `.harness-config` through git but never the ignored part, so secrets and the run
-lock resolve back to the originating checkout.
+A sweep keeps its workers in the tree it sweeps, and a leg that works in a copy keeps it in its
+tree's `.legs`; either is refused (exit 13), nothing made, in a tree whose git does not ignore
+that slot: run `init` once in each repository and commit what it writes - each agent's branch
+needs that commit before it can sweep or have a leg work in a copy. Workers an earlier version kept
+beside a tree, `<tree>.mutation-*`, on this machine and on every host, are no longer known to the
+tool: find them with `ls -d <tree>.mutation-*` and delete them. `list-worktree` warns of one
+beside a worktree, and `delete-orchestrator` is refused (13) while one is beside an agent's
+worktree. Each worker's build is made once again.
+
+Secrets and the run lock live only in the main checkout. A worktree receives the tracked
+part of `.harness-config` through git but never the ignored part, so both resolve back to
+the originating checkout. What a tree makes for itself - its runs' records, its mutation
+workers in `.mutations`, its legs' copies in `.legs` - is ignored too, and kept in that tree.
+The run lock knows a tree on this machine by where it leads, every link followed, so
+worktrees kept on another disk through a worktrees root that is a link, and copies kept
+through a `.legs` or `.mutations` that is one, are held, and asked about, as one tree however
+a command spells them - a build before this one's too, since the lock keeps each tree as its
+run spelled it.
 
 ## Legs and hosts
 
@@ -224,6 +255,7 @@ its emulator - and is turned away there when that host lacks a program its comma
 
 ```json
 {
+  "defaults": { "localCopy": true },
   "hosts": {
     "wsl": { "Ubuntu": { "repositoryPath": "~/src/app" } },
     "ssh": { "mac-mini": { "repositoryPath": "~/src/app", "env": { "CCACHE_DIR": "/Users/dev/.cache/app-ccache" } } }
@@ -237,7 +269,7 @@ its emulator - and is turned away there when that host lacks a program its comma
   },
   "legs": {
     "linux-release": { "os": "linux", "processor": "x86_64", "config": "release" },
-    "mac-x64-release": { "os": "macos", "processor": "x86_64", "emulator": "rosetta", "config": "release" }
+    "mac-x64-release": { "os": "macos", "processor": "x86_64", "emulator": "rosetta", "config": "release", "localCopy": false }
   }
 }
 ```
@@ -247,6 +279,16 @@ dssharness legs                                       # every leg: where it runs
 dssharness legs --legs linux-release,mac-x64-release
 dssharness host-exec --ssh mac-mini -- verify-git
 ```
+
+Where this machine runs a leg itself, it works in its tree or in a copy of it kept in the tree's
+`.legs`: said by `--local-copy` or `--in-place` on the command for one run, then by a runner's
+`writesTree`, which works in place and is refused with `--local-copy` or on a leg a host would
+run, then by the leg's own `localCopy` - `false` on a leg turns a
+`true` default off for it - then by `defaults.localCopy`, and by none of them, its tree. The copy
+is made from the run's one reading of the tree and kept
+warm between runs, so a fold, a commit or an edit while the leg runs ends nothing of the leg's;
+the first build in one starts cold, files git ignores are not in it, and `clean` removes it
+(`help legs`).
 
 No leg, `host-exec` or sync a host runs for this machine outlives the command that asked for it.
 Stopping that command ends its legs on every host at once; and a command killed where nothing
@@ -330,8 +372,8 @@ stays. A file crosses whole, either way, so one larger than 804,519,909 bytes is
 before anything is sent. An
 emulator counts only once its witness proves it runs programs for its processor.
 
-`legs` runs the witness of each emulator the selected legs use, and both commands install
-or update DssHarness on the hosts they reach, as `config.json` declares. That is the
+`legs` runs the witness of each emulator the selected legs use, and every command that reaches
+a WSL distribution or an ssh host installs or updates DssHarness there, as `config.json` declares. That is the
 trust building the repository already asks for. Run `dssharness help legs` for the rules.
 
 ## Anchors
@@ -359,8 +401,8 @@ id or a path cut in two is refused, and so is one that newly cites an id no row 
 ## Building from source
 
 ```bash
-dotnet build RepoHarness.slnx
-dotnet test --project tests/repo-harness-test/repo-harness-test.csproj
+dotnet build DssHarness.slnx
+dotnet test --project tests/dss-harness-test/dss-harness-test.csproj
 ```
 
 Everything a build produces — binaries, intermediates and packages — lands under
@@ -379,5 +421,5 @@ integration runners do, to have them fail instead.
 
 ## License
 
-repo-harness is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE)
+DssHarness is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE)
 and [NOTICE](NOTICE).

@@ -1,0 +1,407 @@
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Output;
+
+namespace DssHarness.Core.Execution;
+
+/// <summary>One phase of a leg, as the ledger records it.</summary>
+/// <param name="Phase">The phase's name, which is what sibling legs are compared by.</param>
+/// <param name="Duration">The command's own time, from the monotonic clock.</param>
+/// <param name="ClockStepped">
+/// Whether wall-clock time and monotonic time disagreed across the phase by more than the
+/// tolerance, meaning it spanned a clock step or a host sleep. A host that slept once reported a
+/// 4 millisecond test at 729 seconds.
+/// </param>
+public sealed record PhaseRecord(string Phase, TimeSpan Duration, bool ClockStepped);
+
+/// <summary>
+/// One timing a phase reported about itself, pulled from its output under <c>--time</c>.
+/// </summary>
+/// <remarks>
+/// Carries the phase as well as the value because a leg runs several, and a list of bare numbers
+/// with nothing saying which phase produced them is not a measurement anyone can act on. The
+/// matched text is kept beside the captured value so a reader can see what the pattern actually
+/// found, rather than trusting a number whose units the pattern alone decided.
+/// </remarks>
+/// <param name="Phase">The phase whose output carried the mark.</param>
+/// <param name="Text">The whole match, as the phase printed it.</param>
+/// <param name="Value">The first captured group, or the whole match when the pattern captures none.</param>
+public sealed record TimingMark(string Phase, string Text, string Value);
+
+/// <summary>One leg's line in the ledger.</summary>
+public sealed record LegEntry
+{
+    /// <summary>The leg, as the configuration names it.</summary>
+    public required string Leg { get; init; }
+
+    /// <summary>The one verdict it reached.</summary>
+    public required LegVerdict Verdict { get; init; }
+
+    /// <summary>What produced the verdict, in the words the DETAIL column shows.</summary>
+    public string Detail { get; init; } = string.Empty;
+
+    /// <summary>
+    /// The whole leg's time, from the monotonic clock. Zero for a leg that never ran, which the
+    /// table then leaves blank rather than reporting as an instant run.
+    /// </summary>
+    public TimeSpan Duration { get; init; }
+
+    /// <summary>
+    /// The time the leg's own commands took. Reported apart from the whole, because the difference
+    /// is what the harness itself spent on syncing, fingerprinting and sampling, and a leg that
+    /// looks slow for that reason is a different problem from one whose build is slow.
+    /// </summary>
+    public TimeSpan CommandTime { get; init; }
+
+    /// <summary>
+    /// Whether the leg ran under emulation. An emulated leg is never compared with a native one:
+    /// the two have no common scale, and comparing them marks every emulated leg suspect forever.
+    /// </summary>
+    public bool Emulated { get; init; }
+
+    /// <summary>How many tests the leg reported running, where a count pattern extracted one.</summary>
+    public int? TestCount { get; init; }
+
+    /// <summary>
+    /// The project whose tests <see cref="TestCount"/> counts, by name: recorded with the count by a
+    /// test that reached its runner, and <see langword="null"/> on every other leg - a build, a run, a
+    /// test stopped before its runner - and where the leg resolves no project. A count is compared only
+    /// with the others of the same project and <see cref="TestSet"/>, and one with no project with nothing.
+    /// </summary>
+    /// <remarks>
+    /// Recorded where the count is made, on the host that ran the leg, rather than looked up again
+    /// wherever a report is built, as <see cref="Emulated"/> is for the duration comparison: a report
+    /// composed from another host's <c>--json</c> has only the entries that arrived, and a host running
+    /// what it has staged may have run another test set than this machine's configuration now names.
+    /// </remarks>
+    public string? Project { get; init; }
+
+    /// <summary>
+    /// Which of <see cref="Project"/>'s test sets <see cref="TestCount"/> belongs to, as the test
+    /// invocation that produced it names it with <c>testSet</c>; <see langword="null"/> for the
+    /// project's own shared set.
+    /// </summary>
+    public string? TestSet { get; init; }
+
+    /// <summary>Each phase, for the comparison that marks a slow one suspect.</summary>
+    public IReadOnlyList<PhaseRecord> Phases { get; init; } = [];
+
+    /// <summary>
+    /// What the leg's phases reported about their own timing under <c>--time</c>. Empty without it,
+    /// and empty with it where no timing pattern is configured or none matched.
+    /// </summary>
+    public IReadOnlyList<TimingMark> Timings { get; init; } = [];
+
+    /// <summary>
+    /// Anything already known to make this leg's timings meaningless, such as a phase that spanned a
+    /// clock step or a host sleep.
+    /// </summary>
+    public IReadOnlyList<string> TimingNotes { get; init; } = [];
+
+    /// <summary>
+    /// Where this leg's records are when another host ran it: that host's own run directory, since a
+    /// host runs a leg under a run of its own. Null for a leg this machine ran, whose records are in
+    /// this run's directory.
+    /// </summary>
+    public string? RunDirectory { get; init; }
+
+    /// <summary>
+    /// The run a host ran the leg under, which the host's command named as it began: <see langword="null"/> for a leg
+    /// this machine ran, whose run is the reader's own.
+    /// </summary>
+    public RunId? HostRunId { get; init; }
+
+    /// <summary>
+    /// The directory the run kept this leg's own records in, as its machine spells it - a host's with its home as
+    /// <c>~</c> - wherever the leg ran. <see langword="null"/> for a leg that kept none: refused, not admitted,
+    /// skipped, before its work began.
+    /// </summary>
+    public string? Records { get; init; }
+
+    /// <summary>Each phase log in <see cref="Records"/>, by phase, in the order of their names.</summary>
+    public IReadOnlyList<PhaseLogFile>? Logs { get; init; }
+
+    /// <summary>
+    /// The last lines the leg's last phase that did not pass printed, on either stream in the order they
+    /// came, secrets masked: what a reader who cannot open its log - another host's, which stays on that
+    /// host - needs first. Empty for a leg that passed, and for one whose every phase passed, whatever else
+    /// decided its verdict.
+    /// </summary>
+    public IReadOnlyList<string> LogTail { get; init; } = [];
+
+    /// <summary>
+    /// The steps of the runner's action this leg's operating system does not run, by name, in the order
+    /// they are declared: left out on purpose, and said so, rather than simply absent.
+    /// </summary>
+    public IReadOnlyList<string> SkippedSteps { get; init; } = [];
+
+    /// <summary>
+    /// The steps this leg ran - its runner's action's, or the runner's own phases - by name, in the order
+    /// they ran: each one whose work began, in this attempt or an earlier one of the same run, and none
+    /// after the one that stopped it.
+    /// </summary>
+    public IReadOnlyList<string> RanSteps { get; init; } = [];
+
+    /// <summary>
+    /// The manual steps this leg ran, by name, in the order they are declared: work that runs only where a
+    /// run names it, marked so, so a line that measured something says which of its steps did.
+    /// </summary>
+    public IReadOnlyList<string> ManualSteps { get; init; } = [];
+
+    /// <summary>
+    /// The steps of the runner's action this run did not select, by name, in the order they are declared:
+    /// a manual step a plain run leaves out, or a step a run naming others does not reach. Listed, so a
+    /// run that left a step out is never read as having run it.
+    /// </summary>
+    public IReadOnlyList<string> UnselectedSteps { get; init; } = [];
+
+    /// <summary>
+    /// The compilers CMake configured the leg's build with, as it reported them: named on its line
+    /// with whatever verdict it reached, so every verdict says which compiler produced what it judged.
+    /// </summary>
+    public IReadOnlyList<Build.CompilerFact> Compilers { get; init; } = [];
+
+    /// <summary>
+    /// The developer environment the leg's processes started in, where its toolchain names one and it
+    /// was set up: which Visual Studio instance and tools, for which processor. Named on its line with
+    /// whatever verdict it reached, as the compilers are.
+    /// </summary>
+    public Hosts.DeveloperEnvironmentFact? DeveloperEnvironment { get; init; }
+
+    /// <summary>
+    /// How the leg's machine took it, where it is heavy and that machine declares admission: how long it waited, and
+    /// the memory in use it started at. An admitted leg's line names both, whatever verdict it then reached; a leg not
+    /// admitted says why as its detail.
+    /// </summary>
+    public AdmissionFact? Admission { get; init; }
+
+    /// <summary>
+    /// What the leg's build directory held and the room on its filesystem, where the command measured
+    /// them: <c>clean</c>, whether it removed the directory or only looked.
+    /// </summary>
+    public BuildSpace? Space { get; init; }
+
+    /// <summary>
+    /// Each file the leg's steps kept, relative to its tree with forward slashes: the path <c>sync --pull</c>
+    /// takes to bring it back from the host that kept it.
+    /// </summary>
+    public IReadOnlyList<string> KeptOutputs { get; init; } = [];
+
+    /// <summary>
+    /// Each mutation arm the leg was asked about, in the registry's order, with the verdict it reached there: empty for
+    /// every command but <c>check-mutations</c>. The leg's own verdict is the worst of its own and these.
+    /// </summary>
+    public IReadOnlyList<ArmEntry> Arms { get; init; } = [];
+
+    /// <summary>
+    /// What <c>check-mutations --pending</c> made of the leg's arms: how many held a recorded <c>passed</c>, and how many it
+    /// swept; <see langword="null"/> for every leg of every other command, and of a sweep without it.
+    /// </summary>
+    public PendingSweep? PendingSweep { get; init; }
+
+    /// <summary>
+    /// Each control of the leg's sweep that did not pass - the unmutated run of a test binary that reddened, hung or could
+    /// not run - with the cases it reddened, where its records are and what ctest registers for them that a sweep does not
+    /// apply; empty for every leg of every command but <c>check-mutations</c>.
+    /// </summary>
+    public IReadOnlyList<ControlEntry> Controls { get; init; } = [];
+
+    /// <summary>
+    /// The refusal of the run this leg's work was ended by, where the leg had reached verdicts worth keeping by then - the
+    /// arms a sweep had judged: this line is recorded, and then the refusal ends the run, as one raised from a leg's work
+    /// does. <see langword="null"/> on every line a ledger holds, and nothing a ledger writes: the refusal is the run's.
+    /// </summary>
+    public Results.HarnessException? EndsTheRun { get; init; }
+
+    /// <summary>
+    /// The tree the leg worked in: its path, and for a copy a sync made, the tree it is a copy of and which reading it
+    /// holds. Filled by the run that placed the leg - it made the copy - and never read from a host's answer.
+    /// <see langword="null"/> for a leg that was never placed.
+    /// </summary>
+    public WorkedTree? Tree { get; init; }
+
+    /// <summary>What the harness spent outside the leg's own commands.</summary>
+    public TimeSpan Overhead => Duration > CommandTime ? Duration - CommandTime : TimeSpan.Zero;
+}
+
+/// <summary>What <c>check-mutations --pending</c> made of one leg's arms.</summary>
+/// <param name="Held">How many held a recorded <c>passed</c>, and were left out.</param>
+/// <param name="Swept">How many were pending, and swept.</param>
+public sealed record PendingSweep(int Held, int Swept);
+
+/// <summary>
+/// The tree a leg worked in: its path as its machine spells it, and for a copy a sync made of it, the tree it is a copy
+/// of and the reading it holds.
+/// </summary>
+/// <param name="Path">The tree, as the machine the leg ran on spells it - a host's as the configuration spells it.</param>
+public sealed record WorkedTree(string Path)
+{
+    /// <summary>The tree the copy was made of; <see langword="null"/> for a leg that worked in its tree itself.</summary>
+    public string? CopyOf { get; init; }
+
+    /// <summary>
+    /// The reading the copy holds, where that is known: this run's, or what a run on what is staged found recorded there;
+    /// <see langword="null"/> where neither says.
+    /// </summary>
+    public Sync.CopyReading? Reading { get; init; }
+
+    /// <summary>Whether <see cref="Reading"/> is what a run on what is staged found there, rather than one its own run made.</summary>
+    public bool Staged { get; init; }
+
+    /// <summary>What the leg's line says of the reading it tested, or <see langword="null"/> where none is known.</summary>
+    public string? Said => Reading?.Said(Staged);
+}
+
+/// <summary>
+/// Collects what each leg did while the run is going on, and hands the whole set to the report at
+/// the end.
+/// </summary>
+/// <remarks>
+/// Progress is one line per leg transition, not a stream of child process output: with several legs
+/// running at once, interleaved build output says nothing about which leg is where. Legs run in
+/// parallel, so every method here is safe to call from any of them.
+/// </remarks>
+/// <param name="output">Where the lines go.</param>
+/// <param name="commandName">The command every line is reported under.</param>
+/// <param name="dispatched">
+/// Whether this run is a leg another machine dispatched here (<c>--here</c>). That machine says for itself that its
+/// legs are starting, where each starts and the verdict each reaches, and relays every line this one says: said here
+/// as well, each was said twice. What only this machine can say - each step, and what it waited for - is said still.
+/// </param>
+public sealed class LegLedger(IHarnessOutput output, string commandName, bool dispatched = false)
+{
+    private readonly Lock _gate = new();
+    private readonly List<LegEntry> _entries = [];
+    private readonly IHarnessOutput _output = output;
+    private readonly string _commandName = commandName;
+    private readonly bool _dispatched = dispatched;
+
+    /// <summary>
+    /// Which host runs each leg, as its starting line named it: what names the leg's records where another machine ran
+    /// it. Said once, where the leg starts, for the machine that says its records is the one that named its host.
+    /// </summary>
+    private readonly Dictionary<string, HostId> _where = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The command every line is reported under, so interleaved output stays attributable.</summary>
+    public string CommandName => _commandName;
+
+    /// <summary>
+    /// Every leg recorded so far, in the order they finished. The table is rendered from the
+    /// selection's order instead, so two runs of one gate print their rows the same way round.
+    /// </summary>
+    public IReadOnlyList<LegEntry> Entries
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return [.. _entries];
+            }
+        }
+    }
+
+    /// <summary>
+    /// Reports that a leg moved on: started, synced, built, testing, finished. One line, so the
+    /// progress of a run with eight legs still fits on a screen.
+    /// </summary>
+    /// <param name="leg">The leg.</param>
+    /// <param name="message">What it is now doing.</param>
+    public void Transition(string leg, string message)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(leg);
+
+        _output.Info(_commandName, $"{leg}: {message}");
+    }
+
+    /// <summary>
+    /// Says what is about to run, and where, before any of it starts - unless the machine that dispatched it here says
+    /// so itself.
+    /// </summary>
+    /// <param name="message">What is starting, across which machines.</param>
+    public void Announce(string message)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(message);
+
+        if (!_dispatched)
+        {
+            _output.Info(_commandName, message);
+        }
+    }
+
+    /// <summary>Says a leg is starting, and where - unless the machine that dispatched it here says so itself.</summary>
+    /// <param name="leg">The leg.</param>
+    /// <param name="host">The host that runs it, as the placement names it.</param>
+    /// <param name="worksIn">
+    /// Where this machine's leg works, as its starting line says it (<see cref="LegPlan.WorksIn"/>), or empty for a leg
+    /// another machine runs.
+    /// </param>
+    public void Starting(string leg, HostId host, string worksIn = "")
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(leg);
+        ArgumentNullException.ThrowIfNull(host);
+
+        lock (_gate)
+        {
+            _where[leg] = host;
+        }
+
+        if (!_dispatched)
+        {
+            Transition(leg, $"starting on {host}{worksIn}");
+        }
+    }
+
+    /// <summary>
+    /// Records a leg's verdict, and says it - unless the machine that dispatched it here says so itself. A leg is
+    /// recorded exactly once; recording it twice is a defect, because the second entry would give one leg two verdicts
+    /// in a table that promises one.
+    /// </summary>
+    /// <param name="entry">The leg's line.</param>
+    /// <exception cref="InvalidOperationException">The leg was already recorded.</exception>
+    public void Record(LegEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+
+        lock (_gate)
+        {
+            if (_entries.Any(existing => string.Equals(existing.Leg, entry.Leg, StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new InvalidOperationException($"Leg '{entry.Leg}' already has a verdict in this run's ledger.");
+            }
+
+            _entries.Add(entry);
+        }
+
+        // The machine that dispatched the leg here says its verdict as it records it from this one's ledger.
+        if (_dispatched)
+        {
+            return;
+        }
+
+        var said = LedgerReport.Marked(entry.Detail, entry.Tree, [], entry.Compilers, entry.DeveloperEnvironment, entry.Admission, testCountNote: null);
+
+        Transition(entry.Leg, Verdicts.Display(entry.Verdict) + (said.Length > 0 ? $" ({said})" : string.Empty));
+
+        // Where the leg's own records are, said as its verdict is - and in the same words the run's closing lines say
+        // it, so the two cannot drift: a reader who follows the line finds the leg's logs, here or on a host.
+        if (entry.Records is { Length: > 0 } records)
+        {
+            HostId? ranOn;
+
+            lock (_gate)
+            {
+                ranOn = _where.GetValueOrDefault(entry.Leg);
+            }
+
+            Transition(entry.Leg, LegRecords.Said(entry.Leg, ranOn, records, [.. (entry.Logs ?? []).Select(log => Path.GetFileName(log.File))]));
+        }
+    }
+
+    /// <summary>
+    /// The report for everything recorded, with a phase slower than its siblings marked suspect.
+    /// </summary>
+    /// <param name="durationWarningFactor">
+    /// How many times longer than the same phase on a sibling leg a phase may take before its
+    /// timings are marked suspect; zero or less disables the mark.
+    /// </param>
+    public LedgerReport Build(double durationWarningFactor) => LedgerReport.From(Entries, durationWarningFactor);
+}

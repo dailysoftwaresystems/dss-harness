@@ -1,0 +1,204 @@
+using System.ComponentModel;
+using System.Diagnostics;
+using System.Globalization;
+using System.Text;
+using DssHarness.Core.Output;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Processes;
+
+namespace DssHarness.Core.Execution;
+
+/// <summary>What one leg wants the process table watched for.</summary>
+public sealed record ContentionRequest
+{
+    /// <summary>The leg, so the report says whose build directory was used.</summary>
+    public required string Leg { get; init; }
+
+    /// <summary>
+    /// The leg's build directory. A process is a contender only when its command line names this,
+    /// because two legs with their own variant directories legitimately build at the same time.
+    /// </summary>
+    public required string BuildDirectory { get; init; }
+
+    /// <summary>Tools from <c>contention.buildTools</c>, which make the verdict <c>contended</c>.</summary>
+    public IReadOnlyList<string> BuildTools { get; init; } = [];
+
+    /// <summary>Tools from <c>contention.sharedResourceTools</c>, which are reported as a warning.</summary>
+    public IReadOnlyList<string> SharedResourceTools { get; init; } = [];
+
+    /// <summary>Seconds between samples, beyond the ones always taken at the start and at the end.</summary>
+    public int SampleSeconds { get; init; }
+
+    /// <summary>
+    /// Every other build directory of the repository on this machine, with whose it is - this tree's other legs', then each
+    /// leg's in every other tree of the repository here - so work found beside this leg can be said to be that leg's
+    /// rather than a stranger's. The first that a process's command line names is its owner.
+    /// </summary>
+    public IReadOnlyList<OwnedBuildDirectory> Owned { get; init; } = [];
+
+    /// <summary>
+    /// Why the repository's other trees on this machine could not be listed, where they could not: a process no listed
+    /// directory accounts for may be working in one of theirs.
+    /// </summary>
+    public string? OthersUnlisted { get; init; }
+}
+
+/// <summary>
+/// Whose a build directory is: another leg of the tree the sampled leg builds, or a leg of another tree of its repository
+/// on the same machine - a worktree's, an agent's, the main checkout's.
+/// </summary>
+public sealed record BuildDirectoryOwner
+{
+    private BuildDirectoryOwner(string leg, string? tree)
+    {
+        Leg = leg;
+        Tree = tree;
+    }
+
+    /// <summary>The leg, as the configuration declares it.</summary>
+    public string Leg { get; }
+
+    /// <summary>
+    /// The other tree, as a line calls it - <c>worktree o1/xa</c>, <c>the main checkout</c> - or <see langword="null"/>
+    /// for the sampled leg's own tree.
+    /// </summary>
+    public string? Tree { get; }
+
+    /// <summary>Another leg of the sampled leg's own tree.</summary>
+    /// <param name="leg">The leg.</param>
+    public static BuildDirectoryOwner Sibling(string leg)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(leg);
+
+        return new(leg, null);
+    }
+
+    /// <summary>A leg of another tree of the repository on the same machine, as a line calls that tree.</summary>
+    /// <param name="tree">The tree, as a line calls it.</param>
+    /// <param name="leg">The leg.</param>
+    public static BuildDirectoryOwner InTree(string tree, string leg)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tree);
+        ArgumentException.ThrowIfNullOrWhiteSpace(leg);
+
+        return new(leg, tree);
+    }
+
+    /// <summary>The owner as a line names it: <c>leg 'x'</c>, or <c>worktree o1/xa's leg 'x'</c>.</summary>
+    public string Describe() => Tree is null ? $"leg '{Leg}'" : $"{Tree}'s leg '{Leg}'";
+}
+
+/// <summary>A build directory, and whose it is.</summary>
+/// <param name="Directory">The directory, as the machine that samples spells it.</param>
+/// <param name="Owner">The leg that builds in it.</param>
+public sealed record OwnedBuildDirectory(string Directory, BuildDirectoryOwner Owner);
+
+/// <summary>
+/// Samples the machine's process table while a leg runs, and says what else was using the leg's
+/// build directory.
+/// </summary>
+/// <remarks>
+/// Machine-wide, not limited to this process's tree, because the hazard is a tool somebody started
+/// by hand: the lock keeps two harness runs apart, and a lock cannot see a process that never took
+/// one. Measured: a test run started in a shared build directory while a gate ran turned a green
+/// suite red, with four test processes live at once.
+/// </remarks>
+public sealed class ProcessSampler(IProcessTable processTable, IHostPlatform platform, IHarnessOutput output)
+{
+    /// <summary>How far a parent link is followed before the walk is abandoned as a cycle.</summary>
+    private const int MaxAncestors = 64;
+
+    private readonly IProcessTable _processTable = processTable;
+    private readonly IHostPlatform _platform = platform;
+    private readonly IHarnessOutput _output = output;
+
+    /// <summary>
+    /// Reads the machine's process table once. A reading that failed comes back as a sample saying
+    /// why, never as a sample holding nothing.
+    /// </summary>
+    /// <param name="index">Which reading this is.</param>
+    /// <param name="elapsed">Monotonic time since the leg started.</param>
+    /// <param name="cancellationToken">Stops the reading.</param>
+    public async Task<ProcessSample> SampleAsync(int index, TimeSpan elapsed, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var reading = await _processTable.ReadAsync(cancellationToken).ConfigureAwait(false);
+
+            if (reading.Degraded is { } degraded)
+            {
+                // A reading that came back without command lines is reported as a reading that
+                // failed, not as one that found nothing: contention is decided by a command line,
+                // so this sample can no longer answer the question it was taken for.
+                _output.Detail("sample", $"the process table could not be read: {degraded}");
+            }
+
+            return new ProcessSample(index, elapsed, reading.Processes, reading.Degraded);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException
+                                       or Win32Exception or NotSupportedException or ProgramStartException)
+        {
+            _output.Detail("sample", $"the process table could not be read: {ex.Message}");
+            return new ProcessSample(index, elapsed, [], ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Starts sampling for a leg, taking the first reading before returning so the report always
+    /// has one from before the work began.
+    /// </summary>
+    /// <param name="request">What to watch for.</param>
+    /// <param name="cancellationToken">Stops the first reading; the session's own stop ends the rest.</param>
+    public async Task<ProcessSamplingSession> StartAsync(ContentionRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var first = await SampleAsync(0, TimeSpan.Zero, cancellationToken).ConfigureAwait(false);
+        return new ProcessSamplingSession(this, request, first, _platform.PathComparison);
+    }
+
+    /// <summary>
+    /// Whether <paramref name="process"/> is inside the harness's own process tree, following a
+    /// parent link only when the parent started no later than the child. A recycled id otherwise
+    /// makes an unrelated process look like the harness's own child, and its contention invisible.
+    /// </summary>
+    /// <param name="process">The process to place.</param>
+    /// <param name="byId">Every process in the same sample, by id.</param>
+    /// <param name="harnessId">This process's id.</param>
+    internal static bool InHarnessTree(SampledProcess process, IReadOnlyDictionary<int, SampledProcess> byId, int harnessId)
+    {
+        ArgumentNullException.ThrowIfNull(process);
+        ArgumentNullException.ThrowIfNull(byId);
+
+        var current = process;
+
+        for (var depth = 0; depth < MaxAncestors; depth++)
+        {
+            if (current.Id == harnessId)
+            {
+                return true;
+            }
+
+            if (current.ParentId is not { } parentId || parentId <= 0 || !byId.TryGetValue(parentId, out var parent))
+            {
+                return false;
+            }
+
+            if (parent.StartedUtc is { } parentStart && current.StartedUtc is { } childStart && parentStart > childStart)
+            {
+                // The "parent" started after its child, so the id has been reused since. The link
+                // says nothing about this process, and following it would invent an ancestry.
+                return false;
+            }
+
+            current = parent;
+        }
+
+        return false;
+    }
+
+}
