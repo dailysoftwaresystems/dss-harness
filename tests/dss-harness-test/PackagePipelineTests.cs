@@ -1,32 +1,25 @@
 namespace DssHarness.Tests;
 
 /// <summary>
-/// What the workflow that publishes a release says of this suite - run for the one commit nothing else tested, and for
-/// no other - and what the workflow that starts it says, which is what makes the other runs safe to publish from.
+/// What the workflow that publishes a release says of this suite - it never runs it - and what the workflow that starts
+/// it says, which is what makes the runs it starts safe to publish from.
 /// </summary>
 public sealed class PackagePipelineTests
 {
     /// <summary>
-    /// The suite runs only where nothing else tested the commit being published. Never in a run Deploy started - told by
-    /// who started it, the workflow token Deploy starts it with, and not by anything typed: the full matrix passed on
-    /// that commit, or for beta on its parent, which differs only in the version. Never in a run resuming a commit an
-    /// earlier run tagged: that run's package job passed, by this same rule, before its tag was made. And never where
-    /// the version is on nuget.org already, and nothing is built. What is left is a run a person started, on a commit no
-    /// run has packaged - a release branch moved past the rules that guard it has nothing else behind it - whatever it
-    /// names: told by the commit it names, a person's run that filled it in was taken for Deploy's and ran no suite.
+    /// The workflow that publishes a release runs this suite on no commit - not by the test project's name, not by
+    /// <c>dotnet test</c>, and not by calling the matrix workflow as Deploy and the pull-request pipeline do: a run
+    /// Deploy started has the full matrix behind it, and a run a person starts publishes its release branch as it
+    /// stands.
     /// </summary>
     [Fact]
-    public void TheSuite_RunsOnlyForACommitNothingElseTested()
+    public void TheSuite_NeverRunsInTheWorkflowThatPublishes()
     {
-        var step = WorkflowFiles.StepRunning("pipeline-pkg.yml", typeof(WorkflowFiles).Assembly.GetName().Name!);
+        var lines = WorkflowFiles.Lines("pipeline-pkg.yml");
 
-        Assert.Equal("- name: Test", step[0]);
-        Assert.Equal(
-            "if: env.ON_NUGET != 'true' && github.actor != 'github-actions[bot]' && steps.resume.outputs.tag_exists != 'true'",
-            Assert.Single(step, line => line.StartsWith("if:", StringComparison.Ordinal)));
-
-        // A run started with the workflow's own token is github-actions[bot]'s, and stays so when a person runs it again.
-        Assert.Contains("GH_TOKEN: ${{ github.token }}", WorkflowFiles.StepNamed("deploy.yml", "Start the package pipeline"));
+        Assert.DoesNotContain(lines, line => line.Contains(typeof(WorkflowFiles).Assembly.GetName().Name!, StringComparison.Ordinal));
+        Assert.DoesNotContain(lines, line => line.Contains("dotnet test", StringComparison.Ordinal));
+        Assert.DoesNotContain(lines, line => line.Contains("test.yml", StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -54,7 +47,7 @@ public sealed class PackagePipelineTests
 
         var checkout = WorkflowFiles.StepNamed("deploy.yml", "Checkout the tested commit");
 
-        Assert.Contains(checkout, promote.Contains);
+        Assert.All(checkout, line => Assert.Contains(line, promote));
         Assert.Equal("ref: ${{ needs.plan.outputs.sha }}", Assert.Single(checkout, line => line.StartsWith("ref:", StringComparison.Ordinal)));
 
         var promoted = WorkflowFiles.StepNamed("deploy.yml", "Promote");

@@ -1,9 +1,12 @@
 name: Package Pipeline
 
 # Owns everything that produces a published artifact: build, pack, the immutable tag,
-# publishing to nuget.org, and the GitHub release - and the test of a commit nothing else
-# tested. Started by Deploy once it has promoted a release branch, or by hand from the
-# Actions tab for a release branch.
+# publishing to nuget.org, and the GitHub release. Started by Deploy once it has promoted a
+# release branch, or by hand from the Actions tab for a release branch.
+#
+# It runs no test suite. Deploy promotes only a commit the full test matrix passed on - for
+# beta, its parent, which differs only in <Version> - and a run started by hand publishes the
+# release branch as it stands, with nothing run against it here.
 #
 # beta releases on GitHub alone, as a prerelease with the package attached. stable publishes
 # to nuget.org, then releases on GitHub with the package attached too. However a run started,
@@ -13,9 +16,8 @@ name: Package Pipeline
 # the exact commit it promoted, which this refuses to substitute, and a push to a release
 # branch publishes nothing by itself, so a stray push can never ship.
 #
-# Four jobs, so each holds only what it needs. package builds, tests where nothing else did,
-# and verifies with read-only permissions, so repository code never runs with a credential
-# that can write.
+# Four jobs, so each holds only what it needs. package builds and verifies with read-only
+# permissions, so repository code never runs with a credential that can write.
 # tag creates the tag. nuget, for stable only, is the one job in the nuget environment and
 # the one that can ask GitHub for the OIDC token nuget.org trusts. release creates the GitHub
 # release last, which is what marks a version published.
@@ -272,24 +274,6 @@ jobs:
         run: >
           dotnet build DssHarness.slnx --configuration Release
           -p:Version=${{ env.PACKAGE_VERSION }}
-
-      - name: Test
-        # The package is only worth publishing if the suite passed on the commit being
-        # published, and this runs it only where nothing else did. A run Deploy started has the
-        # full matrix behind it: on this commit for stable, and for beta on its parent, which
-        # differs only in <Version>. It is told by who started it - Deploy starts it with the
-        # workflow's own token, so it is github-actions[bot]'s, and stays so when a person runs
-        # it again - never by what was typed into expected_sha, which a person can fill in too.
-        # A run resuming a commit an earlier run tagged has that run's package job behind it,
-        # which passed by this same rule before the tag was made. What is left is a run a person
-        # started, on a commit no run has packaged: a release branch moved past the rules that
-        # guard it has nothing else behind it, so the suite runs here, on Linux x86_64 alone.
-        if: env.ON_NUGET != 'true' && github.actor != 'github-actions[bot]' && steps.resume.outputs.tag_exists != 'true'
-        env:
-          # As the test matrix sets it: a test that really builds fails where the runner lacks cmake, ninja or a
-          # compiler, rather than being skipped green. This runner's image carries all three.
-          DSSHARNESS_TESTS_REQUIRE_BUILD_TOOLS: "1"
-        run: dotnet test --project tests/dss-harness-test/dss-harness-test.csproj --configuration Release --no-build
 
       - name: Pack
         if: env.ON_NUGET != 'true'

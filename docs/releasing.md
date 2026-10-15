@@ -37,9 +37,9 @@ the one push that promotes a release.
   fork code with repository permissions, is not used anywhere. The only other
   pull-request-triggered workflow, `cleanup-cache.yml`, asks for `actions: write` and is
   skipped outright for forks, which GitHub would issue a read-only token for regardless.
-- **Each publishing job holds only what it needs.** Package Pipeline builds, tests where
-  nothing else did, and verifies in a job with read-only permissions, so repository code
-  never runs with a credential that can write. The tag and the GitHub release are created by jobs that run
+- **Each publishing job holds only what it needs.** Package Pipeline builds and verifies
+  in a job with read-only permissions, so repository code never runs with a credential
+  that can write. The tag and the GitHub release are created by jobs that run
   no repository code. Only the job that publishes to nuget.org runs in the `nuget`
   environment, which admits `release/stable` alone, and only it can request the OIDC
   token nuget.org trusts.
@@ -146,9 +146,8 @@ Deploy runs as three jobs:
 Package Pipeline runs as four jobs:
 
 1. **package** checks, for stable, that beta released the commit, and refuses to publish a
-   version again. It then builds, runs the suite where nothing else tested the commit being
-   published, packs, and verifies that the packed tool installs from the local package alone
-   and reports the version it was packed as. It holds read-only permissions.
+   version again. It then builds, packs, and verifies that the packed tool installs from the
+   local package alone and reports the version it was packed as. It holds read-only permissions.
 2. **tag** creates the immutable tag.
 3. **nuget**, for stable only, publishes to nuget.org from the `nuget` environment.
 4. **release** creates the GitHub release at the promoted commit, a prerelease for beta,
@@ -168,21 +167,15 @@ minutes after accepting it, so a run started again within those minutes stops an
 start it again a little later. Runs of either workflow wait in the order they started rather
 than cancelling a run that waits.
 
-Package Pipeline runs the suite only for a commit nothing else tested. A run Deploy started
-has the full matrix behind it: on that commit for stable, and for beta on its parent, which
-differs only in `<Version>`. Such a run is told by who started it: Deploy starts it with the
-workflow's own token, so its actor is `github-actions[bot]`, and stays so when a person runs it
-again. What `expected_sha` holds decides nothing here, since a person can fill it in too. A run
-resuming a commit an earlier run tagged has that run's package job behind it, which passed by
-this same rule before the tag was made. What is left is a run a person started, on a commit no
-run has packaged - a release branch moved past the rulesets has nothing else behind it - and
-there the suite runs, on Linux x86_64 only, before anything is packed, whether or not the run
-names a commit.
+Package Pipeline runs no test suite. A run Deploy started has the full matrix behind it: on
+that commit for stable, and for beta on its parent, which differs only in `<Version>`. A run a
+person starts publishes its release branch as it stands, with nothing run against it there:
+start one for a commit Deploy promoted, as when finishing a publish that stopped.
 
 ## Refusals worth knowing
 
-The pipelines fail loudly rather than reporting a green run that shipped nothing, or
-shipped something that was never tested:
+The pipelines fail loudly rather than reporting a green run that shipped nothing, or a
+Deploy that shipped something the matrix never tested:
 
 - **Nothing new to publish.** `beta` refuses a commit that a release tag already contains,
   and `stable` a version that is already tagged. Tags record what was published, not where
@@ -249,7 +242,7 @@ succeeded, and `failure` otherwise, including when either was skipped or cancell
 | `pipeline-pr.yml` | pull request, push to `main` | Runs `test.yml`; packs, installs and runs the tool; uploads the package, kept for the repository's artifact retention period; posts the `Pipeline / ci-check result` status |
 | `test.yml` | called by `pipeline-pr.yml` and `deploy.yml` | Builds and tests on Linux, Windows and macOS, each on x86_64 and arm64 |
 | `deploy.yml` | manual | Tests, checks, bumps the version, promotes with the deploy app's token, starts `pipeline-pkg.yml` |
-| `pipeline-pkg.yml` | dispatched by `deploy.yml`, or manual | Checks, builds, tests a commit nothing else tested, packs, verifies and tags; publishes stable to nuget.org; releases on GitHub, as a prerelease for beta; resumes a run that stopped part way |
+| `pipeline-pkg.yml` | dispatched by `deploy.yml`, or manual | Checks, builds, packs, verifies and tags; publishes stable to nuget.org; releases on GitHub, as a prerelease for beta; resumes a run that stopped part way |
 | `cleanup-cache.yml` | pull request closed | Evicts that pull request's caches |
 
 Both pipelines verify a package through one composite action,
