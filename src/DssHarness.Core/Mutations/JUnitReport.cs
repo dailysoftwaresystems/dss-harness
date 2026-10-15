@@ -1,7 +1,7 @@
 using System.Xml;
 using System.Xml.Linq;
 
-namespace RepoHarness.Core.Mutations;
+namespace DssHarness.Core.Mutations;
 
 /// <summary>One case a test binary's report names.</summary>
 /// <param name="Id">Its name as an arm declares it: <c>classname.name</c>, or the name alone where it has no class.</param>

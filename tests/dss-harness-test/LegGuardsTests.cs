@@ -1,6 +1,6 @@
-using RepoHarness.Core.Execution;
+using DssHarness.Core.Execution;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// One scope watches a span of work for every verb. What it must never do is turn "nobody looked"
@@ -113,14 +113,14 @@ public sealed class LegGuardsTests
     }
 
     /// <summary>A process table that counts how often it is read, and finds nothing but this test.</summary>
-    private sealed class CountingTable : RepoHarness.Core.Platform.IProcessTable
+    private sealed class CountingTable : DssHarness.Core.Platform.IProcessTable
     {
         private int _readings;
 
         /// <summary>How many times it was read.</summary>
         public int Readings => Volatile.Read(ref _readings);
 
-        public Task<RepoHarness.Core.Platform.ProcessTableReading> ReadAsync(CancellationToken cancellationToken = default)
+        public Task<DssHarness.Core.Platform.ProcessTableReading> ReadAsync(CancellationToken cancellationToken = default)
         {
             Interlocked.Increment(ref _readings);
 

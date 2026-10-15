@@ -1,10 +1,10 @@
 using NSubstitute;
-using RepoHarness.Core.Ci;
-using RepoHarness.Core.Git;
-using RepoHarness.Core.Processes;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Ci;
+using DssHarness.Core.Git;
+using DssHarness.Core.Processes;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>Which variables git reads a repository from, and the children that start without them.</summary>
 public sealed class GitLocalVariablesTests

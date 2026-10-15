@@ -1,6 +1,6 @@
 using System.ComponentModel;
 
-namespace RepoHarness.Core.Configuration;
+namespace DssHarness.Core.Configuration;
 
 /// <summary>
 /// Mutation testing: where a repository declares the arms <c>check-mutations</c> drives, how many worker copies a leg

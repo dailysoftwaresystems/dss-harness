@@ -1,6 +1,6 @@
 using System.Runtime.Versioning;
 
-namespace RepoHarness.Core.Platform;
+namespace DssHarness.Core.Platform;
 
 /// <summary>
 /// Owner-only access and execute bits on Linux and macOS, which share the Unix mode model.

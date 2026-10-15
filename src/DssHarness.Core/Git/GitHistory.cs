@@ -1,6 +1,6 @@
-using RepoHarness.Core.Results;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Git;
+namespace DssHarness.Core.Git;
 
 /// <summary>
 /// The commit a tree is at, and how much of the history behind it a copy of the tree is asked to hold, so that git

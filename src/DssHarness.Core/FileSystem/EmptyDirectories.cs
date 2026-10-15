@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.FileSystem;
+namespace DssHarness.Core.FileSystem;
 
 /// <summary>
 /// The one test of a directory holding nothing, and the one walk that removes a directory a deletion emptied with each

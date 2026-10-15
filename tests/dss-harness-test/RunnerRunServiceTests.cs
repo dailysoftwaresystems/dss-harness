@@ -1,11 +1,11 @@
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Processes;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Runners;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Processes;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
+using DssHarness.Core.Runners;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// A predefined runner gets the same witnesses, bounds and verdicts every other leg-running command

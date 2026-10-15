@@ -1,8 +1,8 @@
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Orchestration;
-using RepoHarness.Core.Worktrees;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Orchestration;
+using DssHarness.Core.Worktrees;
 
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>
 /// The commands that pass a point of no return: once one has written, nothing interrupts it, and what it meets from there

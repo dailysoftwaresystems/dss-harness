@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>How a watched directory is watched.</summary>
 internal enum WatchDepth

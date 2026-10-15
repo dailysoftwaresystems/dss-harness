@@ -1,6 +1,6 @@
-using RepoHarness.Core.Hosts;
+using DssHarness.Core.Hosts;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>One argument of the command a run request names: text, or bytes that cross as their base64 text.</summary>
 public sealed class HostArgumentTests

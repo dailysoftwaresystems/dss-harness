@@ -1,8 +1,8 @@
 using System.ComponentModel;
 using System.Text.Json.Serialization;
-using RepoHarness.Core.Execution;
+using DssHarness.Core.Execution;
 
-namespace RepoHarness.Core.Configuration;
+namespace DssHarness.Core.Configuration;
 
 /// <summary>
 /// A multi-phase procedure, such as a corpus build-and-test or a benchmark.

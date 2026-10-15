@@ -1,8 +1,8 @@
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Repository;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Repository;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// A .gitignore is hand edited and merged, so the managed block will eventually be

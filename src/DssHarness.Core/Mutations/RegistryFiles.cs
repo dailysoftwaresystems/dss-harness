@@ -1,9 +1,9 @@
 using System.Collections.Concurrent;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Sync;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Sync;
 
-namespace RepoHarness.Core.Mutations;
+namespace DssHarness.Core.Mutations;
 
 /// <summary>
 /// The files of a tree as a registry's validation reads them: the texts and sites its rows cite, and the text

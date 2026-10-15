@@ -1,8 +1,8 @@
 using System.Collections.Concurrent;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Processes;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Processes;
 
-namespace RepoHarness.Core.Hosts;
+namespace DssHarness.Core.Hosts;
 
 /// <summary>
 /// Keeps asking for an ssh host that is waking up - its name, then a connection - for as long as the window

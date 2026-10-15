@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.FileSystem;
+namespace DssHarness.Core.FileSystem;
 
 /// <summary>A file or directory another program holds, so that Windows would not delete it.</summary>
 /// <param name="Path">The entry.</param>

@@ -1,8 +1,8 @@
 using System.CommandLine;
-using RepoHarness.Core.Mutations;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Mutations;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Cli.Commands;
+namespace DssHarness.Cli.Commands;
 
 /// <summary>Wires <c>DssHarness check-mutations</c>.</summary>
 internal static class CheckMutationsCommand

@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 
-namespace RepoHarness.Core.Platform;
+namespace DssHarness.Core.Platform;
 
 /// <summary>
 /// The words configuration uses for operating systems and processors, and how what a machine

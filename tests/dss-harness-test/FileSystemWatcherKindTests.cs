@@ -1,6 +1,6 @@
-using RepoHarness.Core.Execution;
+using DssHarness.Core.Execution;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// The kind of watch that goes through .NET's own watcher, one for each directory. What it must never do is leave a

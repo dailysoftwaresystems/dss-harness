@@ -1,6 +1,6 @@
-using RepoHarness.Core.Execution;
+using DssHarness.Core.Execution;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// Every log is scoped to a run id, so two ids that collide put two legs' output in one file and

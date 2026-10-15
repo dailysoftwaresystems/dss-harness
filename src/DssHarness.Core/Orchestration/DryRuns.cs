@@ -1,8 +1,8 @@
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Worktrees;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Results;
+using DssHarness.Core.Worktrees;
 
-namespace RepoHarness.Core.Orchestration;
+namespace DssHarness.Core.Orchestration;
 
 /// <summary>What a request needs of its caller before its --apply goes through.</summary>
 public enum RequestStanding

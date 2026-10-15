@@ -1,7 +1,7 @@
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Platform;
+using DssHarness.Core.Output;
+using DssHarness.Core.Platform;
 
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>
 /// One inotify instance for a whole process, which every span of work on Linux watches through: made at the first watch

@@ -1,6 +1,6 @@
-using RepoHarness.Core.Mutations;
+using DssHarness.Core.Mutations;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// A test binary's JUnit report, read one way for the four runners that write one: each case named as an arm declares

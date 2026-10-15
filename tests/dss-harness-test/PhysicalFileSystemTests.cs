@@ -5,10 +5,10 @@ using System.Runtime.Versioning;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Platform;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Platform;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 public sealed class PhysicalFileSystemTests
 {
@@ -72,7 +72,7 @@ public sealed class PhysicalFileSystemTests
         Assert.SkipUnless(OperatingSystem.IsLinux() && Directory.Exists("/dev/shm"), "Linux keeps a filesystem of its own at /dev/shm.");
 
         using var temp = new TempDirectory();
-        var elsewhere = Path.Combine("/dev/shm", "repo-harness-" + Guid.NewGuid().ToString("N"));
+        var elsewhere = Path.Combine("/dev/shm", "dss-harness-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(elsewhere);
 
         try

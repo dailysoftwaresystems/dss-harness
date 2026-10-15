@@ -1,11 +1,11 @@
-using RepoHarness.Core.Build;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Runs;
-using RepoHarness.Core.Sync;
+using DssHarness.Core.Build;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Runs;
+using DssHarness.Core.Sync;
 
-namespace RepoHarness.Core.Legs;
+namespace DssHarness.Core.Legs;
 
 /// <summary>
 /// The copies of a tree its legs work in, kept in the tree's own slot for them

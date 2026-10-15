@@ -1,10 +1,10 @@
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Git;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Results;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Git;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Output;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Sync;
+namespace DssHarness.Core.Sync;
 
 /// <summary>Builds the transport that reaches one host's copy of the repository.</summary>
 public interface ISyncTransportFactory

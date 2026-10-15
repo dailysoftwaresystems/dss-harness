@@ -1,6 +1,6 @@
-using RepoHarness.Core.Mutations;
+using DssHarness.Core.Mutations;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// The arms registry's grammar, golden: each shape it reads, read whole, and each it refuses, refused with its line and

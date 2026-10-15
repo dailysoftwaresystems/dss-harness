@@ -1,7 +1,7 @@
 using System.CommandLine;
-using RepoHarness.Core.Hosts;
+using DssHarness.Core.Hosts;
 
-namespace RepoHarness.Cli.Commands;
+namespace DssHarness.Cli.Commands;
 
 /// <summary>Wires <c>DssHarness host-exec</c>.</summary>
 internal static class HostExecCommand

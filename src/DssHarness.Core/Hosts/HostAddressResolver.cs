@@ -3,7 +3,7 @@ using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 
-namespace RepoHarness.Core.Hosts;
+namespace DssHarness.Core.Hosts;
 
 /// <summary>
 /// Looks a name up with whatever this machine resolves names with: DNS, mDNS for a <c>.local</c> name,

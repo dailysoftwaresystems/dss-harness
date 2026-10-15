@@ -1,9 +1,9 @@
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Output;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Runners;
+namespace DssHarness.Core.Runners;
 
 /// <summary>What one run check decided, and why.</summary>
 /// <param name="PredefinedRunner">The runner the check invoked.</param>

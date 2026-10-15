@@ -1,7 +1,7 @@
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Platform;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Platform;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// Containment guards the one recursive delete the harness performs, so every doubtful

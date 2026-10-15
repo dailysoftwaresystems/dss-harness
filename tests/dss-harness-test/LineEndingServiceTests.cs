@@ -1,11 +1,11 @@
 using System.Text;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Git;
-using RepoHarness.Core.LineEndings;
-using RepoHarness.Core.Processes;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Git;
+using DssHarness.Core.LineEndings;
+using DssHarness.Core.Processes;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// fix-line-endings against a real repository and a real <c>.gitattributes</c>. The policy is never

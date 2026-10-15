@@ -1,6 +1,6 @@
-using RepoHarness.Core.Hosts;
+using DssHarness.Core.Hosts;
 
-namespace RepoHarness.Core.Tools;
+namespace DssHarness.Core.Tools;
 
 /// <summary>The exit code <c>install-missing-tools</c> uses for an answer of "no".</summary>
 /// <remarks>

@@ -1,6 +1,6 @@
-using RepoHarness.Core.Hosts;
+using DssHarness.Core.Hosts;
 
-namespace RepoHarness.Core.Configuration;
+namespace DssHarness.Core.Configuration;
 
 /// <summary>
 /// The machines legs run on. The machine running the harness is always one of them; a WSL

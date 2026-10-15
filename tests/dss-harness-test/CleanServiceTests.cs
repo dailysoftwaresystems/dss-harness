@@ -1,20 +1,20 @@
 using System.Globalization;
 using System.Text.Json;
 using NSubstitute;
-using RepoHarness.Core.Build;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Legs;
-using RepoHarness.Core.Mutations;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Runs;
-using RepoHarness.Core.Sync;
+using DssHarness.Core.Build;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Legs;
+using DssHarness.Core.Mutations;
+using DssHarness.Core.Output;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
+using DssHarness.Core.Runs;
+using DssHarness.Core.Sync;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// A consumer's host filled its disk with two builds at once, and nothing could free it: a build from clean

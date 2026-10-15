@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 
-namespace RepoHarness.Core.Testing;
+namespace DssHarness.Core.Testing;
 
 /// <summary>
 /// What ctest's own description of a leg's tests says (<c>--show-only=json-v1</c>, as <see cref="CtestEntries.ShowOnly"/>

@@ -1,8 +1,8 @@
-using RepoHarness.Core.Build;
-using RepoHarness.Core.Mutations;
-using RepoHarness.Core.Sync;
+using DssHarness.Core.Build;
+using DssHarness.Core.Mutations;
+using DssHarness.Core.Sync;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// The dependency sources a leg's own build fetched, as each worker of its sweep is given them: each that is there found,

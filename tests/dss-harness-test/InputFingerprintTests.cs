@@ -1,10 +1,10 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using NSubstitute;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Platform;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Platform;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// Edit a file mid-run and some tests see the old one and some the new, and the report describes a

@@ -1,7 +1,7 @@
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Runners;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Runners;
 
-namespace RepoHarness.Core.Sync;
+namespace DssHarness.Core.Sync;
 
 /// <summary>
 /// What of the harness's own directory an ordinary sync carries: its runner actions, the way the

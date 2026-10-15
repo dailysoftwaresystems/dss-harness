@@ -1,22 +1,22 @@
 using NSubstitute;
-using RepoHarness.Core.Anchors;
-using RepoHarness.Core.Commands;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Git;
-using RepoHarness.Core.Mutations;
-using RepoHarness.Core.Orchestration;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Processes;
-using RepoHarness.Core.Projects;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Sync;
-using RepoHarness.Core.Tools;
-using RepoHarness.Core.Worktrees;
+using DssHarness.Core.Anchors;
+using DssHarness.Core.Commands;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Git;
+using DssHarness.Core.Mutations;
+using DssHarness.Core.Orchestration;
+using DssHarness.Core.Output;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Processes;
+using DssHarness.Core.Projects;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Sync;
+using DssHarness.Core.Tools;
+using DssHarness.Core.Worktrees;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// Assembles real services for tests that exercise behaviour end to end. Using the
@@ -144,7 +144,7 @@ public sealed class HarnessFactory
     public HeavyLegSlots Slots { get; }
 
     private static string ScratchSlotsRecord()
-        => Path.Combine(Path.GetTempPath(), "rh-test-" + Guid.NewGuid().ToString("N"), HeavyLegSlots.FileNameFor("tests"));
+        => Path.Combine(Path.GetTempPath(), "dh-test-" + Guid.NewGuid().ToString("N"), HeavyLegSlots.FileNameFor("tests"));
 
     /// <summary>Claude Code's transcripts over <paramref name="fileSystem"/>, in <see cref="ClaudeConfigDirectory"/> where a test sets it.</summary>
     private ClaudeTranscripts TranscriptsOver(IFileSystem fileSystem)
@@ -242,7 +242,7 @@ public sealed class HarnessFactory
     /// Where Claude Code's configuration is taken to be: a directory no test makes unless it says, so no test ever reads
     /// this machine's own transcripts.
     /// </summary>
-    public string ClaudeConfigDirectory { get; set; } = Path.Combine(Path.GetTempPath(), "repo-harness-no-claude-" + Guid.NewGuid().ToString("N"));
+    public string ClaudeConfigDirectory { get; set; } = Path.Combine(Path.GetTempPath(), "dss-harness-no-claude-" + Guid.NewGuid().ToString("N"));
 
     /// <summary>This process's working directory as the agent service sees it; the process's own where a test sets none.</summary>
     public string? CurrentDirectory { get; set; }

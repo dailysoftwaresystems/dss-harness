@@ -1,10 +1,10 @@
 using System.Text.Json;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Git;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Execution;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Git;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Sync;
+namespace DssHarness.Core.Sync;
 
 /// <summary>
 /// The packs made of one reading's history for the copies synced from it: each made once, whatever number of copies it

@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Configuration;
+namespace DssHarness.Core.Configuration;
 
 /// <summary>One unit of work that receives exactly one verdict.</summary>
 /// <remarks>

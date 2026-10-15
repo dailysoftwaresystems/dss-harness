@@ -1,12 +1,12 @@
 using System.Text.Json;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Sync;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
+using DssHarness.Core.Sync;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// The defects a review of this branch found, each pinned by the behaviour that was wrong. Every one

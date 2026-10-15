@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Platform;
+namespace DssHarness.Core.Platform;
 
 /// <summary>
 /// How a configured value is narrowed to one platform, in the two shapes the file uses.

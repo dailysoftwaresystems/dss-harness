@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.FileSystem;
+namespace DssHarness.Core.FileSystem;
 
 /// <summary>Decides whether one path lies beneath another, or is the same path.</summary>
 public static class PathContainment

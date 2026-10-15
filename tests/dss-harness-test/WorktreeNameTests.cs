@@ -1,9 +1,9 @@
 using NSubstitute;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Worktrees;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Worktrees;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 public sealed class WorktreeNameTests
 {

@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using Microsoft.Win32.SafeHandles;
 
-namespace RepoHarness.Core.FileSystem;
+namespace DssHarness.Core.FileSystem;
 
 /// <summary>What a directory entry is, as far as removing it as a link goes.</summary>
 internal enum JunctionKind

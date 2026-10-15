@@ -1,10 +1,10 @@
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Orchestration;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Worktrees;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Orchestration;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
+using DssHarness.Core.Worktrees;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// A repository run through init, with everything committed and one orchestrator, <c>o1</c>, created: what every

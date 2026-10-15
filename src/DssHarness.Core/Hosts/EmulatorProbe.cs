@@ -1,10 +1,10 @@
 using System.Text.RegularExpressions;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Processes;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Processes;
 
-namespace RepoHarness.Core.Hosts;
+namespace DssHarness.Core.Hosts;
 
 /// <summary>
 /// Checks, on the machine it runs on, whether an emulator can carry legs there: the machine is one it

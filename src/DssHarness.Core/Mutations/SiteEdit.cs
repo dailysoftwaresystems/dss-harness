@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Mutations;
+namespace DssHarness.Core.Mutations;
 
 /// <summary>A mutation of one site: how many times its before-text occurs there, and the site's bytes with it replaced.</summary>
 /// <param name="Occurrences">How many times the before-text occurs, overlapping occurrences counted.</param>

@@ -1,6 +1,6 @@
-using RepoHarness.Core.Execution;
+using DssHarness.Core.Execution;
 
-namespace RepoHarness.Core.Sync;
+namespace DssHarness.Core.Sync;
 
 /// <summary>
 /// Which run is using a copy kept in a tree, as whatever would remove the copy asks first: a mutation worker's copy is

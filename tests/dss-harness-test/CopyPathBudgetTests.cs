@@ -1,10 +1,10 @@
 using NSubstitute;
-using RepoHarness.Core.Build;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Legs;
-using RepoHarness.Core.Platform;
+using DssHarness.Core.Build;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Legs;
+using DssHarness.Core.Platform;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// Whether the build in a copy of a tree kept in it fits this machine's path limit is reckoned in one place, as a

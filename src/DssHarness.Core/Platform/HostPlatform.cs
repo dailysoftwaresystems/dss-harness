@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 
-namespace RepoHarness.Core.Platform;
+namespace DssHarness.Core.Platform;
 
 /// <inheritdoc cref="IHostPlatform"/>
 public sealed class HostPlatform : IHostPlatform

@@ -1,9 +1,9 @@
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Mutations;
-using RepoHarness.Core.Processes;
+using DssHarness.Core.Execution;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Mutations;
+using DssHarness.Core.Processes;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// One whole run of a test binary in a worker, against a child whose output, report and timing this test controls: told

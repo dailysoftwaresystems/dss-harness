@@ -1,8 +1,8 @@
 using System.Text.Json;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Results;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>
 /// A state file holding a list of entries that every process on the machine decides by - the run lock, the heavy

@@ -3,10 +3,10 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.Versioning;
 using System.Text;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Processes;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Processes;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// The process runner is exercised against this test assembly started as a child, whose
@@ -297,7 +297,7 @@ public sealed class ProcessRunnerTests
     [Fact]
     public async Task RunAsync_AppliesEnvironmentOverrides()
     {
-        const string Name = "REPO_HARNESS_TEST_APPLIED";
+        const string Name = "DSSHARNESS_TEST_APPLIED";
         var request = TestHost.ChildRequest("print-env", Name);
 
         var result = await CreateRunner().RunAsync(
@@ -311,7 +311,7 @@ public sealed class ProcessRunnerTests
     public async Task RunAsync_RemovesAnInheritedVariable_WhenGivenNull()
     {
         // A name no other test uses, so setting it on this process cannot affect them.
-        const string Name = "REPO_HARNESS_TEST_REMOVED";
+        const string Name = "DSSHARNESS_TEST_REMOVED";
         Environment.SetEnvironmentVariable(Name, "inherited");
 
         try
@@ -807,7 +807,7 @@ public sealed class ProcessRunnerTests
     public async Task ANameSpelledInAnotherCase_SetsTheVariableThisMachineAlreadyHas()
     {
         // Ahead of the PATH this process has, so the child can still be started by name.
-        var configured = Path.Combine(Path.GetTempPath(), "rh-configured-bin") + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH");
+        var configured = Path.Combine(Path.GetTempPath(), "dh-configured-bin") + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH");
         var child = TestHost.ChildRequest("print-env", "PATH");
         var request = child with
         {

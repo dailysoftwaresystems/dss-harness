@@ -1,7 +1,7 @@
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Hosts;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Hosts;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>Where a WSL distribution reaches the drives of the Windows machine it runs on.</summary>
 public sealed class WindowsDriveMountsTests

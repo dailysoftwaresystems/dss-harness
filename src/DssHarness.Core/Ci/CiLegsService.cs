@@ -1,16 +1,16 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Git;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Processes;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Git;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Output;
+using DssHarness.Core.Processes;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Ci;
+namespace DssHarness.Core.Ci;
 
 /// <summary>What check-ci-legs was asked to read.</summary>
 /// <param name="Branch">The branch, or null for the one checked out.</param>

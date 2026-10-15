@@ -1,9 +1,9 @@
 using System.Diagnostics;
 using System.Globalization;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Platform;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Platform;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// The hub over this machine's own inotify, on Linux alone: one instance however many spans, what it hears and what

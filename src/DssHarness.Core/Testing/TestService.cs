@@ -2,18 +2,18 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO.Enumeration;
 using System.Text.RegularExpressions;
-using RepoHarness.Core.Build;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Git;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Processes;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Sync;
-using RepoHarness.Core.Worktrees;
+using DssHarness.Core.Build;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Git;
+using DssHarness.Core.Output;
+using DssHarness.Core.Processes;
+using DssHarness.Core.Results;
+using DssHarness.Core.Sync;
+using DssHarness.Core.Worktrees;
 
-namespace RepoHarness.Core.Testing;
+namespace DssHarness.Core.Testing;
 
 /// <summary>One leg's test run, with everything the caller has already decided.</summary>
 /// <remarks>

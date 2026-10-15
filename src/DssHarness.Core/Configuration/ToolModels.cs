@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Configuration;
+namespace DssHarness.Core.Configuration;
 
 /// <summary>An external tool this repository needs in order to work.</summary>
 public sealed class ToolConfig

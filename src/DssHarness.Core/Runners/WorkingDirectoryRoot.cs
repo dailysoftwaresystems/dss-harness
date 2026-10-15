@@ -1,6 +1,6 @@
-using RepoHarness.Core.Repository;
+using DssHarness.Core.Repository;
 
-namespace RepoHarness.Core.Runners;
+namespace DssHarness.Core.Runners;
 
 /// <summary>
 /// What a step's <c>workingDirectory</c> is relative to.

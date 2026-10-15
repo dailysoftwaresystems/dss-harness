@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.FileSystem;
+namespace DssHarness.Core.FileSystem;
 
 /// <summary>
 /// Where a directory is renamed to while it is removed: beside it, hidden, and named as nothing a build or a sync makes

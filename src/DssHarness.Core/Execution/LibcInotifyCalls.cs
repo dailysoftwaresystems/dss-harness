@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>
 /// The calls, made to the C library this process runs on: found by name - <c>libc.so.6</c>, then <c>libc.so</c>,

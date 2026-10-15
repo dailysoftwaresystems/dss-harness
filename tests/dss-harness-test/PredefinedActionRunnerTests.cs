@@ -1,8 +1,8 @@
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Runners;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Results;
+using DssHarness.Core.Runners;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// The two predefined actions an action file may name, and what each of them settles before the

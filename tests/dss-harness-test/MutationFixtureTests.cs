@@ -1,12 +1,12 @@
 using System.Text;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Mutations;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Mutations;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// The fixture a self-test sweeps, as this assembly carries it: whole, its registry sweepable and every arm in it designed,

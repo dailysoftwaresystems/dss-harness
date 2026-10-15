@@ -1,6 +1,6 @@
 using System.Buffers;
 
-namespace RepoHarness.Core.Hosts;
+namespace DssHarness.Core.Hosts;
 
 /// <summary>
 /// Which kind of shell an ssh server hands a command line to. It decides how the path to a

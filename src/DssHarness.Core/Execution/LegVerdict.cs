@@ -1,6 +1,6 @@
-using RepoHarness.Core.Results;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>
 /// The closed vocabulary a leg's result is reported in. Every declared leg reaches exactly one of

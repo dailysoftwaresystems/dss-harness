@@ -1,14 +1,14 @@
 using System.Globalization;
 using NSubstitute;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Legs;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Sync;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Legs;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
+using DssHarness.Core.Sync;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// Carrying one run's kept artifacts to a host, which is the half of a round trip that crosses a

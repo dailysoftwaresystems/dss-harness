@@ -1,7 +1,7 @@
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// Legs are isolated from one another, so a command runs every selected leg at once and waits for
@@ -517,9 +517,9 @@ public sealed class LegExecutorTests
         var factory = new HarnessFactory();
         var ledger = new LegLedger(factory.Output, "test");
 
-        RepoHarness.Core.Processes.ProgramStartException failure = how == "missing"
-            ? new RepoHarness.Core.Processes.ExecutableNotFoundException("build/bench")
-            : new RepoHarness.Core.Processes.ProgramStartException("build/bench", "'build/bench' could not be started: Exec format error");
+        DssHarness.Core.Processes.ProgramStartException failure = how == "missing"
+            ? new DssHarness.Core.Processes.ExecutableNotFoundException("build/bench")
+            : new DssHarness.Core.Processes.ProgramStartException("build/bench", "'build/bench' could not be started: Exec format error");
 
         var execution = await Executor(factory).RunAsync(
             new LegExecutionRequest

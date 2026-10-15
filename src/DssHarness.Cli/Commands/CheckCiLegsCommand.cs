@@ -1,7 +1,7 @@
 using System.CommandLine;
-using RepoHarness.Core.Ci;
+using DssHarness.Core.Ci;
 
-namespace RepoHarness.Cli.Commands;
+namespace DssHarness.Cli.Commands;
 
 /// <summary>Wires <c>DssHarness check-ci-legs</c>.</summary>
 internal static class CheckCiLegsCommand

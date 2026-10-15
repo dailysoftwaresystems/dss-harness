@@ -1,8 +1,8 @@
-using RepoHarness.Core.Git;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Git;
+using DssHarness.Core.Output;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Runners;
+namespace DssHarness.Core.Runners;
 
 /// <summary>What performing an action file's predefined actions established.</summary>
 /// <param name="Environment">

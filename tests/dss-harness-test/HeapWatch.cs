@@ -1,4 +1,4 @@
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// Watches how far this process's managed heap grows while something runs, and says the most it grew by.

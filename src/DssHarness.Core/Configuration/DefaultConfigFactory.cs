@@ -1,7 +1,7 @@
-using RepoHarness.Core.Projects;
-using RepoHarness.Core.Testing;
+using DssHarness.Core.Projects;
+using DssHarness.Core.Testing;
 
-namespace RepoHarness.Core.Configuration;
+namespace DssHarness.Core.Configuration;
 
 /// <summary>
 /// Builds the configuration <c>init</c> writes. The result is a working starting

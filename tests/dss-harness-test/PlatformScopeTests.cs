@@ -1,6 +1,6 @@
-using RepoHarness.Core.Platform;
+using DssHarness.Core.Platform;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// The one place a list- or map-shaped setting is narrowed to a platform, so what it decides is

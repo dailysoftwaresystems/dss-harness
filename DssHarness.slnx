@@ -21,10 +21,10 @@
     <File Path=".github/workflows/test.yml" />
   </Folder>
   <Folder Name="/src/">
-    <Project Path="src/RepoHarness.Cli/RepoHarness.Cli.csproj" />
-    <Project Path="src/RepoHarness.Core/RepoHarness.Core.csproj" />
+    <Project Path="src/DssHarness.Cli/DssHarness.Cli.csproj" />
+    <Project Path="src/DssHarness.Core/DssHarness.Core.csproj" />
   </Folder>
   <Folder Name="/tests/">
-    <Project Path="tests/repo-harness-test/repo-harness-test.csproj" />
+    <Project Path="tests/dss-harness-test/dss-harness-test.csproj" />
   </Folder>
 </Solution>

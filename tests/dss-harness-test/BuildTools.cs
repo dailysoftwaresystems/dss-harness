@@ -1,7 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
-using RepoHarness.Core.Processes;
+using DssHarness.Core.Processes;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// What a test that really builds needs on the machine running it: cmake, ninja, a compiler, or Visual Studio's own.

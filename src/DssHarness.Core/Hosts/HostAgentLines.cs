@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Hosts;
+namespace DssHarness.Core.Hosts;
 
 /// <summary>
 /// Reads the two streams of one request to a host's agent: which lines are the agent's, the exit code its

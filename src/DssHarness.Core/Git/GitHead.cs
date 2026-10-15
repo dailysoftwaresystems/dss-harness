@@ -1,6 +1,6 @@
-using RepoHarness.Core.Results;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Git;
+namespace DssHarness.Core.Git;
 
 /// <summary>What a command that measures from HEAD asks of it first.</summary>
 public static class GitHead

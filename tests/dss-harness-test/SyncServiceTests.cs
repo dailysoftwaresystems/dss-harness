@@ -1,19 +1,19 @@
 using System.Globalization;
 using System.Text.Json;
 using NSubstitute;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Git;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Legs;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Processes;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Sync;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Git;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Legs;
+using DssHarness.Core.Output;
+using DssHarness.Core.Processes;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
+using DssHarness.Core.Sync;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// A sync end to end, against a real tree and a real copy. The transport is the local one, which is

@@ -1,7 +1,7 @@
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Processes;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Processes;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>How a machine's process table is read where another program has to be asked for it.</summary>
 public sealed class ProcessTableTests

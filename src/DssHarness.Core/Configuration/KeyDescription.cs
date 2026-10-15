@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Configuration;
+namespace DssHarness.Core.Configuration;
 
 /// <summary>One key a configuration file takes, with what it does, as help lists it.</summary>
 /// <param name="Name">The key, spelled as the file writes it.</param>

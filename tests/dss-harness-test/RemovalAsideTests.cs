@@ -1,6 +1,6 @@
-using RepoHarness.Core.FileSystem;
+using DssHarness.Core.FileSystem;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>Where a directory is renamed to while it is removed, and which names are such a directory's.</summary>
 public sealed class RemovalAsideTests

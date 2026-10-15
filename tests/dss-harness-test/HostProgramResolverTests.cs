@@ -1,9 +1,9 @@
 using NSubstitute;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Processes;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Processes;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// A login shell's PATH is not the PATH a command sees. Measured: /opt/homebrew/bin is absent from the

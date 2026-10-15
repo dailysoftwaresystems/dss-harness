@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Worktrees;
+namespace DssHarness.Core.Worktrees;
 
 /// <summary>
 /// Where a worktree sits under the worktrees root, and so what it is called: a plain worktree by its own name, and an

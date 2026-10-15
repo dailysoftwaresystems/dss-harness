@@ -1,9 +1,9 @@
 using System.Text;
 using NSubstitute;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Platform;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Platform;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>Bytes no file holds yet, written as a copy between trees is: proved before they are put in place.</summary>
 public sealed class VerifiedFileCopyTests

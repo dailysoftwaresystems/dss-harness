@@ -1,15 +1,15 @@
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
-using RepoHarness.Core.Build;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Processes;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Worktrees;
+using DssHarness.Core.Build;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Processes;
+using DssHarness.Core.Results;
+using DssHarness.Core.Worktrees;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// A build passes only on evidence that it produced something. Each test here answers a way a build
@@ -2997,7 +2997,7 @@ public sealed class BuildServiceTests
 
             return Task.FromResult(new ProcessResult(
                 0,
-                $"repo_harness_compiler_version {msvc} {gnu} __clang_major__ __clang_minor__ __clang_patchlevel__ __apple_build_version__\n",
+                $"dssharness_compiler_version {msvc} {gnu} __clang_major__ __clang_minor__ __clang_patchlevel__ __apple_build_version__\n",
                 "compiler-version-CXX.cpp\n",
                 TimeSpan.Zero,
                 TimedOut: false));

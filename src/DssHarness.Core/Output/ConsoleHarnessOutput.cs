@@ -1,6 +1,6 @@
-using RepoHarness.Core.Platform;
+using DssHarness.Core.Platform;
 
-namespace RepoHarness.Core.Output;
+namespace DssHarness.Core.Output;
 
 /// <inheritdoc cref="IHarnessOutput"/>
 /// <param name="standardOutput">

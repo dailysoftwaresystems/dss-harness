@@ -1,6 +1,6 @@
-using RepoHarness.Core.FileSystem;
+using DssHarness.Core.FileSystem;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// The real file system, but for one file that cannot be deleted: one marked read-only, or held open by a scanner,

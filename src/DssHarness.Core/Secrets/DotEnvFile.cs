@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Secrets;
+namespace DssHarness.Core.Secrets;
 
 /// <summary>
 /// Reads a file of <c>NAME=value</c> lines. Names compare exactly, case included, as an environment

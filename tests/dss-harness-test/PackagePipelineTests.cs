@@ -1,4 +1,4 @@
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// What the workflow that publishes a release says of this suite - run for the one commit nothing else tested, and for
@@ -18,7 +18,7 @@ public sealed class PackagePipelineTests
     [Fact]
     public void TheSuite_RunsOnlyForACommitNothingElseTested()
     {
-        var step = WorkflowFiles.StepRunning("pipeline-pkg.yml", "repo-harness-test");
+        var step = WorkflowFiles.StepRunning("pipeline-pkg.yml", typeof(WorkflowFiles).Assembly.GetName().Name!);
 
         Assert.Equal("- name: Test", step[0]);
         Assert.Equal(

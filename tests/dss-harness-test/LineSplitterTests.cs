@@ -1,6 +1,6 @@
-using RepoHarness.Core.Processes;
+using DssHarness.Core.Processes;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// The one rule a child's output is cut into lines by, wherever it is read - from the child's pipes, or from a phase's log

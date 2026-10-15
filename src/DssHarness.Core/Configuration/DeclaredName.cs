@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Configuration;
+namespace DssHarness.Core.Configuration;
 
 /// <summary>Finds the spelling a configuration declares a name with.</summary>
 /// <remarks>

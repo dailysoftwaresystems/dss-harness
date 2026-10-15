@@ -1,7 +1,7 @@
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Processes;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Processes;
 
-namespace RepoHarness.Core.Hosts;
+namespace DssHarness.Core.Hosts;
 
 /// <summary>
 /// Where each of a set of programs is on this machine, and the directories they were found in.

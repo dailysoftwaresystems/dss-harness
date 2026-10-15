@@ -1,8 +1,8 @@
-using RepoHarness.Core.Build;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Platform;
+using DssHarness.Core.Build;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Platform;
 
-namespace RepoHarness.Core.Legs;
+namespace DssHarness.Core.Legs;
 
 /// <summary>
 /// Whether the build in a copy of a tree kept in that tree's slot stays within this machine's path limit: said once, for

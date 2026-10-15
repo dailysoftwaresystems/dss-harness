@@ -1,14 +1,14 @@
 using System.Text.RegularExpressions;
-using RepoHarness.Core.Build;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Processes;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Testing;
-using RepoHarness.Core.Worktrees;
+using DssHarness.Core.Build;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Processes;
+using DssHarness.Core.Results;
+using DssHarness.Core.Testing;
+using DssHarness.Core.Worktrees;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// One leg, one verdict. Each rule here answers a way a suite was measured passing without having

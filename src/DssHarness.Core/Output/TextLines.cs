@@ -1,6 +1,6 @@
 using System.Buffers;
 
-namespace RepoHarness.Core.Output;
+namespace DssHarness.Core.Output;
 
 /// <summary>
 /// Where a line of text ends: the one set of characters this tool divides lines at, as

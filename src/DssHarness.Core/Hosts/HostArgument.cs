@@ -1,8 +1,8 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using RepoHarness.Core.Output;
+using DssHarness.Core.Output;
 
-namespace RepoHarness.Core.Hosts;
+namespace DssHarness.Core.Hosts;
 
 /// <summary>
 /// One argument of the command a run request names: text, or bytes that cross as their base64 text. The host reads every

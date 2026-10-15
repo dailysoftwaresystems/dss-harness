@@ -1,7 +1,7 @@
-using RepoHarness.Core.Git;
-using RepoHarness.Core.Repository;
+using DssHarness.Core.Git;
+using DssHarness.Core.Repository;
 
-namespace RepoHarness.Core.Anchors;
+namespace DssHarness.Core.Anchors;
 
 /// <summary>Finds the registry files a command works on.</summary>
 public interface IAnchorRegistryLocator

@@ -1,7 +1,7 @@
 using System.Text.RegularExpressions;
-using RepoHarness.Core.Output;
+using DssHarness.Core.Output;
 
-namespace RepoHarness.Core.Mutations;
+namespace DssHarness.Core.Mutations;
 
 /// <summary>
 /// Reads a mutation arms registry: a repository's own line-oriented data file, one row to a line, its fields separated

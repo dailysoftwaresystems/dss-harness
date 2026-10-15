@@ -1,6 +1,6 @@
-using RepoHarness.Core.Anchors;
+using DssHarness.Core.Anchors;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// What a cell would store broken - a check every anchor write is held to - and what replacing a cell does to its stored

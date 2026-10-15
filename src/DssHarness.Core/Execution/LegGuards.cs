@@ -1,6 +1,6 @@
-using RepoHarness.Core.Results;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>
 /// The files a span of work wants fingerprinted, or why it cannot have them.

@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Processes;
+namespace DssHarness.Core.Processes;
 
 /// <summary>
 /// A line written to a child's standard input again and again for as long as that input is held open, so that a child

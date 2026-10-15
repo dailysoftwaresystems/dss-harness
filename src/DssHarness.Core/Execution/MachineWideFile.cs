@@ -1,12 +1,12 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Text.Json;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Results;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>
 /// Serialises one file's read-decide-write across every process on the machine.

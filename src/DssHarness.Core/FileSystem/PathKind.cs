@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.FileSystem;
+namespace DssHarness.Core.FileSystem;
 
 /// <summary>What is at a path itself, as <see cref="IFileSystem.KindOf"/> answers.</summary>
 public enum PathKind

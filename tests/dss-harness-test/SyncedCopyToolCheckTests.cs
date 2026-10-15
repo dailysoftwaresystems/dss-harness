@@ -1,9 +1,9 @@
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Repository;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Output;
+using DssHarness.Core.Repository;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// A command typed in a copy the harness synced to a host is told when the DssHarness running it trails the

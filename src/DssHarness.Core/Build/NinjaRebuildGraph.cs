@@ -1,10 +1,10 @@
 using System.Text;
 using System.Text.RegularExpressions;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Processes;
-using RepoHarness.Core.Results;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Processes;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Build;
+namespace DssHarness.Core.Build;
 
 /// <summary>One object's dependency record, as <c>ninja -t deps</c> printed it.</summary>
 /// <param name="Object">The object, as ninja named it.</param>

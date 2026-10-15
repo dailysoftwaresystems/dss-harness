@@ -1,7 +1,7 @@
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Processes;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Processes;
 
-namespace RepoHarness.Core.Build;
+namespace DssHarness.Core.Build;
 
 /// <summary>What ninja says of a build directory's outputs that no target of the current build produces any more.</summary>
 /// <param name="Paths">Each such output that is there, as ninja names it: below the build directory, or absolute.</param>

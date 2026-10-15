@@ -1,11 +1,11 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Worktrees;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Worktrees;
 
-namespace RepoHarness.Core.Hosts;
+namespace DssHarness.Core.Hosts;
 
 /// <summary>How long a host's agent waits on the machine that asked, and on what it started for that machine.</summary>
 public sealed record HostAgentPatience

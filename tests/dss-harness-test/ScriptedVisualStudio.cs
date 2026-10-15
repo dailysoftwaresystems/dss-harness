@@ -1,12 +1,12 @@
 using System.Text;
 using System.Text.Json;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Processes;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Output;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Processes;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// Visual Studio as its installer's vswhere and cmd.exe running vcvarsall.bat show it, with neither

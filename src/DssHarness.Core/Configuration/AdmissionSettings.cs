@@ -1,7 +1,7 @@
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Output;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Output;
 
-namespace RepoHarness.Core.Configuration;
+namespace DssHarness.Core.Configuration;
 
 /// <summary>
 /// How heavy legs are admitted onto one physical machine: at most <see cref="HeavyLegs"/> at once across every

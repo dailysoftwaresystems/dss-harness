@@ -1,8 +1,8 @@
 using System.Text.Json;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// A file of state read without stopping the command: what it holds, nothing where no file is there, or why it could

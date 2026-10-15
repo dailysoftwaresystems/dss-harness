@@ -1,8 +1,8 @@
 using System.Text.RegularExpressions;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Anchors;
+namespace DssHarness.Core.Anchors;
 
 /// <summary>How serious a problem found in a registry is.</summary>
 public enum AnchorFindingSeverity

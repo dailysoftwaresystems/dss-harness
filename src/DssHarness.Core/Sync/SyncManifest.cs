@@ -1,11 +1,11 @@
 using System.Text.Json.Serialization;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Execution;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Output;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Sync;
+namespace DssHarness.Core.Sync;
 
 /// <summary>One file in a tree, identified by what it holds rather than by when it was written.</summary>
 /// <param name="Path">The file's path relative to the tree root, with forward separators.</param>

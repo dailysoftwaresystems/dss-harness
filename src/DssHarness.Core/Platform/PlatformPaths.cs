@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Platform;
+namespace DssHarness.Core.Platform;
 
 /// <summary>
 /// How a path reads on a platform, decided from its text alone.

@@ -1,8 +1,8 @@
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Worktrees;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Results;
+using DssHarness.Core.Worktrees;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>What the root of a checkout may hold, and what a failed look at it means.</summary>
 public sealed class RootLitterServiceTests

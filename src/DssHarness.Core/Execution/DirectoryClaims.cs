@@ -1,9 +1,9 @@
 using System.Text.Json;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Results;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Output;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>
 /// How every line a claim on one kind of directory says speaks of it: one set of terms for a run's log directory, one for

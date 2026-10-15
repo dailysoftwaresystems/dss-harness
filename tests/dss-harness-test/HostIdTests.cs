@@ -1,6 +1,6 @@
-using RepoHarness.Core.Hosts;
+using DssHarness.Core.Hosts;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>How a host is named, and read back from its name.</summary>
 public sealed class HostIdTests

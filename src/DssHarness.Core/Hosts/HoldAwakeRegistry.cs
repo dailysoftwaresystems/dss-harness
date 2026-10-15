@@ -1,10 +1,10 @@
 using System.Collections.Concurrent;
 using System.Globalization;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Processes;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Output;
+using DssHarness.Core.Processes;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Hosts;
+namespace DssHarness.Core.Hosts;
 
 /// <summary>
 /// The ssh hosts a command reached that are to be held awake between commands, and the hold it leaves each of

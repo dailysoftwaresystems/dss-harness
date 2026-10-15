@@ -1,15 +1,15 @@
-using RepoHarness.Core.Anchors;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Git;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Projects;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Tools;
+using DssHarness.Core.Anchors;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Git;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Projects;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
+using DssHarness.Core.Tools;
 
-namespace RepoHarness.Core.Commands;
+namespace DssHarness.Core.Commands;
 
 /// <summary>Creates the harness directory, its configuration, its ignore rules, and the anchor registries.</summary>
 public sealed class InitService(

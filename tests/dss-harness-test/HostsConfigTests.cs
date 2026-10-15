@@ -1,7 +1,7 @@
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Hosts;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Hosts;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>What each host declares for itself.</summary>
 public sealed class HostsConfigTests

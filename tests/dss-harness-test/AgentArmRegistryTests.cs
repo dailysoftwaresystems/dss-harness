@@ -1,11 +1,11 @@
 using System.Collections.Concurrent;
 using System.Text;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Orchestration;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Orchestration;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// The arm registry both trees changed, met by a fold, a move of an agent's base or a refresh: merged by arm with no option given and

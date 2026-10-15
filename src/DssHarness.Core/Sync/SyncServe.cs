@@ -2,13 +2,13 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Git;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Git;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Output;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Sync;
+namespace DssHarness.Core.Sync;
 
 /// <summary>
 /// The operations one side of a sync asks the other to perform.

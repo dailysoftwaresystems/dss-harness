@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Git;
+namespace DssHarness.Core.Git;
 
 /// <summary>One entry of a commit's tree, as <c>git ls-tree</c> lists it.</summary>
 /// <param name="Mode">The octal mode, such as 100644 for a file, 100755 for one that can be run, or 120000 for a link.</param>

@@ -1,10 +1,10 @@
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Processes;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Processes;
 
-namespace RepoHarness.Core.Legs;
+namespace DssHarness.Core.Legs;
 
 /// <summary>Where a leg runs, or why it does not: no host can take it, or the one it went to lacks what it needs.</summary>
 /// <param name="Leg">The leg.</param>

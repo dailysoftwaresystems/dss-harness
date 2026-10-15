@@ -1,9 +1,9 @@
 using System.Globalization;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Processes;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Output;
+using DssHarness.Core.Processes;
 
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>
 /// Holds the machine a leg runs on awake while the leg's own work runs there, with the command that

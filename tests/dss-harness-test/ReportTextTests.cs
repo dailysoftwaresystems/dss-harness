@@ -1,6 +1,6 @@
-using RepoHarness.Core.Output;
+using DssHarness.Core.Output;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// Every line that counts something says the count through one method, so one wording reads true of one thing and

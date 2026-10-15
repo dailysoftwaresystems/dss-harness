@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Orchestration;
+namespace DssHarness.Core.Orchestration;
 
 /// <summary>
 /// What a refresh of an agent weighs, and what of the agent's own it leaves alone: the paths named, the directory the

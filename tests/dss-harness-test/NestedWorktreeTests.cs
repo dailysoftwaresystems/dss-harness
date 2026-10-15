@@ -1,11 +1,11 @@
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Sync;
-using RepoHarness.Core.Worktrees;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
+using DssHarness.Core.Sync;
+using DssHarness.Core.Worktrees;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>An orchestrator's agents' worktrees, made below the directory named for it under the worktrees root.</summary>
 public sealed class NestedWorktreeTests

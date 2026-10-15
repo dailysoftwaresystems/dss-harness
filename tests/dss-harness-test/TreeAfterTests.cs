@@ -1,11 +1,11 @@
 using NSubstitute;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Orchestration;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Sync;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Orchestration;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Sync;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>The tree a command leaves, as an arm registry it merges into that tree is judged by it.</summary>
 public sealed class TreeAfterTests

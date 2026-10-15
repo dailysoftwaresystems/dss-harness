@@ -1,18 +1,18 @@
 using System.Globalization;
-using RepoHarness.Core.Build;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Legs;
-using RepoHarness.Core.Mutations;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Runs;
-using RepoHarness.Core.Sync;
-using RepoHarness.Core.Worktrees;
+using DssHarness.Core.Build;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Legs;
+using DssHarness.Core.Mutations;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Runs;
+using DssHarness.Core.Sync;
+using DssHarness.Core.Worktrees;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// Where a leg's mutation workers are kept, the lock a sweep of the leg takes, and the claim a sweep holds on each

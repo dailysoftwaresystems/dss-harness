@@ -1,22 +1,22 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using RepoHarness.Core.Build;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Git;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Legs;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Processes;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Runners;
-using RepoHarness.Core.Runs;
-using RepoHarness.Core.Tools;
+using DssHarness.Core.Build;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Git;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Legs;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Processes;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
+using DssHarness.Core.Runners;
+using DssHarness.Core.Runs;
+using DssHarness.Core.Tools;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// End-to-end coverage of the built CLI: parsing, wiring and exit codes.
@@ -2164,7 +2164,7 @@ public sealed partial class CliEndToEndTests
         var harness = new HarnessFactory();
         var platform = harness.Platform;
         var token = TestContext.Current.CancellationToken;
-        var missing = "rh-missing-" + Guid.NewGuid().ToString("N")[..8];
+        var missing = "dh-missing-" + Guid.NewGuid().ToString("N")[..8];
 
         await harness.InitializeHarnessAsync(temp.Path, token, new HarnessConfig
         {
@@ -3351,8 +3351,8 @@ public sealed partial class CliEndToEndTests
         var harness = new HarnessFactory();
         var platform = harness.Platform;
         var token = TestContext.Current.CancellationToken;
-        var compiler = "rh-missing-cc-" + Guid.NewGuid().ToString("N")[..8];
-        var tool = "rh-missing-tool-" + Guid.NewGuid().ToString("N")[..8];
+        var compiler = "dh-missing-cc-" + Guid.NewGuid().ToString("N")[..8];
+        var tool = "dh-missing-tool-" + Guid.NewGuid().ToString("N")[..8];
 
         var toolchain = new ToolchainConfig { Platforms = [platform.PlatformKey] };
         toolchain.Env["CC"] = compiler;

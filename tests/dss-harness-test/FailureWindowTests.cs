@@ -1,6 +1,6 @@
-using RepoHarness.Core.Runners;
+using DssHarness.Core.Runners;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>The failing unit's own execution window, and what counts as recorded inside it.</summary>
 public sealed class FailureWindowTests

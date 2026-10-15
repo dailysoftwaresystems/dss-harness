@@ -1,13 +1,13 @@
 using NSubstitute;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Processes;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Secrets;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Processes;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
+using DssHarness.Core.Secrets;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>Gives this machine back the memory WSL's virtual machine holds as clean page cache.</summary>
 public sealed class WslPageCacheTests

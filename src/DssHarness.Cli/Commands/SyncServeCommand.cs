@@ -1,9 +1,9 @@
 using System.CommandLine;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Sync;
+using DssHarness.Core.Output;
+using DssHarness.Core.Results;
+using DssHarness.Core.Sync;
 
-namespace RepoHarness.Cli.Commands;
+namespace DssHarness.Cli.Commands;
 
 /// <summary>
 /// Wires the hidden <c>DssHarness sync-serve</c>, which a machine runs on a host to act on that
@@ -88,7 +88,7 @@ internal static class SyncServeCommand
                     return Answer(await transport
                         .TakeHistoryAsync(
                             root,
-                            new RepoHarness.Core.Git.GitHistoryTaken(
+                            new DssHarness.Core.Git.GitHistoryTaken(
                                 SyncServe.WantedIn(arguments, 3)
                                     ?? throw new HarnessException(
                                         HarnessExit.UsageError,
@@ -178,7 +178,7 @@ internal static class SyncServeCommand
                     // Hashed here, where the bytes were read. A hash the asking machine took of what
                     // arrived would agree with those bytes whatever happened on the way.
                     return Answer(
-                        new SyncFileAnswer(contents.LongLength, RepoHarness.Core.FileSystem.FileContentHash.Of(contents)),
+                        new SyncFileAnswer(contents.LongLength, DssHarness.Core.FileSystem.FileContentHash.Of(contents)),
                         SyncServe.ContentLines(contents));
 
                 default:

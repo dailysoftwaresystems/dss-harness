@@ -1,6 +1,6 @@
-using RepoHarness.Core.Sync;
+using DssHarness.Core.Sync;
 
-namespace RepoHarness.Core.Mutations;
+namespace DssHarness.Core.Mutations;
 
 /// <summary>
 /// The files of one reading of a tree, found by a path relative to the tree as the tree's own file system compares names,

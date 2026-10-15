@@ -1,14 +1,14 @@
 using System.Security.Cryptography;
 using System.Text.Json;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Legs;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Legs;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// The built CLI's legs, host-exec and host-agent commands, end to end. Only this machine is declared
@@ -278,7 +278,7 @@ public sealed class LegsCliTests
     {
         // A host is told to install this package and to run this command, so both must be what the
         // project actually packs.
-        var project = File.ReadAllText(FindInRepository("src", "RepoHarness.Cli", "RepoHarness.Cli.csproj"));
+        var project = File.ReadAllText(FindInRepository("src", "DssHarness.Cli", "DssHarness.Cli.csproj"));
 
         Assert.Contains($"<PackageId>{ToolPackage.Id}</PackageId>", project, StringComparison.Ordinal);
         Assert.Contains($"<ToolCommandName>{ToolPackage.Command}</ToolCommandName>", project, StringComparison.Ordinal);

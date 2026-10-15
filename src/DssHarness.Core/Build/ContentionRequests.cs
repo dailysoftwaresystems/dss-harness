@@ -1,8 +1,8 @@
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Worktrees;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Worktrees;
 
-namespace RepoHarness.Core.Build;
+namespace DssHarness.Core.Build;
 
 /// <summary>What sampling watches for during one leg, from the configuration every verb reads.</summary>
 /// <remarks>

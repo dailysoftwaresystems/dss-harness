@@ -2,12 +2,12 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Processes;
-using RepoHarness.Core.Results;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Output;
+using DssHarness.Core.Processes;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>One phase to run: a program, its arguments, and the evidence it must produce.</summary>
 public sealed record PhaseRequest

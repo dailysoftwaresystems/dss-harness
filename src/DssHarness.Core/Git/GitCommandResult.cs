@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Git;
+namespace DssHarness.Core.Git;
 
 /// <summary>Outcome of a git invocation.</summary>
 /// <param name="ExitCode">git's exit code, read directly and never through a pipeline.</param>

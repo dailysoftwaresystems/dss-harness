@@ -1,13 +1,13 @@
 using System.Globalization;
 using System.Text.Json;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Mutations;
-using RepoHarness.Core.Sync;
-using RepoHarness.Core.Worktrees;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Mutations;
+using DssHarness.Core.Sync;
+using DssHarness.Core.Worktrees;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// What <c>check-mutations --list</c> makes of the record and what this machine reads: each arm pending for the first reason

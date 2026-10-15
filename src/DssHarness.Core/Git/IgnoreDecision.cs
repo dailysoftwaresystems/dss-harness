@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Git;
+namespace DssHarness.Core.Git;
 
 /// <summary>What git decided about one path, and which rule decided it.</summary>
 /// <param name="Path">The path asked about, relative to the work tree's root.</param>

@@ -1,6 +1,6 @@
 using System.Buffers;
 
-namespace RepoHarness.Core.FileSystem;
+namespace DssHarness.Core.FileSystem;
 
 /// <summary>Names made into file names: a leg's, a step's, a machine's.</summary>
 public static class FileNames

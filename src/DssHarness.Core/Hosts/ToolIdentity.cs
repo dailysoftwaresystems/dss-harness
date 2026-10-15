@@ -1,7 +1,7 @@
 using System.Reflection;
 using System.Security.Cryptography;
 
-namespace RepoHarness.Core.Hosts;
+namespace DssHarness.Core.Hosts;
 
 /// <summary>The package this tool is published as, which is what a host installs to run it.</summary>
 public static class ToolPackage

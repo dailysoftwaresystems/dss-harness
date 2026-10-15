@@ -1,11 +1,11 @@
 using System.CommandLine;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Legs;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Runners;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Legs;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Runners;
 
-namespace RepoHarness.Cli.Commands;
+namespace DssHarness.Cli.Commands;
 
 /// <summary>Wires <c>DssHarness legs</c>.</summary>
 internal static class LegsCommand

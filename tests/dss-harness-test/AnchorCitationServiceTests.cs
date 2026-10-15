@@ -1,10 +1,10 @@
-using RepoHarness.Core.Anchors;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Git;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Anchors;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Git;
+using DssHarness.Core.Output;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// check-anchor-citations against a real repository: what is scanned, what resolves, and what the

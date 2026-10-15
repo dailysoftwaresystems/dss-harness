@@ -1,6 +1,6 @@
-using RepoHarness.Core.Processes;
+using DssHarness.Core.Processes;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 public sealed class LineTextTests
 {

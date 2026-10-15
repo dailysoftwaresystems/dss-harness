@@ -1,19 +1,19 @@
 using System.Text.RegularExpressions;
-using RepoHarness.Core.Anchors;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Mutations;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Processes;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Runners;
-using RepoHarness.Core.Testing;
-using RepoHarness.Core.Tools;
-using RepoHarness.Core.Worktrees;
+using DssHarness.Core.Anchors;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Mutations;
+using DssHarness.Core.Output;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Processes;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
+using DssHarness.Core.Runners;
+using DssHarness.Core.Testing;
+using DssHarness.Core.Tools;
+using DssHarness.Core.Worktrees;
 
-namespace RepoHarness.Core.Configuration;
+namespace DssHarness.Core.Configuration;
 
 /// <summary>
 /// Checks a loaded configuration for problems that would otherwise surface far from

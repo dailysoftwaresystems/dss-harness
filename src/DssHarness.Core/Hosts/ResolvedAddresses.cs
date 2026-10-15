@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Hosts;
+namespace DssHarness.Core.Hosts;
 
 /// <summary>
 /// The addresses an ssh host's name has resolved to here, shared by every copy of the connection it was made for.

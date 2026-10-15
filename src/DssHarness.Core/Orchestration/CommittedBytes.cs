@@ -1,7 +1,7 @@
-using RepoHarness.Core.Git;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Git;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Orchestration;
+namespace DssHarness.Core.Orchestration;
 
 /// <summary>
 /// The bytes of a blob a commit holds, as git stores them or as a checkout into a tree writes them: read one way, and

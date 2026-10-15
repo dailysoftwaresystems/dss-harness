@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Git;
+namespace DssHarness.Core.Git;
 
 /// <summary>Where a directory sits in its repository.</summary>
 /// <param name="Prefix">

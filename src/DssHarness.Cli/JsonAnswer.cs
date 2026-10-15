@@ -1,7 +1,7 @@
 using System.CommandLine;
-using RepoHarness.Core.Execution;
+using DssHarness.Core.Execution;
 
-namespace RepoHarness.Cli;
+namespace DssHarness.Cli;
 
 /// <summary>
 /// The document a command asked for <c>--json</c> answers with where it has none of its own to answer with - its command

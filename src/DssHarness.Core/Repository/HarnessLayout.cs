@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Repository;
+namespace DssHarness.Core.Repository;
 
 /// <summary>
 /// Where every piece of harness state lives, derived from one repository.

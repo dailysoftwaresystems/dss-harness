@@ -1,9 +1,9 @@
-using RepoHarness.Core.Build;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Processes;
+using DssHarness.Core.Build;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Processes;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// Which objects recorded no header dependencies, and which of them legitimately so. Only an object

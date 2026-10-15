@@ -1,7 +1,7 @@
-using RepoHarness.Core.Orchestration;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Orchestration;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// The records orchestrators and agents keep, read strictly: one that does not read as exactly what it must be is refused,

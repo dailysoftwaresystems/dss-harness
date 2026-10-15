@@ -1,4 +1,4 @@
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// The workflows that run this suite, and the one that promotes a release, as written: embedded into the tests, so a

@@ -1,15 +1,15 @@
 using System.Diagnostics;
-using RepoHarness.Core.Anchors;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Git;
-using RepoHarness.Core.Mutations;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Sync;
+using DssHarness.Core.Anchors;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Git;
+using DssHarness.Core.Mutations;
+using DssHarness.Core.Output;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
+using DssHarness.Core.Sync;
 
-namespace RepoHarness.Core.Orchestration;
+namespace DssHarness.Core.Orchestration;
 
 /// <summary>How a path both trees changed is resolved: the one decision, whichever command meets it.</summary>
 internal enum TwoChangeRule

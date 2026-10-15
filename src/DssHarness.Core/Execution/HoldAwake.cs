@@ -1,9 +1,9 @@
 using System.Text.Json;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Platform;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Platform;
 
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>The hold that keeps this machine awake between commands, as the machine held keeps it.</summary>
 /// <param name="Generation">Which hold this is: a newer one, or its end, changes it, and the hold's process stops.</param>

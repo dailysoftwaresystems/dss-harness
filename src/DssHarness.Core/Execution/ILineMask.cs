@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>
 /// Masks the secrets a phase carries in each line its child prints, before anything keeps or shows the line.

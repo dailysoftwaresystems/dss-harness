@@ -1,6 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 
-namespace RepoHarness.Core.Hosts;
+namespace DssHarness.Core.Hosts;
 
 /// <summary>How a host is reached.</summary>
 public enum HostKind

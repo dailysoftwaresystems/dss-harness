@@ -1,9 +1,9 @@
 using System.Text.Json.Serialization;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Results;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Output;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>The run that owns a log directory.</summary>
 /// <param name="Machine">The machine it runs on.</param>

@@ -1,7 +1,7 @@
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Platform;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Platform;
 
-namespace RepoHarness.Core.Runners;
+namespace DssHarness.Core.Runners;
 
 /// <summary>
 /// Every key an action file takes, with what each does: the parser reads exactly these, and

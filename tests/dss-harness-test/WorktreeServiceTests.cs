@@ -1,14 +1,14 @@
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Mutations;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Sync;
-using RepoHarness.Core.Worktrees;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Mutations;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
+using DssHarness.Core.Sync;
+using DssHarness.Core.Worktrees;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 public sealed class WorktreeServiceTests
 {
@@ -157,9 +157,9 @@ public sealed class WorktreeServiceTests
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var platform = harness.Platform;
-        var other = platform.PlatformKey == RepoHarness.Core.Platform.PlatformNames.Linux
-            ? RepoHarness.Core.Platform.PlatformNames.MacOs
-            : RepoHarness.Core.Platform.PlatformNames.Linux;
+        var other = platform.PlatformKey == DssHarness.Core.Platform.PlatformNames.Linux
+            ? DssHarness.Core.Platform.PlatformNames.MacOs
+            : DssHarness.Core.Platform.PlatformNames.Linux;
 
         var path = HarnessFactory.WorktreePath(temp.Path, "wt");
         const int Reserve = 5;
@@ -204,9 +204,9 @@ public sealed class WorktreeServiceTests
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
-        var other = harness.Platform.PlatformKey == RepoHarness.Core.Platform.PlatformNames.Linux
-            ? RepoHarness.Core.Platform.PlatformNames.MacOs
-            : RepoHarness.Core.Platform.PlatformNames.Linux;
+        var other = harness.Platform.PlatformKey == DssHarness.Core.Platform.PlatformNames.Linux
+            ? DssHarness.Core.Platform.PlatformNames.MacOs
+            : DssHarness.Core.Platform.PlatformNames.Linux;
 
         var path = HarnessFactory.WorktreePath(temp.Path, "wt");
 
@@ -730,7 +730,7 @@ public sealed class WorktreeServiceTests
         Assert.True(cleared.Succeeded, cleared.Outcome.Message);
         Assert.True(string.IsNullOrWhiteSpace((await BaseCommitAsync()).StandardOutput), "The base commit record outlived its worktree.");
 
-        Task<RepoHarness.Core.Git.GitCommandResult> BaseCommitAsync()
+        Task<DssHarness.Core.Git.GitCommandResult> BaseCommitAsync()
             => harness.GitClient.RunAsync(temp.Path, ["rev-parse", "--verify", "--quiet", WorktreeService.BaseCommitRefPrefix + "wt"], cancellationToken: cancellationToken);
     }
 

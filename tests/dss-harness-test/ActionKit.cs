@@ -1,9 +1,9 @@
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Runners;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Output;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Runners;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>Reads the action files a test writes: the real file system, this platform, and output nobody reads.</summary>
 internal static class ActionKit

@@ -1,13 +1,13 @@
 using System.Globalization;
 using System.Reflection;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Orchestration;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Processes;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Orchestration;
+using DssHarness.Core.Output;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Processes;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Hosts;
+namespace DssHarness.Core.Hosts;
 
 /// <summary>What <c>update-tool</c> was asked to do.</summary>
 /// <param name="Wait">Whether to wait for every DssHarness running on this machine to end, rather than be refused by one.</param>

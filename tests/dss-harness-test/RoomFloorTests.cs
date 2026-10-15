@@ -1,7 +1,7 @@
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.FileSystem;
+using DssHarness.Core.Execution;
+using DssHarness.Core.FileSystem;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// The least room a heavy leg's build leaves free (<see cref="RoomFloor"/>), in each of its shapes, and the watch that

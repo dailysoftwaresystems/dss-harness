@@ -1,4 +1,4 @@
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// A clock that moves only when told, whose every wait passes at once and moves it on by what was waited: so a test of

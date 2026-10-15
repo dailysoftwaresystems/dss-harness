@@ -1,10 +1,10 @@
 using System.Globalization;
 using System.Text;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Processes;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Output;
+using DssHarness.Core.Processes;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Git;
+namespace DssHarness.Core.Git;
 
 /// <content>Carrying a tree's HEAD commit, and the history behind it, into another repository.</content>
 public sealed partial class GitClient

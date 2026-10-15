@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.FileSystem;
+namespace DssHarness.Core.FileSystem;
 
 /// <summary>A directory junction that could not be removed as a link, and the ones that were removed before it.</summary>
 /// <param name="path">The junction that could not be removed.</param>

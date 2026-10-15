@@ -3,7 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
-namespace RepoHarness.Core.Output;
+namespace DssHarness.Core.Output;
 
 /// <summary>
 /// How every command's <c>--json</c> document is written: a ledger, the legs, the tools, the anchors, the worktrees and

@@ -1,8 +1,8 @@
 using System.CommandLine;
-using RepoHarness.Core.Anchors;
-using RepoHarness.Core.Orchestration;
+using DssHarness.Core.Anchors;
+using DssHarness.Core.Orchestration;
 
-namespace RepoHarness.Cli.Commands;
+namespace DssHarness.Cli.Commands;
 
 /// <summary>The arguments and options the orchestrator and agent commands share, each spelt once.</summary>
 internal static class OrchestrationArguments

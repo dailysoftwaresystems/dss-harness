@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace RepoHarness.Core.Mutations;
+namespace DssHarness.Core.Mutations;
 
 /// <summary>
 /// The one place a worker's own path is told apart from what its build wrote: wherever the worker's root stands in a

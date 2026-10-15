@@ -1,6 +1,6 @@
-using RepoHarness.Core.Mutations;
+using DssHarness.Core.Mutations;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// Whether a run said an arm's diagnostic, matched a line at a time as the output arrives: exactly the text, anywhere in

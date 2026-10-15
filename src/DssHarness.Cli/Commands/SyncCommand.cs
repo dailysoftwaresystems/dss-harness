@@ -1,7 +1,7 @@
 using System.CommandLine;
-using RepoHarness.Core.Sync;
+using DssHarness.Core.Sync;
 
-namespace RepoHarness.Cli.Commands;
+namespace DssHarness.Cli.Commands;
 
 /// <summary>Wires <c>DssHarness sync</c>.</summary>
 internal static class SyncCommand

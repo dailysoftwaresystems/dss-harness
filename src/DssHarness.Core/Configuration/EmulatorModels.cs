@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Configuration;
+namespace DssHarness.Core.Configuration;
 
 /// <summary>
 /// A way to run programs built for another processor on a host without leaving the host's

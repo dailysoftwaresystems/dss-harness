@@ -1,6 +1,6 @@
-using RepoHarness.Core.Platform;
+using DssHarness.Core.Platform;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// Compares paths the way the platform does. An ordinal string assertion fails on Windows

@@ -1,6 +1,6 @@
-using RepoHarness.Core.Output;
+using DssHarness.Core.Output;
 
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>
 /// The last lines of a phase's output, kept as they arrive in a ring of a fixed number of them, so that keeping them costs

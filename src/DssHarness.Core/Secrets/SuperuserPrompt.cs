@@ -1,7 +1,7 @@
 using System.Text;
-using RepoHarness.Core.Hosts;
+using DssHarness.Core.Hosts;
 
-namespace RepoHarness.Core.Secrets;
+namespace DssHarness.Core.Secrets;
 
 /// <summary>Whether this run can ask a human for a password right now, and why not when it cannot.</summary>
 public enum PromptAvailability

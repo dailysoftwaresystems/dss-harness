@@ -1,12 +1,12 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
-using RepoHarness.Core.Anchors;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Anchors;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Output;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Orchestration;
+namespace DssHarness.Core.Orchestration;
 
 /// <summary>What list-orchestrator reports: each orchestrator, and where each of its agents stands.</summary>
 public static class OrchestrationReports

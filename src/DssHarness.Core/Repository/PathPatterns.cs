@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Repository;
+namespace DssHarness.Core.Repository;
 
 /// <summary>
 /// How a configured list of paths names what it covers, and the one place that decides whether a

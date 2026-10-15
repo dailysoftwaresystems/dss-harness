@@ -1,8 +1,8 @@
 using System.Text;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Output;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Git;
+namespace DssHarness.Core.Git;
 
 /// <content>
 /// What a three-way merge of one path asks of git: each version as git would store it, the merge itself, the result as a

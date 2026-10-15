@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Configuration;
+namespace DssHarness.Core.Configuration;
 
 /// <summary>Environment and cache variables layered onto a build.</summary>
 public class VariantOverlay

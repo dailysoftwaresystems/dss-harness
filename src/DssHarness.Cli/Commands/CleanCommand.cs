@@ -1,7 +1,7 @@
 using System.CommandLine;
-using RepoHarness.Core.Runs;
+using DssHarness.Core.Runs;
 
-namespace RepoHarness.Cli.Commands;
+namespace DssHarness.Cli.Commands;
 
 /// <summary>Wires <c>DssHarness clean</c>.</summary>
 internal static class CleanCommand

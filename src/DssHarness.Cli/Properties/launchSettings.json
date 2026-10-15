@@ -1,14 +1,14 @@
 {
   "profiles": {
-    "repo-harness --help": {
+    "dssharness --help": {
       "commandName": "Project",
       "commandLineArgs": "--help"
     },
-    "repo-harness verify-git": {
+    "dssharness verify-git": {
       "commandName": "Project",
       "commandLineArgs": "verify-git"
     },
-    "repo-harness init": {
+    "dssharness init": {
       "commandName": "Project",
       "commandLineArgs": "init"
     }

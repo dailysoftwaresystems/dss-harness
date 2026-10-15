@@ -1,7 +1,7 @@
 using System.Text.RegularExpressions;
-using RepoHarness.Core.Configuration;
+using DssHarness.Core.Configuration;
 
-namespace RepoHarness.Core.Anchors;
+namespace DssHarness.Core.Anchors;
 
 /// <summary>How anchor ids are spelled, recognised, and turned into a row's identity.</summary>
 /// <remarks>

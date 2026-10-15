@@ -1,6 +1,6 @@
-using RepoHarness.Core.Output;
+using DssHarness.Core.Output;
 
-namespace RepoHarness.Core.Git;
+namespace DssHarness.Core.Git;
 
 /// <summary>A file's content, wherever it is: a blob the repository holds, a file on disk, or bytes in hand.</summary>
 public abstract record GitContent

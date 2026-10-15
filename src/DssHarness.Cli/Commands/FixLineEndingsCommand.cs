@@ -1,8 +1,8 @@
 using System.CommandLine;
-using RepoHarness.Core.LineEndings;
-using RepoHarness.Core.Results;
+using DssHarness.Core.LineEndings;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Cli.Commands;
+namespace DssHarness.Cli.Commands;
 
 /// <summary>Wires <c>DssHarness fix-line-endings</c>.</summary>
 internal static class FixLineEndingsCommand

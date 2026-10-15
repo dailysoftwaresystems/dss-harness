@@ -1,9 +1,9 @@
 using System.Text.Json.Nodes;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Processes;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Processes;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// A command asked for <c>--json</c> that stops before its body has an outcome - a <c>--directory</c> that does not

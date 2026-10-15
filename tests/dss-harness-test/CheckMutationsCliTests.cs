@@ -1,10 +1,10 @@
 using System.Text.Json;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Mutations;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Mutations;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// The built CLI's <c>check-mutations</c>, end to end where nothing is built: what it refuses before any host is touched,

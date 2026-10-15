@@ -1,9 +1,9 @@
-using RepoHarness.Core.Build;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Platform;
+using DssHarness.Core.Build;
+using DssHarness.Core.Execution;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Platform;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>What ninja says as a build ends, read as ninja says it.</summary>
 public sealed class NinjaTests

@@ -2,7 +2,7 @@ using System.Globalization;
 using System.Net;
 using System.Text.Json;
 
-namespace RepoHarness.Core.Hosts;
+namespace DssHarness.Core.Hosts;
 
 /// <summary>What a feed said of the newest release: which it is, or why that could not be told.</summary>
 /// <param name="Newest">The newest release, or <see langword="null"/> where the feed did not say.</param>

@@ -1,6 +1,6 @@
-using RepoHarness.Core.FileSystem;
+using DssHarness.Core.FileSystem;
 
-namespace RepoHarness.Core.Worktrees;
+namespace DssHarness.Core.Worktrees;
 
 /// <summary>
 /// Which git worktree a directory is, as opposed to where it is: told by the <c>commondir</c> file in the worktree's own

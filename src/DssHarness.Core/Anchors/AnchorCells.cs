@@ -1,8 +1,8 @@
 using System.Text.RegularExpressions;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Anchors;
+namespace DssHarness.Core.Anchors;
 
 /// <summary>Reads and writes the cells of a registry table row.</summary>
 /// <remarks>

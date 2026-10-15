@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <RootNamespace>RepoHarness.Cli</RootNamespace>
+    <RootNamespace>DssHarness.Cli</RootNamespace>
     <!-- The command the package installs, not the product's name. System.CommandLine builds the usage
          line of every command's own help from the executable's name, so an assembly called DssHarness
          had each one tell the reader to type a spelling that runs nothing on a case-sensitive
@@ -28,8 +28,8 @@
     <Company>Daily Software Systems</Company>
     <Product>DssHarness</Product>
     <PackageTags>cli;tool;git;worktree;build;test;cross-platform;devops</PackageTags>
-    <PackageProjectUrl>https://github.com/dailysoftwaresystems/repo-harness</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/dailysoftwaresystems/repo-harness</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/dailysoftwaresystems/dss-harness</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/dailysoftwaresystems/dss-harness</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageReadmeFile>README.md</PackageReadmeFile>
 
@@ -53,7 +53,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="../RepoHarness.Core/RepoHarness.Core.csproj" />
+    <ProjectReference Include="../DssHarness.Core/DssHarness.Core.csproj" />
   </ItemGroup>
 
 </Project>

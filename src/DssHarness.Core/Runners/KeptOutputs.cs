@@ -1,7 +1,7 @@
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Repository;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Repository;
 
-namespace RepoHarness.Core.Runners;
+namespace DssHarness.Core.Runners;
 
 /// <summary>The files a run's steps kept, as a tree names them.</summary>
 public static class KeptOutputs

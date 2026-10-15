@@ -1,10 +1,10 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Platform;
+using DssHarness.Core.Output;
+using DssHarness.Core.Platform;
 
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>
 /// Whether the process that took something still holds it.

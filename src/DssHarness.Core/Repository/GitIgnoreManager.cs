@@ -1,7 +1,7 @@
 using System.Text;
-using RepoHarness.Core.FileSystem;
+using DssHarness.Core.FileSystem;
 
-namespace RepoHarness.Core.Repository;
+namespace DssHarness.Core.Repository;
 
 /// <inheritdoc cref="IGitIgnoreManager"/>
 public sealed class GitIgnoreManager(IFileSystem fileSystem) : IGitIgnoreManager

@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.FileSystem;
+namespace DssHarness.Core.FileSystem;
 
 /// <summary>
 /// A directory of one use's own under the temporary directory, for files written only to hand to a

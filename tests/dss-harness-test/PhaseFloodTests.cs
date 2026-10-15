@@ -1,9 +1,9 @@
 using System.Globalization;
 using System.Text;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Processes;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Processes;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// A child that prints more than any string can hold. A consumer's test started an interactive interpreter with no console,

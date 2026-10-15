@@ -1,6 +1,6 @@
 using System.Diagnostics;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// Watches this machine's wall clock against its monotonic clock while a test that needs an honest one

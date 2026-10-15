@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Processes;
+namespace DssHarness.Core.Processes;
 
 /// <summary>How much of one of a child's streams the process runner keeps for the result it returns.</summary>
 public enum StreamKept

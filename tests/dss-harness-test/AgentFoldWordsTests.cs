@@ -1,7 +1,7 @@
-using RepoHarness.Core.Git;
-using RepoHarness.Core.Orchestration;
+using DssHarness.Core.Git;
+using DssHarness.Core.Orchestration;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// The words a fold's refusal says of how the main tree came to hold a path since the agent's base, for every way it can:

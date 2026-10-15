@@ -1,7 +1,7 @@
 using System.Text;
-using RepoHarness.Core.Configuration;
+using DssHarness.Core.Configuration;
 
-namespace RepoHarness.Core.Anchors;
+namespace DssHarness.Core.Anchors;
 
 /// <summary>Which of the two registries a file is.</summary>
 public enum AnchorRegistryKind
@@ -20,7 +20,7 @@ public enum AnchorRegistryKind
 /// </remarks>
 public static class AnchorRegistrySkeleton
 {
-    private const string ResourceName = "RepoHarness.Core.Anchors.Templates.anchor-registry.md";
+    private const string ResourceName = "DssHarness.Core.Anchors.Templates.anchor-registry.md";
 
     /// <summary>The skeleton for <paramref name="kind"/>, with its id examples in the configured spelling.</summary>
     public static string Render(AnchorRegistryKind kind, AnchorSettings settings)

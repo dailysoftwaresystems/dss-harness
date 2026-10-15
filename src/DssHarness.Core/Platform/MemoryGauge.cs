@@ -1,8 +1,8 @@
 using System.Globalization;
 using System.Runtime.InteropServices;
-using RepoHarness.Core.FileSystem;
+using DssHarness.Core.FileSystem;
 
-namespace RepoHarness.Core.Platform;
+namespace DssHarness.Core.Platform;
 
 /// <summary>How much of a machine's memory is in use, as its operating system counts it.</summary>
 /// <param name="Percent">The share in use, from 0 to 100.</param>

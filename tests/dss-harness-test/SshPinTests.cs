@@ -1,7 +1,7 @@
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Processes;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Processes;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// What ssh says it would do, read, and the pin made from it: ssh given the address this machine resolved,

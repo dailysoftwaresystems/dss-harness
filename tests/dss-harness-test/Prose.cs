@@ -1,4 +1,4 @@
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// Text read as a person reads it, its words one space apart wherever a line was wrapped: what the CLI says, and what
@@ -21,12 +21,12 @@ internal static class Prose
     {
         for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
         {
-            if (File.Exists(Path.Combine(directory.FullName, "RepoHarness.slnx")))
+            if (File.Exists(Path.Combine(directory.FullName, "DssHarness.slnx")))
             {
                 return directory.FullName;
             }
         }
 
-        throw new InvalidOperationException($"No directory above '{AppContext.BaseDirectory}' holds RepoHarness.slnx.");
+        throw new InvalidOperationException($"No directory above '{AppContext.BaseDirectory}' holds DssHarness.slnx.");
     }
 }

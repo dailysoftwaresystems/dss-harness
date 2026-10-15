@@ -1,6 +1,6 @@
-using RepoHarness.Core.Processes;
+using DssHarness.Core.Processes;
 
-namespace RepoHarness.Core.Build;
+namespace DssHarness.Core.Build;
 
 /// <summary>
 /// A compiler variable's value - <c>CC</c>, <c>CXX</c> - read as CMake reads it: the program it

@@ -1,6 +1,6 @@
-using RepoHarness.Core.Hosts;
+using DssHarness.Core.Hosts;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// The line an ssh server hands its shell is never quoted, so what it may hold is the whole defence:

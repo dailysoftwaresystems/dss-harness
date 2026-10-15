@@ -2,9 +2,9 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.ExceptionServices;
 using System.Text;
-using RepoHarness.Core.Platform;
+using DssHarness.Core.Platform;
 
-namespace RepoHarness.Core.Processes;
+namespace DssHarness.Core.Processes;
 
 /// <inheritdoc cref="IProcessRunner"/>
 public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions filePermissions) : IProcessRunner

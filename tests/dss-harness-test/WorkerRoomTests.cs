@@ -1,7 +1,7 @@
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Mutations;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Mutations;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// How many workers a sweep runs: no more than its cap and its arms, one in WSL, and of those the ones that fit the room,

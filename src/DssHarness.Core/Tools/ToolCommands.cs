@@ -1,6 +1,6 @@
-using RepoHarness.Core.Configuration;
+using DssHarness.Core.Configuration;
 
-namespace RepoHarness.Core.Tools;
+namespace DssHarness.Core.Tools;
 
 /// <summary>
 /// What a tool's <c>install</c> becomes: an argument list, never a shell line. A command whose first

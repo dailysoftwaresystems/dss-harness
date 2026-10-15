@@ -1,6 +1,6 @@
 using System.Security.Cryptography;
 
-namespace RepoHarness.Core.FileSystem;
+namespace DssHarness.Core.FileSystem;
 
 /// <summary>
 /// What a file holds, as the one identity every part of the harness compares by.

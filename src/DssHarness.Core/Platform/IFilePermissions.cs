@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Platform;
+namespace DssHarness.Core.Platform;
 
 /// <summary>
 /// File permission questions whose answers genuinely differ by platform: Unix

@@ -1,7 +1,7 @@
-using RepoHarness.Core.Anchors;
-using RepoHarness.Core.Repository;
+using DssHarness.Core.Anchors;
+using DssHarness.Core.Repository;
 
-namespace RepoHarness.Core.Orchestration;
+namespace DssHarness.Core.Orchestration;
 
 /// <summary>
 /// What the person folding an agent lets its fold do that it otherwise refuses, each said by name. Nothing is let through

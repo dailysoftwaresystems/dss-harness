@@ -1,17 +1,17 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
-using RepoHarness.Core.Build;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Legs;
-using RepoHarness.Core.Mutations;
-using RepoHarness.Core.Orchestration;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Sync;
-using RepoHarness.Core.Worktrees;
+using DssHarness.Core.Build;
+using DssHarness.Core.Execution;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Legs;
+using DssHarness.Core.Mutations;
+using DssHarness.Core.Orchestration;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
+using DssHarness.Core.Sync;
+using DssHarness.Core.Worktrees;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// delete-agent: an agent's fold and rows put in, its evidence and transcripts kept and read back, its closing recorded,

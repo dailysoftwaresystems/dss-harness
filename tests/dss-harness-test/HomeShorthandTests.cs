@@ -1,8 +1,8 @@
 using NSubstitute;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Platform;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Platform;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// How a host answering another machine writes its home: as <c>~</c>, wherever it stands as a whole path

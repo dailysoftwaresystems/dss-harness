@@ -1,7 +1,7 @@
 using System.Text;
-using RepoHarness.Core.Processes;
+using DssHarness.Core.Processes;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>What a child is given on its standard input, read back as the child reads it.</summary>
 internal static class ChildInputs

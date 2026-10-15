@@ -1,8 +1,8 @@
-using RepoHarness.Core.Platform;
+using DssHarness.Core.Platform;
 using System.Diagnostics;
 using System.Globalization;
 
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>
 /// Sampling in progress for one leg: the reading taken as it started, the readings taken while it

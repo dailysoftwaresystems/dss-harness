@@ -1,13 +1,13 @@
 using System.Reflection;
 using System.Text;
 using NSubstitute;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Mutations;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Sync;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Mutations;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Sync;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// A registry's text validated against a view of a tree's files: the tree as it stands, or the tree as a command would

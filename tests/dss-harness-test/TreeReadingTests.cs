@@ -1,7 +1,7 @@
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Sync;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Sync;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// What a reading of a tree says of itself - the line a run says, and the part each leg on a copy says - and how a file

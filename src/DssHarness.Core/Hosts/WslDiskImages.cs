@@ -1,8 +1,8 @@
 using System.Text.RegularExpressions;
 using Microsoft.Win32;
-using RepoHarness.Core.FileSystem;
+using DssHarness.Core.FileSystem;
 
-namespace RepoHarness.Core.Hosts;
+namespace DssHarness.Core.Hosts;
 
 /// <summary>Where WSL keeps a distribution's disk on this machine.</summary>
 public interface IWslDiskImages

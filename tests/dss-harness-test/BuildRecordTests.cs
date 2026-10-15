@@ -1,7 +1,7 @@
-using RepoHarness.Core.Build;
-using RepoHarness.Core.FileSystem;
+using DssHarness.Core.Build;
+using DssHarness.Core.FileSystem;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// The record a build keeps in its directory: read back as written, read as an earlier version wrote

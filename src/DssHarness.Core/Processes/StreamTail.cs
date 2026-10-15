@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace RepoHarness.Core.Processes;
+namespace DssHarness.Core.Processes;
 
 /// <summary>
 /// The end of a stream, as it was written: its last <see cref="Length"/> characters, however much came before them.

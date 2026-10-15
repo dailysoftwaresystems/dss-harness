@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Secrets;
+namespace DssHarness.Core.Secrets;
 
 /// <summary>
 /// A superuser credential read from the secrets layout. It is carried in this wrapper rather than as

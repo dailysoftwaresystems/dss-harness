@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Results;
+namespace DssHarness.Core.Results;
 
 /// <summary>
 /// A refusal that carries the exit code it should be reported with. Lets a service

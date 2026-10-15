@@ -1,11 +1,11 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Platform;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Platform;
 
-namespace RepoHarness.Core.Build;
+namespace DssHarness.Core.Build;
 
 /// <summary>
 /// What makes one build directory different from another, and the directory name it produces.

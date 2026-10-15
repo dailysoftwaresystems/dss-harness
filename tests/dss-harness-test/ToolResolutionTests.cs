@@ -1,15 +1,15 @@
-using RepoHarness.Core.Output;
+using DssHarness.Core.Output;
 using NSubstitute;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Legs;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Processes;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Legs;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Processes;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// Where a program is found, and that the survey and the run find it in the same place. Measured on a
@@ -182,7 +182,7 @@ public sealed class ToolResolutionTests
     {
         using var temp = new TempDirectory();
         var appended = Directory.CreateDirectory(temp.Combine("appended")).FullName;
-        var name = "rh-probe-" + Guid.NewGuid().ToString("N")[..8];
+        var name = "dh-probe-" + Guid.NewGuid().ToString("N")[..8];
 
         TestHost.StartableProgram(appended, name);
 
@@ -205,7 +205,7 @@ public sealed class ToolResolutionTests
         using var temp = new TempDirectory();
         var found = Directory.CreateDirectory(temp.Combine("found")).FullName;
         var elsewhere = Directory.CreateDirectory(temp.Combine("elsewhere")).FullName;
-        var name = "rh-probe-" + Guid.NewGuid().ToString("N")[..8];
+        var name = "dh-probe-" + Guid.NewGuid().ToString("N")[..8];
 
         TestHost.StartableProgram(found, name);
 
@@ -439,22 +439,22 @@ public sealed class ToolResolutionTests
         Assert.Empty(LegWorkload.ForRunner(whole, action: null).Programs);
         Assert.Equal(["python3", "arm-none-eabi-size"], LegWorkload.ForRunner(whole, action: null).UnderOwnPath);
 
-        var action = new RepoHarness.Core.Runners.ActionFile(
+        var action = new DssHarness.Core.Runners.ActionFile(
             "actions/probe/probe.yml",
             "probe",
             null,
             [],
             [
-                new RepoHarness.Core.Runners.ActionStep
+                new DssHarness.Core.Runners.ActionStep
                 {
                     Name = "plain",
-                    Commands = [new RepoHarness.Core.Runners.ActionCommand("tclsh probe.tcl", 4, ["tclsh", "probe.tcl"])],
+                    Commands = [new DssHarness.Core.Runners.ActionCommand("tclsh probe.tcl", 4, ["tclsh", "probe.tcl"])],
                     Env = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
                 },
-                new RepoHarness.Core.Runners.ActionStep
+                new DssHarness.Core.Runners.ActionStep
                 {
                     Name = "cross",
-                    Commands = [new RepoHarness.Core.Runners.ActionCommand("arm-none-eabi-size out.elf", 8, ["arm-none-eabi-size", "out.elf"])],
+                    Commands = [new DssHarness.Core.Runners.ActionCommand("arm-none-eabi-size out.elf", 8, ["arm-none-eabi-size", "out.elf"])],
                     Env = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["PATH"] = "/opt/arm/bin" },
                 },
             ]);
@@ -487,27 +487,27 @@ public sealed class ToolResolutionTests
             },
         };
 
-        var action = new RepoHarness.Core.Runners.ActionFile(
+        var action = new DssHarness.Core.Runners.ActionFile(
             "actions/probe/probe.yml",
             "probe",
             null,
             [],
             [
-                new RepoHarness.Core.Runners.ActionStep
+                new DssHarness.Core.Runners.ActionStep
                 {
                     Name = "everywhere",
-                    Commands = [new RepoHarness.Core.Runners.ActionCommand("tclsh probe.tcl", 4, ["tclsh", "probe.tcl"])],
+                    Commands = [new DssHarness.Core.Runners.ActionCommand("tclsh probe.tcl", 4, ["tclsh", "probe.tcl"])],
                 },
-                new RepoHarness.Core.Runners.ActionStep
+                new DssHarness.Core.Runners.ActionStep
                 {
                     Name = "msvc",
-                    Commands = [new RepoHarness.Core.Runners.ActionCommand("cl /nologo", 6, ["cl", "/nologo"])],
+                    Commands = [new DssHarness.Core.Runners.ActionCommand("cl /nologo", 6, ["cl", "/nologo"])],
                     RunOn = ["windows"],
                 },
-                new RepoHarness.Core.Runners.ActionStep
+                new DssHarness.Core.Runners.ActionStep
                 {
                     Name = "cross",
-                    Commands = [new RepoHarness.Core.Runners.ActionCommand("arm-none-eabi-size out.elf", 8, ["arm-none-eabi-size", "out.elf"])],
+                    Commands = [new DssHarness.Core.Runners.ActionCommand("arm-none-eabi-size out.elf", 8, ["arm-none-eabi-size", "out.elf"])],
                     Env = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["PATH"] = "/opt/arm/bin" },
                     RunOn = ["linux", "macos"],
                 },
@@ -671,10 +671,10 @@ public sealed class ToolResolutionTests
     public void AKeepAwakeCommand_IsAskedAbout_AndRequiredOfNoHost()
     {
         var config = Configured(generator: "Ninja");
-        config.Hosts.Ssh["pi"] = new SshHostConfig { RepositoryPath = "~/repo", KeepAwake = ["rh-awake", "-w", "{pid}"] };
+        config.Hosts.Ssh["pi"] = new SshHostConfig { RepositoryPath = "~/repo", KeepAwake = ["dh-awake", "-w", "{pid}"] };
 
-        Assert.Contains("rh-awake", LegPrograms.Wanted(config, LegWorkload.BuildAndTest));
-        Assert.DoesNotContain("rh-awake", LegPrograms.For(config, config.Legs["lin"], LegWorkload.BuildAndTest, config.Hosts.Ssh["pi"]));
+        Assert.Contains("dh-awake", LegPrograms.Wanted(config, LegWorkload.BuildAndTest));
+        Assert.DoesNotContain("dh-awake", LegPrograms.For(config, config.Legs["lin"], LegWorkload.BuildAndTest, config.Hosts.Ssh["pi"]));
     }
 
     /// <summary>
@@ -931,7 +931,7 @@ public sealed class ToolResolutionTests
         var off = new LegEntry { Leg = "pi", Verdict = LegVerdict.SkippedUnavailable, Detail = "ssh pi: ssh could not connect" };
         var defect = new LegEntry { Leg = "lin", Verdict = LegVerdict.Poisoned, Detail = "local: whether 'cmake' is there was never asked" };
 
-        var unavailable = RepoHarness.Core.Runs.LegRunPlan.NothingRuns([missing, off]);
+        var unavailable = DssHarness.Core.Runs.LegRunPlan.NothingRuns([missing, off]);
 
         Assert.Equal(LegsExit.Unavailable, unavailable.ExitCode);
         Assert.Equal("no selected leg can run", unavailable.Message);
@@ -939,14 +939,14 @@ public sealed class ToolResolutionTests
             ["mac: skipped-tool-missing: ssh mac: 'cmake' is not installed there", "pi: skipped-unavailable: ssh pi: ssh could not connect"],
             unavailable.Details);
 
-        Assert.Equal(HarnessExit.InternalError, RepoHarness.Core.Runs.LegRunPlan.NothingRuns([missing, defect]).ExitCode);
+        Assert.Equal(HarnessExit.InternalError, DssHarness.Core.Runs.LegRunPlan.NothingRuns([missing, defect]).ExitCode);
 
-        var ofASweep = RepoHarness.Core.Runs.LegRunPlan.NothingRuns([missing, off], HarnessExit.Incomplete);
+        var ofASweep = DssHarness.Core.Runs.LegRunPlan.NothingRuns([missing, off], HarnessExit.Incomplete);
 
         Assert.Equal(HarnessExit.Incomplete, ofASweep.ExitCode);
         Assert.Equal(unavailable.Message, ofASweep.Message);
         Assert.Equal(unavailable.Details, ofASweep.Details);
-        Assert.Equal(HarnessExit.InternalError, RepoHarness.Core.Runs.LegRunPlan.NothingRuns([missing, defect], HarnessExit.Incomplete).ExitCode);
+        Assert.Equal(HarnessExit.InternalError, DssHarness.Core.Runs.LegRunPlan.NothingRuns([missing, defect], HarnessExit.Incomplete).ExitCode);
     }
 
     /// <summary>Every program there, found on the PATH or off it, and the leg runs.</summary>
@@ -1031,7 +1031,7 @@ public sealed class ToolResolutionTests
         Executable(searched, "qemu-probe" + exe);
 
         var platform = HostDoubles.Platform(windows ? PlatformId.Windows : PlatformId.Linux, "arm64", temp.Path);
-        var fileSystem = new RepoHarness.Core.FileSystem.PhysicalFileSystem(FilePermissionsFactory.Create());
+        var fileSystem = new DssHarness.Core.FileSystem.PhysicalFileSystem(FilePermissionsFactory.Create());
         var identity = Substitute.For<IToolIdentityProvider>();
         identity.Current.Returns(new ToolIdentity("1.2.3", "abc123"));
 

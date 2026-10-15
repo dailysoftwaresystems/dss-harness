@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Platform;
+namespace DssHarness.Core.Platform;
 
 /// <summary>Operating system families the harness distinguishes.</summary>
 public enum PlatformId

@@ -1,7 +1,7 @@
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Runners;
+namespace DssHarness.Core.Runners;
 
 /// <summary>
 /// A predefined action a step names under <c>uses</c>. The set is closed and small on purpose:

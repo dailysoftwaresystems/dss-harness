@@ -1,7 +1,7 @@
-using RepoHarness.Core.Orchestration;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Orchestration;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>create-agent, seed-agent and refresh-agent: an agent's record, worktree and seed, and what it is handed later.</summary>
 public sealed class AgentServiceTests

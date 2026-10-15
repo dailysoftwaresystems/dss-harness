@@ -1,9 +1,9 @@
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Worktrees;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Output;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Worktrees;
 
-namespace RepoHarness.Core.Orchestration;
+namespace DssHarness.Core.Orchestration;
 
 /// <summary>What an agent's worktree holds under its evidence roots, each file with its digest.</summary>
 /// <param name="Files">Every evidence file, relative to the worktree, with its digest.</param>

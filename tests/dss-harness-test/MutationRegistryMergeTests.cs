@@ -1,7 +1,7 @@
 using System.Text;
-using RepoHarness.Core.Mutations;
+using DssHarness.Core.Mutations;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// An arms registry merged by arm: what each of two trees did to each arm since the text both last held, taken where

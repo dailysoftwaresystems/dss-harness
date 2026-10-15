@@ -1,7 +1,7 @@
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Output;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Output;
 
-namespace RepoHarness.Core.Repository;
+namespace DssHarness.Core.Repository;
 
 /// <summary>
 /// Who a command is being run for: somebody typing it here, this machine's host agent serving another machine, or a

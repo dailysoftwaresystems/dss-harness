@@ -1,7 +1,7 @@
 using System.Text;
-using RepoHarness.Core.FileSystem;
+using DssHarness.Core.FileSystem;
 
-namespace RepoHarness.Core.Platform;
+namespace DssHarness.Core.Platform;
 
 /// <summary>
 /// A machine's home directory written as <c>~</c>, in what DssHarness writes for another machine to read.

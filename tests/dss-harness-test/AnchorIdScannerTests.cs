@@ -1,7 +1,7 @@
-using RepoHarness.Core.Anchors;
-using RepoHarness.Core.Configuration;
+using DssHarness.Core.Anchors;
+using DssHarness.Core.Configuration;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// What the scanner does and does not call a citation. The blind spot it exists to close is a

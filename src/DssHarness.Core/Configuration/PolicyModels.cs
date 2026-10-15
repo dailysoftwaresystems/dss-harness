@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-namespace RepoHarness.Core.Configuration;
+namespace DssHarness.Core.Configuration;
 
 /// <summary>Commit message templating and policy.</summary>
 public sealed class CommitConfig

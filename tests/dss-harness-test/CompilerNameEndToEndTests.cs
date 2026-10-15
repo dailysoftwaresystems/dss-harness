@@ -1,11 +1,11 @@
 using System.Text.Json;
-using RepoHarness.Core.Build;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Mutations;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Build;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Mutations;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// The built CLI's <c>run</c> and <c>test</c> naming a leg's own compiler, end to end through a real build by the CMake,

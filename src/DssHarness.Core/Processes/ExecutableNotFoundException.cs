@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Processes;
+namespace DssHarness.Core.Processes;
 
 /// <summary>
 /// Raised when a requested executable is not installed or not on PATH.

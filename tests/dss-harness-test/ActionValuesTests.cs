@@ -1,10 +1,10 @@
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Runners;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Output;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Results;
+using DssHarness.Core.Runners;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>The values an action reads, and what keeps a secret out of everything that prints.</summary>
 public sealed class ActionValuesTests

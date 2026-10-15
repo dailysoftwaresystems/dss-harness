@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Configuration;
+namespace DssHarness.Core.Configuration;
 
 /// <summary>The kinds of developer environment this build knows how to set up.</summary>
 public static class DeveloperEnvironmentKinds

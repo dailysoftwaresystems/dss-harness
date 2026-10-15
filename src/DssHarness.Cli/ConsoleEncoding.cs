@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace RepoHarness.Cli;
+namespace DssHarness.Cli;
 
 /// <summary>Makes standard output and standard error UTF-8 for the life of the process.</summary>
 /// <remarks>

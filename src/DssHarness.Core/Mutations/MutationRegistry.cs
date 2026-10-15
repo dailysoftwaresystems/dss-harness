@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Mutations;
+namespace DssHarness.Core.Mutations;
 
 /// <summary>What an arm declares its mutation does: make cases of a test binary fail, or make the build fail.</summary>
 /// <remarks>

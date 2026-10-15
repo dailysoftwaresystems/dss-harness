@@ -1,6 +1,6 @@
-using RepoHarness.Core.Configuration;
+using DssHarness.Core.Configuration;
 
-namespace RepoHarness.Core.Anchors;
+namespace DssHarness.Core.Anchors;
 
 /// <summary>One data row of a registry's anchor table, exactly as read.</summary>
 /// <remarks>

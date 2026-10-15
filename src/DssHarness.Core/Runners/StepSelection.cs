@@ -1,7 +1,7 @@
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Runners;
+namespace DssHarness.Core.Runners;
 
 /// <summary>
 /// Which of an action's steps one run runs: every step that is not manual, the steps a runner declares

@@ -1,7 +1,7 @@
-using RepoHarness.Core.Processes;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Processes;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Git;
+namespace DssHarness.Core.Git;
 
 /// <summary>
 /// The variables git reads a repository from rather than from <c>-C &lt;directory&gt;</c>: every name

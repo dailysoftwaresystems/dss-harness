@@ -1,7 +1,7 @@
-using RepoHarness.Core.Build;
-using RepoHarness.Core.Processes;
+using DssHarness.Core.Build;
+using DssHarness.Core.Processes;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// A compiler asked its version as CMake identifies one: the macros it predefines, put together by
@@ -24,7 +24,7 @@ public sealed class CompilerVersionProbeTests
     [InlineData("GNU", "_MSC_VER _MSC_FULL_VER _MSC_BUILD __GNUC__ 13 2 0 __clang_major__ __clang_minor__ __clang_patchlevel__ __apple_build_version__", "13.2.0")]
     public void WhatTheCompilerPrinted_IsPutTogetherAsCMakeRecordsIt(string id, string printed, string version)
     {
-        var answer = CompilerVersionProbe.Read(id, $"probe.cpp\r\nrepo_harness_compiler_version {printed}\r\n");
+        var answer = CompilerVersionProbe.Read(id, $"probe.cpp\r\ndssharness_compiler_version {printed}\r\n");
 
         Assert.Equal(version, answer.Version);
         Assert.Null(answer.Replaced);
@@ -41,7 +41,7 @@ public sealed class CompilerVersionProbeTests
     [InlineData("1310 13103077 _MSC_BUILD", "13.10.3077")]
     public void AnMsvcPartThatIsNotDefined_IsLeftOff_WithEveryPartAfterIt(string msvc, string version)
     {
-        var answer = CompilerVersionProbe.Read("MSVC", $"repo_harness_compiler_version {msvc} __GNUC__ __GNUG__ __GNUC_MINOR__ __GNUC_PATCHLEVEL__ __clang_major__ __clang_minor__ __clang_patchlevel__ __apple_build_version__\n");
+        var answer = CompilerVersionProbe.Read("MSVC", $"dssharness_compiler_version {msvc} __GNUC__ __GNUG__ __GNUC_MINOR__ __GNUC_PATCHLEVEL__ __clang_major__ __clang_minor__ __clang_patchlevel__ __apple_build_version__\n");
 
         Assert.Equal(version, answer.Version);
     }
@@ -53,7 +53,7 @@ public sealed class CompilerVersionProbeTests
     [Fact]
     public void ACompilerDefiningNoneOfItsIdsMacros_IsAnotherCompiler()
     {
-        var answer = CompilerVersionProbe.Read("Clang", "repo_harness_compiler_version _MSC_VER _MSC_FULL_VER _MSC_BUILD 13 13 2 0 __clang_major__ __clang_minor__ __clang_patchlevel__ __apple_build_version__\n");
+        var answer = CompilerVersionProbe.Read("Clang", "dssharness_compiler_version _MSC_VER _MSC_FULL_VER _MSC_BUILD 13 13 2 0 __clang_major__ __clang_minor__ __clang_patchlevel__ __apple_build_version__\n");
 
         Assert.Null(answer.Version);
         Assert.Contains("none of the macros a Clang compiler's version is made of", answer.Replaced, StringComparison.Ordinal);
@@ -64,9 +64,9 @@ public sealed class CompilerVersionProbeTests
     /// short, or a word that is not a number where a macro was.
     /// </summary>
     [Theory]
-    [InlineData("nothing like it\n", "printed no line starting 'repo_harness_compiler_version'")]
-    [InlineData("repo_harness_compiler_version 1951 195136260\n", "it printed 2 words")]
-    [InlineData("repo_harness_compiler_version (1951) 195136260 0 __GNUC__ __GNUG__ __GNUC_MINOR__ __GNUC_PATCHLEVEL__ __clang_major__ __clang_minor__ __clang_patchlevel__ __apple_build_version__\n", "it printed '(1951)' for _MSC_VER")]
+    [InlineData("nothing like it\n", "printed no line starting 'dssharness_compiler_version'")]
+    [InlineData("dssharness_compiler_version 1951 195136260\n", "it printed 2 words")]
+    [InlineData("dssharness_compiler_version (1951) 195136260 0 __GNUC__ __GNUG__ __GNUC_MINOR__ __GNUC_PATCHLEVEL__ __clang_major__ __clang_minor__ __clang_patchlevel__ __apple_build_version__\n", "it printed '(1951)' for _MSC_VER")]
     public void OutputThatDoesNotReadAsTheLine_IsUnanswered(string output, string why)
     {
         var answer = CompilerVersionProbe.Read("MSVC", output);
@@ -89,7 +89,7 @@ public sealed class CompilerVersionProbeTests
         var factory = new HarnessFactory();
         var program = temp.WriteFile(Path.Combine("toolchain", "compiler.exe"), "a compiler");
         var scratch = temp.Combine("run", "leg");
-        var runner = new AnsweringRunner("repo_harness_compiler_version 1951 195136260 0 __GNUC__ __GNUG__ __GNUC_MINOR__ __GNUC_PATCHLEVEL__ __clang_major__ __clang_minor__ __clang_patchlevel__ __apple_build_version__");
+        var runner = new AnsweringRunner("dssharness_compiler_version 1951 195136260 0 __GNUC__ __GNUG__ __GNUC_MINOR__ __GNUC_PATCHLEVEL__ __clang_major__ __clang_minor__ __clang_patchlevel__ __apple_build_version__");
         var environment = new Dictionary<string, string?> { ["INCLUDE"] = "from the developer environment" };
 
         await new CompilerVersionProbe(runner, factory.FileSystem).AskAsync(
@@ -106,7 +106,7 @@ public sealed class CompilerVersionProbeTests
         Assert.Equal(["--launched", .. options.Split(' '), source], request.Arguments);
         Assert.Same(environment, request.Environment);
         Assert.Equal([temp.Combine("tools")], request.AppendToPath);
-        Assert.StartsWith("repo_harness_compiler_version _MSC_VER ", File.ReadAllText(source), StringComparison.Ordinal);
+        Assert.StartsWith("dssharness_compiler_version _MSC_VER ", File.ReadAllText(source), StringComparison.Ordinal);
     }
 
     /// <summary>A compiler whose recorded path holds nothing now is gone, and is not run.</summary>

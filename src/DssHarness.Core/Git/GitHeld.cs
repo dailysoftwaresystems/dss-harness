@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Git;
+namespace DssHarness.Core.Git;
 
 /// <summary>
 /// What a commit holds at a path: a file - or a symbolic link, which git holds as a file of its target's name - a

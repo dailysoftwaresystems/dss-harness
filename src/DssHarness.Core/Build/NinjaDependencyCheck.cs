@@ -1,8 +1,8 @@
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Processes;
-using RepoHarness.Core.Results;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Processes;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Build;
+namespace DssHarness.Core.Build;
 
 /// <summary>What a build directory's dependency records say.</summary>
 /// <param name="ObjectsRead">How many objects had a dependency record at all.</param>

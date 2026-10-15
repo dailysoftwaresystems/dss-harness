@@ -401,8 +401,8 @@ id or a path cut in two is refused, and so is one that newly cites an id no row 
 ## Building from source
 
 ```bash
-dotnet build RepoHarness.slnx
-dotnet test --project tests/repo-harness-test/repo-harness-test.csproj
+dotnet build DssHarness.slnx
+dotnet test --project tests/dss-harness-test/dss-harness-test.csproj
 ```
 
 Everything a build produces — binaries, intermediates and packages — lands under
@@ -421,5 +421,5 @@ integration runners do, to have them fail instead.
 
 ## License
 
-repo-harness is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE)
+DssHarness is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE)
 and [NOTICE](NOTICE).

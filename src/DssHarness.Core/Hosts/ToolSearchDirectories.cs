@@ -1,7 +1,7 @@
 using System.Collections.Immutable;
-using RepoHarness.Core.Platform;
+using DssHarness.Core.Platform;
 
-namespace RepoHarness.Core.Hosts;
+namespace DssHarness.Core.Hosts;
 
 /// <summary>
 /// Where a program is looked for when the PATH of a command run without a login shell does not

@@ -1,11 +1,11 @@
 using System.Runtime.InteropServices;
 using NSubstitute;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Projects;
-using RepoHarness.Core.Repository;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Projects;
+using DssHarness.Core.Repository;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// Expectations come from <see cref="RuntimeInformation"/>, never from the platform

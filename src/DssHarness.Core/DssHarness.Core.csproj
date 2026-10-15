@@ -1,13 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <RootNamespace>RepoHarness.Core</RootNamespace>
+    <RootNamespace>DssHarness.Core</RootNamespace>
   </PropertyGroup>
 
   <ItemGroup>
     <!-- The registry document's edits are internal: each takes the row positions read when the
          file was parsed, which only the service that just parsed it can vouch for. -->
-    <InternalsVisibleTo Include="repo-harness-test" />
+    <InternalsVisibleTo Include="dss-harness-test" />
   </ItemGroup>
 
   <ItemGroup>
@@ -28,7 +28,7 @@
          assembly and can never be missing or out of step with the code that reads it. -->
     <None Remove="Anchors/Templates/anchor-registry.md" />
     <EmbeddedResource Include="Anchors/Templates/anchor-registry.md"
-                      LogicalName="RepoHarness.Core.Anchors.Templates.anchor-registry.md" />
+                      LogicalName="DssHarness.Core.Anchors.Templates.anchor-registry.md" />
   </ItemGroup>
 
   <ItemGroup>
@@ -36,7 +36,7 @@
          beside the tests, and embedded whole, each file under its path in the fixture, so every
          build of the tool carries the very fixture its own tests swept. -->
     <EmbeddedResource Include="../../tests/mutation-fixture/**/*"
-                      LogicalName="RepoHarness.Core.MutationFixture/%(RecursiveDir)%(Filename)%(Extension)" />
+                      LogicalName="DssHarness.Core.MutationFixture/%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 
 </Project>

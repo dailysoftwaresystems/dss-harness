@@ -1,6 +1,6 @@
-using RepoHarness.Core.FileSystem;
+using DssHarness.Core.FileSystem;
 
-namespace RepoHarness.Core.Projects;
+namespace DssHarness.Core.Projects;
 
 /// <inheritdoc cref="IProjectDetector"/>
 public sealed class ProjectDetector(IFileSystem fileSystem) : IProjectDetector

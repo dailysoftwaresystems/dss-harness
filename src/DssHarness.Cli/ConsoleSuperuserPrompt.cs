@@ -1,8 +1,8 @@
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Secrets;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Output;
+using DssHarness.Core.Secrets;
 
-namespace RepoHarness.Cli;
+namespace DssHarness.Cli;
 
 /// <summary>
 /// Reads a superuser password from the console, masked, and only when there is a console to read.

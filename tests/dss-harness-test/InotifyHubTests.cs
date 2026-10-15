@@ -1,7 +1,7 @@
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Platform;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Platform;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// The one inotify instance a process watches through on Linux, over calls a test answers: what it adds and removes,

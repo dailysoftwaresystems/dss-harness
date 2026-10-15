@@ -1,6 +1,6 @@
 using System.ComponentModel;
 
-namespace RepoHarness.Core.Configuration;
+namespace DssHarness.Core.Configuration;
 
 /// <summary>
 /// A failure a runner is allowed to produce, and what to report when it does.

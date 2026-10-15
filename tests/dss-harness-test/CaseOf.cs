@@ -1,6 +1,6 @@
-using RepoHarness.Core.FileSystem;
+using DssHarness.Core.FileSystem;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// The real file system, save that it finds <paramref name="root"/> by its name in another case only where

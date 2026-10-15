@@ -1,6 +1,6 @@
-using RepoHarness.Core.Execution;
+using DssHarness.Core.Execution;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// What a clock step is, for whoever times a window on both clocks: how far they disagreed, whichever ran ahead, and

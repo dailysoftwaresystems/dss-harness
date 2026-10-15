@@ -1,13 +1,13 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Processes;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Testing;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Output;
+using DssHarness.Core.Processes;
+using DssHarness.Core.Results;
+using DssHarness.Core.Testing;
 
-namespace RepoHarness.Core.Runs;
+namespace DssHarness.Core.Runs;
 
 /// <summary>
 /// Runs one leg on the host it was placed on, by asking the DssHarness already installed there.

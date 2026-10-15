@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Git;
+namespace DssHarness.Core.Git;
 
 /// <summary>
 /// Result of <c>DssHarness verify-git</c>, returned directly as the process exit code.

@@ -1,7 +1,7 @@
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Output;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Output;
 
-namespace RepoHarness.Core.Sync;
+namespace DssHarness.Core.Sync;
 
 /// <summary>
 /// What one reading of a tree read: the tree, the commit its HEAD named, and how many of the paths a sync of it carries

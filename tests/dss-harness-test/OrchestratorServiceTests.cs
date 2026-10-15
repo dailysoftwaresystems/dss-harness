@@ -1,10 +1,10 @@
 using System.Text.Json.Nodes;
-using RepoHarness.Core.Orchestration;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Worktrees;
+using DssHarness.Core.Orchestration;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
+using DssHarness.Core.Worktrees;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>create-orchestrator, delete-orchestrator and list-orchestrator.</summary>
 public sealed class OrchestratorServiceTests
@@ -233,7 +233,7 @@ public sealed class OrchestratorServiceTests
     }
 
     /// <summary>A disk that will not say which files one directory holds, so not whether it is empty either.</summary>
-    private sealed class CannotTellEmpty(RepoHarness.Core.FileSystem.IFileSystem inner, string directory) : PassThroughFileSystem(inner)
+    private sealed class CannotTellEmpty(DssHarness.Core.FileSystem.IFileSystem inner, string directory) : PassThroughFileSystem(inner)
     {
         public override IEnumerable<string> EnumerateFiles(string path, bool recursive)
             => string.Equals(Path.GetFullPath(path), Path.GetFullPath(directory), StringComparison.OrdinalIgnoreCase)
@@ -242,7 +242,7 @@ public sealed class OrchestratorServiceTests
     }
 
     /// <summary>Deleting orchestrators over <paramref name="fileSystem"/>, the worktrees below them deleted over it as well.</summary>
-    private static OrchestratorService Over(OrchestrationKit kit, RepoHarness.Core.FileSystem.IFileSystem fileSystem)
+    private static OrchestratorService Over(OrchestrationKit kit, DssHarness.Core.FileSystem.IFileSystem fileSystem)
         => new(
             kit.Harness.ContextLoader,
             kit.Harness.GitClient,
@@ -266,7 +266,7 @@ public sealed class OrchestratorServiceTests
     /// <summary>A mutation worker as a sync makes one: marked as the harness's, a repository of its own, holding a file.</summary>
     private static async Task<string> WorkerAsync(OrchestrationKit kit, string path)
     {
-        await kit.Harness.LocalTransport.CreateRootAsync(path, RepoHarness.Core.Sync.CopyMark.Complete, Token);
+        await kit.Harness.LocalTransport.CreateRootAsync(path, DssHarness.Core.Sync.CopyMark.Complete, Token);
         Directory.CreateDirectory(Path.Combine(path, ".git"));
         File.WriteAllText(Path.Combine(path, "main.c"), "int main;");
 

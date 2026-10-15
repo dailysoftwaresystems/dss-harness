@@ -1,8 +1,8 @@
 using System.Text.Json.Serialization;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Execution;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
 
-namespace RepoHarness.Core.Runners;
+namespace DssHarness.Core.Runners;
 
 /// <summary>
 /// What a run reported: the four things an expected exception can declare, and the four a run check

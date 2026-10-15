@@ -1,8 +1,8 @@
-using RepoHarness.Core.Build;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Sync;
+using DssHarness.Core.Build;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Sync;
 
-namespace RepoHarness.Core.Mutations;
+namespace DssHarness.Core.Mutations;
 
 /// <summary>One file a target's build lines read, whole, and whether a build line makes it.</summary>
 /// <param name="Path">The file, whole, as the build directory resolves it.</param>

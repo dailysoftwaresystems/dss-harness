@@ -1,8 +1,8 @@
 using System.CommandLine;
-using RepoHarness.Core.Anchors;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Anchors;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Cli.Commands;
+namespace DssHarness.Cli.Commands;
 
 /// <summary>Wires <c>DssHarness check-anchor-citations</c>.</summary>
 internal static class CheckAnchorCitationsCommand

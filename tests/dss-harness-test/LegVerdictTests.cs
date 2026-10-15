@@ -1,7 +1,7 @@
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// The verdict vocabulary is a promise to whoever reads a gate: one word per outcome, one exit code
@@ -242,7 +242,7 @@ public sealed class LegVerdictTests
             Verdicts.ForFailure(new PhaseOutputUnreadException("build.log", "it was written again since")));
         Assert.Equal(
             ReachedVerdict.Of(LegVerdict.Failed, "'bench' could not be started: Exec format error"),
-            Verdicts.ForFailure(new RepoHarness.Core.Processes.ProgramStartException("bench", "'bench' could not be started: Exec format error")));
+            Verdicts.ForFailure(new DssHarness.Core.Processes.ProgramStartException("bench", "'bench' could not be started: Exec format error")));
         Assert.Null(Verdicts.ForFailure(new InvalidOperationException("the build directory vanished")));
         Assert.Null(Verdicts.ForFailure(new IOException("the disk went away")));
     }

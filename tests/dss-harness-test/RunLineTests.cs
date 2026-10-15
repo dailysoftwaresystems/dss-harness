@@ -1,8 +1,8 @@
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Platform;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Output;
+using DssHarness.Core.Platform;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// A run is spelt one way in every line that names one, and the line a command says its own run in is read back to

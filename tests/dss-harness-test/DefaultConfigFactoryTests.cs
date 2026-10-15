@@ -1,12 +1,12 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
-using RepoHarness.Core.Build;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Projects;
+using DssHarness.Core.Build;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Projects;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>What <c>init</c> seeds, which is the starting point every user edits from.</summary>
 public sealed class DefaultConfigFactoryTests

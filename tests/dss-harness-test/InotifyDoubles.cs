@@ -1,10 +1,10 @@
 using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Text;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Platform;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Platform;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// inotify's calls as a machine would answer them, with nothing of the machine's own taken: an instance and its watches

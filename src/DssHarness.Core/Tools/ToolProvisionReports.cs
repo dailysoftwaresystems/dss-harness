@@ -1,9 +1,9 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Output;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Tools;
+namespace DssHarness.Core.Tools;
 
 /// <summary>Turns what provisioning found into what <c>install-missing-tools</c> prints.</summary>
 /// <remarks>

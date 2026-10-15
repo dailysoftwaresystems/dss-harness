@@ -1,8 +1,8 @@
 using NSubstitute;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Processes;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Processes;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// What programs on a host print is read before a leg is placed there. A reader that guessed at text

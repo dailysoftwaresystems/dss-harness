@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Processes;
+namespace DssHarness.Core.Processes;
 
 /// <summary>Text as its lines read, each ended by a line feed alone, whatever ended it where it was written.</summary>
 /// <remarks>

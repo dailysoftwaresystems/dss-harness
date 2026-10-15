@@ -1,7 +1,7 @@
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Runners;
+using DssHarness.Core.Results;
+using DssHarness.Core.Runners;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// What <c>run --input name=value</c> accepts, what it refuses before anything is read, and what a

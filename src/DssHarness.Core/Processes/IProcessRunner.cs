@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Processes;
+namespace DssHarness.Core.Processes;
 
 /// <summary>
 /// Runs child processes. The single seam through which the harness reaches

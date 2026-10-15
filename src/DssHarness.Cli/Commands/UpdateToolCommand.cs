@@ -1,7 +1,7 @@
 using System.CommandLine;
-using RepoHarness.Core.Hosts;
+using DssHarness.Core.Hosts;
 
-namespace RepoHarness.Cli.Commands;
+namespace DssHarness.Cli.Commands;
 
 /// <summary>Wires <c>DssHarness update-tool</c>.</summary>
 internal static class UpdateToolCommand

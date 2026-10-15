@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Output;
+namespace DssHarness.Core.Output;
 
 /// <summary>
 /// Console output. Every line the harness itself emits identifies the command that

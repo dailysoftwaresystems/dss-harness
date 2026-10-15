@@ -1,9 +1,9 @@
 using System.Collections.Frozen;
 using System.Globalization;
-using RepoHarness.Core.Processes;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Processes;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Hosts;
+namespace DssHarness.Core.Hosts;
 
 /// <summary>Everything needed to start a program on one host.</summary>
 public sealed record HostConnection

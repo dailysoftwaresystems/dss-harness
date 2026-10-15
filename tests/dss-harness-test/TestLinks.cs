@@ -1,6 +1,6 @@
 using System.Diagnostics;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>The links tests make, each made one way.</summary>
 internal static class TestLinks

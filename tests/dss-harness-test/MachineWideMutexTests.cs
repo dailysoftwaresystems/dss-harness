@@ -1,7 +1,7 @@
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// The machine-wide lock every read-decide-write here is taken under, opened through the race the
@@ -46,7 +46,7 @@ public sealed class MachineWideMutexTests
         var tries = 0;
 
         var refusal = Assert.Throws<HarnessException>(() => MachineWideMutex.Open(
-            @"Global\repo-harness-test-lock",
+            @"Global\dss-harness-test-lock",
             "a test's subject",
             () =>
             {
@@ -57,7 +57,7 @@ public sealed class MachineWideMutexTests
 
         Assert.Equal(MachineWideMutex.Attempts, tries);
         Assert.Equal(HarnessExit.HostUnavailable, refusal.ExitCode);
-        Assert.Contains(@"'Global\repo-harness-test-lock' on a test's subject", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains(@"'Global\dss-harness-test-lock' on a test's subject", refusal.Message, StringComparison.Ordinal);
         Assert.Contains($"errno == EEXIST; try {MachineWideMutex.Attempts}.", refusal.Message, StringComparison.Ordinal);
         Assert.Contains("fix what the system said, and run the command again", refusal.Message, StringComparison.Ordinal);
     }
@@ -179,7 +179,7 @@ public sealed class MachineWideMutexTests
         var tries = 0;
 
         var refusal = Assert.Throws<HarnessException>(() => MachineWideMutex.Open(
-            @"Global\repo-harness-test-lock",
+            @"Global\dss-harness-test-lock",
             "a test's subject",
             () =>
             {

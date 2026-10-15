@@ -1,9 +1,9 @@
 using System.Security.Cryptography;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Platform;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Output;
+using DssHarness.Core.Platform;
 
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>One input file as it stood at one moment.</summary>
 /// <param name="Path">The file, relative to the tree and always spelled with forward slashes.</param>

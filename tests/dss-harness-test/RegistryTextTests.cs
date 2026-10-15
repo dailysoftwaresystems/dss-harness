@@ -1,7 +1,7 @@
 using System.Text;
-using RepoHarness.Core.Mutations;
+using DssHarness.Core.Mutations;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// The one reader of an arms registry's text: its lines, each with the ending it has, numbered as the parser numbers

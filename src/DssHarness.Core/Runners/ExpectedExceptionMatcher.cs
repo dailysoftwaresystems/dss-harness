@@ -1,8 +1,8 @@
 using System.Text.RegularExpressions;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Output;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Output;
 
-namespace RepoHarness.Core.Runners;
+namespace DssHarness.Core.Runners;
 
 /// <summary>
 /// The runner an expected exception was read from, and the legs it is available on.

@@ -1,7 +1,7 @@
 using System.Text.Json;
-using RepoHarness.Core.Runners;
+using DssHarness.Core.Runners;
 
-namespace RepoHarness.Core.Configuration;
+namespace DssHarness.Core.Configuration;
 
 /// <summary>
 /// Keys <c>config.json</c> refuses where they are written, each said with where what it means is read

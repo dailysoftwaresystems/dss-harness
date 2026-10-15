@@ -1,7 +1,7 @@
 using System.Globalization;
-using RepoHarness.Core.Output;
+using DssHarness.Core.Output;
 
-namespace RepoHarness.Core.Platform;
+namespace DssHarness.Core.Platform;
 
 /// <summary>One of this user's processes that holds inotify instances, as <c>/proc</c> shows it.</summary>
 /// <param name="ProcessId">Its id.</param>

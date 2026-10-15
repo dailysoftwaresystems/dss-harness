@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Orchestration;
+namespace DssHarness.Core.Orchestration;
 
 /// <summary>
 /// What a move of an agent's base is let through that it otherwise refuses, each path said by name: a path the agent

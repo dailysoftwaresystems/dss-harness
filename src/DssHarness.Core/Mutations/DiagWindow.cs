@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Mutations;
+namespace DssHarness.Core.Mutations;
 
 /// <summary>
 /// Whether a run said an arm's diagnostic: the diagnostic's text, exactly, anywhere in the lines of the run's output, its

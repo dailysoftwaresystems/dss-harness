@@ -1,7 +1,7 @@
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Mutations;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Mutations;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// The judge of a test binary's unmutated control: a control that does not pass decides the leg's own verdict and stops

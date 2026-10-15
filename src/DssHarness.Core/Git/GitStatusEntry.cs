@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Git;
+namespace DssHarness.Core.Git;
 
 /// <summary>One change <c>git status</c> names.</summary>
 /// <param name="Index">The staged column: what the index changes against HEAD.</param>

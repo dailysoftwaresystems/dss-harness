@@ -1,9 +1,9 @@
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Runners;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Output;
+using DssHarness.Core.Runners;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>Which failures an expected exception explains, and on which legs.</summary>
 public sealed class ExpectedExceptionMatcherTests

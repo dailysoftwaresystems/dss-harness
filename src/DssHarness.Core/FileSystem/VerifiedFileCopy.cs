@@ -1,7 +1,7 @@
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Platform;
+using DssHarness.Core.Output;
+using DssHarness.Core.Platform;
 
-namespace RepoHarness.Core.FileSystem;
+namespace DssHarness.Core.FileSystem;
 
 /// <summary>
 /// Copies one file from one tree into another and proves the copy: written beside its destination, read back and

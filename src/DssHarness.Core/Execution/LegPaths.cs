@@ -1,8 +1,8 @@
 using System.Text.RegularExpressions;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>
 /// Which leg a piece of work is, in the words a configured command can spell.

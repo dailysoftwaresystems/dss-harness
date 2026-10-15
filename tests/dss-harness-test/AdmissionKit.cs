@@ -1,14 +1,14 @@
 using System.Globalization;
 using System.Text.Json;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Legs;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Repository;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Legs;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Repository;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>A machine's memory in use, as a test says it stands: one reading per look, the last one kept.</summary>
 /// <param name="percents">Each reading in turn; <see langword="null"/> for one that cannot be read.</param>

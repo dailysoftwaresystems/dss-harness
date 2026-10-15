@@ -1,6 +1,6 @@
-using RepoHarness.Core.Results;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Anchors;
+namespace DssHarness.Core.Anchors;
 
 /// <summary>
 /// A row's five cells as a registry stores them - a priority normalised, a status as it is written, each text on one line

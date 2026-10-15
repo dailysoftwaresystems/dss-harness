@@ -1,8 +1,8 @@
 using System.CommandLine;
-using RepoHarness.Core.Orchestration;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Orchestration;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Cli.Commands;
+namespace DssHarness.Cli.Commands;
 
 /// <summary>Wires <c>DssHarness create-agent</c>.</summary>
 internal static class CreateAgentCommand

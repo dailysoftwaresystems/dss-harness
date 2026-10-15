@@ -1,8 +1,8 @@
-using RepoHarness.Core.Build;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Platform;
+using DssHarness.Core.Build;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Platform;
 
-namespace RepoHarness.Core.Tools;
+namespace DssHarness.Core.Tools;
 
 /// <summary>Which declared legs need a declared tool.</summary>
 /// <remarks>

@@ -1,10 +1,10 @@
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Orchestration;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Results;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Orchestration;
+using DssHarness.Core.Output;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// fold-agent: an agent's own work measured - told apart from what it was handed and from what the main tree did

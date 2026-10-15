@@ -1,7 +1,7 @@
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Hosts;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Hosts;
 
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>
 /// Watches the room a heavy leg's build leaves on each filesystem it fills, while it builds, and stops the build once one

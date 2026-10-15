@@ -1,25 +1,25 @@
 using System.CommandLine;
 using System.Globalization;
 using System.Text;
-using RepoHarness.Core.Ci;
-using RepoHarness.Core.Anchors;
-using RepoHarness.Core.Build;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Git;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Legs;
-using RepoHarness.Core.Mutations;
-using RepoHarness.Core.Orchestration;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Runners;
-using RepoHarness.Core.Sync;
-using RepoHarness.Core.Tools;
+using DssHarness.Core.Ci;
+using DssHarness.Core.Anchors;
+using DssHarness.Core.Build;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Git;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Legs;
+using DssHarness.Core.Mutations;
+using DssHarness.Core.Orchestration;
+using DssHarness.Core.Output;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
+using DssHarness.Core.Runners;
+using DssHarness.Core.Sync;
+using DssHarness.Core.Tools;
 
-namespace RepoHarness.Cli.Commands;
+namespace DssHarness.Cli.Commands;
 
 /// <summary>
 /// Wires <c>DssHarness help</c>: reference material that does not fit in option

@@ -1,11 +1,11 @@
 using System.CommandLine;
 using System.Text;
 using Microsoft.Extensions.DependencyInjection;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Repository;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Output;
+using DssHarness.Core.Repository;
 
-namespace RepoHarness.Cli.Commands;
+namespace DssHarness.Cli.Commands;
 
 /// <summary>
 /// Wires the hidden <c>DssHarness host-agent</c>, through which the DssHarness on another machine

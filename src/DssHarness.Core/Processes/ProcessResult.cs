@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Processes;
+namespace DssHarness.Core.Processes;
 
 /// <summary>Outcome of a child process.</summary>
 /// <param name="ExitCode">Process exit code. Meaningless when <paramref name="TimedOut"/> is set.</param>

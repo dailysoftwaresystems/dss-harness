@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Text;
 
-namespace RepoHarness.Core.Output;
+namespace DssHarness.Core.Output;
 
 /// <summary>How a message names things in a line of text: one spelling for each, whichever command writes it.</summary>
 public static class ReportText

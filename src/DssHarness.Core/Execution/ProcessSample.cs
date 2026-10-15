@@ -1,7 +1,7 @@
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Platform;
+using DssHarness.Core.Output;
+using DssHarness.Core.Platform;
 
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>One reading of the machine's process table.</summary>
 /// <param name="Index">Which reading this was; zero is the one taken as the leg started.</param>

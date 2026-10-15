@@ -1,10 +1,10 @@
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Git;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Git;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Repository;
+namespace DssHarness.Core.Repository;
 
 /// <summary>Everything a command needs to know about where it is running.</summary>
 /// <param name="Layout">Resolved paths for this repository.</param>

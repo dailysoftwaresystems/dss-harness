@@ -2,24 +2,24 @@ using System.Globalization;
 using System.Text.Json;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
-using RepoHarness.Core.Build;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Git;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Legs;
-using RepoHarness.Core.Mutations;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Processes;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Runners;
-using RepoHarness.Core.Runs;
-using RepoHarness.Core.Sync;
-using RepoHarness.Core.Worktrees;
+using DssHarness.Core.Build;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Git;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Legs;
+using DssHarness.Core.Mutations;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Processes;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
+using DssHarness.Core.Runners;
+using DssHarness.Core.Runs;
+using DssHarness.Core.Sync;
+using DssHarness.Core.Worktrees;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// What becomes of a leg whose host's copy cannot be brought up to date before it runs, and where a
@@ -724,7 +724,7 @@ public sealed class LegRunServiceTests
             Processor = platform.Processor,
             Programs = new Dictionary<string, ProgramLocation>(StringComparer.Ordinal)
             {
-                ["rh-probe"] = new("rh-probe", host.Kind == HostKind.Local ? ProgramFound.Nowhere : ProgramFound.OnPath, "/usr/bin/rh-probe"),
+                ["dh-probe"] = new("dh-probe", host.Kind == HostKind.Local ? ProgramFound.Nowhere : ProgramFound.OnPath, "/usr/bin/dh-probe"),
             },
             Session = host.Kind == HostKind.Local ? null : Session(host),
         });
@@ -734,10 +734,10 @@ public sealed class LegRunServiceTests
             harness,
             config,
             inspector,
-            new LegRunRequest(temp.Path, null, Json: true, UseStaged: useStaged) { Workload = new LegWorkload(Build: false, Test: false, ["rh-probe"]) });
+            new LegRunRequest(temp.Path, null, Json: true, UseStaged: useStaged) { Workload = new LegWorkload(Build: false, Test: false, ["dh-probe"]) });
 
         Assert.Equal("skipped-tool-missing", verdicts["here"].Verdict);
-        Assert.StartsWith("local: 'rh-probe' is not installed there", verdicts["here"].Detail, StringComparison.Ordinal);
+        Assert.StartsWith("local: 'dh-probe' is not installed there", verdicts["here"].Detail, StringComparison.Ordinal);
     }
 
     /// <summary>

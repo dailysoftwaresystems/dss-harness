@@ -1,6 +1,6 @@
-using RepoHarness.Core.Testing;
+using DssHarness.Core.Testing;
 
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>
 /// One control of a leg's sweep that did not pass, as the leg's line carries it: the unmutated run of a test binary that

@@ -51,13 +51,13 @@ jobs:
 
       - name: Pack
         run: >
-          dotnet pack src/RepoHarness.Cli/RepoHarness.Cli.csproj
+          dotnet pack src/DssHarness.Cli/DssHarness.Cli.csproj
           --configuration Release --output build/package
 
       - name: Read the packed version
         run: |
           set -euo pipefail
-          version=$(dotnet run .github/scripts/version.cs read src/RepoHarness.Cli/RepoHarness.Cli.csproj)
+          version=$(dotnet run .github/scripts/version.cs read src/DssHarness.Cli/DssHarness.Cli.csproj)
           echo "PACKED_VERSION=$version" >> "$GITHUB_ENV"
 
       - name: Verify the package

@@ -1,7 +1,7 @@
 using System.Diagnostics;
-using RepoHarness.Core.Processes;
+using DssHarness.Core.Processes;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>How the one process the tool starts and never waits for is started.</summary>
 public sealed class DetachedProcessLauncherTests

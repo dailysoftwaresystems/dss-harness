@@ -1,8 +1,8 @@
-using RepoHarness.Core.Ci;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Ci;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// check-ci-legs over job metadata a test supplies. The separation these tests pin is the point of

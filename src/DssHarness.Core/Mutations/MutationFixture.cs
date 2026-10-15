@@ -1,13 +1,13 @@
 using System.Text;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Sync;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
+using DssHarness.Core.Sync;
 
-namespace RepoHarness.Core.Mutations;
+namespace DssHarness.Core.Mutations;
 
 /// <summary>
 /// The fixture <c>check-mutations --self-test</c> sweeps: a CMake library, a test binary that writes its own JUnit report,
@@ -32,7 +32,7 @@ namespace RepoHarness.Core.Mutations;
 public static class MutationFixture
 {
     /// <summary>What each of its files is embedded under, followed by the file's path in the fixture.</summary>
-    public const string ResourcePrefix = "RepoHarness.Core.MutationFixture/";
+    public const string ResourcePrefix = "DssHarness.Core.MutationFixture/";
 
     /// <summary>The directory it is kept in, among this user's own data for this tool.</summary>
     public const string DirectoryName = "mutation-fixture";

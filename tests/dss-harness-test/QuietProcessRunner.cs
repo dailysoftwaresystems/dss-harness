@@ -1,7 +1,7 @@
 using System.Diagnostics;
-using RepoHarness.Core.Processes;
+using DssHarness.Core.Processes;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// A process runner that says one thing and then goes quiet, so a stall is what the bound sees rather

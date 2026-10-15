@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace RepoHarness.Core.FileSystem;
+namespace DssHarness.Core.FileSystem;
 
 /// <summary>The room on one filesystem.</summary>
 /// <param name="FreeBytes">What the user asking can still write there.</param>

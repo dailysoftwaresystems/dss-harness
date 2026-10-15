@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 
-namespace RepoHarness.Core.Anchors;
+namespace DssHarness.Core.Anchors;
 
 /// <summary>One anchor id as a file cites it, and where.</summary>
 /// <param name="Id">

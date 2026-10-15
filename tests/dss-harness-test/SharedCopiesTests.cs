@@ -1,10 +1,10 @@
 using System.Text.Json.Nodes;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Orchestration;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Results;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Orchestration;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// The bytes of every file an agent shares with the main tree, kept beside its seed under the digest the seed records:

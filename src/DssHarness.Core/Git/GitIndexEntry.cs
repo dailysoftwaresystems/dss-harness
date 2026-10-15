@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Git;
+namespace DssHarness.Core.Git;
 
 /// <summary>One entry of the index, as <c>git ls-files --stage -v</c> reports it.</summary>
 /// <param name="Tag">

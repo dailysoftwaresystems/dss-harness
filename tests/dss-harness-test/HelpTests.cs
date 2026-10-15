@@ -1,21 +1,21 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using RepoHarness.Core.Anchors;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Legs;
-using RepoHarness.Core.Mutations;
-using RepoHarness.Core.Orchestration;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Runners;
-using RepoHarness.Core.Sync;
+using DssHarness.Core.Anchors;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Legs;
+using DssHarness.Core.Mutations;
+using DssHarness.Core.Orchestration;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
+using DssHarness.Core.Runners;
+using DssHarness.Core.Sync;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// Help is treated as documentation, so it is tested like documentation: every
@@ -1628,7 +1628,7 @@ public sealed partial class HelpTests
         // What a cancelled command is given to stop in, from the patience a host is built with: one that finishes what
         // it began as long as the command line gives it where it is typed.
         Assert.Equal(
-            (TimeSpan.FromSeconds(60), RepoHarness.Core.Worktrees.WorktreeService.DefaultInterruptionGrace),
+            (TimeSpan.FromSeconds(60), DssHarness.Core.Worktrees.WorktreeService.DefaultInterruptionGrace),
             (new HostAgentPatience().Unwind, new HostAgentPatience().Finishing));
         Assert.Contains(
             "What the host started that has not stopped 60 seconds after it was cancelled - a command reading the output of something its child "

@@ -1,8 +1,8 @@
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Mutations;
-using RepoHarness.Core.Platform;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Mutations;
+using DssHarness.Core.Platform;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// What of the configuration an arm is judged on beyond what its build records: what the build is given, how the run

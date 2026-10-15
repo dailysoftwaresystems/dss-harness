@@ -1,17 +1,17 @@
 using System.CommandLine;
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.DependencyInjection;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Processes;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Runs;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Output;
+using DssHarness.Core.Processes;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
+using DssHarness.Core.Runs;
 
-namespace RepoHarness.Cli;
+namespace DssHarness.Cli;
 
 /// <summary>What a command body receives.</summary>
 /// <param name="Services">The services for this invocation.</param>

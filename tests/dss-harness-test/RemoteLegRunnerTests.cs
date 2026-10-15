@@ -1,16 +1,16 @@
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Mutations;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Processes;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Runs;
-using RepoHarness.Core.Testing;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Mutations;
+using DssHarness.Core.Output;
+using DssHarness.Core.Processes;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
+using DssHarness.Core.Runs;
+using DssHarness.Core.Testing;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// A leg placed on another machine runs there. These pin the part that makes that true: the request
@@ -706,7 +706,7 @@ public sealed class RemoteLegRunnerTests
     [Fact]
     public async Task TheCompilersTheHostBuiltWith_AreCarried_AndNamedOnce()
     {
-        IReadOnlyList<RepoHarness.Core.Build.CompilerFact> gnu = [new("C", "GNU", "13.2.0"), new("CXX", "GNU", "13.2.0")];
+        IReadOnlyList<DssHarness.Core.Build.CompilerFact> gnu = [new("C", "GNU", "13.2.0"), new("CXX", "GNU", "13.2.0")];
 
         var written = LedgerReport
             .From([new LegEntry { Leg = "wsl-debug", Verdict = LegVerdict.Failed, Detail = "2 tests failed", Compilers = gnu }], durationWarningFactor: 0)
@@ -1323,7 +1323,7 @@ public sealed class RemoteLegRunnerTests
             new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug" },
             host,
             Project: null,
-            new RepoHarness.Core.Build.VariantKey("x86_64", "gcc", "debug", null),
+            new DssHarness.Core.Build.VariantKey("x86_64", "gcc", "debug", null),
             TreeRoot: @"C:\src\repo",
             HostTreeRoot: "/home/dev/repo",
             "/home/dev/repo/build/x86_64-gcc-debug",

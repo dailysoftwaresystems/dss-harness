@@ -1,9 +1,9 @@
 using System.CommandLine;
-using RepoHarness.Core.Commands;
-using RepoHarness.Core.Git;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Commands;
+using DssHarness.Core.Git;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Cli.Commands;
+namespace DssHarness.Cli.Commands;
 
 /// <summary>Wires <c>DssHarness verify-git</c>.</summary>
 internal static class VerifyGitCommand

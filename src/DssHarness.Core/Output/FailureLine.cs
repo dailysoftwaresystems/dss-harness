@@ -1,6 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 
-namespace RepoHarness.Core.Output;
+namespace DssHarness.Core.Output;
 
 /// <summary>
 /// The line a command ends with when it fails, spelled once for everything that writes one and for

@@ -1,7 +1,7 @@
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Mutations;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Mutations;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// The judge of one arm: each row of its table reaching its own verdict, in the order the rows are read, the first that

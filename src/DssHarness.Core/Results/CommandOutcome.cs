@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Results;
+namespace DssHarness.Core.Results;
 
 /// <summary>
 /// What a command decided. Commands return this rather than calling into the

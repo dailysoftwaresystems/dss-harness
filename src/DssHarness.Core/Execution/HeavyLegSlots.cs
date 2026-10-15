@@ -1,10 +1,10 @@
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Legs;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Results;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Legs;
+using DssHarness.Core.Output;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>A heavy leg that asked its machine for a slot: holding one, or waiting its turn.</summary>
 /// <param name="Machine">The machine it runs on, by the name it had then, for whoever reads the entry.</param>

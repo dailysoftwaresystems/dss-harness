@@ -1,7 +1,7 @@
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Processes;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Processes;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// A host that sleeps between commands is given its window to wake: its name is looked up again, and a

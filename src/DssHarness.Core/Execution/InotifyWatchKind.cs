@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>
 /// Watches through this process's one inotify instance, on Linux: every directory that holds an input is watched for

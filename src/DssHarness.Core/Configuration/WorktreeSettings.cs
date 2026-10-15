@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Configuration;
+namespace DssHarness.Core.Configuration;
 
 /// <summary>Worktree creation policy.</summary>
 public sealed class WorktreeSettings

@@ -1,9 +1,9 @@
 using System.Globalization;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Repository;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Repository;
 
-namespace RepoHarness.Core.Secrets;
+namespace DssHarness.Core.Secrets;
 
 /// <summary>
 /// Reads the connection data of one host from its own directory under <c>.harness-config</c>, and

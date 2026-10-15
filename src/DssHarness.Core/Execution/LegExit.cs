@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>
 /// The exit codes the commands that run legs — <c>build</c>, <c>test</c>, <c>run</c> and

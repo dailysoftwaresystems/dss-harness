@@ -1,7 +1,7 @@
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Output;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Output;
 
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>One phase of a leg, as the ledger records it.</summary>
 /// <param name="Phase">The phase's name, which is what sibling legs are compared by.</param>

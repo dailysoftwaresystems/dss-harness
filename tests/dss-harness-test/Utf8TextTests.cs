@@ -1,7 +1,7 @@
 using System.Text;
-using RepoHarness.Core.FileSystem;
+using DssHarness.Core.FileSystem;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// The one strict reader of UTF-8: bytes that are UTF-8 are the text they spell and are written back as themselves, and

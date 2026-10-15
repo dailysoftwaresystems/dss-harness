@@ -1,6 +1,6 @@
-using RepoHarness.Core.Output;
+using DssHarness.Core.Output;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// Where a line ends: the one set of characters this tool divides lines at, which a registry's reader and a phase's last

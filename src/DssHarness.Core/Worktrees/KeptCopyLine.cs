@@ -1,7 +1,7 @@
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Sync;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Sync;
 
-namespace RepoHarness.Core.Worktrees;
+namespace DssHarness.Core.Worktrees;
 
 /// <summary>
 /// One line of what removing the copies kept in a worktree - the mutation workers its sweeps made and the copies of it its

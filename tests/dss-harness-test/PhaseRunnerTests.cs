@@ -1,10 +1,10 @@
 using System.Diagnostics;
 using System.Text;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Processes;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Processes;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// A phase is where a green result stops meaning anything: an exit code read through a wrapper, a

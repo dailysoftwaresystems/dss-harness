@@ -1,13 +1,13 @@
 using System.Text;
-using RepoHarness.Core.Build;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Mutations;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Sync;
+using DssHarness.Core.Build;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Mutations;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
+using DssHarness.Core.Sync;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// What a target is built from, as a worker's build of it read: every file of the tree its build lines read, through

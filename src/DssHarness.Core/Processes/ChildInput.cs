@@ -1,7 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
 
-namespace RepoHarness.Core.Processes;
+namespace DssHarness.Core.Processes;
 
 /// <summary>
 /// What a child is given on its standard input: text, or a writer that writes it as it makes it. Written as UTF-8 on every

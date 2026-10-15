@@ -1,8 +1,8 @@
 using System.CommandLine;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Worktrees;
+using DssHarness.Core.Results;
+using DssHarness.Core.Worktrees;
 
-namespace RepoHarness.Cli.Commands;
+namespace DssHarness.Cli.Commands;
 
 /// <summary>Wires <c>DssHarness check-root-litter</c>.</summary>
 internal static class CheckRootLitterCommand

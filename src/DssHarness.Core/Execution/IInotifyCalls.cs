@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>
 /// The calls an inotify instance is made, watched and read through. Each answers as the C library's own does - the

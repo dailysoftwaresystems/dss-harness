@@ -1,9 +1,9 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Platform;
+namespace DssHarness.Core.Platform;
 
 /// <summary>
 /// The machine-wide lock two processes of this tool contend for.

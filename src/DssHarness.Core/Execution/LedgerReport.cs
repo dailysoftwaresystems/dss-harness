@@ -1,10 +1,10 @@
 using System.Globalization;
 using System.Text.Json;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Output;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>One row of the per-leg table.</summary>
 /// <param name="Leg">The leg, as the configuration names it.</param>

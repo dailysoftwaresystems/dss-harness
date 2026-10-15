@@ -27,12 +27,12 @@ than a section still waiting to be written.
 ## Layering
 
 ```
-RepoHarness.Cli        Program.cs: argument parsing and dependency wiring only
-RepoHarness.Core       domain, services, abstractions
-repo-harness-test      tests
+DssHarness.Cli        Program.cs: argument parsing and dependency wiring only
+DssHarness.Core       domain, services, abstractions
+dss-harness-test      tests
 
-(RepoHarness.Adapters was planned for the build adapters; they arrived in
-RepoHarness.Core instead, beside the build service that is their only caller, and the
+(DssHarness.Adapters was planned for the build adapters; they arrived in
+DssHarness.Core instead, beside the build service that is their only caller, and the
 project was not created.)
 ```
 

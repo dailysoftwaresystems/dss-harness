@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>
 /// Watches through .NET's own watcher, one for each directory watched: a handle, a buffer and a thread apiece - on Linux

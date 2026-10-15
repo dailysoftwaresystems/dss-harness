@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>
 /// The least room a heavy leg's build leaves free on each filesystem it fills, below which it is stopped rather than let

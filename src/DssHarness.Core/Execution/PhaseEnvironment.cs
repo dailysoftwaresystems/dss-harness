@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>The environment a process a leg starts is given, built from the layers that declare it.</summary>
 public static class PhaseEnvironment

@@ -1,8 +1,8 @@
 using System.Globalization;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Processes;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Processes;
 
-namespace RepoHarness.Core.Build;
+namespace DssHarness.Core.Build;
 
 /// <summary>What asking a compiler its version found.</summary>
 /// <param name="Version">Its version now, spelled as CMake spells one, where it gave one.</param>
@@ -52,7 +52,7 @@ public sealed record CompilerVersionAnswer(string? Version, string? Replaced, st
 public sealed class CompilerVersionProbe(IProcessRunner processRunner, IFileSystem fileSystem)
 {
     /// <summary>The word the probed line starts with, which no compiler defines.</summary>
-    private const string Marker = "repo_harness_compiler_version";
+    private const string Marker = "dssharness_compiler_version";
 
     /// <summary>
     /// Every macro a known id's version is made of, in the order the probed line names them: one the

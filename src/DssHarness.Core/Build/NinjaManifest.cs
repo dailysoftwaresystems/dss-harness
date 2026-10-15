@@ -1,7 +1,7 @@
 using System.Text;
-using RepoHarness.Core.FileSystem;
+using DssHarness.Core.FileSystem;
 
-namespace RepoHarness.Core.Build;
+namespace DssHarness.Core.Build;
 
 /// <summary>How a ninja manifest says one output is built.</summary>
 /// <param name="Rule">The rule that builds it.</param>

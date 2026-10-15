@@ -1,6 +1,6 @@
-using RepoHarness.Core.Sync;
+using DssHarness.Core.Sync;
 
-namespace RepoHarness.Core.Mutations;
+namespace DssHarness.Core.Mutations;
 
 /// <summary>
 /// The one reading of a tree a sweep makes: every worker of the leg is synced from it, so every arm is measured against

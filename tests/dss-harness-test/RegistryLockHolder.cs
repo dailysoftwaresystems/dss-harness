@@ -1,7 +1,7 @@
 using System.Runtime.ExceptionServices;
-using RepoHarness.Core.Anchors;
+using DssHarness.Core.Anchors;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// Holds the lock on a pair of anchor registries from a thread of its own, as another process would, until disposed. A

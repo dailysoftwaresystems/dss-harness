@@ -1,10 +1,10 @@
 using System.CommandLine;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Legs;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Runs;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Legs;
+using DssHarness.Core.Results;
+using DssHarness.Core.Runs;
 
-namespace RepoHarness.Cli;
+namespace DssHarness.Cli;
 
 /// <summary>
 /// Options every command that runs legs reads alike: what a machine dispatching a leg tells the host that runs it, and

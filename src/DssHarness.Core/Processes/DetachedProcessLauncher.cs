@@ -6,7 +6,7 @@ using System.Runtime.Versioning;
 using System.Text;
 using Microsoft.Win32.SafeHandles;
 
-namespace RepoHarness.Core.Processes;
+namespace DssHarness.Core.Processes;
 
 /// <summary>Starts this tool again as a process of its own, which goes on after the one starting it has ended.</summary>
 public interface IDetachedProcessLauncher

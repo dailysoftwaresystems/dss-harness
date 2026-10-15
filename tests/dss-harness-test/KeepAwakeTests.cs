@@ -1,10 +1,10 @@
 using System.Diagnostics;
 using System.Globalization;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Processes;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Processes;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>How a machine is held awake while a leg's own work runs on it.</summary>
 public sealed class KeepAwakeTests
@@ -88,7 +88,7 @@ public sealed class KeepAwakeTests
     public async Task ACommandThatCannotStart_IsSaid_AndFailsNothing()
     {
         var factory = new HarnessFactory();
-        var host = new LocalHostConfig { KeepAwake = ["rh-missing-awake-" + Guid.NewGuid().ToString("N")[..8]] };
+        var host = new LocalHostConfig { KeepAwake = ["dh-missing-awake-" + Guid.NewGuid().ToString("N")[..8]] };
 
         await using (new KeepAwake(factory.ProcessRunner, factory.Output).Hold("test", "native", host, [], TestContext.Current.CancellationToken))
         {

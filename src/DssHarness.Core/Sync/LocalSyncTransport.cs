@@ -1,15 +1,15 @@
-using RepoHarness.Core.Platform;
+using DssHarness.Core.Platform;
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Git;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Worktrees;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Git;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
+using DssHarness.Core.Worktrees;
 
-namespace RepoHarness.Core.Sync;
+namespace DssHarness.Core.Sync;
 
 /// <summary>
 /// A sync into a directory on the machine running the harness. Also what a host runs on its own

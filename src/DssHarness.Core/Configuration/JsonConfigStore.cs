@@ -1,9 +1,9 @@
 using System.Text;
 using System.Text.Json;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Hosts;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Hosts;
 
-namespace RepoHarness.Core.Configuration;
+namespace DssHarness.Core.Configuration;
 
 /// <inheritdoc cref="IConfigStore"/>
 public sealed class JsonConfigStore(IFileSystem fileSystem) : IConfigStore

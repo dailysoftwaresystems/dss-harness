@@ -1,8 +1,8 @@
 using System.Globalization;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Output;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Output;
 
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>
 /// What a leg's contention report says to a reader, besides a contender: which other work ran

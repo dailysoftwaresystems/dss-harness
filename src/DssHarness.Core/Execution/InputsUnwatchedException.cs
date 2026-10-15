@@ -1,8 +1,8 @@
 using System.Globalization;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Platform;
+using DssHarness.Core.Output;
+using DssHarness.Core.Platform;
 
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>
 /// The inputs of a span of work could not be watched, so the span was not begun: no phase of it ran. Work a verdict

@@ -1,6 +1,6 @@
-using RepoHarness.Core.Repository;
+using DssHarness.Core.Repository;
 
-namespace RepoHarness.Core.Orchestration;
+namespace DssHarness.Core.Orchestration;
 
 /// <summary>
 /// Where one orchestrator keeps everything it and its agents hold, under <c>.orchestrators/&lt;name&gt;</c> in the main

@@ -1,14 +1,14 @@
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
-using RepoHarness.Core.Anchors;
-using RepoHarness.Core.Commands;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Git;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Tools;
+using DssHarness.Core.Anchors;
+using DssHarness.Core.Commands;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Git;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
+using DssHarness.Core.Tools;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 public sealed class VerifyGitServiceTests
 {

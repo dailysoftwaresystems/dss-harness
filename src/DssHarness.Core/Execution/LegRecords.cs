@@ -1,7 +1,7 @@
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Hosts;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Hosts;
 
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>One phase's log among a leg's records.</summary>
 /// <param name="Phase">The phase, as its log is named for it.</param>

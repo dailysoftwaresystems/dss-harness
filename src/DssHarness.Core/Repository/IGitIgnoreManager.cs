@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Repository;
+namespace DssHarness.Core.Repository;
 
 /// <summary>
 /// Maintains the harness's own block inside a repository's <c>.gitignore</c>.

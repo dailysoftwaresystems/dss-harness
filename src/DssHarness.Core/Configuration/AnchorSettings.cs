@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Configuration;
+namespace DssHarness.Core.Configuration;
 
 /// <summary>Where the anchor registries live, and how a new anchor id is spelled.</summary>
 public sealed class AnchorSettings

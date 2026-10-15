@@ -1,7 +1,7 @@
 using System.Text;
-using RepoHarness.Core.Git;
+using DssHarness.Core.Git;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>How a name git listed as bytes becomes text.</summary>
 public sealed class GitNameTests

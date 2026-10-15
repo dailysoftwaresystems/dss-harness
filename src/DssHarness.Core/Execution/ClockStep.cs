@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>
 /// What tells that the clock stepped, or the host slept, across a window timed on both clocks: how far wall-clock time

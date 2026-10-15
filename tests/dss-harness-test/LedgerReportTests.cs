@@ -1,12 +1,12 @@
 using System.Text.Json;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Testing;
+using DssHarness.Core.Execution;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Results;
+using DssHarness.Core.Testing;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// The ledger is what a gate is read from, so its columns, its arithmetic and its marks are pinned
@@ -164,7 +164,7 @@ public sealed class LedgerReportTests
     [Fact]
     public void EveryLine_NamesTheCompilersItsBuildWasConfiguredWith()
     {
-        IReadOnlyList<RepoHarness.Core.Build.CompilerFact> msvc = [new("C", "MSVC", "19.51.36231"), new("CXX", "MSVC", "19.51.36231")];
+        IReadOnlyList<DssHarness.Core.Build.CompilerFact> msvc = [new("C", "MSVC", "19.51.36231"), new("CXX", "MSVC", "19.51.36231")];
 
         var report = LedgerReport.From(
         [
@@ -195,7 +195,7 @@ public sealed class LedgerReportTests
     [Fact]
     public void EveryLine_NamesTheDeveloperEnvironmentItStartedIn()
     {
-        var visualStudio = new RepoHarness.Core.Hosts.DeveloperEnvironmentFact("vs", @"C:\VS", "18.0.1", "14.50.35717", "amd64");
+        var visualStudio = new DssHarness.Core.Hosts.DeveloperEnvironmentFact("vs", @"C:\VS", "18.0.1", "14.50.35717", "amd64");
 
         var report = LedgerReport.From(
         [

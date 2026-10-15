@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Output;
+namespace DssHarness.Core.Output;
 
 /// <summary>
 /// A row that quotes one line a program printed, as it printed it: beneath a ledger, the last lines a phase

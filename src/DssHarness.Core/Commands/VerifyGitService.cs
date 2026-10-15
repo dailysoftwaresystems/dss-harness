@@ -1,6 +1,6 @@
-using RepoHarness.Core.Git;
+using DssHarness.Core.Git;
 
-namespace RepoHarness.Core.Commands;
+namespace DssHarness.Core.Commands;
 
 /// <summary>
 /// Answers whether this machine and this directory can be worked with at all:

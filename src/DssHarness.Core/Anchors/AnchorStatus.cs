@@ -1,6 +1,6 @@
-using RepoHarness.Core.Configuration;
+using DssHarness.Core.Configuration;
 
-namespace RepoHarness.Core.Anchors;
+namespace DssHarness.Core.Anchors;
 
 /// <summary>The states an anchor can be in.</summary>
 public enum AnchorState

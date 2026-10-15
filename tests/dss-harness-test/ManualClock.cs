@@ -1,4 +1,4 @@
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>A clock that moves only when told, its timestamps with it.</summary>
 /// <param name="start">The time it starts at.</param>

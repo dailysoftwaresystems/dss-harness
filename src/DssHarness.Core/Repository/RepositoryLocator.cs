@@ -1,7 +1,7 @@
-using RepoHarness.Core.Git;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Git;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Repository;
+namespace DssHarness.Core.Repository;
 
 /// <inheritdoc cref="IRepositoryLocator"/>
 public sealed class RepositoryLocator(IGitClient gitClient) : IRepositoryLocator

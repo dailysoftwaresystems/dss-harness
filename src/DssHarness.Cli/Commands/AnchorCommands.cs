@@ -1,9 +1,9 @@
 using System.CommandLine;
-using RepoHarness.Core.Anchors;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Anchors;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Cli.Commands;
+namespace DssHarness.Cli.Commands;
 
 /// <summary>
 /// Pairs each cell's inline option with a <c>--&lt;cell&gt;-file</c> twin, and reads whichever was given.

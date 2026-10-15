@@ -1,8 +1,8 @@
 using System.Diagnostics.CodeAnalysis;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Hosts;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Hosts;
 
-namespace RepoHarness.Core.Output;
+namespace DssHarness.Core.Output;
 
 /// <summary>
 /// How a run is spelt in a line, said once for everything that names one and for the one reader that has to find a

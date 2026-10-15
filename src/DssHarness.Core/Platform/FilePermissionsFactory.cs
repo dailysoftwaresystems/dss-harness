@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Platform;
+namespace DssHarness.Core.Platform;
 
 /// <summary>
 /// Chooses the permission model for the running platform. Together with

@@ -1,8 +1,8 @@
 using System.Globalization;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>How many cores a phase was given, and what decided it.</summary>
 /// <param name="Value">The number of cores.</param>

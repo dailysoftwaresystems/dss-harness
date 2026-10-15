@@ -1,6 +1,6 @@
 using System.Diagnostics;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// A wall clock that steps only when a test steps it, as the measured host's steps by about 25 seconds

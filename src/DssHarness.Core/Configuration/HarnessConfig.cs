@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Configuration;
+namespace DssHarness.Core.Configuration;
 
 /// <summary>
 /// The whole of <c>.harness-config/config.json</c>. Every behaviour the harness has

@@ -1,10 +1,10 @@
 using System.Text;
 using System.Text.Json;
-using RepoHarness.Core.Anchors;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Anchors;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// The <c>--&lt;cell&gt;-file</c> options, through the built CLI. They exist because a command line is

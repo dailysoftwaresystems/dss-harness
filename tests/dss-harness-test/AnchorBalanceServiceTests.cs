@@ -1,10 +1,10 @@
 using System.Text.Json;
-using RepoHarness.Core.Anchors;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Anchors;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Output;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>The balance against real commits: every base is a commit the test made.</summary>
 public sealed class AnchorBalanceServiceTests

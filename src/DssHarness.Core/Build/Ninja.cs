@@ -1,8 +1,8 @@
 using System.Text.RegularExpressions;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Output;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Output;
 
-namespace RepoHarness.Core.Build;
+namespace DssHarness.Core.Build;
 
 /// <summary>
 /// What ninja says as a build ends, where that decides what the harness reports. Whenever ninja itself ends a build that

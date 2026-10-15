@@ -1,6 +1,6 @@
-using RepoHarness.Core.Processes;
+using DssHarness.Core.Processes;
 
-namespace RepoHarness.Core.Hosts;
+namespace DssHarness.Core.Hosts;
 
 /// <summary>
 /// What ssh would do to reach a host, as <c>ssh -G</c> prints it: every setting it would connect with once

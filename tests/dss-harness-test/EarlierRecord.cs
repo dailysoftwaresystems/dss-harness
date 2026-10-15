@@ -1,4 +1,4 @@
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>Build records as 0.5.8 wrote them, which a build directory may still hold, and which are read as they were.</summary>
 internal static class EarlierRecord

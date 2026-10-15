@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Configuration;
+namespace DssHarness.Core.Configuration;
 
 /// <summary>Reads and writes <c>config.json</c>.</summary>
 public interface IConfigStore

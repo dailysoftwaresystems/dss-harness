@@ -1,10 +1,10 @@
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Worktrees;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Worktrees;
 
-namespace RepoHarness.Core.Orchestration;
+namespace DssHarness.Core.Orchestration;
 
 /// <summary>
 /// The states an agent's record can be in, in the order it can reach them: live, then closed, then deleted - or live

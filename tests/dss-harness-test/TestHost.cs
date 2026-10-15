@@ -1,7 +1,7 @@
 using System.Runtime.CompilerServices;
-using RepoHarness.Core.Processes;
+using DssHarness.Core.Processes;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// Process-wide setup for the test run, and the means to use this test assembly as a
@@ -10,7 +10,7 @@ namespace RepoHarness.Tests;
 internal static class TestHost
 {
     /// <summary>Selects a child behaviour. Unset in an ordinary test run.</summary>
-    internal const string ChildModeVariable = "REPO_HARNESS_TEST_CHILD";
+    internal const string ChildModeVariable = "DSSHARNESS_TEST_CHILD";
 
     /// <summary>
     /// Root of every temporary directory the suite creates, with symbolic links resolved.
@@ -116,7 +116,7 @@ internal static class TestHost
             Environment.GetEnvironmentVariable("RUNNER_TEMP") is { Length: > 0 } runnerTemp
                 ? runnerTemp
                 : Path.GetTempPath(),
-            "rh-test");
+            "dh-test");
 
         Directory.CreateDirectory(root);
         return ResolveLinks(root);

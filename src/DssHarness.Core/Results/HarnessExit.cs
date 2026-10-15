@@ -1,7 +1,7 @@
 using System.Reflection;
-using RepoHarness.Core.Hosts;
+using DssHarness.Core.Hosts;
 
-namespace RepoHarness.Core.Results;
+namespace DssHarness.Core.Results;
 
 /// <summary>
 /// Exit codes shared by every command. Codes 1-9 are reserved for per command

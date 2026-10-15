@@ -1,19 +1,19 @@
-using RepoHarness.Core.Sync;
-using RepoHarness.Core.Configuration;
+using DssHarness.Core.Sync;
+using DssHarness.Core.Configuration;
 using System.Globalization;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Execution;
+using DssHarness.Core.Output;
+using DssHarness.Core.Execution;
 using System.Text.Json;
 using NSubstitute;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Mutations;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Processes;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Results;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Mutations;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Processes;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>What the DssHarness on a host answers, what it agrees to run, and how it says a run ended.</summary>
 public sealed class HostAgentServiceTests

@@ -1,4 +1,4 @@
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// What a watched heap counts: what is still held, and never what was dropped and only waits to be collected - which is

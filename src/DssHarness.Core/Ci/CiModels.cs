@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Ci;
+namespace DssHarness.Core.Ci;
 
 /// <summary>One step of a CI job, as the job's metadata records it.</summary>
 /// <param name="Name">The step's name, matched exactly.</param>

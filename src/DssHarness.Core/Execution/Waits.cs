@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>How long a wait that looks again until a deadline waits each time.</summary>
 internal static class Waits

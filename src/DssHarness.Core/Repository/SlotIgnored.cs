@@ -1,8 +1,8 @@
-using RepoHarness.Core.Git;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Git;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Repository;
+namespace DssHarness.Core.Repository;
 
 /// <summary>
 /// Whether git ignores what would be made in one of a tree's root slots (<see cref="HarnessLayout.RootSlots"/>), asked

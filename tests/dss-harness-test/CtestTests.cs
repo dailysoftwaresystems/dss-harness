@@ -1,7 +1,7 @@
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Testing;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Testing;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>What ctest's own output says, and what two of its patterns side by side choose, read as ctest 4.3.2 was measured to.</summary>
 public sealed class CtestTests

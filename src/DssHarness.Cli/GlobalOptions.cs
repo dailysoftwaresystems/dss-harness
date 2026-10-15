@@ -1,6 +1,6 @@
 using System.CommandLine;
 
-namespace RepoHarness.Cli;
+namespace DssHarness.Cli;
 
 /// <summary>Options every command accepts.</summary>
 internal static class GlobalOptions

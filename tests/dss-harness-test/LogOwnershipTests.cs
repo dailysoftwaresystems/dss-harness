@@ -1,9 +1,9 @@
 using System.Globalization;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Platform;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Results;
+using DssHarness.Core.Platform;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// A run that cannot own its log path cannot keep the evidence for its own verdict. These pin that

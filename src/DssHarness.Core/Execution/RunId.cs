@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Security.Cryptography;
 
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>
 /// One run's identity, <c>yyyyMMdd-HHmmss-&lt;8 hex&gt;</c>, which every log path is scoped to so that

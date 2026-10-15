@@ -1,7 +1,7 @@
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Execution;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
 
-namespace RepoHarness.Core.Runners;
+namespace DssHarness.Core.Runners;
 
 /// <summary>What builds a run's legs first, and the operating systems whose legs it builds.</summary>
 /// <remarks>

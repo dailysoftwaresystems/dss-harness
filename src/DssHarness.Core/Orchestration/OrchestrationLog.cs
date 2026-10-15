@@ -1,9 +1,9 @@
 using System.Text.Json;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Execution;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Orchestration;
+namespace DssHarness.Core.Orchestration;
 
 /// <summary>One line of an orchestrator's log: a command the tool ran on the orchestrator, or on one of its agents.</summary>
 /// <param name="At">When it finished.</param>

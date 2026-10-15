@@ -1,8 +1,8 @@
-using RepoHarness.Core.Anchors;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Anchors;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Orchestration;
+namespace DssHarness.Core.Orchestration;
 
 /// <summary>An agent's rows as a fold weighs them: what applying those it declared anew does, or did, and those it did not.</summary>
 /// <param name="Batch">What applying the rows it declared anew - or never had applied - does, or did.</param>

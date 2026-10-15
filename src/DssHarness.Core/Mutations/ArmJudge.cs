@@ -1,7 +1,7 @@
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Output;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Output;
 
-namespace RepoHarness.Core.Mutations;
+namespace DssHarness.Core.Mutations;
 
 /// <summary>How many times one before-text occurs where an arm must replace it.</summary>
 /// <param name="Text">The file holding the text, as the registry cites it.</param>

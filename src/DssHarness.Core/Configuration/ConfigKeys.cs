@@ -1,7 +1,7 @@
 using System.ComponentModel;
 using System.Text.Json.Serialization.Metadata;
 
-namespace RepoHarness.Core.Configuration;
+namespace DssHarness.Core.Configuration;
 
 /// <summary>
 /// The keys a section of <c>config.json</c> takes, read from the contract the file is read with.

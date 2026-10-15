@@ -1,8 +1,8 @@
 using System.Globalization;
 using System.Text;
-using RepoHarness.Core.FileSystem;
+using DssHarness.Core.FileSystem;
 
-namespace RepoHarness.Core.Build;
+namespace DssHarness.Core.Build;
 
 /// <summary>
 /// What the harness keeps in a variant's build directory about the build that last ran there: what the

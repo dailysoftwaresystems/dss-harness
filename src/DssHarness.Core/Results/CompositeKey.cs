@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Results;
+namespace DssHarness.Core.Results;
 
 /// <summary>
 /// Joins several strings into one key that cannot be confused with a different set of parts.

@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Hosts;
+namespace DssHarness.Core.Hosts;
 
 /// <summary>What every command says and leaves on the hosts it reached as it ends, however it ended.</summary>
 /// <remarks>

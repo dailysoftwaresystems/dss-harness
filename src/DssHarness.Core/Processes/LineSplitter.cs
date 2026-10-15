@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace RepoHarness.Core.Processes;
+namespace DssHarness.Core.Processes;
 
 /// <summary>
 /// Cuts text into lines as it arrives, the one rule for every reader of a child's output: the process runner reading the

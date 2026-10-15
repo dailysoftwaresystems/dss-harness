@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 
-namespace RepoHarness.Core.Anchors;
+namespace DssHarness.Core.Anchors;
 
 /// <summary>
 /// What a cell would store broken, refused before it is written: a cell is stored on one line, each line break a space

@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Projects;
+namespace DssHarness.Core.Projects;
 
 /// <summary>
 /// Recognises what kind of project a directory holds, so <c>init</c> can seed a

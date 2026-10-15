@@ -1,12 +1,12 @@
 using NSubstitute;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Git;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Sync;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Git;
+using DssHarness.Core.Output;
+using DssHarness.Core.Results;
+using DssHarness.Core.Sync;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// A copy's git HEAD names the commit its tree was at, so what a step asks git about HEAD is answered in the copy as
@@ -764,7 +764,7 @@ public sealed class SyncHistoryTests
         Assert.Contains("'--template=/elsewhere' is not how a git repository names its objects", noFormat.StandardError, StringComparison.Ordinal);
         Assert.Equal(head, await HeadAsync(harness, temp.Path, token));
 
-        static SyncInspectAnswer Answered(RepoHarness.Core.Processes.ProcessResult result)
+        static SyncInspectAnswer Answered(DssHarness.Core.Processes.ProcessResult result)
             => SyncServe.ReadAnswer<SyncInspectAnswer>(
                 result.StandardOutput.Split('\n').Single(line => line.StartsWith(SyncServe.AnswerPrefix, StringComparison.Ordinal)).TrimEnd('\r'))!;
 
@@ -1831,7 +1831,7 @@ public sealed class SyncHistoryTests
     }
 
     /// <summary>A file system that does what the one it wraps does, and holds every directory it was asked to remove.</summary>
-    private sealed class RemovalsSeen(RepoHarness.Core.FileSystem.IFileSystem inner) : PassThroughFileSystem(inner)
+    private sealed class RemovalsSeen(DssHarness.Core.FileSystem.IFileSystem inner) : PassThroughFileSystem(inner)
     {
         public List<string> Removed { get; } = [];
 

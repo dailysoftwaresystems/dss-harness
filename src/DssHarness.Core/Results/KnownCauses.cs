@@ -1,6 +1,6 @@
-using RepoHarness.Core.Processes;
+using DssHarness.Core.Processes;
 
-namespace RepoHarness.Core.Results;
+namespace DssHarness.Core.Results;
 
 /// <summary>
 /// The exceptions whose cause this build already has a name for, and what each means.

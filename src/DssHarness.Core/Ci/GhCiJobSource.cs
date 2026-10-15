@@ -1,11 +1,11 @@
 using System.Globalization;
 using System.Text.Json;
-using RepoHarness.Core.Git;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Processes;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Git;
+using DssHarness.Core.Output;
+using DssHarness.Core.Processes;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Ci;
+namespace DssHarness.Core.Ci;
 
 /// <summary>Reads CI run and job metadata for the repository a command is standing in.</summary>
 public interface ICiJobSource

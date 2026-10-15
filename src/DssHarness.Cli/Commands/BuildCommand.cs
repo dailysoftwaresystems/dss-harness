@@ -1,12 +1,12 @@
 using System.CommandLine;
 using System.Diagnostics;
-using RepoHarness.Core.Build;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Legs;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Runs;
+using DssHarness.Core.Build;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Legs;
+using DssHarness.Core.Output;
+using DssHarness.Core.Runs;
 
-namespace RepoHarness.Cli.Commands;
+namespace DssHarness.Cli.Commands;
 
 /// <summary>Wires <c>DssHarness build</c>.</summary>
 internal static class BuildCommand

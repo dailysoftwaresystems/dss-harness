@@ -1,6 +1,6 @@
-using RepoHarness.Core.Secrets;
+using DssHarness.Core.Secrets;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// The two parts of asking somebody for a superuser password that do not need a console: whether

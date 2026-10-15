@@ -1,8 +1,8 @@
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Execution;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Execution;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// A lock keeps two harness runs apart; it cannot see a tool somebody started by hand. Measured: a

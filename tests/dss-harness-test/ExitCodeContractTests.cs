@@ -1,16 +1,16 @@
-using RepoHarness.Core.Anchors;
-using RepoHarness.Core.Ci;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Git;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Legs;
-using RepoHarness.Core.Mutations;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Runs;
-using RepoHarness.Core.Tools;
+using DssHarness.Core.Anchors;
+using DssHarness.Core.Ci;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Git;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Legs;
+using DssHarness.Core.Mutations;
+using DssHarness.Core.Results;
+using DssHarness.Core.Runs;
+using DssHarness.Core.Tools;
 
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// The exit-code contract is a promise to callers, and the parts of it that are

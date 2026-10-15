@@ -1,7 +1,7 @@
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Repository;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Repository;
 
-namespace RepoHarness.Core.Worktrees;
+namespace DssHarness.Core.Worktrees;
 
 /// <summary>What a worktree's declared evidence roots hold, root by root, as a removal of the worktree would reach it.</summary>
 /// <param name="Files">Each root holding files, with every file under it, relative to the worktree and spelt with forward slashes.</param>

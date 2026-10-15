@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace RepoHarness.Core.Platform;
+namespace DssHarness.Core.Platform;
 
 /// <summary>
 /// Reading <c>/proc/&lt;pid&gt;/stat</c>, which is where Linux publishes what it knows about a process.

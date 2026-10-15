@@ -1,6 +1,6 @@
-using RepoHarness.Core.Execution;
+using DssHarness.Core.Execution;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>How the environment a process starts with is built from the layers that declare it.</summary>
 public sealed class PhaseEnvironmentTests

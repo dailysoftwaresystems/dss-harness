@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Anchors;
+namespace DssHarness.Core.Anchors;
 
 /// <summary>What becomes of a stored cell's text when the text declared for it is written.</summary>
 public enum AnchorCellFate

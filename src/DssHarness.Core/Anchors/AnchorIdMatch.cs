@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Anchors;
+namespace DssHarness.Core.Anchors;
 
 /// <summary>How an anchor id - asked for by read-anchor, or cited in a scanned root - finds its row.</summary>
 /// <remarks>

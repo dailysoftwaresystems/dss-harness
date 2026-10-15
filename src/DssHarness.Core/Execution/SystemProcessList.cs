@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>
 /// When a process on this Windows machine started, read from the list Windows keeps of every process for whoever asks.

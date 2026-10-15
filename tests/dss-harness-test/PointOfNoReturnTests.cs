@@ -1,9 +1,9 @@
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Orchestration;
-using RepoHarness.Core.Worktrees;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Orchestration;
+using DssHarness.Core.Worktrees;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>The commands the command line waits for after Ctrl+C, rather than cut off part way.</summary>
 public sealed class PointOfNoReturnTests

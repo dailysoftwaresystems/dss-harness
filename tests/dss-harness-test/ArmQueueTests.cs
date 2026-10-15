@@ -1,7 +1,7 @@
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Mutations;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Mutations;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// The arms of a sweep dealt to its workers: each once, in order, to whichever worker is free; an arm a retired worker

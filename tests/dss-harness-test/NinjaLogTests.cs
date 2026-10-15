@@ -1,6 +1,6 @@
-using RepoHarness.Core.Mutations;
+using DssHarness.Core.Mutations;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// ninja's own record of what it ran, read as ninja writes it, and compared before a build and after it: the witness

@@ -1,8 +1,8 @@
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Output;
+using DssHarness.Core.Results;
 using System.Globalization;
 
-namespace RepoHarness.Core.Sync;
+namespace DssHarness.Core.Sync;
 
 /// <summary>What one sync would do to a host's copy.</summary>
 /// <param name="Writes">Files whose content differs, or which the copy does not have.</param>

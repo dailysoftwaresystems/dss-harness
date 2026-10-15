@@ -1,7 +1,7 @@
 using System.Buffers.Binary;
 using System.Text;
 
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>The bits of an inotify mask this tool asks for or reads, as <c>linux/inotify.h</c> numbers them.</summary>
 internal static class InotifyBits

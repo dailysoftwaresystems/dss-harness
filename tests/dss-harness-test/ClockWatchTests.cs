@@ -1,4 +1,4 @@
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// What a watched clock explains of a test that failed: an assertion about what a build or a run came to, where the

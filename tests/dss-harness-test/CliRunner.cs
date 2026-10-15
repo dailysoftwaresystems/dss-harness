@@ -1,9 +1,9 @@
 using System.Reflection;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Processes;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Processes;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// Runs the real <c>DssHarness</c> CLI. End-to-end tests exercise the built program
@@ -144,12 +144,12 @@ public static class CliRunner
     {
         var path = typeof(CliRunner).Assembly
             .GetCustomAttributes<AssemblyMetadataAttribute>()
-            .FirstOrDefault(attribute => attribute.Key == "RepoHarnessCliPath")
+            .FirstOrDefault(attribute => attribute.Key == "DssHarnessCliPath")
             ?.Value;
 
         Assert.False(
             string.IsNullOrEmpty(path),
-            "This test assembly records no RepoHarnessCliPath; the EmbedCliPath build target did not run.");
+            "This test assembly records no DssHarnessCliPath; the EmbedCliPath build target did not run.");
 
         Assert.True(File.Exists(path), $"The CLI assembly is not at '{path}'. Build the solution first.");
         return path;

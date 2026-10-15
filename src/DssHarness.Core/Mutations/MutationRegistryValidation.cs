@@ -1,7 +1,7 @@
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Output;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Output;
 
-namespace RepoHarness.Core.Mutations;
+namespace DssHarness.Core.Mutations;
 
 /// <summary>A registry's text as validated: what it declares, and everything wrong with it.</summary>
 /// <param name="Registry">The arms that could be read.</param>

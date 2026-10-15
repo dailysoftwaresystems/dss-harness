@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>
 /// What sampling the process table cannot see, each limit one member: a phrase that finishes "sampling cannot see",

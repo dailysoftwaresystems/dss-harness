@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// Behaviours this assembly performs when started as a child process. They give the
@@ -412,13 +412,13 @@ internal static class TestChild
 
         output.Write(sleeper.Id.ToString(CultureInfo.InvariantCulture) + "\n");
 
-        var platform = new RepoHarness.Core.Platform.HostPlatform();
-        var table = RepoHarness.Core.Platform.ProcessTableFactory.Create(
+        var platform = new DssHarness.Core.Platform.HostPlatform();
+        var table = DssHarness.Core.Platform.ProcessTableFactory.Create(
             platform,
-            new RepoHarness.Core.Processes.ProcessRunner(platform, RepoHarness.Core.Platform.FilePermissionsFactory.Create()));
+            new DssHarness.Core.Processes.ProcessRunner(platform, DssHarness.Core.Platform.FilePermissionsFactory.Create()));
 
         // Longer than an agent gives it: a busy machine's table is read slowly, and this is no test of that budget.
-        var resort = new RepoHarness.Core.Hosts.HostAgentLastResort(table, platform, TimeSpan.FromMinutes(5));
+        var resort = new DssHarness.Core.Hosts.HostAgentLastResort(table, platform, TimeSpan.FromMinutes(5));
 
         output.Write(resort.EndStartedAsync().GetAwaiter().GetResult() + "\n");
         output.Flush();

@@ -1,7 +1,7 @@
 using System.CommandLine;
-using RepoHarness.Core.Tools;
+using DssHarness.Core.Tools;
 
-namespace RepoHarness.Cli.Commands;
+namespace DssHarness.Cli.Commands;
 
 /// <summary>Wires <c>DssHarness install-missing-tools</c>.</summary>
 internal static class InstallMissingToolsCommand

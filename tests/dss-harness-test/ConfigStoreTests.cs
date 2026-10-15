@@ -1,8 +1,8 @@
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Platform;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Platform;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 public sealed class ConfigStoreTests
 {
@@ -756,7 +756,7 @@ public sealed class ConfigStoreTests
 
         // The harness's own state is withheld by code rather than by that list, so emptying the list
         // reaches it no more than it reaches .git: a host's credentials are neither sent nor deleted.
-        var exclusions = new RepoHarness.Core.Sync.SyncExclusions(emptied.Sync, emptied.Worktrees.Root);
+        var exclusions = new DssHarness.Core.Sync.SyncExclusions(emptied.Sync, emptied.Worktrees.Root);
 
         foreach (var local in new[] { ".git/config", ".harness-config/sshItems/vps/.env", ".harness-config/runner/.secrets/ci.env" })
         {

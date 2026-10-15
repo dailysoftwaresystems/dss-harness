@@ -1,6 +1,6 @@
-using RepoHarness.Core.Platform;
+using DssHarness.Core.Platform;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// A process table that reads, and finds a machine running nothing but this test and <paramref name="others"/> - a shared
@@ -14,6 +14,6 @@ internal sealed class QuietProcessTable(params SampledProcess[] others) : IProce
 {
     public Task<ProcessTableReading> ReadAsync(CancellationToken cancellationToken = default)
         => Task.FromResult(new ProcessTableReading(
-            [new SampledProcess(Environment.ProcessId, null, "repo-harness-test", DateTimeOffset.UnixEpoch, "repo-harness-test"), .. others],
+            [new SampledProcess(Environment.ProcessId, null, "dss-harness-test", DateTimeOffset.UnixEpoch, "dss-harness-test"), .. others],
             null));
 }

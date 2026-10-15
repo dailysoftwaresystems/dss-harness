@@ -1,10 +1,10 @@
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Processes;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Processes;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>How a program is started on each kind of host, which decides what reaches the program there.</summary>
 public sealed class HostCommandRunnerTests

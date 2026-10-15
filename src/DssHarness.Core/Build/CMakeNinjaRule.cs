@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Build;
+namespace DssHarness.Core.Build;
 
 /// <summary>
 /// What CMake's ninja generator says of a build line through the name it gives the rule the line runs: the language,

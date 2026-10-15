@@ -1,18 +1,18 @@
 using System.CommandLine;
 using System.Diagnostics;
-using RepoHarness.Core.Build;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Legs;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Platform;
-using RepoHarness.Core.Results;
-using RepoHarness.Core.Runners;
-using RepoHarness.Core.Runs;
+using DssHarness.Core.Build;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Legs;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Output;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Results;
+using DssHarness.Core.Runners;
+using DssHarness.Core.Runs;
 
-namespace RepoHarness.Cli.Commands;
+namespace DssHarness.Cli.Commands;
 
 /// <summary>Wires <c>DssHarness run</c>.</summary>
 internal static class RunCommand
@@ -100,7 +100,7 @@ internal static class RunCommand
             var runners = context.Get<IRunnerRunService>();
             var builds = context.Get<IBuildService>();
 
-            var harness = await context.Get<RepoHarness.Core.Repository.IHarnessContextLoader>()
+            var harness = await context.Get<DssHarness.Core.Repository.IHarnessContextLoader>()
                 .LoadAsync(context.Directory, cancellationToken)
                 .ConfigureAwait(false);
 

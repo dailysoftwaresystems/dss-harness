@@ -1,7 +1,7 @@
 using System.Runtime.InteropServices;
-using RepoHarness.Core.Platform;
+using DssHarness.Core.Platform;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// A leg names what it needs and a host is measured into the same words. A report that uses

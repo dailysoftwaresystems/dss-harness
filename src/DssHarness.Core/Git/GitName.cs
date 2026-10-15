@@ -1,9 +1,9 @@
 using System.Buffers;
 using System.Text;
 using System.Text.Unicode;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Git;
+namespace DssHarness.Core.Git;
 
 /// <summary>A name git holds - a path, from the repository's root - as git listed it.</summary>
 /// <param name="Text">

@@ -1,10 +1,10 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Text;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Output;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Output;
 
-namespace RepoHarness.Core.Mutations;
+namespace DssHarness.Core.Mutations;
 
 /// <summary>What a line of an arms registry is.</summary>
 public enum RegistryLineKind

@@ -1,9 +1,9 @@
 using System.Text.Json;
-using RepoHarness.Core.Anchors;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Anchors;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>The anchor commands through the built CLI: arguments, output streams and exit codes.</summary>
 public sealed class AnchorCommandsCliTests

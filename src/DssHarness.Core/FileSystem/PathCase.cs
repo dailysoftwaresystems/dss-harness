@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.FileSystem;
+namespace DssHarness.Core.FileSystem;
 
 /// <summary>How a file system compares the names of what it holds, as it answers for itself.</summary>
 public static class PathCase

@@ -1,13 +1,13 @@
 using System.CommandLine;
-using RepoHarness.Cli;
-using RepoHarness.Cli.Commands;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Worktrees;
+using DssHarness.Cli;
+using DssHarness.Cli.Commands;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Worktrees;
 
 // Command selection and dependency wiring only. Every behaviour lives in a service
-// in RepoHarness.Core, which is a library precisely so that nothing can accumulate here.
+// in DssHarness.Core, which is a library precisely so that nothing can accumulate here.
 using var consoleEncoding = ConsoleEncoding.UseUtf8();
 
 var root = new RootCommand(

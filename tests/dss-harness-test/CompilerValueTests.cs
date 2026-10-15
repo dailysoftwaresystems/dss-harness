@@ -1,6 +1,6 @@
-using RepoHarness.Core.Build;
+using DssHarness.Core.Build;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>How a compiler variable's value is read: as CMake reads it, and never guessed at.</summary>
 public sealed class CompilerValueTests

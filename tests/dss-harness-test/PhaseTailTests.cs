@@ -1,8 +1,8 @@
-using RepoHarness.Core.Build;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Build;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// What a phase that did not pass shows of itself where its log is not to hand: its last lines, in
@@ -135,15 +135,15 @@ public sealed class PhaseTailTests
         };
 
     /// <summary>A runner that prints on standard output, then standard error, then standard output again, and fails.</summary>
-    private sealed class Interleaved : RepoHarness.Core.Processes.IProcessRunner
+    private sealed class Interleaved : DssHarness.Core.Processes.IProcessRunner
     {
-        public Task<RepoHarness.Core.Processes.ProcessResult> RunAsync(RepoHarness.Core.Processes.ProcessRequest request, CancellationToken cancellationToken = default)
+        public Task<DssHarness.Core.Processes.ProcessResult> RunAsync(DssHarness.Core.Processes.ProcessRequest request, CancellationToken cancellationToken = default)
         {
             request.OnOutputLine?.Invoke("[1/2] check");
             request.OnErrorLine?.Invoke("warning: slow fixture");
             request.OnOutputLine?.Invoke("1 of 2 checks failed");
 
-            return Task.FromResult(new RepoHarness.Core.Processes.ProcessResult(
+            return Task.FromResult(new DssHarness.Core.Processes.ProcessResult(
                 1,
                 "[1/2] check\n1 of 2 checks failed\n",
                 "warning: slow fixture\n",

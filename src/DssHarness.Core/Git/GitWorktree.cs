@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Git;
+namespace DssHarness.Core.Git;
 
 /// <summary>One entry of <c>git worktree list</c>.</summary>
 /// <param name="Path">

@@ -1,8 +1,8 @@
 using NSubstitute;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Platform;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Platform;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// How paths compare is asked of the file system, never assumed from the operating system: macOS's

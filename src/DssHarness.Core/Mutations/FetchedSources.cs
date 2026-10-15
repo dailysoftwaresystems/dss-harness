@@ -1,9 +1,9 @@
-using RepoHarness.Core.Build;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Sync;
+using DssHarness.Core.Build;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Sync;
 
-namespace RepoHarness.Core.Mutations;
+namespace DssHarness.Core.Mutations;
 
 /// <summary>One dependency a leg's own build has the sources of: the name FetchContent declared it under, and where they are.</summary>
 /// <param name="Name">The name, as its <c>FETCHCONTENT_SOURCE_DIR_&lt;NAME&gt;</c> cache entry spells it.</param>

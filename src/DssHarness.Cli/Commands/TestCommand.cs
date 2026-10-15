@@ -1,13 +1,13 @@
 using System.CommandLine;
 using System.Diagnostics;
-using RepoHarness.Core.Build;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Legs;
-using RepoHarness.Core.Runs;
-using RepoHarness.Core.Testing;
+using DssHarness.Core.Build;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Legs;
+using DssHarness.Core.Runs;
+using DssHarness.Core.Testing;
 
-namespace RepoHarness.Cli.Commands;
+namespace DssHarness.Cli.Commands;
 
 /// <summary>Wires <c>DssHarness test</c>.</summary>
 internal static class TestCommand

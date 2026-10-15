@@ -1,8 +1,8 @@
 using System.Text;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Repository;
+using DssHarness.Core.Output;
+using DssHarness.Core.Repository;
 
-namespace RepoHarness.Core.Hosts;
+namespace DssHarness.Core.Hosts;
 
 /// <summary>
 /// How a command a host serves for another machine tells that machine something while it runs: a note, written on its

@@ -1,6 +1,6 @@
-using RepoHarness.Core.Platform;
+using DssHarness.Core.Platform;
 
-namespace RepoHarness.Core.Hosts;
+namespace DssHarness.Core.Hosts;
 
 /// <summary>
 /// Where a process started with an environment looks for a program named by its name: the PATH that

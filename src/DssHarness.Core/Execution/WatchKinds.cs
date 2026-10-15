@@ -1,7 +1,7 @@
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Platform;
+using DssHarness.Core.Output;
+using DssHarness.Core.Platform;
 
-namespace RepoHarness.Core.Execution;
+namespace DssHarness.Core.Execution;
 
 /// <summary>Which kind of watch a span of work on this machine watches through: chosen in one place.</summary>
 /// <remarks>

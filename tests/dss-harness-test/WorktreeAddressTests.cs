@@ -1,6 +1,6 @@
-using RepoHarness.Core.Worktrees;
+using DssHarness.Core.Worktrees;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>How a worktree is named, and found, whether plain or an orchestrator's agent's.</summary>
 public sealed class WorktreeAddressTests

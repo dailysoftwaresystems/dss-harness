@@ -2,8 +2,8 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <AssemblyName>repo-harness-test</AssemblyName>
-    <RootNamespace>RepoHarness.Tests</RootNamespace>
+    <AssemblyName>dss-harness-test</AssemblyName>
+    <RootNamespace>DssHarness.Tests</RootNamespace>
     <IsPackable>false</IsPackable>
 
     <!-- xunit.v3 speaks the Microsoft.Testing.Platform protocol only when this is set,
@@ -19,12 +19,12 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="../../src/RepoHarness.Core/RepoHarness.Core.csproj" />
+    <ProjectReference Include="../../src/DssHarness.Core/DssHarness.Core.csproj" />
 
     <!-- Builds the CLI so end-to-end tests can run the real binary, without referencing
-         its assembly: RepoHarness.Cli is an Exe, and referencing it would put a second
+         its assembly: DssHarness.Cli is an Exe, and referencing it would put a second
          entry point in this test application. -->
-    <ProjectReference Include="../../src/RepoHarness.Cli/RepoHarness.Cli.csproj"
+    <ProjectReference Include="../../src/DssHarness.Cli/DssHarness.Cli.csproj"
                       ReferenceOutputAssembly="false" />
   </ItemGroup>
 
@@ -42,16 +42,16 @@
        Guessing it from directory names breaks as soon as an output layout differs from
        the default one. -->
   <Target Name="EmbedCliPath" BeforeTargets="GetAssemblyAttributes">
-    <MSBuild Projects="../../src/RepoHarness.Cli/RepoHarness.Cli.csproj"
+    <MSBuild Projects="../../src/DssHarness.Cli/DssHarness.Cli.csproj"
              Targets="GetTargetPath"
              Properties="Configuration=$(Configuration)">
-      <Output TaskParameter="TargetOutputs" ItemName="_RepoHarnessCli" />
+      <Output TaskParameter="TargetOutputs" ItemName="_DssHarnessCli" />
     </MSBuild>
 
     <ItemGroup>
       <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
-        <_Parameter1>RepoHarnessCliPath</_Parameter1>
-        <_Parameter2>@(_RepoHarnessCli->'%(FullPath)')</_Parameter2>
+        <_Parameter1>DssHarnessCliPath</_Parameter1>
+        <_Parameter2>@(_DssHarnessCli->'%(FullPath)')</_Parameter2>
       </AssemblyAttribute>
     </ItemGroup>
   </Target>

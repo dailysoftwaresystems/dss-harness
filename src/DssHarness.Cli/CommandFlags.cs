@@ -1,6 +1,6 @@
 using System.CommandLine;
 
-namespace RepoHarness.Cli;
+namespace DssHarness.Cli;
 
 /// <summary>
 /// A command line's flags, read where the parser may have refused the line: whether <c>--json</c> is set

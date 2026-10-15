@@ -1,11 +1,11 @@
 using System.Buffers;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Output;
-using RepoHarness.Core.Results;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Output;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Core.Runners;
+namespace DssHarness.Core.Runners;
 
 /// <summary>One unit a segment carried to an outcome.</summary>
 /// <param name="Unit">The unit's identity, as the run attributes its output.</param>

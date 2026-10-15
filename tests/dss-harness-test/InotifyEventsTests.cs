@@ -1,7 +1,7 @@
 using System.Text;
-using RepoHarness.Core.Execution;
+using DssHarness.Core.Execution;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// Reading what an inotify instance gives into events, on every system: every shape a record takes is read here, since

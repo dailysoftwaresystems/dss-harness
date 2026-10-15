@@ -1,6 +1,6 @@
-using RepoHarness.Core.Output;
+using DssHarness.Core.Output;
 
-namespace RepoHarness.Core.Hosts;
+namespace DssHarness.Core.Hosts;
 
 /// <summary>
 /// Whether a command typed in a copy the harness synced to a host was refused a host, and the one notice that

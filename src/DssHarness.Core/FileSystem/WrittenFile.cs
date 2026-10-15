@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.FileSystem;
+namespace DssHarness.Core.FileSystem;
 
 /// <summary>A file, and when it was last written.</summary>
 /// <param name="Path">The file.</param>

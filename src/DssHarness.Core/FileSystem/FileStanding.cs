@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.FileSystem;
+namespace DssHarness.Core.FileSystem;
 
 /// <summary>
 /// How a file stood when it was looked at: how many bytes it held, and when it was last written and created - what

@@ -1,11 +1,11 @@
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Git;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Git;
+using DssHarness.Core.Results;
 
-using RepoHarness.Core.FileSystem;
-using RepoHarness.Core.Repository;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Repository;
 
-namespace RepoHarness.Core.Sync;
+namespace DssHarness.Core.Sync;
 
 /// <summary>
 /// What a sync withholds, and equally what it must never delete.

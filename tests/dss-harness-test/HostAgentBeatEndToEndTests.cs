@@ -1,12 +1,12 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
-using RepoHarness.Core.Configuration;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Processes;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Processes;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// A leg on a host and the machine that dispatched it, end to end: this build's own agent, started as a host starts it,

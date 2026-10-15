@@ -1,7 +1,7 @@
 using System.Globalization;
-using RepoHarness.Core.Output;
+using DssHarness.Core.Output;
 
-namespace RepoHarness.Core.Mutations;
+namespace DssHarness.Core.Mutations;
 
 /// <summary>Which of the three texts a merge is given.</summary>
 public enum MergeSide

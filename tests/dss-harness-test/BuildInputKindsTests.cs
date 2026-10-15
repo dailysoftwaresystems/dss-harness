@@ -1,6 +1,6 @@
-using RepoHarness.Core.Build;
+using DssHarness.Core.Build;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// Which files a clean-rebuild decision compares over. Every tracked file was the first answer and

@@ -1,9 +1,9 @@
 using System.IO.Enumeration;
 using System.Runtime.Versioning;
 using System.Text;
-using RepoHarness.Core.Platform;
+using DssHarness.Core.Platform;
 
-namespace RepoHarness.Core.FileSystem;
+namespace DssHarness.Core.FileSystem;
 
 /// <inheritdoc cref="IFileSystem"/>
 public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFileSystem

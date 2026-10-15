@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Runners;
+namespace DssHarness.Core.Runners;
 
 /// <summary>What one line of a run's output is.</summary>
 public enum RunOutputKind

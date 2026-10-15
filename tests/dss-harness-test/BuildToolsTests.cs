@@ -1,6 +1,6 @@
 using Xunit.Sdk;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>
 /// A test that really builds, on a machine lacking what it needs: skipped, naming what is lacked - and failed where the
@@ -76,7 +76,7 @@ public sealed class BuildToolsTests
     [InlineData("pipeline-pkg.yml")]
     public void EachWorkflowRunningThisSuite_SaysItsRunnerHoldsEveryBuildTool(string workflow)
     {
-        var step = WorkflowFiles.StepRunning(workflow, "repo-harness-test");
+        var step = WorkflowFiles.StepRunning(workflow, typeof(WorkflowFiles).Assembly.GetName().Name!);
 
         // Among the step's own variables, the last of them: set just above the line that runs the suite.
         Assert.Contains("env:", step);

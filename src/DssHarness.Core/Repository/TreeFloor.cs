@@ -1,6 +1,6 @@
-using RepoHarness.Core.Configuration;
+using DssHarness.Core.Configuration;
 
-namespace RepoHarness.Core.Repository;
+namespace DssHarness.Core.Repository;
 
 /// <summary>
 /// The paths of a tree that are never moved into another tree, whatever git says of them: git's own directory, what

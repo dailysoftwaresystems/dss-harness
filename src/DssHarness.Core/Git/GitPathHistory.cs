@@ -1,4 +1,4 @@
-namespace RepoHarness.Core.Git;
+namespace DssHarness.Core.Git;
 
 /// <summary>A version of a path a history held: the blob, and a commit that holds it there.</summary>
 /// <param name="Commit">The oldest of the commits read, one after another, that hold the blob at the path.</param>

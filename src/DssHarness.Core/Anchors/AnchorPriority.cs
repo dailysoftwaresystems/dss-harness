@@ -1,6 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 
-namespace RepoHarness.Core.Anchors;
+namespace DssHarness.Core.Anchors;
 
 /// <summary>
 /// An anchor's priority band, from <c>P0</c>, the most urgent, to <c>P5</c>. A declaration made by

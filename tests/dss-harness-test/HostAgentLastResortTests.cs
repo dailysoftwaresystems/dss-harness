@@ -1,9 +1,9 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
-using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Platform;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Platform;
 
-namespace RepoHarness.Tests;
+namespace DssHarness.Tests;
 
 /// <summary>What a host's agent does when what it started will not stop, and how it takes a hang-up.</summary>
 public sealed class HostAgentLastResortTests

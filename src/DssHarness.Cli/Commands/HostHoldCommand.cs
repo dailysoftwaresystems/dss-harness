@@ -1,11 +1,11 @@
 using System.CommandLine;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.DependencyInjection;
-using RepoHarness.Core.Execution;
-using RepoHarness.Core.Repository;
-using RepoHarness.Core.Results;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
 
-namespace RepoHarness.Cli.Commands;
+namespace DssHarness.Cli.Commands;
 
 /// <summary>
 /// Wires the hidden <c>DssHarness host-hold</c>, which holds this machine awake between commands for the hold a
