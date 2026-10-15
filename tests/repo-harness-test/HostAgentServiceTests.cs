@@ -256,6 +256,38 @@ public sealed class HostAgentServiceTests
     }
 
     /// <summary>
+    /// A note of the request is never relayed, whether or not the machine that asked reads notes: where it reads none - a
+    /// sweep typed by hand in a synced copy, which records nothing - each line of it is dropped, before the agent serves
+    /// and after, while a line of the command's own and a note of another request are relayed as ever.
+    /// </summary>
+    [Fact]
+    public void ANoteOfTheRequest_IsDroppedNeverRelayed_WhereTheMachineThatAskedReadsNone()
+    {
+        var lines = new StringWriter();
+        var notes = new HostNotes(
+            CommandOrigin.Served(Dispatch.Of(new HostAgentRequest { Kind = HostAgentRequestKind.Run, Arguments = ["check-mutations"], Nonce = Nonce })),
+            new ConsoleHarnessOutput(new StringWriter(), lines, verbose: false));
+
+        notes.Write(NoteSink.ArmKind, new string('t', HostAgentProtocol.NotePiece(NoteSink.ArmKind) * 2 + 3));
+        notes.Write(NoteSink.VerifiedKind, string.Empty);
+
+        var written = lines.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(line => line.TrimEnd('\r')).ToList();
+        var agent = new HostAgentLines(Nonce);
+
+        Assert.Equal(4, written.Count);
+        Assert.False(agent.Error(written[0]), "a note's line is relayed before the agent serves");
+        Assert.False(agent.Error(HostAgentProtocol.StartedLine(Nonce)));
+
+        foreach (var line in written.Skip(1))
+        {
+            Assert.False(agent.Error(line), "a note's line is relayed");
+        }
+
+        Assert.True(agent.Error("check-mutations: arm charge, on worker 1: passed"));
+        Assert.True(agent.Error(HostAgentProtocol.NoteLine("fedcba9876543210fedcba9876543210", NoteSink.ArmKind, last: true, "e30=")));
+    }
+
+    /// <summary>
     /// The architecture names the cut a note crosses by - pieces of at most <see cref="HostAgentProtocol.NotePiece"/>
     /// bytes, each small enough that its whole line fits what the machine that asked hands lines on in
     /// (<see cref="ProcessRunner.LongestLine"/>) - in the words the protocol owns, and names no other cut.

@@ -3926,8 +3926,10 @@ hand in a copy the harness synced (`HarnessContext.IsSyncedCopy`) - a host's - h
 and records nothing (`MutationService.RunAsync`): the record is the main checkout's on the machine
 the copy was synced from, and one kept in the copy would hold what that machine never sees and decide
 what a later sweep typed there holds. It says so once, as a warning, and names no record; under
-`--pending` it holds nothing, and sweeps every selected arm. These shapes are the host-agent protocol's
-rise to 10.
+`--pending` it holds nothing, and sweeps every selected arm. A leg such a sweep dispatches to a host
+still has its notes written there, and they are dropped as they arrive: a note line carrying the
+request's own nonce is never relayed, read or not (`HostAgentLines`, given no `onNote`). These
+shapes are the host-agent protocol's rise to 10.
 
 A record that cannot be read - not JSON, a member this build does not know, or a hand's damage: a
 null where entries or tables go, an entry with a key and nothing it was judged on, a null inside what
