@@ -110,6 +110,67 @@ public sealed class GitClientTests
         Assert.True(await harness.GitClient.IsDirtyAsync(temp.Path, cancellationToken));
     }
 
+    /// <summary>
+    /// Where the file system tells names apart by case, a new file beside a tracked one in another case is a file of its
+    /// own, whatever core.ignorecase says: listed untracked, the tree dirty - and, with the tracked one deleted, both the
+    /// deletion and the new file listed.
+    /// </summary>
+    [Fact]
+    public async Task Status_ListsANewFileBesideATrackedOneInAnotherCase_WhereTheFileSystemTellsThemApart()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
+        Assert.SkipWhen(PathCase.In(harness.FileSystem, temp.Path).Equals("a", "A"), "Only a file system that tells names apart by case holds two files whose names differ in case alone.");
+        File.WriteAllText(temp.Combine("a.txt"), "one\n");
+        await harness.CommitAllAsync(temp.Path, "a file", cancellationToken);
+        await harness.RunGitAsync(temp.Path, ["config", "core.ignorecase", "false"], cancellationToken);
+        File.WriteAllText(temp.Combine("A.txt"), "two\n");
+
+        Assert.Equal(["A.txt"], (await harness.GitClient.ReadStatusAsync(temp.Path, cancellationToken)).SelectMany(entry => entry.Paths).Select(name => name.Text));
+        Assert.Equal(["A.txt"], (await harness.GitClient.GetStatusAsync(temp.Path, cancellationToken)).SelectMany(entry => entry.Paths).Select(name => name.Text));
+        Assert.True(await harness.GitClient.IsDirtyAsync(temp.Path, cancellationToken));
+
+        File.Delete(temp.Combine("a.txt"));
+
+        Assert.Equal(
+            ["A.txt", "a.txt"],
+            (await harness.GitClient.ReadStatusAsync(temp.Path, cancellationToken)).SelectMany(entry => entry.Paths).Select(name => name.Text).Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// The index's spelling of an untracked name is the same file only where it reaches something on disk not held so
+    /// spelled: a directory that finds a name in any case reaching the file the disk spells otherwise. Nothing there - a
+    /// tracked file deleted - and both spellings held - two files a directory tells apart - are not, nor is a directory
+    /// that cannot be listed; each part of the path is asked of the directory holding it.
+    /// </summary>
+    [Fact]
+    public void ReachedOnlyInAnotherCase_IsAskedOfEachDirectoryAlongThePath()
+    {
+        var top = Path.Combine(Path.GetTempPath(), "tree");
+        var src = Path.Combine(top, "src");
+
+        IFileSystem Disk(string held, PathKind reached)
+        {
+            var disk = Substitute.For<IFileSystem>();
+            disk.KindOf(Path.Combine(top, "src/M.txt")).Returns(reached);
+            disk.EnumerateDirectories(top).Returns([src]);
+            disk.EnumerateFiles(top, false).Returns([]);
+            disk.EnumerateDirectories(src).Returns([]);
+            disk.EnumerateFiles(src, false).Returns([Path.Combine(src, held)]);
+            return disk;
+        }
+
+        var unlistable = Disk("m.txt", PathKind.File);
+        unlistable.EnumerateFiles(src, false).Returns(_ => throw new IOException("denied"));
+
+        Assert.True(GitClient.ReachedOnlyInAnotherCase(Disk("m.txt", PathKind.File), top, "src/M.txt"));
+        Assert.False(GitClient.ReachedOnlyInAnotherCase(Disk("m.txt", PathKind.None), top, "src/M.txt"));
+        Assert.False(GitClient.ReachedOnlyInAnotherCase(Disk("M.txt", PathKind.File), top, "src/M.txt"));
+        Assert.False(GitClient.ReachedOnlyInAnotherCase(unlistable, top, "src/M.txt"));
+    }
+
     [Fact]
     public async Task GetRepositoryRootAsync_FindsTheRoot_FromASubdirectory()
     {

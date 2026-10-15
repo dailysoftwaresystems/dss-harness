@@ -352,11 +352,13 @@ public interface IGitClient
 
     /// <summary>
     /// Which of <paramref name="untracked"/> - files git status called untracked, by their paths from the top of the tree -
-    /// the index holds under another spelling, where the tree at <paramref name="directory"/> finds a name in any case and
-    /// its core.ignorecase says it does not: there git lists a file the disk spells otherwise than its index twice, changed
-    /// under the index's name and untracked under the disk's, though the tree holds one file. Empty anywhere else: where
-    /// the repository says it ignores case, git already finds such a name in its index. An untracked directory, named as one
-    /// entry, is never among them. git's ignore rules are left as the repository has them.
+    /// are a file the index holds under another spelling, where the repository at <paramref name="directory"/> says by its
+    /// core.ignorecase that it heeds case: there git lists a file the disk spells otherwise than its index twice, changed
+    /// under the index's name and untracked under the disk's, though the directory holds one file. Decided file by file, as
+    /// each directory compares names: one is that file only where the index's spelling reaches something on disk that is
+    /// not held so spelled; a new file beside a tracked one a directory tells apart, or beside a tracked one deleted, is
+    /// not. Empty where the repository says it ignores case: git already finds such a name in its index. An untracked
+    /// directory, named as one entry, is never among them. git's ignore rules are left as the repository has them.
     /// </summary>
     /// <exception cref="HarnessException">git could not read the configuration or the index.</exception>
     Task<IReadOnlySet<string>> IndexedInAnotherCaseAsync(string directory, IReadOnlyCollection<string> untracked, CancellationToken cancellationToken = default);

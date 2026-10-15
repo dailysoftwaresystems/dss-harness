@@ -168,6 +168,26 @@ public sealed class RootLitterServiceTests
         Assert.Equal("probe.out", Assert.Single((await service.CheckAsync(temp.Path, cancellationToken)).Untracked));
     }
 
+    /// <summary>
+    /// Where the file system tells names apart by case, a new file at the root beside a tracked one in another case is a
+    /// file of its own, and litter, whatever core.ignorecase says.
+    /// </summary>
+    [Fact]
+    public async Task ANewFileBesideATrackedOneInAnotherCase_IsLitter_WhereTheFileSystemTellsThemApart()
+    {
+        using var temp = new TempDirectory();
+        var (harness, service) = await PrepareAsync(temp);
+        var cancellationToken = TestContext.Current.CancellationToken;
+        Assert.SkipWhen(PathCase.In(harness.FileSystem, temp.Path).Equals("a", "A"), "Only a file system that tells names apart by case holds two files whose names differ in case alone.");
+
+        await File.WriteAllTextAsync(Path.Combine(temp.Path, "README.md"), "x\n", cancellationToken);
+        await harness.CommitAllAsync(temp.Path, "a readme", cancellationToken);
+        await harness.RunGitAsync(temp.Path, ["config", "core.ignorecase", "false"], cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(temp.Path, "readme.md"), "y\n", cancellationToken);
+
+        Assert.Equal("readme.md", Assert.Single((await service.CheckAsync(temp.Path, cancellationToken)).Untracked));
+    }
+
     private static async Task<(HarnessFactory Harness, IRootLitterService Service)> PrepareAsync(TempDirectory temp)
     {
         var harness = new HarnessFactory();
