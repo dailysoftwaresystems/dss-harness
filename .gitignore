@@ -40,8 +40,13 @@ Thumbs.db
 /.harness-config/runner/.secrets/*
 !/.harness-config/runner/.secrets/.gitkeep
 
-# Claude Code local state (per-user settings, agent worktrees)
-.claude/
+# Claude Code local state (per-user settings, agent worktrees, personal skills). The
+# repository's own skill is tracked: everything else under .claude stays on the machine
+# that wrote it.
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/dss-harness/
 
 # Working notes and handoffs between sessions, kept beside the tree and never committed
 /.plans/
