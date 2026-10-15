@@ -2276,6 +2276,7 @@ public sealed class GitClientTests
     [InlineData("git version 2.39.5 (Apple Git-154)", "2.39.5")]
     [InlineData("git version 2.41.0", null)]
     [InlineData("git version 2.47.1.windows.1", null)]
+    [InlineData("git version 2.56.GIT", null)]
     public async Task AFileOnlyAttributesDeclaredToGitTellHowToRead_IsReadFromGit241On_AndRefusedBeforeIt(string answer, string? installed)
     {
         using var temp = new TempDirectory();

@@ -1974,7 +1974,8 @@ public sealed partial class GitClient(
 
     /// <summary>
     /// The version the git this client runs names itself by, as <c>git version</c> gives it - "2.47.1.windows.1" - and the
-    /// release its first three numbers make, where they make one: asked of git once, and the answer kept.
+    /// release its first two numbers make, where they make one, its patch read as 0 - a git built from its own sources
+    /// may name itself "2.56.GIT": asked of git once, and the answer kept.
     /// </summary>
     /// <exception cref="HarnessException">git could not say its version.</exception>
     private async Task<(string Named, SemanticVersion? Release)> InstalledVersionAsync(string directory, CancellationToken cancellationToken)
@@ -1991,7 +1992,9 @@ public sealed partial class GitClient(
             _installed = line.StartsWith(Answer, StringComparison.Ordinal) ? line[Answer.Length..].Split(' ')[0] : line.Trim();
         }
 
-        return (_installed, SemanticVersion.TryParse(string.Join('.', _installed.Split('.').Take(3)), out var release) ? release : null);
+        var numbers = _installed.Split('.');
+
+        return (_installed, numbers.Length >= 2 && SemanticVersion.TryParse($"{numbers[0]}.{numbers[1]}.0", out var release) ? release : null);
     }
 
     /// <summary>
