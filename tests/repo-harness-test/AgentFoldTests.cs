@@ -351,27 +351,30 @@ public sealed class AgentFoldTests
     }
 
     /// <summary>
-    /// A rename a commit made of a path's case alone, where the repository ignores case, is what that commit did: a main
-    /// tree that holds what its HEAD holds says the path changed by a commit, one that edited the renamed file since says
-    /// the commit changed it and the edit then changed it again, and one that removed it says it removed it after a commit
-    /// renamed it - git asked about the main tree's file as it spells it, in its HEAD and in its status.
+    /// A rename a commit made of a path's case alone, where the main tree's file system finds a name in any case, is what
+    /// that commit did: a main tree that holds what its HEAD holds says the path changed by a commit, one that edited the
+    /// renamed file since says the commit changed it and the edit then changed it again, and one that removed it says it
+    /// removed it after a commit renamed it - git asked about the main tree's file in any case, in its HEAD and in its
+    /// status, whether the repository says it ignores case or not.
     /// </summary>
     /// <param name="since">What the main tree did to the renamed file since, uncommitted: nothing, edited it, or removed it.</param>
+    /// <param name="ignoresCase">Whether the repository says it ignores case.</param>
     [Theory]
-    [InlineData("nothing")]
-    [InlineData("edited")]
-    [InlineData("removed")]
-    public async Task ARenameOfCaseAloneACommitMade_IsSaidAsThatCommitsOwn(string since)
+    [InlineData("nothing", true)]
+    [InlineData("edited", true)]
+    [InlineData("removed", true)]
+    [InlineData("nothing", false)]
+    [InlineData("edited", false)]
+    [InlineData("removed", false)]
+    public async Task ARenameOfCaseAloneACommitMade_IsSaidAsThatCommitsOwn(string since, bool ignoresCase)
     {
         using var temp = new TempDirectory();
         var kit = await OrchestrationKit.PrepareAsync(temp);
-        var ignoresCase = (await kit.Harness.GitClient.RunAsync(kit.Main, ["config", "--type=bool", "--default=false", "core.ignorecase"], cancellationToken: TestContext.Current.CancellationToken))
-            .StandardOutput.Trim() == "true";
-        Assert.SkipUnless(ignoresCase, "Only a repository that ignores case holds a rename of case alone as the same file.");
         var worktree = await kit.CreateAgentAsync("ag");
+        await CaseFoldedAsync(kit, ignoresCase);
         var at = ReportText.Commit(kit.Record("ag").Base!);
         OrchestrationKit.Write(worktree, "a.txt", "one\nthe agent's\n");
-        await kit.GitAsync(kit.Main, "mv", "a.txt", "A.txt");
+        await kit.GitAsync(kit.Main, "mv", "-f", "a.txt", "A.txt");
         await kit.Harness.CommitAllAsync(kit.Main, "a sibling's rename", TestContext.Current.CancellationToken);
 
         switch (since)
@@ -1067,8 +1070,8 @@ public sealed class AgentFoldTests
             "A refusal of a main-tree path the agent shares nothing for, made, changed, made a directory of or removed since the "
                 + "agent's base, says whether a commit, an uncommitted edit or a commit and then an edit did it, since each is "
                 + "reconciled differently: a commit alone where the main tree's HEAD already holds what the main tree holds there now, "
-                + "which `git status` - untracked files listed, its paths compared as `core.ignorecase` says, so a rename of case alone "
-                + "is the commit's - answers by listing nothing at the path, below it, or in a directory above it that it folds into one "
+                + "which `git status` - untracked files listed, its paths compared in any case where the main tree's file system finds a "
+                + "name in any case, so a rename of case alone is the commit's - answers by listing nothing at the path, below it, or in a directory above it that it folds into one "
                 + "entry, as it folds an untracked repository nested in the tree (one process a fold, asked only where a commit moved a "
                 + "path or neither HEAD nor the base holds one); an uncommitted edit alone where HEAD holds what the base holds, each entry "
                 + "compared as git compares a commit, so a commit of a mode alone is a commit; and both otherwise, "

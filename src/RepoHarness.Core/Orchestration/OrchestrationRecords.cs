@@ -112,6 +112,15 @@ public sealed record AgentRecord
     /// </summary>
     public IReadOnlyList<string>? MovingWith { get; init; }
 
+    /// <summary>
+    /// Whether the move <see cref="Moving"/> names wrote the paths it writes first (<see cref="RebasePlan.Written"/>), the
+    /// checkout of them returned: true once it has; null before it has, where no move stands, and in a record a build that
+    /// kept no such mark wrote. Only then is the old name of a file renamed in case alone, which that checkout removes,
+    /// missing by the move's doing: git leaves the index and the disk alike after it and after a git rm of the agent's
+    /// session.
+    /// </summary>
+    public bool? MovingWritten { get; init; }
+
     /// <summary>The Claude session the agent runs as - a session's id or a subagent's - where it was given.</summary>
     public string? Session { get; init; }
 
@@ -190,6 +199,13 @@ public sealed record AgentRecord
             return Moving is null
                 ? "it records what a move of its base was told, and no move of it"
                 : "it records what the move of its base was told as nothing, or with an empty word";
+        }
+
+        if (MovingWritten is { } written && (Moving is null || !written))
+        {
+            return Moving is null
+                ? "it records what a move of its base wrote first, and no move of it"
+                : "it records what the move of its base wrote first as not written";
         }
 
         return State switch

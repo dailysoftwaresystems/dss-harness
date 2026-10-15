@@ -1834,11 +1834,13 @@ public sealed class AgentRebaseTests
 
         Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
         Assert.False(File.Exists(Path.Combine(worktree, "a.txt")), "The old name was not removed before the move stopped.");
+        Assert.True(kit.Record("ag").MovingWritten);
 
         var finished = await RebaseAsync(kit, apply: true);
 
         Assert.True(finished.Succeeded, OrchestrationKit.Describe(finished));
         Assert.Equal(to, kit.Record("ag").Base);
+        Assert.DoesNotContain("movingWritten", File.ReadAllText(kit.Layout.AgentRecordFile("ag")), StringComparison.Ordinal);
         Assert.Equal(["A.txt"], Directory.EnumerateFiles(worktree, "?.txt").Select(Path.GetFileName).Where(name => string.Equals(name, "a.txt", StringComparison.OrdinalIgnoreCase)));
         Assert.Equal("one\n", OrchestrationKit.Read(worktree, "A.txt"));
         Assert.Empty((await kit.Harness.RunGitAsync(worktree, ["status", "--porcelain"], Token)).StandardOutput.Trim());
@@ -1846,13 +1848,16 @@ public sealed class AgentRebaseTests
 
     /// <summary>
     /// A move of a file the main tree renamed in case alone that stopped before git wrote anything - the agent's session
-    /// deleted the old name once the move was weighed - never takes that deletion for the move's own: the agent's git index
-    /// still holds the old name, which the move's checkout would have taken out, so running the move again, as its stop
-    /// says, refuses it as a rename and a deletion of one file, and doing what that says moves the base and folds the
-    /// deletion.
+    /// deleted the old name once the move was weighed, from disk or with git rm, which leaves the index and the disk as the
+    /// move's checkout would - never takes that deletion for the move's own: its record says the move wrote nothing yet, so
+    /// running it again, as its stop says, refuses it as a rename and a deletion of one file, and doing what that says
+    /// moves the base and folds the deletion.
     /// </summary>
-    [Fact]
-    public async Task AMoveOfARenameOfCaseAlone_StoppedBeforeItWroteAnything_NeverTakesTheSessionsDeletionOfTheOldNameForItsOwn()
+    /// <param name="withGit">Whether the session deleted the old name with git rm, rather than from disk alone.</param>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AMoveOfARenameOfCaseAlone_StoppedBeforeItWroteAnything_NeverTakesTheSessionsDeletionOfTheOldNameForItsOwn(bool withGit)
     {
         using var temp = new TempDirectory();
         var kit = await OrchestrationKit.PrepareAsync(temp);
@@ -1864,14 +1869,28 @@ public sealed class AgentRebaseTests
 
         // The record names where the move goes once the move is weighed under its hold, and before git writes anything:
         // the session deletes the old name then.
+        void Delete()
+        {
+            if (withGit)
+            {
+                Task.Run(() => kit.GitAsync(worktree, "rm", "--quiet", "--", "a.txt")).GetAwaiter().GetResult();
+            }
+            else
+            {
+                File.Delete(Path.Combine(worktree, "a.txt"));
+            }
+        }
+
         var agents = kit.Harness.Agents(
-            new WrittenMeanwhileFileSystem(kit.Harness.FileSystem, kit.Layout.AgentRecordFile("ag"), "\"moving\"", () => File.Delete(Path.Combine(worktree, "a.txt"))),
+            new WrittenMeanwhileFileSystem(kit.Harness.FileSystem, kit.Layout.AgentRecordFile("ag"), "\"moving\"", Delete),
             kit.Harness.AnchorRegistryService);
 
         var stopped = await agents.RebaseAsync(kit.Main, "o1", "ag", new RebaseRequest(), apply: true, Token);
 
         Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
         Assert.EndsWith($"run '{ToolPackage.Command} rebase-agent o1 ag --apply' again once that is dealt with, and it finishes it.", stopped.Message, StringComparison.Ordinal);
+        Assert.NotNull(kit.Record("ag").Moving);
+        Assert.Null(kit.Record("ag").MovingWritten);
 
         var again = await RebaseAsync(kit, apply: true);
 

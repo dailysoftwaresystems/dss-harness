@@ -2306,7 +2306,7 @@ public sealed partial class HelpTests
             + "with it: where the agent keeps that - its own change, settled or shared - writing the new name would write over it, and both are named, "
             + "a shared one it changed to be folded first, since no refresh hands it, and one it did not to be refreshed under the new name; where the "
             + "agent deleted it, the two are named as a rename and a deletion of one file, with what to do - unless a move that stopped part way removed "
-            + "it, taking it out of the agent's git index, which running it again finishes. "
+            + "it, as its record says, which running it again finishes. "
             + $"A file of the agent's written after it was weighed is never written over or removed: the move stops there, exit {HarnessExit.Incomplete}, "
             + "before git writes anything, naming it.",
             text,
@@ -2326,18 +2326,17 @@ public sealed partial class HelpTests
             + "folded first, since no refresh hands a path the agent changed, and one it did not to be refreshed under the new name, which records the "
             + "file it holds as shared there. Where it holds nothing at the old name, the agent deleted it, and the new name refuses the move as a "
             + "rename and a deletion of one file - to be put back with `git checkout HEAD`, or, shared, folded and committed in the main tree - unless "
-            + "the move being finished removed it, the new name written last: its checkout takes the old name out of the agent's git index, where a "
-            + "deletion of the agent's session - made before that checkout ran, or after the move stopped - leaves the index holding it. The record "
-            + "names where the "
+            + "the move being finished removed it, the new name written last, as its record says (`MovingWritten`, marked once the checkout of what "
+            + "the move writes first returns): git leaves the index and the disk alike after that checkout and after a `git rm` of the agent's "
+            + "session. The record names where the "
             + "move goes (`Moving`) before anything is written; then each path the move takes is asked to hold what was measured there "
             + "(`RebasePlan.Held`, `AgentFold.RequireTakenAsync`), so a file the agent's session wrote since stops the move, exit 21, before git "
             + "writes anything, never written over;",
             architecture,
             StringComparison.Ordinal);
         Assert.Contains(
-            "The base's entry and HEAD's are found alike, as git spells the path where the repository ignores case, and in any case, whatever "
-            + "`core.ignorecase` says, for paths that are one file in the agent's worktree, so a rename of case alone is the "
-            + "commit's that made it, and none other's.",
+            "The base's entry and HEAD's are found alike, as git spells the path and, where the main tree's file system finds a name in any case, in "
+            + "any case, whatever `core.ignorecase` says, so a rename of case alone is the commit's that made it, and none other's.",
             architecture,
             StringComparison.Ordinal);
         Assert.Contains(

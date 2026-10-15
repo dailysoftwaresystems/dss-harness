@@ -861,9 +861,10 @@ writing it would write over that; a shared file the agent changed is to be folde
 the agent changed, and one it did not to be refreshed under the new name, which records the file it holds as shared
 there. Where it holds nothing at the old name, the agent deleted it, and the new name refuses the move as a rename and
 a deletion of one file - to be put back with `git checkout HEAD`, or, shared, folded and committed in the main tree -
-unless the move being finished removed it, the new name written last: its checkout takes the old name out of the
-agent's git index, where a deletion of the agent's session - made before that checkout ran, or after the move stopped -
-leaves the index holding it. The record names where the move goes (`Moving`) before anything is written; then each
+unless the move being finished removed it, the new name written last, as its record says (`MovingWritten`, marked
+once the checkout of what the move writes first returns): git leaves the index and the disk alike after that checkout
+and after a `git rm` of the agent's session. The record names where the move goes (`Moving`) before anything is
+written; then each
 path the move takes is asked to hold what was measured there (`RebasePlan.Held`, `AgentFold.RequireTakenAsync`), so a
 file the agent's session wrote since stops the move, exit 21, before git writes anything, never written over; then the new
 base's paths are written, HEAD and the index move (`git reset --mixed`), then the record and the worktree's base ref
@@ -891,8 +892,9 @@ those paths against what the fold left, never against the base: the agent puttin
 to fold. A refusal of a main-tree path the agent shares nothing for, made, changed, made a directory of or removed since
 the agent's base, says whether a commit, an uncommitted edit or a commit and then an edit did it, since each is
 reconciled differently: a commit alone where the main tree's HEAD already holds what the main tree holds there now,
-which `git status` - untracked files listed, its paths compared as `core.ignorecase` says, so a rename of case alone is
-the commit's - answers by listing nothing at the path, below it, or in a directory above it that it folds into one
+which `git status` - untracked files listed, its paths compared in any case where the main tree's file system finds a
+name in any case, so a rename of case alone is the commit's - answers by listing nothing at the path, below it, or in a
+directory above it that it folds into one
 entry, as it folds an untracked repository nested in the tree (one process a fold, asked only where a commit moved a
 path or neither HEAD nor the base holds one); an uncommitted edit alone where HEAD holds what the base holds, each entry
 compared as git compares a commit, so a commit of a mode alone is a commit; and both otherwise, each said with what it
@@ -906,9 +908,9 @@ git, with no word of when it came. A file of a submodule of the main tree's in t
 holds, where git looks at nothing and `check-ignore` answers nothing - came as that record did: by a commit where HEAD
 holds it, then changed by an uncommitted edit where status lists the record, and by an uncommitted edit where only the
 index holds it (`Came`, the one wording of how a path came to be held, and `Since`, of what the main tree did, both
-decided once). The base's entry and HEAD's are found alike, as git spells the path where the repository ignores case,
-and in any case, whatever `core.ignorecase` says, for paths that are one file in the agent's worktree, so a rename of
-case alone is the commit's that made it, and none other's. A shared path's
+decided once). The base's entry and HEAD's are found alike, as git spells the path and, where the main tree's file
+system finds a name in any case, in any case, whatever `core.ignorecase` says, so a rename of case alone is the
+commit's that made it, and none other's. A shared path's
 refusal says the main tree changed it after the agent was last handed it or folded, which the seed records alike. A deletion needs the same baseline proof a copy does. A directory with no `.git` of its own
 holds no file at its path, so a file the agent turned into a directory folds as the file's deletion and the directory's
 files, and a directory it turned into a file as the files' deletions and the file: every removal is made first, with

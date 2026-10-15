@@ -432,15 +432,12 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         var shared = new Baselines(seed);
         var roots = new Roots(main, _fileSystem.ResolveLinks(main), worktree, _fileSystem.ResolveLinks(worktree));
 
-        // Paths that differ in case alone, where the agent's worktree finds a name in any case, are one file there, which
-        // the main tree's commits are asked for in any case, whatever its core.ignorecase says.
-        var oneFile = OneFileEach(worktree, candidates);
-        var answers = new MainTreeAnswers(_gitClient, main, baseCommit, oneFile.SelectMany(file => file).ToHashSet(StringComparer.Ordinal), cancellationToken);
+        var answers = new MainTreeAnswers(_gitClient, main, baseCommit, PathCase.In(_fileSystem, main).Equals("a", "A"), cancellationToken);
         var looks = new List<Look>(candidates.Count);
 
-        // A file the agent renamed in case alone is one file at two paths there: each is read only where a tree spells the
-        // file so, never as the other.
-        var spellings = await RenamedInCaseByTheAgentAsync(roots, answers, oneFile, cancellationToken).ConfigureAwait(false);
+        // A file the agent renamed in case alone, where its worktree finds a name in any case, is one file at two paths
+        // there: each is read only where a tree spells the file so, never as the other.
+        var spellings = await RenamedInCaseByTheAgentAsync(roots, answers, OneFileEach(worktree, candidates), cancellationToken).ConfigureAwait(false);
 
         foreach (var path in candidates)
         {
@@ -450,9 +447,9 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         var (renamedInCase, refusedInCase) = RenamedByTheAgentInCase(roots, spellings, [.. looks.Where(look => spellings.ContainsKey(look.Path) && look.Link is null)]);
 
         // Every path the agent shares nothing for is weighed against its base: the blob there, found as git spells the path,
-        // and in any case where it is one file with another - so a file renamed in case alone is weighed against the base's
-        // under its old name, as how it came is said below - and whether the main tree moved from it since, asked of git
-        // once, compared as git status compares.
+        // and in any case where the main tree finds a name in any case - so a file renamed in case alone is weighed against
+        // the base's under its old name, as how it came is said below - and whether the main tree moved from it since, asked
+        // of git once, compared as git status compares.
         var unseeded = looks.Where(look => look.Link is null && shared.Of(look.Path) is null).ToList();
         var atBase = await answers.BaseAsync([.. unseeded.Select(look => look.Path)]).ConfigureAwait(false);
         var baseBlobs = unseeded.ToDictionary(
@@ -1541,10 +1538,10 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         var shared = new Baselines(seed);
         var unseeded = both.Where(path => shared.Of(path) is null).ToList();
 
-        // The base's entry found as a fold finds it - as git spells the path, and in any case for one file at two paths - so
-        // a file the main tree renamed in case alone is merged from the base's file under its old name.
+        // The base's entry found as a fold finds it - as git spells the path, and in any case where the main tree finds a
+        // name in any case - so a file the main tree renamed in case alone is merged from the base's file under its old name.
         var entries = unseeded.Count > 0
-            ? await new MainTreeAnswers(_gitClient, main, baseCommit, twins, cancellationToken).BaseAsync(unseeded).ConfigureAwait(false)
+            ? await new MainTreeAnswers(_gitClient, main, baseCommit, PathCase.In(_fileSystem, main).Equals("a", "A"), cancellationToken).BaseAsync(unseeded).ConfigureAwait(false)
             : new Dictionary<string, (GitEntry Entry, string Spelling)>(StringComparer.Ordinal);
         var reachedMain = _fileSystem.ResolveLinks(main);
         var reachedAgent = _fileSystem.ResolveLinks(worktree);
@@ -1910,8 +1907,8 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     /// over anything of the agent's: a file or a link where the new base needs a directory, anything in a directory where
     /// it holds a file, and the old name of a file it renamed in case alone, where the worktree finds a name in any case,
     /// refuse the move too - its own, settled, or shared alike, and the agent's deletion of that old name, unless the move
-    /// being finished removed it, its checkout having taken it out of the agent's git index. What each path it takes holds
-    /// is measured with it (<see cref="RebasePlan.Held"/>), so git writes over nothing that was not weighed.
+    /// being finished removed it (<paramref name="wroteFirst"/>). What each path it takes holds is measured with it
+    /// (<see cref="RebasePlan.Held"/>), so git writes over nothing that was not weighed.
     /// </summary>
     /// <param name="worktree">The agent's worktree.</param>
     /// <param name="from">The commit its worktree was made from.</param>
@@ -1926,6 +1923,10 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     /// Otherwise such a file is the agent's own - unless it is the very file <paramref name="to"/> holds there, read and
     /// compared, which is held as <paramref name="to"/> holds it whether a move is being finished or not.
     /// </param>
+    /// <param name="wroteFirst">
+    /// Whether the move being finished wrote the paths it writes first, as its record says (<see cref="AgentRecord.MovingWritten"/>):
+    /// the old name of a file renamed in case alone that it took is then missing by its doing, and otherwise by the agent's.
+    /// </param>
     /// <param name="cancellationToken">Stops the measuring.</param>
     /// <exception cref="HarnessException">git could not answer, or names a path that is not UTF-8.</exception>
     public async Task<RebasePlan> MeasureRebaseAsync(
@@ -1937,6 +1938,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         TwoChangePolicy policy,
         TwoChanges changes,
         bool finishing,
+        bool wroteFirst,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(seed);
@@ -2194,15 +2196,10 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         // agent's worktree holds the old name and the agent keeps it - declared settled, shared, or its own change, a shared
         // file it changed among them, which no refresh hands it - writing the new name would write over it, both names
         // being one file there. Where it holds nothing there, the agent deleted it, and writing the new name would undo
-        // that - unless the move being finished removed it, writing the new name last: its checkout takes the old name out of
-        // the agent's git index too, where a deletion the agent's session made - before that checkout ran, or after the move
-        // stopped - leaves the index holding it.
+        // that - unless the move being finished removed it, writing the new name last, as its record says.
         var renamedOver = renamed.Where(rename => takenPaths.Contains(rename.Key) && !takenPaths.Contains(rename.Value)).ToList();
         var sharedChanged = (await EditedAsync(worktree, from, seed, [.. renamedOver.Select(rename => rename.Value).Where(old => shared.Of(old) is not null)], cancellationToken)
             .ConfigureAwait(false)).ToHashSet(StringComparer.Ordinal);
-        IReadOnlySet<string> indexed = finishing && renamedOver.Any(rename => KindOf(rename.Value) == PathKind.None)
-            ? (await _gitClient.ListIndexAsync(worktree, cancellationToken).ConfigureAwait(false)).Select(entry => entry.Path).ToHashSet(StringComparer.Ordinal)
-            : new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var (path, old) in renamedOver)
         {
@@ -2215,7 +2212,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
                         : shared.Of(old) is not null && !sharedChanged.Contains(old) ? $"which the agent shares with the main tree: refresh-agent hands it what the main tree holds at '{path}' first"
                         : "which the agent changed: fold it into the main tree first, and run again")));
             }
-            else if (!finishing || indexed.Contains(old))
+            else if (!wroteFirst)
             {
                 refused.Add((path, $"{renaming}, which the agent deleted - a rename and a deletion of one file, which a move cannot both keep: "
                     + (shared.Of(old) is not null ? "fold the deletion into the main tree, commit it there, and run again"
@@ -2299,7 +2296,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     /// otherwise its file system's. Keyed by each such path; empty where there is none.
     /// </summary>
     /// <param name="roots">Both trees' roots.</param>
-    /// <param name="answers">What git answers of the main tree in this measuring, which finds those paths in any case.</param>
+    /// <param name="answers">What git answers of the main tree in this measuring.</param>
     /// <param name="files">Each such file's paths.</param>
     /// <param name="cancellationToken">Stops the reading.</param>
     private async Task<IReadOnlyDictionary<string, Spellings>> RenamedInCaseByTheAgentAsync(
@@ -3146,11 +3143,11 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     /// <param name="main">The main tree.</param>
     /// <param name="baseCommit">The agent's base.</param>
     /// <param name="inAnyCase">
-    /// The paths that differ in case alone from another the measuring weighs, one file with it where the agent's worktree
-    /// finds a name in any case: what a commit holds there is found in any case, whatever core.ignorecase says.
+    /// Whether the main tree's file system finds a name in any case: a path is then found in any case in what a commit holds
+    /// and in what its status lists, whatever core.ignorecase says, since the main tree holds one file under any of them.
     /// </param>
     /// <param name="cancellationToken">Cancels the git processes.</param>
-    private sealed class MainTreeAnswers(IGitClient git, string main, string baseCommit, IReadOnlySet<string> inAnyCase, CancellationToken cancellationToken)
+    private sealed class MainTreeAnswers(IGitClient git, string main, string baseCommit, bool inAnyCase, CancellationToken cancellationToken)
     {
         private IReadOnlySet<string>? _movedFromBase;
         private IReadOnlyList<(string Path, bool Folded)>? _listed;
@@ -3176,7 +3173,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
                 .Where(name => name.IsUtf8)
                 .Select(name => (name.Text.TrimEnd('/'), name.Text.EndsWith('/')))];
 
-            var comparison = await IgnoresCaseAsync().ConfigureAwait(false) ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+            var comparison = inAnyCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
             return _listed.Any(listed => string.Equals(listed.Path, path, comparison)
                 || Below(listed.Path, path, comparison)
@@ -3220,8 +3217,8 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
 
         /// <summary>
         /// The entry <paramref name="commit"/> holds at each of <paramref name="paths"/>, found as git spells the path: as
-        /// asked, and where the repository ignores case - or the path is one file with another (<c>inAnyCase</c>) - and the
-        /// commit holds nothing so spelled, as the commit spells it in another case - with that spelling.
+        /// asked, and where the main tree finds a name in any case (<c>inAnyCase</c>) and the commit holds nothing so
+        /// spelled, as the commit spells it in another case - with that spelling.
         /// </summary>
         /// <param name="commit">The commit.</param>
         /// <param name="paths">The paths, as the agent spells them.</param>
@@ -3231,12 +3228,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             var found = exact.ToDictionary(held => held.Key, held => (held.Value, Spelling: held.Key), StringComparer.Ordinal);
             var missing = paths.Where(path => !exact.ContainsKey(path)).ToList();
 
-            if (missing.Count > 0 && !await IgnoresCaseAsync().ConfigureAwait(false))
-            {
-                missing = [.. missing.Where(inAnyCase.Contains)];
-            }
-
-            if (missing.Count == 0)
+            if (missing.Count == 0 || !inAnyCase)
             {
                 return found;
             }

@@ -1070,6 +1070,10 @@ public sealed class AgentService(
                 // stops the move here, before git writes anything.
                 await _fold.RequireTakenAsync(path, plan!).ConfigureAwait(false);
                 await _gitClient.CheckOutAtAsync(path, to, plan!.Written, CancellationToken.None).ConfigureAwait(false);
+
+                // Recorded before what is written last: an old name of a file renamed in case alone that checkout removed is
+                // the move's doing when it is run again, where git alone could not tell it from a git rm of the session's.
+                _store.UpdateAgent(layout, record.Name, current => current with { MovingWritten = true });
                 await _gitClient.CheckOutAtAsync(path, to, plan.WrittenLast, CancellationToken.None).ConfigureAwait(false);
 
                 // Each merge over the agent's file as it was weighed, before HEAD moves: stopped after, a run again finds the
@@ -1080,7 +1084,7 @@ public sealed class AgentService(
                 }
 
                 await _gitClient.ResetToAsync(path, to, CancellationToken.None).ConfigureAwait(false);
-                _store.UpdateAgent(layout, record.Name, current => current with { Base = to, Moving = null, MovingWith = null });
+                _store.UpdateAgent(layout, record.Name, current => current with { Base = to, Moving = null, MovingWith = null, MovingWritten = null });
             }
             catch (Exception ex) when (Unfinished(ex))
             {
@@ -1117,7 +1121,8 @@ public sealed class AgentService(
 
             try
             {
-                measured = await _fold.MeasureRebaseAsync(path, from, to, seed, request.Settled, policy, Changes(context, layout, record.Name, keeping: false), finishing, token)
+                measured = await _fold.MeasureRebaseAsync(
+                        path, from, to, seed, request.Settled, policy, Changes(context, layout, record.Name, keeping: false), finishing, record.MovingWritten is true, token)
                     .ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
