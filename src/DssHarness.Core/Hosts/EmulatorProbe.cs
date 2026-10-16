@@ -91,7 +91,7 @@ public sealed class EmulatorProbe(IHostPlatform platform, IProcessRunner process
                     FileName = command[0],
                     Arguments = command[1..],
                     Environment = emulator.Env.ToDictionary(pair => pair.Key, pair => (string?)pair.Value, StringComparer.Ordinal),
-                    AppendToPath = found.Directories,
+                    ProgramDirectories = found.Directories,
                     Timeout = WitnessBudget,
                 },
                 cancellationToken).ConfigureAwait(false);
@@ -157,10 +157,13 @@ public sealed class EmulatorProbe(IHostPlatform platform, IProcessRunner process
             throw new ArgumentException($"'{requirement}' was not among the programs searched for.", nameof(found));
         }
 
-        return location.Found switch
+        return location switch
         {
-            ProgramFound.OnPath or ProgramFound.OffPath => null,
-            ProgramFound.Unreadable => location.Unestablished(),
+            { Present: true } => null,
+            { Found: ProgramFound.Unreadable } => location.Unestablished(),
+
+            // There, and held below a declared tool's minimum version, which its reason says how.
+            { HeldToFloor: true } => location.Reason,
             _ => $"{requirement} is missing",
         };
     }

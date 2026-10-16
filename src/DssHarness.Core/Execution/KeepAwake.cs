@@ -121,7 +121,7 @@ public sealed class KeepAwake
                 // A process the leg starts on this machine, so it starts as the leg's own programs
                 // do: under the host's environment, and finding what the survey found.
                 Environment = PhaseEnvironment.Layered(host.Env),
-                AppendToPath = programDirectories,
+                ProgramDirectories = ProgramDirectories.After(programDirectories),
             },
             stop.Token);
 

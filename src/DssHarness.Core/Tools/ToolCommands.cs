@@ -8,9 +8,12 @@ namespace DssHarness.Core.Tools;
 /// other command runs as the user the host is reached as.
 /// </summary>
 /// <remarks>
-/// Installing and updating are separate verbs for most package managers: <c>brew install</c> on a
+/// Installing and updating are separate verbs for most package managers: <c>scoop install</c> on a
 /// package that is already there says so and changes nothing, which would report a tool as updated
-/// while leaving it exactly as old as it was.
+/// while leaving it exactly as old as it was. Homebrew is the exception the other way: <c>brew upgrade</c>
+/// acts only on what Homebrew installed, so a tool below its minimum because the copy found is the
+/// system's - macOS's own python3 - would never be updated, and <c>brew install</c> upgrades a formula
+/// that is installed and outdated, as Homebrew documents, unless <c>HOMEBREW_NO_INSTALL_UPGRADE</c> is set.
 /// </remarks>
 public static class ToolCommands
 {
@@ -54,8 +57,9 @@ public static class ToolCommands
             "zypper" => ["sudo", "zypper", "--non-interactive", "install", id],
             "pacman" => ["sudo", "pacman", "-S", "--noconfirm", id],
 
-            // Homebrew refuses to run as root and installs into a directory its user owns.
-            "brew" => update ? ["brew", "upgrade", id] : ["brew", "install", id],
+            // Homebrew refuses to run as root and installs into a directory its user owns; install is its
+            // verb for both (see the remarks above).
+            "brew" => ["brew", "install", id],
             "winget" => update
                 ? ["winget", "upgrade", "--silent", "--accept-package-agreements", "--accept-source-agreements", "--id", id]
                 : ["winget", "install", "--silent", "--accept-package-agreements", "--accept-source-agreements", "--id", id],

@@ -56,6 +56,6 @@ public sealed class SyncTransportFactory(
             _output,
             host.KeepAwake,
             host.KeepAwakeEnvironment,
-            host.ProgramDirectories);
+            host.ProgramDirectories.All);
     }
 }

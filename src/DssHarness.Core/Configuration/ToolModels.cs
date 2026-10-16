@@ -9,7 +9,11 @@ public sealed class ToolConfig
     /// <summary>How to read the installed version.</summary>
     public ToolProbe? Probe { get; init; }
 
-    /// <summary>Lowest acceptable version; below it the tool is updated.</summary>
+    /// <summary>
+    /// Lowest acceptable version, as major.minor.patch, read with <see cref="Probe"/>: every leg the tool is declared
+    /// for starts the first copy at least this, and is turned away where none is; <c>install-missing-tools</c>
+    /// updates a tool every copy of which is older.
+    /// </summary>
     public string? MinVersion { get; init; }
 
     /// <summary>

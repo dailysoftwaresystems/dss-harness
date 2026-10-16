@@ -146,7 +146,7 @@ public sealed partial class HelpTests
             ["stopped", "skipped-unavailable", "skipped-tool-missing"],
             verdict => Assert.Contains($"  {verdict,-22} not a failure      exit {HarnessExit.Incomplete}", result.StandardOutput, StringComparison.Ordinal));
         Assert.Contains($" {HarnessExit.Incomplete}  skipped-unavailable        Make what its line names available, then run again", result.StandardOutput, StringComparison.Ordinal);
-        Assert.Contains($" {HarnessExit.Incomplete}  skipped-tool-missing       Install the tool its line names, then run again", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains($" {HarnessExit.Incomplete}  skipped-tool-missing       Install or update the tool its line names,", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains(
             "A run killed, or stopped with its machine, before it finished says nothing more: the next build, test, run or "
             + "check-mutations in its tree on that machine to own its run directory says it was abandoned - its run id, process "
@@ -517,6 +517,40 @@ public sealed partial class HelpTests
         }
 
         Assert.Contains("--pending Drive on each leg only the arms with no recorded passed that still holds", command, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The tools topic says a minVersion holds every copy a leg could start, the one that meets it raised ahead of the
+    /// PATH and a leg with none turned away; and that the package manager an install runs is started where it was found.
+    /// </summary>
+    [Fact]
+    public async Task TheToolsTopic_SaysAMinVersionHoldsEveryCopy_AndAManagerRunsWhereItWasFound()
+    {
+        var tools = Prose.Words((await CliRunner.RunAsync(["help", "tools"], TestContext.Current.CancellationToken)).StandardOutput);
+
+        foreach (var text in new[]
+        {
+            "The package manager an install runs is started the same way, where the search found it - brew in /opt/homebrew/bin, "
+                + "which no login-free PATH on macOS names - save one run through sudo, which sudo looks up on a PATH of its own.",
+            "A minVersion holds every copy of the tool a leg could start: the first one - on the PATH, then in the searched "
+                + "directories - whose version meets it is the one a leg there starts",
+            "That tool is found where its first copy that meets it is, and that copy's directory goes ahead of the PATH of every "
+                + "process every leg on that host starts - one whose environment, or developer environment, sets PATH included",
+            "A leg the tool is declared for is turned away where every copy is older, naming each copy, what it said, and - where "
+                + "the tool declares an install there - the install-missing-tools command that would install one; where the copy that "
+                + "meets it is behind an older one in a "
+                + "directory raised for another tool, naming both; and where no copy could be shown to meet it, as unknown, "
+                + "'skipped-unavailable'.",
+            "Where none met it and a copy's version could not be read, or a place a copy could be could not be looked in, the "
+                + "tool is unknown and nothing is installed: nothing says it is behind.",
+            "A minVersion is written major.minor.patch and needs a probe to read versions with; brew installs and updates with "
+                + "'brew install'",
+            "A leg in a developer environment holds the copy that environment's PATH names to it, once set up.",
+            "A leg turned away for a missing program, or for one below its minVersion, is 'skipped-tool-missing'",
+        })
+        {
+            Assert.Contains(text, tools, StringComparison.Ordinal);
+        }
     }
 
     /// <summary>
@@ -1618,6 +1652,13 @@ public sealed partial class HelpTests
         Assert.Contains(
             "No leg, host-exec or sync's operation a host runs for this machine outlives the command that asked for it, whatever carries it there; "
             + "only what holds a host awake between commands (holdAwakeSeconds) is started to outlast one.",
+            prose,
+            StringComparison.Ordinal);
+
+        // What a host's shell prints while it starts is dropped by the mark it writes first, before the command's fixed words.
+        Assert.Contains(
+            "The command line ssh hands a remote shell holds only fixed words, after a mark the shell writes first so that what its "
+            + "startup files print is dropped, and no argument is ever reinterpreted by sh, cmd or PowerShell.",
             prose,
             StringComparison.Ordinal);
 

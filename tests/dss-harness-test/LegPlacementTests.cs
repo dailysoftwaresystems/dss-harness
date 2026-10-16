@@ -252,6 +252,107 @@ public sealed class LegPlacementTests
         Assert.DoesNotContain("ctest", refused.Reason, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A leg that starts a declared tool no copy of which meets its minimum version is a tool missing, turned away
+    /// before anything of it starts: its work would otherwise run under a version its configuration says it does not
+    /// use, and fail, where it fails, for a reason naming something else. The refusal says what the host found and the
+    /// command that installs one; a leg the tool is not declared for starts the copy the PATH names, as ever.
+    /// </summary>
+    [Fact]
+    public void Place_TurnsALegAway_ThatStartsAToolBelowItsMinimumVersion_WhereTheToolIsDeclaredForIt()
+    {
+        const string Found = "no copy of 'python3' there is at least 3.12.0, the minVersion it is declared with: /usr/bin/python3 is 3.9.6";
+        var test = new TestConfig { All = new TestInvocation { Runner = "python3" } };
+        var leg = new SelectedLeg("win", new LegConfig { Os = "windows", Processor = "x86_64", Config = "debug", Test = test });
+        var host = Windows with
+        {
+            Programs = new Dictionary<string, ProgramLocation>(StringComparer.Ordinal)
+            {
+                ["python3"] = new ProgramLocation("python3", ProgramFound.BelowFloor, "/usr/bin/python3", Found),
+            },
+        };
+        var reports = new Dictionary<HostId, HostReport> { [host.Host] = host };
+
+        HarnessConfig Declaring(List<string>? platforms) => new()
+        {
+            Tools =
+            [
+                new ToolConfig
+                {
+                    Name = "python3",
+                    Probe = new ToolProbe(),
+                    MinVersion = "3.12.0",
+                    Platforms = platforms,
+                    Install = { ["windows"] = new ToolInstall { Manager = "winget", Id = "Python.Python.3.12" } },
+                },
+            ],
+        };
+
+        var refused = LegPlacement.Place(Declaring(null), leg, LegWorkload.BuildAndTest, reports);
+
+        Assert.False(refused.Runnable);
+        Assert.Equal(LegVerdict.SkippedToolMissing, refused.Verdict);
+        Assert.Equal(
+            $"local: {Found}; run 'dssharness install-missing-tools --legs win', which installs one as its tools entry declares, "
+            + "or put a copy of at least that version where a leg there finds programs: on the PATH, or in a directory searched for programs",
+            refused.Reason);
+
+        Assert.True(LegPlacement.Place(Declaring(["linux"]), leg, LegWorkload.BuildAndTest, reports).Runnable);
+
+        // A tool scoped to legs of another toolchain is held to its minimum for those, and this leg starts it as found.
+        var scoped = new HarnessConfig
+        {
+            Toolchains = { ["msvc"] = new ToolchainConfig { Platforms = ["windows"] } },
+            Tools = [new ToolConfig { Name = "python3", Probe = new ToolProbe(), MinVersion = "3.12.0", Toolchains = ["msvc"] }],
+        };
+
+        Assert.True(LegPlacement.Place(scoped, leg, LegWorkload.BuildAndTest, reports).Runnable);
+    }
+
+    /// <summary>
+    /// A copy that meets the minimum behind an older one a directory raised for another tool holds turns the leg away as
+    /// a tool missing, its reason saying what to update; one no copy of which could be shown to meet it is not known
+    /// either way, unavailable; neither names an install, which would settle neither; and a tool that declares no
+    /// install there is told only where a copy has to be.
+    /// </summary>
+    [Fact]
+    public void Place_TurnsALegAway_ForAMinimumShadowedOrNotKnownToBeMet_AsItsReasonSays()
+    {
+        const string Below = "no copy of 'python3' there is at least 3.12.0, the minVersion it is declared with: /usr/bin/python3 is 3.9.6";
+        var test = new TestConfig { All = new TestInvocation { Runner = "python3" } };
+        var leg = new SelectedLeg("win", new LegConfig { Os = "windows", Processor = "x86_64", Config = "debug", Test = test });
+
+        LegPlacement Placed(ProgramFound found, string reason, bool install = true)
+        {
+            var host = Windows with
+            {
+                Programs = new Dictionary<string, ProgramLocation>(StringComparer.Ordinal)
+                {
+                    ["python3"] = new ProgramLocation("python3", found, "/usr/bin/python3", reason),
+                },
+            };
+            var tool = new ToolConfig { Name = "python3", Probe = new ToolProbe(), MinVersion = "3.12.0" };
+
+            if (install)
+            {
+                tool.Install["windows"] = new ToolInstall { Manager = "winget", Id = "Python.Python.3.12" };
+            }
+
+            return LegPlacement.Place(new HarnessConfig { Tools = [tool] }, leg, LegWorkload.BuildAndTest, new Dictionary<HostId, HostReport> { [host.Host] = host });
+        }
+
+        var shadowed = Placed(ProgramFound.FloorShadowed, "shadowed, so update it");
+        var unknown = Placed(ProgramFound.FloorUnknown, "not known to meet it");
+        var nowhereToInstall = Placed(ProgramFound.BelowFloor, Below, install: false);
+
+        Assert.Equal((LegVerdict.SkippedToolMissing, "local: shadowed, so update it"), (shadowed.Verdict, shadowed.Reason));
+        Assert.Equal((LegVerdict.SkippedUnavailable, "local: not known to meet it"), (unknown.Verdict, unknown.Reason));
+        Assert.Equal(
+            (LegVerdict.SkippedToolMissing,
+                $"local: {Below}; put a copy of at least that version where a leg there finds programs: on the PATH, or in a directory searched for programs"),
+            (nowhereToInstall.Verdict, nowhereToInstall.Reason));
+    }
+
     [Fact]
     public void TheCheck_FailsForANamedLegThatCannotRun_ButNotForADeclaredOne()
     {

@@ -108,7 +108,7 @@ internal static class HelpCommand
             ]),
         ([LegVerdict.Stopped], ["Find out what stopped its work, then run again"]),
         ([LegVerdict.SkippedUnavailable], ["Make what its line names available, then run again"]),
-        ([LegVerdict.SkippedToolMissing], ["Install the tool its line names, then run again"]),
+        ([LegVerdict.SkippedToolMissing], ["Install or update the tool its line names,", "then run again"]),
     ];
 
     internal static Command Create()
@@ -176,12 +176,27 @@ internal static class HelpCommand
         builder.AppendLine("Every WSL distribution and ssh host gets the .NET 10 SDK when it has none, under");
         builder.AppendLine("the home directory, where no login-free PATH names it - which is why every command");
         builder.AppendLine("the harness runs there spells the resolved absolute path rather than a bare name.");
+        builder.AppendLine("The package manager an install runs is started the same way, where the search found");
+        builder.AppendLine("it - brew in /opt/homebrew/bin, which no login-free PATH on macOS names - save one run");
+        builder.AppendLine("through sudo, which sudo looks up on a PATH of its own.");
         builder.AppendLine();
         builder.AppendLine("Each entry under tools that carries an install is probed with probe.args and");
         builder.AppendLine("probe.regex, compared against minVersion, and installed or updated through it. An");
         builder.AppendLine("entry with no install is an allowlist entry: probed if it declares a probe,");
         builder.AppendLine("reported when missing, never installed. That is how a program shipping with the");
         builder.AppendLine("platform, or with the repository, is allowed to appear in a runner's steps.");
+        builder.AppendLine();
+        builder.AppendLine("A minVersion holds every copy of the tool a leg could start: the first one - on the");
+        builder.AppendLine("PATH, then in the searched directories - whose version meets it is the one a leg");
+        builder.AppendLine("there starts (see 'Where a program is found'). The tool is current where such a copy");
+        builder.AppendLine("exists, named with the older copy it is started ahead of, and installed or updated");
+        builder.AppendLine("where every copy said an older version. Where none met it and a copy's version could");
+        builder.AppendLine("not be read, or a place a copy could be could not be looked in, the tool is unknown");
+        builder.AppendLine("and nothing is installed: nothing says it is behind. A minVersion is written");
+        builder.AppendLine("major.minor.patch and needs a probe to read versions with; brew installs and updates");
+        builder.AppendLine("with 'brew install', which upgrades a formula that is there and older, since 'brew");
+        builder.AppendLine("upgrade' touches only what brew put there - never the system's own copy that fell");
+        builder.AppendLine("below.");
         builder.AppendLine();
         builder.AppendLine("An entry may name the platforms it is needed on:");
         builder.AppendLine();
@@ -246,10 +261,21 @@ internal static class HelpCommand
         builder.AppendLine("PATH or off it, is appended to the PATH of every process the leg starts - even one");
         builder.AppendLine("whose environment sets PATH itself - so the run finds what the survey found, and a");
         builder.AppendLine("build tool's own children, ninja and the compilers cmake starts, are found where it");
-        builder.AppendLine("was. Appended, never prepended: a name the PATH already answers for keeps that");
-        builder.AppendLine("answer. install-missing-tools, which runs before the harness is on a host, looks in");
-        builder.AppendLine("the same directories through the host's shell; where that shell cannot look, it");
-        builder.AppendLine("says the tool is unknown rather than missing, and installs nothing.");
+        builder.AppendLine("was. Appended: a name the PATH already answers for keeps that answer - save a");
+        builder.AppendLine("declared tool whose first copy is older than its minVersion. That tool is found where");
+        builder.AppendLine("its first copy that meets it is, and that copy's directory goes ahead of the PATH of");
+        builder.AppendLine("every process every leg on that host starts - one whose environment, or developer");
+        builder.AppendLine("environment, sets PATH included - every other program in it with it, as a shell");
+        builder.AppendLine("Homebrew set up puts /opt/homebrew/bin first. A leg the tool is declared for is turned");
+        builder.AppendLine("away where every copy is older, naming each copy, what it said, and - where the tool");
+        builder.AppendLine("declares an install there - the install-missing-tools command that would install one;");
+        builder.AppendLine("where the copy that meets it is behind an older one in a directory raised for another");
+        builder.AppendLine("tool, naming both; and where no copy could be shown to meet it, as unknown,");
+        builder.AppendLine("'skipped-unavailable'. A leg in a developer environment holds the copy that");
+        builder.AppendLine("environment's PATH names to it, once set up. install-missing-tools, which runs before");
+        builder.AppendLine("the harness is on a host, looks in the same directories through the host's shell; where");
+        builder.AppendLine("that shell cannot look, it says the tool is unknown rather than missing, and installs");
+        builder.AppendLine("nothing.");
         builder.AppendLine();
         builder.AppendLine("A leg goes to the first of its hosts that can take it - the right machine, reached -");
         builder.AppendLine("whatever the command, which is where a sync puts its tree and where --use-staged");
@@ -281,17 +307,17 @@ internal static class HelpCommand
         builder.AppendLine("name with a placeholder in it. A program started under an environment the");
         builder.AppendLine("configuration declares that sets PATH - the build's, the test invocation's, the");
         builder.AppendLine("runner's, a phase's or a step's - is looked for too, so its directory reaches that");
-        builder.AppendLine("PATH, and never turns a leg away: that PATH is where it is found when it starts. A");
-        builder.AppendLine("PATH among a runner's values is not seen before the run; name its directory under");
-        builder.AppendLine("toolSearchDirectories instead.");
+        builder.AppendLine("PATH, and never turns a leg away: that PATH is where it is found when it starts, a");
+        builder.AppendLine("directory raised for a minVersion ahead of it. A PATH among a runner's values is not");
+        builder.AppendLine("seen before the run; name its directory under toolSearchDirectories instead.");
         builder.AppendLine();
-        builder.AppendLine("A leg turned away for a missing program is 'skipped-tool-missing', and the run is");
-        builder.AppendLine($"incomplete, exit {HarnessExit.Incomplete} - or exit {LegsExit.Unavailable} when no selected leg can run at all, save of");
-        builder.AppendLine($"check-mutations, which stays {MutationService.NothingRuns}: its {LegsExit.Unavailable} is an arm violated. A leg");
-        builder.AppendLine("that is already running when a program will not start has 'failed', naming the");
-        builder.AppendLine("program and the reason the system gave: no survey could have required it - a file");
-        builder.AppendLine("the build was to make, a binary for another processor. Neither is 'poisoned', which");
-        builder.AppendLine("is kept for a defect in this tool.");
+        builder.AppendLine("A leg turned away for a missing program, or for one below its minVersion, is");
+        builder.AppendLine($"'skipped-tool-missing', and the run is incomplete, exit {HarnessExit.Incomplete} - or exit {LegsExit.Unavailable} when");
+        builder.AppendLine($"no selected leg can run at all, save of check-mutations, which stays {MutationService.NothingRuns}: its {LegsExit.Unavailable}");
+        builder.AppendLine("is an arm violated. A leg that is already running when a program will not start");
+        builder.AppendLine("has 'failed', naming the program and the reason the system gave: no survey could");
+        builder.AppendLine("have required it - a file the build was to make, a binary for another processor.");
+        builder.AppendLine("Neither is 'poisoned', which is kept for a defect in this tool.");
 
         return builder.ToString();
     }
@@ -1960,7 +1986,8 @@ internal static class HelpCommand
         builder.AppendLine("The DssHarness on a host is reached through a hidden host-agent command, with the");
         builder.AppendLine("request on standard input, held open while the host works: interrupting host-exec");
         builder.AppendLine("ends it, and the host cancels the command. The command line ssh hands a remote");
-        builder.AppendLine("shell holds only fixed words, so no argument is ever reinterpreted by sh, cmd or");
+        builder.AppendLine("shell holds only fixed words, after a mark the shell writes first so that what its");
+        builder.AppendLine("startup files print is dropped, and no argument is ever reinterpreted by sh, cmd or");
         builder.AppendLine("PowerShell. host-exec runs in the host's copy of the tree it is typed in, which");
         builder.AppendLine($"'{ToolPackage.Command} sync' creates and keeps in step with that tree - its files, and the");
         builder.AppendLine("commit its git HEAD names ('help config').");

@@ -95,9 +95,10 @@ its command waiting until something stopped it.
 
 A program named without a path is looked up in the `PATH` directories and nowhere else -
 the `PATH` the child is given, which ends with the directories the survey found a leg's
-programs in. Left to the runtime, it would be looked for beside the running executable and in
-the current directory first, and the current directory is usually the repository, so a file
-committed there under a tool's name would run in place of the tool. On Windows a name
+programs in, and begins with any a tool's `minVersion` raised. Left to the runtime, it would
+be looked for beside the running executable and in the current directory first, and the
+current directory is usually the repository, so a file committed there under a tool's name
+would run in place of the tool. On Windows a name
 without an extension starts only `<name>.exe`, never a batch file, whose arguments cmd.exe
 would parse a second time, and a path without one starts that path with `.exe` added. A
 program a leg's configuration names by a relative path is read from the directory its phase
@@ -1505,12 +1506,58 @@ is not dependable on such a host.
   the survey found even where a phase's environment sets a PATH of its own - which is why a
   program started under such an environment is looked for too, though it never turns a leg away.
   A directory the search could not look in leaves a program unknown, never missing.
+- **A tool's minimum version holds every copy a leg could start.** A declared tool with a
+  `minVersion` is found where its first copy that meets it is - on the PATH, then in the
+  searched directories, each copy asked its version with the tool's own probe until one does -
+  and where an older copy comes first, the directory of the one that meets it is raised ahead of
+  the PATH of every process every leg on that host starts, every other program in it coming with
+  it, as a shell Homebrew set up puts `/opt/homebrew/bin` first. That is the one exception to
+  appending, and the survey resolves every other program with the raised directories ahead, so
+  survey and run still agree. A host answers for all of its legs at once, so the directory is
+  raised for the legs the tool is not declared for too, and ahead of a PATH a configuration or a
+  developer environment sets: the copy chosen is the one started whichever PATH it goes ahead of.
+  Three outcomes, kept apart as "not there" is kept from "could not look":
+  - every copy said an older version: a leg the tool is declared for is `skipped-tool-missing`,
+    naming each copy and what it said, and `dssharness install-missing-tools --legs <leg>` where
+    the tool declares an install there;
+  - the copy that meets it is behind an older one in a directory raised for another tool: the leg
+    is `skipped-tool-missing`, naming both and what to update. The directories are raised in the
+    order the tools are declared, and no other order is tried;
+  - no copy was shown to meet it - one could not say a version this can compare, or a place a copy
+    could be was not looked in: the leg is `skipped-unavailable`, and nothing names an install,
+    which would settle nothing.
+
+  A leg the tool is not declared for is turned away for none of them. A leg in a developer
+  environment holds the copy that environment's PATH names to the tool's minimum once it is set
+  up, as it looks for its programs there. A survey request carries the minimums, which its host
+  holds every copy it finds to, and its answer the directories they raised beside the appended ones
+  (`appendedDirectories` on the wire, no longer every directory a leg's PATH is given): the
+  host-agent protocol's rise to 11. Measured on a Mac: the PATH of a command run over ssh
+  named macOS's own python3, 3.9.6, and a leg whose configuration needs 3.12 ran its steps under it
+  without a word, failing a self-test for a reason that named something else.
 - **No quoting.** An ssh server hands its command line to a shell, and which shell is not
   known in advance: sh, bash, zsh, fish, cmd or PowerShell. The harness quotes for none of
   them. The command line holds only words every one of them reads literally (letters,
-  digits and `._-/=:+`), and anything else travels on standard input. Which shell answers is
-  measured once per connection, by whether `echo %COMSPEC%` comes back expanded, because cmd
-  needs backslashes in the path of a program.
+  digits and `._-/=:+`), save the mark written ahead of it in the measured shell's own syntax
+  (below), and anything else travels on standard input. Which shell answers is
+  measured once per connection by `echo %COMSPEC% %COMSPEC%`: cmd expands it, a POSIX shell
+  prints both words on one line, and PowerShell, whose echo writes each argument as an object of
+  its own, on two. cmd and PowerShell read a backslash literally, which a Windows path needs, and
+  are asked where a program is with `where.exe` - PowerShell reads a bare `where` as its own
+  Where-Object, which finds nothing and says nothing. Neither can look in a searched directory, so
+  a program off the PATH there is unknown rather than missing. PowerShell writes to standard error
+  in a way of its own.
+- **What a host's shell prints first is its own.** A shell an ssh server starts can run the
+  account's startup files before the command - bash run by sshd reads `~/.bashrc` - and what they
+  print arrives first, on the streams the command writes. So every command the harness sends over
+  ssh is preceded by its shell writing a mark of the harness's own, random for each command, as a
+  line on standard output and then on standard error, and each stream is read from after its mark:
+  what came before is neither kept nor relayed. A stream that never carries the mark - a
+  connection that failed before any session - is all there is, and is kept whole, its lines
+  relayed once it ends. Measured on one consumer's Mac: every command's error carried the lines
+  emsdk's environment script prints, and an install's failure quoted them in place of the
+  shell's own words. The probe that names the shell is the one command sent unmarked: how to write
+  the mark is what it answers.
 
 ### DssHarness on every host
 
@@ -1717,11 +1764,32 @@ says how: adopting the harness's files changes one tree, and an install changes 
   cannot run DssHarness has it installed, under the home directory, where no login-free PATH
   names it — which is why every command the harness runs there spells the resolved absolute path.
   The machine running the harness is assumed to have it already.
+- **The package manager an install runs is started where the search found it**, as every other
+  program the harness runs on a host is: brew in `/opt/homebrew/bin`, which no login-free PATH on
+  macOS names. Measured on a Mac over ssh: the survey found brew there and called it current, and
+  the install then ran it by its name and failed with "command not found". One found nowhere is
+  run as written, and the host says what became of it; one run through `sudo` is left to sudo,
+  which looks its program up on a PATH of its own. A dry run names the command as the install
+  would run it.
 - **Everything under `tools` that carries an `install` is probed and installed or updated
   through it**, by `probe.args`, `probe.regex` and `minVersion`. An entry with no `install` is an
   allowlist entry: probed where it declares a probe, reported when missing, never installed. That
   is how a program shipping with the platform, or with the repository, is allowed to appear in a
   runner's steps.
+- **A `minVersion` is judged as a leg finds the tool.** The copy found first is asked its version,
+  and where it is older, every other copy the host has - each directory its login-free PATH names,
+  then each searched directory - in that order, until one meets it: that copy is the one a leg
+  starts (see PATH truth), so the tool is current, named with the older copy it is started ahead
+  of. Judged by the first copy alone, macOS's own python3 kept a tool behind however many newer
+  copies were installed beside it. Where every copy is older, the tool is installed or updated, and
+  the copies are asked again; where none met it and a copy's version could not be read, or a place
+  a copy could be was not looked in - a Windows shell's searched directories, a path no command
+  line can carry - the tool is unknown and nothing is installed, by the rule a leg's own survey
+  holds it to. A `minVersion` is written `major.minor.patch` - the parser every
+  copy's version is compared with - and needs a `probe`; either is refused where it is written
+  otherwise. brew installs and updates with `brew install`, which Homebrew documents as upgrading a
+  formula that is installed and outdated: `brew upgrade` touches only what brew installed, never a
+  system copy that fell below.
 - **A tool may name the platforms it is needed on**, with `platforms`, in the same words a
   toolchain uses: `windows`, `linux`, `macos`, or `all`. A host whose platform an entry does not
   name is never asked about it, so it is neither probed there nor counted against that host's legs.
@@ -1824,8 +1892,8 @@ from the report.
 | `unmeasured` | Whether those files held still could not be established - where they could not be watched at all, with none of the leg's work run; or what a phase printed could not be read back from its log where a verdict was to be read from it; or ninja's log could not be read around a mutation arm's build, so nothing witnessed what it rebuilt; or the report a mutation arm's run wrote, or its binary's unmutated run, could not be read from its file | **yes** |
 | `contended` | Another process used the leg's build directory while it ran | **yes** |
 | `skipped-not-selected` | Filtered out by `--legs`; or a mutation arm `--arms`, or its S row, leaves out of the leg, or `--pending` leaves out because its `passed` holds, and a leg whose sweep drives no arm | no |
-| `skipped-unavailable` | No host can take the leg; its host or its tree could not be reached; whether a program it starts is there could not be established; git could not answer in its tree; or no worker of its sweep fits the room left or the path limit, and every arm of the leg with it | warning |
-| `skipped-tool-missing` | A required tool is not installed | warning |
+| `skipped-unavailable` | No host can take the leg; its host or its tree could not be reached; whether a program it starts is there, or whether any copy of a declared tool meets its `minVersion`, could not be established; git could not answer in its tree; or no worker of its sweep fits the room left or the path limit, and every arm of the leg with it | warning |
+| `skipped-tool-missing` | A required tool is not installed, or every copy of it is older than its `minVersion`, or the one that meets it is behind an older one a directory raised for another tool holds | warning |
 | `refused-locked` | Another run holds the lock for this leg, or its host's tree | **yes** |
 | `not-admitted` | A heavy leg waited its machine's `maxWaitMinutes` for a heavy-leg slot, for the memory in use to fall below the limit, or for room for its build beside what the other admitted legs claim, and nothing of it ran; or a unit of a sweep - a worker, an arm - waited so, and each arm the sweep had left once its machine refused one | **yes** |
 | `log-held` | Another live run owns this leg's log path | **yes** |
@@ -2630,7 +2698,7 @@ Seven independent guarantees, each addressing a measured failure mode:
    disagrees with this leg. The compiler is compared by the file it starts: the name the
    leg's toolchain gives is resolved on the PATH the build's phases are given - its
    environment's own, or this process's, with the directories a survey found programs in
-   appended - and held to the whole path CMake cached. A name compared with a name let a
+   around it - and held to the whole path CMake cached. A name compared with a name let a
    directory configured with one gcc be rebuilt with another earlier on the PATH, and the
    leg reported on objects from both. A name the search finds nowhere cannot start, and is
    compared by name until the build says so.

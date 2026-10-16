@@ -26,18 +26,11 @@ public sealed record ProcessRequest
         = new Dictionary<string, string?>(StringComparer.Ordinal);
 
     /// <summary>
-    /// Directories added to the end of the child's PATH, after <see cref="Environment"/> has been
-    /// applied. The program itself is looked up on that same PATH.
+    /// Directories added around the child's PATH, after <see cref="Environment"/> has been applied: the raised
+    /// ones ahead of it and every other after it (see <see cref="Processes.ProgramDirectories"/>). The program
+    /// itself is looked up on that same PATH.
     /// </summary>
-    /// <remarks>
-    /// Appended, never prepended: every name the PATH already answers for keeps that answer, and only a
-    /// name it does not know becomes findable. This is how a program found off the PATH of a command
-    /// run without a login shell — cmake in /opt/homebrew/bin — is started, and how the programs it
-    /// starts by name in turn, ninja and the compilers, are found where it was. Appended after an
-    /// environment that sets a PATH of its own, too: a program a survey found is then still found by
-    /// the run, which would otherwise look for it only where that environment says.
-    /// </remarks>
-    public IReadOnlyList<string> AppendToPath { get; init; } = [];
+    public ProgramDirectories ProgramDirectories { get; init; } = ProgramDirectories.None;
 
     /// <summary>
     /// What is written to the child's standard input - text, or what a writer writes as it makes it - which is then closed

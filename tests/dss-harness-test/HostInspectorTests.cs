@@ -933,6 +933,49 @@ public sealed class HostInspectorTests
         Assert.Equal(DeveloperEnvironmentProbe.ProbeBudget, budgets[0] - budgets[1]);
     }
 
+    /// <summary>
+    /// A declared tool's minimum version travels to the host with the survey, which gives it the time two of its copies
+    /// take to answer; the directories the host raised for it come back ahead of the PATH every leg there is given, and
+    /// the appended ones after it.
+    /// </summary>
+    [Fact]
+    public async Task ToolMinimumsTravelToTheHost_AndTheDirectoriesTheyRaisedComeBack()
+    {
+        var asked = new List<HostAgentRequest>();
+        var budgets = new List<TimeSpan?>();
+
+        using var fixture = new Fixture(PlatformId.Windows, respond: HostThat(agent: command =>
+        {
+            asked.Add(JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput.Read(), HostAgentProtocol.JsonOptions)!);
+            budgets.Add(command.Timeout);
+
+            return HostResults.Ok(JsonSerializer.Serialize(
+                new HostAgentInfo
+                {
+                    Version = Root.Version,
+                    AssemblySha256 = Root.AssemblySha256,
+                    Os = "linux",
+                    Processor = "x86_64",
+                    RaisedDirectories = ["/opt/homebrew/opt/python@3.13/bin"],
+                    AppendedDirectories = ["/opt/homebrew/bin"],
+                },
+                HostAgentProtocol.JsonOptions));
+        }));
+
+        await fixture.InspectAsync(HostId.Wsl(Distro));
+        fixture.Config.Tools.Add(new ToolConfig { Name = "python3", MinVersion = "3.12.0", Probe = new ToolProbe { Args = ["--version"] }, Platforms = ["macos"] });
+        var report = await fixture.InspectAsync(HostId.Wsl(Distro));
+
+        Assert.True(report.Available, report.Reason);
+        Assert.Empty(asked[0].Floors);
+        var floor = Assert.Single(asked[1].Floors);
+        Assert.Equal(("python3", "3.12.0", "macos"), (floor.Name, floor.MinVersion, Assert.Single(floor.Platforms!)));
+        Assert.Equal(["--version"], floor.Args);
+        Assert.Equal(ProgramFloors.Allowance(1), budgets[1] - budgets[0]);
+        Assert.Equal(["/opt/homebrew/opt/python@3.13/bin"], report.ProgramDirectories.Raised);
+        Assert.Equal(["/opt/homebrew/bin"], report.ProgramDirectories.Appended);
+    }
+
     [Fact]
     public async Task AnInstallThatFails_SaysAHostRunsOnlyPublishedVersions()
     {
@@ -1255,15 +1298,17 @@ public sealed class HostInspectorTests
     }
 
     /// <summary>
-    /// cmd is Windows's own shell, whose installers put the SDK on the machine PATH, and no POSIX
-    /// directory is one a Windows host has. So nothing was left unlooked: an SDK on no PATH there is
-    /// missing, with the fix named, rather than unknown for directories that were never its.
+    /// cmd and PowerShell are Windows's own shells, whose installers put the SDK on the machine PATH,
+    /// and no POSIX directory is one a Windows host has. So nothing was left unlooked: an SDK on no PATH
+    /// there is missing, with the fix named, rather than unknown for directories that were never its.
     /// </summary>
-    [Fact]
-    public async Task Ssh_ToACmdShellWithoutDotnetOnItsPath_SaysTheSdkIsNotInstalled()
+    [Theory]
+    [InlineData("C:\\WINDOWS\\system32\\cmd.exe C:\\WINDOWS\\system32\\cmd.exe\r\n")]
+    [InlineData("%COMSPEC%\r\n%COMSPEC%\r\n")]
+    public async Task Ssh_ToAWindowsShellWithoutDotnetOnItsPath_SaysTheSdkIsNotInstalled(string probe)
     {
         using var fixture = new Fixture(PlatformId.Linux, respond: HostThat(dotnet: Where.Nowhere, answeredOs: "windows"));
-        fixture.Commands.ShellProbe = HostResults.Ok("C:\\WINDOWS\\system32\\cmd.exe\r\n");
+        fixture.Commands.ShellProbe = HostResults.Ok(probe);
 
         var report = await fixture.InspectAsync(HostId.Ssh(SshName));
 
@@ -1273,16 +1318,18 @@ public sealed class HostInspectorTests
     [Fact]
     public async Task Ssh_ToAWindowsHostWhoseShellIsNotCmd_IsStillTreatedAsWindows()
     {
-        // PowerShell leaves %COMSPEC% unexpanded, as sh does, and runs on Windows all the same. Where the SDK
-        // is installed says what the host is; the shell says only which separator a path takes.
+        // PowerShell leaves %COMSPEC% unexpanded, as sh does, and writes each word echo is given on a line of its own,
+        // which sh does not; and it runs on Windows all the same. Where the SDK is installed says what the host is; the
+        // shell says only how a command line is written.
         using var fixture = new Fixture(
             PlatformId.Linux,
             respond: HostThat(installed: "1.1.9", sdks: "10.0.100 [C:\\Program Files\\dotnet\\sdk]\n", answeredOs: "windows"));
+        fixture.Commands.ShellProbe = HostResults.Ok("%COMSPEC%\r\n%COMSPEC%\r\n");
 
         var report = await fixture.InspectAsync(HostId.Ssh(SshName));
 
         Assert.True(report.Available, report.Reason);
-        Assert.Equal(RemoteShell.Standard, report.Session?.Connection.Shell);
+        Assert.Equal(RemoteShell.PowerShell, report.Session?.Connection.Shell);
         Assert.Equal(".dotnet/tools/dssharness.exe", report.Session?.ToolPath);
         Assert.Equal("tasklist", fixture.Commands.Single("/FO").Program);
     }
@@ -1353,7 +1400,7 @@ public sealed class HostInspectorTests
     private static string? Lookup(HostCommand command) => (command.Program, command.Arguments.FirstOrDefault()) switch
     {
         ("command", "-v") => command.Arguments[1],
-        ("where", not null) => command.Arguments[0],
+        ("where" or "where.exe", not null) => command.Arguments[0],
         ("sh", "-c") => command.Arguments[1].Split(' ')[^1],
         _ => null,
     };
@@ -1450,7 +1497,7 @@ public sealed class HostInspectorTests
                 new EmulatorProbe(platform, processRunner, fileSystem),
                 new DeveloperEnvironmentProbe(platform, processRunner),
                 fileSystem,
-                new LocalProgramResolver(platform, FilePermissionsFactory.Create()),
+                HostDoubles.Floors(platform, processRunner),
                 new KeepAwake(processRunner, new ConsoleHarnessOutput(new StringWriter(), new StringWriter(), verbose: false)),
                 new HoldAwakeStore(new PhysicalFileSystem(FilePermissionsFactory.Create()), Path.Combine(TestHost.TemporaryRoot, "holds", Guid.NewGuid().ToString("N") + ".json")),
                 new RecordingLauncher(),
@@ -1493,6 +1540,9 @@ public sealed class HostInspectorTests
         public IReadOnlyList<string> LookedUp => _lookup.Names;
 
         public IFilePermissions Permissions { get; }
+
+        /// <summary>The configuration the inspector reads, which a test may add to between two inspections.</summary>
+        public HarnessConfig Config => _context.Config;
 
         public Task<HostReport> InspectAsync(
             HostId host,

@@ -33,6 +33,64 @@ public enum ProgramFound
     /// and no refusal may claim it is missing.
     /// </summary>
     Unreadable,
+
+    /// <summary>
+    /// A declared tool is there, and every copy a leg could start said a version below the
+    /// <c>minVersion</c> it is declared with. The location's path is the copy a leg would start, and its
+    /// reason names each copy asked and what it said.
+    /// </summary>
+    BelowFloor,
+
+    /// <summary>
+    /// A declared tool is there with a copy at least its <c>minVersion</c>, and a directory raised ahead of
+    /// the PATH for another tool holds an older copy of it, which a leg would start in its place. The
+    /// location's path is that older copy, and its reason names both.
+    /// </summary>
+    FloorShadowed,
+
+    /// <summary>
+    /// A declared tool is there, and whether any copy a leg could start is at least its <c>minVersion</c>
+    /// could not be established: no copy asked was shown to be, and a copy's version could not be read, or
+    /// a place a copy could be could not be looked in. Nothing says it is below, and no refusal may claim
+    /// it is. The location's path is the copy a leg would start, and its reason says what each copy said.
+    /// </summary>
+    FloorUnknown,
+}
+
+/// <summary>Every copy of one program a search found, in the order a leg looks, and where it could not look.</summary>
+/// <param name="Copies">Each copy, by its path.</param>
+/// <param name="Unsearched">
+/// Why a place a copy could be was not looked in, or <see langword="null"/> where every one was: a copy no
+/// search saw may be the one that meets a tool's minimum version.
+/// </param>
+public sealed record ProgramCopies(IReadOnlyList<string> Copies, string? Unsearched = null)
+{
+    /// <summary>
+    /// The copies, or the places a copy could be, whose path no command line sent there can carry: seen, or
+    /// looked for, and never asked anything. Kept apart from <see cref="Unsearched"/> so a caller that already asked
+    /// one by another name - the copy the PATH starts, by its bare name - does not count it unasked.
+    /// </summary>
+    public IReadOnlyList<string> Unspeakable { get; init; } = [];
+
+    /// <summary>
+    /// Why some place a copy could be was not looked at, all told - <see cref="Unspeakable"/> and
+    /// <see cref="Unsearched"/> - or <see langword="null"/> where every one was.
+    /// </summary>
+    public string? Unlooked()
+        => HostProbes.Joined(
+            Unspeakable.Count == 0
+                ? null
+                : $"{string.Join(", ", Unspeakable.Select(path => $"'{path}'"))} could not be looked at, because {HostProgramResolver.SpaceUnspeakable}",
+            Unsearched);
+
+    /// <summary>These, but <paramref name="asked"/>, which a caller has asked already: among the copies, and among the unspeakable ones.</summary>
+    /// <param name="asked">The paths, or names, already asked.</param>
+    public ProgramCopies Besides(IReadOnlyCollection<string> asked)
+    {
+        ArgumentNullException.ThrowIfNull(asked);
+
+        return this with { Copies = [.. Copies.Except(asked, StringComparer.Ordinal)], Unspeakable = [.. Unspeakable.Except(asked, StringComparer.Ordinal)] };
+    }
 }
 
 /// <summary>Where one program is on one host.</summary>
@@ -46,8 +104,17 @@ public enum ProgramFound
 /// </param>
 public sealed record ProgramLocation(string Program, ProgramFound Found, string? Path = null, string? Reason = null)
 {
-    /// <summary>Whether the host has it at all, wherever it is.</summary>
+    /// <summary>
+    /// Whether the host has a copy a leg there starts, wherever it is: not one held below a declared tool's minimum
+    /// version, which is there too (see <see cref="HeldToFloor"/>).
+    /// </summary>
     public bool Present => Found is ProgramFound.OnPath or ProgramFound.OffPath;
+
+    /// <summary>
+    /// Whether a declared tool's minimum version turned the copy a leg would start down: it is there, and was not
+    /// shown to meet it. Its reason says why.
+    /// </summary>
+    public bool HeldToFloor => Found is ProgramFound.BelowFloor or ProgramFound.FloorShadowed or ProgramFound.FloorUnknown;
 
     /// <summary>
     /// Why whether it is there could not be established: the search's own reason, where it could not
@@ -92,6 +159,28 @@ public interface IHostProgramResolver
         IReadOnlyList<string> directories,
         TimeSpan budget,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Every copy of <paramref name="program"/> a name could start on the host, by its path, in the order a leg there
+    /// would look: each directory the PATH of a command run without a login shell names, then each searched directory.
+    /// A tool's minimum version is held to these (see <see cref="Tools.ToolFloor"/>) where the first copy is below it.
+    /// </summary>
+    /// <remarks>
+    /// Only the copies the host could be asked about, and why any place was not looked in: a directory that cannot be
+    /// named in a command line sent there, or cannot be listed with its shell, and a host that did not answer. cmd and
+    /// PowerShell list the PATH's copies with <c>where.exe</c>, and cannot look in a searched directory.
+    /// </remarks>
+    /// <param name="connection">The connection to look on.</param>
+    /// <param name="program">The program's name.</param>
+    /// <param name="directories">Where to look beyond the PATH, as <see cref="ResolveAsync"/> is told.</param>
+    /// <param name="budget">Longest one lookup may take.</param>
+    /// <param name="cancellationToken">Stops the lookups.</param>
+    Task<ProgramCopies> CopiesAsync(
+        HostConnection connection,
+        string program,
+        IReadOnlyList<string> directories,
+        TimeSpan budget,
+        CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc cref="IHostProgramResolver"/>
@@ -116,8 +205,10 @@ public sealed class HostProgramResolver(LocalProgramResolver local, IHostCommand
 
         foreach (var program in programs.Distinct(StringComparer.Ordinal).Where(program => !found.ContainsKey(program)))
         {
-            // This machine is asked the way a leg on it will be: the same function the survey and the
-            // run use, so install-missing-tools cannot call a tool present that a leg then cannot start.
+            // This machine is asked the way a leg on it will be: the same search the survey and the run
+            // make, short of the directory a tool's minimum version raises, which changes which copy is
+            // found and never whether one is - so install-missing-tools cannot call a tool present that
+            // a leg then cannot start.
             found[program] = connection.Host.Kind == HostKind.Local
                 ? _local.Find(program, directories)
                 : await ThereAsync(connection, program, directories, home, budget, cancellationToken).ConfigureAwait(false);
@@ -134,6 +225,157 @@ public sealed class HostProgramResolver(LocalProgramResolver local, IHostCommand
         };
     }
 
+    public async Task<ProgramCopies> CopiesAsync(
+        HostConnection connection,
+        string program,
+        IReadOnlyList<string> directories,
+        TimeSpan budget,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentException.ThrowIfNullOrWhiteSpace(program);
+        ArgumentNullException.ThrowIfNull(directories);
+
+        if (connection.Host.Kind == HostKind.Local)
+        {
+            return _local.Copies(program, directories);
+        }
+
+        if (!RemoteCommandLine.IsLiteral(program, connection.Shell))
+        {
+            return new ProgramCopies([], Unspeakable(program));
+        }
+
+        if (RemoteCommandLine.IsWindows(connection.Shell))
+        {
+            return await WhereCopiesAsync(connection, program, directories, budget, cancellationToken).ConfigureAwait(false);
+        }
+
+        var path = await RunAsync(connection, "printenv", ["PATH"], budget, cancellationToken).ConfigureAwait(false);
+
+        if (!path.Succeeded)
+        {
+            return new ProgramCopies([], HostProbes.Failure("the PATH there could not be read", path, connection));
+        }
+
+        var onPath = path.TrimmedOutput
+            .Split(':', StringSplitOptions.RemoveEmptyEntries)
+            .Where(directory => PlatformPaths.IsAbsoluteOn(directory, PlatformNames.Linux))
+            .Select(directory => directory.TrimEnd('/') + "/" + program)
+            .ToList();
+        var unspeakable = onPath.Where(candidate => !Speakable(candidate, connection)).ToList();
+
+        // The home a search already asked the host for, where one did: a program found under it is named from there.
+        var home = connection.Home
+            ?? (directories.Any(PlatformPaths.IsHomeRelative) ? (await HomeAsync(connection, budget, cancellationToken).ConfigureAwait(false)).Directory : null);
+        var (searched, unsearched) = Candidates(program, directories, home, connection);
+        var candidates = onPath.Except(unspeakable).Concat(searched).Distinct(StringComparer.Ordinal).ToList();
+        var listing = candidates.Count == 0 ? Listing.Empty : await ListAsync(connection, candidates, budget, cancellationToken).ConfigureAwait(false);
+
+        var unlistable = listing.Unread is { } unread ? $"{Quoted(candidates)} could not be looked at, because {unread}" : null;
+
+        return new ProgramCopies(listing.Existing, HostProbes.Joined(unsearched, unlistable)) { Unspeakable = unspeakable };
+    }
+
+    /// <summary>
+    /// Every copy of <paramref name="program"/> on the PATH of a cmd or PowerShell host, as <c>where.exe</c> lists them,
+    /// in the order it is searched: their shells give no way to look in a directory searched beyond it (see ThereAsync).
+    /// </summary>
+    private async Task<ProgramCopies> WhereCopiesAsync(
+        HostConnection connection,
+        string program,
+        IReadOnlyList<string> directories,
+        TimeSpan budget,
+        CancellationToken cancellationToken)
+    {
+        var where = await RunAsync(connection, WhereProgram, [program], budget, cancellationToken).ConfigureAwait(false);
+
+        if (!HostProbes.Answered(where))
+        {
+            return new ProgramCopies([], HostProbes.Failure($"the host did not answer when asked where '{program}' is", where, connection));
+        }
+
+        // where.exe exits 1 having found nothing, which leaves nothing to list.
+        List<string> listed = where.Succeeded ? [.. Paths(where.StandardOutput).Distinct(StringComparer.OrdinalIgnoreCase)] : [];
+        var unspeakable = listed.Where(copy => !Speakable(copy, connection)).ToList();
+
+        var unsearched = directories.Count == 0 ? null : $"{Quoted(directories)} could not be looked in, because {NoSearchedDirectories(connection.Shell)}";
+
+        return new ProgramCopies([.. listed.Except(unspeakable)], unsearched) { Unspeakable = unspeakable };
+    }
+
+    /// <summary>Whether <paramref name="path"/> can be named in a command line sent over <paramref name="connection"/>.</summary>
+    /// <remarks>wsl.exe --exec hands each argument over as it is, with no shell to split it.</remarks>
+    private static bool Speakable(string path, HostConnection connection)
+        => connection.Host.Kind == HostKind.Wsl || RemoteCommandLine.IsLiteral(path, connection.Shell);
+
+    /// <summary>Why a path holding a space is not sent: a command line an ssh server hands to a shell carries only literal words.</summary>
+    internal const string SpaceUnspeakable = "a path holding a space cannot be named in a command line sent there";
+
+    /// <summary>
+    /// Windows's program that lists where a name is found. Named with its extension, because PowerShell reads a bare
+    /// <c>where</c> as its own Where-Object, which finds nothing and says nothing.
+    /// </summary>
+    private const string WhereProgram = "where.exe";
+
+    /// <summary>Why a Windows shell's host cannot be looked in beyond its PATH.</summary>
+    private static string NoSearchedDirectories(RemoteShell shell)
+        => $"its shell, {(shell == RemoteShell.Cmd ? "cmd" : "PowerShell")}, gives this no way to look in the directories searched for programs";
+
+    /// <summary>Why a name no command line sent there can carry is not looked for.</summary>
+    private static string Unspeakable(string program)
+        => $"'{program}' holds characters a command line sent there cannot carry, so it could not be looked for";
+
+    /// <summary>
+    /// What one <c>ls</c> of <paramref name="candidates"/> says: each one it printed, in the order given, or why what it
+    /// printed says nothing.
+    /// </summary>
+    /// <remarks>
+    /// One listing for every candidate at once: a separate command for each would open a separate ssh connection for
+    /// each, and a host that is merely far away would take a minute to answer. A POSIX <c>ls</c> given files prints each
+    /// one that exists as it was given; a candidate it printed is there, whatever else it printed beside it - the
+    /// contents of one that is a directory, say. Anything else it printed and no candidate is some other shell's
+    /// listing - PowerShell's is a table - and reading it as "none of them exist" would call every program there
+    /// missing.
+    /// </remarks>
+    private async Task<Listing> ListAsync(HostConnection connection, IReadOnlyList<string> candidates, TimeSpan budget, CancellationToken cancellationToken)
+    {
+        var listing = await RunAsync(connection, "ls", candidates, budget, cancellationToken).ConfigureAwait(false);
+
+        if (!HostProbes.Answered(listing))
+        {
+            return new Listing([], Answered: false, "the host did not answer when they were listed");
+        }
+
+        var lines = listing.StandardOutput
+            .Split('\n')
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0)
+            .ToList();
+        var existing = candidates.Where(lines.Contains).ToList();
+
+        return existing.Count == 0 && lines.Count > 0
+            ? new Listing([], Answered: true, "what its shell printed for the directories searched for programs is not a listing this can read")
+            : new Listing(existing, Answered: true, null);
+    }
+
+    /// <summary>What one listing of candidate paths said.</summary>
+    /// <param name="Existing">Each candidate it printed, in the order given.</param>
+    /// <param name="Answered">Whether the host answered at all.</param>
+    /// <param name="Unread">Why what it said could not be read, or <see langword="null"/> where it could.</param>
+    private sealed record Listing(IReadOnlyList<string> Existing, bool Answered, string? Unread)
+    {
+        /// <summary>Nothing to list, and so nothing listed.</summary>
+        public static Listing Empty { get; } = new([], Answered: true, null);
+    }
+
+    /// <summary>Each line of <paramref name="output"/> that names a path, trimmed, in order.</summary>
+    private static IEnumerable<string> Paths(string output)
+        => output
+            .Split('\n')
+            .Select(line => line.Trim())
+            .Where(line => line.Contains('/', StringComparison.Ordinal) || line.Contains('\\', StringComparison.Ordinal));
+
     private async Task<ProgramLocation> ThereAsync(
         HostConnection connection,
         string program,
@@ -146,10 +388,7 @@ public sealed class HostProgramResolver(LocalProgramResolver local, IHostCommand
         // reads literally cannot be looked up at all, and saying so beats guessing at it.
         if (!RemoteCommandLine.IsLiteral(program, connection.Shell))
         {
-            return new ProgramLocation(
-                program,
-                ProgramFound.Unreadable,
-                Reason: $"'{program}' holds characters a command line sent there cannot carry, so it could not be looked for");
+            return new ProgramLocation(program, ProgramFound.Unreadable, Reason: Unspeakable(program));
         }
 
         var onPath = await OnPathAsync(connection, program, budget, cancellationToken).ConfigureAwait(false);
@@ -166,11 +405,12 @@ public sealed class HostProgramResolver(LocalProgramResolver local, IHostCommand
             return onPath;
         }
 
-        // cmd has no portable way to test one absolute path. Its host was told where to look, and
-        // saying the program is not there would be a claim about directories nobody looked in.
-        if (connection.Shell == RemoteShell.Cmd)
+        // cmd has no portable way to test one absolute path, and PowerShell's listing is a table. Its host
+        // was told where to look, and saying the program is not there would be a claim about directories
+        // nobody looked in.
+        if (RemoteCommandLine.IsWindows(connection.Shell))
         {
-            return Unlooked(program, "its shell, cmd, gives this no way to look in the directories searched for programs");
+            return Unlooked(program, NoSearchedDirectories(connection.Shell));
         }
 
         var answered = await home.Value.ConfigureAwait(false);
@@ -186,35 +426,21 @@ public sealed class HostProgramResolver(LocalProgramResolver local, IHostCommand
 
         if (candidates.Count > 0)
         {
-            // One listing for every candidate at once: a separate command for each would open a
-            // separate ssh connection for each, and a host that is merely far away would take a
-            // minute to answer.
-            var listing = await RunAsync(connection, "ls", candidates, budget, cancellationToken).ConfigureAwait(false);
+            var listing = await ListAsync(connection, candidates, budget, cancellationToken).ConfigureAwait(false);
 
-            if (!HostProbes.Answered(listing))
+            if (!listing.Answered)
             {
                 return new ProgramLocation(program, ProgramFound.Unreadable);
             }
 
-            var lines = listing.StandardOutput
-                .Split('\n')
-                .Select(line => line.Trim())
-                .Where(line => line.Length > 0)
-                .ToList();
-
-            // A POSIX 'ls' given files prints each one that exists as it was given. A candidate it
-            // printed is found, whatever else it printed beside it - the contents of one that is a
-            // directory, say.
-            if (candidates.FirstOrDefault(lines.Contains) is { } path)
+            if (listing.Existing is [var path, ..])
             {
                 return new ProgramLocation(program, ProgramFound.OffPath, path);
             }
 
-            // Anything else is some other shell's listing - PowerShell's is a table - and reading
-            // it as "none of them exist" would call every program there missing.
-            if (lines.Count > 0)
+            if (listing.Unread is { } unread)
             {
-                return Unlooked(program, "what its shell printed for the directories searched for programs is not a listing this can read");
+                return Unlooked(program, unread);
             }
         }
 
@@ -227,9 +453,7 @@ public sealed class HostProgramResolver(LocalProgramResolver local, IHostCommand
 
     /// <summary>
     /// Whether the PATH of a command run without a login shell names <paramref name="program"/>.
-    /// <c>command -v</c> is the POSIX way and a builtin of every shell an ssh server uses on a POSIX
-    /// host; <c>where</c> is the Windows one, and is tried after it so that PowerShell, which has
-    /// neither <c>command</c> nor a way to say which shell it is, is still answered for.
+    /// <c>command -v</c> is the POSIX way, and <c>where.exe</c> the Windows one, for cmd and PowerShell.
     /// </summary>
     private async Task<ProgramLocation> OnPathAsync(
         HostConnection connection,
@@ -287,11 +511,14 @@ public sealed class HostProgramResolver(LocalProgramResolver local, IHostCommand
             yield break;
         }
 
-        if (connection.Shell != RemoteShell.Cmd)
+        if (RemoteCommandLine.IsWindows(connection.Shell))
         {
-            yield return ("command", new[] { "-v", program });
+            yield return (WhereProgram, new[] { program });
+            yield break;
         }
 
+        // where after it, for a POSIX shell with no command builtin: tcsh's own where answers the same question.
+        yield return ("command", new[] { "-v", program });
         yield return ("where", new[] { program });
     }
 
@@ -331,8 +558,8 @@ public sealed class HostProgramResolver(LocalProgramResolver local, IHostCommand
 
             // A path holding a space cannot travel in a command line an ssh server hands to a shell,
             // so it is not sent in a form the shell would split - and is not reported as looked in
-            // either. wsl.exe --exec hands each argument over as it is, with no shell to split it.
-            if (connection.Host.Kind == HostKind.Wsl || RemoteCommandLine.IsLiteral(path, connection.Shell))
+            // either.
+            if (Speakable(path, connection))
             {
                 candidates.Add(path);
             }
@@ -356,7 +583,7 @@ public sealed class HostProgramResolver(LocalProgramResolver local, IHostCommand
 
         if (unspeakable.Count > 0)
         {
-            reasons.Add($"{Quoted(unspeakable)} could not be looked in, because a path holding a space cannot be named in a command line sent there");
+            reasons.Add($"{Quoted(unspeakable)} could not be looked in, because {SpaceUnspeakable}");
         }
 
         return (candidates, reasons.Count == 0 ? null : string.Join("; ", reasons));
@@ -375,10 +602,5 @@ public sealed class HostProgramResolver(LocalProgramResolver local, IHostCommand
             new HostCommand { Program = program, Arguments = arguments, Timeout = budget },
             cancellationToken);
 
-    private static string? FirstPath(string output)
-        => output
-            .Split('\n')
-            .Select(line => line.Trim())
-            .FirstOrDefault(line => line.Length > 0 && (line.Contains('/', StringComparison.Ordinal)
-                || line.Contains('\\', StringComparison.Ordinal)));
+    private static string? FirstPath(string output) => Paths(output).FirstOrDefault();
 }

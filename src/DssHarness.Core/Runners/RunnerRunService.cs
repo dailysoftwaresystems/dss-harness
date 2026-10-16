@@ -16,7 +16,7 @@ namespace DssHarness.Core.Runners;
 public sealed record RunnerRunRequest
 {
     /// <inheritdoc cref="Hosts.HostReport.ProgramDirectories"/>
-    public IReadOnlyList<string> ProgramDirectories { get; init; } = [];
+    public ProgramDirectories ProgramDirectories { get; init; } = ProgramDirectories.None;
 
     /// <summary>
     /// What the host the leg runs on gives it, beneath the runner's values, its secrets, its own
@@ -1030,7 +1030,7 @@ public sealed class RunnerRunService(
                     LogFile = new LegRecords(request.RunDirectory, request.Leg).PhaseLog(LogNameFor(phase.Name)),
                     WorkingDirectory = working,
                     Environment = EnvironmentFor(request, phase, values),
-                    AppendToPath = request.ProgramDirectories,
+                    ProgramDirectories = request.ProgramDirectories,
                     SuccessPattern = phase.SuccessPattern,
 
                     // The step's own bound, else the runner's, else the repository's. A stall bound

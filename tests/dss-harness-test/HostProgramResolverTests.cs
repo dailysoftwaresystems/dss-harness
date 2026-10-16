@@ -176,7 +176,37 @@ public sealed class HostProgramResolverTests
         Assert.Equal(
             "'cmake' is not on the PATH there, and its shell, cmd, gives this no way to look in the directories searched for programs",
             located?.Reason);
-        Assert.Equal(["where"], asked);
+        Assert.Equal(["where.exe"], asked);
+    }
+
+    /// <summary>
+    /// PowerShell reads a bare where as its own Where-Object, which finds nothing and says nothing, so its PATH is asked
+    /// with where.exe; and its ls prints a table, so the directories searched beyond it are not looked in either.
+    /// </summary>
+    [Fact]
+    public async Task OnAPowerShellShell_ThePathIsAskedWithWhereExe_AndTheDirectoriesAreNotLookedIn()
+    {
+        var asked = new List<string>();
+        var commands = new ScriptedHostCommands((_, command) =>
+        {
+            asked.Add(command.Program);
+
+            return (command.Program, command.Arguments[0]) switch
+            {
+                ("where.exe", "ninja") => HostResults.Ok("C:\\tools\\ninja.exe\r\n"),
+                ("where.exe", _) => HostResults.Failed(1, "INFO: Could not find files"),
+                _ => throw HostResults.Unexpected(command),
+            };
+        });
+
+        var connection = await Resolve(commands, SshHost with { Shell = RemoteShell.PowerShell }, ["ninja", "cmake"], [@"C:\tools"]);
+
+        Assert.Equal(ProgramFound.OnPath, connection.Located("ninja")?.Found);
+        Assert.Equal(ProgramFound.Unreadable, connection.Located("cmake")?.Found);
+        Assert.Equal(
+            "'cmake' is not on the PATH there, and its shell, PowerShell, gives this no way to look in the directories searched for programs",
+            connection.Located("cmake")?.Reason);
+        Assert.Equal(["where.exe", "where.exe"], asked);
     }
 
     /// <summary>With nothing to look in beyond the PATH, the PATH was everywhere there was to look.</summary>
@@ -191,9 +221,9 @@ public sealed class HostProgramResolverTests
     }
 
     /// <summary>
-    /// A POSIX 'ls' given files prints the ones that exist, as given, and nothing else. PowerShell -
-    /// which no probe tells apart from a POSIX shell - prints a table, and reading that as "none of
-    /// them exist" would call every program there missing.
+    /// A POSIX 'ls' given files prints the ones that exist, as given, and nothing else. Anything else -
+    /// a table, as PowerShell's prints - is no listing, and reading it as "none of them exist" would call
+    /// every program there missing.
     /// </summary>
     [Fact]
     public async Task AListingThatIsNotPosixs_LeavesTheProgramUnknown_NotMissing()
@@ -236,11 +266,11 @@ public sealed class HostProgramResolverTests
     }
 
     /// <summary>
-    /// A Windows directory given to a host whose shell is not cmd - PowerShell over ssh - cannot be
-    /// listed with a POSIX 'ls', and is said to be that rather than searched and found empty.
+    /// A Windows directory given to a host whose shell is a POSIX one cannot be listed with its 'ls', and
+    /// is said to be that rather than searched and found empty.
     /// </summary>
     [Fact]
-    public async Task AWindowsDirectoryGivenToAShellThatIsNotCmd_IsSaidToBeUnlooked()
+    public async Task AWindowsDirectoryGivenToAPosixShell_IsSaidToBeUnlooked()
     {
         var commands = new ScriptedHostCommands((_, command) => command.Program switch
         {
@@ -454,6 +484,204 @@ public sealed class HostProgramResolverTests
         Assert.Equal(ProgramFound.Nowhere, connection.Located("ninja")?.Found);
         Assert.Empty(commands.Calls);
     }
+
+    /// <summary>
+    /// Every copy of a program a name could start on a POSIX host, in the order a leg there looks: each directory its
+    /// login-free PATH names, then each searched directory, from one listing of all of them - with the home expanded,
+    /// and only the copies the host listed.
+    /// </summary>
+    [Fact]
+    public async Task EveryCopyOfAProgram_IsListedInTheOrderALegLooks_ThePathFirst()
+    {
+        var listed = new List<IReadOnlyList<string>>();
+        var commands = new ScriptedHostCommands((_, command) => (command.Program, command.Arguments.FirstOrDefault()) switch
+        {
+            ("printenv", "PATH") => HostResults.Ok("/usr/local/bin:/usr/bin:relative\n"),
+            ("pwd", _) => HostResults.Ok(Home + "\n"),
+            ("ls", _) => Kept(command, listed, "/usr/bin/python3", "/opt/homebrew/bin/python3", $"{Home}/.local/bin/python3"),
+            _ => throw HostResults.Unexpected(command),
+        });
+
+        var copies = await Copies(commands, SshHost, "python3", ["~/.local/bin", "/opt/homebrew/bin"]);
+
+        Assert.Equal(["/usr/bin/python3", $"{Home}/.local/bin/python3", "/opt/homebrew/bin/python3"], copies.Copies);
+        Assert.Null(copies.Unsearched);
+        Assert.Equal(
+            ["/usr/local/bin/python3", "/usr/bin/python3", $"{Home}/.local/bin/python3", "/opt/homebrew/bin/python3"],
+            Assert.Single(listed));
+    }
+
+    /// <summary>The home a search already measured on the connection is the one its directories are read under, unasked.</summary>
+    [Fact]
+    public async Task TheHomeASearchMeasured_IsTheOneTheCopiesAreLookedForUnder()
+    {
+        var listed = new List<IReadOnlyList<string>>();
+        var commands = new ScriptedHostCommands((_, command) => (command.Program, command.Arguments.FirstOrDefault()) switch
+        {
+            ("printenv", "PATH") => HostResults.Ok("/usr/bin\n"),
+            ("ls", _) => Kept(command, listed, "/srv/me/.local/bin/python3"),
+            _ => throw HostResults.Unexpected(command),
+        });
+
+        var copies = await Copies(commands, SshHost with { Home = "/srv/me" }, "python3", ["~/.local/bin"]);
+
+        Assert.Equal(["/srv/me/.local/bin/python3"], copies.Copies);
+        Assert.Equal(["/usr/bin/python3", "/srv/me/.local/bin/python3"], Assert.Single(listed));
+    }
+
+    /// <summary>
+    /// cmd and PowerShell list the PATH's copies with where.exe. A copy whose path no command line sent there can carry
+    /// could never be asked its version, and a searched directory could not be looked in: each is said, since a copy
+    /// nobody could ask may be the one that meets a tool's minimum.
+    /// </summary>
+    [Theory]
+    [InlineData(RemoteShell.Cmd, "cmd")]
+    [InlineData(RemoteShell.PowerShell, "PowerShell")]
+    public async Task OnAWindowsShell_TheCopiesAreWhatWhereExeLists_AndWhatCouldNotBeAskedIsSaid(RemoteShell shell, string named)
+    {
+        var where = new ScriptedHostCommands((_, command) => (command.Program, command.Arguments.FirstOrDefault()) switch
+        {
+            ("where.exe", "python3") => HostResults.Ok("C:\\Python312\\python3.exe\r\nC:\\Program Files\\Python311\\python3.exe\r\n"),
+            _ => throw HostResults.Unexpected(command),
+        });
+
+        var copies = await Copies(where, SshHost with { Shell = shell }, "python3", [@"C:\tools"]);
+
+        Assert.Equal(["C:\\Python312\\python3.exe"], copies.Copies);
+        Assert.Equal(["C:\\Program Files\\Python311\\python3.exe"], copies.Unspeakable);
+        Assert.Equal(
+            "'C:\\Program Files\\Python311\\python3.exe' could not be looked at, because a path holding a space cannot be named in a "
+            + $"command line sent there; 'C:\\tools' could not be looked in, because its shell, {named}, gives this no way to look in the "
+            + "directories searched for programs",
+            copies.Unlooked());
+    }
+
+    /// <summary>
+    /// A copy a caller already asked - the one the PATH starts, asked by its name - is no place left unlooked, though no
+    /// command line can name its path: a tool whose only copy is under 'Program Files' is judged on what it said.
+    /// </summary>
+    [Fact]
+    public async Task ACopyAlreadyAsked_IsNoPlaceLeftUnlooked_ThoughNoCommandLineCanNameIt()
+    {
+        const string Only = "C:\\Program Files\\Git\\cmd\\git.exe";
+        var where = new ScriptedHostCommands((_, command) => (command.Program, command.Arguments.FirstOrDefault()) switch
+        {
+            ("where.exe", "git") => HostResults.Ok(Only + "\r\n"),
+            ("where.exe", _) => HostResults.Failed(1, "INFO: Could not find files"),
+            _ => throw HostResults.Unexpected(command),
+        });
+
+        var copies = await Copies(where, SshHost with { Shell = RemoteShell.Cmd }, "git", []);
+        var none = await Copies(where, SshHost with { Shell = RemoteShell.Cmd }, "cmake", []);
+
+        Assert.NotNull(copies.Unlooked());
+        Assert.Null(copies.Besides(["git", Only]).Unlooked());
+        Assert.Empty(copies.Besides(["git", Only]).Copies);
+        Assert.Equal((0, null), (none.Copies.Count, none.Unlooked()));
+    }
+
+    /// <summary>
+    /// A POSIX host's PATH directory holding a space cannot be listed in a command line sent there, and is said to be
+    /// unlooked; wsl.exe --exec hands each argument over as it is, so a distribution lists it like any other.
+    /// </summary>
+    [Fact]
+    public async Task APathDirectoryHoldingASpace_IsUnlookedOverSsh_AndListedInADistribution()
+    {
+        var listed = new List<IReadOnlyList<string>>();
+        var commands = new ScriptedHostCommands((_, command) => (command.Program, command.Arguments.FirstOrDefault()) switch
+        {
+            ("printenv", "PATH") => HostResults.Ok("/usr/bin:/mnt/c/Program Files/Python\n"),
+            ("ls", _) => Kept(command, listed, "/usr/bin/python3", "/mnt/c/Program Files/Python/python3"),
+            _ => throw HostResults.Unexpected(command),
+        });
+
+        var ssh = await Copies(commands, SshHost, "python3", []);
+        var wsl = await Copies(commands, new HostConnection { Host = HostId.Wsl("wsl-a"), Distribution = "Example-Linux" }, "python3", []);
+
+        Assert.Equal(["/usr/bin/python3"], ssh.Copies);
+        Assert.Equal(
+            "'/mnt/c/Program Files/Python/python3' could not be looked at, because a path holding a space cannot be named in a command line sent there",
+            ssh.Unlooked());
+        Assert.Equal(["/usr/bin/python3", "/mnt/c/Program Files/Python/python3"], wsl.Copies);
+        Assert.Null(wsl.Unlooked());
+    }
+
+    /// <summary>
+    /// A host that could not say its PATH, a listing it did not answer or that was no listing, a name no command line
+    /// can carry, and where.exe going unanswered: each leaves the copies unknown, and says why, rather than none.
+    /// </summary>
+    [Fact]
+    public async Task CopiesAHostCouldNotBeAskedAbout_AreUnknown_AndSaySo()
+    {
+        var silent = new ScriptedHostCommands((_, command) => command.Program == "printenv"
+            ? HostResults.Failed(1, "printenv: not found")
+            : throw HostResults.Unexpected(command));
+        var unanswered = new ScriptedHostCommands((_, command) => command.Program switch
+        {
+            "printenv" => HostResults.Ok("/usr/bin\n"),
+            "ls" => HostResults.Failed(HostProbes.SshFailed, string.Empty),
+            _ => throw HostResults.Unexpected(command),
+        });
+        var table = new ScriptedHostCommands((_, command) => command.Program switch
+        {
+            "printenv" => HostResults.Ok("/usr/bin\n"),
+            "ls" => HostResults.Ok("Mode   LastWriteTime   Length Name\n-a---  1/1/2026 0:00  1024   python3\n"),
+            _ => throw HostResults.Unexpected(command),
+        });
+        var nowhere = new ScriptedHostCommands((_, command) => command.Program == "where.exe"
+            ? HostResults.Failed(HostProbes.SshFailed, string.Empty)
+            : throw HostResults.Unexpected(command));
+        var unasked = new ScriptedHostCommands((_, command) => throw HostResults.Unexpected(command));
+
+        var couldNotSay = await Copies(silent, SshHost, "python3", []);
+        var notListed = await Copies(unanswered, SshHost, "python3", []);
+        var noListing = await Copies(table, SshHost, "python3", []);
+        var notAnswered = await Copies(nowhere, SshHost with { Shell = RemoteShell.Cmd }, "python3", []);
+        var unspeakable = await Copies(unasked, SshHost, "python 3", []);
+
+        Assert.All([couldNotSay, notListed, noListing, notAnswered, unspeakable], copies => Assert.Empty(copies.Copies));
+        Assert.Equal("the PATH there could not be read (exit 1): printenv: not found", couldNotSay.Unsearched);
+        Assert.Equal("'/usr/bin/python3' could not be looked at, because the host did not answer when they were listed", notListed.Unsearched);
+        Assert.Equal(
+            "'/usr/bin/python3' could not be looked at, because what its shell printed for the directories searched for programs is not a listing this can read",
+            noListing.Unsearched);
+        Assert.Equal("the host did not answer when asked where 'python3' is (exit 255): ", notAnswered.Unsearched);
+        Assert.Equal("'python 3' holds characters a command line sent there cannot carry, so it could not be looked for", unspeakable.Unsearched);
+    }
+
+    /// <summary>On this machine the copies are the local search's own, and no host command is run for them.</summary>
+    [Fact]
+    public async Task OnThisMachine_TheCopiesAreTheLocalSearchs()
+    {
+        var onPath = Path.GetFullPath("/usr/bin");
+        var searched = Path.GetFullPath("/opt/homebrew/bin");
+        var permissions = Substitute.For<IFilePermissions>();
+        permissions.IsExecutable(Arg.Any<string>()).Returns(call => Path.GetFileNameWithoutExtension(call.Arg<string>()) == "python3");
+        var commands = new ScriptedHostCommands((_, command) => throw HostResults.Unexpected(command));
+        var resolver = new HostProgramResolver(new LocalProgramResolver(HostDoubles.Platform(), permissions, () => onPath), commands);
+
+        var copies = await resolver.CopiesAsync(
+            new HostConnection { Host = HostId.Local }, "python3", [searched], TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.Equal([onPath, searched], copies.Copies.Select(Path.GetDirectoryName));
+        Assert.Empty(commands.Calls);
+    }
+
+    /// <summary>Answers a listing with the ones of <paramref name="present"/> it was asked about, sorted as ls sorts them.</summary>
+    private static ProcessResult Kept(HostCommand command, List<IReadOnlyList<string>> listed, params string[] present)
+    {
+        listed.Add(command.Arguments);
+
+        return HostResults.Ok(string.Join('\n', command.Arguments.Where(present.Contains).Order(StringComparer.Ordinal)) + "\n");
+    }
+
+    private static Task<ProgramCopies> Copies(
+        ScriptedHostCommands commands,
+        HostConnection connection,
+        string program,
+        IReadOnlyList<string> directories)
+        => new HostProgramResolver(new LocalProgramResolver(HostDoubles.Platform(), Substitute.For<IFilePermissions>()), commands)
+            .CopiesAsync(connection, program, directories, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
     /// <summary>Records the candidate paths a listing was asked about, and answers that it has none of them.</summary>
     private static ProcessResult Remember(HostCommand command, out IReadOnlyList<string> candidates)

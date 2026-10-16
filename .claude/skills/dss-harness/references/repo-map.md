@@ -83,7 +83,10 @@ From [`docs/architecture.md`](../../../../docs/architecture.md) "Layering", whic
   are listed in the architecture document; do not add another without adding it there. Nothing above the seam
   branches on `OperatingSystem.Is*`.
 - **Programs run through `IProcessRunner`**, the single seam to external tools, with arguments as a list, never a
-  command-line string, so shell quoting is never part of the system. A bare program name is looked up on `PATH` alone.
+  command-line string, so shell quoting is never part of the system. A bare program name is looked up on `PATH` alone:
+  the child's, with the survey's `ProgramDirectories` around it - appended, save the directory a tool's `minVersion`
+  raised ahead (`ProgramFloors`). A command sent over ssh goes through `HostCommandRunner`, which has the host's shell
+  write a mark first and keeps only what follows it (`MarkedText`), so a host's startup output is never read as an answer.
 - **Paths come from git.** Every repository path is resolved through git with links followed; a typed directory only
   tells git where to start.
 - **`config.json` is strict.** An unknown key, a key written twice, a `null` the model forbids, or a reference to

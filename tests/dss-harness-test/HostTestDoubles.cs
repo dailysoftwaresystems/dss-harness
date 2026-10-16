@@ -79,7 +79,7 @@ internal sealed class ScriptedHostCommands(Func<HostConnection, HostCommand, Pro
     public bool LoginShellLeavesALineOpen { get; set; }
 
     /// <summary>What the ssh shell probe answers; by default a shell that is not cmd.</summary>
-    public ProcessResult ShellProbe { get; set; } = HostResults.Ok("%COMSPEC%\n");
+    public ProcessResult ShellProbe { get; set; } = HostResults.Ok("%COMSPEC% %COMSPEC%\n");
 
     /// <summary>What the shell probe answers first, one per probe, before <see cref="ShellProbe"/>: a host that takes a while to wake.</summary>
     public Queue<ProcessResult> ShellProbesFirst { get; } = new();
@@ -602,6 +602,14 @@ internal static class HostResults
 /// <summary>Stand-ins for what host and leg code reads about this machine, the repository, and its legs.</summary>
 internal static class HostDoubles
 {
+    /// <summary>
+    /// The search a survey on <paramref name="platform"/> makes, holding declared tools to their minimum versions,
+    /// each copy asked through <paramref name="processRunner"/>; files start where <paramref name="permissions"/>
+    /// says, and where this machine's own permissions say where it is left out.
+    /// </summary>
+    public static ProgramFloors Floors(IHostPlatform platform, IProcessRunner processRunner, IFilePermissions? permissions = null)
+        => new(new LocalProgramResolver(platform, permissions ?? FilePermissionsFactory.Create()), processRunner, platform);
+
     /// <summary>A machine that runs <paramref name="current"/> on <paramref name="processor"/>.</summary>
     public static IHostPlatform Platform(PlatformId current = PlatformId.Linux, string processor = "x86_64", string? home = null)
     {

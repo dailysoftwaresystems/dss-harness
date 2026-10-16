@@ -385,7 +385,7 @@ public sealed class HoldAwakeTests
         HoldAwakeSeconds = hold,
         KeepAwake = [.. Caffeinate],
         KeepAwakeEnvironment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["RH_HOST"] = "mac" },
-        ProgramDirectories = ["/opt/homebrew/bin"],
+        ProgramDirectories = ProgramDirectories.After(["/opt/homebrew/bin"]),
         Session = new HostSession(new HostConnection { Host = host, Address = "192.0.2.10" }, ".dotnet/tools/dssharness"),
     };
 
@@ -404,7 +404,7 @@ public sealed class HoldAwakeTests
             new EmulatorProbe(platform, processRunner, fileSystem),
             new DeveloperEnvironmentProbe(platform, processRunner),
             fileSystem,
-            new LocalProgramResolver(platform, FilePermissionsFactory.Create()),
+            HostDoubles.Floors(platform, processRunner),
             new KeepAwake(new HeldProcesses(), new ConsoleHarnessOutput(new StringWriter(), new StringWriter(), verbose: false), store),
             store,
             launcher,

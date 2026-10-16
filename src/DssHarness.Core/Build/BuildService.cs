@@ -5,6 +5,7 @@ using DssHarness.Core.Hosts;
 using DssHarness.Core.Output;
 using DssHarness.Core.Results;
 using DssHarness.Core.Worktrees;
+using DssHarness.Core.Processes;
 
 namespace DssHarness.Core.Build;
 
@@ -28,7 +29,7 @@ public sealed record BuildRequest(
     bool Time = false)
 {
     /// <inheritdoc cref="Hosts.HostReport.ProgramDirectories"/>
-    public IReadOnlyList<string> ProgramDirectories { get; init; } = [];
+    public ProgramDirectories ProgramDirectories { get; init; } = ProgramDirectories.None;
 
     /// <summary>
     /// What the host the leg runs on gives it, beneath the variant's own environment: what the host

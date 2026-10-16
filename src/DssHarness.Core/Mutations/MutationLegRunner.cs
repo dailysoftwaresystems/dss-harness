@@ -16,6 +16,7 @@ using DssHarness.Core.Runs;
 using DssHarness.Core.Sync;
 using DssHarness.Core.Testing;
 using DssHarness.Core.Worktrees;
+using DssHarness.Core.Processes;
 
 namespace DssHarness.Core.Mutations;
 
@@ -1878,7 +1879,7 @@ internal sealed class MutationLegRunner(
                 RecordDirectory = records,
                 WorkingDirectory = TestInvocationResolver.StartDirectory(invocation is null ? null : TestInvocationResolver.WorkingDirectoryFor(invocation, paths), worker),
                 Environment = TestInvocationResolver.EnvironmentFor(_leg.Environment, invocation?.Env ?? new Dictionary<string, string>()),
-                AppendToPath = _leg.Host.ProgramDirectories,
+                ProgramDirectories = _leg.Host.ProgramDirectories,
                 StallSeconds = _config.Defaults.StallSeconds,
                 ClockStepToleranceMilliseconds = _config.Defaults.ClockStepToleranceMilliseconds,
                 Bound = bound,

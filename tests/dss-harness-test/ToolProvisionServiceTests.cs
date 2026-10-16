@@ -634,6 +634,185 @@ public sealed class ToolProvisionServiceTests
     }
 
     /// <summary>
+    /// The package manager an install runs is started where the survey found it. Measured on a Mac over ssh: brew was
+    /// found in /opt/homebrew/bin, which the PATH of a command run there does not name, and the install then ran it by
+    /// its name and failed with "command not found". A dry run names the command as the install would run it.
+    /// </summary>
+    [Fact]
+    public async Task AManagerFoundOffThePath_IsRunByThePathItWasFoundAt_AndADryRunSaysSo()
+    {
+        var brew = $"{FakeHost.Homebrew}/brew";
+
+        using (var dry = new Fixture(tools: [Brew("python3")], ssh: true, offPath: new() { [brew] = "4.4.0" }))
+        {
+            var would = Assert.Single(Assert.Single((await dry.ProvisionAsync(dryRun: true)).Legs).Tools, entry => entry.Tool == "python3");
+
+            Assert.Equal(ToolState.WouldInstall, would.State);
+            Assert.Equal($"would run '{brew} install python3-build'", would.Detail);
+            Assert.DoesNotContain(dry.Host.Calls, call => call.Arguments is ["install", ..]);
+        }
+
+        using var fixture = new Fixture(tools: [Brew("python3")], ssh: true, offPath: new() { [brew] = "4.4.0" });
+
+        var outcome = Assert.Single(Assert.Single((await fixture.ProvisionAsync()).Legs).Tools, entry => entry.Tool == "python3");
+
+        Assert.Equal(ToolState.Installed, outcome.State);
+        Assert.Equal(InstalledVersion, outcome.Version);
+        Assert.Equal(brew, Assert.Single(fixture.Host.Calls, call => call.Arguments is ["install", "python3-build"]).Program);
+    }
+
+    /// <summary>
+    /// A tool with a minimum version is current where any copy a leg finds meets it, the first that does being the one
+    /// a leg starts: one behind an older copy on the PATH is named, with the copy it is started ahead of, and nothing
+    /// is installed. Judged by the first copy alone, an older system copy - macOS's own python3 - kept the tool
+    /// reported behind however many newer copies were installed beside it.
+    /// </summary>
+    [Fact]
+    public async Task ACopyThatMeetsTheMinimum_BehindAnOlderOne_IsCurrent_AndNamedAheadOfIt()
+    {
+        var newer = $"{FakeHost.Homebrew}/python3";
+        using var fixture = new Fixture(
+            tools: [Brew("python3", minVersion: "1.12.0")],
+            present: new() { ["python3"] = "1.10.0" },
+            ssh: true,
+            offPath: new() { [newer] = "1.13.0", [$"{FakeHost.Homebrew}/brew"] = "4.4.0" });
+
+        var outcome = Assert.Single(Assert.Single((await fixture.ProvisionAsync()).Legs).Tools, entry => entry.Tool == "python3");
+
+        Assert.Equal(ToolState.AlreadyCurrent, outcome.State);
+        Assert.Equal("1.13.0", outcome.Version);
+        Assert.Equal($"{newer} is 1.13.0, which a leg there starts ahead of /usr/bin/python3 (1.10.0)", outcome.Detail);
+        Assert.DoesNotContain(fixture.Host.Calls, call => call.Arguments is ["install", ..]);
+    }
+
+    /// <summary>
+    /// Where no copy meets the minimum, the tool is installed, and the copy the install left is judged as a leg would
+    /// find it: brew installs off the PATH, behind the older copy still on it, and that copy is the one that counts.
+    /// </summary>
+    [Fact]
+    public async Task NoCopyMeetingTheMinimum_IsInstalled_AndTheNewCopyBehindTheOldOneCounts()
+    {
+        using var fixture = new Fixture(
+            tools: [Brew("python3", minVersion: "1.12.0")],
+            present: new() { ["python3"] = "1.10.0" },
+            ssh: true,
+            offPath: new() { [$"{FakeHost.Homebrew}/brew"] = "4.4.0" });
+
+        var outcome = Assert.Single(Assert.Single((await fixture.ProvisionAsync()).Legs).Tools, entry => entry.Tool == "python3");
+
+        Assert.Equal(ToolState.Updated, outcome.State);
+        Assert.Equal(InstalledVersion, outcome.Version);
+    }
+
+    /// <summary>
+    /// A copy whose version could not be read, beside one older than the minimum, leaves the tool unknown and nothing
+    /// installed: it may be the one that meets it, as a leg's own survey there holds, which turns the leg away as not
+    /// known to have the tool rather than as missing it.
+    /// </summary>
+    [Fact]
+    public async Task ACopyWhoseVersionCouldNotBeRead_LeavesTheToolUnknown_AndInstallsNothing()
+    {
+        using var fixture = new Fixture(
+            tools: [Brew("python3", minVersion: "1.12.0")],
+            present: new() { ["python3"] = "1.10.0" },
+            ssh: true,
+            offPath: new() { [$"{FakeHost.Homebrew}/python3"] = "1.13", [$"{FakeHost.Homebrew}/brew"] = "4.4.0" });
+
+        var outcome = Assert.Single(Assert.Single((await fixture.ProvisionAsync()).Legs).Tools, entry => entry.Tool == "python3");
+
+        Assert.Equal(ToolState.Unknown, outcome.State);
+        Assert.Equal(
+            "whether a copy of 'python3' there is at least 1.12.0, the minVersion it is declared with, could not be established: "
+            + $"/usr/bin/python3 is 1.10.0; {FakeHost.Homebrew}/python3: the probe regex of 'python3' matched nothing in what it "
+            + "printed: python3 version 1.13",
+            outcome.Detail);
+        Assert.DoesNotContain(fixture.Host.Calls, call => call.Arguments is ["install", ..]);
+    }
+
+    /// <summary>
+    /// An ssh host whose shell is cmd or PowerShell is a Windows one: the SDK is not installed there with the shell
+    /// script, which it has no shell to run, and the host is told how it is installed instead.
+    /// </summary>
+    [Theory]
+    [InlineData("C:\\WINDOWS\\system32\\cmd.exe C:\\WINDOWS\\system32\\cmd.exe\r\n")]
+    [InlineData("%COMSPEC%\r\n%COMSPEC%\r\n")]
+    public async Task AWindowsShellsHost_IsNeverHandedTheInstallScript(string probe)
+    {
+        using var fixture = new Fixture(ssh: true, shellProbe: HostResults.Ok(probe));
+
+        var dotnet = Assert.Single(Assert.Single((await fixture.ProvisionAsync()).Legs).Tools, tool => tool.Tool == "dotnet");
+
+        Assert.Equal(ToolState.Failed, dotnet.State);
+        Assert.StartsWith("the .NET 10 SDK is installed there with the Windows installer, which this command cannot run", dotnet.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain(fixture.Host.Calls, call => call.Program == "sh");
+    }
+
+    /// <summary>
+    /// A copy on this machine that will not start - a file that is no program for it, or may not be run - never ran,
+    /// and could not say its version: the tool is unknown, as a leg's own survey holds it, and nothing is installed,
+    /// rather than the whole command ending over it.
+    /// </summary>
+    [Fact]
+    public async Task ACopyHereThatWillNotStart_LeavesTheToolUnknown_AndTheCommandGoesOn()
+    {
+        using var fixture = new Fixture(
+            tools: [Brew("python3", minVersion: "1.12.0")],
+            present: new() { ["python3"] = "1.10.0" },
+            twoLegs: true,
+            localPlatform: PlatformId.Linux);
+        fixture.Host.WontStart = command => Path.GetFileName(command.Program) == "python3" && command.Program != "python3";
+
+        var outcome = Assert.Single(Assert.Single((await fixture.ProvisionAsync(["only-local"])).Legs).Tools, entry => entry.Tool == "python3");
+
+        Assert.Equal(ToolState.Unknown, outcome.State);
+        Assert.Contains("'python3' would not report its version there (exit -1): it is not a program this machine can run", outcome.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain(fixture.Host.Calls, call => call.Arguments is ["install", ..]);
+    }
+
+    /// <summary>
+    /// A copy an install left that cannot say its version leaves the tool unknown after it, saying the install reported
+    /// success: nothing says the copy a leg would start meets the minimum, nor that it does not.
+    /// </summary>
+    [Fact]
+    public async Task ACopyAnInstallLeft_ThatCannotSayItsVersion_LeavesTheToolUnknown()
+    {
+        using var fixture = new Fixture(
+            tools: [Brew("python3", minVersion: "1.12.0")],
+            present: new() { ["python3"] = "1.10.0" },
+            ssh: true,
+            offPath: new() { [$"{FakeHost.Homebrew}/brew"] = "4.4.0" },
+            installed: "1.13");
+
+        var outcome = Assert.Single(Assert.Single((await fixture.ProvisionAsync()).Legs).Tools, entry => entry.Tool == "python3");
+
+        Assert.Equal(ToolState.Unknown, outcome.State);
+        Assert.Equal(
+            "its install reported success, and whether a copy of 'python3' there is at least 1.12.0, the minVersion it is declared "
+            + $"with, could not be established: /usr/bin/python3 is 1.10.0; {FakeHost.Homebrew}/python3: the probe regex of 'python3' "
+            + "matched nothing in what it printed: python3 version 1.13",
+            outcome.Detail);
+    }
+
+    /// <summary>Every copy a leg could find is named, with what it is, where none meets the minimum.</summary>
+    [Fact]
+    public async Task NoCopyMeetingTheMinimum_NamesEveryCopy_WhereNothingDeclaresAnInstall()
+    {
+        using var fixture = new Fixture(
+            tools: [new ToolConfig { Name = "python3", Probe = new ToolProbe { Regex = @"(\d+\.\d+\.\d+)" }, MinVersion = "1.12.0" }],
+            present: new() { ["python3"] = "1.10.0" },
+            ssh: true,
+            offPath: new() { [$"{FakeHost.Homebrew}/python3"] = "1.11.0" });
+
+        var outcome = Assert.Single(Assert.Single((await fixture.ProvisionAsync()).Legs).Tools, entry => entry.Tool == "python3");
+
+        Assert.Equal(ToolState.Outdated, outcome.State);
+        Assert.Equal(
+            $"no copy of 'python3' there is at least 1.12.0, the minVersion it is declared with: /usr/bin/python3 is 1.10.0; "
+            + $"{FakeHost.Homebrew}/python3 is 1.11.0; it declares no install, so update it there by hand",
+            outcome.Detail);
+    }
+
+    /// <summary>
     /// What a tool printed over ssh is quoted with every address the host's name resolved to written as the
     /// host's item declares it, as everything a host prints is.
     /// </summary>
@@ -651,7 +830,8 @@ public sealed class ToolProvisionServiceTests
         var outcome = Assert.Single(Assert.Single(report.Legs).Tools, entry => entry.Tool == "ninja");
 
         Assert.Equal(
-            $"the probe regex of 'ninja' matched nothing in what it printed: ninja version 1.10.0 built on {ResolvedName}",
+            "whether a copy of 'ninja' there is at least 1.12.0, the minVersion it is declared with, could not be established: "
+            + $"/usr/bin/ninja: the probe regex of 'ninja' matched nothing in what it printed: ninja version 1.10.0 built on {ResolvedName}",
             outcome.Detail);
     }
 
@@ -966,9 +1146,11 @@ public sealed class ToolProvisionServiceTests
 
         var native = Assert.Single(report.Legs.Single(leg => leg.Leg == "native").Tools);
         Assert.Equal(ToolState.Failed, native.State);
-        Assert.Equal(
-            $"its install reported success, and it is still {VisualStudioHere.StudioNinja}, where at least 1.12.0 is needed",
-            native.Detail);
+        Assert.StartsWith(
+            "its install reported success, and no copy of 'ninja' there is at least 1.12.0, the minVersion it is declared with: ",
+            native.Detail,
+            StringComparison.Ordinal);
+        Assert.EndsWith($" is {VisualStudioHere.StudioNinja}", native.Detail, StringComparison.Ordinal);
 
         Assert.Equal(1, here.Installs);
         Assert.Equal(2, visualStudio.Captures.Count);
@@ -1073,6 +1255,15 @@ public sealed class ToolProvisionServiceTests
             cl.Detail);
         Assert.DoesNotContain(fixture.Host.Calls, call => call.Program == "apt-get" || call.Arguments.Contains("cl-build"));
     }
+
+    /// <summary>A tool brew installs, whose package is named after it.</summary>
+    private static ToolConfig Brew(string name, string? minVersion = null) => new()
+    {
+        Name = name,
+        Probe = new ToolProbe { Args = ["--version"], Regex = @"(\d+\.\d+\.\d+)" },
+        MinVersion = minVersion,
+        Install = { ["all"] = new ToolInstall { Manager = "brew", Id = name + "-build" } },
+    };
 
     /// <summary>A tool apt installs, whose package is named after it.</summary>
     private static ToolConfig Apt(
@@ -1262,15 +1453,44 @@ public sealed class ToolProvisionServiceTests
         Func<HostId, string> rootPassword,
         bool checkNeverFinishes,
         bool homeUnreadable,
-        Func<HostId, HostCommand, bool>? transportStops)
+        Func<HostId, HostCommand, bool>? transportStops,
+        Dictionary<string, string> offPath)
     {
+        /// <summary>Where brew is, off the PATH, and where it installs.</summary>
+        public const string Homebrew = "/opt/homebrew/bin";
+
+        /// <summary>Says which commands name a program of this machine's own that will not start.</summary>
+        public Func<HostCommand, bool>? WontStart { get; set; }
+
         private readonly Dictionary<string, Dictionary<string, string>> _present = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, Dictionary<string, string>> _offPath = new(StringComparer.Ordinal);
         private readonly HashSet<string> _dotnet = new(StringComparer.Ordinal);
 
         public List<HostCall> Calls { get; } = [];
 
         /// <summary>Whether one host has a program, which is not what another host has.</summary>
         public bool Has(HostId host, string program) => Present(host).ContainsKey(program);
+
+        /// <summary>
+        /// The files one host has off its PATH, by path, each the version it reports; what every host was said to
+        /// have, and what brew installed there since.
+        /// </summary>
+        private Dictionary<string, string> OffPath(HostId host)
+        {
+            if (!_offPath.TryGetValue(host.ToString(), out var found))
+            {
+                found = new Dictionary<string, string>(offPath, StringComparer.Ordinal);
+                _offPath[host.ToString()] = found;
+            }
+
+            return found;
+        }
+
+        /// <summary>Whether <paramref name="path"/> is a file one host has: on its PATH, or off it.</summary>
+        private bool Exists(HostId host, string path, bool dotnet)
+            => (dotnet && path == $"{Home}/.dotnet/dotnet")
+                || OffPath(host).ContainsKey(path)
+                || (path.StartsWith("/usr/bin/", StringComparison.Ordinal) && Has(host, path["/usr/bin/".Length..]));
 
         public ProcessResult Respond(HostConnection connection, HostCommand command)
         {
@@ -1280,6 +1500,11 @@ public sealed class ToolProvisionServiceTests
             if (transportStops?.Invoke(host, command) == true)
             {
                 throw HostResults.TransportWouldNotStart(host);
+            }
+
+            if (WontStart?.Invoke(command) == true)
+            {
+                throw new ProgramStartException(command.Program, "it is not a program this machine can run");
             }
 
             if (!exists && host.Kind != HostKind.Local)
@@ -1301,9 +1526,8 @@ public sealed class ToolProvisionServiceTests
                     ? HostResults.Failed(HostProbes.SshFailed, "Connection closed by remote host")
                     : HostResults.Ok($"{kernel} x86_64\n"),
                 ("pwd", _) => homeUnreadable ? HostResults.Failed(1, "pwd: cannot read the current directory") : HostResults.Ok(Home + "\n"),
-                ("ls", _) => HostResults.Ok(dotnet
-                    ? string.Join('\n', command.Arguments.Where(path => path == dotnetPath)) + "\n"
-                    : "\n"),
+                ("ls", _) => HostResults.Ok(string.Join('\n', command.Arguments.Where(path => Exists(host, path, dotnet))) + "\n"),
+                ("printenv", "PATH") => HostResults.Ok("/usr/bin:/bin\n"),
                 ("sh", null) => Install(host, dotnet: true),
 
                 // Matched ahead of the install below, which is every other way sudo is reached: this is
@@ -1319,6 +1543,10 @@ public sealed class ToolProvisionServiceTests
                 ("sudo", _) => Install(host, dotnet: false, command),
                 _ when command.Program == dotnetPath && command.Arguments.FirstOrDefault() == "--list-sdks" =>
                     dotnet ? HostResults.Ok($"10.0.100 [{Home}/.dotnet/sdk]\n") : HostResults.Failed(1, "not found"),
+                _ when command.Program == $"{Homebrew}/brew" && OffPath(host).ContainsKey(command.Program) && command.Arguments is ["install", var id] =>
+                    Brew(host, id),
+                _ when OffPath(host).TryGetValue(command.Program, out var version) =>
+                    HostResults.Ok($"{Path.GetFileName(command.Program)} version {version}\n"),
                 _ when Present(host).TryGetValue(Path.GetFileName(command.Program), out var version) =>
                     HostResults.Ok($"{Path.GetFileName(command.Program)} version {version}\n"),
                 _ => throw HostResults.Unexpected(command),
@@ -1345,9 +1573,23 @@ public sealed class ToolProvisionServiceTests
         {
             ("sh", "-c") => command.Arguments[1].Split(' ')[^1],
             ("command", "-v") => command.Arguments[1],
-            ("where", not null) => command.Arguments[0],
+            ("where" or "where.exe", not null) => command.Arguments[0],
             _ => null,
         };
+
+        /// <summary>Brew installing <paramref name="package"/> where it installs everything: its own directory, off the PATH.</summary>
+        private ProcessResult Brew(HostId host, string package)
+        {
+            if (installFails is { } said)
+            {
+                return HostResults.Failed(1, said);
+            }
+
+            var name = package[..^"-build".Length];
+            OffPath(host)[$"{Homebrew}/{name}"] = installs[name];
+
+            return HostResults.Ok($"==> Pouring {package}\n");
+        }
 
         private ProcessResult Install(HostId host, bool dotnet, HostCommand? command = null)
         {
@@ -1396,7 +1638,10 @@ public sealed class ToolProvisionServiceTests
             bool ssh = false,
             Func<HostId, HostCommand, bool>? transportStops = null,
             Action<HarnessConfig>? configure = null,
-            string sshAddress = "192.0.2.10")
+            string sshAddress = "192.0.2.10",
+            Dictionary<string, string>? offPath = null,
+            ProcessResult? shellProbe = null,
+            string installed = InstalledVersion)
         {
             var declared = tools ?? [];
 
@@ -1405,14 +1650,15 @@ public sealed class ToolProvisionServiceTests
             Host = new FakeHost(
                 distributionExists,
                 present ?? [],
-                declared.ToDictionary(tool => tool.Name, _ => InstalledVersion, StringComparer.Ordinal),
+                declared.ToDictionary(tool => tool.Name, _ => installed, StringComparer.Ordinal),
                 passwordlessSudo,
                 installFails,
                 kernel,
                 rootPassword ?? (_ => Credential),
                 checkNeverFinishes,
                 homeUnreadable,
-                transportStops);
+                transportStops,
+                offPath ?? []);
 
             _repository.WriteFile(
                 Path.Combine(".harness-config", "wslDistros", Distro, ".env"),
@@ -1497,6 +1743,12 @@ public sealed class ToolProvisionServiceTests
                 || Host.Has(HostId.Local, Path.GetFileNameWithoutExtension(call.Arg<string>())));
 
             var commands = new ScriptedHostCommands(Host.Respond);
+
+            if (shellProbe is not null)
+            {
+                commands.ShellProbe = shellProbe;
+            }
+
             var fileSystem = new PhysicalFileSystem(FilePermissionsFactory.Create());
             var secrets = new HostSecretsStore(fileSystem, permissions, platform);
             var addresses = new HostAddressResolver(new NameLookup(), TimeProvider.System, TimeSpan.Zero);

@@ -1,5 +1,6 @@
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Processes;
 
 namespace DssHarness.Core.Mutations;
 
@@ -25,7 +26,7 @@ internal sealed record ArmRunRequest
     public IReadOnlyDictionary<string, string?> Environment { get; init; } = new Dictionary<string, string?>();
 
     /// <summary>The directories it finds programs in beside its PATH, as the leg's host declares them.</summary>
-    public IReadOnlyList<string> AppendToPath { get; init; } = [];
+    public ProgramDirectories ProgramDirectories { get; init; } = ProgramDirectories.None;
 
     /// <summary>How long it may print nothing before it is stopped as hung: <c>defaults.stallSeconds</c>.</summary>
     public int StallSeconds { get; init; }
@@ -155,7 +156,7 @@ internal sealed class ArmTestRunner(PhaseRunner phaseRunner, IFileSystem fileSys
                         LogFile = log,
                         WorkingDirectory = request.WorkingDirectory,
                         Environment = request.Environment,
-                        AppendToPath = request.AppendToPath,
+                        ProgramDirectories = request.ProgramDirectories,
                         StallSeconds = request.StallSeconds,
                     },
                     linked.Token)

@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Text.RegularExpressions;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.Hosts;
@@ -65,9 +64,6 @@ public sealed class ToolProvisionService(
     /// host has, and a package manager that has to refresh its index first.
     /// </summary>
     public static readonly TimeSpan InstallBudget = TimeSpan.FromMinutes(30);
-
-    /// <summary>Longest a regular expression may spend reading a version out of a tool's own output.</summary>
-    private static readonly TimeSpan PatternBudget = TimeSpan.FromSeconds(2);
 
     private readonly IHarnessContextLoader _contextLoader = contextLoader;
     private readonly IHostConnector _connector = connector;
@@ -341,7 +337,7 @@ public sealed class ToolProvisionService(
             return OwnOr($"{where} could not be set up: {setUp.Failure}");
         }
 
-        var search = PathSearch.For(PhaseEnvironment.Layered(hostEnvironment, setUp.Environment), on.Searched);
+        var search = PathSearch.For(PhaseEnvironment.Layered(hostEnvironment, setUp.Environment), ProgramDirectories.After(on.Searched));
 
         return own => search.Find(_platform, _filePermissions, own.Program) switch
         {
@@ -387,7 +383,7 @@ public sealed class ToolProvisionService(
 
         // The installer is a shell script, and a Windows host has no shell to run it. Said plainly
         // rather than attempted: a half-run installer leaves a host worse than an untouched one.
-        if (connection.Shell == RemoteShell.Cmd)
+        if (RemoteCommandLine.IsWindows(connection.Shell))
         {
             return (
                 new ToolOutcome(Name, ToolState.Failed, null,
@@ -493,64 +489,158 @@ public sealed class ToolProvisionService(
             }
 
             return on.DryRun
-                ? (WouldRun(tool, install, found: null, update: false), connection)
+                ? await WouldRunAsync(on, connection, tool, install, found: null, update: false, cancellationToken).ConfigureAwait(false)
                 : await RunInstallAsync(on, connection, path, tool, install, update: false, cancellationToken).ConfigureAwait(false);
         }
 
-        var (version, problem) = await ProbeVersionAsync(connection, tool, cancellationToken).ConfigureAwait(false);
-
-        if (problem is not null)
+        if (ToolFloor.For(tool) is not { } floor)
         {
-            return (new ToolOutcome(tool.Name, ToolState.Unknown, version, problem), connection);
+            var (version, problem) = await ProbeVersionAsync(connection, tool, cancellationToken).ConfigureAwait(false);
+
+            return problem is not null
+                ? (new ToolOutcome(tool.Name, ToolState.Unknown, version, problem), connection)
+                : (new ToolOutcome(tool.Name, ToolState.AlreadyCurrent, version), connection);
         }
 
-        if (tool.MinVersion is not { Length: > 0 } minimum)
+        var search = await FloorSearchAsync(on, connection, path, floor, located, cancellationToken).ConfigureAwait(false);
+
+        if (Held(search) is { } held)
         {
-            return (new ToolOutcome(tool.Name, ToolState.AlreadyCurrent, version), connection);
+            return (held, connection);
         }
 
-        if (!SemanticVersion.TryParse(version, out var found) || !SemanticVersion.TryParse(minimum, out var least))
-        {
-            // Biased toward not knowing: reported rather than passed off as current, because a tool
-            // whose version could not be read is exactly the one whose age nobody can vouch for.
-            return (
-                new ToolOutcome(tool.Name, ToolState.Unknown, version, Uncomparable(version, minimum)),
-                connection);
-        }
-
-        if (SemanticVersion.Compare(found, least) >= 0)
-        {
-            return (new ToolOutcome(tool.Name, ToolState.AlreadyCurrent, version), connection);
-        }
+        var first = search.Probed[0];
 
         if (install is null)
         {
             return (
-                new ToolOutcome(tool.Name, ToolState.Outdated, version,
-                    $"it is {version}, and at least {minimum} is needed; it declares no install, so update it there by hand"),
+                new ToolOutcome(tool.Name, ToolState.Outdated, first.Version,
+                    $"{search.Refusal()}; it declares no install, so update it there by hand"),
                 connection);
         }
 
         return on.DryRun
-            ? (WouldRun(tool, install, version, update: true), connection)
+            ? await WouldRunAsync(on, connection, tool, install, first.Version, update: true, cancellationToken).ConfigureAwait(false)
             : await RunInstallAsync(on, connection, path, tool, install, update: true, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
+    /// Asks the copies of a tool with a minimum version their version, in the order a leg finds them, until one
+    /// meets it: the first copy - the one found - and, where it does not, every other the host has, as a leg's own
+    /// survey there does (see <see cref="ProgramFloors"/>), so that this command calls current exactly the copy a
+    /// leg will start, and updates a tool exactly when a leg would be refused over it.
+    /// </summary>
+    /// <remarks>
+    /// A developer environment's PATH is set up only on the machine it belongs to, and only the copy found on it
+    /// is asked.
+    /// </remarks>
+    private async Task<FloorSearch> FloorSearchAsync(
+        Provisioning on,
+        HostConnection connection,
+        ToolPath path,
+        ToolFloor floor,
+        ProgramLocation located,
+        CancellationToken cancellationToken)
+    {
+        Task<ProcessResult> Probe(string copy, CancellationToken token) => RunAsync(connection, copy, floor.Args, ProbeBudget, token);
+
+        // Started as every other probe of it is, and named by the file the host said it is, where it said one.
+        var first = connection.Spell(floor.Name);
+        var head = floor.Judge(located.Path ?? first, await Probe(first, cancellationToken).ConfigureAwait(false), connection);
+
+        if (head.Meets || path.DeveloperEnvironment is not null)
+        {
+            return new FloorSearch(floor, [head]);
+        }
+
+        // The copy just asked is no other, by its path or by the name it was asked by: a copy under 'Program Files'
+        // that no command line can name was asked all the same, and is no place left unlooked.
+        var copies = await _programs.CopiesAsync(connection, floor.Name, on.Searched, ProbeBudget, cancellationToken).ConfigureAwait(false);
+        var tail = await floor.SearchAsync(copies.Besides([first, .. located.Path is { } at ? [at] : Array.Empty<string>()]), Probe, connection, cancellationToken)
+            .ConfigureAwait(false);
+
+        return tail with { Probed = [head, .. tail.Probed] };
+    }
+
+    /// <summary>
+    /// What a tool held to its minimum version is reported as where that settles it - a copy meets it, or no copy
+    /// could be shown to - and <see langword="null"/> where it is <see cref="FloorSearch.Below"/>, which an install
+    /// settles.
+    /// </summary>
+    /// <remarks>
+    /// Biased toward not knowing, by the rule a leg's own survey holds it to: a tool no copy of which was shown to
+    /// meet the minimum, where a copy's version could not be read or a place could not be looked in, is reported
+    /// rather than passed off as current, because it is exactly the one whose age nobody can vouch for, and not
+    /// updated either, because nothing says it is behind - a leg there is turned away as not known to have it, not
+    /// as missing it. A copy that meets the minimum behind one that does not is named, with the copy it is started
+    /// ahead of, since that is the one a terminal on the host starts.
+    /// </remarks>
+    private static ToolOutcome? Held(FloorSearch search, string? prefix = null)
+        => search.Chosen is { } chosen ? new ToolOutcome(search.Floor.Name, ToolState.AlreadyCurrent, chosen.Version, search.StartedAhead())
+            : search.Below ? null
+            : new ToolOutcome(search.Floor.Name, ToolState.Unknown, search.Probed[0].Version, prefix + search.Unestablished());
+
+    /// <summary>
     /// What a dry run reports for a tool it would install or update: the command, exactly as the
-    /// configuration makes it, <c>sudo</c> and all, and never run.
+    /// configuration makes it, <c>sudo</c> and all, its program spelt as the install would spell it,
+    /// and never run.
     /// </summary>
     /// <remarks>
     /// Nothing is asked of the host's superuser either - not a password, not whether one is needed -
     /// because a dry run that stopped to ask for a password would be the install it says it is not.
+    /// Where the program is, is looked up, as every tool's own place is: a lookup changes nothing there.
     /// </remarks>
-    private static ToolOutcome WouldRun(ToolConfig tool, ToolInstall install, string? found, bool update)
+    private async Task<(ToolOutcome Outcome, HostConnection Connection)> WouldRunAsync(
+        Provisioning on,
+        HostConnection connection,
+        ToolConfig tool,
+        ToolInstall install,
+        string? found,
+        bool update,
+        CancellationToken cancellationToken)
     {
-        var state = update ? ToolState.WouldUpdate : ToolState.WouldInstall;
+        if (ToolCommands.For(install, update) is not { Count: > 0 } command)
+        {
+            return (new ToolOutcome(tool.Name, ToolState.Failed, found, NoCommand), connection);
+        }
 
-        return ToolCommands.For(install, update) is { Count: > 0 } command
-            ? new ToolOutcome(tool.Name, state, found, $"would run '{string.Join(' ', command)}'")
-            : new ToolOutcome(tool.Name, ToolState.Failed, found, NoCommand);
+        var (spelled, measured) = await SpelledAsync(on, connection, command, cancellationToken).ConfigureAwait(false);
+
+        return (new ToolOutcome(tool.Name, update ? ToolState.WouldUpdate : ToolState.WouldInstall, found, $"would run '{string.Join(' ', spelled)}'"), measured);
+    }
+
+    /// <summary>
+    /// <paramref name="command"/> with the program it runs spelt as it has to be to start on the host: by the path
+    /// it was found at where the PATH of a command run there does not name it, as every other program the harness
+    /// runs there is.
+    /// </summary>
+    /// <remarks>
+    /// The survey looks for a program in the searched directories as well as on the PATH, and the install it
+    /// leads to has to start the one it found. Measured on a Mac reached over ssh: the survey found brew in
+    /// <c>/opt/homebrew/bin</c>, said it was there, and the install then ran <c>brew</c> by its name in a shell
+    /// whose PATH lacks that directory, and failed with "command not found". One found nowhere, or whose place
+    /// could not be established, is run as written, and the host says what became of it: a lookup that missed
+    /// a program the host would have started - an alias Windows resolves itself - must not stop an install that
+    /// would have run. A command run through <c>sudo</c> is left as written: sudo looks its program up on a PATH
+    /// of its own, which is not the one this looks on.
+    /// </remarks>
+    /// <returns>The command to run, and the connection, carrying where the program is.</returns>
+    private async Task<(IReadOnlyList<string> Command, HostConnection Connection)> SpelledAsync(
+        Provisioning on,
+        HostConnection connection,
+        IReadOnlyList<string> command,
+        CancellationToken cancellationToken)
+    {
+        var program = command[0];
+
+        if (ProcessRunner.IsPath(program) || string.Equals(program, "sudo", StringComparison.Ordinal))
+        {
+            return (command, connection);
+        }
+
+        connection = await _programs.ResolveAsync(connection, [program], on.Searched, ProbeBudget, cancellationToken).ConfigureAwait(false);
+
+        return ([connection.Spell(program), .. command.Skip(1)], connection);
     }
 
     /// <summary>Why an install entry cannot be run, whether or not this run would run it.</summary>
@@ -575,7 +665,7 @@ public sealed class ToolProvisionService(
         // at what it left there, rather than running it again for what the first run already did.
         if (!on.Installs.TryGetValue(tool.Name, out var ended))
         {
-            ended = await InstallAsync(on, connection, tool, install, update, cancellationToken).ConfigureAwait(false);
+            (ended, connection) = await InstallAsync(on, connection, tool, install, update, cancellationToken).ConfigureAwait(false);
             on.Installs[tool.Name] = ended;
         }
 
@@ -608,48 +698,44 @@ public sealed class ToolProvisionService(
                 connection);
         }
 
-        var (version, problem) = await ProbeVersionAsync(connection, tool, cancellationToken).ConfigureAwait(false);
+        var done = update ? ToolState.Updated : ToolState.Installed;
 
-        if (problem is not null)
+        if (ToolFloor.For(tool) is not { } floor)
         {
+            var (version, problem) = await ProbeVersionAsync(connection, tool, cancellationToken).ConfigureAwait(false);
+
             // The install reported success and the tool is there; what nobody can say is which
             // version arrived. Reported as unknown rather than installed: "it is current" is a claim
             // about a number this run never read.
-            return (new ToolOutcome(tool.Name, ToolState.Unknown, version, problem), connection);
+            return problem is not null
+                ? (new ToolOutcome(tool.Name, ToolState.Unknown, version, problem), connection)
+                : (new ToolOutcome(tool.Name, done, version), connection);
         }
 
-        // The same comparison the probe makes before installing. An installer can report success and
-        // leave an older version in place — a package pinned by a distribution, a cached artefact, a
-        // second copy earlier on the PATH — and reporting that as up to date is how a leg runs for
-        // weeks against a toolchain the configuration says it is not using.
-        if (tool.MinVersion is { Length: > 0 } minimum)
+        // The same search the probe makes before installing. An installer can report success and leave
+        // an older version in place — a package pinned by a distribution, a cached artefact, a second
+        // copy earlier on the PATH — and reporting that as up to date is how a leg runs for weeks against
+        // a toolchain the configuration says it is not using.
+        var search = await FloorSearchAsync(on, connection, path, floor, located, cancellationToken).ConfigureAwait(false);
+
+        return Held(search, prefix: "its install reported success, and ") switch
         {
-            if (!SemanticVersion.TryParse(version, out var found) || !SemanticVersion.TryParse(minimum, out var least))
-            {
-                return (
-                    new ToolOutcome(tool.Name, ToolState.Unknown, version,
-                        $"its install reported success, and '{version ?? string.Empty}' there cannot be compared "
-                        + $"with the minVersion '{minimum}'"),
-                    connection);
-            }
-
-            if (SemanticVersion.Compare(found, least) < 0)
-            {
-                return (
-                    new ToolOutcome(tool.Name, ToolState.Failed, version,
-                        $"its install reported success, and it is still {version}, where at least {minimum} is needed"),
-                    connection);
-            }
-        }
-
-        return (new ToolOutcome(tool.Name, update ? ToolState.Updated : ToolState.Installed, version), connection);
+            { State: ToolState.AlreadyCurrent } current => (current with { State = done }, connection),
+            { } unknown => (unknown, connection),
+            null => (
+                new ToolOutcome(tool.Name, ToolState.Failed, search.Probed[0].Version, $"its install reported success, and {search.Refusal()}"),
+                connection),
+        };
     }
 
     /// <summary>
     /// Runs one tool's install command on the host, as a superuser where it asks for one.
     /// </summary>
-    /// <returns><see langword="null"/> once it reported success, and what the tool is reported as otherwise.</returns>
-    private async Task<ToolOutcome?> InstallAsync(
+    /// <returns>
+    /// <see langword="null"/> once it reported success, and what the tool is reported as otherwise; and the
+    /// connection, carrying where the program the install runs is.
+    /// </returns>
+    private async Task<(ToolOutcome? Outcome, HostConnection Connection)> InstallAsync(
         Provisioning on,
         HostConnection connection,
         ToolConfig tool,
@@ -657,16 +743,18 @@ public sealed class ToolProvisionService(
         bool update,
         CancellationToken cancellationToken)
     {
-        if (ToolCommands.For(install, update) is not { Count: > 0 } command)
+        if (ToolCommands.For(install, update) is not { Count: > 0 } declared)
         {
-            return new ToolOutcome(tool.Name, ToolState.Failed, null, NoCommand);
+            return (new ToolOutcome(tool.Name, ToolState.Failed, null, NoCommand), connection);
         }
+
+        (var command, connection) = await SpelledAsync(on, connection, declared, cancellationToken).ConfigureAwait(false);
 
         var privileged = await on.Superuser.PrepareAsync(this, connection, command, cancellationToken).ConfigureAwait(false);
 
         if (privileged.Problem is { } refused)
         {
-            return new ToolOutcome(tool.Name, ToolState.Failed, null, refused);
+            return (new ToolOutcome(tool.Name, ToolState.Failed, null, refused), connection);
         }
 
         _output.Info(CommandName, $"{on.Host}: {(update ? "updating" : "installing")} '{tool.Name}' with {privileged.Command[0]}");
@@ -680,9 +768,9 @@ public sealed class ToolProvisionService(
             privileged.Input).ConfigureAwait(false);
 
         return result.Succeeded
-            ? null
-            : new ToolOutcome(tool.Name, ToolState.Failed, null,
-                on.Superuser.Hide(HostProbes.Failure($"{(update ? "updating" : "installing")} '{tool.Name}' there failed", result, connection)));
+            ? (null, connection)
+            : (new ToolOutcome(tool.Name, ToolState.Failed, null,
+                on.Superuser.Hide(HostProbes.Failure($"{(update ? "updating" : "installing")} '{tool.Name}' there failed", result, connection))), connection);
     }
 
     /// <summary>Reads a tool's version the way its own configuration says to read it.</summary>
@@ -700,32 +788,7 @@ public sealed class ToolProvisionService(
         var result = await RunAsync(connection, connection.Spell(tool.Name), probe.Args, ProbeBudget, cancellationToken)
             .ConfigureAwait(false);
 
-        if (!result.Succeeded)
-        {
-            return (null, HostProbes.Failure($"'{tool.Name}' would not report its version there", result, connection));
-        }
-
-        var text = result.StandardOutput.Length > 0 ? result.StandardOutput : result.StandardError;
-
-        if (probe.Regex is not { Length: > 0 } pattern)
-        {
-            // With no pattern, the last word of the first line is the version a tool usually prints:
-            // "ninja version 1.12.1", "git version 2.47.0".
-            return (text.Split('\n').FirstOrDefault()?.Trim().Split(' ').LastOrDefault(), null);
-        }
-
-        try
-        {
-            var match = Regex.Match(text, pattern, RegexOptions.CultureInvariant, PatternBudget);
-
-            return match.Success
-                ? (match.Groups.Count > 1 ? match.Groups[1].Value : match.Value, null)
-                : (null, $"the probe regex of '{tool.Name}' matched nothing in what it printed: {HostProbes.Excerpt(HostProbes.AsConfigured(text, connection))}");
-        }
-        catch (Exception ex) when (ex is ArgumentException or RegexMatchTimeoutException)
-        {
-            return (null, $"the probe regex of '{tool.Name}' could not be used: {ex.Message}");
-        }
+        return ToolVersion.Of(tool.Name, probe.Regex, result, connection);
     }
 
     /// <summary>
@@ -748,7 +811,7 @@ public sealed class ToolProvisionService(
             return measured;
         }
 
-        if (connection.Shell == RemoteShell.Cmd)
+        if (RemoteCommandLine.IsWindows(connection.Shell))
         {
             return PlatformNames.Windows;
         }
@@ -763,42 +826,9 @@ public sealed class ToolProvisionService(
             return null;
         }
 
-        // uname is on every POSIX system, so a host that answered without it is a Windows one running
-        // PowerShell, which is the only other shell an ssh server here hands a command to. A host that
-        // has it and names a system this build does not know is not that, and is not guessed at.
+        // uname is on every POSIX system, so a host that answered without it is a Windows one. A host
+        // that has it and names a system this build does not know is not that, and is not guessed at.
         return uname.Succeeded ? PlatformNames.ForKernel(uname.TrimmedOutput) : PlatformNames.Windows;
-    }
-
-    /// <summary>
-    /// Why a version and a minimum could not be compared, naming whichever of them failed to parse.
-    /// </summary>
-    /// <remarks>
-    /// The two fail for unrelated reasons and have unrelated remedies: what the host reported is
-    /// the probe's business, and the minimum is a string in this repository's own configuration.
-    /// One message for both sent every reader of a two-component minVersion — which this parser
-    /// refuses, because the field is a semantic version — to adjust a probe regex that had just
-    /// worked perfectly.
-    /// </remarks>
-    /// <param name="version">What the probe read from the host, if anything.</param>
-    /// <param name="minimum">The configured minVersion.</param>
-    private static string Uncomparable(string? version, string? minimum)
-    {
-        var foundParses = SemanticVersion.TryParse(version, out _);
-        var leastParses = SemanticVersion.TryParse(minimum, out _);
-
-        return (foundParses, leastParses) switch
-        {
-            (true, false) =>
-                $"the minVersion '{minimum}' is not a version this can compare; "
-                + "write it as major.minor.patch, such as '1.2.0'",
-            (false, true) =>
-                $"'{version ?? string.Empty}' is not a version this can compare with the minVersion "
-                + $"'{minimum}'; give the tool's probe a regex whose first group is the version",
-            _ =>
-                $"neither '{version ?? string.Empty}' nor the minVersion '{minimum}' is a version this "
-                + "can compare; the minVersion is written as major.minor.patch, and the probe's regex "
-                + "captures the version in its first group",
-        };
     }
 
     /// <summary>The install entry for one platform, falling back to the one declared for <c>all</c>.</summary>
@@ -839,11 +869,13 @@ public sealed class ToolProvisionService(
                 },
                 cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is ArgumentException or ExecutableNotFoundException)
+        catch (Exception ex) when (ex is ArgumentException or ProgramStartException)
         {
-            // A token no shell reads literally, or a program of this machine's own that is not
-            // installed: reported as what the command did, because either way the program never ran.
-            return new ProcessResult(-1, string.Empty, ex.Message, TimeSpan.Zero, TimedOut: false);
+            // A token no shell reads literally, or a program of this machine's own that is not installed
+            // or would not start - a copy that is no program for it, or may not be run: reported as what
+            // the command did, because either way the program never ran. A transport that would not start
+            // is the host unreached, which the host command runner says itself.
+            return ProcessResult.NotRun(ex.Message);
         }
     }
 

@@ -32,7 +32,7 @@ public sealed class HostAgentService(
     EmulatorProbe emulatorProbe,
     DeveloperEnvironmentProbe developerEnvironmentProbe,
     IFileSystem fileSystem,
-    LocalProgramResolver programs,
+    ProgramFloors programFloors,
     KeepAwake keepAwake,
     HoldAwakeStore holds,
     IDetachedProcessLauncher launcher,
@@ -45,7 +45,7 @@ public sealed class HostAgentService(
     private readonly EmulatorProbe _emulatorProbe = emulatorProbe;
     private readonly DeveloperEnvironmentProbe _developerEnvironmentProbe = developerEnvironmentProbe;
     private readonly IFileSystem _fileSystem = fileSystem;
-    private readonly LocalProgramResolver _programs = programs;
+    private readonly ProgramFloors _programFloors = programFloors;
     private readonly KeepAwake _keepAwake = keepAwake;
     private readonly HoldAwakeStore _holds = holds;
     private readonly IDetachedProcessLauncher _launcher = launcher;
@@ -171,8 +171,8 @@ public sealed class HostAgentService(
         {
             // Marked as a run request's output is, and for the same reason: an inspection that fails quotes
             // what the host said into that host's reason, which reaches the reader, --json and every leg
-            // reported unavailable. Without the marker that quotation is whatever the login shell printed
-            // first. A request from a build that sends no nonce is answered all the same, unmarked.
+            // reported unavailable. Without the marker that quotation is whatever reached the streams ahead
+            // of the agent (see HostAgentProtocol.StartedLine). A request from a build that sends no nonce is answered all the same, unmarked.
             if (!string.IsNullOrWhiteSpace(request.Nonce))
             {
                 await WriteStartedAsync(output, error, request.Nonce).ConfigureAwait(false);
@@ -183,6 +183,7 @@ public sealed class HostAgentService(
                     request.DeveloperEnvironments,
                     request.Programs,
                     request.ToolSearchDirectories,
+                    request.Floors,
                     new RoomQuestions(request.SpaceAt, request.Builds),
                     abandoned)
                 .ConfigureAwait(false);
@@ -331,6 +332,7 @@ public sealed class HostAgentService(
     /// <param name="developerEnvironments">The developer environments to look for, by name.</param>
     /// <param name="programs">The programs to find, the way a leg here will start them.</param>
     /// <param name="searchDirectories">The repository's <c>toolSearchDirectories</c>, of which this machine takes its own platform's.</param>
+    /// <param name="floors">The declared tools' minimum versions, of which this machine holds the copies it finds to its own platform's.</param>
     /// <param name="room">Where to measure the room here, and which build directories to measure and read the record of.</param>
     /// <param name="cancellationToken">Stops the checks.</param>
     public async Task<HostAgentInfo> DescribeAsync(
@@ -338,6 +340,7 @@ public sealed class HostAgentService(
         IReadOnlyDictionary<string, DeveloperEnvironmentConfig> developerEnvironments,
         IReadOnlyList<string> programs,
         IReadOnlyDictionary<string, List<string>> searchDirectories,
+        IReadOnlyList<Tools.ToolFloor> floors,
         RoomQuestions room,
         CancellationToken cancellationToken = default)
     {
@@ -345,6 +348,7 @@ public sealed class HostAgentService(
         ArgumentNullException.ThrowIfNull(developerEnvironments);
         ArgumentNullException.ThrowIfNull(programs);
         ArgumentNullException.ThrowIfNull(searchDirectories);
+        ArgumentNullException.ThrowIfNull(floors);
         ArgumentNullException.ThrowIfNull(room);
 
         // By the function the leg's own run uses, on the machine that will run it. Answered from
@@ -352,9 +356,11 @@ public sealed class HostAgentService(
         // opinion is how a survey came to call a leg runnable whose build tool could not be found.
         // The emulators' own programs are found by the same search, in the same pass, so a launcher
         // installed off the PATH is found - and handed on - exactly as a build tool would be.
-        var found = _programs.Resolve(
+        var found = await _programFloors.ResolveAsync(
             programs.Concat(emulators.Values.SelectMany(EmulatorProbe.ProgramsOf)),
-            ToolSearchDirectories.For(searchDirectories, _platform.PlatformKey));
+            ToolSearchDirectories.For(searchDirectories, _platform.PlatformKey),
+            floors,
+            cancellationToken).ConfigureAwait(false);
 
         var checks = new Dictionary<string, EmulatorCheck>(StringComparer.OrdinalIgnoreCase);
 
@@ -387,7 +393,8 @@ public sealed class HostAgentService(
             Emulators = checks,
             DeveloperEnvironments = environments,
             Programs = [.. found.Found.Values],
-            ProgramDirectories = [.. found.Directories],
+            AppendedDirectories = [.. found.Directories.Appended],
+            RaisedDirectories = [.. found.Directories.Raised],
             Space = space,
             SpaceUnmeasured = unmeasured,
             Builds = [.. room.Builds.Distinct(StringComparer.Ordinal).Select(BuildRoom)],

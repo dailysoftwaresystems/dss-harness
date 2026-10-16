@@ -259,7 +259,7 @@ public sealed class HostExecServiceTests
             {
                 KeepAwake = ["caffeinate", "-dimsu", "-w", "{pid}"],
                 KeepAwakeEnvironment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["HOMEBREW_PREFIX"] = "/opt/homebrew" },
-                ProgramDirectories = ["/opt/homebrew/bin"],
+                ProgramDirectories = new ProgramDirectories(["/opt/homebrew/opt/python@3.13/bin"], ["/opt/homebrew/bin"]),
             },
             respond: (_, command) =>
             {
@@ -271,7 +271,7 @@ public sealed class HostExecServiceTests
 
         Assert.Equal(["caffeinate", "-dimsu", "-w", "{pid}"], asked!.KeepAwake);
         Assert.Equal("/opt/homebrew", asked.KeepAwakeEnvironment["HOMEBREW_PREFIX"]);
-        Assert.Equal(["/opt/homebrew/bin"], asked.KeepAwakeDirectories);
+        Assert.Equal(["/opt/homebrew/opt/python@3.13/bin", "/opt/homebrew/bin"], asked.KeepAwakeDirectories);
     }
 
     /// <summary>

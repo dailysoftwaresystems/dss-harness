@@ -3118,7 +3118,7 @@ public sealed partial class CliEndToEndTests
                     FileName = programs["cmake"]!,
                     Arguments = ["--fresh", "-S", temp.Path, "-B", directory, "-G", "Ninja", $"-DCMAKE_MAKE_PROGRAM={programs["ninja"]}", "-DFAIL=ON"],
                     Environment = new Dictionary<string, string?>(StringComparer.Ordinal) { ["CC"] = cCompiler, ["CXX"] = cxx },
-                    AppendToPath = [.. programs.Values.Select(found => Path.GetDirectoryName(found)!).Distinct(StringComparer.Ordinal)],
+                    ProgramDirectories = ProgramDirectories.After([.. programs.Values.Select(found => Path.GetDirectoryName(found)!).Distinct(StringComparer.Ordinal)]),
                 },
                 token);
 

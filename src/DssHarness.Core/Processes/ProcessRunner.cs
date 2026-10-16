@@ -125,16 +125,14 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             }
         }
 
-        if (request.AppendToPath.Count > 0)
+        if (!request.ProgramDirectories.IsEmpty)
         {
             var current = startInfo.Environment.TryGetValue(PathVariable, out var inherited) ? inherited : null;
-            var appended = string.Join(
-                Path.PathSeparator,
-                new[] { current }.Concat(request.AppendToPath).Where(part => !string.IsNullOrEmpty(part)));
+            var around = request.ProgramDirectories.Around(current, Path.PathSeparator);
 
             foreach (var name in Spellings(startInfo.Environment, PathVariable))
             {
-                startInfo.Environment[name] = appended;
+                startInfo.Environment[name] = around;
             }
         }
 
@@ -391,24 +389,29 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// is looked in.
     /// </summary>
     internal static string? ProgramOnPath(string name, string? pathVariable, bool windows, Func<string, bool> isExecutable)
+        => ProgramsOnPath(name, pathVariable, windows, isExecutable).FirstOrDefault();
+
+    /// <summary>
+    /// Every file that would start as <paramref name="name"/> in the directories <paramref name="pathVariable"/>
+    /// lists, in the order it lists them: the first is the one <see cref="ProgramOnPath"/> finds.
+    /// </summary>
+    internal static IEnumerable<string> ProgramsOnPath(string name, string? pathVariable, bool windows, Func<string, bool> isExecutable)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         ArgumentNullException.ThrowIfNull(isExecutable);
 
-        if (string.IsNullOrEmpty(pathVariable))
-        {
-            return null;
-        }
+        return Found(pathVariable ?? string.Empty);
 
-        foreach (var directory in pathVariable.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        IEnumerable<string> Found(string path)
         {
-            if (ProgramInDirectory(name, directory.Trim('"'), windows, isExecutable) is { } found)
+            foreach (var directory in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
             {
-                return found;
+                if (ProgramInDirectory(name, directory.Trim('"'), windows, isExecutable) is { } found)
+                {
+                    yield return found;
+                }
             }
         }
-
-        return null;
     }
 
     /// <summary>

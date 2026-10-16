@@ -147,13 +147,13 @@ public sealed class EmulatorProbeTests
             .Returns(new ProcessResult(0, "[aarch64]", string.Empty, TimeSpan.Zero, TimedOut: false));
 
         var emulator = Emulator(prints: "aarch64", pattern: @"^\[aarch64\]$");
-        var found = new ProgramSearch(Found(emulator).Found, [Path.Combine(TestHost.TemporaryRoot, "tools")]);
+        var found = new ProgramSearch(Found(emulator).Found, ProgramDirectories.After([Path.Combine(TestHost.TemporaryRoot, "tools")]));
 
         var check = await new EmulatorProbe(Platform("linux", "x86_64"), runner, FileSystem())
             .CheckAsync(emulator, found, TestContext.Current.CancellationToken);
 
         Assert.True(check.Available, check.Reason);
-        Assert.Equal(found.Directories, started?.AppendToPath);
+        Assert.Equal(found.Directories, started?.ProgramDirectories);
     }
 
     [Fact]
@@ -165,7 +165,7 @@ public sealed class EmulatorProbeTests
             {
                 ["qemu-x86_64"] = new("qemu-x86_64", ProgramFound.Unreadable, Reason: "the home directory is not known here"),
             },
-            []);
+            ProgramDirectories.None);
 
         var check = await Probe().CheckAsync(emulator, found, TestContext.Current.CancellationToken);
 
@@ -175,13 +175,17 @@ public sealed class EmulatorProbeTests
 
     /// <summary>
     /// The program a witness starts, named by name, is read from the search as a requirement is: one
-    /// nobody could look for everywhere is unknown, and one looked for everywhere and not found is
-    /// missing. Neither is started: started anyway, one nobody could look for everywhere would be
-    /// reported as not found.
+    /// nobody could look for everywhere is unknown, one looked for everywhere and not found is
+    /// missing, and one held below a declared tool's minimum version is said as its search says it.
+    /// None is started: started anyway, one nobody could look for everywhere would be reported as not
+    /// found, and one below its minimum would answer for a copy a leg is not to start.
     /// </summary>
     [Theory]
     [InlineData(ProgramFound.Unreadable, "whether 'qemu-aarch64' is there could not be established: the home directory is not known here")]
     [InlineData(ProgramFound.Nowhere, "qemu-aarch64 is missing")]
+    [InlineData(ProgramFound.BelowFloor, "the home directory is not known here")]
+    [InlineData(ProgramFound.FloorShadowed, "the home directory is not known here")]
+    [InlineData(ProgramFound.FloorUnknown, "the home directory is not known here")]
     public async Task AWitnessProgramTheSearchDidNotFind_IsNeverStarted(ProgramFound found, string reason)
     {
         var runner = Substitute.For<IProcessRunner>();
@@ -195,9 +199,9 @@ public sealed class EmulatorProbeTests
         var search = new ProgramSearch(
             new Dictionary<string, ProgramLocation>(StringComparer.Ordinal)
             {
-                ["qemu-aarch64"] = new("qemu-aarch64", found, Reason: found == ProgramFound.Unreadable ? "the home directory is not known here" : null),
+                ["qemu-aarch64"] = new("qemu-aarch64", found, Reason: found == ProgramFound.Nowhere ? null : "the home directory is not known here"),
             },
-            []);
+            ProgramDirectories.None);
 
         var check = await new EmulatorProbe(Platform("linux", "x86_64"), runner, FileSystem())
             .CheckAsync(emulator, search, TestContext.Current.CancellationToken);
@@ -229,7 +233,7 @@ public sealed class EmulatorProbeTests
         };
         var search = new ProgramSearch(
             new Dictionary<string, ProgramLocation>(StringComparer.Ordinal) { ["qemu-aarch64"] = new("qemu-aarch64", ProgramFound.Nowhere) },
-            []);
+            ProgramDirectories.None);
 
         var check = await new EmulatorProbe(Platform("linux", "x86_64"), runner, FileSystem())
             .CheckAsync(emulator, search, TestContext.Current.CancellationToken);
@@ -242,7 +246,7 @@ public sealed class EmulatorProbeTests
     public async Task ARequirementTheSearchWasNotGiven_IsADefect_NotAMissingProgram()
     {
         var emulator = Emulator(prints: "aarch64", pattern: "x", requires: ["qemu-x86_64"]);
-        var nothing = new ProgramSearch(new Dictionary<string, ProgramLocation>(StringComparer.Ordinal), []);
+        var nothing = new ProgramSearch(new Dictionary<string, ProgramLocation>(StringComparer.Ordinal), ProgramDirectories.None);
 
         await Assert.ThrowsAsync<ArgumentException>(
             () => Probe().CheckAsync(emulator, nothing, TestContext.Current.CancellationToken));

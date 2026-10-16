@@ -96,7 +96,7 @@ public sealed class CompilerVersionProbeTests
             new IdentifiedCompiler(language, "MSVC", "19.51.36260.0", program, ["--launched"], msvc),
             scratch,
             environment,
-            [temp.Combine("tools")],
+            ProgramDirectories.After([temp.Combine("tools")]),
             TestContext.Current.CancellationToken);
 
         var request = Assert.Single(runner.Requests);
@@ -105,7 +105,7 @@ public sealed class CompilerVersionProbeTests
         Assert.Equal(program, request.FileName);
         Assert.Equal(["--launched", .. options.Split(' '), source], request.Arguments);
         Assert.Same(environment, request.Environment);
-        Assert.Equal([temp.Combine("tools")], request.AppendToPath);
+        Assert.Equal([temp.Combine("tools")], request.ProgramDirectories.Appended);
         Assert.StartsWith("dssharness_compiler_version _MSC_VER ", File.ReadAllText(source), StringComparison.Ordinal);
     }
 
@@ -120,7 +120,7 @@ public sealed class CompilerVersionProbeTests
             new IdentifiedCompiler("CXX", "GNU", "13.2.0", temp.Combine("gone", "g++"), [], MsvcOptions: false),
             temp.Combine("scratch"),
             new Dictionary<string, string?>(),
-            [],
+            ProgramDirectories.None,
             TestContext.Current.CancellationToken);
 
         Assert.NotNull(answer);
@@ -150,7 +150,7 @@ public sealed class CompilerVersionProbeTests
             new IdentifiedCompiler("C", "GNU", "13.2.0", program, [], MsvcOptions: false),
             temp.Combine("scratch"),
             new Dictionary<string, string?>(),
-            [],
+            ProgramDirectories.None,
             TestContext.Current.CancellationToken);
 
         Assert.NotNull(answer);
@@ -175,7 +175,7 @@ public sealed class CompilerVersionProbeTests
             new IdentifiedCompiler("CXX", id, version, temp.WriteFile("icx", "a compiler"), [], MsvcOptions: false),
             temp.Combine("scratch"),
             new Dictionary<string, string?>(),
-            [],
+            ProgramDirectories.None,
             TestContext.Current.CancellationToken);
 
         Assert.Null(answer);
@@ -199,7 +199,7 @@ public sealed class CompilerVersionProbeTests
             new IdentifiedCompiler("C", "GNU", version, program.Length > 0 ? temp.WriteFile(program, "a compiler") : program, [], MsvcOptions: false),
             temp.Combine("scratch"),
             new Dictionary<string, string?>(),
-            [],
+            ProgramDirectories.None,
             TestContext.Current.CancellationToken);
 
         Assert.NotNull(answer);

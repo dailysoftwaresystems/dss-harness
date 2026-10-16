@@ -57,15 +57,17 @@ public enum LegVerdict
 
     /// <summary>
     /// No host can take the leg, its host or its tree could not be reached, whether a program it
-    /// starts is there could not be established, or git could not answer in its tree. A warning: a
+    /// starts is there - or whether a copy of a declared tool is at least its minVersion - could not be
+    /// established, or git could not answer in its tree. A warning: a
     /// switched-off machine is normal. Of a sweep: no worker fits the room left or the path limit, and
     /// every arm of the leg is skipped with it.
     /// </summary>
     SkippedUnavailable,
 
     /// <summary>
-    /// A required tool is not installed. A warning, and named: executables are resolved before a
-    /// leg starts so this is never a failure halfway through a build.
+    /// A required tool is not installed, or no copy of a declared one a leg would start is at least the
+    /// minVersion it is declared with. A warning, and named: executables are resolved, and held to their
+    /// minimum versions, before a leg starts so this is never a failure halfway through a build.
     /// </summary>
     SkippedToolMissing,
 

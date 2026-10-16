@@ -2097,6 +2097,7 @@ public sealed class MutationServiceTests
             trees ?? new KnownTrees(),
             new KeepAwake(new HeldProcesses(), harness.Output),
             new DeveloperEnvironmentProvider(harness.Platform, processes, harness.FileSystem, harness.Output),
+            HostDoubles.Floors(harness.Platform, processes, harness.FilePermissions),
             harness.GitClient,
             harness.PathBudget,
             harness.FileSystem,

@@ -83,9 +83,10 @@ public sealed record HostReport
 
     /// <summary>
     /// The directories a program asked for by name was found in there, on the PATH or off it, in the
-    /// order the search looked. A leg run there appends them to the PATH of every process it starts.
+    /// order the search looked: the ones a tool's minimum version raised, which a leg run there puts ahead of
+    /// the PATH of every process it starts, and every other, which it appends to it.
     /// </summary>
-    public IReadOnlyList<string> ProgramDirectories { get; init; } = [];
+    public Processes.ProgramDirectories ProgramDirectories { get; init; } = Processes.ProgramDirectories.None;
 
     /// <summary>What inspection changed on the host, such as installing DssHarness.</summary>
     public IReadOnlyList<string> Actions { get; init; } = [];
@@ -171,12 +172,14 @@ public sealed record RoomQuestions(string? SpaceAt, IReadOnlyList<string> Builds
 /// <param name="DeveloperEnvironments">The developer environments to look for, by name.</param>
 /// <param name="Programs">The programs to find.</param>
 /// <param name="SearchDirectories">The repository's <c>toolSearchDirectories</c>.</param>
+/// <param name="Floors">The declared tools' minimum versions.</param>
 /// <param name="Room">Where to measure the room, and which build directories.</param>
 internal sealed record HostQuestions(
     IReadOnlyDictionary<string, EmulatorConfig> Emulators,
     IReadOnlyDictionary<string, DeveloperEnvironmentConfig> DeveloperEnvironments,
     IReadOnlyList<string> Programs,
     IReadOnlyDictionary<string, List<string>> SearchDirectories,
+    IReadOnlyList<ToolFloor> Floors,
     RoomQuestions Room);
 
 /// <inheritdoc cref="IHostInspector"/>
@@ -218,7 +221,13 @@ public sealed class HostInspector(
         ArgumentNullException.ThrowIfNull(developerEnvironments);
         ArgumentNullException.ThrowIfNull(programs);
 
-        var questions = new HostQuestions(emulators, developerEnvironments, programs, context.Config.ToolSearchDirectories, room ?? RoomQuestions.None);
+        var questions = new HostQuestions(
+            emulators,
+            developerEnvironments,
+            programs,
+            context.Config.ToolSearchDirectories,
+            ToolFloor.Of(context.Config.Tools),
+            room ?? RoomQuestions.None);
 
         return host.Kind switch
         {
@@ -256,7 +265,7 @@ public sealed class HostInspector(
     private async Task<HostReport> InspectLocalAsync(HostQuestions questions, CancellationToken cancellationToken)
     {
         var info = await _agent
-            .DescribeAsync(questions.Emulators, questions.DeveloperEnvironments, questions.Programs, questions.SearchDirectories, questions.Room, cancellationToken)
+            .DescribeAsync(questions.Emulators, questions.DeveloperEnvironments, questions.Programs, questions.SearchDirectories, questions.Floors, questions.Room, cancellationToken)
             .ConfigureAwait(false);
 
         return Answered(new HostReport { Host = HostId.Local }, info, session: null);
@@ -483,7 +492,8 @@ public sealed class HostInspector(
         var shownTool = $"~/{toolPath.Replace('\\', '/')}";
 
         // Carried so the host marks where its own answer begins: an inspection that fails quotes what the
-        // host said into this host's reason, and unmarked that quotation is whatever its login shell printed.
+        // host said into this host's reason, and unmarked that quotation is whatever reached its streams ahead of
+        // the agent (see HostAgentProtocol.StartedLine).
         var nonce = HostAgentProtocol.NewNonce();
 
         var request = new HostAgentRequest
@@ -496,13 +506,15 @@ public sealed class HostInspector(
             ToolSearchDirectories = new Dictionary<string, List<string>>(
                 questions.SearchDirectories,
                 StringComparer.OrdinalIgnoreCase),
+            Floors = [.. questions.Floors],
             SpaceAt = questions.Room.SpaceAt,
             Builds = [.. questions.Room.Builds],
         };
 
         var budget = ProbeBudget
             + (EmulatorProbe.WitnessBudget * emulators.Count)
-            + (DeveloperEnvironmentProbe.ProbeBudget * questions.DeveloperEnvironments.Count);
+            + (DeveloperEnvironmentProbe.ProbeBudget * questions.DeveloperEnvironments.Count)
+            + ProgramFloors.Allowance(questions.Floors.Count);
 
         // One line, held open until the host has answered: a budget that runs out stops ssh or wsl.exe here,
         // which ends the input there and stops any witness still running.
@@ -740,7 +752,7 @@ public sealed class HostInspector(
         Programs = info.Programs
             .GroupBy(location => location.Program, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.Last(), StringComparer.Ordinal),
-        ProgramDirectories = info.ProgramDirectories,
+        ProgramDirectories = new Processes.ProgramDirectories(info.RaisedDirectories, info.AppendedDirectories),
         Space = info.Space,
         SpaceUnmeasured = info.SpaceUnmeasured,
         Builds = info.Builds,

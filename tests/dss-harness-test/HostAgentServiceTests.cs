@@ -405,7 +405,7 @@ public sealed class HostAgentServiceTests
 
         Assert.Equal("~", info.Space?.Filesystem);
         Assert.Equal("~" + tool[home.Path.Length..], Assert.Single(info.Programs).Path);
-        Assert.Equal([Path.GetDirectoryName(tool)!], info.ProgramDirectories);
+        Assert.Equal([Path.GetDirectoryName(tool)!], info.AppendedDirectories);
     }
 
     /// <summary>
@@ -1110,10 +1110,33 @@ public sealed class HostAgentServiceTests
         var run = new HostAgentRequest { Kind = HostAgentRequestKind.Run };
         var read = JsonSerializer.Deserialize<HostAgentRequest>(JsonSerializer.Serialize(run, HostAgentProtocol.JsonOptions), HostAgentProtocol.JsonOptions)!;
 
-        Assert.Equal(10, HostAgentProtocol.Version);
+        Assert.Equal(11, HostAgentProtocol.Version);
         Assert.Equal(15, read.BeatSeconds);
         Assert.Equal(new InputBeat(TimeSpan.FromSeconds(15), "host-agent: beat"), HostAgentProtocol.BeatOf(read));
         Assert.Null(HostAgentProtocol.BeatOf(new HostAgentRequest { Kind = HostAgentRequestKind.Run, BeatSeconds = 0 }));
+    }
+
+    /// <summary>
+    /// A survey carries every declared tool's minimum version to the host, which holds the copies it finds to them, and
+    /// its answer carries back the directories it raised, apart from the ones it appends: a host told only one list
+    /// would put a raised directory behind the older copy it was raised past.
+    /// </summary>
+    [Fact]
+    public void ASurvey_CarriesTheToolsMinimums_AndItsAnswerTheDirectoriesRaised()
+    {
+        var floor = new DssHarness.Core.Tools.ToolFloor { Name = "python3", MinVersion = "3.12.0", Args = ["--version"], Regex = @"(\d+\.\d+\.\d+)", Platforms = ["macos"] };
+        var asked = new HostAgentRequest { Kind = HostAgentRequestKind.Info, Floors = [floor] };
+        var answer = new HostAgentInfo { Version = "1.0.0", AssemblySha256 = "00", Os = "macos", Processor = "arm64", RaisedDirectories = ["/opt/homebrew/bin"], AppendedDirectories = ["/usr/local/bin"] };
+
+        var read = JsonSerializer.Deserialize<HostAgentRequest>(JsonSerializer.Serialize(asked, HostAgentProtocol.JsonOptions), HostAgentProtocol.JsonOptions)!;
+        var told = JsonSerializer.Deserialize<HostAgentInfo>(JsonSerializer.Serialize(answer, HostAgentProtocol.JsonOptions), HostAgentProtocol.JsonOptions)!;
+
+        var carried = Assert.Single(read.Floors);
+        Assert.Equal((floor.Name, floor.MinVersion, floor.Regex), (carried.Name, carried.MinVersion, carried.Regex));
+        Assert.Equal(floor.Args, carried.Args);
+        Assert.Equal(floor.Platforms, carried.Platforms);
+        Assert.Equal(["/opt/homebrew/bin"], told.RaisedDirectories);
+        Assert.Equal(["/usr/local/bin"], told.AppendedDirectories);
     }
 
     [Theory]
@@ -1367,7 +1390,7 @@ public sealed class HostAgentServiceTests
             new EmulatorProbe(platform, processRunner, fileSystem),
             new DeveloperEnvironmentProbe(platform, processRunner),
             fileSystem,
-            new LocalProgramResolver(platform, FilePermissionsFactory.Create()),
+            HostDoubles.Floors(platform, processRunner),
             new KeepAwake(keepingAwake ?? processRunner, new ConsoleHarnessOutput(new StringWriter(), new StringWriter(), verbose: false)),
                 new HoldAwakeStore(new PhysicalFileSystem(FilePermissionsFactory.Create()), Path.Combine(TestHost.TemporaryRoot, "holds", Guid.NewGuid().ToString("N") + ".json")),
                 new RecordingLauncher(),

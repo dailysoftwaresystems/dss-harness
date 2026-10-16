@@ -58,8 +58,8 @@ public sealed class NinjaRebuildGraphTests
         var cancellationToken = TestContext.Current.CancellationToken;
 
         var failure = await Assert.ThrowsAsync<HarnessException>(
-            () => NinjaRebuildGraph.ReadRecordsAsync(new Answering("ninja: no work to do.\n"), "build", [], null, null, cancellationToken));
-        var records = await NinjaRebuildGraph.ReadRecordsAsync(new Answering("a.o: #deps 1, deps mtime 1 (VALID)\r\n    a.cpp\r\n"), "build", [], null, null, cancellationToken);
+            () => NinjaRebuildGraph.ReadRecordsAsync(new Answering("ninja: no work to do.\n"), "build", ProgramDirectories.None, null, null, cancellationToken));
+        var records = await NinjaRebuildGraph.ReadRecordsAsync(new Answering("a.o: #deps 1, deps mtime 1 (VALID)\r\n    a.cpp\r\n"), "build", ProgramDirectories.None, null, null, cancellationToken);
 
         Assert.Equal(HarnessExit.CommandFailed, failure.ExitCode);
         Assert.Contains("'ninja -t deps' listed no objects for 'build'", failure.Message, StringComparison.Ordinal);

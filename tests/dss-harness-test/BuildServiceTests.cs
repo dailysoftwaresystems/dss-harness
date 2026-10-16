@@ -1987,7 +1987,7 @@ public sealed class BuildServiceTests
         var request = tracked with
         {
             HostEnvironment = new Dictionary<string, string> { ["CC"] = "gcc", ["PATH"] = temp.Combine("empty-path") },
-            ProgramDirectories = [temp.Combine(ToolchainDirectory)],
+            ProgramDirectories = ProgramDirectories.After([temp.Combine(ToolchainDirectory)]),
         };
 
         var buildDirectory = request.Variant.DirectoryUnder(temp.Path);
@@ -2641,7 +2641,7 @@ public sealed class BuildServiceTests
         var request = tracked with
         {
             HostEnvironment = new Dictionary<string, string> { ["CC"] = "clang", ["PATH"] = temp.Combine("empty-path") },
-            ProgramDirectories = [temp.Combine(ToolchainDirectory)],
+            ProgramDirectories = ProgramDirectories.After([temp.Combine(ToolchainDirectory)]),
         };
         var buildDirectory = request.Variant.DirectoryUnder(temp.Path);
         var config = Config();
@@ -2675,7 +2675,7 @@ public sealed class BuildServiceTests
         var runner = new RecordingRunner("app.o: #deps 1, deps mtime 1 (VALID)\n    app.h\n");
 
         _ = await new NinjaDependencyCheck(runner, new HarnessFactory().FileSystem)
-            .CheckAsync(buildDirectory, [], "tools/ninja", cancellationToken: TestContext.Current.CancellationToken);
+            .CheckAsync(buildDirectory, ProgramDirectories.None, "tools/ninja", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(Path.Combine(buildDirectory, "tools", "ninja"), Assert.Single(runner.Started).FileName);
     }
@@ -2697,7 +2697,7 @@ public sealed class BuildServiceTests
             .ThrowsAsync(new ProgramStartException("/opt/arm/bin/ninja", "'/opt/arm/bin/ninja' could not be started: Text file busy"));
 
         var failure = await Assert.ThrowsAsync<HarnessException>(() => new NinjaDependencyCheck(runner, new HarnessFactory().FileSystem)
-            .CheckAsync(buildDirectory, [], "/opt/arm/bin/ninja", cancellationToken: TestContext.Current.CancellationToken));
+            .CheckAsync(buildDirectory, ProgramDirectories.None, "/opt/arm/bin/ninja", cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(HarnessExit.CommandFailed, failure.ExitCode);
         Assert.Contains("could not be started", failure.Message, StringComparison.Ordinal);

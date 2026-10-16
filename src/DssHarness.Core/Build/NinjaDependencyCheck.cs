@@ -51,7 +51,7 @@ public sealed class NinjaDependencyCheck(IProcessRunner processRunner, IFileSyst
     /// <summary>Runs ninja in <paramref name="buildDirectory"/> as the build ran it, within the budget of a probe.</summary>
     /// <param name="buildDirectory">The build directory, which ninja runs in.</param>
     /// <param name="arguments">What ninja is asked.</param>
-    /// <param name="appendToPath">
+    /// <param name="programDirectories">
     /// The directories the build was given, for a ninja looked up by name: the one the survey found for the
     /// build, not "not installed".
     /// </param>
@@ -60,13 +60,13 @@ public sealed class NinjaDependencyCheck(IProcessRunner processRunner, IFileSyst
     internal static ProcessRequest Request(
         string buildDirectory,
         IReadOnlyList<string> arguments,
-        IReadOnlyList<string> appendToPath,
+        ProgramDirectories programDirectories,
         string? program,
         IReadOnlyDictionary<string, string?>? environment) => new()
         {
             FileName = string.IsNullOrWhiteSpace(program) ? Program : ProcessRunner.Anchored(program, buildDirectory),
             Arguments = arguments,
-            AppendToPath = appendToPath,
+            ProgramDirectories = programDirectories,
             Environment = environment ?? new Dictionary<string, string?>(StringComparer.Ordinal),
             WorkingDirectory = buildDirectory,
             Timeout = Budget,
@@ -77,7 +77,7 @@ public sealed class NinjaDependencyCheck(IProcessRunner processRunner, IFileSyst
 
     /// <summary>Checks one build directory.</summary>
     /// <param name="buildDirectory">The directory to read.</param>
-    /// <param name="appendToPath">The directories the build appended to its PATH, which ninja is looked up on too.</param>
+    /// <param name="programDirectories">The directories the build put around its PATH, which ninja is looked up on too.</param>
     /// <param name="program">
     /// The ninja the build ran, as its configuration recorded it, or <see langword="null"/> to look one
     /// up. Read by the program that wrote them, the records are read the way they were written, and a
@@ -97,12 +97,12 @@ public sealed class NinjaDependencyCheck(IProcessRunner processRunner, IFileSyst
     /// </exception>
     public async Task<NinjaDependencyReport> CheckAsync(
         string buildDirectory,
-        IReadOnlyList<string> appendToPath,
+        ProgramDirectories programDirectories,
         string? program = null,
         IReadOnlyDictionary<string, string?>? environment = null,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(appendToPath);
+        ArgumentNullException.ThrowIfNull(programDirectories);
 
         if (!_fileSystem.DirectoryExists(buildDirectory))
         {
@@ -121,7 +121,7 @@ public sealed class NinjaDependencyCheck(IProcessRunner processRunner, IFileSyst
         }
 
         var records = await NinjaRebuildGraph
-            .ReadRecordsAsync(_processRunner, buildDirectory, appendToPath, program, environment, cancellationToken)
+            .ReadRecordsAsync(_processRunner, buildDirectory, programDirectories, program, environment, cancellationToken)
             .ConfigureAwait(false);
 
         var withoutHeaders = records.Values.Where(record => record.Count == 0).Select(record => record.Object).ToList();

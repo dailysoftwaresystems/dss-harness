@@ -12,6 +12,7 @@ using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 using DssHarness.Core.SetUps;
 using DssHarness.Core.Sync;
+using DssHarness.Core.Tools;
 using DssHarness.Core.Worktrees;
 
 namespace DssHarness.Core.Runs;
@@ -153,6 +154,7 @@ public sealed class LegRunService(
     IRepositoryTrees trees,
     KeepAwake keepAwake,
     DeveloperEnvironmentProvider developerEnvironments,
+    ProgramFloors programFloors,
     Git.IGitClient gitClient,
     Platform.IPathBudget pathBudget,
     IFileSystem fileSystem,
@@ -175,6 +177,7 @@ public sealed class LegRunService(
     private readonly IRepositoryTrees _trees = trees;
     private readonly KeepAwake _keepAwake = keepAwake;
     private readonly DeveloperEnvironmentProvider _developerEnvironments = developerEnvironments;
+    private readonly ProgramFloors _programFloors = programFloors;
     private readonly Git.IGitClient _gitClient = gitClient;
     private readonly Platform.IPathBudget _pathBudget = pathBudget;
     private readonly IFileSystem _fileSystem = fileSystem;
@@ -1012,7 +1015,7 @@ public sealed class LegRunService(
 
         // Held awake for as long as the leg's own work runs here, by the command this machine
         // declares - under the section the machine that dispatched the leg knows it by.
-        await using var awake = _keepAwake.Hold(commandName, leg.Name, leg.HostSettings, leg.Host.ProgramDirectories, cancellationToken);
+        await using var awake = _keepAwake.Hold(commandName, leg.Name, leg.HostSettings, leg.Host.ProgramDirectories.All, cancellationToken);
 
         var environmentName = LegPrograms.DeveloperEnvironmentOf(context.Config, leg.Leg, request.Workload);
         DeveloperEnvironmentSetup? setUp = null;
@@ -1029,7 +1032,7 @@ public sealed class LegRunService(
                 return Ended(leg, LegVerdict.Failed, setUp.Failure, started);
             }
 
-            if (MissingInDeveloperEnvironment(context.Config, leg, request.Workload, environmentName, setUp) is { } missing)
+            if (await MissingInDeveloperEnvironmentAsync(context.Config, leg, request.Workload, environmentName, setUp, cancellationToken).ConfigureAwait(false) is { } missing)
             {
                 return Ended(leg, missing.Verdict, missing.Reason, started) with { DeveloperEnvironment = setUp.Fact };
             }
@@ -1130,21 +1133,32 @@ public sealed class LegRunService(
     /// now. So they are looked for then, before anything of the leg starts, and one that is missing is
     /// a tool missing, named, as the survey names one it can see - never a program failing to start
     /// halfway through a build. Visual Studio carries cl and link, and CMake and Ninja only where its
-    /// CMake component is installed.
+    /// CMake component is installed. A declared tool is held to its minimum version as the survey holds
+    /// one, in the copy that PATH names: the one the leg starts, a CMake Visual Studio carries older than
+    /// the configuration needs among them.
     /// </remarks>
-    private (string Reason, LegVerdict Verdict)? MissingInDeveloperEnvironment(
+    private async Task<(string Reason, LegVerdict Verdict)?> MissingInDeveloperEnvironmentAsync(
         HarnessConfig config,
         PlacedLeg leg,
         LegWorkload workload,
         string name,
-        DeveloperEnvironmentSetup setUp)
+        DeveloperEnvironmentSetup setUp,
+        CancellationToken cancellationToken)
     {
         var search = PathSearch.For(PhaseEnvironment.Layered(leg.HostSettings.Env, setUp.Environment), leg.Host.ProgramDirectories);
+        var programs = LegPrograms.InDeveloperEnvironment(config, leg.Leg, workload, leg.HostSettings);
+        var found = await _programFloors
+            .HoldAsync(
+                programs.ToDictionary(program => program, program => search.Find(_platform, _filePermissions, program), StringComparer.Ordinal),
+                ToolFloor.Of(config.Tools),
+                cancellationToken)
+            .ConfigureAwait(false);
 
         return LegPlacement.MissingPrograms(
-            LegPrograms.InDeveloperEnvironment(config, leg.Leg, workload, leg.HostSettings),
-            program => search.Find(_platform, _filePermissions, program),
-            $"the PATH developer environment '{name}' sets up");
+            programs,
+            found.GetValueOrDefault,
+            $"the PATH developer environment '{name}' sets up",
+            LegPlacement.FloorRemedy(config, leg.Name, leg.Leg, leg.Host.Os));
     }
 
     /// <summary>
