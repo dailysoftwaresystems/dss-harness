@@ -38,8 +38,8 @@ public sealed record PhaseRequest
     public IReadOnlyDictionary<string, string?> Environment { get; init; }
         = new Dictionary<string, string?>(StringComparer.Ordinal);
 
-    /// <summary>Directories added to the end of the PATH the command runs with, and looks its program up on.</summary>
-    public IReadOnlyList<string> AppendToPath { get; init; } = [];
+    /// <summary>Directories put around the PATH the command runs with, and looks its program up on: raised ahead of it, or appended.</summary>
+    public ProgramDirectories ProgramDirectories { get; init; } = ProgramDirectories.None;
 
     /// <summary>
     /// The pattern proving the command ran, matched against each line of its output as it arrives, or
@@ -225,7 +225,7 @@ public sealed class PhaseRunner(
             Arguments = request.Arguments,
             WorkingDirectory = request.WorkingDirectory,
             Environment = request.Environment,
-            AppendToPath = request.AppendToPath,
+            ProgramDirectories = request.ProgramDirectories,
             OnStarted = clock.Saw,
             OnOutputLine = line => Line(line, error: false),
             OnErrorLine = line => Line(line, error: true),

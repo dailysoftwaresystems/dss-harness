@@ -234,6 +234,18 @@ public static partial class HostProbes
                 : null;
     }
 
+    /// <summary>
+    /// The reasons given, as the parts of one sentence, in order; or <see langword="null"/> where none was given:
+    /// every reason a search or a probe gives for what it could not do is said this one way.
+    /// </summary>
+    /// <param name="reasons">Each reason, or <see langword="null"/> or empty where there is none.</param>
+    public static string? Joined(params IEnumerable<string?> reasons)
+    {
+        ArgumentNullException.ThrowIfNull(reasons);
+
+        return string.Join("; ", reasons.Where(reason => !string.IsNullOrEmpty(reason))) is { Length: > 0 } said ? said : null;
+    }
+
     /// <summary>That the host could not be reached, with what ssh said about it.</summary>
     /// <param name="said">ssh's words, quoted as they are.</param>
     public static string CouldNotReach(string said) => $"the host could not be reached: ssh said {said}";

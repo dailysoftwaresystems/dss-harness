@@ -31,8 +31,9 @@ public sealed class HostAgentService(
     IToolIdentityProvider identity,
     EmulatorProbe emulatorProbe,
     DeveloperEnvironmentProbe developerEnvironmentProbe,
+    DeveloperEnvironmentProvider developerEnvironments,
     IFileSystem fileSystem,
-    LocalProgramResolver programs,
+    ProgramFloors programFloors,
     KeepAwake keepAwake,
     HoldAwakeStore holds,
     IDetachedProcessLauncher launcher,
@@ -44,8 +45,9 @@ public sealed class HostAgentService(
     private readonly IToolIdentityProvider _identity = identity;
     private readonly EmulatorProbe _emulatorProbe = emulatorProbe;
     private readonly DeveloperEnvironmentProbe _developerEnvironmentProbe = developerEnvironmentProbe;
+    private readonly DeveloperEnvironmentProvider _developerEnvironments = developerEnvironments;
     private readonly IFileSystem _fileSystem = fileSystem;
-    private readonly LocalProgramResolver _programs = programs;
+    private readonly ProgramFloors _programFloors = programFloors;
     private readonly KeepAwake _keepAwake = keepAwake;
     private readonly HoldAwakeStore _holds = holds;
     private readonly IDetachedProcessLauncher _launcher = launcher;
@@ -171,8 +173,8 @@ public sealed class HostAgentService(
         {
             // Marked as a run request's output is, and for the same reason: an inspection that fails quotes
             // what the host said into that host's reason, which reaches the reader, --json and every leg
-            // reported unavailable. Without the marker that quotation is whatever the login shell printed
-            // first. A request from a build that sends no nonce is answered all the same, unmarked.
+            // reported unavailable. Without the marker that quotation is whatever reached the streams ahead
+            // of the agent (see HostAgentProtocol.StartedLine). A request from a build that sends no nonce is answered all the same, unmarked.
             if (!string.IsNullOrWhiteSpace(request.Nonce))
             {
                 await WriteStartedAsync(output, error, request.Nonce).ConfigureAwait(false);
@@ -183,7 +185,9 @@ public sealed class HostAgentService(
                     request.DeveloperEnvironments,
                     request.Programs,
                     request.ToolSearchDirectories,
+                    request.Floors,
                     new RoomQuestions(request.SpaceAt, request.Builds),
+                    request.InDeveloperEnvironments,
                     abandoned)
                 .ConfigureAwait(false);
             await output.WriteLineAsync(JsonSerializer.Serialize(Told(info), HostAgentProtocol.JsonOptions)).ConfigureAwait(false);
@@ -331,30 +335,41 @@ public sealed class HostAgentService(
     /// <param name="developerEnvironments">The developer environments to look for, by name.</param>
     /// <param name="programs">The programs to find, the way a leg here will start them.</param>
     /// <param name="searchDirectories">The repository's <c>toolSearchDirectories</c>, of which this machine takes its own platform's.</param>
+    /// <param name="floors">The declared tools' minimum versions, of which this machine holds the copies it finds to its own platform's.</param>
     /// <param name="room">Where to measure the room here, and which build directories to measure and read the record of.</param>
+    /// <param name="looks">
+    /// The developer environments to set up here, each among <paramref name="developerEnvironments"/>, and the programs to
+    /// find on the PATH each sets up, each among <paramref name="programs"/>.
+    /// </param>
     /// <param name="cancellationToken">Stops the checks.</param>
     public async Task<HostAgentInfo> DescribeAsync(
         IReadOnlyDictionary<string, EmulatorConfig> emulators,
         IReadOnlyDictionary<string, DeveloperEnvironmentConfig> developerEnvironments,
         IReadOnlyList<string> programs,
         IReadOnlyDictionary<string, List<string>> searchDirectories,
+        IReadOnlyList<Tools.ToolFloor> floors,
         RoomQuestions room,
+        IReadOnlyList<DeveloperEnvironmentLook> looks,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(emulators);
         ArgumentNullException.ThrowIfNull(developerEnvironments);
         ArgumentNullException.ThrowIfNull(programs);
         ArgumentNullException.ThrowIfNull(searchDirectories);
+        ArgumentNullException.ThrowIfNull(floors);
         ArgumentNullException.ThrowIfNull(room);
+        ArgumentNullException.ThrowIfNull(looks);
 
         // By the function the leg's own run uses, on the machine that will run it. Answered from
         // anywhere else this would be a second opinion about this machine's PATH, and a second
         // opinion is how a survey came to call a leg runnable whose build tool could not be found.
         // The emulators' own programs are found by the same search, in the same pass, so a launcher
         // installed off the PATH is found - and handed on - exactly as a build tool would be.
-        var found = _programs.Resolve(
+        var found = await _programFloors.ResolveAsync(
             programs.Concat(emulators.Values.SelectMany(EmulatorProbe.ProgramsOf)),
-            ToolSearchDirectories.For(searchDirectories, _platform.PlatformKey));
+            ToolSearchDirectories.For(searchDirectories, _platform.PlatformKey),
+            floors,
+            cancellationToken).ConfigureAwait(false);
 
         var checks = new Dictionary<string, EmulatorCheck>(StringComparer.OrdinalIgnoreCase);
 
@@ -363,13 +378,20 @@ public sealed class HostAgentService(
             checks[name] = await _emulatorProbe.CheckAsync(emulator, found, cancellationToken).ConfigureAwait(false);
         }
 
-        // Looked for, never set up: the survey has to be cheap, and setting one up is the run's work,
-        // on the machine that runs the leg.
+        // Looked for, and set up only for a look that asks what a leg in it would start: the survey has to be
+        // cheap, and setting one up is the run's work, on the machine that runs the leg.
         var environments = new Dictionary<string, DeveloperEnvironmentCheck>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var (name, environment) in developerEnvironments)
         {
             environments[name] = await _developerEnvironmentProbe.CheckAsync(environment, cancellationToken).ConfigureAwait(false);
+        }
+
+        var looked = new List<DeveloperEnvironmentPrograms>();
+
+        foreach (var look in looks)
+        {
+            looked.Add(await LookAsync(look, environments, found, floors, cancellationToken).ConfigureAwait(false));
         }
 
         var current = _identity.Current;
@@ -387,7 +409,9 @@ public sealed class HostAgentService(
             Emulators = checks,
             DeveloperEnvironments = environments,
             Programs = [.. found.Found.Values],
-            ProgramDirectories = [.. found.Directories],
+            AppendedDirectories = [.. found.Directories.Appended],
+            RaisedDirectories = [.. found.Directories.Raised],
+            InDeveloperEnvironments = looked,
             Space = space,
             SpaceUnmeasured = unmeasured,
             Builds = [.. room.Builds.Distinct(StringComparer.Ordinal).Select(BuildRoom)],
@@ -418,13 +442,88 @@ public sealed class HostAgentService(
             pair => pair.Key,
             pair => pair.Value with { Reason = Told(pair.Value.Reason), InstallationPath = Told(pair.Value.InstallationPath) },
             StringComparer.OrdinalIgnoreCase),
-        Programs = [.. info.Programs.Select(program => program with { Path = Told(program.Path), Reason = Told(program.Reason) })],
+        Programs = [.. info.Programs.Select(Told)],
+        InDeveloperEnvironments = [.. info.InDeveloperEnvironments.Select(look => look with
+        {
+            Programs = [.. look.Programs.Select(Told)],
+            Unestablished = Told(look.Unestablished),
+        })],
         Space = Told(info.Space),
         SpaceUnmeasured = Told(info.SpaceUnmeasured),
         Builds = [.. info.Builds.Select(build => build with { Disk = Told(build.Disk), Unmeasured = Told(build.Unmeasured) })],
     };
 
     private string? Told(string? text) => text is null ? null : _home.Shown(text);
+
+    private ProgramLocation Told(ProgramLocation program) => program with
+    {
+        Path = Told(program.Path),
+        Reason = Told(program.Reason),
+        Judged = Told(program.Judged),
+        PassedOver = Told(program.PassedOver),
+    };
+
+    private Tools.FloorCopy? Told(Tools.FloorCopy? copy) => copy is null ? null : copy with { Copy = Told(copy.Copy)!, Problem = Told(copy.Problem) };
+
+    /// <summary>
+    /// What a leg in the developer environment <paramref name="look"/> names would start of its programs here: the
+    /// environment set up afresh, as a leg's run sets it up, and each program found on the PATH it sets up and held to
+    /// its minimum version there, as the run holds it (see <see cref="ProgramFloors.HoldOnAsync"/>).
+    /// </summary>
+    /// <remarks>
+    /// Set up afresh rather than from what an earlier look set up: what is asked is what it sets up now, after an install
+    /// that may have added to it. A host with no instance of it has only its own PATH, on which <paramref name="found"/>
+    /// holds the programs as the survey found them; one whose instance could not be looked at, or set up, has nothing to
+    /// say about that PATH, and says why.
+    /// </remarks>
+    /// <exception cref="ArgumentException">
+    /// The environment was not among those looked for, or a program it names was not among those found: a request this
+    /// build never sends.
+    /// </exception>
+    private async Task<DeveloperEnvironmentPrograms> LookAsync(
+        DeveloperEnvironmentLook look,
+        IReadOnlyDictionary<string, DeveloperEnvironmentCheck> environments,
+        ProgramSearch found,
+        IReadOnlyList<Tools.ToolFloor> floors,
+        CancellationToken cancellationToken)
+    {
+        if (!environments.TryGetValue(look.Name, out var check))
+        {
+            throw new ArgumentException($"Developer environment '{look.Name}' was not among the ones looked for.", nameof(look));
+        }
+
+        var answer = new DeveloperEnvironmentPrograms { Name = look.Name, Processor = look.Processor };
+
+        if (check.Found == DeveloperEnvironmentFound.Nowhere)
+        {
+            return answer with
+            {
+                Programs = [.. look.Programs.Distinct(StringComparer.Ordinal).Select(program => found.Found.TryGetValue(program, out var location)
+                    ? location
+                    : throw new ArgumentException($"'{program}' was not among the programs searched for.", nameof(look)))],
+            };
+        }
+
+        if (!check.CanSetUp)
+        {
+            return answer with { Unestablished = $"could not be looked at: {check.Reason}" };
+        }
+
+        _developerEnvironments.Forget(look.Name);
+
+        var setUp = await _developerEnvironments.SetUpAsync(look.Name, check, look.Processor, look.Environment, cancellationToken).ConfigureAwait(false);
+
+        if (setUp.HasFailed)
+        {
+            return answer with { Unestablished = $"could not be set up: {setUp.Failure}" };
+        }
+
+        var held = await _programFloors
+            .HoldOnAsync(PathSearch.For(PhaseEnvironment.Layered(look.Environment, setUp.Environment), found.Directories), look.Programs, floors, cancellationToken)
+            .ConfigureAwait(false);
+
+        return answer with { Programs = [.. look.Programs.Distinct(StringComparer.Ordinal).Select(program => held[program])] };
+    }
 
     private DiskSpace? Told(DiskSpace? space) => space is null ? null : space with { Filesystem = _home.Shown(space.Filesystem) };
 

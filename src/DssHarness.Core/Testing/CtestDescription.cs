@@ -20,7 +20,7 @@ namespace DssHarness.Core.Testing;
 /// <param name="Excludes">The exclusions the <c>test</c> command gives a leg working in a copy: its invocation's remote ones.</param>
 /// <param name="Worker">The worker's copy, where the binary is and the runner starts.</param>
 /// <param name="HostEnvironment">What the leg's host gives it, over which the invocation's environment is laid.</param>
-/// <param name="AppendToPath">The host's program directories, appended to the runner's PATH.</param>
+/// <param name="ProgramDirectories">The host's program directories, put around the runner's PATH.</param>
 /// <param name="DefaultCores">The core count the configuration defaults a test to, where its invocation names none.</param>
 internal sealed record CtestQuestion(
     string Program,
@@ -31,7 +31,7 @@ internal sealed record CtestQuestion(
     IReadOnlyList<string> Excludes,
     string Worker,
     IReadOnlyDictionary<string, string> HostEnvironment,
-    IReadOnlyList<string> AppendToPath,
+    ProgramDirectories ProgramDirectories,
     int? DefaultCores)
 {
     /// <summary>The invocation the leg's tests start with, or <see langword="null"/> where the subject has no test settings.</summary>
@@ -109,7 +109,7 @@ internal sealed class CtestDescription(IProcessRunner processes, IFileSystem fil
                         Arguments = [.. command.Arguments, CtestEntries.ShowOnly],
                         WorkingDirectory = start,
                         Environment = TestInvocationResolver.EnvironmentFor(question.HostEnvironment, invocation.Env),
-                        AppendToPath = question.AppendToPath,
+                        ProgramDirectories = question.ProgramDirectories,
                         Timeout = Bound,
                         OutputKept = StreamKept.Whole,
                     },

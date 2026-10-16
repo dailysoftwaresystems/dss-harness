@@ -87,7 +87,7 @@ public sealed class CompilerVersionProbe(IProcessRunner processRunner, IFileSyst
         IdentifiedCompiler compiler,
         string scratchDirectory,
         IReadOnlyDictionary<string, string?> environment,
-        IReadOnlyList<string> programDirectories,
+        ProgramDirectories programDirectories,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(compiler);
@@ -134,7 +134,7 @@ public sealed class CompilerVersionProbe(IProcessRunner processRunner, IFileSyst
                         Arguments = [.. compiler.Arguments, .. preprocess],
                         WorkingDirectory = scratchDirectory,
                         Environment = environment,
-                        AppendToPath = programDirectories,
+                        ProgramDirectories = programDirectories,
                         Timeout = Budget,
                     },
                     cancellationToken)

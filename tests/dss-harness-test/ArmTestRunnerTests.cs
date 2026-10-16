@@ -140,7 +140,7 @@ public sealed class ArmTestRunnerTests
         Assert.Equal(0, started.Run.ExitCode);
         Assert.True(File.Exists(Path.Combine(where, "made", "here.txt")), "the run did not start where it was told");
 
-        var printed = await RunAsync(Child("print-env", temp.Combine("arms", "path"), "PATH") with { AppendToPath = [given] });
+        var printed = await RunAsync(Child("print-env", temp.Combine("arms", "path"), "PATH") with { ProgramDirectories = ProgramDirectories.After([given]) });
 
         Assert.Equal(0, printed.Run.ExitCode);
         Assert.Contains(

@@ -75,7 +75,7 @@ internal sealed partial class NinjaRebuildGraph(
     /// </summary>
     /// <param name="processRunner">Runs ninja.</param>
     /// <param name="buildDirectory">The build directory, which ninja runs in.</param>
-    /// <param name="appendToPath">The directories the build appended to its PATH, which ninja is looked up on too.</param>
+    /// <param name="programDirectories">The directories the build put around its PATH, which ninja is looked up on too.</param>
     /// <param name="program">The ninja the build ran, as its configuration recorded it, or <see langword="null"/> to look one up.</param>
     /// <param name="environment">The environment the build's phases ran in.</param>
     /// <param name="cancellationToken">Stops ninja.</param>
@@ -87,7 +87,7 @@ internal sealed partial class NinjaRebuildGraph(
     internal static async Task<IReadOnlyDictionary<string, DepsRecord>> ReadRecordsAsync(
         IProcessRunner processRunner,
         string buildDirectory,
-        IReadOnlyList<string> appendToPath,
+        ProgramDirectories programDirectories,
         string? program,
         IReadOnlyDictionary<string, string?>? environment,
         CancellationToken cancellationToken)
@@ -100,7 +100,7 @@ internal sealed partial class NinjaRebuildGraph(
         {
             result = await processRunner
                 .RunAsync(
-                    NinjaDependencyCheck.Request(buildDirectory, ["-C", buildDirectory, "-t", "deps"], appendToPath, program, environment),
+                    NinjaDependencyCheck.Request(buildDirectory, ["-C", buildDirectory, "-t", "deps"], programDirectories, program, environment),
                     cancellationToken)
                 .ConfigureAwait(false);
         }

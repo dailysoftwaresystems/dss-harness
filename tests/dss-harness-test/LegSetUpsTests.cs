@@ -160,7 +160,7 @@ public sealed class LegSetUpsTests
             harness.ProcessRunner,
             harness.Platform,
             new ActionToolPolicy(harness.Platform),
-            new LocalProgramResolver(harness.Platform, FilePermissionsFactory.Create()),
+            HostDoubles.Floors(harness.Platform, harness.ProcessRunner),
             holds,
             harness.Output);
 

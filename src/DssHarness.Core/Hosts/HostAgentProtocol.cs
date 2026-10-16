@@ -1,6 +1,5 @@
 using System.Buffers;
 using System.Globalization;
-using System.Security.Cryptography;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -39,7 +38,7 @@ public static class HostAgentProtocol
     /// and its own version. With the number left as it was, the same host refuses the request over
     /// whichever field it happens not to know, which says nothing about why.
     /// </remarks>
-    public const int Version = 10;
+    public const int Version = 11;
 
     /// <summary>
     /// How often, in seconds, the machine that asked writes <see cref="BeatLine"/> on the input it holds open while a run
@@ -107,7 +106,7 @@ public static class HostAgentProtocol
     public static bool IsNotForwardable(string command) => NotForwardable.Contains(command, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>A new value for <see cref="HostAgentRequest.Nonce"/>: random, so no output of a command holds it by chance.</summary>
-    public static string NewNonce() => Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
+    public static string NewNonce() => MarkedText.NewMark();
 
     /// <summary>
     /// The line a host writes to standard error last, once the command a run request named has finished,
@@ -127,24 +126,25 @@ public static class HostAgentProtocol
     /// consumer's Mac sources emsdk's environment script on every session, which prints the account's home
     /// layout - the user's name among it - and a machine relaying a leg's output published it into a ledger,
     /// a CI log and a chat transcript. What a host's profile says is not this run's output and does not
-    /// belong in it; the agent's own words, from here on, are.
+    /// belong in it; the agent's own words, from here on, are. Over ssh, the shell's own mark (see
+    /// <see cref="RemoteCommandLine.Marked"/>) drops what its startup files print before the agent is even
+    /// started; this line still tells the agent's own words from whatever is said on its way there -
+    /// by the .NET runtime, or the launcher the tool is installed with.
     /// </remarks>
     public static string StartedLine(string nonce)
         => $"{CommandName}: serving {nonce}";
 
     /// <summary>Whether <paramref name="line"/> carries the started line of the request that sent <paramref name="nonce"/>.</summary>
     /// <remarks>
-    /// Matched as the end of the line rather than the whole of it. A login profile whose last write has no
-    /// trailing newline - a prompt, an escape sequence, an <c>echo -n</c> - glues its bytes onto the first
-    /// line the agent writes, which is this one. Held to the whole line, such a host would never open the
-    /// gate at all, and every run on it would report as one that never said how it finished.
+    /// Matched as any mark line is (see <see cref="MarkedText.IsMarkLine"/>): held to the whole line, a host
+    /// whose last write before it had no trailing newline would never open the gate at all, and every run on
+    /// it would report as one that never said how it finished.
     /// </remarks>
     public static bool IsStartedLine(string line, string nonce)
     {
-        ArgumentNullException.ThrowIfNull(line);
         ArgumentException.ThrowIfNullOrWhiteSpace(nonce);
 
-        return line.TrimEnd().EndsWith(StartedLine(nonce), StringComparison.Ordinal);
+        return MarkedText.IsMarkLine(line, StartedLine(nonce));
     }
 
     /// <summary>
@@ -161,12 +161,9 @@ public static class HostAgentProtocol
     /// </remarks>
     public static string SinceServing(string text, string nonce)
     {
-        ArgumentNullException.ThrowIfNull(text);
         ArgumentException.ThrowIfNullOrWhiteSpace(nonce);
 
-        var started = text.LastIndexOf(StartedLine(nonce), StringComparison.Ordinal);
-
-        return started < 0 ? text : text[(started + StartedLine(nonce).Length)..].TrimStart('\r', '\n');
+        return MarkedText.Since(text, StartedLine(nonce));
     }
 
     /// <summary>
@@ -400,6 +397,19 @@ public sealed class HostAgentRequest
     public Dictionary<string, List<string>> ToolSearchDirectories { get; init; } = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
+    /// The declared tools' minimum versions, of which the host holds the copies it finds of each tool among
+    /// <see cref="Programs"/> to the ones its own platform's are. Info only.
+    /// </summary>
+    /// <remarks>Sent whole, as <see cref="ToolSearchDirectories"/> is, because only the host knows its platform.</remarks>
+    public List<Tools.ToolFloor> Floors { get; init; } = [];
+
+    /// <summary>
+    /// The developer environments to set up there, each with the programs to find on the PATH it sets up, as a leg in
+    /// it would start them. Info only; asked by <c>install-missing-tools</c>, which judges a tool where its legs find it.
+    /// </summary>
+    public List<DeveloperEnvironmentLook> InDeveloperEnvironments { get; init; } = [];
+
+    /// <summary>
     /// Where to measure the room on the host's filesystem - where its copies of the repository are kept -
     /// absolute or from the home directory; <see langword="null"/> to measure none. Info only.
     /// </summary>
@@ -503,7 +513,7 @@ public sealed class HostAgentRequest
     /// <remarks>
     /// A run request is refused without one, because how its command finished could not then be reported.
     /// An info request answers without one, from a build that sent none: only the marker is lost, and with
-    /// it the trimming of whatever the host's login shell printed first.
+    /// it the trimming of whatever reached the streams ahead of the agent (see <see cref="HostAgentProtocol.StartedLine"/>).
     /// </remarks>
     public string? Nonce { get; init; }
 }
@@ -543,9 +553,19 @@ public sealed record HostAgentInfo
 
     /// <summary>
     /// The directories a program asked for by name was found in there, on the PATH or off it, in the
-    /// order the search looked: what a leg there appends to the PATH of every process it starts.
+    /// order the search looked, but the raised ones: what a leg there appends to the PATH of every process
+    /// it starts.
     /// </summary>
-    public List<string> ProgramDirectories { get; init; } = [];
+    public List<string> AppendedDirectories { get; init; } = [];
+
+    /// <summary>
+    /// The directories a tool's minimum version raised there, in order: what a leg there puts ahead of the
+    /// PATH of every process it starts (see <see cref="Processes.ProgramDirectories"/>).
+    /// </summary>
+    public List<string> RaisedDirectories { get; init; } = [];
+
+    /// <summary>What looking in each developer environment the request named found, in the order it named them.</summary>
+    public List<DeveloperEnvironmentPrograms> InDeveloperEnvironments { get; init; } = [];
 
     /// <summary>
     /// The room on the filesystem the request's <see cref="HostAgentRequest.SpaceAt"/> is on; <see langword="null"/>
@@ -638,4 +658,46 @@ public sealed record EmulatorCheck(bool Available, string? Reason, string? Witne
 {
     /// <summary>An emulator legs cannot run through, and why.</summary>
     public static EmulatorCheck Unavailable(string reason) => new(false, reason, null);
+}
+
+/// <summary>
+/// A developer environment to set up on a host, for a leg of one processor, and the programs to find on the PATH it
+/// sets up there: what a leg in it starts, which no survey sees until it is set up.
+/// </summary>
+public sealed record DeveloperEnvironmentLook
+{
+    /// <summary>The developer environment, as the configuration names it.</summary>
+    public required string Name { get; init; }
+
+    /// <summary>The processor of the legs it is set up for.</summary>
+    public required string Processor { get; init; }
+
+    /// <summary>The programs to find on the PATH it sets up.</summary>
+    public List<string> Programs { get; init; } = [];
+
+    /// <summary>
+    /// What the host declares under <c>env</c> for itself, which the environment is set up over, as a leg's is: filled
+    /// in by the machine that asks, which reads the configuration.
+    /// </summary>
+    public Dictionary<string, string> Environment { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+}
+
+/// <summary>What looking in one developer environment on a host found.</summary>
+public sealed record DeveloperEnvironmentPrograms
+{
+    /// <summary>The developer environment, as the configuration names it.</summary>
+    public required string Name { get; init; }
+
+    /// <summary>The processor of the legs it was set up for.</summary>
+    public required string Processor { get; init; }
+
+    /// <summary>
+    /// Each program the look named, as a leg in the environment starts it: held to a declared tool's minimum version
+    /// as the survey holds one. Where the host has no instance of the environment, as its own PATH has it, which is
+    /// all there is.
+    /// </summary>
+    public List<ProgramLocation> Programs { get; init; } = [];
+
+    /// <summary>Why the PATH it sets up could not be looked at, or <see langword="null"/> where it was.</summary>
+    public string? Unestablished { get; init; }
 }

@@ -33,6 +33,27 @@ public sealed class EmulatorProbe(IHostPlatform platform, IProcessRunner process
             .Where(program => !string.IsNullOrWhiteSpace(program) && !ProcessRunner.IsPath(program));
     }
 
+    /// <summary>
+    /// The programs of <see cref="ProgramsOf"/> a check of <paramref name="emulator"/> reads from the search: all of
+    /// them, where its witness is looked for on the PATH the search saw, and none where its environment sets a PATH
+    /// of its own, on which its programs are the witness's to find.
+    /// </summary>
+    /// <param name="emulator">The emulator.</param>
+    /// <remarks>
+    /// Also the ones a leg that runs through it is held to a declared tool's minimum version over (see
+    /// <see cref="Legs.LegPlacement"/>): whether that minimum is the leg's is the tool's scope, which only the leg can
+    /// say, so the check here takes a copy held to it as the one there, which the witness starts.
+    /// </remarks>
+    public static IEnumerable<string> ProgramsRead(EmulatorConfig emulator)
+    {
+        ArgumentNullException.ThrowIfNull(emulator);
+
+        return ReadsSearch(emulator) ? ProgramsOf(emulator) : [];
+    }
+
+    /// <summary>Whether a check of <paramref name="emulator"/> reads its programs from the search (see <see cref="ProgramsRead"/>).</summary>
+    private static bool ReadsSearch(EmulatorConfig emulator) => !ProcessRunner.SetsPath(emulator.Env.Keys);
+
     /// <summary>Checks <paramref name="emulator"/> on this machine.</summary>
     /// <param name="emulator">The emulator.</param>
     /// <param name="found">
@@ -61,7 +82,7 @@ public sealed class EmulatorProbe(IHostPlatform platform, IProcessRunner process
         // A name is read from the search only where the witness is looked for on the PATH the search
         // saw. An emulator whose environment sets PATH is found on that PATH, which no search can
         // see: its programs are the witness's to find, and one the search missed is no missing one.
-        var searched = !ProcessRunner.SetsPath(emulator.Env.Keys);
+        var searched = ReadsSearch(emulator);
 
         foreach (var requirement in emulator.Requires.Where(requirement => searched || ProcessRunner.IsPath(requirement)))
         {
@@ -91,7 +112,7 @@ public sealed class EmulatorProbe(IHostPlatform platform, IProcessRunner process
                     FileName = command[0],
                     Arguments = command[1..],
                     Environment = emulator.Env.ToDictionary(pair => pair.Key, pair => (string?)pair.Value, StringComparer.Ordinal),
-                    AppendToPath = found.Directories,
+                    ProgramDirectories = found.Directories,
                     Timeout = WitnessBudget,
                 },
                 cancellationToken).ConfigureAwait(false);
@@ -157,10 +178,12 @@ public sealed class EmulatorProbe(IHostPlatform platform, IProcessRunner process
             throw new ArgumentException($"'{requirement}' was not among the programs searched for.", nameof(found));
         }
 
-        return location.Found switch
+        return location switch
         {
-            ProgramFound.OnPath or ProgramFound.OffPath => null,
-            ProgramFound.Unreadable => location.Unestablished(),
+            // There: one held to a declared tool's minimum version is the copy a leg starts as well, and is turned
+            // away by the minimum only for a leg it is declared for, when that leg is placed.
+            { Present: true } or { HeldToFloor: true } => null,
+            { Found: ProgramFound.Unreadable } => location.Unestablished(),
             _ => $"{requirement} is missing",
         };
     }

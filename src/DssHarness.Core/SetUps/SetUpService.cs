@@ -7,6 +7,7 @@ using DssHarness.Core.Processes;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 using DssHarness.Core.Runners;
+using DssHarness.Core.Tools;
 
 namespace DssHarness.Core.SetUps;
 
@@ -69,7 +70,7 @@ public interface ISetUpService
 /// <param name="processRunner">Starts the line's program.</param>
 /// <param name="platform">Says which platform's line runs.</param>
 /// <param name="toolPolicy">Says whether the line's program may run.</param>
-/// <param name="programs">Finds the line's program as a leg on this machine finds what it starts.</param>
+/// <param name="programFloors">Finds the line's program as a leg on this machine finds what it starts.</param>
 /// <param name="holds">Says which legs still use a set-up a typed down would bring down.</param>
 /// <param name="output">Where the command says what it runs, and the line's output goes.</param>
 public sealed class SetUpService(
@@ -77,7 +78,7 @@ public sealed class SetUpService(
     IProcessRunner processRunner,
     IHostPlatform platform,
     ActionToolPolicy toolPolicy,
-    LocalProgramResolver programs,
+    ProgramFloors programFloors,
     SetUpHolds holds,
     IHarnessOutput output) : ISetUpService
 {
@@ -91,7 +92,7 @@ public sealed class SetUpService(
     private readonly IProcessRunner _processRunner = processRunner;
     private readonly IHostPlatform _platform = platform;
     private readonly ActionToolPolicy _toolPolicy = toolPolicy;
-    private readonly LocalProgramResolver _programs = programs;
+    private readonly ProgramFloors _programFloors = programFloors;
     private readonly SetUpHolds _holds = holds;
     private readonly IHarnessOutput _output = output;
 
@@ -144,8 +145,12 @@ public sealed class SetUpService(
         _output.Info(CommandName(direction), $"'{declared}'{SetUpValues.Said(values)} in '{_output.Shown(root)}': {line.Line}");
 
         // Looked for as a leg on this machine looks for what it starts - on the PATH, then where toolSearchDirectories
-        // names - so a program a leg's line found, this line finds too.
-        var search = _programs.Resolve([line.FileName], ToolSearchDirectories.For(config.ToolSearchDirectories, _platform.PlatformKey));
+        // names, each declared tool held to its minimum version - so a program a leg's line found, this line finds too,
+        // and so does every program it starts by a declared tool's name.
+        var floors = ToolFloor.Of(config.Tools);
+        var search = await _programFloors
+            .ResolveAsync([line.FileName, .. floors.Select(floor => floor.Name)], ToolSearchDirectories.For(config.ToolSearchDirectories, _platform.PlatformKey), floors, cancellationToken)
+            .ConfigureAwait(false);
 
         // Read against the tree the line runs in, never this process's own directory: '-C' runs a line somewhere this
         // process is not.
@@ -156,7 +161,7 @@ public sealed class SetUpService(
                     FileName = line.FileName,
                     Arguments = line.Arguments,
                     WorkingDirectory = root,
-                    AppendToPath = search.Directories,
+                    ProgramDirectories = search.Directories,
                     OnOutputLine = _output.Raw,
                     OnErrorLine = _output.RawError,
                     OutputKept = StreamKept.Tail,

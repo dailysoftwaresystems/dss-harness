@@ -666,7 +666,7 @@ public sealed class NinjaDependencyCheckTests
     /// <summary>Checks <paramref name="build"/>, whose ninja answers <c>-t deps</c> with <paramref name="answer"/>.</summary>
     private static Task<NinjaDependencyReport> CheckAnswered(string build, string answer)
         => new NinjaDependencyCheck(new DepsAnswer(answer), FileSystem())
-            .CheckAsync(build, [], cancellationToken: TestContext.Current.CancellationToken);
+            .CheckAsync(build, ProgramDirectories.None, cancellationToken: TestContext.Current.CancellationToken);
 
     private static PhysicalFileSystem FileSystem() => new(FilePermissionsFactory.Create());
 

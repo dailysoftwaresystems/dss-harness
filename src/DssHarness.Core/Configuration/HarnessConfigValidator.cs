@@ -1393,9 +1393,18 @@ public static partial class HarnessConfigValidator
                     + "so it would never be checked anywhere");
             }
 
-            if (tool.MinVersion is { } minVersion && !Version.TryParse(minVersion, out _))
+            // Read by the parser every copy's version is compared with, so a minimum that would never compare
+            // with anything - '3.12', which a looser parser takes - is refused here, rather than leaving every
+            // copy of the tool unknown, everywhere, at run time. And a minimum needs a probe to read a version
+            // by: without one no copy can be held to it, and every one would be.
+            if (tool.MinVersion is { } minVersion && !SemanticVersion.TryParse(minVersion, out _))
             {
-                problems.Add($"tool '{tool.Name}' minVersion '{minVersion}' is not a version");
+                problems.Add($"tool '{tool.Name}' minVersion '{minVersion}' is not a version written as major.minor.patch, such as '1.2.0'");
+            }
+
+            if (tool.MinVersion is not null && tool.Probe is null)
+            {
+                problems.Add($"tool '{tool.Name}' declares a minVersion and no probe, so no copy's version can be read to hold to it");
             }
 
             foreach (var (platform, install) in tool.Install)

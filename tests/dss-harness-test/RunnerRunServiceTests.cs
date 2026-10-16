@@ -2829,7 +2829,7 @@ public sealed class RunnerRunServiceTests
         SegmentId = "s1",
         TreeRoot = temp.Path,
         ResolvedLegs = [Leg],
-        ProgramDirectories = Path.IsPathFullyQualified(TestHost.DotnetExecutable) ? [Path.GetDirectoryName(TestHost.DotnetExecutable)!] : [],
+        ProgramDirectories = Path.IsPathFullyQualified(TestHost.DotnetExecutable) ? ProgramDirectories.After([Path.GetDirectoryName(TestHost.DotnetExecutable)!]) : ProgramDirectories.None,
     };
 
     /// <summary>

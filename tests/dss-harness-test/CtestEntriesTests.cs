@@ -449,6 +449,6 @@ public sealed class CtestDescriptionTests
             [],
             Worker,
             new Dictionary<string, string>(StringComparer.Ordinal),
-            [],
+            ProgramDirectories.None,
             DefaultCores: null);
 }

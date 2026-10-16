@@ -3,6 +3,7 @@ using DssHarness.Core.Execution;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
+using DssHarness.Core.Tools;
 
 namespace DssHarness.Core.Legs;
 
@@ -151,7 +152,10 @@ public sealed record LegPlacement(SelectedLeg Leg, HostReport? Host, string? Rea
             var settings = config.Hosts.SettingsFor(here ?? candidate);
 
             var refused = MissingDeveloperEnvironment(LegPrograms.DeveloperEnvironmentOf(config, selected.Leg, workload), report)
-                ?? MissingPrograms(LegPrograms.For(config, selected.Leg, workload, settings), report);
+                ?? MissingPrograms(
+                    [.. LegPrograms.For(config, selected.Leg, workload, settings).Concat(EmulatedThrough(config, selected.Leg, workload)).Distinct(StringComparer.Ordinal)],
+                    report,
+                    FloorRemedy(config, selected.Name, selected.Leg, report.Os));
 
             return refused is { } missing
                 ? new LegPlacement(selected, null, at + missing.Reason) { Verdict = missing.Verdict }
@@ -198,6 +202,22 @@ public sealed record LegPlacement(SelectedLeg Leg, HostReport? Host, string? Rea
 
         return check.Available ? null : $"emulator '{leg.Emulator}' cannot run there: {check.Reason}";
     }
+
+    /// <summary>
+    /// The programs the emulator <paramref name="leg"/> runs through is checked with on its host (see
+    /// <see cref="EmulatorProbe.ProgramsRead"/>), which the leg starts through it, or none where it runs natively or
+    /// <paramref name="workload"/> starts no program - a copy, or a clean, starts nothing through it.
+    /// </summary>
+    /// <remarks>
+    /// Held here, with the leg's own programs, to a declared tool's minimum version that is the leg's: the check finds
+    /// a copy held to one there, since only the leg can say whether the tool is declared for it - a minimum declared
+    /// for other legs alone turned every leg through the emulator away. One missing there is no concern of this: the
+    /// emulator cannot run there, and the host was passed over before its programs were asked about.
+    /// </remarks>
+    private static IEnumerable<string> EmulatedThrough(HarnessConfig config, LegConfig leg, LegWorkload workload)
+        => workload.StartsPrograms && leg.Emulator is { } name && config.Emulators.TryGetValue(name, out var emulator)
+            ? EmulatorProbe.ProgramsRead(emulator)
+            : [];
 
     /// <summary>
     /// Why the developer environment <paramref name="name"/> cannot be set up on <paramref name="host"/>,
@@ -248,8 +268,46 @@ public sealed record LegPlacement(SelectedLeg Leg, HostReport? Host, string? Rea
     /// every program any leg starts. A survey that had not looked must not read as one that looked
     /// and found nothing, nor as one that found it.
     /// </remarks>
-    private static (string Reason, LegVerdict Verdict)? MissingPrograms(IReadOnlyList<string> programs, HostReport host)
-        => MissingPrograms(programs, program => host.Programs.GetValueOrDefault(program), "the PATH a command run there sees");
+    private static (string Reason, LegVerdict Verdict)? MissingPrograms(
+        IReadOnlyList<string> programs,
+        HostReport host,
+        Func<string, string?> floorRemedy)
+        => MissingPrograms(programs, program => host.Programs.GetValueOrDefault(program), "the PATH a command run there sees", floorRemedy);
+
+    /// <summary>
+    /// What the leg <paramref name="name"/> is told to do about a tool it starts whose every copy on a host running
+    /// <paramref name="os"/> is below the tool's minimum version, or <see langword="null"/> where the tool is not declared
+    /// for it: its minimum is another leg's business, and the leg starts whichever copy the host finds - the one raised
+    /// for the legs it is declared for, where one was.
+    /// </summary>
+    /// <param name="config">The whole configuration.</param>
+    /// <param name="name">The leg's name.</param>
+    /// <param name="leg">The leg.</param>
+    /// <param name="os">The operating system of the host it runs on.</param>
+    /// <remarks>
+    /// A host holds every copy of a tool to the tool's minimum on every platform the tool is declared for, because it
+    /// answers for all of its legs at once; whether the minimum is this leg's is the tool's whole scope, which only the
+    /// leg can say. <c>install-missing-tools</c> is named where the tool declares how to install it there, so that the
+    /// remedy said is one that can be run.
+    /// </remarks>
+    internal static Func<string, string?> FloorRemedy(HarnessConfig config, string name, LegConfig leg, string? os)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentNullException.ThrowIfNull(leg);
+
+        return program => config.Tools.FirstOrDefault(tool => string.Equals(tool.Name, program, StringComparison.Ordinal)) is { } tool
+            && ToolScope.Covers(tool, config, name, leg)
+                ? PlatformScope.Select(tool.Install, os) is null
+                    ? FloorCopyWanted
+                    : $"run '{ToolPackage.Command} {ToolProvisionService.CommandName} --legs {name}', which installs one as its tools "
+                        + $"entry declares, or {FloorCopyWanted}"
+                : null;
+    }
+
+    /// <summary>Where a copy that meets a tool's minimum version has to be, for a leg to start it.</summary>
+    private const string FloorCopyWanted
+        = "put a copy of at least that version where a leg there finds programs: on the PATH, or in a directory searched for programs";
 
     /// <summary>
     /// The programs of <paramref name="programs"/> that <paramref name="located"/> does not find, said
@@ -258,34 +316,62 @@ public sealed record LegPlacement(SelectedLeg Leg, HostReport? Host, string? Rea
     /// <param name="programs">The programs to find.</param>
     /// <param name="located">Where each program is, or <see langword="null"/> where nothing was ever asked about it.</param>
     /// <param name="path">The PATH they were looked for on, as a refusal names it.</param>
+    /// <param name="floorRemedy">
+    /// What the leg is told to do about a program every copy of which is below the minimum version its tool is
+    /// declared with (see <see cref="FloorRemedy"/>), or <see langword="null"/> where that minimum is not the leg's,
+    /// and a program held to it counts as found.
+    /// </param>
     /// <remarks>
     /// One reading for every look: a host's survey, and a leg checking the PATH its developer
     /// environment set up before anything of it starts. See the overload above for the three facts it
-    /// keeps apart.
+    /// keeps apart. A declared tool held to a minimum version that is the leg's adds three more, kept apart the
+    /// same way: below it, with every copy older, is a tool missing, which an install can settle; one whose
+    /// copy that meets it a directory raised for another tool shadows is a tool missing too, whose reason says
+    /// what to update; and one no copy of which could be shown to meet it is not known either way. Either of
+    /// the first two would run the leg's work under a version its configuration says it does not use, to fail,
+    /// when it fails, for a reason that names something else.
     /// </remarks>
     internal static (string Reason, LegVerdict Verdict)? MissingPrograms(
         IReadOnlyList<string> programs,
         Func<string, ProgramLocation?> located,
-        string path)
+        string path,
+        Func<string, string?> floorRemedy)
     {
+        ArgumentNullException.ThrowIfNull(floorRemedy);
+
         var absent = new List<string>();
         var nothingAt = new List<string>();
-        var unknown = new List<ProgramLocation>();
+        var unknown = new List<string>();
         var unasked = new List<string>();
+        var below = new List<string>();
 
         foreach (var program in programs)
         {
             var location = located(program);
 
-            switch (location?.Found)
+            switch (location)
             {
-                case ProgramFound.OnPath or ProgramFound.OffPath:
+                case { Present: true }:
                     break;
-                case ProgramFound.Nowhere:
+
+                // Its reason says what each copy said; only every copy being older is one an install settles.
+                case { Found: ProgramFound.BelowFloor } when floorRemedy(program) is { } remedy:
+                    below.Add($"{location.Reason}; {remedy}");
+                    break;
+                case { Found: ProgramFound.FloorShadowed } when floorRemedy(program) is not null:
+                    below.Add(location.Reason!);
+                    break;
+                case { Found: ProgramFound.FloorUnknown } when floorRemedy(program) is not null:
+                    unknown.Add(location.Reason!);
+                    break;
+                case { HeldToFloor: true }:
+                    // A minimum that is another leg's: the copy is there, and this leg starts it.
+                    break;
+                case { Found: ProgramFound.Nowhere }:
                     (ProcessRunner.IsPath(program) ? nothingAt : absent).Add(program);
                     break;
-                case ProgramFound.Unreadable:
-                    unknown.Add(location);
+                case { Found: ProgramFound.Unreadable }:
+                    unknown.Add(location.Unestablished());
                     break;
                 default:
                     unasked.Add(program);
@@ -312,10 +398,8 @@ public sealed record LegPlacement(SelectedLeg Leg, HostReport? Host, string? Rea
                 + "at that path, or name the program where it is");
         }
 
-        foreach (var location in unknown)
-        {
-            said.Add(location.Unestablished());
-        }
+        said.AddRange(below);
+        said.AddRange(unknown);
 
         if (unasked.Count > 0)
         {
@@ -330,7 +414,7 @@ public sealed record LegPlacement(SelectedLeg Leg, HostReport? Host, string? Rea
         }
 
         var verdict = unasked.Count > 0 ? LegVerdict.Poisoned
-            : absent.Count + nothingAt.Count > 0 ? LegVerdict.SkippedToolMissing
+            : absent.Count + nothingAt.Count + below.Count > 0 ? LegVerdict.SkippedToolMissing
             : LegVerdict.SkippedUnavailable;
 
         return (string.Join("; ", said), verdict);

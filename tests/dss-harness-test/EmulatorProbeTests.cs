@@ -147,13 +147,13 @@ public sealed class EmulatorProbeTests
             .Returns(new ProcessResult(0, "[aarch64]", string.Empty, TimeSpan.Zero, TimedOut: false));
 
         var emulator = Emulator(prints: "aarch64", pattern: @"^\[aarch64\]$");
-        var found = new ProgramSearch(Found(emulator).Found, [Path.Combine(TestHost.TemporaryRoot, "tools")]);
+        var found = new ProgramSearch(Found(emulator).Found, ProgramDirectories.After([Path.Combine(TestHost.TemporaryRoot, "tools")]));
 
         var check = await new EmulatorProbe(Platform("linux", "x86_64"), runner, FileSystem())
             .CheckAsync(emulator, found, TestContext.Current.CancellationToken);
 
         Assert.True(check.Available, check.Reason);
-        Assert.Equal(found.Directories, started?.AppendToPath);
+        Assert.Equal(found.Directories, started?.ProgramDirectories);
     }
 
     [Fact]
@@ -165,7 +165,7 @@ public sealed class EmulatorProbeTests
             {
                 ["qemu-x86_64"] = new("qemu-x86_64", ProgramFound.Unreadable, Reason: "the home directory is not known here"),
             },
-            []);
+            ProgramDirectories.None);
 
         var check = await Probe().CheckAsync(emulator, found, TestContext.Current.CancellationToken);
 
@@ -195,9 +195,9 @@ public sealed class EmulatorProbeTests
         var search = new ProgramSearch(
             new Dictionary<string, ProgramLocation>(StringComparer.Ordinal)
             {
-                ["qemu-aarch64"] = new("qemu-aarch64", found, Reason: found == ProgramFound.Unreadable ? "the home directory is not known here" : null),
+                ["qemu-aarch64"] = new("qemu-aarch64", found, Reason: found == ProgramFound.Nowhere ? null : "the home directory is not known here"),
             },
-            []);
+            ProgramDirectories.None);
 
         var check = await new EmulatorProbe(Platform("linux", "x86_64"), runner, FileSystem())
             .CheckAsync(emulator, search, TestContext.Current.CancellationToken);
@@ -205,6 +205,54 @@ public sealed class EmulatorProbeTests
         Assert.False(check.Available);
         Assert.Equal(reason, check.Reason);
         await runner.DidNotReceiveWithAnyArgs().RunAsync(default!, TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>
+    /// A requirement, and the program a witness starts, held to a declared tool's minimum version are there: the copy a leg
+    /// through the emulator starts, which the witness is started with. Whether the minimum turns a leg away is the tool's
+    /// scope, which only the leg can say (see <see cref="LegPlacementTests"/>), so no leg the tool is not declared for is
+    /// turned away from an emulator over it.
+    /// </summary>
+    [Theory]
+    [InlineData(ProgramFound.BelowFloor)]
+    [InlineData(ProgramFound.FloorShadowed)]
+    [InlineData(ProgramFound.FloorUnknown)]
+    public async Task AProgramHeldToAMinimumVersion_LeavesTheEmulatorAbleToRun_AndIsWhatItsWitnessStarts(ProgramFound found)
+    {
+        var runner = Substitute.For<IProcessRunner>();
+        runner.RunAsync(Arg.Any<ProcessRequest>(), Arg.Any<CancellationToken>())
+            .Returns(new ProcessResult(0, "aarch64", string.Empty, TimeSpan.Zero, TimedOut: false));
+        var emulator = new EmulatorConfig
+        {
+            HostOs = "linux",
+            HostProcessor = "x86_64",
+            Processor = "arm64",
+            Requires = ["qemu-aarch64-static"],
+            Witness = new EmulatorWitness { Command = ["qemu-aarch64", "./witness"], Pattern = "aarch64" },
+        };
+        var search = new ProgramSearch(
+            new Dictionary<string, ProgramLocation>(StringComparer.Ordinal)
+            {
+                ["qemu-aarch64"] = new("qemu-aarch64", found, "/usr/bin/qemu-aarch64", "below its minimum"),
+                ["qemu-aarch64-static"] = new("qemu-aarch64-static", found, "/usr/bin/qemu-aarch64-static", "below its minimum"),
+            },
+            ProgramDirectories.None);
+
+        var check = await new EmulatorProbe(Platform("linux", "x86_64"), runner, FileSystem())
+            .CheckAsync(emulator, search, TestContext.Current.CancellationToken);
+
+        Assert.True(check.Available, check.Reason);
+        await runner.Received(1).RunAsync(Arg.Is<ProcessRequest>(request => request.FileName == "qemu-aarch64"), Arg.Any<CancellationToken>());
+        Assert.Equal(["qemu-aarch64", "qemu-aarch64-static"], EmulatorProbe.ProgramsRead(emulator));
+        Assert.Empty(EmulatorProbe.ProgramsRead(new EmulatorConfig
+        {
+            HostOs = emulator.HostOs,
+            HostProcessor = emulator.HostProcessor,
+            Processor = emulator.Processor,
+            Requires = emulator.Requires,
+            Env = new(StringComparer.OrdinalIgnoreCase) { ["PATH"] = "/opt/qemu/bin" },
+            Witness = emulator.Witness,
+        }));
     }
 
     /// <summary>
@@ -229,7 +277,7 @@ public sealed class EmulatorProbeTests
         };
         var search = new ProgramSearch(
             new Dictionary<string, ProgramLocation>(StringComparer.Ordinal) { ["qemu-aarch64"] = new("qemu-aarch64", ProgramFound.Nowhere) },
-            []);
+            ProgramDirectories.None);
 
         var check = await new EmulatorProbe(Platform("linux", "x86_64"), runner, FileSystem())
             .CheckAsync(emulator, search, TestContext.Current.CancellationToken);
@@ -242,7 +290,7 @@ public sealed class EmulatorProbeTests
     public async Task ARequirementTheSearchWasNotGiven_IsADefect_NotAMissingProgram()
     {
         var emulator = Emulator(prints: "aarch64", pattern: "x", requires: ["qemu-x86_64"]);
-        var nothing = new ProgramSearch(new Dictionary<string, ProgramLocation>(StringComparer.Ordinal), []);
+        var nothing = new ProgramSearch(new Dictionary<string, ProgramLocation>(StringComparer.Ordinal), ProgramDirectories.None);
 
         await Assert.ThrowsAsync<ArgumentException>(
             () => Probe().CheckAsync(emulator, nothing, TestContext.Current.CancellationToken));

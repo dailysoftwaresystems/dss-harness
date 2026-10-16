@@ -361,7 +361,7 @@ public sealed class LegSetUps(ISetUpService setUps, SetUpHolds holds, PhaseRunne
                         LogFile = new LegRecords(runDirectory, leg.Name).PhaseLog(log),
                         WorkingDirectory = leg.HostTreeRoot,
                         Environment = PhaseEnvironment.Layered(leg.Environment),
-                        AppendToPath = leg.Host.ProgramDirectories,
+                        ProgramDirectories = leg.Host.ProgramDirectories,
                         StallSeconds = config.Defaults.StallSeconds,
                     },
                     cancellationToken)

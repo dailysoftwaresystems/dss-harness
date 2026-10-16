@@ -105,6 +105,32 @@ public sealed record HostConnection
     }
 
     /// <summary>
+    /// How the copy a survey of this host found as <paramref name="location"/> is spelt to start that copy here: by its
+    /// path - one the host wrote from its home as <c>~</c> spelt from the home directory a command here starts in - where
+    /// a command line to this host can carry it, and by the program's name otherwise, which starts the copy this PATH
+    /// names.
+    /// </summary>
+    /// <param name="location">Where the host's survey found the program.</param>
+    /// <remarks>
+    /// By the path wherever it can be, and never by the name where it was found on the PATH: the survey looks in the
+    /// searched directories, and ahead of the PATH in a directory a declared tool's minimum version raised, neither of
+    /// which the PATH of a command run here names.
+    /// </remarks>
+    public string Spell(ProgramLocation location)
+    {
+        ArgumentNullException.ThrowIfNull(location);
+
+        if (location.Path is not { } path || ProcessRunner.IsPath(location.Program))
+        {
+            return location.Program;
+        }
+
+        var spelled = path.StartsWith("~/", StringComparison.Ordinal) || path.StartsWith(@"~\", StringComparison.Ordinal) ? path[2..] : path;
+
+        return Host.Kind != HostKind.Ssh || RemoteCommandLine.IsLiteral(spelled, Shell) ? spelled : location.Program;
+    }
+
+    /// <summary>
     /// Drops what was measured about <paramref name="program"/>, so that the next resolution measures
     /// it again. Used after installing one: what was true before the install is exactly what the
     /// install changed, and reusing it would start the copy that was not there.
@@ -253,10 +279,37 @@ public sealed class HostCommandRunner(IProcessRunner processRunner) : IHostComma
         return connection.Host.Kind switch
         {
             HostKind.Local => await _processRunner.RunAsync(BuildRequest(connection, command), cancellationToken).ConfigureAwait(false),
-            HostKind.Ssh => await OverSshAsync(connection, pin => BuildRequest(connection, command, pin), cancellationToken).ConfigureAwait(false),
+            HostKind.Ssh => await OverSshAsync(connection, ShellMarked(connection, command, NewShellMark()), cancellationToken).ConfigureAwait(false),
             _ => await ThroughTransportAsync(connection.Host.ToString(), BuildRequest(connection, command), cancellationToken).ConfigureAwait(false),
         };
     }
+
+    /// <summary>
+    /// A new mark for an ssh host's shell to write before the command (see <see cref="RemoteCommandLine.Marked"/>): named
+    /// for the tool, so a reader of a raw capture can tell whose it is, and random, so no output holds it by chance.
+    /// </summary>
+    private static string NewShellMark() => $"{ToolPackage.Command}-{MarkedText.NewMark()}";
+
+    /// <summary>
+    /// The ssh calls that run <paramref name="command"/> on the host <paramref name="connection"/> reaches, its shell writing
+    /// <paramref name="mark"/> first: each hands the command's own receivers only what follows the mark (see <see cref="MarkedLines"/>).
+    /// </summary>
+    private static Func<SshPin?, SshCall> ShellMarked(HostConnection connection, HostCommand command, string mark)
+        => pin =>
+        {
+            var output = MarkedLines.For(mark, command.OnOutputLine);
+            var error = MarkedLines.For(mark, command.OnErrorLine);
+            var gated = command with { OnOutputLine = output is null ? null : output.Line, OnErrorLine = error is null ? null : error.Line };
+
+            return new SshCall(BuildRequest(connection, gated, pin, mark), mark, output, error);
+        };
+
+    /// <summary>One ssh call, and what its shell writes first on each stream, where it writes anything.</summary>
+    /// <param name="Request">The call.</param>
+    /// <param name="Mark">What the shell writes first on each stream, or <see langword="null"/> where it writes nothing.</param>
+    /// <param name="Output">Hands the lines of standard output on, where anything receives them.</param>
+    /// <param name="Error">Hands the lines of standard error on, where anything receives them.</param>
+    private sealed record SshCall(ProcessRequest Request, string? Mark = null, MarkedLines? Output = null, MarkedLines? Error = null);
 
     /// <summary>
     /// Runs the ssh call <paramref name="build"/> makes for <paramref name="connection"/>; and where it went to a
@@ -269,7 +322,7 @@ public sealed class HostCommandRunner(IProcessRunner processRunner) : IHostComma
     /// slept and woke with another lease, one that answers at another of its addresses - and ssh itself tries
     /// every address a name has. What the pinned call printed is kept ahead of what the second one printed.
     /// </remarks>
-    private async Task<ProcessResult> OverSshAsync(HostConnection connection, Func<SshPin?, ProcessRequest> build, CancellationToken cancellationToken)
+    private async Task<ProcessResult> OverSshAsync(HostConnection connection, Func<SshPin?, SshCall> build, CancellationToken cancellationToken)
     {
         var (pin, result) = await AttemptAsync(connection, build, cancellationToken).ConfigureAwait(false);
 
@@ -295,11 +348,12 @@ public sealed class HostCommandRunner(IProcessRunner processRunner) : IHostComma
     /// <remarks>
     /// Whether the call is pinned is read once, and the call built from that reading: a copy of the connection running
     /// beside this one can drop the pin they share at any moment, and a call that learnt nothing because the pin held,
-    /// then built once it was dropped, would let ssh dial an address nobody had learnt.
+    /// then built once it was dropped, would let ssh dial an address nobody had learnt. Each stream keeps only what follows
+    /// the mark the call's shell wrote first, where it wrote one.
     /// </remarks>
     private async Task<(SshPin? Pin, ProcessResult Result)> AttemptAsync(
         HostConnection connection,
-        Func<SshPin?, ProcessRequest> build,
+        Func<SshPin?, SshCall> build,
         CancellationToken cancellationToken)
     {
         var pin = connection.Pin is { Holds: true } holding ? holding : null;
@@ -309,7 +363,21 @@ public sealed class HostCommandRunner(IProcessRunner processRunner) : IHostComma
             await resolved.LearnAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        return (pin, await ThroughTransportAsync(connection.Host.ToString(), build(pin), cancellationToken).ConfigureAwait(false));
+        var call = build(pin);
+        var result = await ThroughTransportAsync(connection.Host.ToString(), call.Request, cancellationToken).ConfigureAwait(false);
+
+        call.Output?.Ended();
+        call.Error?.Ended();
+
+        return (
+            pin,
+            call.Mark is not { } mark
+                ? result
+                : result with
+                {
+                    StandardOutput = MarkedText.Since(result.StandardOutput, mark),
+                    StandardError = MarkedText.Since(result.StandardError, mark),
+                });
     }
 
     /// <summary>
@@ -347,9 +415,10 @@ public sealed class HostCommandRunner(IProcessRunner processRunner) : IHostComma
             throw new ArgumentException("Only an ssh host hands commands to a shell.", nameof(connection));
         }
 
+        // Unmarked: which shell is there is what this asks, and how a mark is written is what the answer says.
         return OverSshAsync(
             connection,
-            pin => SshRequest(connection, pin, RemoteCommandLine.ShellProbe) with { Timeout = timeout, StandardInput = string.Empty },
+            pin => new SshCall(SshRequest(connection, pin, RemoteCommandLine.ShellProbe) with { Timeout = timeout, StandardInput = string.Empty }),
             cancellationToken);
     }
 
@@ -421,14 +490,21 @@ public sealed class HostCommandRunner(IProcessRunner processRunner) : IHostComma
     };
 
     /// <summary>The process that runs <paramref name="command"/> on the host <paramref name="connection"/> reaches.</summary>
-    public static ProcessRequest BuildRequest(HostConnection connection, HostCommand command)
-        => BuildRequest(connection, command, Holding(connection));
+    /// <param name="connection">The connection.</param>
+    /// <param name="command">The command.</param>
+    /// <param name="mark">
+    /// What an ssh host's shell writes on each stream before the command (see <see cref="RemoteCommandLine.Marked"/>); none
+    /// where left out. Neither this machine nor a WSL distribution starts a shell for a command, so none is written there.
+    /// </param>
+    public static ProcessRequest BuildRequest(HostConnection connection, HostCommand command, string? mark = null)
+        => BuildRequest(connection, command, Holding(connection), mark);
 
     /// <summary>
     /// The process that runs <paramref name="command"/> on the host <paramref name="connection"/> reaches, going to
-    /// <paramref name="pin"/>'s address where there is one.
+    /// <paramref name="pin"/>'s address where there is one, and an ssh host's shell writing <paramref name="mark"/> first
+    /// where there is one.
     /// </summary>
-    private static ProcessRequest BuildRequest(HostConnection connection, HostCommand command, SshPin? pin)
+    private static ProcessRequest BuildRequest(HostConnection connection, HostCommand command, SshPin? pin, string? mark)
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(command);
@@ -461,7 +537,7 @@ public sealed class HostCommandRunner(IProcessRunner processRunner) : IHostComma
                 ],
                 Environment = WslEnvironment,
             },
-            _ => SshRequest(connection, pin, RemoteCommandLine.Join([command.Program, .. command.Arguments], connection.Shell)),
+            _ => SshRequest(connection, pin, Marked(RemoteCommandLine.Join([command.Program, .. command.Arguments], connection.Shell))),
         };
 
         return request with
@@ -475,6 +551,8 @@ public sealed class HostCommandRunner(IProcessRunner processRunner) : IHostComma
             OutputKept = command.OutputKept,
             ErrorKept = command.ErrorKept,
         };
+
+        string Marked(string line) => mark is null ? line : RemoteCommandLine.Marked(line, mark, connection.Shell);
     }
 
     /// <summary>

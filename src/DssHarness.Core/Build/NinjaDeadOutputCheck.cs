@@ -41,19 +41,19 @@ public sealed class NinjaDeadOutputCheck(IProcessRunner processRunner, IFileSyst
 
     /// <summary>Asks ninja about one build directory.</summary>
     /// <param name="buildDirectory">The directory to ask about.</param>
-    /// <param name="appendToPath">The directories the build appended to its PATH, which ninja is looked up on too.</param>
+    /// <param name="programDirectories">The directories the build put around its PATH, which ninja is looked up on too.</param>
     /// <param name="program">The ninja the build ran, as its configuration recorded it, or <see langword="null"/> to look one up.</param>
     /// <param name="environment">The environment the build's phases ran in.</param>
     /// <param name="cancellationToken">Stops the question.</param>
     public async Task<NinjaDeadOutputs> CheckAsync(
         string buildDirectory,
-        IReadOnlyList<string> appendToPath,
+        ProgramDirectories programDirectories,
         string? program = null,
         IReadOnlyDictionary<string, string?>? environment = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(buildDirectory);
-        ArgumentNullException.ThrowIfNull(appendToPath);
+        ArgumentNullException.ThrowIfNull(programDirectories);
 
         if (!_fileSystem.FileExists(Path.Combine(buildDirectory, NinjaDependencyCheck.ManifestFileName)))
         {
@@ -67,7 +67,7 @@ public sealed class NinjaDeadOutputCheck(IProcessRunner processRunner, IFileSyst
             result = await _processRunner
                 .RunAsync(
                     // -n: named, never removed. The harness removes nothing of a build directory it keeps.
-                    NinjaDependencyCheck.Request(buildDirectory, ["-C", buildDirectory, "-n", "-t", "cleandead"], appendToPath, program, environment),
+                    NinjaDependencyCheck.Request(buildDirectory, ["-C", buildDirectory, "-n", "-t", "cleandead"], programDirectories, program, environment),
                     cancellationToken)
                 .ConfigureAwait(false);
         }

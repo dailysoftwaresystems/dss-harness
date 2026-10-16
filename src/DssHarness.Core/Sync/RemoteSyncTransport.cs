@@ -477,8 +477,8 @@ public sealed class RemoteSyncTransport(
         if (exitCode != HarnessExit.Success)
         {
             // From the agent's own output on, and under the name the configuration declares, as every other
-            // reason built here is: the whole capture holds whatever the host's login shell printed first,
-            // and ssh names the address it dialled, one the host's name resolved to.
+            // reason built here is: the whole capture holds whatever reached it ahead of the agent (see
+            // HostAgentProtocol.StartedLine), and ssh names the address it dialled, one the host's name resolved to.
             throw new HarnessException(
                 exitCode,
                 $"{Host}: '{operation}' exited {exitCode}"

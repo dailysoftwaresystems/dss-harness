@@ -24,7 +24,7 @@ namespace DssHarness.Core.Testing;
 public sealed record TestRequest
 {
     /// <inheritdoc cref="Hosts.HostReport.ProgramDirectories"/>
-    public IReadOnlyList<string> ProgramDirectories { get; init; } = [];
+    public ProgramDirectories ProgramDirectories { get; init; } = ProgramDirectories.None;
 
     /// <summary>The leg, as the configuration names it and as the ledger shows it.</summary>
     public required string Leg { get; init; }
@@ -345,7 +345,7 @@ public sealed class TestService(
                     FileName = ProcessRunner.Anchored(command.Program, working),
                     Arguments = command.Arguments,
                     LogFile = logFile,
-                    AppendToPath = request.ProgramDirectories,
+                    ProgramDirectories = request.ProgramDirectories,
                     WorkingDirectory = working,
                     Environment = TestInvocationResolver.EnvironmentFor(request.HostEnvironment, command.Environment),
                     SuccessPattern = invocation.SuccessPattern,

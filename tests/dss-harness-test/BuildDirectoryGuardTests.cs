@@ -3,6 +3,7 @@ using DssHarness.Core.FileSystem;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Results;
+using DssHarness.Core.Processes;
 
 namespace DssHarness.Tests;
 
@@ -26,10 +27,10 @@ public sealed class BuildDirectoryGuardTests
         var cache = Path.Combine(build, BuildDirectoryGuard.CMakeCacheFileName);
 
         File.WriteAllText(cache, $"CMAKE_HOME_DIRECTORY:INTERNAL={Path.Combine(linked, "app").Replace('\\', '/')}\n");
-        guard.Check(build, tree, null, null, null, new PathSearch(null, []));
+        guard.Check(build, tree, null, null, null, new PathSearch(null, ProgramDirectories.None));
 
         File.WriteAllText(cache, $"CMAKE_HOME_DIRECTORY:INTERNAL={temp.Combine("other", "app").Replace('\\', '/')}\n");
-        var refusal = Assert.Throws<HarnessException>(() => guard.Check(build, tree, null, null, null, new PathSearch(null, [])));
+        var refusal = Assert.Throws<HarnessException>(() => guard.Check(build, tree, null, null, null, new PathSearch(null, ProgramDirectories.None)));
 
         Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
         Assert.Contains("was configured from", refusal.Message, StringComparison.Ordinal);

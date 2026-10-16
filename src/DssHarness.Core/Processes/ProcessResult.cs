@@ -29,4 +29,11 @@ public sealed record ProcessResult(
 
     /// <summary>stdout with surrounding whitespace removed, for single line probes.</summary>
     public string TrimmedOutput => StandardOutput.Trim();
+
+    /// <summary>
+    /// What a program that never ran is reported as, <paramref name="why"/> on its standard error: so a caller reads
+    /// a start that failed as it reads a run that did.
+    /// </summary>
+    /// <param name="why">Why it never ran.</param>
+    public static ProcessResult NotRun(string why) => new(-1, string.Empty, why, TimeSpan.Zero, TimedOut: false);
 }

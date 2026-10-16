@@ -19,6 +19,7 @@ using DssHarness.Core.Runners;
 using DssHarness.Core.Runs;
 using DssHarness.Core.SetUps;
 using DssHarness.Core.Sync;
+using DssHarness.Core.Tools;
 using DssHarness.Core.Worktrees;
 
 namespace DssHarness.Tests;
@@ -1537,6 +1538,46 @@ public sealed class LegRunServiceTests
             leg.GetProperty("detail").GetString(),
             StringComparison.Ordinal);
         Assert.Equal("vs", leg.GetProperty("developerEnvironment").GetProperty("name").GetString());
+        Assert.Empty(ran);
+    }
+
+    /// <summary>
+    /// A declared tool the PATH a developer environment set up names is held to its minimum version there, before
+    /// anything of the leg starts: the copy Visual Studio carries is the one the leg starts, and one older than the
+    /// configuration needs skips the leg as a tool missing, named with what it said, as the survey names one it can see.
+    /// </summary>
+    [Fact]
+    public async Task AToolTheDeveloperEnvironmentCarriesBelowItsMinimum_SkipsItsLeg_NamingIt_BeforeAnythingOfItStarts()
+    {
+        using var temp = new TempDirectory();
+        using var visualStudio = new ScriptedVisualStudio().Carrying("x64", "cl", "cmake");
+        var harness = new HarnessFactory();
+        var ran = new List<string>();
+        var config = MsvcLeg(hostSetsPath: false);
+        config.Tools.Add(new ToolConfig { Name = "cmake", Probe = new ToolProbe { Args = ["--version"], Regex = @"(\d+\.\d+\.\d+)" }, MinVersion = "3.28.0" });
+        var probes = Substitute.For<IProcessRunner>();
+        probes.RunAsync(Arg.Any<ProcessRequest>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult(HostResults.Ok("cmake version 3.25.1\n")));
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            config,
+            WindowsHere(visualStudio),
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = LegWorkload.BuildOnly },
+            ran: leg => ran.Add(leg.Name),
+            developerEnvironments: visualStudio.Provider(),
+            versionProbes: probes);
+
+        using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
+        var leg = Assert.Single(document.RootElement.GetProperty("legs").EnumerateArray());
+        var cmake = Assert.Single(probes.ReceivedCalls()).GetArguments()[0] as ProcessRequest;
+
+        Assert.Equal("skipped-tool-missing", leg.GetProperty("verdict").GetString());
+        Assert.Equal(
+            $"no copy of 'cmake' there is at least 3.28.0, the minVersion it is declared with: {cmake!.FileName} is 3.25.1; put a copy of at "
+            + "least that version where a leg there finds programs: on the PATH, or in a directory searched for programs",
+            leg.GetProperty("detail").GetString());
+        Assert.StartsWith(visualStudio.InstallationPath, cmake.FileName, StringComparison.OrdinalIgnoreCase);
         Assert.Empty(ran);
     }
 
@@ -3624,7 +3665,7 @@ public sealed class LegRunServiceTests
             harness.ProcessRunner,
             harness.Platform,
             new ActionToolPolicy(harness.Platform),
-            new LocalProgramResolver(harness.Platform, FilePermissionsFactory.Create()),
+            HostDoubles.Floors(harness.Platform, harness.ProcessRunner),
             holds,
             harness.Output);
 
@@ -4192,7 +4233,8 @@ public sealed class LegRunServiceTests
         CancellationToken? cancellationToken = null,
         RunId? runId = null,
         IHarnessContextLoader? loader = null,
-        LegSetUps? setUps = null)
+        LegSetUps? setUps = null,
+        IProcessRunner? versionProbes = null)
     {
         var loading = loader ?? HostDoubles.Loader(config, tree ?? temp.Path, temp.Path);
         var run = runId ?? RunId.New();
@@ -4215,10 +4257,10 @@ public sealed class LegRunServiceTests
             trees ?? new KnownTrees(),
             new KeepAwake(keepAwake ?? new HeldProcesses(), harness.Output),
             developerEnvironments ?? NoDeveloperEnvironment(harness),
+            HostDoubles.Floors(harness.Platform, versionProbes ?? harness.ProcessRunner, harness.FilePermissions),
             harness.GitClient,
             harness.PathBudget,
             fileSystem ?? harness.FileSystem,
-            harness.FilePermissions,
             harness.Platform,
             harness.Output,
             origin,

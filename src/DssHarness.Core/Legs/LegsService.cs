@@ -135,7 +135,7 @@ public sealed class LegsService(
         if (candidates.Any(entry => entry.Hosts.Contains(HostId.Local)))
         {
             reports[HostId.Local] = await _inspector
-                .InspectAsync(context, HostId.Local, emulators, environments, programs, room.GetValueOrDefault(HostId.Local), cancellationToken)
+                .InspectAsync(context, HostId.Local, emulators, environments, programs, room.GetValueOrDefault(HostId.Local), cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -265,7 +265,7 @@ public sealed class LegsService(
         IReadOnlyList<string> programs,
         RoomQuestions? room,
         CancellationToken cancellationToken)
-        => await _inspector.InspectAsync(context, host, emulators, environments, programs, room, cancellationToken).ConfigureAwait(false);
+        => await _inspector.InspectAsync(context, host, emulators, environments, programs, room, cancellationToken: cancellationToken).ConfigureAwait(false);
 
     /// <summary>
     /// Reports what the measurements that finished changed, warns about every failure but one, and raises that

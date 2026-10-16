@@ -47,7 +47,7 @@ public sealed class KeepAwakeTests
         Assert.Equal("caffeinate", request.FileName);
         Assert.Equal(["-dimsu", "-w", Environment.ProcessId.ToString(CultureInfo.InvariantCulture)], request.Arguments);
         Assert.Equal("mac", request.Environment["RH_HOST"]);
-        Assert.Equal(Directories, request.AppendToPath);
+        Assert.Equal(Directories, request.ProgramDirectories.Appended);
         Assert.False(stopping.IsCancellationRequested);
 
         await holding.DisposeAsync();

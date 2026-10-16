@@ -4,6 +4,7 @@ using DssHarness.Core.FileSystem;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Results;
+using DssHarness.Core.Processes;
 
 namespace DssHarness.Tests;
 
@@ -183,7 +184,7 @@ public sealed class BuildVariantTests
             temp,
             $"CMAKE_HOME_DIRECTORY:INTERNAL={temp.Path.Replace('\\', '/')}\nCMAKE_C_COMPILER:FILEPATH={configured.Replace('\\', '/')}");
 
-        Guard().Check(buildDirectory, temp.Path, CompilerValue.Read("gcc"), null, null, new PathSearch(null, [temp.Combine("found")]));
+        Guard().Check(buildDirectory, temp.Path, CompilerValue.Read("gcc"), null, null, new PathSearch(null, ProgramDirectories.After([temp.Combine("found")])));
 
         Assert.Throws<HarnessException>(() => Guard().Check(
             buildDirectory,
@@ -191,7 +192,7 @@ public sealed class BuildVariantTests
             CompilerValue.Read("gcc"),
             null,
             null,
-            new PathSearch(null, [temp.Combine("other")])));
+            new PathSearch(null, ProgramDirectories.After([temp.Combine("other")]))));
     }
 
     /// <summary>
@@ -221,11 +222,11 @@ public sealed class BuildVariantTests
     {
         var declared = PathSearch.For(
             new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase) { ["Path"] = "/opt/arm/bin" },
-            ["/opt/found"]);
+            ProgramDirectories.After(["/opt/found"]));
 
         Assert.Equal("/opt/arm/bin", declared.Path);
-        Assert.Equal(["/opt/found"], declared.ProgramDirectories);
-        Assert.Equal(Environment.GetEnvironmentVariable("PATH"), PathSearch.For(new Dictionary<string, string?>(), []).Path);
+        Assert.Equal(["/opt/found"], declared.ProgramDirectories.Appended);
+        Assert.Equal(Environment.GetEnvironmentVariable("PATH"), PathSearch.For(new Dictionary<string, string?>(), ProgramDirectories.None).Path);
     }
 
     /// <summary>
@@ -278,10 +279,10 @@ public sealed class BuildVariantTests
         => new(new HarnessFactory().FileSystem, new HostPlatform(), FilePermissionsFactory.Create());
 
     /// <summary>A search that finds no program at all, so only names can be compared.</summary>
-    private static PathSearch Nowhere => new(null, []);
+    private static PathSearch Nowhere => new(null, ProgramDirectories.None);
 
     /// <summary>A search whose PATH is <paramref name="directories"/>, in order, and nothing else.</summary>
-    private static PathSearch OnPath(params string[] directories) => new(string.Join(Path.PathSeparator, directories), []);
+    private static PathSearch OnPath(params string[] directories) => new(string.Join(Path.PathSeparator, directories), ProgramDirectories.None);
 
     private static string WriteCache(TempDirectory temp, string contents)
     {

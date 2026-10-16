@@ -376,13 +376,13 @@ public sealed class HostConnector(
         {
             // Before the host's platform is known, so the built-in list: what is looked for here is
             // the harness's own SDK, which a repository's toolSearchDirectories must never hide. cmd
-            // is Windows's own shell, and Windows's built-in list is empty: a POSIX directory is none a
-            // Windows host has, and the SDK there is on the machine PATH.
+            // and PowerShell are Windows's own shells, and Windows's built-in list is empty: a POSIX
+            // directory is none a Windows host has, and the SDK there is on the machine PATH.
             Connection = await _programs
                 .ResolveAsync(
                     connection,
                     wanted,
-                    connection.Shell == RemoteShell.Cmd ? ToolSearchDirectories.BuiltIn(PlatformNames.Windows) : ToolSearchDirectories.Posix,
+                    RemoteCommandLine.IsWindows(connection.Shell) ? ToolSearchDirectories.BuiltIn(PlatformNames.Windows) : ToolSearchDirectories.Posix,
                     budget,
                     cancellationToken)
                 .ConfigureAwait(false),

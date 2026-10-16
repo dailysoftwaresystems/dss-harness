@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
 using DssHarness.Core.Hosts;
@@ -260,6 +261,118 @@ public sealed class HostCommandRunnerTests
     }
 
     /// <summary>
+    /// What an ssh host's shell prints before the command - its startup files, emsdk's environment script among them - is
+    /// none of the command's: its shell writes a mark on each stream first, and only what follows the mark is kept and
+    /// handed on, whichever stream the startup files wrote to and whether or not they ended their last line.
+    /// </summary>
+    [Theory]
+    [InlineData(RemoteShell.Standard)]
+    [InlineData(RemoteShell.Cmd)]
+    [InlineData(RemoteShell.PowerShell)]
+    public async Task WhatAnSshHostsShellPrintsBeforeTheCommand_IsNeitherKeptNorHandedOn(RemoteShell shell)
+    {
+        var relayed = new List<string>();
+        string? line = null;
+        var processRunner = Substitute.For<IProcessRunner>();
+        processRunner.RunAsync(Arg.Any<ProcessRequest>(), Arg.Any<CancellationToken>()).Returns(call =>
+        {
+            var request = call.Arg<ProcessRequest>();
+            line = request.Arguments[^1];
+            var mark = Regex.Match(line, "dssharness-[0-9a-f]{32}").Value;
+
+            request.OnOutputLine!("Adding directories to PATH:");
+            request.OnOutputLine!("PATH += /home/harness/emsdk");
+            request.OnOutputLine!(mark);
+            request.OnOutputLine!("10.0.100 [/usr/lib/dotnet/sdk]");
+            request.OnErrorLine!("Setting up EMSDK environment" + mark + " ");
+            request.OnErrorLine!("warning: an SDK is deprecated");
+
+            return Task.FromResult(new ProcessResult(
+                0,
+                $"Adding directories to PATH:\nPATH += /home/harness/emsdk\n{mark}\n10.0.100 [/usr/lib/dotnet/sdk]\n",
+                $"Setting up EMSDK environment{mark} \r\nwarning: an SDK is deprecated\r\n",
+                TimeSpan.Zero,
+                TimedOut: false));
+        });
+        var listing = ListSdks with { OnOutputLine = relayed.Add, OnErrorLine = relayed.Add };
+
+        var result = await new HostCommandRunner(processRunner).RunAsync(Ssh() with { Shell = shell }, listing, TestContext.Current.CancellationToken);
+
+        Assert.EndsWith("dotnet --list-sdks", line, StringComparison.Ordinal);
+        Assert.Equal("10.0.100 [/usr/lib/dotnet/sdk]\n", result.StandardOutput);
+        Assert.Equal("warning: an SDK is deprecated\r\n", result.StandardError);
+        Assert.Equal(["10.0.100 [/usr/lib/dotnet/sdk]", "warning: an SDK is deprecated"], relayed);
+    }
+
+    /// <summary>
+    /// Every call writes a mark of its own, so no output of one command can stand for another's; neither this machine nor a
+    /// WSL distribution starts a shell for a command, so nothing there writes one.
+    /// </summary>
+    [Fact]
+    public void OnlyAnSshHostsShell_IsHandedAMark()
+    {
+        var marked = HostCommandRunner.BuildRequest(Ssh(), ListSdks, "dssharness-ab12");
+        var wsl = HostCommandRunner.BuildRequest(new HostConnection { Host = HostId.Wsl("wsl-a"), Distribution = "Example-Linux" }, ListSdks, "dssharness-ab12");
+        var local = HostCommandRunner.BuildRequest(new HostConnection { Host = HostId.Local }, ListSdks, "dssharness-ab12");
+
+        Assert.Equal("sh -c 'echo dssharness-ab12; echo dssharness-ab12 1>&2'; dotnet --list-sdks", marked.Arguments[^1]);
+        Assert.DoesNotContain(wsl.Arguments, argument => argument.Contains("dssharness-ab12", StringComparison.Ordinal));
+        Assert.Equal(["--list-sdks"], local.Arguments);
+    }
+
+    /// <summary>
+    /// A stream that never carries the mark - ssh's own words about a connection that never began a session - is held
+    /// while the call runs, since the mark may yet come, and handed on whole once it ends: the reader is owed why the
+    /// host could not be reached.
+    /// </summary>
+    [Fact]
+    public async Task AStreamThatNeverCarriesTheMark_IsHandedOnWhole_OnceTheCallEnds()
+    {
+        const string Refused = "ssh: connect to host host.invalid port 22: Connection refused";
+        var relayed = new List<string>();
+        var processRunner = Substitute.For<IProcessRunner>();
+        processRunner.RunAsync(Arg.Any<ProcessRequest>(), Arg.Any<CancellationToken>()).Returns(call =>
+        {
+            call.Arg<ProcessRequest>().OnErrorLine!(Refused);
+            Assert.Empty(relayed);
+
+            return Task.FromResult(HostResults.Failed(255, Refused + "\n"));
+        });
+
+        var result = await new HostCommandRunner(processRunner).RunAsync(Ssh(), ListSdks with { OnErrorLine = relayed.Add }, TestContext.Current.CancellationToken);
+
+        Assert.Equal([Refused], relayed);
+        Assert.Equal(Refused + "\n", result.StandardError);
+    }
+
+    /// <summary>
+    /// Each call over ssh is marked afresh, so no output of one command can stand for another's; and the shell probe is
+    /// sent as written, unmarked, since how a mark is written is what it asks.
+    /// </summary>
+    [Fact]
+    public async Task EachSshCall_IsMarkedAfresh_AndTheShellProbeIsSentUnmarked()
+    {
+        var lines = new List<string>();
+        var processRunner = Substitute.For<IProcessRunner>();
+        processRunner.RunAsync(Arg.Any<ProcessRequest>(), Arg.Any<CancellationToken>()).Returns(call =>
+        {
+            lines.Add(call.Arg<ProcessRequest>().Arguments[^1]);
+            return Task.FromResult(HostResults.Ok(string.Empty));
+        });
+        var hosts = new HostCommandRunner(processRunner);
+
+        await hosts.RunAsync(Ssh(), ListSdks, TestContext.Current.CancellationToken);
+        await hosts.RunAsync(Ssh(), ListSdks, TestContext.Current.CancellationToken);
+        await hosts.ProbeShellAsync(Ssh(), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        var marks = lines.Take(2).Select(line => Regex.Match(line, @"^sh -c 'echo (dssharness-[0-9a-f]{32}); echo \1 1>&2'; ").Groups[1].Value).ToList();
+
+        Assert.All(marks, mark => Assert.NotEmpty(mark));
+        Assert.NotEqual(marks[0], marks[1]);
+        Assert.Equal(RemoteCommandLine.ShellProbe, lines[2]);
+    }
+
+    /// <summary>
     /// The shell probe drops a pin that failed before any session the same way; and a call that was never
     /// pinned is run once whatever it failed over, since nothing would change the second time.
     /// </summary>
@@ -462,6 +575,29 @@ public sealed class HostCommandRunnerTests
         Assert.Equal("cmake", connection.Spell("cmake"));
         Assert.Null(connection.Located("ninja"));
         Assert.Equal(ProgramFound.Unknown, connection.Forget("dotnet").Located("dotnet")?.Found ?? ProgramFound.Unknown);
+    }
+
+    /// <summary>
+    /// The copy a host's survey found is started by its path - on the PATH too, since the survey looks where the PATH of
+    /// a command run there does not - with one the host wrote from its home as <c>~</c> spelt from the home a command
+    /// there starts in; by the program's name where a command line to an ssh host cannot carry the path, or the survey
+    /// found none.
+    /// </summary>
+    [Fact]
+    public void ACopyAHostsSurveyFound_IsStartedByItsPath_WhereACommandLineThereCanCarryIt()
+    {
+        var wsl = new HostConnection { Host = HostId.Wsl("wsl-a"), Distribution = "Example-Linux" };
+        var cmd = Ssh("win-box") with { Shell = RemoteShell.Cmd };
+
+        Assert.Equal("/opt/cmake-3.31/bin/cmake", Ssh().Spell(new ProgramLocation("cmake", ProgramFound.OnPath, "/opt/cmake-3.31/bin/cmake")));
+        Assert.Equal(".local/bin/ninja", Ssh().Spell(new ProgramLocation("ninja", ProgramFound.OffPath, "~/.local/bin/ninja")));
+        Assert.Equal(@".dotnet\tools\ninja.exe", cmd.Spell(new ProgramLocation("ninja", ProgramFound.OffPath, @"~\.dotnet\tools\ninja.exe")));
+        Assert.Equal("ninja", Ssh().Spell(new ProgramLocation("ninja", ProgramFound.OffPath, "/opt/my tools/ninja")));
+        Assert.Equal("/opt/my tools/ninja", wsl.Spell(new ProgramLocation("ninja", ProgramFound.OffPath, "/opt/my tools/ninja")));
+        Assert.Equal(
+            @"C:\Program Files\CMake\bin\cmake.exe",
+            new HostConnection { Host = HostId.Local }.Spell(new ProgramLocation("cmake", ProgramFound.OnPath, @"C:\Program Files\CMake\bin\cmake.exe")));
+        Assert.Equal("ninja", Ssh().Spell(new ProgramLocation("ninja", ProgramFound.Nowhere)));
     }
 
     /// <summary>

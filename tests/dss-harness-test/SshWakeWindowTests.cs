@@ -153,7 +153,7 @@ public sealed class SshWakeWindowTests
 
     private static ProcessResult TimedOut() => new(-1, string.Empty, string.Empty, TimeSpan.FromSeconds(30), TimedOut: true);
 
-    private static ProcessResult Answered() => HostResults.Ok("%COMSPEC%\n");
+    private static ProcessResult Answered() => HostResults.Ok("%COMSPEC% %COMSPEC%\n");
 
     /// <summary>
     /// A clock whose time of day is set an hour ahead each time it moves, as a machine syncing its time sets it,

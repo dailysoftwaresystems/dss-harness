@@ -1,6 +1,7 @@
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.Results;
+using DssHarness.Core.Processes;
 
 namespace DssHarness.Core.Build;
 
@@ -322,7 +323,7 @@ public sealed class CMakeAdapter : IBuildAdapter
             WorkingDirectory = request.TreeRoot,
             Environment = environment,
             LogFile = BuildAdapters.LogFor(request, ConfigurePhase),
-            AppendToPath = request.ProgramDirectories,
+            ProgramDirectories = request.ProgramDirectories,
         };
 
         var build = new List<string>
@@ -346,7 +347,7 @@ public sealed class CMakeAdapter : IBuildAdapter
             WorkingDirectory = request.TreeRoot,
             Environment = environment,
             LogFile = BuildAdapters.LogFor(request, BuildPhase),
-            AppendToPath = request.ProgramDirectories,
+            ProgramDirectories = request.ProgramDirectories,
         };
     }
 }
@@ -432,7 +433,7 @@ public sealed class DotnetAdapter : IBuildAdapter
             WorkingDirectory = request.TreeRoot,
             Environment = environment,
             LogFile = BuildAdapters.LogFor(request, "build"),
-            AppendToPath = request.ProgramDirectories,
+            ProgramDirectories = request.ProgramDirectories,
         };
     }
 }
@@ -493,7 +494,7 @@ public sealed class DartAdapter : IBuildAdapter
             WorkingDirectory = project,
             Environment = environment,
             LogFile = BuildAdapters.LogFor(request, "pub-get"),
-            AppendToPath = request.ProgramDirectories,
+            ProgramDirectories = request.ProgramDirectories,
         };
 
         var arguments = new List<string> { "compile", "exe" };
@@ -520,7 +521,7 @@ public sealed class DartAdapter : IBuildAdapter
             WorkingDirectory = project,
             Environment = environment,
             LogFile = BuildAdapters.LogFor(request, "build"),
-            AppendToPath = request.ProgramDirectories,
+            ProgramDirectories = request.ProgramDirectories,
         };
     }
 }

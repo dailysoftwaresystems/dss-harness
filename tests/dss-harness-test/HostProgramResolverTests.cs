@@ -176,7 +176,37 @@ public sealed class HostProgramResolverTests
         Assert.Equal(
             "'cmake' is not on the PATH there, and its shell, cmd, gives this no way to look in the directories searched for programs",
             located?.Reason);
-        Assert.Equal(["where"], asked);
+        Assert.Equal(["where.exe"], asked);
+    }
+
+    /// <summary>
+    /// PowerShell reads a bare where as its own Where-Object, which finds nothing and says nothing, so its PATH is asked
+    /// with where.exe; and its ls prints a table, so the directories searched beyond it are not looked in either.
+    /// </summary>
+    [Fact]
+    public async Task OnAPowerShellShell_ThePathIsAskedWithWhereExe_AndTheDirectoriesAreNotLookedIn()
+    {
+        var asked = new List<string>();
+        var commands = new ScriptedHostCommands((_, command) =>
+        {
+            asked.Add(command.Program);
+
+            return (command.Program, command.Arguments[0]) switch
+            {
+                ("where.exe", "ninja") => HostResults.Ok("C:\\tools\\ninja.exe\r\n"),
+                ("where.exe", _) => HostResults.Failed(1, "INFO: Could not find files"),
+                _ => throw HostResults.Unexpected(command),
+            };
+        });
+
+        var connection = await Resolve(commands, SshHost with { Shell = RemoteShell.PowerShell }, ["ninja", "cmake"], [@"C:\tools"]);
+
+        Assert.Equal(ProgramFound.OnPath, connection.Located("ninja")?.Found);
+        Assert.Equal(ProgramFound.Unreadable, connection.Located("cmake")?.Found);
+        Assert.Equal(
+            "'cmake' is not on the PATH there, and its shell, PowerShell, gives this no way to look in the directories searched for programs",
+            connection.Located("cmake")?.Reason);
+        Assert.Equal(["where.exe", "where.exe"], asked);
     }
 
     /// <summary>With nothing to look in beyond the PATH, the PATH was everywhere there was to look.</summary>
@@ -191,9 +221,9 @@ public sealed class HostProgramResolverTests
     }
 
     /// <summary>
-    /// A POSIX 'ls' given files prints the ones that exist, as given, and nothing else. PowerShell -
-    /// which no probe tells apart from a POSIX shell - prints a table, and reading that as "none of
-    /// them exist" would call every program there missing.
+    /// A POSIX 'ls' given files prints the ones that exist, as given, and nothing else. Anything else -
+    /// a table, as PowerShell's prints - is no listing, and reading it as "none of them exist" would call
+    /// every program there missing.
     /// </summary>
     [Fact]
     public async Task AListingThatIsNotPosixs_LeavesTheProgramUnknown_NotMissing()
@@ -236,11 +266,11 @@ public sealed class HostProgramResolverTests
     }
 
     /// <summary>
-    /// A Windows directory given to a host whose shell is not cmd - PowerShell over ssh - cannot be
-    /// listed with a POSIX 'ls', and is said to be that rather than searched and found empty.
+    /// A Windows directory given to a host whose shell is a POSIX one cannot be listed with its 'ls', and
+    /// is said to be that rather than searched and found empty.
     /// </summary>
     [Fact]
-    public async Task AWindowsDirectoryGivenToAShellThatIsNotCmd_IsSaidToBeUnlooked()
+    public async Task AWindowsDirectoryGivenToAPosixShell_IsSaidToBeUnlooked()
     {
         var commands = new ScriptedHostCommands((_, command) => command.Program switch
         {

@@ -142,6 +142,7 @@ internal static class HarnessServices
             TimeProvider.System,
             SshWakeWindow.DefaultPollDelay));
         services.AddSingleton<LocalProgramResolver>();
+        services.AddSingleton<ProgramFloors>();
         services.AddSingleton<IHostProgramResolver, HostProgramResolver>();
         services.AddSingleton<IHostConnector, HostConnector>();
 

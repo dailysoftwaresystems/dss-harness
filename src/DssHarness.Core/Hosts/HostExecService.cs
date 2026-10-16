@@ -136,7 +136,7 @@ public sealed class HostExecService(
             // how it finished. Read from this machine's configuration, which is the one that has it.
             KeepAwake = [.. report.KeepAwake],
             KeepAwakeEnvironment = new(report.KeepAwakeEnvironment, StringComparer.Ordinal),
-            KeepAwakeDirectories = [.. report.ProgramDirectories],
+            KeepAwakeDirectories = [.. report.ProgramDirectories.All],
             Nonce = nonce,
         };
 

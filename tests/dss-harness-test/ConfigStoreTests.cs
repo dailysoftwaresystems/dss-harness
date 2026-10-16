@@ -1704,6 +1704,27 @@ public sealed class ConfigStoreTests
     }
 
     /// <summary>
+    /// A tool's minimum version is read by the parser every copy's version is compared with, so one that would never
+    /// compare - two parts, which a looser parser took - is refused where it is written, rather than leaving every copy
+    /// of the tool unknown everywhere it runs; and a minimum needs a probe to read a copy's version by.
+    /// </summary>
+    [Theory]
+    [InlineData("\"minVersion\": \"3.12\", \"probe\": {}", "tool 'python3' minVersion '3.12' is not a version written as major.minor.patch, such as '1.2.0'")]
+    [InlineData("\"minVersion\": \"3.12.0\"", "tool 'python3' declares a minVersion and no probe, so no copy's version can be read to hold to it")]
+    public void Load_RejectsAMinVersion_NoCopyCouldBeHeldTo(string declared, string expected)
+    {
+        var exception = LoadInvalid($$"""
+            {
+              "buildConfigs": { "debug": {} },
+              "legs": { "win": { "os": "windows", "processor": "x86_64", "config": "debug" } },
+              "tools": [ { "name": "python3", {{declared}} } ]
+            }
+            """);
+
+        Assert.Contains(expected, exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Every scope must hold at once, so two that no one leg satisfies together cover nothing: the
     /// tool would never be checked anywhere, which reads exactly like never having declared it.
     /// </summary>

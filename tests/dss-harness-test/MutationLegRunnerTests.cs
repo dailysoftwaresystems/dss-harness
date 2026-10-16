@@ -1787,7 +1787,7 @@ public sealed class MutationLegRunnerTests
         Assert.Equal(["native/arms/charge-bound", "native/controls/fixture_tests"], sweep.Tests.Runs.Select(request => request.Leg).Order(StringComparer.Ordinal));
         Assert.All(sweep.Tests.Runs, request =>
         {
-            Assert.Equal(["/opt/mingw/bin"], request.AppendToPath);
+            Assert.Equal(["/opt/mingw/bin"], request.ProgramDirectories.Appended);
             Assert.Equal(77, request.StallSeconds);
             Assert.Equal(1234, request.ClockStepToleranceMilliseconds);
         });
@@ -3940,7 +3940,7 @@ public sealed class MutationLegRunnerTests
             {
                 project.CacheVars[name] = value;
             }
-            var host = new HostReport { Host = Host, Os = os, Processor = Variant.Processor, ProgramDirectories = ProgramDirectories };
+            var host = new HostReport { Host = Host, Os = os, Processor = Variant.Processor, ProgramDirectories = DssHarness.Core.Processes.ProgramDirectories.After(ProgramDirectories) };
             var leg = new PlacedLeg(
                 LegName,
                 new LegConfig { Os = os, Processor = Variant.Processor, Config = "debug" },

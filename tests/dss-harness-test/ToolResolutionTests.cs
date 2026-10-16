@@ -1,5 +1,6 @@
 using DssHarness.Core.Output;
 using NSubstitute;
+using NSubstitute.ExceptionExtensions;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
@@ -8,6 +9,7 @@ using DssHarness.Core.Legs;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
+using DssHarness.Core.Tools;
 
 namespace DssHarness.Tests;
 
@@ -82,7 +84,7 @@ public sealed class ToolResolutionTests
 
         Assert.Equal(new ProgramLocation("cmake", ProgramFound.OffPath, cmake), search.Found["cmake"]);
         Assert.Equal(ProgramFound.Nowhere, search.Found["absent"].Found);
-        Assert.Equal([searched], search.Directories);
+        Assert.Equal([searched], search.Directories.Appended);
     }
 
     /// <summary>
@@ -106,7 +108,7 @@ public sealed class ToolResolutionTests
         // Asked for the program in the directory searched last first, and the one on the PATH last.
         var search = Resolver(onPath).Resolve(["cmake", "ninja", "ctest"], [first, second]);
 
-        Assert.Equal([onPath, first, second], search.Directories);
+        Assert.Equal([onPath, first, second], search.Directories.Appended);
     }
 
     /// <summary>A program named by its path is started by that path, and adds nothing to anybody's PATH.</summary>
@@ -119,7 +121,560 @@ public sealed class ToolResolutionTests
         var search = Resolver(temp.Combine("empty")).Resolve([tool], []);
 
         Assert.Equal(new ProgramLocation(tool, ProgramFound.OnPath, tool), search.Found[tool]);
-        Assert.Empty(search.Directories);
+        Assert.Empty(search.Directories.Appended);
+    }
+
+    /// <summary>
+    /// A declared tool with a minimum version is found where its first copy that meets it is, the PATH's own first
+    /// copy passed over when it is older, and that copy's directory is raised ahead of the PATH, so a leg's processes
+    /// start it by name. Measured on a Mac: the PATH of a command run over ssh named macOS's own python3, 3.9.6, and a
+    /// leg whose configuration needs 3.12 ran its steps under it without a word.
+    /// </summary>
+    [Fact]
+    public async Task AToolsCopyBelowItsMinimum_IsPassedOver_ForTheFirstThatMeetsIt_WhoseDirectoryIsRaised()
+    {
+        using var temp = new TempDirectory();
+        var onPath = Directory.CreateDirectory(temp.Combine("path")).FullName;
+        var searched = Directory.CreateDirectory(temp.Combine("homebrew")).FullName;
+        var older = Executable(onPath, "python3");
+        var newer = Executable(searched, "python3");
+        var asked = new List<string>();
+
+        var search = await Floors(onPath, asked, (older, "Python 3.9.6"), (newer, "Python 3.13.1"))
+            .ResolveAsync(["python3"], [searched], [Floor("python3", "3.12.0")], TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            new ProgramLocation("python3", ProgramFound.OnPath, newer)
+            {
+                Judged = new FloorCopy(newer, "3.13.1", null, Meets: true),
+                PassedOver = new FloorCopy(older, "3.9.6", null),
+            },
+            search.Found["python3"]);
+        Assert.Equal($"{newer} is 3.13.1, which a leg there starts ahead of {older} (3.9.6)", search.Found["python3"].StartedAhead());
+        Assert.Equal([searched], search.Directories.Raised);
+        Assert.Empty(search.Directories.Appended);
+        Assert.Equal([older, newer], asked);
+    }
+
+    /// <summary>
+    /// A first copy that meets the minimum is the only one asked, and raises nothing: on every host whose PATH names a
+    /// copy new enough first, a minimum costs one probe and changes nothing a leg starts.
+    /// </summary>
+    [Fact]
+    public async Task AToolsFirstCopyThatMeetsItsMinimum_IsTheOnlyOneAsked_AndRaisesNothing()
+    {
+        using var temp = new TempDirectory();
+        var onPath = Directory.CreateDirectory(temp.Combine("path")).FullName;
+        var searched = Directory.CreateDirectory(temp.Combine("homebrew")).FullName;
+        var first = Executable(onPath, "python3");
+        Executable(searched, "python3");
+        var asked = new List<string>();
+
+        var search = await Floors(onPath, asked, (first, "Python 3.12.3"))
+            .ResolveAsync(["python3"], [searched], [Floor("python3", "3.12.0")], TestContext.Current.CancellationToken);
+
+        Assert.Equal(new ProgramLocation("python3", ProgramFound.OnPath, first) { Judged = new FloorCopy(first, "3.12.3", null, Meets: true) }, search.Found["python3"]);
+        Assert.Null(search.Found["python3"].StartedAhead());
+        Assert.Empty(search.Directories.Raised);
+        Assert.Equal([first], asked);
+    }
+
+    /// <summary>
+    /// A tool every copy of which is older than its minimum is below it, at the copy a leg would start, naming every
+    /// copy asked and what each said; and a minimum declared for another platform asks nothing at all.
+    /// </summary>
+    [Fact]
+    public async Task AToolEveryCopyOfWhichIsOlder_IsBelowItsMinimum_NamingEveryCopy_AndAnotherPlatformsAsksNothing()
+    {
+        using var temp = new TempDirectory();
+        var onPath = Directory.CreateDirectory(temp.Combine("path")).FullName;
+        var searched = Directory.CreateDirectory(temp.Combine("homebrew")).FullName;
+        var older = Executable(onPath, "python3");
+        var old = Executable(searched, "python3");
+        var cmake = Executable(onPath, "cmake");
+        var asked = new List<string>();
+
+        var search = await Floors(onPath, asked, (older, "Python 3.9.6"), (old, "Python 3.11.2"))
+            .ResolveAsync(
+                ["python3", "cmake"],
+                [searched],
+                [Floor("python3", "3.12.0"), Floor("cmake", "9.0.0") with { Platforms = ["windows"] }],
+                TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            new ProgramLocation(
+                "python3",
+                ProgramFound.BelowFloor,
+                older,
+                $"no copy of 'python3' there is at least 3.12.0, the minVersion it is declared with: {older} is 3.9.6; {old} is 3.11.2")
+            {
+                Judged = new FloorCopy(older, "3.9.6", null),
+            },
+            search.Found["python3"]);
+        Assert.Equal(new ProgramLocation("cmake", ProgramFound.OnPath, cmake), search.Found["cmake"]);
+        Assert.Equal([older, old], asked);
+    }
+
+    /// <summary>
+    /// A tool none of whose copies was shown to meet its minimum - one could not say its version, or a place a copy
+    /// could be was not looked in - is not known to meet it, rather than below it: the copy nobody could read, or
+    /// nobody saw, may be the one that does, and nothing installed would settle that.
+    /// </summary>
+    [Fact]
+    public async Task AToolNoCopyOfWhichWasShownToMeetItsMinimum_IsNotKnownToMeetIt_SayingWhy()
+    {
+        using var temp = new TempDirectory();
+        var onPath = Directory.CreateDirectory(temp.Combine("path")).FullName;
+        var searched = Directory.CreateDirectory(temp.Combine("homebrew")).FullName;
+        var older = Executable(onPath, "python3");
+        var broken = Executable(searched, "python3");
+
+        var unread = await Floors(onPath, [], (older, "Python 3.9.6"), (broken, null))
+            .ResolveAsync(["python3"], [searched], [Floor("python3", "3.12.0")], TestContext.Current.CancellationToken);
+        var unsearched = await Floors(Resolver(onPath, home: string.Empty), [], (older, "Python 3.9.6"))
+            .ResolveAsync(["python3"], ["~/.local/bin"], [Floor("python3", "3.12.0")], TestContext.Current.CancellationToken);
+
+        const string Unestablished = "whether a copy of 'python3' there is at least 3.12.0, the minVersion it is declared with, could not be established: ";
+        Assert.Equal(
+            new ProgramLocation(
+                "python3",
+                ProgramFound.FloorUnknown,
+                older,
+                $"{Unestablished}{older} is 3.9.6; {broken}: 'python3' would not report its version there (exit 1): no such interpreter")
+            {
+                Judged = new FloorCopy(older, "3.9.6", null),
+            },
+            unread.Found["python3"]);
+        Assert.Equal(
+            new ProgramLocation(
+                "python3",
+                ProgramFound.FloorUnknown,
+                older,
+                $"{Unestablished}{older} is 3.9.6; the home directory is not known here, so '~/.local/bin' could not be searched")
+            {
+                Judged = new FloorCopy(older, "3.9.6", null),
+            },
+            unsearched.Found["python3"]);
+    }
+
+    /// <summary>
+    /// A directory raised for one tool can hold an older copy of another, which a leg would then start ahead of the one
+    /// that meets its minimum: that tool is said to be shadowed, naming both copies and what to update, rather than run.
+    /// </summary>
+    [Fact]
+    public async Task ACopyThatMeetsItsMinimum_BehindAnOlderOneARaisedDirectoryHolds_IsShadowed_NamingBoth()
+    {
+        using var temp = new TempDirectory();
+        var onPath = Directory.CreateDirectory(temp.Combine("path")).FullName;
+        var searched = Directory.CreateDirectory(temp.Combine("homebrew")).FullName;
+        var olderPython = Executable(onPath, "python3");
+        var newerPython = Executable(searched, "python3");
+        var newerCmake = Executable(onPath, "cmake");
+        var olderCmake = Executable(searched, "cmake");
+        var asked = new List<string>();
+
+        var search = await Floors(
+                onPath,
+                asked,
+                (olderPython, "Python 3.9.6"),
+                (newerPython, "Python 3.13.1"),
+                (newerCmake, "cmake version 3.31.0"),
+                (olderCmake, "cmake version 3.20.0"))
+            .ResolveAsync(["python3", "cmake"], [searched], [Floor("python3", "3.12.0"), Floor("cmake", "3.28.0")], TestContext.Current.CancellationToken);
+
+        Assert.Equal([searched], search.Directories.Raised);
+        Assert.Equal(
+            new ProgramLocation("python3", ProgramFound.OnPath, newerPython)
+            {
+                Judged = new FloorCopy(newerPython, "3.13.1", null, Meets: true),
+                PassedOver = new FloorCopy(olderPython, "3.9.6", null),
+            },
+            search.Found["python3"]);
+        Assert.Equal(
+            new ProgramLocation(
+                "cmake",
+                ProgramFound.FloorShadowed,
+                olderCmake,
+                $"{olderCmake} is 3.20.0, below the minVersion 3.28.0 'cmake' is declared with, and a directory raised ahead of the "
+                + $"PATH for another tool puts it ahead of {newerCmake}, which is 3.31.0; update or remove it, so the copy that meets "
+                + "it is the one a leg starts")
+            {
+                Judged = new FloorCopy(olderCmake, "3.20.0", null),
+            },
+            search.Found["cmake"]);
+        Assert.Equal([olderPython, newerPython, newerCmake, olderCmake], asked);
+    }
+
+    /// <summary>
+    /// Two tools each raising a directory, the first one's holding an older copy of the second: raised in the order the
+    /// tools are declared, the second would start that older copy. The directories go up in the order that keeps both on
+    /// a copy that meets its minimum, and no copy is asked beyond the ones a leg starts.
+    /// </summary>
+    [Fact]
+    public async Task DirectoriesTwoToolsRaise_GoUpInTheOrderThatKeepsBothOnACopyThatMeetsItsMinimum()
+    {
+        using var temp = new TempDirectory();
+        var system = Directory.CreateDirectory(temp.Combine("system")).FullName;
+        var local = Directory.CreateDirectory(temp.Combine("local")).FullName;
+        var searched = Directory.CreateDirectory(temp.Combine("homebrew")).FullName;
+        var olderPython = Executable(system, "python3");
+        var newerPython = Executable(local, "python3");
+        var olderCmake = Executable(local, "cmake");
+        var newerCmake = Executable(searched, "cmake");
+        var asked = new List<string>();
+
+        var search = await Floors(
+                string.Join(Path.PathSeparator, system, local),
+                asked,
+                (olderPython, "Python 3.9.6"),
+                (newerPython, "Python 3.13.1"),
+                (olderCmake, "cmake version 3.20.0"),
+                (newerCmake, "cmake version 3.31.0"))
+            .ResolveAsync(["python3", "cmake"], [searched], [Floor("python3", "3.12.0"), Floor("cmake", "3.28.0")], TestContext.Current.CancellationToken);
+
+        Assert.Equal([searched, local], search.Directories.Raised);
+        Assert.Equal(
+            new ProgramLocation("python3", ProgramFound.OnPath, newerPython)
+            {
+                Judged = new FloorCopy(newerPython, "3.13.1", null, Meets: true),
+                PassedOver = new FloorCopy(olderPython, "3.9.6", null),
+            },
+            search.Found["python3"]);
+        Assert.Equal(
+            new ProgramLocation("cmake", ProgramFound.OnPath, newerCmake)
+            {
+                Judged = new FloorCopy(newerCmake, "3.31.0", null, Meets: true),
+                PassedOver = new FloorCopy(olderCmake, "3.20.0", null),
+            },
+            search.Found["cmake"]);
+        Assert.Equal([olderPython, newerPython, olderCmake, newerCmake], asked);
+    }
+
+    /// <summary>
+    /// A directory raised for one tool, holding an older copy of another whose first copy - on the PATH - meets its own
+    /// minimum, goes up behind that first copy's directory, which is raised too: that is what keeps the PATH's copy the
+    /// one a leg starts, and it is never passed over.
+    /// </summary>
+    [Fact]
+    public async Task ATool_WhoseFirstCopyMeetsItsMinimum_HasItsDirectoryRaisedToo_AheadOfOneHoldingAnOlderCopy()
+    {
+        using var temp = new TempDirectory();
+        var system = Directory.CreateDirectory(temp.Combine("system")).FullName;
+        var local = Directory.CreateDirectory(temp.Combine("local")).FullName;
+        var searched = Directory.CreateDirectory(temp.Combine("homebrew")).FullName;
+        var olderPython = Executable(system, "python3");
+        var newerCmake = Executable(local, "cmake");
+        var newerPython = Executable(searched, "python3");
+        var olderCmake = Executable(searched, "cmake");
+        var asked = new List<string>();
+
+        var search = await Floors(
+                string.Join(Path.PathSeparator, system, local),
+                asked,
+                (olderPython, "Python 3.9.6"),
+                (newerPython, "Python 3.13.1"),
+                (newerCmake, "cmake version 3.31.0"),
+                (olderCmake, "cmake version 3.20.0"))
+            .ResolveAsync(["python3", "cmake"], [searched], [Floor("python3", "3.12.0"), Floor("cmake", "3.28.0")], TestContext.Current.CancellationToken);
+
+        Assert.Equal([local, searched], search.Directories.Raised);
+        Assert.Equal(
+            new ProgramLocation("python3", ProgramFound.OnPath, newerPython)
+            {
+                Judged = new FloorCopy(newerPython, "3.13.1", null, Meets: true),
+                PassedOver = new FloorCopy(olderPython, "3.9.6", null),
+            },
+            search.Found["python3"]);
+        Assert.Equal(
+            new ProgramLocation("cmake", ProgramFound.OnPath, newerCmake) { Judged = new FloorCopy(newerCmake, "3.31.0", null, Meets: true) },
+            search.Found["cmake"]);
+        Assert.Null(search.Found["cmake"].StartedAhead());
+    }
+
+    /// <summary>
+    /// Where no order settles it - the copy of one tool that meets its minimum shares a directory with an older copy of the
+    /// other, whose first copy meets its own beside an older copy of the first - the tool in the way is asked about its
+    /// further copies, and one that meets in a directory that can go up first settles both.
+    /// </summary>
+    [Fact]
+    public async Task AConflictNoOrderSettles_IsSettledByAFurtherCopy_InADirectoryThatCanGoUpFirst()
+    {
+        using var temp = new TempDirectory();
+        var onPath = Directory.CreateDirectory(temp.Combine("path")).FullName;
+        var homebrew = Directory.CreateDirectory(temp.Combine("homebrew")).FullName;
+        var tools = Directory.CreateDirectory(temp.Combine("tools")).FullName;
+        var olderPython = Executable(onPath, "python3");
+        var newerPython = Executable(homebrew, "python3");
+        var newerCmake = Executable(onPath, "cmake");
+        var olderCmake = Executable(homebrew, "cmake");
+        var otherCmake = Executable(tools, "cmake");
+        var asked = new List<string>();
+
+        var search = await Floors(
+                onPath,
+                asked,
+                (olderPython, "Python 3.9.6"),
+                (newerPython, "Python 3.13.1"),
+                (newerCmake, "cmake version 3.31.0"),
+                (olderCmake, "cmake version 3.20.0"),
+                (otherCmake, "cmake version 3.30.2"))
+            .ResolveAsync(["python3", "cmake"], [homebrew, tools], [Floor("python3", "3.12.0"), Floor("cmake", "3.28.0")], TestContext.Current.CancellationToken);
+
+        Assert.Equal([tools, homebrew], search.Directories.Raised);
+        Assert.Equal(
+            new ProgramLocation("python3", ProgramFound.OnPath, newerPython)
+            {
+                Judged = new FloorCopy(newerPython, "3.13.1", null, Meets: true),
+                PassedOver = new FloorCopy(olderPython, "3.9.6", null),
+            },
+            search.Found["python3"]);
+        Assert.Equal(
+            new ProgramLocation("cmake", ProgramFound.OnPath, otherCmake)
+            {
+                Judged = new FloorCopy(otherCmake, "3.30.2", null, Meets: true),
+                PassedOver = new FloorCopy(newerCmake, "3.31.0", null, Meets: true),
+            },
+            search.Found["cmake"]);
+        Assert.Equal($"{otherCmake} is 3.30.2, which a leg there starts ahead of {newerCmake} (3.31.0)", search.Found["cmake"].StartedAhead());
+        Assert.Equal([olderPython, newerPython, newerCmake, olderCmake, otherCmake], asked);
+    }
+
+    /// <summary>
+    /// Where programs were found some other way - on the PATH a developer environment set up - each a minimum names is
+    /// held to it as found, the one copy found being the one asked; a program no minimum names, one not there, a
+    /// minimum for another platform, and a minimum for a program not found this way at all ask nothing.
+    /// </summary>
+    [Fact]
+    public async Task ProgramsFoundElsewhere_AreHeldToTheirMinimumAsFound()
+    {
+        using var temp = new TempDirectory();
+        var carried = Directory.CreateDirectory(temp.Combine("carried")).FullName;
+        var cmake = Executable(carried, "cmake");
+        var ninja = Executable(carried, "ninja");
+        var cl = Executable(carried, "cl");
+        var asked = new List<string>();
+        var found = new Dictionary<string, ProgramLocation>(StringComparer.Ordinal)
+        {
+            ["cmake"] = new("cmake", ProgramFound.OffPath, cmake),
+            ["ninja"] = new("ninja", ProgramFound.OffPath, ninja),
+            ["cl"] = new("cl", ProgramFound.OffPath, cl),
+            ["python3"] = new("python3", ProgramFound.Nowhere),
+        };
+
+        var held = await Floors(temp.Combine("empty"), asked, (cmake, "cmake version 3.25.1"))
+            .HoldAsync(
+                found,
+                [
+                    Floor("cmake", "3.28.0"),
+                    Floor("python3", "3.12.0"),
+                    Floor("cl", "99.0.0") with { Platforms = ["windows"] },
+                    Floor("gcc", "13.0.0"),
+                ],
+                TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            new ProgramLocation(
+                "cmake",
+                ProgramFound.BelowFloor,
+                cmake,
+                $"no copy of 'cmake' there is at least 3.28.0, the minVersion it is declared with: {cmake} is 3.25.1")
+            {
+                Judged = new FloorCopy(cmake, "3.25.1", null),
+            },
+            held["cmake"]);
+        Assert.Equal(found["ninja"], held["ninja"]);
+        Assert.Equal(found["cl"], held["cl"]);
+        Assert.Equal(found["python3"], held["python3"]);
+        Assert.False(held.ContainsKey("gcc"));
+        Assert.Equal([cmake], asked);
+    }
+
+    /// <summary>
+    /// A survey carrying a tool's minimum version answers with the directory it raised for the tool, apart from the
+    /// appended ones, which it then holds none of; and a minimum for a program nobody asked about asks nothing, though a
+    /// copy of it is on the PATH.
+    /// </summary>
+    [Fact]
+    public async Task ASurveyCarryingAMinimum_AnswersTheDirectoryItRaised_AndAsksNothingOfAToolNotAskedAbout()
+    {
+        using var temp = new TempDirectory();
+        var first = Directory.CreateDirectory(temp.Combine("first")).FullName;
+        var second = Directory.CreateDirectory(temp.Combine("second")).FullName;
+        var third = Directory.CreateDirectory(temp.Combine("third")).FullName;
+        var older = Executable(first, "python3");
+        var newer = Executable(second, "python3");
+        Executable(third, "ninja");
+        Executable(first, "cmake");
+        var asked = new List<string>();
+        var platform = HostDoubles.Platform(PlatformId.Linux, "x86_64", temp.Path);
+        var fileSystem = new PhysicalFileSystem(FilePermissionsFactory.Create());
+        var identity = Substitute.For<IToolIdentityProvider>();
+        identity.Current.Returns(new ToolIdentity("1.2.3", "abc123"));
+        var processRunner = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create());
+        var agent = new HostAgentService(
+            platform,
+            identity,
+            new EmulatorProbe(platform, processRunner, fileSystem),
+            new DeveloperEnvironmentProbe(platform, processRunner),
+            new DeveloperEnvironmentProvider(platform, processRunner, fileSystem, new ConsoleHarnessOutput(new StringWriter(), new StringWriter(), verbose: false)),
+            fileSystem,
+            Floors(Resolver(string.Join(Path.PathSeparator, first, second, third)), asked, (older, "Python 3.9.6"), (newer, "Python 3.13.1")),
+            new KeepAwake(processRunner, new ConsoleHarnessOutput(new StringWriter(), new StringWriter(), verbose: false)),
+            new HoldAwakeStore(fileSystem, Path.Combine(TestHost.TemporaryRoot, "holds", Guid.NewGuid().ToString("N") + ".json")),
+            new RecordingLauncher(),
+            HomeShorthand.Of(platform, fileSystem),
+            new RecordingLastResort());
+
+        var info = await agent.DescribeAsync(
+            new Dictionary<string, EmulatorConfig>(StringComparer.OrdinalIgnoreCase),
+            new Dictionary<string, DeveloperEnvironmentConfig>(StringComparer.OrdinalIgnoreCase),
+            ["python3", "ninja"],
+            new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase),
+            [Floor("python3", "3.12.0"), Floor("cmake", "3.28.0")],
+            RoomQuestions.None,
+            [],
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(newer, Answer(info, "python3").Path);
+        Assert.Equal([second], info.RaisedDirectories);
+        Assert.Equal([third], info.AppendedDirectories);
+        Assert.Equal([older, newer], asked);
+    }
+
+    /// <summary>
+    /// A copy that will not start at all - a file that is no program for this machine, or may not be run - could not
+    /// say its version, and leaves the tool not known to meet its minimum, saying what starting it said.
+    /// </summary>
+    [Fact]
+    public async Task ACopyThatWillNotStart_LeavesItsToolNotKnownToMeetItsMinimum()
+    {
+        using var temp = new TempDirectory();
+        var onPath = Directory.CreateDirectory(temp.Combine("path")).FullName;
+        var broken = Executable(onPath, "python3");
+        var processes = Substitute.For<IProcessRunner>();
+        processes.RunAsync(Arg.Any<ProcessRequest>(), Arg.Any<CancellationToken>())
+            .ThrowsAsync(new ProgramStartException(broken, "it is not a program this machine can run"));
+
+        var search = await new ProgramFloors(Resolver(onPath), processes, HostDoubles.Platform(PlatformId.Linux, "x86_64"))
+            .ResolveAsync(["python3"], [], [Floor("python3", "3.12.0")], TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            new ProgramLocation(
+                "python3",
+                ProgramFound.FloorUnknown,
+                broken,
+                "whether a copy of 'python3' there is at least 3.12.0, the minVersion it is declared with, could not be established: "
+                + $"{broken}: 'python3' would not report its version there (exit -1): it is not a program this machine can run")
+            {
+                Judged = new FloorCopy(broken, null, "'python3' would not report its version there (exit -1): it is not a program this machine can run"),
+            },
+            search.Found["python3"]);
+    }
+
+    /// <summary>
+    /// A copy found some other way that could not say its version is not known to meet the minimum, as one the survey
+    /// asked is not; a program named by its path is the one copy it names, and a file not there is none.
+    /// </summary>
+    [Fact]
+    public async Task AProgramFoundElsewhere_ThatCouldNotSayItsVersion_IsNotKnownToMeetIt_AndAPathIsItsOnlyCopy()
+    {
+        using var temp = new TempDirectory();
+        var carried = Directory.CreateDirectory(temp.Combine("carried")).FullName;
+        var cmake = Executable(carried, "cmake");
+
+        var held = await Floors(temp.Combine("empty"), [], (cmake, null))
+            .HoldAsync(
+                new Dictionary<string, ProgramLocation>(StringComparer.Ordinal) { ["cmake"] = new("cmake", ProgramFound.OffPath, cmake) },
+                [Floor("cmake", "3.28.0")],
+                TestContext.Current.CancellationToken);
+
+        Assert.Equal(ProgramFound.FloorUnknown, held["cmake"].Found);
+        Assert.Equal([cmake], Resolver(temp.Combine("empty")).Copies(cmake, []).Copies);
+        Assert.Empty(Resolver(temp.Combine("empty")).Copies(Path.Combine(carried, "ninja"), []).Copies);
+    }
+
+    /// <summary>
+    /// A program started by name whose copy in a raised directory is the one a survey chose is the one started, though
+    /// the PATH the child is given names another copy first: raised ahead of a PATH the request sets, too.
+    /// </summary>
+    [Fact]
+    public async Task AProgramInARaisedDirectory_IsTheOneStarted_AheadOfTheCopyThePathNames()
+    {
+        using var temp = new TempDirectory();
+        var raised = Directory.CreateDirectory(temp.Combine("raised")).FullName;
+        var onPath = Directory.CreateDirectory(temp.Combine("path")).FullName;
+        var name = "dh-probe-" + Guid.NewGuid().ToString("N")[..8];
+
+        TestHost.StartableProgram(raised, name);
+
+        // A copy that cannot start: started in place of the raised one, the request would fail.
+        File.WriteAllText(Path.Combine(onPath, OperatingSystem.IsWindows() ? name + ".exe" : name), string.Empty);
+
+        var result = await new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create()).RunAsync(
+            new ProcessRequest
+            {
+                FileName = name,
+                Environment = new Dictionary<string, string?>(StringComparer.Ordinal) { ["PATH"] = onPath },
+                ProgramDirectories = new ProgramDirectories([raised], []),
+                Timeout = TimeSpan.FromSeconds(30),
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    /// <summary>
+    /// The directories around a PATH: the raised ones ahead, the appended ones after, a part that is empty left out,
+    /// and the PATH itself unchanged where none is added; a name is looked up on the raised ones and the PATH, and in
+    /// the appended ones only after both.
+    /// </summary>
+    [Fact]
+    public void ProgramDirectories_GoAroundThePath_AndAreLookedInAsAProcessLooks()
+    {
+        using var temp = new TempDirectory();
+        var raised = Directory.CreateDirectory(temp.Combine("raised")).FullName;
+        var onPath = Directory.CreateDirectory(temp.Combine("path")).FullName;
+        var appended = Directory.CreateDirectory(temp.Combine("appended")).FullName;
+        var directories = new ProgramDirectories([raised], [appended]);
+        var separator = Path.PathSeparator;
+
+        Assert.Equal($"{raised}{separator}{onPath}{separator}{appended}", directories.Around(onPath, separator));
+        Assert.Equal($"{raised}{separator}{appended}", directories.Around(null, separator));
+        Assert.Equal($"{raised}{separator}{onPath}", directories.Ahead(onPath, separator));
+        Assert.Equal(onPath, ProgramDirectories.None.Around(onPath, separator));
+        Assert.Null(ProgramDirectories.None.Around(null, separator));
+        Assert.Equal([raised, appended], directories.All);
+
+        var tool = Executable(raised, "tool");
+        Executable(onPath, "tool");
+        var other = Executable(appended, "other");
+        var search = new PathSearch(onPath, directories);
+
+        Assert.Equal(new ProgramLocation("tool", ProgramFound.OnPath, tool), search.Find(HostDoubles.Platform(PlatformId.Linux, "x86_64"), Permissions(), "tool"));
+        Assert.Equal(new ProgramLocation("other", ProgramFound.OffPath, other), search.Find(HostDoubles.Platform(PlatformId.Linux, "x86_64"), Permissions(), "other"));
+    }
+
+    /// <summary>
+    /// Raised ahead of the PATH the child inherits, and the appended ones after it: the one exception to every name
+    /// keeping the answer its PATH gives, made for a tool whose PATH answer is older than its minimum.
+    /// </summary>
+    [Fact]
+    public async Task RaisedDirectories_ComeAheadOfThePathTheChildInherits()
+    {
+        using var temp = new TempDirectory();
+        var raised = Directory.CreateDirectory(temp.Combine("raised")).FullName;
+        var appended = Directory.CreateDirectory(temp.Combine("appended")).FullName;
+
+        var request = TestHost.ChildRequest("print-env", "PATH") with { ProgramDirectories = new ProgramDirectories([raised], [appended]) };
+
+        var result = await new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create())
+            .RunAsync(request, TestContext.Current.CancellationToken);
+
+        var entries = result.StandardOutput.Trim().Split(Path.PathSeparator);
+
+        Assert.Equal(raised, entries[0]);
+        Assert.Equal(appended, entries[^1]);
+        Assert.Equal(Environment.GetEnvironmentVariable("PATH")?.Trim(), string.Join(Path.PathSeparator, entries[1..^1]));
     }
 
     /// <summary><c>~/</c> is the home directory of whoever searches, on each machine its own.</summary>
@@ -187,7 +742,7 @@ public sealed class ToolResolutionTests
         TestHost.StartableProgram(appended, name);
 
         var result = await new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create()).RunAsync(
-            new ProcessRequest { FileName = name, AppendToPath = [appended], Timeout = TimeSpan.FromSeconds(30) },
+            new ProcessRequest { FileName = name, ProgramDirectories = ProgramDirectories.After([appended]), Timeout = TimeSpan.FromSeconds(30) },
             TestContext.Current.CancellationToken);
 
         Assert.Equal(0, result.ExitCode);
@@ -214,7 +769,7 @@ public sealed class ToolResolutionTests
             {
                 FileName = name,
                 Environment = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase) { ["PATH"] = elsewhere },
-                AppendToPath = [found],
+                ProgramDirectories = ProgramDirectories.After([found]),
                 Timeout = TimeSpan.FromSeconds(30),
             },
             TestContext.Current.CancellationToken);
@@ -233,7 +788,7 @@ public sealed class ToolResolutionTests
         var first = Directory.CreateDirectory(temp.Combine("first")).FullName;
         var second = Directory.CreateDirectory(temp.Combine("second")).FullName;
 
-        var request = TestHost.ChildRequest("print-env", "PATH") with { AppendToPath = [first, second] };
+        var request = TestHost.ChildRequest("print-env", "PATH") with { ProgramDirectories = ProgramDirectories.After([first, second]) };
 
         var result = await new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create())
             .RunAsync(request, TestContext.Current.CancellationToken);
@@ -1058,8 +1613,9 @@ public sealed class ToolResolutionTests
             identity,
             new EmulatorProbe(platform, processRunner, fileSystem),
             new DeveloperEnvironmentProbe(platform, processRunner),
+            new DeveloperEnvironmentProvider(platform, processRunner, fileSystem, new ConsoleHarnessOutput(new StringWriter(), new StringWriter(), verbose: false)),
             fileSystem,
-            new LocalProgramResolver(platform, Permissions(), () => onPath),
+            new ProgramFloors(new LocalProgramResolver(platform, Permissions(), () => onPath), processRunner, platform),
             new KeepAwake(processRunner, new ConsoleHarnessOutput(new StringWriter(), new StringWriter(), verbose: false)),
                 new HoldAwakeStore(new PhysicalFileSystem(FilePermissionsFactory.Create()), Path.Combine(TestHost.TemporaryRoot, "holds", Guid.NewGuid().ToString("N") + ".json")),
                 new RecordingLauncher(),
@@ -1083,14 +1639,16 @@ public sealed class ToolResolutionTests
             new Dictionary<string, DeveloperEnvironmentConfig>(StringComparer.OrdinalIgnoreCase),
             ["cmake", "ninja", "absent"],
             new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase) { [platform.PlatformKey] = [searched] },
+            [],
             RoomQuestions.None,
+            [],
             TestContext.Current.CancellationToken);
 
         Assert.Equal(ProgramFound.OnPath, Answer(info, "cmake").Found);
         Assert.Equal(ProgramFound.OffPath, Answer(info, "ninja").Found);
         Assert.Equal(ProgramFound.Nowhere, Answer(info, "absent").Found);
         Assert.Equal(ProgramFound.OffPath, Answer(info, "qemu-probe").Found);
-        Assert.Equal([onPath, searched], info.ProgramDirectories);
+        Assert.Equal([onPath, searched], info.AppendedDirectories);
     }
 
     /// <summary>
@@ -1183,6 +1741,35 @@ public sealed class ToolResolutionTests
     /// <summary>A resolver over <paramref name="path"/> as the PATH, answering from the files that are really there.</summary>
     private static LocalProgramResolver Resolver(string path, string? home = null)
         => new(HostDoubles.Platform(PlatformId.Linux, "x86_64", home), Permissions(), () => path);
+
+    /// <summary>
+    /// The search a survey makes with tools' minimum versions, on a Linux machine whose PATH is <paramref name="path"/>:
+    /// each copy in <paramref name="versions"/> prints its version when started, or fails where it has none, and every
+    /// copy started is added to <paramref name="asked"/>.
+    /// </summary>
+    private static ProgramFloors Floors(string path, List<string> asked, params (string Copy, string? Said)[] versions)
+        => Floors(Resolver(path), asked, versions);
+
+    /// <summary>The same, over <paramref name="resolver"/>.</summary>
+    private static ProgramFloors Floors(LocalProgramResolver resolver, List<string> asked, params (string Copy, string? Said)[] versions)
+    {
+        var processes = Substitute.For<IProcessRunner>();
+        processes.RunAsync(Arg.Any<ProcessRequest>(), Arg.Any<CancellationToken>()).Returns(call =>
+        {
+            var copy = call.Arg<ProcessRequest>().FileName;
+            asked.Add(copy);
+
+            return Task.FromResult(versions.Single(version => version.Copy == copy).Said is { } said
+                ? HostResults.Ok(said + "\n")
+                : HostResults.Failed(1, "no such interpreter\n"));
+        });
+
+        return new ProgramFloors(resolver, processes, HostDoubles.Platform(PlatformId.Linux, "x86_64"));
+    }
+
+    /// <summary>A tool's minimum version, read from what <c>--version</c> prints.</summary>
+    private static ToolFloor Floor(string name, string minVersion)
+        => new() { Name = name, MinVersion = minVersion, Args = ["--version"], Regex = @"(\d+\.\d+\.\d+)" };
 
     /// <summary>A file starts when it is there: what Windows answers, made to hold on every platform the tests run on.</summary>
     private static IFilePermissions Permissions()

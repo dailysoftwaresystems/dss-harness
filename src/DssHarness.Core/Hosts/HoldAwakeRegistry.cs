@@ -100,7 +100,7 @@ public sealed class HoldAwakeRegistry(IHostCommandRunner hostCommands, IHarnessO
                         HoldAwakeSeconds = host.HoldAwakeSeconds,
                         KeepAwake = [.. host.KeepAwake],
                         KeepAwakeEnvironment = new(host.KeepAwakeEnvironment, StringComparer.Ordinal),
-                        KeepAwakeDirectories = [.. host.ProgramDirectories],
+                        KeepAwakeDirectories = [.. host.ProgramDirectories.All],
                         Nonce = nonce,
                     },
                     cancellationToken)

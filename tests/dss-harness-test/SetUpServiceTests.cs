@@ -1,4 +1,5 @@
 using System.Text.Json;
+using NSubstitute;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Platform;
@@ -40,6 +41,52 @@ public sealed class SetUpServiceTests
         Assert.Equal(["up e2e"], SetUpScripts.Logged(temp.Path));
         Assert.Empty(SetUpScripts.Logged(inside));
         Assert.Contains("up: 'e2e' in '", harness.StandardOutput.ToString() + harness.StandardError.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A line's program is found as a leg on this machine finds what it starts, each declared tool held to its minimum
+    /// version: the directory of a copy that meets it, behind an older one on the PATH, goes ahead of the PATH the line
+    /// runs with, so a program the line starts by that tool's name is the one a leg would start too.
+    /// </summary>
+    [Fact]
+    public async Task ALinesPrograms_AreFoundAsALegFindsThem_EachDeclaredToolHeldToItsMinimum()
+    {
+        using var temp = new TempDirectory();
+        var first = Directory.CreateDirectory(Path.Combine(temp.Path, "first")).FullName;
+        var second = Directory.CreateDirectory(Path.Combine(temp.Path, "second")).FullName;
+        var older = Path.Combine(first, "python3");
+        var newer = Path.Combine(second, "python3");
+        File.WriteAllText(older, string.Empty);
+        File.WriteAllText(newer, string.Empty);
+        var platform = HostDoubles.Platform(PlatformId.Linux, "x86_64");
+        var permissions = Substitute.For<IFilePermissions>();
+        permissions.IsExecutable(Arg.Any<string>()).Returns(call => File.Exists(call.Arg<string>()));
+        var requests = new List<ProcessRequest>();
+        var processes = Substitute.For<IProcessRunner>();
+        processes.RunAsync(Arg.Do<ProcessRequest>(requests.Add), Arg.Any<CancellationToken>()).Returns(call => Task.FromResult(
+            call.Arg<ProcessRequest>().FileName == older ? HostResults.Ok("Python 3.9.6\n")
+                : call.Arg<ProcessRequest>().FileName == newer ? HostResults.Ok("Python 3.13.1\n")
+                : HostResults.Ok(string.Empty)));
+        var config = new HarnessConfig
+        {
+            Tools = [new ToolConfig { Name = "python3", MinVersion = "3.12.0", Probe = new ToolProbe { Args = ["--version"], Regex = @"(\d+\.\d+\.\d+)" } }],
+            SetUp = { ["db"] = new SetUpConfig { Up = SetUpLine.Keyed([new("all", "python3 seed.py")]), Down = SetUpLine.Keyed([new("all", "python3 drop.py")]) } },
+        };
+        var harness = new HarnessFactory();
+        var service = new SetUpService(
+            HostDoubles.Loader(config, temp.Path, temp.Path),
+            processes,
+            platform,
+            new ActionToolPolicy(platform),
+            new ProgramFloors(new LocalProgramResolver(platform, permissions, () => string.Join(Path.PathSeparator, first, second)), processes, platform),
+            Holds(harness, temp),
+            harness.Output);
+
+        await service.RunAsync(temp.Path, SetUpDirection.Up, "db", NoInputs, Token);
+
+        var line = Assert.Single(requests, request => request.FileName == "python3");
+        Assert.Equal([second], line.ProgramDirectories.Raised);
+        Assert.Equal(["seed.py"], line.Arguments);
     }
 
     /// <summary>
@@ -346,7 +393,7 @@ public sealed class SetUpServiceTests
             harness.ProcessRunner,
             harness.Platform,
             new ActionToolPolicy(harness.Platform),
-            new LocalProgramResolver(harness.Platform, FilePermissionsFactory.Create()),
+            HostDoubles.Floors(harness.Platform, harness.ProcessRunner),
             holds ?? new SetUpHolds(harness.FileSystem, harness.Output, harness.Identity, harness.Platform, () => Path.Combine(temp.Path, ".holds", "setups.json")),
             harness.Output);
 }
