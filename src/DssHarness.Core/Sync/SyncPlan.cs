@@ -1,3 +1,4 @@
+using DssHarness.Core.Hosts;
 using DssHarness.Core.Output;
 using DssHarness.Core.Results;
 using System.Globalization;
@@ -176,6 +177,7 @@ public sealed record SyncPlan(
     /// Whether this sync is taking over a directory it did not make, which changes what the reader
     /// should check: not that the source is the tree they meant, but that the directory is.
     /// </param>
+    /// <param name="reader">Whose refusal this is, which says what its reader can be told to do; the sync command's own by default.</param>
     /// <exception cref="HarnessException">The plan is over the bound, and nothing is changed.</exception>
     /// <remarks>
     /// Deletions have to propagate, or a copy that only ever gains files stops being a copy of the
@@ -184,9 +186,9 @@ public sealed record SyncPlan(
     /// path is mistyped, because a source that is not there looks exactly like a source that deleted
     /// everything.
     /// </remarks>
-    public void RefuseWhenDeletingTooMuch(SyncManifest destination, double maxDeleteFraction, bool adopting = false)
+    public void RefuseWhenDeletingTooMuch(SyncManifest destination, double maxDeleteFraction, bool adopting = false, SyncBoundReader reader = SyncBoundReader.Sync)
     {
-        if (OverTheBound(destination, maxDeleteFraction, adopting) is { } refusal)
+        if (OverTheBound(destination, maxDeleteFraction, adopting, reader) is { } refusal)
         {
             throw new HarnessException(HarnessExit.Refused, refusal);
         }
@@ -200,7 +202,8 @@ public sealed record SyncPlan(
     /// <param name="destination">The copy as it stands, which is what the share is measured against.</param>
     /// <param name="maxDeleteFraction">The share one sync may delete; zero allows any deletion.</param>
     /// <param name="adopting">Whether the directory is one this tool would be taking over, as for <see cref="RefuseWhenDeletingTooMuch"/>.</param>
-    public string? OverTheBound(SyncManifest destination, double maxDeleteFraction, bool adopting = false)
+    /// <param name="reader">Whose refusal this is, which says what its reader can be told to do; the sync command's own by default.</param>
+    public string? OverTheBound(SyncManifest destination, double maxDeleteFraction, bool adopting = false, SyncBoundReader reader = SyncBoundReader.Sync)
     {
         ArgumentNullException.ThrowIfNull(destination);
 
@@ -220,12 +223,24 @@ public sealed record SyncPlan(
         // that suddenly loses most of itself means the source is wrong; a directory being taken over
         // that loses most of itself means the directory is — which is what a mistyped repositoryPath
         // looks like, and is the reason this bound applies to a takeover at all.
-        var check = adopting
-            ? "Nothing was changed. Confirm that is the directory you meant to take over — a "
+        //
+        // And what to do differs by who reads it. The sync command's reader can run it again with
+        // --dry-run to see the list; a sweep's worker is refused where check-mutations was typed,
+        // which takes no --dry-run, so its reader is told what that command's own tools can do.
+        var check = reader switch
+        {
+            SyncBoundReader.Sweep =>
+                "Nothing was changed. Confirm the tree is the one you meant, then raise "
+                + "sync.maxDeleteFraction, or run '" + ToolPackage.Command
+                + " clean --legs <leg>' to remove this sweep's workers, which the next sweep makes again whole.",
+            _ when adopting =>
+                "Nothing was changed. Confirm that is the directory you meant to take over — a "
                 + "repositoryPath naming a home directory rather than a checkout under it looks exactly "
-                + "like this — then run with --dry-run to see the list, or raise sync.maxDeleteFraction."
-            : "Nothing was changed. Confirm the source tree is the one you meant, then raise "
-                + "sync.maxDeleteFraction or run with --dry-run to see the list.";
+                + "like this — then run with --dry-run to see the list, or raise sync.maxDeleteFraction.",
+            _ =>
+                "Nothing was changed. Confirm the source tree is the one you meant, then raise "
+                + "sync.maxDeleteFraction or run with --dry-run to see the list.",
+        };
 
         return $"This sync would delete {Deletes.Count} of the {ReportText.Counted(destination.Entries.Count, "file")} in "
             + $"'{destination.Root}', which is {share:P0} of it and over the {maxDeleteFraction:P0} "
@@ -270,4 +285,23 @@ public enum SyncVerb
 
     /// <summary>It has.</summary>
     Done,
+}
+
+/// <summary>
+/// Whose copy a sync judges the delete bound on, which says what its reader can be told to do about
+/// going over it.
+/// </summary>
+public enum SyncBoundReader
+{
+    /// <summary>
+    /// The sync command's own: its reader can run it again with <c>--dry-run</c> to see the list the
+    /// refusal sends them to.
+    /// </summary>
+    Sync,
+
+    /// <summary>
+    /// A sweep's worker, refused where <c>check-mutations</c> was typed, which takes no
+    /// <c>--dry-run</c>: its reader is told what raises the bound and what makes the workers again.
+    /// </summary>
+    Sweep,
 }

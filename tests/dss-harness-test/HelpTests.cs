@@ -286,7 +286,9 @@ public sealed partial class HelpTests
             + "no worktree at, so until then one below the worktrees root is said as any such directory: "
             + "list-worktree warns of it, and delete-orchestrator, and delete-worktree of an orchestrator's directory with or "
             + $"without --force, refuse ({HarnessExit.Refused}) while one is below it.",
-            "built whole before it drives an arm. Of the tree itself a sweep reads every file and writes none: its workers, and "
+            "built whole before it drives an arm: that sync withholds the worker's own build directory itself, "
+            + "whatever sync.neverTransfer says, and sync.maxDeleteFraction judges only what mirrors the tree the sweep read. "
+            + "Of the tree itself a sweep reads every file and writes none: its workers, and "
             + "the claims on them, are in .mutations, and its run's records in .harness-config, as every run's are.",
             "Its workers are kept in the leg's own tree, as a sweep's are, in a family of their own - <tree>/.mutations/<key>s-<n>,",
             "What the sweep timed across a clock step or a host sleep is said on the leg's line, among why its timings are suspect, and "

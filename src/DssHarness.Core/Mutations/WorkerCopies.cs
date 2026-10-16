@@ -1,3 +1,4 @@
+using DssHarness.Core.Build;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Output;
@@ -260,8 +261,19 @@ internal sealed class WorkerCopies(
     public string? HeldBy(string worker) => _claims.HeldBy(worker)?.Said;
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// The worker's own build directory is withheld by the sync itself, whatever the configuration says: a sweep
+    /// made it, keeps it warm from one sweep to the next, and re-syncs over it - so no spelling of
+    /// <c>sync.neverTransfer</c> decides whether a sweep may run, and the delete bound judges only what mirrors
+    /// the tree the sweep read. The worker's <c>.git</c> the floor already withholds.
+    /// </remarks>
     public Task SyncAsync(SyncSource source, string worker, CancellationToken cancellationToken)
-        => _syncService.SyncAsync(source, _transport, worker, new SyncOptions(), cancellationToken);
+        => _syncService.SyncAsync(
+            source,
+            _transport,
+            worker,
+            new SyncOptions(Withheld: [VariantKey.BuildRootName], Reader: SyncBoundReader.Sweep),
+            cancellationToken);
 
     /// <inheritdoc/>
     public Task<long> HistoryBytesAsync(SyncSource source, CancellationToken cancellationToken)

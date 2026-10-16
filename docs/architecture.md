@@ -3887,7 +3887,11 @@ admits whole. The tree is read once, as a sync reads it, and every worker is syn
 reading, so every arm measures the same tree however long the sweep takes, and an edit made
 meanwhile reaches none of them. A worker stays between sweeps and is synced again by content - so
 its build directory stays warm, and a site a killed sweep left mutated is put back - and built
-whole as the leg builds before it drives an arm. A worker is claimed while
+whole as the leg builds before it drives an arm. That sync withholds the worker's own build
+directory itself, whatever `sync.neverTransfer` says: the sweep made what is in it, no spelling of
+a configuration should decide whether a sweep may run, and `sync.maxDeleteFraction` judges only
+what mirrors the tree the sweep read - a genuinely wrong source tree is still refused by it, with a
+remedy a reader who typed `check-mutations` can take. A worker is claimed while
 a sweep uses it, in `<worker>.claim.json` beside it in `.mutations`, by the claim a run takes on its log directory,
 which never makes the copy it claims: the sync that makes a copy refuses a directory it did not
 make. A claim whose sweep died is released and said; the copy it held is synced again, as every

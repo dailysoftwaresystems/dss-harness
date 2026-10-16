@@ -109,6 +109,77 @@ public sealed class WorkerCopiesTests
     }
 
     /// <summary>
+    /// A second sweep over a worker the first built syncs again and refuses nothing, whatever neverTransfer says: the
+    /// worker's own build directory is the sweep's, withheld by the sync itself and never counted by the delete bound.
+    /// Measured on a consumer, where a neverTransfer of its own replaced the shipped build entry and every sweep after
+    /// the first was refused (13) over the worker's own build outputs.
+    /// </summary>
+    [Fact]
+    public async Task ASecondSweepOverABuiltWorker_SyncsAgainAndRefusesNothing_WhateverNeverTransferSays()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, tree) = await PrepareAsync(
+            temp,
+            cancellationToken,
+            new HarnessConfig { Sync = new SyncConfig { NeverTransfer = ["**/.secrets"] } });
+        var copies = Copies(harness);
+        var service = SyncKit.Service(harness);
+        var worker = MutationWorkers.PathOf(tree, Variant, 1);
+
+        await copies.SyncAsync(await service.ReadSourceAsync(tree, cancellationToken), worker, cancellationToken);
+
+        // The worker's build, as the first sweep left it: more of the copy than the tree itself holds.
+        foreach (var built in Enumerable.Range(0, 10).Select(index => Path.Combine(Variant.DirectoryUnder(worker), $"a{index}.o")))
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(built)!);
+            await File.WriteAllTextAsync(built, "object", cancellationToken);
+        }
+
+        await File.WriteAllTextAsync(Path.Combine(worker, "src", "a.c"), "mutant\n", cancellationToken);
+
+        await copies.SyncAsync(await service.ReadSourceAsync(tree, cancellationToken), worker, cancellationToken);
+
+        Assert.Equal("a\n", await File.ReadAllTextAsync(Path.Combine(worker, "src", "a.c"), cancellationToken));
+        Assert.Equal(10, Directory.GetFiles(Variant.DirectoryUnder(worker)).Length);
+    }
+
+    /// <summary>
+    /// The delete bound still judges what mirrors the tree: a worker holding many files the tree lacks outside its
+    /// build directory is refused (13), changing nothing, and its refusal names what a reader who typed
+    /// check-mutations can take - never --dry-run, which that command does not have.
+    /// </summary>
+    [Fact]
+    public async Task AWorkerHoldingMoreThanTheTreeMirrors_IsRefused_NamingWhatCheckMutationsCanTake()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, tree) = await PrepareAsync(
+            temp,
+            cancellationToken,
+            new HarnessConfig { Sync = new SyncConfig { NeverTransfer = ["**/.secrets"] } });
+        var copies = Copies(harness);
+        var service = SyncKit.Service(harness);
+        var worker = MutationWorkers.PathOf(tree, Variant, 1);
+
+        await copies.SyncAsync(await service.ReadSourceAsync(tree, cancellationToken), worker, cancellationToken);
+
+        foreach (var index in Enumerable.Range(0, 10))
+        {
+            temp.WriteFile(Path.Combine(Path.GetRelativePath(temp.Path, worker), "extra", $"i{index}.txt"), "x");
+        }
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(
+            async () => await copies.SyncAsync(await service.ReadSourceAsync(tree, cancellationToken), worker, cancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+        Assert.Contains("sync.maxDeleteFraction allows", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("clean --legs <leg>", refusal.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("--dry-run", refusal.Message, StringComparison.Ordinal);
+        Assert.True(File.Exists(Path.Combine(worker, "extra", "i0.txt")), "the refusal changed something");
+    }
+
+    /// <summary>
     /// The reading of a tree a sweep's workers are synced from takes nothing of the tree's slots - neither a worker
     /// kept in it nor a copy its legs work in - so no copy carries them, and the room a worker's copy is reckoned to need,
     /// which is what that reading counts, is the tree's own files alone.
@@ -609,7 +680,10 @@ public sealed class WorkerCopiesTests
     }
 
     /// <summary>A tree in a repository of its own, in <paramref name="temp"/>, so the workers beside it are in it too.</summary>
-    private static async Task<(HarnessFactory Harness, string Tree)> PrepareAsync(TempDirectory temp, CancellationToken cancellationToken)
+    private static async Task<(HarnessFactory Harness, string Tree)> PrepareAsync(
+        TempDirectory temp,
+        CancellationToken cancellationToken,
+        HarnessConfig? config = null)
     {
         var harness = new HarnessFactory();
         var tree = temp.Combine("tree");
@@ -618,7 +692,7 @@ public sealed class WorkerCopiesTests
         temp.WriteFile(Path.Combine("tree", "src", "b.c"), "b\n");
         temp.WriteFile(Path.Combine("tree", ".gitignore"), "build/\n");
 
-        await harness.InitializeHarnessAsync(tree, cancellationToken, new HarnessConfig());
+        await harness.InitializeHarnessAsync(tree, cancellationToken, config ?? new HarnessConfig());
         await harness.CommitAllAsync(tree, "initial", cancellationToken);
 
         return (harness, tree);

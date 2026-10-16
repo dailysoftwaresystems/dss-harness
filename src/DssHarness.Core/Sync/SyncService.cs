@@ -17,7 +17,21 @@ namespace DssHarness.Core.Sync;
 /// somebody meant on one machine would otherwise also take over whatever unexpected thing is found
 /// at another's repositoryPath, including a mistyped one, without being asked again.
 /// </param>
-public sealed record SyncOptions(bool DryRun = false, IReadOnlyList<string>? Adopt = null)
+/// <param name="Withheld">
+/// Paths this one sync withholds - never transfers, never deletes - in addition to the
+/// configuration's: what the sync's own caller keeps in the copy it is syncing, as a sweep keeps the
+/// build directory it made in its own worker. The configuration's own statements are untouched, and
+/// the delete bound still judges everything that mirrors the source.
+/// </param>
+/// <param name="Reader">
+/// Whose refusal a sync over the delete bound is, which says what its reader can be told to do; the
+/// sync command's own reader by default.
+/// </param>
+public sealed record SyncOptions(
+    bool DryRun = false,
+    IReadOnlyList<string>? Adopt = null,
+    IReadOnlyList<string>? Withheld = null,
+    SyncBoundReader Reader = SyncBoundReader.Sync)
 {
     /// <summary>
     /// The run the copy is made for, which its marker records with the reading as the sync finishes it; <see langword="null"/>
@@ -813,7 +827,13 @@ public sealed class SyncService(
         // edited since would decide what the copy withholds and what may be deleted from it, and those deletions would
         // be made before anything noticed the tree had moved.
         var context = source.Context;
-        var exclusions = source.Exclusions;
+
+        // What this one sync's own caller keeps in the copy, over the configuration's statements: a sweep keeps the
+        // build directory it made in its own worker, which no spelling of a configuration should have to name for a
+        // sweep to work - and which the delete bound has no business judging, since the source never carried it.
+        var exclusions = options.Withheld is { Count: > 0 }
+            ? source.Exclusions.With(options.Withheld)
+            : source.Exclusions;
 
         // A worktree's copy is claimed for it before anything is written to it: recorded, so that deleting the
         // worktree asks this host to remove it and asks no host that holds none; and refused while another worktree
@@ -916,11 +936,11 @@ public sealed class SyncService(
 
         if (options.DryRun)
         {
-            overTheBound = plan.OverTheBound(destination, context.Config.Sync.MaxDeleteFraction, adopting: !mine);
+            overTheBound = plan.OverTheBound(destination, context.Config.Sync.MaxDeleteFraction, adopting: !mine, options.Reader);
         }
         else
         {
-            plan.RefuseWhenDeletingTooMuch(destination, context.Config.Sync.MaxDeleteFraction, adopting);
+            plan.RefuseWhenDeletingTooMuch(destination, context.Config.Sync.MaxDeleteFraction, adopting, options.Reader);
         }
 
         if (options.DryRun)

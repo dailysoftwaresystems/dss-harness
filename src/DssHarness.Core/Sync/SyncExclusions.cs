@@ -88,6 +88,37 @@ public sealed class SyncExclusions
     public IReadOnlyList<string> Excluded => _excluded;
 
     /// <summary>
+    /// This policy with <paramref name="withheld"/> withheld too - not transferred, and protected from deletion -
+    /// for the one sync that asks: what that sync's own caller keeps in the copy it is syncing, as a sweep keeps the
+    /// build directory it made in its own worker. The configuration's own statements are untouched.
+    /// </summary>
+    /// <param name="withheld">The paths to add, spelled as the configuration spells them.</param>
+    public SyncExclusions With(IReadOnlyList<string> withheld)
+    {
+        ArgumentNullException.ThrowIfNull(withheld);
+
+        var extra = withheld.Select(Normalize).Where(path => path.Length > 0).ToArray();
+
+        return extra.Length == 0
+            ? this
+            : new SyncExclusions(
+                [.. _withheld.Concat(extra).Distinct(StringComparer.Ordinal)],
+                _excluded,
+                _neverTransfer,
+                _coveredByConfiguration,
+                _worktreesRoot);
+    }
+
+    private SyncExclusions(string[] withheld, string[] excluded, string[] neverTransfer, string[] coveredByConfiguration, string worktreesRoot)
+    {
+        _withheld = withheld;
+        _excluded = excluded;
+        _neverTransfer = neverTransfer;
+        _coveredByConfiguration = coveredByConfiguration;
+        _worktreesRoot = worktreesRoot;
+    }
+
+    /// <summary>
     /// Whether <paramref name="relativePath"/> is withheld from transfer. True for a withheld or
     /// excluded path and for everything beneath one.
     /// </summary>
