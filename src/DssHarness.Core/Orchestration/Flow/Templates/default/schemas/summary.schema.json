@@ -1,0 +1,21 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "summary",
+    "newRows"
+  ],
+  "properties": {
+    "summary": {
+      "type": "string",
+      "description": "What this step wrote, and where."
+    },
+    "newRows": {
+      "type": "array",
+      "description": "The id of every registry row filed in this work that the registry did not have before it, said again in full in each report; empty where none was filed or the repository keeps no registry.",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

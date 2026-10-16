@@ -11,6 +11,7 @@ using DssHarness.Core.Hosts;
 using DssHarness.Core.Legs;
 using DssHarness.Core.Mutations;
 using DssHarness.Core.Orchestration;
+using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Repository;
@@ -61,6 +62,7 @@ internal static class HelpCommand
         new("admission", ["heavy"], "How heavy legs share a machine: its slots, its memory and its room", RenderAdmission),
         new("worktrees", ["worktree"], "Naming rules, the path budget, and when deleting refuses", RenderWorktrees),
         new("orchestrators", ["orchestrator", "agents", "agent"], "Orchestrators, their agents, and folding an agent's work", RenderOrchestrators),
+        new("workflows", ["workflow"], "Workflow definitions: what config.json declares and the yml file defines", RenderWorkflows),
         new("anchors", ["anchor"], "Anchor registries and the commands that change them", RenderAnchors),
         new("layout", [], "What init creates, and what git tracks", RenderLayout),
         new("secrets", ["hosts-secrets"], "Where each host's connection data lives", RenderSecrets),
@@ -2851,6 +2853,88 @@ internal static class HelpCommand
         return builder.ToString();
     }
 
+    private static string RenderWorkflows()
+    {
+        var builder = new StringBuilder();
+
+        builder.AppendLine("Workflows");
+        builder.AppendLine();
+        builder.AppendLine($"A workflow is a flow of typed steps that depend on one another by name, declared by");
+        builder.AppendLine($"name under workflows in config.json and defined by a yml file of its own:");
+        builder.AppendLine($"{HarnessLayout.WorkflowsDirectoryRelative}/<name>/<name>{HarnessLayout.WorkflowFileExtension}. This build checks a");
+        builder.AppendLine($"workflow's definition, with '{ToolPackage.Command} validate-workflow <name>'; it does not run");
+        builder.AppendLine("one. The engine that runs them is the next thing this tool grows.");
+        builder.AppendLine();
+        builder.AppendLine("The workflow's directory is the workflow's own - its agent files (agents/<name>.md),");
+        builder.AppendLine("its prompts, its schemas, the bar it recommends by (recommendations.md) - and every path");
+        builder.AppendLine("the yml names is relative to that directory and stays inside it, as an action's files");
+        builder.AppendLine("are relative to its own directory (see 'help runners'). So two workflows never read");
+        builder.AppendLine("each other's files, and a repository can hold as many as it has ways of working. init");
+        builder.AppendLine("writes one - the default workflow, from a request to a pull request whose checks are");
+        builder.AppendLine("green - into a repository that has no workflows directory at all, and declares it in the");
+        builder.AppendLine("config it creates; nothing that exists is ever overwritten. The name is the folder's,");
+        builder.AppendLine("the file's and the name: key's alike, one word, and a disagreement among the three is");
+        builder.AppendLine("refused when the file is read.");
+        builder.AppendLine();
+        builder.AppendLine("A workflow declares inputs - the values a run is started with, each with a kind, a");
+        builder.AppendLine("default and the options it takes; params - its own knobs, defaulted in the file and read");
+        builder.AppendLine("as param.<name>; and outputs - what the whole workflow produces, each from a step of");
+        builder.AppendLine("the flow. Its steps are of the types below, or groups holding steps of their own: a");
+        builder.AppendLine("group runs its steps once for each work item a forEach yields, again and again until a");
+        builder.AppendLine("repeat's bound is met, or once as a block that gathers its members' findings. Every");
+        builder.AppendLine("step's name is a lower-case word with dashes within, unique among its siblings; steps");
+        builder.AppendLine($"nest at most {WorkflowFileParser.MaxDepth} deep. A step raised by another step's ending says on - by the outcome");
+        builder.AppendLine("(failure, success or end, a failure by exit code) - and sends the run back with then;");
+        builder.AppendLine("the schedule never starts it. The keys of the file and of every step are listed below,");
+        builder.AppendLine("generated from the tables the reader itself reads, so what is listed is what is read.");
+        builder.AppendLine();
+        builder.AppendLine("The file's own keys:");
+        builder.AppendLine();
+        AppendKeys(builder, WorkflowKeys.File);
+        builder.AppendLine();
+        builder.AppendLine("What one declared input takes, and one declared param, and one declared output:");
+        builder.AppendLine();
+        AppendKeys(builder, WorkflowKeys.Input);
+        AppendKeys(builder, WorkflowKeys.Param);
+        AppendKeys(builder, WorkflowKeys.Output);
+        builder.AppendLine();
+        builder.AppendLine("What every step takes, group or typed step alike:");
+        builder.AppendLine();
+        AppendKeys(builder, WorkflowStepTypes.Common);
+        builder.AppendLine();
+        builder.AppendLine("What a group takes, beyond those:");
+        builder.AppendLine();
+        AppendKeys(builder, WorkflowStepTypes.Group);
+        builder.AppendLine();
+        builder.AppendLine("The step types, and what each takes beyond the common keys (a check's failOn says what");
+        builder.AppendLine("a red verdict does to the step: red fails it, never records it; each type's default is");
+        builder.AppendLine("in its list):");
+        builder.AppendLine();
+
+        foreach (var type in WorkflowStepTypes.All)
+        {
+            // orient takes nothing beyond the common keys: its line stands alone.
+            builder.AppendLine($"  {type.Type}{(type.IsCheck ? $" (a check; failOn {type.FailOnDefault} by default)" : string.Empty)}");
+            builder.AppendLine();
+
+            if (type.Keys.Count > 0)
+            {
+                AppendKeys(builder, type.Keys);
+                builder.AppendLine();
+            }
+        }
+
+        AppendWrapped(
+            builder,
+            $"An expression reads names joined by &&, ||, !, ==, != and ?? with ( ) to group, 'empty(x)' for whether a read holds nothing "
+            + "and 'any(list, test)' for whether any member meets a test written with 'it' for the member: every step, input and param it "
+            + "names must be declared before it, and a placeholder in braces - '{step.member}' - in a prompt or a template key reads the same "
+            + $"names. '{ToolPackage.Command} validate-workflow' checks all of it - the shape of every key, every name an expression reads, every file "
+            + "the definition names - and refuses (12) naming each problem, without running anything.");
+
+        return builder.ToString();
+    }
+
     private static string RenderLayout()
     {
         var builder = new StringBuilder();
@@ -2858,6 +2942,11 @@ internal static class HelpCommand
         builder.AppendLine("Layout created by init");
         builder.AppendLine();
         builder.AppendLine("  .harness-config/config.json        tracked by git; the whole contract");
+        builder.AppendLine($"  {HarnessLayout.WorkflowsDirectoryRelative}/<name>/<name>{HarnessLayout.WorkflowFileExtension}");
+        builder.AppendLine("                                     tracked; one directory per workflow, holding its");
+        builder.AppendLine("                                     definition and every file that definition names -");
+        builder.AppendLine($"                                     its agents, prompts and schemas ('{ToolPackage.Command} help workflows');");
+        builder.AppendLine("                                     written by init where it is the default one");
         builder.AppendLine($"  {HarnessLayout.RunnerActionsDirectoryRelative}/<name>/<name>.yml");
         builder.AppendLine("                                     tracked; one directory per action, holding its");
         builder.AppendLine("                                     steps and whatever those steps run");
@@ -2986,6 +3075,9 @@ internal static class HelpCommand
         builder.AppendLine("  tools          external tools to verify and install");
         builder.AppendLine("  predefinedRunners  multi-phase procedures such as a corpus test or a benchmark;");
         builder.AppendLine("                     one whose steps change the tree says writesTree ('help legs')");
+        builder.AppendLine("  workflows      the workflows this repository runs, each defined by a yml file of its");
+        builder.AppendLine("                 own under .harness-config/workflows/<name>/ and declared here by name");
+        builder.AppendLine("                 alone; validate-workflow checks them ('help workflows')");
         builder.AppendLine("  setUp          what a run brings up around its work and down after, by name: an up");
         builder.AppendLine($"                 and a down command line for '{ToolPackage.Command} up' and '{ToolPackage.Command} down', which");
         builder.AppendLine("                 take inputs; a test invocation's and a runner's setUp name them ('help setups')");

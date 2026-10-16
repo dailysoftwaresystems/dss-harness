@@ -3,6 +3,7 @@ using DssHarness.Core.Configuration;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
 using DssHarness.Core.Hosts;
+using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Projects;
 using DssHarness.Core.Repository;
@@ -126,8 +127,8 @@ public sealed class InitService(
     /// <summary>
     /// The files the harness keeps in git, relative to the tree's root with forward separators: its
     /// configuration, each placeholder, an action's own files - each of <paramref name="actionFiles"/>,
-    /// and a name in an action's directory for any action's - and each anchor registry git tracks. No
-    /// rule one of them rests on is told it does nothing.
+    /// and a name in an action's directory for any action's - each workflow's own files, and each anchor
+    /// registry git tracks. No rule one of them rests on is told it does nothing.
     /// </summary>
     /// <param name="registries">The anchor registries, as located: one git ignores is kept in no git.</param>
     /// <param name="actionFiles">
@@ -136,10 +137,16 @@ public sealed class InitService(
     /// <c>*.sh</c>, as an action's helper may be - which no name made up for any action's file shows.
     /// </param>
     /// <param name="worktrees">The worktree settings, whose root holds a placeholder; the defaults where none are given.</param>
+    /// <param name="workflowFiles">
+    /// The files git keeps under the workflows directory now, for the same reason
+    /// <paramref name="actionFiles"/> is given: a workflow's files are the definition a repository
+    /// runs, and a hand-written rule that drops one is reported rather than passed over.
+    /// </param>
     internal static IReadOnlyList<string> KeptInGit(
         IEnumerable<AnchorRegistry> registries,
         IEnumerable<string> actionFiles,
-        WorktreeSettings? worktrees = null)
+        WorktreeSettings? worktrees = null,
+        IEnumerable<string>? workflowFiles = null)
     {
         var root = HarnessLayout.DirectoryName;
 
@@ -149,7 +156,9 @@ public sealed class InitService(
             .. HarnessLayout.PlaceholderDirectories.Select(directory => $"{root}/{directory.Replace('\\', '/')}/{HarnessLayout.GitKeepFileName}"),
             .. HarnessLayout.RootSlots((worktrees ?? new WorktreeSettings()).Root).Select(slot => $"{slot}/{HarnessLayout.GitKeepFileName}"),
             $"{HarnessLayout.RunnerActionsDirectoryRelative}/{ManagedIgnoreRule.AnyDirectoryName}/{ManagedIgnoreRule.AnyName}",
+            $"{HarnessLayout.WorkflowsDirectoryRelative}/{ManagedIgnoreRule.AnyDirectoryName}/{ManagedIgnoreRule.AnyName}",
             .. actionFiles,
+            .. workflowFiles ?? [],
             .. registries.Where(registry => !registry.IsIgnored).Select(registry => registry.RelativePath.Replace('\\', '/')),
         ];
     }
@@ -254,6 +263,15 @@ public sealed class InitService(
             }
 
             EnsurePlaceholderDirectory(root, directory, actions);
+        }
+
+        // The default workflow's own files, where the repository has no workflows directory at all:
+        // one that is there is a repository's own arrangement, and nothing is written into it.
+        foreach (var written in WorkflowTemplates.EnsureDefault(
+                     Path.Combine(layout.HarnessDirectory, HarnessLayout.WorkflowsDirectoryName),
+                     _fileSystem))
+        {
+            actions.Add($"created {written}");
         }
 
         var gitIgnorePath = Path.Combine(root, ".gitignore");
@@ -387,7 +405,11 @@ public sealed class InitService(
 
         try
         {
-            var kept = KeptInGit(registries, await ActionFilesAsync(root, cancellationToken).ConfigureAwait(false), worktrees);
+            var kept = KeptInGit(
+                registries,
+                await ActionFilesAsync(root, cancellationToken).ConfigureAwait(false),
+                worktrees,
+                await WorkflowFilesAsync(root, cancellationToken).ConfigureAwait(false));
 
             findings = await _managedIgnoreCheck
                 .FindAsync(root, _fileSystem.ReadAllText(gitIgnorePath), rules, kept, cancellationToken)
@@ -438,6 +460,21 @@ public sealed class InitService(
                 .ListNamesAsync(
                     root,
                     ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", HarnessLayout.RunnerActionsDirectoryRelative],
+                    cancellationToken)
+                .ConfigureAwait(false))
+            .Select(name => name.Text)];
+
+    /// <summary>
+    /// The files git keeps under the workflows directory of the tree at <paramref name="root"/>, as
+    /// <see cref="ActionFilesAsync"/> lists the actions': a workflow's files are the definition a
+    /// repository runs, and one a hand-written rule drops is a workflow that no longer is.
+    /// </summary>
+    /// <exception cref="HarnessException">git could not list them.</exception>
+    private async Task<IReadOnlyList<string>> WorkflowFilesAsync(string root, CancellationToken cancellationToken)
+        => [.. (await _gitClient
+                .ListNamesAsync(
+                    root,
+                    ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", HarnessLayout.WorkflowsDirectoryRelative],
                     cancellationToken)
                 .ConfigureAwait(false))
             .Select(name => name.Text)];

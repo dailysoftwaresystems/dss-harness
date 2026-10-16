@@ -1,0 +1,1402 @@
+using System.Diagnostics;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Output;
+using DssHarness.Core.Results;
+using YamlDotNet.Core;
+using YamlDotNet.RepresentationModel;
+
+namespace DssHarness.Core.Orchestration.Flow;
+
+/// <summary>
+/// Reads a workflow's definition file: <c>.harness-config/workflows/&lt;name&gt;/&lt;name&gt;.yml</c>.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Parsed through YamlDotNet's representation model rather than its serialiser, as an action file is,
+/// for the same two reasons: the position of the key that was wrong, and the fact that a key was not
+/// recognised at all. A silently ignored key is a rule nobody applied, and the configuration reader
+/// elsewhere in this repository refuses one for the same reason.
+/// </para>
+/// <para>
+/// Every problem in a file is collected and reported together, each with the line and column it was
+/// read at. What a definition <em>means</em> - that a step it names is declared, that an expression
+/// reads something that exists - is <see cref="WorkflowValidator"/>'s to check, on the parsed
+/// definition; this reads the file's shape alone.
+/// </para>
+/// </remarks>
+public static class WorkflowFileParser
+{
+    /// <summary>How deep steps may nest: a group's steps inside a group's steps, and so on.</summary>
+    /// <remarks>
+    /// Bounded here, in the reader, because the file could nest deeper than any reader could bear
+    /// before anything else looks at it; the same number is the validator's rule, and the two are
+    /// one rule said twice by one owner.
+    /// </remarks>
+    public const int MaxDepth = 10;
+
+    /// <summary>Top-level keys a workflow file takes.</summary>
+    private static readonly IReadOnlyList<string> FileKeys = KeyDescription.Names(WorkflowKeys.File);
+
+    /// <summary>
+    /// Parses <paramref name="text"/> as the workflow definition at <paramref name="path"/>.
+    /// </summary>
+    /// <param name="path">Where the text came from, quoted in every refusal about it.</param>
+    /// <param name="text">The file's contents.</param>
+    /// <exception cref="HarnessException">The file is not usable. Every problem found is reported together.</exception>
+    public static WorkflowDefinition Parse(string path, string text)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentNullException.ThrowIfNull(text);
+
+        var problems = new List<string>();
+        var root = LoadRoot(text, problems);
+
+        if (root is null)
+        {
+            throw Refuse(path, problems);
+        }
+
+        var keys = CollectKeys(root, "the file's top level", FileKeys, problems);
+
+        string? name = null;
+        string? description = null;
+        int? maxReasoningAgents = null;
+        int? maxParallelProcesses = null;
+        int? maxOpenAgents = null;
+        int? maxRetries = null;
+        int? maxInstances = null;
+        bool? pushCheckpoints = null;
+        int? handoffSeconds = null;
+        FlowBudget? budget = null;
+        string? recommendations = null;
+        FlowAdvisor? advisor = null;
+        FlowReporter? reporter = null;
+        FlowAmend? amend = null;
+        var answers = new Dictionary<string, FlowAnswer>(StringComparer.Ordinal);
+        var inputs = new List<FlowInput>();
+        var parameters = new List<FlowParam>();
+        var outputs = new List<WorkflowOutput>();
+        List<WorkflowStep>? steps = null;
+
+        foreach (var (key, value) in keys)
+        {
+            switch (key)
+            {
+                case "name":
+                    name = RequireScalar(value, "name", problems);
+                    break;
+
+                case "description":
+                    description = RequireScalar(value, "description", problems);
+                    break;
+
+                case "maxReasoningAgents":
+                    maxReasoningAgents = RequireInt(value, "maxReasoningAgents", problems);
+                    break;
+
+                case "maxParallelProcesses":
+                    maxParallelProcesses = RequireInt(value, "maxParallelProcesses", problems);
+                    break;
+
+                case "maxOpenAgents":
+                    maxOpenAgents = RequireInt(value, "maxOpenAgents", problems);
+                    break;
+
+                case "maxRetries":
+                    maxRetries = RequireInt(value, "maxRetries", problems);
+                    break;
+
+                case "maxInstances":
+                    maxInstances = RequireInt(value, "maxInstances", problems);
+                    break;
+
+                case "pushCheckpoints":
+                    pushCheckpoints = RequireBoolean(value, "pushCheckpoints", problems);
+                    break;
+
+                case "handoffSeconds":
+                    handoffSeconds = RequireInt(value, "handoffSeconds", problems);
+                    break;
+
+                case "budget":
+                    budget = ReadBudget(value, problems);
+                    break;
+
+                case "recommendations":
+                    recommendations = RequireScalar(value, "recommendations", problems);
+                    break;
+
+                case "advisor":
+                    advisor = ReadAdvisor(value, problems);
+                    break;
+
+                case "reporter":
+                    reporter = ReadReporter(value, problems);
+                    break;
+
+                case "amend":
+                    amend = ReadAmend(value, problems);
+                    break;
+
+                case "answers":
+                    foreach (var (kind, answer) in ReadAnswers(value, "answers", problems))
+                    {
+                        if (!answers.TryAdd(kind, answer))
+                        {
+                            problems.Add(At(value, $"answers names the kind '{kind}' more than once"));
+                        }
+                    }
+
+                    break;
+
+                case "inputs":
+                    inputs.AddRange(ReadDeclarations(value, "inputs", WorkflowKeys.Input, problems, ReadInput));
+                    break;
+
+                case "params":
+                    parameters.AddRange(ReadDeclarations(value, "params", WorkflowKeys.Param, problems, ReadParam));
+                    break;
+
+                case "outputs":
+                    outputs.AddRange(ReadDeclarations(value, "outputs", WorkflowKeys.Output, problems, ReadOutput));
+                    break;
+
+                case "steps":
+                    steps = [.. ReadSteps(value, 1, problems)];
+                    break;
+
+                default:
+                    throw Unread(key);
+            }
+        }
+
+        if (name is null)
+        {
+            problems.Add("the file names no 'name'; a workflow's name is its directory's and its file's, said again in the file so a copied directory cannot pass as the workflow it was copied from");
+        }
+
+        if (steps is null)
+        {
+            problems.Add("the file declares no 'steps'; a workflow that runs nothing is a file whose run reports success having done no work.");
+        }
+
+        return problems.Count == 0
+            ? new WorkflowDefinition(
+                name!,
+                description,
+                maxReasoningAgents,
+                maxParallelProcesses,
+                maxOpenAgents,
+                maxRetries,
+                maxInstances,
+                pushCheckpoints,
+                handoffSeconds,
+                budget,
+                recommendations,
+                advisor,
+                reporter,
+                amend,
+                answers,
+                inputs,
+                parameters,
+                outputs,
+                steps ?? [],
+                path)
+            : throw Refuse(path, problems);
+    }
+
+    private static FlowBudget? ReadBudget(YamlNode node, List<string> problems)
+    {
+        if (node is not YamlMappingNode mapping)
+        {
+            problems.Add(At(node, "'budget' is not a mapping of keys."));
+            return null;
+        }
+
+        var keys = CollectKeys(mapping, "budget", KeyDescription.Names(WorkflowKeys.Budget), problems);
+
+        double? usd = null;
+        long? tokens = null;
+        double? minutes = null;
+        int? reservePercent = null;
+
+        foreach (var (key, value) in keys)
+        {
+            switch (key)
+            {
+                case "usd":
+                    usd = RequireDouble(value, "budget.usd", problems);
+                    break;
+
+                case "tokens":
+                    tokens = RequireLong(value, "budget.tokens", problems);
+                    break;
+
+                case "minutes":
+                    minutes = RequireDouble(value, "budget.minutes", problems);
+                    break;
+
+                case "reservePercent":
+                    reservePercent = RequireInt(value, "budget.reservePercent", problems);
+                    break;
+
+                default:
+                    throw Unread(key);
+            }
+        }
+
+        return new FlowBudget(usd, tokens, minutes, reservePercent);
+    }
+
+    private static FlowAdvisor? ReadAdvisor(YamlNode node, List<string> problems)
+    {
+        if (node is not YamlMappingNode mapping)
+        {
+            problems.Add(At(node, "'advisor' is not a mapping of keys."));
+            return null;
+        }
+
+        var keys = CollectKeys(mapping, "advisor", KeyDescription.Names(WorkflowKeys.Advisor), problems);
+        var read = ReadAgentSelection(keys, "advisor", problems);
+        var prompt = RequireScalarIn(keys, "advisor.prompt", problems);
+        var kinds = StringListIn(keys, "advisor.kinds", problems) ?? [];
+
+        if (read.Agent is null || prompt is null)
+        {
+            return null;
+        }
+
+        return new FlowAdvisor(read.Agent, prompt, read.Tier, read.Model, read.Effort, read.Fallback, read.Provider, read.Client, kinds);
+    }
+
+    private static FlowReporter? ReadReporter(YamlNode node, List<string> problems)
+    {
+        if (node is not YamlMappingNode mapping)
+        {
+            problems.Add(At(node, "'reporter' is not a mapping of keys."));
+            return null;
+        }
+
+        var keys = CollectKeys(mapping, "reporter", KeyDescription.Names(WorkflowKeys.Reporter), problems);
+        var read = ReadAgentSelection(keys, "reporter", problems);
+        var statusPrompt = RequireScalarIn(keys, "reporter.statusPrompt", problems);
+        var askPrompt = RequireScalarIn(keys, "reporter.askPrompt", problems);
+
+        if (read.Agent is null || statusPrompt is null || askPrompt is null)
+        {
+            return null;
+        }
+
+        return new FlowReporter(read.Agent, statusPrompt, askPrompt, read.Tier, read.Model, read.Effort, read.Fallback, read.Provider, read.Client);
+    }
+
+    /// <summary>The keys <c>advisor</c> and <c>reporter</c> share: how each names the agent it runs.</summary>
+    private static (string? Agent, string? Tier, string? Model, string? Effort, IReadOnlyList<string> Fallback, string? Provider, string? Client)
+        ReadAgentSelection(List<(string Key, YamlNode Value)> keys, string owner, List<string> problems)
+    {
+        string? agent = null;
+        string? tier = null;
+        string? model = null;
+        string? effort = null;
+        string? provider = null;
+        string? client = null;
+        var fallback = new List<string>();
+
+        foreach (var (key, value) in keys)
+        {
+            switch (key)
+            {
+                case "agent":
+                    agent = RequireScalar(value, $"{owner}.agent", problems);
+                    break;
+
+                case "tier":
+                    tier = RequireScalar(value, $"{owner}.tier", problems);
+                    break;
+
+                case "model":
+                    model = RequireScalar(value, $"{owner}.model", problems);
+                    break;
+
+                case "effort":
+                    effort = RequireScalar(value, $"{owner}.effort", problems);
+                    break;
+
+                case "fallback":
+                    fallback.AddRange(RequireStringList(value, $"{owner}.fallback", problems));
+                    break;
+
+                case "provider":
+                    provider = RequireScalar(value, $"{owner}.provider", problems);
+                    break;
+
+                case "client":
+                    client = RequireScalar(value, $"{owner}.client", problems);
+                    break;
+
+                // Read by the caller, which owns them: the prompts each of advisor and reporter is
+                // asked with, and the kinds an advisor is asked about.
+                case "prompt":
+                case "statusPrompt":
+                case "askPrompt":
+                case "kinds":
+                    break;
+
+                default:
+                    throw Unread(key);
+            }
+        }
+
+        return (agent, tier, model, effort, fallback, provider, client);
+    }
+
+    private static FlowAmend? ReadAmend(YamlNode node, List<string> problems)
+    {
+        if (node is not YamlMappingNode mapping)
+        {
+            problems.Add(At(node, "'amend' is not a mapping of keys."));
+            return null;
+        }
+
+        var keys = CollectKeys(mapping, "amend", KeyDescription.Names(WorkflowKeys.Amend), problems);
+
+        string? input = null;
+        int? changedAnswerMinutes = null;
+        string? before = null;
+        string? then = null;
+        int? maxAddedIterations = null;
+
+        foreach (var (key, value) in keys)
+        {
+            switch (key)
+            {
+                case "input":
+                    input = RequireScalar(value, "amend.input", problems);
+                    break;
+
+                case "changedAnswerMinutes":
+                    changedAnswerMinutes = RequireInt(value, "amend.changedAnswerMinutes", problems);
+                    break;
+
+                case "before":
+                    before = RequireScalar(value, "amend.before", problems);
+                    break;
+
+                case "step":
+                case "scope":
+                case "whenAddScope":
+                case "whenChangeScope":
+                case "whenRemoveScope":
+                    // Read below, after the loop, so the required ones are refused once, together.
+                    break;
+
+                case "then":
+                    then = RequireScalar(value, "amend.then", problems);
+                    break;
+
+                case "maxAddedIterations":
+                    maxAddedIterations = RequireInt(value, "amend.maxAddedIterations", problems);
+                    break;
+
+                default:
+                    throw Unread(key);
+            }
+        }
+
+        var step = RequireScalarIn(keys, "amend.step", problems);
+        var scope = RequireScalarIn(keys, "amend.scope", problems);
+        var whenAddScope = RequireScalarIn(keys, "amend.whenAddScope", problems);
+        var whenChangeScope = RequireScalarIn(keys, "amend.whenChangeScope", problems);
+        var whenRemoveScope = RequireScalarIn(keys, "amend.whenRemoveScope", problems);
+
+        if (step is null || scope is null || whenAddScope is null || whenChangeScope is null || whenRemoveScope is null)
+        {
+            return null;
+        }
+
+        return new FlowAmend(input, changedAnswerMinutes, before, step, then, scope, whenAddScope, whenChangeScope, whenRemoveScope, maxAddedIterations);
+    }
+
+    /// <summary>Reads an <c>answers</c> map: a kind to the answer the configuration gives it.</summary>
+    private static IEnumerable<(string Kind, FlowAnswer Answer)> ReadAnswers(YamlNode node, string owner, List<string> problems)
+    {
+        if (node is not YamlMappingNode mapping)
+        {
+            problems.Add(At(node, $"'{owner}' is not a mapping of question kind to answer."));
+            yield break;
+        }
+
+        var answerKeys = KeyDescription.Names(WorkflowStepTypes.AnswerKeys);
+
+        foreach (var (keyNode, valueNode) in mapping.Children)
+        {
+            var kind = KeyOf(keyNode, problems);
+
+            if (kind is null)
+            {
+                continue;
+            }
+
+            // The short spelling: the answer alone, written as a scalar.
+            if (valueNode is YamlScalarNode { Value: { } plain })
+            {
+                yield return (kind, new FlowAnswer(plain, null, null));
+                continue;
+            }
+
+            if (valueNode is not YamlMappingNode declaration)
+            {
+                problems.Add(At(valueNode, $"{owner}.{kind} is neither the answer alone nor a mapping of '{string.Join("', '", answerKeys)}'"));
+                continue;
+            }
+
+            var keys = CollectKeys(declaration, $"{owner}.{kind}", answerKeys, problems);
+            var answer = RequireScalarIn(keys, $"{owner}.{kind}.answer", problems);
+            var times = IntIn(keys, $"{owner}.{kind}.times", problems);
+            var then = ScalarIn(keys, $"{owner}.{kind}.then", problems);
+
+            if (answer is null)
+            {
+                continue;
+            }
+
+            yield return (kind, new FlowAnswer(answer, times, then));
+        }
+    }
+
+    private static IEnumerable<FlowInput> ReadInput(YamlMappingNode declaration, string owner, string name, List<string> problems)
+    {
+        var keys = CollectKeys(declaration, owner, KeyDescription.Names(WorkflowKeys.Input), problems);
+
+        var description = ScalarIn(keys, $"{owner}.description", problems);
+        var kind = ScalarIn(keys, $"{owner}.kind", problems) ?? FlowInput.TextKind;
+        var fallback = ScalarIn(keys, $"{owner}.default", problems);
+        var required = BooleanIn(keys, $"{owner}.required", problems) ?? false;
+        var options = StringListIn(keys, $"{owner}.options", problems) ?? [];
+
+        if (kind is not null && !FlowInput.Kinds.Contains(kind, StringComparer.Ordinal))
+        {
+            problems.Add(At(declaration, $"{owner}.kind is '{kind}', which is neither of {string.Join(" nor ", FlowInput.Kinds)}."));
+            kind = null;
+        }
+
+        if (kind == FlowInput.FileKind && options.Count > 0)
+        {
+            problems.Add(At(declaration, $"{owner} declares options and the kind '{FlowInput.FileKind}': options list what a '{FlowInput.TextKind}' input takes, and a file input is a path, checked when the run starts."));
+        }
+
+        yield return new FlowInput(name, description, kind ?? FlowInput.TextKind, fallback, required, options);
+    }
+
+    private static IEnumerable<FlowParam> ReadParam(YamlMappingNode declaration, string owner, string name, List<string> problems)
+    {
+        var keys = CollectKeys(declaration, owner, KeyDescription.Names(WorkflowKeys.Param), problems);
+
+        var description = ScalarIn(keys, $"{owner}.description", problems);
+        var fallback = ScalarIn(keys, $"{owner}.default", problems);
+        var required = BooleanIn(keys, $"{owner}.required", problems) ?? false;
+
+        yield return new FlowParam(name, description, fallback, required);
+    }
+
+    private static IEnumerable<WorkflowOutput> ReadOutput(YamlMappingNode declaration, string owner, string name, List<string> problems)
+    {
+        var keys = CollectKeys(declaration, owner, KeyDescription.Names(WorkflowKeys.Output), problems);
+
+        var description = ScalarIn(keys, $"{owner}.description", problems);
+        var from = RequireScalarIn(keys, $"{owner}.from", problems);
+
+        if (from is null)
+        {
+            yield break;
+        }
+
+        yield return new WorkflowOutput(name, description, from);
+    }
+
+    /// <summary>Reads one of the file's declared lists - <c>inputs</c>, <c>params</c>, <c>outputs</c> - each a sequence of mappings that name themselves.</summary>
+    private static IEnumerable<TDeclaration> ReadDeclarations<TDeclaration>(
+        YamlNode node,
+        string owner,
+        IReadOnlyList<KeyDescription> declarationKeys,
+        List<string> problems,
+        Func<YamlMappingNode, string, string, List<string>, IEnumerable<TDeclaration>> read)
+    {
+        ArgumentNullException.ThrowIfNull(read);
+
+        if (node is not YamlSequenceNode sequence)
+        {
+            problems.Add(At(node, $"'{owner}' is not a sequence."));
+            yield break;
+        }
+
+        var names = new List<string>();
+
+        foreach (var child in sequence.Children)
+        {
+            if (child is not YamlMappingNode mapping)
+            {
+                problems.Add(At(child, $"an entry of '{owner}' is not a mapping of '{string.Join("', '", KeyDescription.Names(declarationKeys))}'"));
+                continue;
+            }
+
+            var keys = CollectKeys(mapping, $"an entry of '{owner}'", KeyDescription.Names(declarationKeys), problems);
+            var name = RequireScalarIn(keys, $"{owner}.name", problems);
+
+            if (name is null)
+            {
+                continue;
+            }
+
+            if (names.Contains(name, StringComparer.Ordinal))
+            {
+                problems.Add(At(child, $"'{owner}' names '{name}' more than once; a name is one value, and a second would leave what everything reads it as depending on where it sat in the file."));
+                continue;
+            }
+
+            names.Add(name);
+
+            foreach (var declared in read(mapping, $"{owner}.{name}", name, problems))
+            {
+                yield return declared;
+            }
+        }
+    }
+
+    private static IEnumerable<WorkflowStep> ReadSteps(YamlNode node, int depth, List<string> problems)
+    {
+        if (node is not YamlSequenceNode sequence)
+        {
+            problems.Add(At(node, "'steps' is not a sequence."));
+            yield break;
+        }
+
+        if (sequence.Children.Count == 0)
+        {
+            problems.Add(At(node, "'steps' is empty; a group that runs nothing would end at once, and its run with it."));
+            yield break;
+        }
+
+        foreach (var child in sequence.Children)
+        {
+            foreach (var step in ReadStep(child, depth, problems))
+            {
+                yield return step;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Reads one step, at <paramref name="depth"/> levels of nesting: a typed step, or a group
+    /// holding steps of its own.
+    /// </summary>
+    private static IEnumerable<WorkflowStep> ReadStep(YamlNode node, int depth, List<string> problems)
+    {
+        if (node is not YamlMappingNode mapping)
+        {
+            problems.Add(At(node, "a step is not a mapping of keys."));
+            yield break;
+        }
+
+        var keys = CollectKeys(mapping, "a step", [.. KeyDescription.Names(WorkflowStepTypes.Common), .. KeyDescription.Names(WorkflowStepTypes.Group), .. WorkflowStepTypes.AllKeys], problems);
+        var nameNode = keys.FirstOrDefault(entry => entry.Key == "name").Value;
+        var name = nameNode is null ? null : ScalarOf(nameNode);
+        var typeNode = keys.FirstOrDefault(entry => entry.Key == "type").Value;
+        var type = typeNode is null ? null : ScalarOf(typeNode);
+        // The step's name, bare, as every key under it is named in a problem: 'orient.dependsOn'.
+        var where = name is null ? "a step" : name;
+        var typed = type is null ? null : WorkflowStepTypes.Find(type);
+
+        if (type is not null && typed is null)
+        {
+            problems.Add(At(typeNode!, $"'{type}' is not a step type. Known: {string.Join(", ", WorkflowStepTypes.All.Select(known => $"'{known.Type}'"))}."));
+        }
+
+        if (type is not null && keys.Any(entry => entry.Key == "steps"))
+        {
+            problems.Add(At(node, $"{where} names the type '{type}' and holds steps; a group holds steps and names no type, and a typed step runs one thing."));
+        }
+
+        // A group's own keys, checked against the group's table; a typed step's against its type's.
+        IReadOnlyList<string> allowed = typed is null
+            ? [.. KeyDescription.Names(WorkflowStepTypes.Common), .. KeyDescription.Names(WorkflowStepTypes.Group)]
+            : [.. KeyDescription.Names(WorkflowStepTypes.Common), .. WorkflowStepTypes.KeysOf(typed)];
+
+        foreach (var (key, value) in keys)
+        {
+            // A key no table lists was refused where the keys were collected; what is left to refuse
+            // here is a key that belongs to a step this one is not.
+            if (!allowed.Contains(key, StringComparer.Ordinal) && WorkflowStepTypes.AllKeys.Contains(key, StringComparer.Ordinal))
+            {
+                var owner = typed is null ? "a group" : $"a {typed.Type} step";
+                var taken = WorkflowStepTypes.All.FirstOrDefault(other => other != typed && WorkflowStepTypes.KeysOf(other).Contains(key, StringComparer.Ordinal));
+
+                problems.Add(At(value, $"'{key}' is not a key of {owner}{(taken is null ? "" : $"; it is one of a {taken.Type} step")}."));
+            }
+        }
+
+        var step = new WorkflowStep
+        {
+            Name = name ?? string.Empty,
+            Type = type,
+            Description = ScalarIn(keys, $"{where}.description", problems),
+            DependsOn = StringListIn(keys, $"{where}.dependsOn", problems) ?? [],
+            When = ScalarIn(keys, $"{where}.when", problems),
+            OnFailure = EnumIn(keys, $"{where}.onFailure", problems, ["stop", "pause", "continue"]),
+            Retries = IntIn(keys, $"{where}.retries", problems),
+            Always = BooleanIn(keys, $"{where}.always", problems),
+            Alone = BooleanIn(keys, $"{where}.alone", problems),
+            Skippable = BooleanIn(keys, $"{where}.skippable", problems),
+        };
+
+        var answersNode = NodeIn(keys, "answers");
+
+        if (answersNode is not null)
+        {
+            var stepAnswers = new Dictionary<string, FlowAnswer>(StringComparer.Ordinal);
+
+            foreach (var (kind, answer) in ReadAnswers(answersNode, $"{where}.answers", problems))
+            {
+                if (!stepAnswers.TryAdd(kind, answer))
+                {
+                    problems.Add(At(answersNode, $"{where}.answers names the kind '{kind}' more than once"));
+                }
+            }
+
+            step = step with { Answers = stepAnswers };
+        }
+
+        var onNode = NodeIn(keys, "on");
+
+        if (onNode is not null)
+        {
+            if (onNode is not YamlMappingNode onMapping)
+            {
+                problems.Add(At(onNode, $"'{where}.on' is not a mapping of '{string.Join("', '", KeyDescription.Names(WorkflowStepTypes.OnKeys))}'"));
+            }
+            else
+            {
+                var onKeys = CollectKeys(onMapping, $"{where}.on", KeyDescription.Names(WorkflowStepTypes.OnKeys), problems);
+                var onStep = RequireScalarIn(onKeys, $"{where}.on.step", problems);
+                var outcome = RequireScalarIn(onKeys, $"{where}.on.outcome", problems);
+                var codes = IntListIn(onKeys, $"{where}.on.codes", problems) ?? [];
+
+                if (outcome is not null && !FlowOn.Outcomes.Contains(outcome, StringComparer.Ordinal))
+                {
+                    problems.Add(At(onNode, $"{where}.on.outcome is '{outcome}', which is none of {string.Join(", ", FlowOn.Outcomes.Select(known => $"'{known}'"))}."));
+                    outcome = null;
+                }
+
+                if (onStep is not null && outcome is not null)
+                {
+                    step = step with { On = new FlowOn(onStep, outcome, codes) };
+                }
+            }
+        }
+
+        step = step with
+        {
+            Then = ScalarIn(keys, $"{where}.then", problems),
+            MaxVisits = IntIn(keys, $"{where}.maxVisits", problems),
+        };
+
+        if (typed is null)
+        {
+            // The group's own keys, checked only where the file holds them.
+            var stepsNode = NodeIn(keys, "steps");
+
+            // A type the file names that no table knows is refused above; what is left to refuse
+            // here is a step that names no type at all.
+            if (stepsNode is null && type is null)
+            {
+                problems.Add(At(node, $"{where} names no type and holds no steps; a step does one thing, and a group holds steps of their own."));
+            }
+            else if (depth >= MaxDepth && stepsNode is not null)
+            {
+                problems.Add(At(stepsNode, $"{where} holds steps {depth} levels deep; steps nest at most {MaxDepth}."));
+            }
+            else if (stepsNode is not null)
+            {
+                step = step with { Steps = [.. ReadSteps(stepsNode, depth + 1, problems)] };
+            }
+
+            step = step with
+            {
+                ForEach = ScalarIn(keys, $"{where}.forEach", problems),
+                Repeat = ReadRepeat(keys, where, problems),
+                Gather = StringListIn(keys, $"{where}.gather", problems) ?? [],
+            };
+        }
+        else
+        {
+            step = ReadTypedKeys(step, typed, keys, where, problems);
+        }
+
+        if (name is null)
+        {
+            problems.Add(At(node, "a step names no 'name'; what dependsOn, on, resume and expressions read would have nothing to read."));
+            yield break;
+        }
+
+        foreach (var required in typed?.Required ?? [])
+        {
+            if (!keys.Any(entry => string.Equals(entry.Key, required, StringComparison.Ordinal)))
+            {
+                problems.Add(At(node, $"{where} names no '{required}'; a {typed!.Type} step is refused without it."));
+            }
+        }
+
+        yield return step;
+    }
+
+    /// <summary>Reads the keys that belong to a step's type alone.</summary>
+    private static WorkflowStep ReadTypedKeys(WorkflowStep step, WorkflowStepTypes.StepType type, List<(string Key, YamlNode Value)> keys, string where, List<string> problems)
+    {
+        var failOn = EnumIn(keys, $"{where}.failOn", problems, ["red", "never"]);
+
+        step = step with
+        {
+            FailOn = failOn,
+            Legs = StringListIn(keys, $"{where}.legs", problems) ?? [],
+            In = ScalarIn(keys, $"{where}.in", problems),
+        };
+
+        switch (type.Type)
+        {
+            case "reason":
+                step = step with
+                {
+                    Agent = ScalarIn(keys, $"{where}.agent", problems),
+                    Tier = ScalarIn(keys, $"{where}.tier", problems),
+                    Model = ScalarIn(keys, $"{where}.model", problems),
+                    Effort = ScalarIn(keys, $"{where}.effort", problems),
+                    Fallback = StringListIn(keys, $"{where}.fallback", problems) ?? [],
+                    Provider = ScalarIn(keys, $"{where}.provider", problems),
+                    Client = ScalarIn(keys, $"{where}.client", problems),
+                    Prompt = ScalarIn(keys, $"{where}.prompt", problems),
+                    ResumePrompt = ScalarIn(keys, $"{where}.resumePrompt", problems),
+                    Outputs = ScalarIn(keys, $"{where}.outputs", problems),
+                    Access = EnumIn(keys, $"{where}.access", problems, ["read", "write"]),
+                    Resume = ScalarIn(keys, $"{where}.resume", problems),
+                    Independent = BooleanIn(keys, $"{where}.independent", problems),
+                    Restrictions = StringListIn(keys, $"{where}.restrictions", problems) ?? [],
+                    Writes = FlowListIn(keys, $"{where}.writes", problems),
+                    Ask = BooleanIn(keys, $"{where}.ask", problems),
+                    AskRounds = IntIn(keys, $"{where}.askRounds", problems),
+                };
+                break;
+
+            case "build":
+                // Its keys are the leg keys every leg step shares, read before this switch.
+                break;
+
+            case "test":
+                step = step with
+                {
+                    Filter = ScalarIn(keys, $"{where}.filter", problems),
+                    Exclude = StringListIn(keys, $"{where}.exclude", problems) ?? [],
+                    Labels = StringListIn(keys, $"{where}.labels", problems) ?? [],
+                    SkipBuild = BooleanIn(keys, $"{where}.skipBuild", problems),
+                };
+                break;
+
+            case "run":
+                step = step with
+                {
+                    Runner = ScalarIn(keys, $"{where}.runner", problems),
+                    Inputs = StringMapIn(keys, $"{where}.inputs", problems),
+                };
+                break;
+
+            case "check-mutations":
+                step = step with
+                {
+                    Arms = StringListIn(keys, $"{where}.arms", problems) ?? [],
+                    Pending = BooleanIn(keys, $"{where}.pending", problems),
+                };
+                break;
+
+            case "create-agent":
+                step = step with
+                {
+                    Agent = ScalarIn(keys, $"{where}.agent", problems),
+                    Empty = BooleanIn(keys, $"{where}.empty", problems),
+                };
+                break;
+
+            case "fold":
+            case "delete-agent":
+                step = step with
+                {
+                    Of = ScalarIn(keys, $"{where}.of", problems),
+                    Others = BooleanIn(keys, $"{where}.others", problems),
+                    Allow = ReadAllow(keys, where, problems),
+                    Within = FlowListIn(keys, $"{where}.within", problems),
+                };
+
+                if (type.Type == "delete-agent")
+                {
+                    step = step with { DiscardUncommitted = BooleanIn(keys, $"{where}.discardUncommitted", problems) };
+                }
+
+                break;
+
+            case "refresh":
+                step = step with
+                {
+                    Of = ScalarIn(keys, $"{where}.of", problems),
+                    Others = BooleanIn(keys, $"{where}.others", problems),
+                    Paths = FlowListIn(keys, $"{where}.paths", problems),
+                    All = BooleanIn(keys, $"{where}.all", problems),
+                    Except = FlowListIn(keys, $"{where}.except", problems),
+                    Stale = FlowListIn(keys, $"{where}.stale", problems),
+                    Merge = FlowListIn(keys, $"{where}.merge", problems),
+                };
+                break;
+
+            case "rebase":
+                step = step with
+                {
+                    Of = ScalarIn(keys, $"{where}.of", problems),
+                    Others = BooleanIn(keys, $"{where}.others", problems),
+                    Settled = StringListIn(keys, $"{where}.settled", problems) ?? [],
+                    Merge = FlowListIn(keys, $"{where}.merge", problems),
+                };
+                break;
+
+            case "validate-plan":
+                step = step with
+                {
+                    Items = ScalarIn(keys, $"{where}.items", problems),
+                    Scope = ScalarIn(keys, $"{where}.scope", problems),
+                };
+                break;
+
+            case "anchor-balance":
+                step = step with
+                {
+                    Base = ScalarIn(keys, $"{where}.base", problems),
+                    Rows = FlowListIn(keys, $"{where}.rows", problems),
+                };
+                break;
+
+            case "anchor-citations":
+                step = step with
+                {
+                    Subject = EnumIn(keys, $"{where}.subject", problems, ["currentTree", "currentCommit", "currentPullRequest"]),
+                    AnchorPaths = FlowListIn(keys, $"{where}.paths", problems),
+                };
+                break;
+
+            case "ci-read":
+                step = step with
+                {
+                    Branch = ScalarIn(keys, $"{where}.branch", problems),
+                    Limit = IntIn(keys, $"{where}.limit", problems),
+                    TimeoutMinutes = IntIn(keys, $"{where}.timeoutMinutes", problems),
+                };
+                break;
+
+            case "ci-wait":
+                step = step with
+                {
+                    Commit = ScalarIn(keys, $"{where}.commit", problems),
+                    AppearSeconds = IntIn(keys, $"{where}.appearSeconds", problems),
+                    WaitMinutes = IntIn(keys, $"{where}.waitMinutes", problems),
+                    PollSeconds = IntIn(keys, $"{where}.pollSeconds", problems),
+                    Ignore = StringListIn(keys, $"{where}.ignore", problems) ?? [],
+                    TimeoutMinutes = IntIn(keys, $"{where}.timeoutMinutes", problems),
+                };
+                break;
+
+            case "commit":
+                step = step with
+                {
+                    Message = ScalarIn(keys, $"{where}.message", problems),
+                    Variables = StringMapIn(keys, $"{where}.variables", problems),
+                    TimeoutMinutes = IntIn(keys, $"{where}.timeoutMinutes", problems),
+                };
+                break;
+
+            case "push":
+                step = step with
+                {
+                    Remote = ScalarIn(keys, $"{where}.remote", problems),
+                    Checkpoint = BooleanIn(keys, $"{where}.checkpoint", problems),
+                    TimeoutMinutes = IntIn(keys, $"{where}.timeoutMinutes", problems),
+                };
+                break;
+
+            case "pull-request":
+                step = step with
+                {
+                    Title = ScalarIn(keys, $"{where}.title", problems),
+                    Body = ScalarIn(keys, $"{where}.body", problems),
+                    Base = ScalarIn(keys, $"{where}.base", problems),
+                    Draft = BooleanIn(keys, $"{where}.draft", problems),
+                    TimeoutMinutes = IntIn(keys, $"{where}.timeoutMinutes", problems),
+                };
+                break;
+
+            case "pause":
+                step = step with
+                {
+                    Question = ScalarIn(keys, $"{where}.question", problems),
+                    Options = StringListIn(keys, $"{where}.options", problems) ?? [],
+                    Text = StringListIn(keys, $"{where}.text", problems) ?? [],
+                    Person = BooleanIn(keys, $"{where}.person", problems),
+                    Questions = ScalarIn(keys, $"{where}.questions", problems),
+                    PreAnswer = ReadPreAnswers(keys, where, problems),
+                };
+                break;
+
+            case "orient":
+                break;
+
+            default:
+                throw Unread(type.Type);
+        }
+
+        return step;
+    }
+
+    private static FlowRepeat? ReadRepeat(List<(string Key, YamlNode Value)> keys, string where, List<string> problems)
+    {
+        var node = NodeIn(keys, "repeat");
+
+        if (node is null)
+        {
+            return null;
+        }
+
+        if (node is not YamlMappingNode mapping)
+        {
+            problems.Add(At(node, $"'{where}.repeat' is not a mapping of '{string.Join("', '", KeyDescription.Names(WorkflowStepTypes.RepeatKeys))}'"));
+            return null;
+        }
+
+        var repeatKeys = CollectKeys(mapping, $"{where}.repeat", KeyDescription.Names(WorkflowStepTypes.RepeatKeys), problems);
+
+        return new FlowRepeat(
+            RequireScalarIn(repeatKeys, $"{where}.repeat.until", problems) ?? string.Empty,
+            IntIn(repeatKeys, $"{where}.repeat.maxIterations", problems),
+            IntIn(repeatKeys, $"{where}.repeat.rounds", problems),
+            ScalarIn(repeatKeys, $"{where}.repeat.blocking", problems),
+            IntIn(repeatKeys, $"{where}.repeat.blockersLimitRounds", problems),
+            ScalarIn(repeatKeys, $"{where}.repeat.leftover", problems));
+    }
+
+    private static FlowAllow? ReadAllow(List<(string Key, YamlNode Value)> keys, string where, List<string> problems)
+    {
+        var node = NodeIn(keys, "allow");
+
+        if (node is null)
+        {
+            return null;
+        }
+
+        if (node is not YamlMappingNode mapping)
+        {
+            problems.Add(At(node, $"'{where}.allow' is not a mapping of '{string.Join("', '", KeyDescription.Names(WorkflowStepTypes.AllowKeys))}'"));
+            return null;
+        }
+
+        var allowKeys = CollectKeys(mapping, $"{where}.allow", KeyDescription.Names(WorkflowStepTypes.AllowKeys), problems);
+
+        return new FlowAllow(
+            StringListIn(allowKeys, $"{where}.allow.settled", problems) ?? [],
+            FlowListIn(allowKeys, $"{where}.allow.new", problems),
+            StringListIn(allowKeys, $"{where}.allow.acceptLost", problems) ?? [],
+            FlowListIn(allowKeys, $"{where}.allow.merge", problems),
+            StringListIn(allowKeys, $"{where}.allow.acceptOver", problems) ?? []);
+    }
+
+    private static IReadOnlyList<FlowPreAnswer> ReadPreAnswers(List<(string Key, YamlNode Value)> keys, string where, List<string> problems)
+    {
+        var node = NodeIn(keys, "preAnswer");
+
+        if (node is null)
+        {
+            return [];
+        }
+
+        if (node is not YamlSequenceNode sequence)
+        {
+            problems.Add(At(node, $"'{where}.preAnswer' is not a sequence."));
+            return [];
+        }
+
+        var answers = new List<FlowPreAnswer>();
+
+        foreach (var child in sequence.Children)
+        {
+            if (child is not YamlMappingNode mapping)
+            {
+                problems.Add(At(child, $"an entry of '{where}.preAnswer' is not a mapping of '{string.Join("', '", KeyDescription.Names(WorkflowStepTypes.PreAnswerKeys))}'"));
+                continue;
+            }
+
+            var entryKeys = CollectKeys(mapping, $"an entry of '{where}.preAnswer'", KeyDescription.Names(WorkflowStepTypes.PreAnswerKeys), problems);
+            var when = RequireScalarIn(entryKeys, $"{where}.preAnswer.when", problems);
+            var answer = RequireScalarIn(entryKeys, $"{where}.preAnswer.answer", problems);
+            var text = ScalarIn(entryKeys, $"{where}.preAnswer.text", problems);
+            var quoteNode = NodeIn(entryKeys, "quote");
+            FlowQuote? quote = null;
+
+            if (quoteNode is not null)
+            {
+                if (quoteNode is not YamlMappingNode quoteMapping)
+                {
+                    problems.Add(At(quoteNode, $"'{where}.preAnswer.quote' is not a mapping of '{string.Join("', '", KeyDescription.Names(WorkflowStepTypes.QuoteKeys))}'"));
+                }
+                else
+                {
+                    var quoteKeys = CollectKeys(quoteMapping, $"{where}.preAnswer.quote", KeyDescription.Names(WorkflowStepTypes.QuoteKeys), problems);
+                    var quoteText = RequireScalarIn(quoteKeys, $"{where}.preAnswer.quote.text", problems);
+                    var quoteInput = RequireScalarIn(quoteKeys, $"{where}.preAnswer.quote.input", problems);
+
+                    if (quoteText is not null && quoteInput is not null)
+                    {
+                        quote = new FlowQuote(quoteText, quoteInput);
+                    }
+                }
+            }
+
+            if (when is not null && answer is not null)
+            {
+                answers.Add(new FlowPreAnswer(when, answer, text, quote));
+            }
+        }
+
+        return answers;
+    }
+
+    private static YamlMappingNode? LoadRoot(string text, List<string> problems)
+    {
+        var stream = new YamlStream();
+
+        try
+        {
+            stream.Load(new StringReader(text));
+        }
+        catch (YamlException exception)
+        {
+            problems.Add($"line {exception.Start.Line}, column {exception.Start.Column}: the file is not valid YAML ({exception.Message}).");
+            return null;
+        }
+
+        if (stream.Documents.Count == 0)
+        {
+            problems.Add("the file is empty.");
+            return null;
+        }
+
+        if (stream.Documents.Count > 1)
+        {
+            problems.Add($"the file holds {stream.Documents.Count} YAML documents; a workflow's definition holds one, so that nothing has to decide which of them a run ran.");
+            return null;
+        }
+
+        if (stream.Documents[0].RootNode is YamlMappingNode mapping)
+        {
+            return mapping;
+        }
+
+        problems.Add(At(stream.Documents[0].RootNode, "the file's top level is not a mapping of keys."));
+        return null;
+    }
+
+    /// <summary>
+    /// One mapping's keys, read once: a key no list names is refused here, before any reader looks at its value. A key
+    /// written twice is refused by YAML itself, as a file that does not read.
+    /// </summary>
+    private static List<(string Key, YamlNode Value)> CollectKeys(YamlMappingNode mapping, string what, IReadOnlyList<string> known, List<string> problems)
+    {
+        var keys = new List<(string Key, YamlNode Value)>();
+
+        foreach (var (keyNode, valueNode) in mapping.Children)
+        {
+            var key = KeyOf(keyNode, problems);
+
+            if (key is null)
+            {
+                continue;
+            }
+
+            if (!known.Contains(key, StringComparer.Ordinal))
+            {
+                problems.Add(At(keyNode, $"'{key}' is not a key of {what}. Known: '{string.Join("', '", known)}'."));
+                continue;
+            }
+
+            keys.Add((key, valueNode));
+        }
+
+        return keys;
+    }
+
+    private static string? KeyOf(YamlNode node, List<string> problems)
+    {
+        if (node is YamlScalarNode { Value: { } value })
+        {
+            return value;
+        }
+
+        problems.Add(At(node, "a key is not a plain name."));
+        return null;
+    }
+
+    private static string? ScalarOf(YamlNode node) => node is YamlScalarNode { Value: { } value } ? value : null;
+
+    private static string? RequireScalar(YamlNode node, string what, List<string> problems)
+    {
+        if (node is YamlScalarNode { Value: { } value })
+        {
+            return value;
+        }
+
+        problems.Add(At(node, $"'{what}' is not a single value."));
+        return null;
+    }
+
+    private static string? ScalarIn(IReadOnlyList<(string Key, YamlNode Value)> keys, string what, List<string> problems)
+        => keys.Where(entry => string.Equals(entry.Key, KeyNameOf(what), StringComparison.Ordinal)).Select(entry => RequireScalar(entry.Value, what, problems)).FirstOrDefault();
+
+    private static string? RequireScalarIn(IReadOnlyList<(string Key, YamlNode Value)> keys, string what, List<string> problems)
+    {
+        var found = keys.FirstOrDefault(entry => string.Equals(entry.Key, KeyNameOf(what), StringComparison.Ordinal));
+
+        if (found.Value is null)
+        {
+            problems.Add($"'{what}' is named nowhere; it is required.");
+            return null;
+        }
+
+        return RequireScalar(found.Value, what, problems);
+    }
+
+    private static YamlNode? NodeIn(IReadOnlyList<(string Key, YamlNode Value)> keys, string key)
+        => keys.FirstOrDefault(entry => string.Equals(entry.Key, key, StringComparison.Ordinal)).Value;
+
+    private static bool? RequireBoolean(YamlNode node, string what, List<string> problems)
+    {
+        var text = RequireScalar(node, what, problems);
+
+        if (text is null)
+        {
+            return null;
+        }
+
+        if (bool.TryParse(text, out var value))
+        {
+            return value;
+        }
+
+        problems.Add(At(node, $"'{what}' is '{text}', which is not true or false."));
+        return null;
+    }
+
+    private static bool? BooleanIn(IReadOnlyList<(string Key, YamlNode Value)> keys, string what, List<string> problems)
+        => keys.Where(entry => string.Equals(entry.Key, KeyNameOf(what), StringComparison.Ordinal)).Select(entry => RequireBoolean(entry.Value, what, problems)).FirstOrDefault();
+
+    private static int? RequireInt(YamlNode node, string what, List<string> problems)
+    {
+        var text = RequireScalar(node, what, problems);
+
+        if (text is null)
+        {
+            return null;
+        }
+
+        if (int.TryParse(text, System.Globalization.CultureInfo.InvariantCulture, out var value))
+        {
+            return value;
+        }
+
+        problems.Add(At(node, $"'{what}' is '{text}', which is not a whole number."));
+        return null;
+    }
+
+    private static int? IntIn(IReadOnlyList<(string Key, YamlNode Value)> keys, string what, List<string> problems)
+        => keys.Where(entry => string.Equals(entry.Key, KeyNameOf(what), StringComparison.Ordinal)).Select(entry => RequireInt(entry.Value, what, problems)).FirstOrDefault();
+
+    private static long? RequireLong(YamlNode node, string what, List<string> problems)
+    {
+        var text = RequireScalar(node, what, problems);
+
+        if (text is null)
+        {
+            return null;
+        }
+
+        if (long.TryParse(text, System.Globalization.CultureInfo.InvariantCulture, out var value))
+        {
+            return value;
+        }
+
+        problems.Add(At(node, $"'{what}' is '{text}', which is not a whole number."));
+        return null;
+    }
+
+    private static double? RequireDouble(YamlNode node, string what, List<string> problems)
+    {
+        var text = RequireScalar(node, what, problems);
+
+        if (text is null)
+        {
+            return null;
+        }
+
+        if (double.TryParse(text, System.Globalization.CultureInfo.InvariantCulture, out var value))
+        {
+            return value;
+        }
+
+        problems.Add(At(node, $"'{what}' is '{text}', which is not a number."));
+        return null;
+    }
+
+    private static IReadOnlyList<string> RequireStringList(YamlNode node, string what, List<string> problems)
+    {
+        if (node is not YamlSequenceNode sequence)
+        {
+            problems.Add(At(node, $"'{what}' is not a list."));
+            return [];
+        }
+
+        var values = new List<string>();
+
+        foreach (var child in sequence.Children)
+        {
+            if (RequireScalar(child, $"one entry of '{what}'", problems) is { } value)
+            {
+                values.Add(value);
+            }
+        }
+
+        return values;
+    }
+
+    private static IReadOnlyList<string> StringListIn(IReadOnlyList<(string Key, YamlNode Value)> keys, string what, List<string> problems)
+        => keys.Where(entry => string.Equals(entry.Key, KeyNameOf(what), StringComparison.Ordinal)).SelectMany(entry => RequireStringList(entry.Value, what, problems)).ToList();
+
+    private static IReadOnlyList<int> RequireIntList(YamlNode node, string what, List<string> problems)
+    {
+        if (node is not YamlSequenceNode sequence)
+        {
+            problems.Add(At(node, $"'{what}' is not a list."));
+            return [];
+        }
+
+        var values = new List<int>();
+
+        foreach (var child in sequence.Children)
+        {
+            if (RequireInt(child, $"one entry of '{what}'", problems) is { } value)
+            {
+                values.Add(value);
+            }
+        }
+
+        return values;
+    }
+
+    private static IReadOnlyList<int> IntListIn(IReadOnlyList<(string Key, YamlNode Value)> keys, string what, List<string> problems)
+        => keys.Where(entry => string.Equals(entry.Key, KeyNameOf(what), StringComparison.Ordinal)).SelectMany(entry => RequireIntList(entry.Value, what, problems)).ToList();
+
+    private static IReadOnlyDictionary<string, string> RequireStringMap(YamlNode node, string what, List<string> problems)
+    {
+        if (node is not YamlMappingNode mapping)
+        {
+            problems.Add(At(node, $"'{what}' is not a mapping of name to value."));
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+        }
+
+        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        foreach (var (keyNode, valueNode) in mapping.Children)
+        {
+            var key = KeyOf(keyNode, problems);
+
+            if (key is null)
+            {
+                continue;
+            }
+
+            if (RequireScalar(valueNode, $"{what}.{key}", problems) is { } value && !values.TryAdd(key, value))
+            {
+                problems.Add(At(keyNode, $"'{what}' names '{key}' more than once"));
+            }
+        }
+
+        return values;
+    }
+
+    private static IReadOnlyDictionary<string, string> StringMapIn(IReadOnlyList<(string Key, YamlNode Value)> keys, string what, List<string> problems)
+        => keys.Where(entry => string.Equals(entry.Key, KeyNameOf(what), StringComparison.Ordinal))
+            .Select(entry => RequireStringMap(entry.Value, what, problems))
+            .FirstOrDefault() ?? new Dictionary<string, string>(StringComparer.Ordinal);
+
+    /// <summary>Reads one key whose values are a closed list, refusing any other with the list.</summary>
+    private static string? EnumIn(IReadOnlyList<(string Key, YamlNode Value)> keys, string what, List<string> problems, IReadOnlyList<string> values)
+    {
+        var text = ScalarIn(keys, what, problems);
+
+        if (text is null)
+        {
+            return null;
+        }
+
+        if (values.Contains(text, StringComparer.Ordinal))
+        {
+            return text;
+        }
+
+        problems.Add($"'{what}' is '{text}', which is none of {string.Join(", ", values.Select(known => $"'{known}'"))}.");
+        return null;
+    }
+
+    /// <summary>
+    /// Reads one list-or-expression key: a scalar is an expression that yields the list, a sequence
+    /// is the list written out. Which keys take this shape is <see cref="WorkflowStepTypes"/>' to say.
+    /// </summary>
+    private static FlowList? FlowListIn(IReadOnlyList<(string Key, YamlNode Value)> keys, string what, List<string> problems)
+    {
+        var node = NodeIn(keys, KeyNameOf(what));
+
+        if (node is null)
+        {
+            return null;
+        }
+
+        if (node is YamlScalarNode { Value: { } expression })
+        {
+            return new FlowList([], expression);
+        }
+
+        return new FlowList(RequireStringList(node, what, problems), null);
+    }
+
+    /// <summary>The key a dotted <c>what</c> names, its last segment.</summary>
+    private static string KeyNameOf(string what) => what.Split('.')[^1];
+
+    /// <summary>
+    /// A key <see cref="WorkflowKeys"/> or <see cref="WorkflowStepTypes"/> lists that nothing here
+    /// reads: a defect in this tool, never a problem in the file, since a key read by nothing would
+    /// be one the file sets and nothing obeys.
+    /// </summary>
+    private static UnreachableException Unread(string key)
+        => new($"'{key}' is a key workflow files take, and nothing reads it.");
+
+    private static string At(YamlNode node, string message)
+        => $"line {node.Start.Line}, column {node.Start.Column}: {message}";
+
+    private static HarnessException Refuse(string path, IReadOnlyList<string> problems)
+    {
+        var detail = string.Join(Environment.NewLine, problems.Select(problem => "  - " + problem));
+
+        return new HarnessException(
+            HarnessExit.ConfigInvalid,
+            $"'{path}' has {ReportText.Counted(problems.Count, "problem")}:{Environment.NewLine}{detail}");
+    }
+}

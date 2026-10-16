@@ -1,0 +1,66 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "applies",
+    "findings"
+  ],
+  "properties": {
+    "applies": {
+      "type": "boolean",
+      "description": "False where the change has nothing of your aspect; the list of findings is then empty."
+    },
+    "findings": {
+      "type": "array",
+      "description": "What you confirmed in the code. Empty where you found nothing.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "aspect",
+          "path",
+          "text",
+          "severity",
+          "production"
+        ],
+        "properties": {
+          "aspect": {
+            "type": "string",
+            "description": "Your aspect.",
+            "enum": [
+              "correctness",
+              "errors",
+              "tests",
+              "types",
+              "comments",
+              "simplicity"
+            ]
+          },
+          "path": {
+            "type": "string",
+            "description": "The file, with the line where one can be named."
+          },
+          "text": {
+            "type": "string",
+            "description": "What is wrong, why it matters, and what would put it right."
+          },
+          "severity": {
+            "type": "string",
+            "description": "How much it matters.",
+            "enum": [
+              "critical",
+              "high",
+              "medium",
+              "low",
+              "nit"
+            ]
+          },
+          "production": {
+            "type": "boolean",
+            "description": "True where the finding is in code the product ships or runs; false in a test, a fixture, an example, documentation or a build script."
+          }
+        }
+      }
+    }
+  }
+}

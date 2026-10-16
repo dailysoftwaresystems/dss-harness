@@ -12,6 +12,7 @@ using DssHarness.Core.Legs;
 using DssHarness.Core.LineEndings;
 using DssHarness.Core.Mutations;
 using DssHarness.Core.Orchestration;
+using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
@@ -100,6 +101,7 @@ internal static class HarnessServices
         services.AddSingleton<ClaudeTranscripts>();
         services.AddSingleton<IOrchestratorService, OrchestratorService>();
         services.AddSingleton<IAgentService, AgentService>();
+        services.AddSingleton<IWorkflowValidationService, WorkflowValidationService>();
 
         services.AddSingleton<IToolIdentityProvider, EntryAssemblyToolIdentityProvider>();
         services.AddSingleton<IHostCommandRunner, HostCommandRunner>();

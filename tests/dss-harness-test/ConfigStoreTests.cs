@@ -1441,6 +1441,34 @@ public sealed class ConfigStoreTests
         Assert.Null(config.Ci.Workflows);
         Assert.Null(config.Projects[0].Targets);
         Assert.Null(config.Projects[0].RebuildableFormats);
+        Assert.Null(config.Workflows);
+    }
+
+    /// <summary>
+    /// The workflows a configuration declares are names and nothing else: an empty list is refused as an empty list is,
+    /// a name a workflow's directory cannot carry is refused naming the one-word spelling, two that differ only by case
+    /// are refused as one directory on a file system that does not tell them apart, and the slot the run's keys are read
+    /// from is no workflow's name.
+    /// </summary>
+    [Theory]
+    [InlineData("""{ "workflows": [] }""", "workflows is given empty, which is never read as its file, as workflows/<name>/<name>.yml: name a workflow, or leave the key out for its file, as workflows/<name>/<name>.yml")]
+    [InlineData("""{ "workflows": ["release/one"] }""", "workflows: 'release/one' holds a path separator; a workflow is named in one word, as '.harness-config/workflows/<name>/<name>.yml', and its files live in its directory of that name")]
+    [InlineData("""{ "workflows": ["default", "Default"] }""", "workflows names 'Default' and 'default', which differ only by case; a workflow directory is the file system's to tell apart, and not every file system does")]
+    [InlineData("""{ "workflows": [".env"] }""", "workflows: '.env' is the name the workflows directory keeps for the slot the run's keys are read from; call the workflow something else, as '.harness-config/workflows/<name>/<name>.yml'")]
+    public void Load_RefusesAWorkflowNameAWorkflowsDirectoryCannotCarry(string json, string expected)
+    {
+        var exception = LoadInvalid(json);
+
+        Assert.Contains(expected, exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>A workflow's name reaching its file is the configuration's alone here: that the file is there is validate-workflow's.</summary>
+    [Fact]
+    public void Load_ReadsTheDeclaredWorkflowNames()
+    {
+        var config = LoadValid("""{ "workflows": ["default", "release"] }""");
+
+        Assert.Equal(["default", "release"], config.Workflows);
     }
 
     /// <summary>

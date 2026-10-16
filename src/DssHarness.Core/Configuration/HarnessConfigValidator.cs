@@ -3,6 +3,7 @@ using DssHarness.Core.Anchors;
 using DssHarness.Core.Execution;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Mutations;
+using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
@@ -72,6 +73,7 @@ public static partial class HarnessConfigValidator
         ValidateTiming(config, problems);
         ValidateLineEndings(config.LineEndings, problems);
         ValidateCi(config.Ci, problems);
+        ValidateWorkflows(config, problems);
 
         return problems;
     }
@@ -485,6 +487,40 @@ public static partial class HarnessConfigValidator
                     "budget",
                     "to capture the leg's budget in minutes",
                     problems);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Checks the workflow names the configuration declares. That a name's file is there, and that
+    /// what it defines holds, is <c>validate-workflow</c>'s to check: reading the file is not part of
+    /// reading the configuration.
+    /// </summary>
+    private static void ValidateWorkflows(HarnessConfig config, List<string> problems)
+    {
+        RefuseGivenEmpty(config.Workflows, "workflows", "name a workflow", "its file, as workflows/<name>/<name>.yml", problems);
+
+        var declared = new List<string>();
+
+        foreach (var name in config.Workflows ?? [])
+        {
+            if (WorkflowName.Problem(name) is { } problem)
+            {
+                problems.Add($"workflows: {problem}");
+                continue;
+            }
+
+            // Ignoring case, because two names that differ only by case are two workflow directories
+            // on a file system that does not distinguish them: one of the two files could never be
+            // read, and which one depended on the machine.
+            if (declared.FirstOrDefault(earlier => string.Equals(earlier, name, StringComparison.OrdinalIgnoreCase)) is { } other)
+            {
+                problems.Add($"workflows names '{name}' and '{other}', which differ only by case; a "
+                    + "workflow directory is the file system's to tell apart, and not every file system does");
+            }
+            else
+            {
+                declared.Add(name);
             }
         }
     }

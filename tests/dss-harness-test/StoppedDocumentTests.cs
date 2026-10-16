@@ -43,6 +43,7 @@ public sealed class StoppedDocumentTests
         ["check-anchor-citations"] = ["exitCode", "summary", "subject", "roots", "filesScanned", "citationsFound", "registryRows", "passed", "unresolved"],
         ["fix-line-endings"] = ["exitCode", "summary", "scope", "check", "considered", "binary", "undeclared", "excluded", "changed"],
         ["check-ci-legs"] = ["exitCode", "summary", "branch", "runs"],
+        ["validate-workflow"] = ["exitCode", "summary", "workflows", "passed"],
         ["legs"] = ["exitCode", "summary", "legs", "hosts"],
         ["install-missing-tools"] = ["exitCode", "summary", "dryRun", "legs"],
         ["build"] = Ledger,

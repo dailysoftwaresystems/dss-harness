@@ -40,6 +40,21 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
     /// <summary>Name of the directory holding runner action files and the values they read.</summary>
     public const string RunnerDirectoryName = "runner";
 
+    /// <summary>
+    /// Name of the directory under the harness directory holding one directory of definition files per
+    /// workflow. Tracked by git, like the runner's actions directory.
+    /// </summary>
+    public const string WorkflowsDirectoryName = "workflows";
+
+    /// <summary>The extension a workflow definition file carries.</summary>
+    public const string WorkflowFileExtension = ".yml";
+
+    /// <summary>
+    /// Name of the directory a workflow's agent definitions live in, inside the workflow's own
+    /// directory. Tracked by git.
+    /// </summary>
+    public const string WorkflowAgentsDirectoryName = "agents";
+
     /// <summary>Name of the directory holding runner action files. Tracked by git.</summary>
     public const string RunnerActionsDirectoryName = "actions";
 
@@ -317,6 +332,45 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
     public string RunnerActionsDirectory => Path.Combine(RunnerDirectory, RunnerActionsDirectoryName);
 
     /// <summary>
+    /// Where the workflow definition directories live, in the tree being acted on. Tracked by git, so
+    /// a worktree has its own, as it has its own configuration.
+    /// </summary>
+    public string WorkflowsDirectory => Path.Combine(HarnessDirectory, WorkflowsDirectoryName);
+
+    /// <summary>
+    /// One workflow's own directory, holding its definition file and everything that file names -
+    /// its agent files, its prompts, its schemas, its bar.
+    /// </summary>
+    /// <param name="name">The workflow's name, as <c>workflows</c> declares it.</param>
+    public string WorkflowDirectory(string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+
+        return Path.Combine(WorkflowsDirectory, name);
+    }
+
+    /// <summary>One workflow's definition file, inside its own directory and named after it.</summary>
+    /// <param name="name">The workflow's name, as <c>workflows</c> declares it.</param>
+    public string WorkflowFile(string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+
+        return Path.Combine(WorkflowDirectory(name), name + WorkflowFileExtension);
+    }
+
+    /// <summary>
+    /// One workflow's directory, relative to a tree root, with forward separators: the form a message
+    /// names it in and a definition's paths are checked against.
+    /// </summary>
+    /// <param name="name">The workflow's name, as <c>workflows</c> declares it.</param>
+    public static string WorkflowDirectoryRelative(string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+
+        return $"{WorkflowsDirectoryRelative}/{name}";
+    }
+
+    /// <summary>
     /// One action's own directory, holding its file and everything that file runs, relative to a
     /// tree root.
     /// </summary>
@@ -347,6 +401,12 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
 
     /// <summary>The runs directory, relative to a tree root, with forward separators.</summary>
     public const string RunsDirectoryRelative = DirectoryName + "/" + RunsDirectoryName;
+
+    /// <summary>
+    /// The workflows directory, relative to a tree root, with forward separators: how a message and a
+    /// refusal name it, whichever machine reads it.
+    /// </summary>
+    public const string WorkflowsDirectoryRelative = DirectoryName + "/" + WorkflowsDirectoryName;
 
     /// <summary>The host copies' record directory, relative to the main checkout's root, with forward separators.</summary>
     public const string HostCopiesDirectoryRelative = DirectoryName + "/" + HostCopiesDirectoryName;

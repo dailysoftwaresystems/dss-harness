@@ -15,7 +15,7 @@ If a behaviour cannot be expressed in `config.json`, that is a defect.
 Implemented today: `init`, `verify-git`, `create-worktree`, `delete-worktree`,
 `list-worktree`, the orchestrator commands (`create-orchestrator`, `delete-orchestrator`,
 `list-orchestrator`, `create-agent`, `seed-agent`, `refresh-agent`, `rebase-agent`,
-`fold-agent`, `delete-agent`), `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
+`fold-agent`, `delete-agent`), `validate-workflow`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
 `read-anchor`, `read-anchors`, `check-anchor-balance`, `check-anchor-citations`),
 `fix-line-endings`, `check-ci-legs`, `legs`, `host-exec`, `install-missing-tools`,
 `update-tool`, `sync`, `build`, `test`, `run`, `check-mutations`, `clean`, `up`, `down` and
@@ -1099,6 +1099,44 @@ main tree ignores is never work, asked of the main tree with its index, since th
 worktree's own ignore rules first. A directory with no `.git` of its own is never read - git would answer for the
 main checkout - and never forced: its evidence is kept again, and the forced removal is named for a person. A
 worktree made at the path since is another, and not the agent's to remove.
+
+## Workflow definitions
+
+A workflow is a flow of typed steps that depend on one another by name, declared by name under
+`workflows` in `config.json` and defined by a yml file of its own,
+`.harness-config/workflows/<name>/<name>.yml` - never an entry in the configuration, which holds
+the names and nothing else. The workflow's directory is the workflow's own - its agent files
+(`agents/<name>.md`), its prompts, its schemas, the bar it recommends by (`recommendations.md`) -
+and every path the definition names is relative to that directory and stays inside it, as an
+action's files are relative to its own directory; two workflows never read each other's files. The
+name is the folder's, the file's and the `name:` key's alike, one word, and a disagreement among
+the three is refused when the file is read, so a copied directory cannot pass as the workflow it
+was copied from. `init` writes one - the default workflow, from a request to a pull request whose
+checks are green, with its agent files, prompts and schemas - into a repository that has no
+workflows directory at all, declares it in the config it creates, and overwrites nothing that
+exists; the set checks itself, so a build whose own workflow does not hold says so.
+
+A definition declares `inputs` - the values a run is started with, each with a kind, a default and
+the options it takes - `params`, its own knobs defaulted in the file and read as `param.<name>`,
+and `outputs`, what the whole workflow produces, each from a step of the flow. Its steps are of
+one `type` - from `orient` and `reason` through the leg steps, the fold family, the checks, git
+and the forge, to `pause` - or groups holding steps of their own: a group runs its steps once for
+each work item a `forEach` yields, again and again until a `repeat`'s bound is met, or once as a
+block that `gathers` its members' findings into one list. A step raised by another step's ending
+says `on` - by the outcome, a failure by exit code - and sends the run back with `then`; the
+schedule never starts it. Steps nest at most ten deep; every step's name is a lower-case word,
+unique among its siblings and never a word a definition reads for its own.
+
+`validate-workflow` checks a declared workflow, or every one declared: the file's shape, every key
+against the table that owns it (`WorkflowStepTypes`, which the parser reads exactly and `help
+workflows` lists from, so what is listed is what is read), every step, input, param and output an
+expression or a template names, every question kind an answer names, and every file the
+definition points at, beside the definition that names it - a runner or a leg no configuration
+declares is said the same way. Every problem is collected and reported together (12), without
+running anything; the structural rules live in Core (`WorkflowValidator`), pure, so the engine can
+run them at the start of a run without reading a file. This build checks workflow definitions and
+does not run them: the engine that runs them - the coordinator, the agents, the steps over the
+services the tool already has - is the next thing the tool grows.
 
 ## Anchor registries
 

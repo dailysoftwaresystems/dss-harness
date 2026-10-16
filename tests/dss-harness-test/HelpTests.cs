@@ -9,6 +9,7 @@ using DssHarness.Core.Hosts;
 using DssHarness.Core.Legs;
 using DssHarness.Core.Mutations;
 using DssHarness.Core.Orchestration;
+using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
@@ -2612,6 +2613,63 @@ public sealed partial class HelpTests
 
     [GeneratedRegex(@"""legJobPattern"": (?<pattern>""(?:[^""\\]|\\.)*"")")]
     private static partial Regex ExamplePattern();
+
+    /// <summary>
+    /// The workflows topic says what a workflow is, where it lives, what this build does with one and what it does not,
+    /// and lists every key from the tables the reader itself reads - so what is listed is what is read.
+    /// </summary>
+    [Fact]
+    public async Task TheWorkflowsTopic_SaysWhatAWorkflowIs_AndListsEveryKeyTheReaderTakes()
+    {
+        var result = await CliRunner.RunAsync(["help", "workflows"], TestContext.Current.CancellationToken);
+
+        Assert.Equal(HarnessExit.Success, result.ExitCode);
+
+        var prose = Prose.Words(result.StandardOutput);
+
+        Assert.Contains(
+            "A workflow is a flow of typed steps that depend on one another by name, declared by name under workflows in config.json and defined by a yml file of its own:",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "This build checks a workflow's definition, with 'dssharness validate-workflow <name>'; it does not run one.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "every path the yml names is relative to that directory and stays inside it, as an action's files are relative to its own directory",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("params - its own knobs, defaulted in the file and read as param.<name>", prose, StringComparison.Ordinal);
+
+        // Every key of the file, of every step and of every group, from the tables the reader reads.
+        Assert.All(WorkflowKeys.File, key => Assert.Contains($"  {key.Name}", result.StandardOutput, StringComparison.Ordinal));
+        Assert.All(WorkflowStepTypes.Common, key => Assert.Contains($"  {key.Name}", result.StandardOutput, StringComparison.Ordinal));
+        Assert.All(WorkflowStepTypes.Group, key => Assert.Contains($"  {key.Name}", result.StandardOutput, StringComparison.Ordinal));
+        Assert.All(WorkflowStepTypes.All, type => Assert.Contains($"  {type.Type}", result.StandardOutput, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// The config topic names the workflows key and the layout topic the workflows directory, each saying where the
+    /// definition lives: never an entry in the one, always a file of its own under the other.
+    /// </summary>
+    [Fact]
+    public async Task TheConfigAndLayoutTopics_NameTheWorkflowsKeyAndItsDirectory()
+    {
+        var config = await CliRunner.RunAsync(["help", "config"], TestContext.Current.CancellationToken);
+        var layout = await CliRunner.RunAsync(["help", "layout"], TestContext.Current.CancellationToken);
+
+        Assert.Equal(HarnessExit.Success, config.ExitCode);
+        Assert.Equal(HarnessExit.Success, layout.ExitCode);
+
+        Assert.Contains(
+            "  workflows      the workflows this repository runs, each defined by a yml file of its",
+            config.StandardOutput,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "  .harness-config/workflows/<name>/<name>.yml",
+            layout.StandardOutput,
+            StringComparison.Ordinal);
+    }
 
     /// <summary>A step key shown as it is written, then what it does: '  outputs: [&lt;path&gt;, ...]  what it writes'.</summary>
     [GeneratedRegex(@"^  (?<key>[A-Za-z]+): \S.*?  +(?<meaning>\S.*)$")]

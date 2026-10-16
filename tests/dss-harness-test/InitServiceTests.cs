@@ -97,6 +97,51 @@ public sealed class InitServiceTests
     }
 
     /// <summary>
+    /// init writes the default workflow - its definition and every file that definition names - into a repository
+    /// that has no workflows directory at all, and declares it in the config it creates; a repository whose directory
+    /// is there, however empty, has made its own arrangement and nothing is written into it.
+    /// </summary>
+    [Fact]
+    public async Task InitializeAsync_WritesTheDefaultWorkflow_WhereARepositoryHasNoWorkflowsOfItsOwn()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var token = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, token);
+
+        var outcome = await harness.InitService.InitializeAsync(temp.Path, token);
+
+        Assert.True(outcome.Succeeded, outcome.Message);
+        Assert.True(File.Exists(temp.Combine(".harness-config", "workflows", "default", "default.yml")));
+        Assert.True(File.Exists(temp.Combine(".harness-config", "workflows", "default", "agents", "planner.md")));
+        Assert.True(File.Exists(temp.Combine(".harness-config", "workflows", "default", "prompts", "plan.md")));
+        Assert.True(File.Exists(temp.Combine(".harness-config", "workflows", "default", "schemas", "plan.schema.json")));
+        Assert.True(File.Exists(temp.Combine(".harness-config", "workflows", "default", "recommendations.md")));
+        Assert.Contains(outcome.Details!, line => line == "created .harness-config/workflows/default/default.yml");
+        Assert.Equal(
+            ["default"],
+            harness.ConfigStore.Load(HarnessFactory.ConfigPath(temp.Path)).Workflows);
+
+        // The second init keeps every file: a re-run repairs nothing the repository may have edited.
+        var again = await harness.InitService.InitializeAsync(temp.Path, token);
+
+        Assert.True(again.Succeeded, again.Message);
+        Assert.DoesNotContain(again.Details!, line => line.StartsWith("created .harness-config/workflows", StringComparison.Ordinal));
+
+        // A repository whose workflows directory is there - here: emptied, its arrangement taken away with it - is
+        // never written into.
+        using var arranged = new TempDirectory();
+        await harness.InitializeGitRepositoryAsync(arranged.Path, token);
+        Directory.CreateDirectory(arranged.Combine(".harness-config", "workflows"));
+
+        var own = await harness.InitService.InitializeAsync(arranged.Path, token);
+
+        Assert.True(own.Succeeded, own.Message);
+        Assert.False(Directory.Exists(arranged.Combine(".harness-config", "workflows", "default")));
+        Assert.DoesNotContain(own.Details!, line => line.StartsWith("created .harness-config/workflows", StringComparison.Ordinal));
+    }
+
+    /// <summary>
     /// A .gitignore whose managed block a build from before the rename wrote, under the former markers, is rewritten in
     /// place under the current ones and said so: one block where the former stood, every other line as it was, and none of
     /// its lines read as the repository's own rules.

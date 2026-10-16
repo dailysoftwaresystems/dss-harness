@@ -1,0 +1,29 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "go",
+    "findings",
+    "checked"
+  ],
+  "properties": {
+    "go": {
+      "type": "boolean",
+      "description": "True only where the plan can be built as it stands."
+    },
+    "findings": {
+      "type": "array",
+      "description": "Each thing that keeps the plan from being built as it stands, with what you checked. Empty where go is true.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "checked": {
+      "type": "array",
+      "description": "What you verified against the code or the request, so a reader knows what the verdict stands on.",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

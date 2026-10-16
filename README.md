@@ -76,6 +76,7 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `fold-agent <o> <a> [--apply] [--json] [--merge <path>] [--settled <path>] [--new <ID>] [--accept-lost <ID>:<cell>] [--accept-over <ID>:<cell>]` | Fold an agent's own work into the main tree and apply the rows it filed, every refusal named before anything is written and the rows all or nothing; a path both trees changed is refused with what a three-way merge of it gives, and a clean merge written into both trees only where `--merge` names it - the arm registry is merged by arm, unasked, and taken where the result reads as a registry; a path reconciled in the main tree by hand and named with `--settled` is handed to the agent as the main tree holds it and recorded as shared; a row is made only where `--new` names it, and a cell that does not keep its stored text written only where `--accept-lost` names it; a row an earlier fold applied is weighed cell by cell against what the registries took since - their change kept where the agent made none, and a cell both changed otherwise written only where `--accept-over` names it; a rename of case alone the agent made is refused, saying to `git mv -f` it in the main tree, and once made there is weighed against the base's file under its old name; its worktree is kept |
 | `delete-agent <o> <a> [--apply] [--json] [--merge <path>] [--settled <path>] [--new <ID>] [--accept-lost <ID>:<cell>] [--accept-over <ID>:<cell>] [--discard-uncommitted]` | Fold what is left and apply its rows, keep its evidence and transcripts, then remove its worktree and its copies on hosts |
 | `list-orchestrator [<o>] [--json]` | List orchestrators, their agents and where each stands |
+| `validate-workflow [<workflow>]` | Check the workflows `workflows` in config.json declares: that each yml definition reads, holds and names files that are there (`help workflows`). Nothing is run |
 | `delete-orchestrator <o> [--delete-evidence]` | Delete an orchestrator once every agent of it is deleted and nothing is left below its directory under the worktrees root - no worktree, and no directory with a `.git` of its own, each named and refused (13) until then; its agents' evidence and transcripts go only with `--delete-evidence` |
 | `check-root-litter` | Report files left loose at the root of the checkout, ignored ones included |
 | `write-anchor <id> --priority P --trigger TEXT` | Add an anchor: to the pending registry, or to done when closed |
@@ -98,7 +99,7 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `up <name> [--input name=value] [--json]` | Bring a set-up up on this machine: run the `up` command line `setUp` declares for it, at the root of the tree - a program and its arguments, no shell, a line per platform where they differ, its declared inputs filled in with what `--input` gives over their defaults (`help setups`) |
 | `down <name> [--input name=value] [--json]` | Bring a set-up down: run its `down` command line there, with the values it was brought up with; refused (13) while a leg of a run on this machine still uses it in that tree - in any of the repository's, for one the machine shares - whose last leg brings it down |
 | `host-exec --ssh <name> \| --wsl [<distro>] -- <command>` | Run a DssHarness command on an ssh host or in a WSL distribution |
-| `help [topic]` | Explain exit codes, configuration, legs, disk space, heavy-leg admission, worktrees, orchestrators, anchors, layout, secrets, tools, runners, set-ups, verdicts, mutation testing and CI legs |
+| `help [topic]` | Explain exit codes, configuration, legs, disk space, heavy-leg admission, worktrees, orchestrators, workflows, anchors, layout, secrets, tools, runners, set-ups, verdicts, mutation testing and CI legs |
 
 Every command takes `-C, --directory <dir>` and `-v, --verbose`.
 
@@ -200,6 +201,8 @@ in `config.json`.
 
 ```
 .harness-config/config.json                  tracked; the whole contract
+.harness-config/workflows/<name>/<name>.yml  tracked; one directory per workflow, its definition
+.harness-config/workflows/<name>/...         tracked; every file that definition names - its agents, prompts, schemas
 .harness-config/runner/actions/<name>/<name>.yml   tracked; one directory per action
 .harness-config/runner/actions/<name>/...          tracked; whatever its steps run
 .harness-config/runner/.env/                 contents ignored, .gitkeep tracked
@@ -388,6 +391,26 @@ emulator counts only once its witness proves it runs programs for its processor.
 `legs` runs the witness of each emulator the selected legs use, and every command that reaches
 a WSL distribution or an ssh host installs or updates DssHarness there, as `config.json` declares. That is the
 trust building the repository already asks for. Run `dssharness help legs` for the rules.
+
+## Workflows
+
+A workflow is a flow of typed steps that depend on one another by name - triage, a plan, builds,
+tests, reviews, a pull request - declared by name under `workflows` in `config.json` and defined
+by a yml file of its own, `.harness-config/workflows/<name>/<name>.yml`, whose directory holds
+every file the definition names: its agent files, its prompts, its schemas. `init` writes one,
+the default workflow, into a repository that has no workflows directory at all and declares it in
+the config it creates; nothing that exists is ever overwritten.
+
+```bash
+dssharness validate-workflow          # check every declared workflow
+dssharness validate-workflow default  # check one
+dssharness help workflows             # the file, every step type and every key
+```
+
+This build checks workflow definitions - the shape of every key, every step, input, param and
+output an expression names, every file the definition points at - and refuses (12) naming each
+problem, without running anything. The engine that runs workflows is the next thing the tool
+grows. Run `dssharness help workflows` for the whole of it.
 
 ## Anchors
 

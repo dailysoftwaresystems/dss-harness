@@ -1,0 +1,33 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "errors",
+    "tests",
+    "types",
+    "comments",
+    "simplicity"
+  ],
+  "properties": {
+    "errors": {
+      "type": "boolean",
+      "description": "Whether the change adds or alters code that handles a failure."
+    },
+    "tests": {
+      "type": "boolean",
+      "description": "Whether the change adds or alters a test, or behaviour a test should hold."
+    },
+    "types": {
+      "type": "boolean",
+      "description": "Whether the change adds or alters a type."
+    },
+    "comments": {
+      "type": "boolean",
+      "description": "Whether the change adds or alters a comment or documentation."
+    },
+    "simplicity": {
+      "type": "boolean",
+      "description": "Whether the change adds or rewrites code of some length."
+    }
+  }
+}
