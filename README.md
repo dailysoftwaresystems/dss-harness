@@ -364,13 +364,14 @@ first copy that meets it - on the `PATH`, then in the searched directories - is 
 on that host starts, its directory put ahead of the `PATH` where an older copy comes first, and a
 leg the tool is declared for is turned away where every copy is older, naming each and the
 `install-missing-tools` command that installs one (`help tools`). Each leg is told about a tool
-as it will find it: a leg whose toolchain names a developer environment, on the `PATH` that
-environment sets up for its processor - set up here for the look, so `cl` is found where Visual
-Studio keeps it - and every other leg on its host's own `PATH`. An install runs once on a host,
-whichever of its legs asked first, and each leg is then told what it finds. On another host, a
-tool its own `PATH` lacks is unknown for a leg in a developer environment, since this command
-sets one up only on the machine it runs on, and nothing is installed for it. `--dry-run` asks
-every host and installs nothing, naming each command that would run. `sync` creates the host's copy
+as it will find it, by the survey `legs` runs on its host: a leg whose toolchain names a developer
+environment, on the `PATH` that environment sets up there for its processor, so `cl` is found
+where Visual Studio keeps it - and every other leg on its host's own `PATH`. A tool is installed
+exactly where a leg would be turned away over it: an install runs once on a host, whichever of its
+legs asked first, and each leg is then told what it finds; a tool the survey could not establish
+is unknown, and nothing is installed for it. `--dry-run` asks every host and installs no tool,
+naming each command that would run; the survey it asks puts DssHarness on a host as `legs` does,
+so a host with no .NET SDK yet has every tool unknown. `sync` creates the host's copy
 of the tree it runs in and keeps it in step, deletions included: the main checkout's at the host's
 `repositoryPath`, and each worktree's beside it, so worktrees do not wait for each other on a host.
 The copy's git HEAD names the commit this tree is at, so a step that asks git about HEAD is answered

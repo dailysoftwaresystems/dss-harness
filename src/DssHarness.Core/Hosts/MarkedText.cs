@@ -27,14 +27,17 @@ public static class MarkedText
     }
 
     /// <summary>
-    /// <paramref name="text"/> after the last line <see cref="IsMarkLine"/> holds to carry <paramref name="mark"/>,
+    /// <paramref name="text"/> after the first line <see cref="IsMarkLine"/> holds to carry <paramref name="mark"/>,
     /// or the whole of it where no line does: a host that never reached the point the mark is written at has
     /// nothing else to show, so there the whole of it is the answer.
     /// </summary>
     /// <remarks>
-    /// Read line by line, by the rule <see cref="MarkedLines"/> reads a stream with, and never by where the mark's
-    /// text happens to occur: PowerShell's own error for a command it could not run quotes the command line, the
-    /// mark in it twice, and cut there the error lost the very words that said what went wrong.
+    /// Read line by line, by the rule <see cref="MarkedLines"/> reads a stream with - the first mark line, the only
+    /// one a stream read as it arrives can act on - so what is kept is exactly what was handed on; and never by where
+    /// the mark's text happens to occur: PowerShell's own error for a command it could not run quotes the command
+    /// line, the mark in it twice, and cut there the error lost the very words that said what went wrong. What
+    /// follows the first mark line is kept whole, a later one among it too: the mark is written once on each stream,
+    /// and a line after it is the command's.
     /// </remarks>
     public static string Since(string text, string mark)
     {
@@ -42,7 +45,6 @@ public static class MarkedText
         ArgumentException.ThrowIfNullOrWhiteSpace(mark);
 
         var start = 0;
-        var after = -1;
 
         while (start < text.Length)
         {
@@ -51,7 +53,7 @@ public static class MarkedText
 
             if (IsMarkLine(line, mark))
             {
-                after = end < 0 ? text.Length : end + 1;
+                return end < 0 ? string.Empty : text[(end + 1)..];
             }
 
             if (end < 0)
@@ -62,7 +64,7 @@ public static class MarkedText
             start = end + 1;
         }
 
-        return after < 0 ? text : text[after..];
+        return text;
     }
 }
 

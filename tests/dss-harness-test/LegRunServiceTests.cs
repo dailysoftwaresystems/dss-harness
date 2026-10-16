@@ -4261,7 +4261,6 @@ public sealed class LegRunServiceTests
             harness.GitClient,
             harness.PathBudget,
             fileSystem ?? harness.FileSystem,
-            harness.FilePermissions,
             harness.Platform,
             harness.Output,
             origin,

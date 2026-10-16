@@ -87,7 +87,7 @@ public sealed class RemoteCommandLineTests
     /// it was handed unchanged; and a mark no shell reads literally is refused, as any other word would be.
     /// </summary>
     [Theory]
-    [InlineData(RemoteShell.Standard, "echo dssharness-ab12; echo dssharness-ab12 1>&2; dotnet --list-sdks")]
+    [InlineData(RemoteShell.Standard, "sh -c 'echo dssharness-ab12; echo dssharness-ab12 1>&2'; dotnet --list-sdks")]
     [InlineData(RemoteShell.Cmd, "echo dssharness-ab12& echo dssharness-ab12 1>&2& dotnet --list-sdks")]
     [InlineData(RemoteShell.PowerShell, "echo dssharness-ab12; [Console]::Error.WriteLine('dssharness-ab12'); dotnet --list-sdks")]
     public void AMarkedLine_WritesTheMarkOnEachStream_BeforeTheCommand(RemoteShell shell, string expected)

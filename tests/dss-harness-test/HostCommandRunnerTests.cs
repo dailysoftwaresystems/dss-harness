@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
 using DssHarness.Core.Hosts;
@@ -277,7 +278,7 @@ public sealed class HostCommandRunnerTests
         {
             var request = call.Arg<ProcessRequest>();
             line = request.Arguments[^1];
-            var mark = line.Split(' ')[1].TrimEnd(';', '&');
+            var mark = Regex.Match(line, "dssharness-[0-9a-f]{32}").Value;
 
             request.OnOutputLine!("Adding directories to PATH:");
             request.OnOutputLine!("PATH += /home/harness/emsdk");
@@ -314,7 +315,7 @@ public sealed class HostCommandRunnerTests
         var wsl = HostCommandRunner.BuildRequest(new HostConnection { Host = HostId.Wsl("wsl-a"), Distribution = "Example-Linux" }, ListSdks, "dssharness-ab12");
         var local = HostCommandRunner.BuildRequest(new HostConnection { Host = HostId.Local }, ListSdks, "dssharness-ab12");
 
-        Assert.Equal("echo dssharness-ab12; echo dssharness-ab12 1>&2; dotnet --list-sdks", marked.Arguments[^1]);
+        Assert.Equal("sh -c 'echo dssharness-ab12; echo dssharness-ab12 1>&2'; dotnet --list-sdks", marked.Arguments[^1]);
         Assert.DoesNotContain(wsl.Arguments, argument => argument.Contains("dssharness-ab12", StringComparison.Ordinal));
         Assert.Equal(["--list-sdks"], local.Arguments);
     }
@@ -364,9 +365,9 @@ public sealed class HostCommandRunnerTests
         await hosts.RunAsync(Ssh(), ListSdks, TestContext.Current.CancellationToken);
         await hosts.ProbeShellAsync(Ssh(), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
-        var marks = lines.Take(2).Select(line => line.Split(';')[0]).ToList();
+        var marks = lines.Take(2).Select(line => Regex.Match(line, @"^sh -c 'echo (dssharness-[0-9a-f]{32}); echo \1 1>&2'; ").Groups[1].Value).ToList();
 
-        Assert.All(marks, mark => Assert.Matches("^echo dssharness-[0-9a-f]{32}$", mark));
+        Assert.All(marks, mark => Assert.NotEmpty(mark));
         Assert.NotEqual(marks[0], marks[1]);
         Assert.Equal(RemoteCommandLine.ShellProbe, lines[2]);
     }
@@ -574,6 +575,29 @@ public sealed class HostCommandRunnerTests
         Assert.Equal("cmake", connection.Spell("cmake"));
         Assert.Null(connection.Located("ninja"));
         Assert.Equal(ProgramFound.Unknown, connection.Forget("dotnet").Located("dotnet")?.Found ?? ProgramFound.Unknown);
+    }
+
+    /// <summary>
+    /// The copy a host's survey found is started by its path - on the PATH too, since the survey looks where the PATH of
+    /// a command run there does not - with one the host wrote from its home as <c>~</c> spelt from the home a command
+    /// there starts in; by the program's name where a command line to an ssh host cannot carry the path, or the survey
+    /// found none.
+    /// </summary>
+    [Fact]
+    public void ACopyAHostsSurveyFound_IsStartedByItsPath_WhereACommandLineThereCanCarryIt()
+    {
+        var wsl = new HostConnection { Host = HostId.Wsl("wsl-a"), Distribution = "Example-Linux" };
+        var cmd = Ssh("win-box") with { Shell = RemoteShell.Cmd };
+
+        Assert.Equal("/opt/cmake-3.31/bin/cmake", Ssh().Spell(new ProgramLocation("cmake", ProgramFound.OnPath, "/opt/cmake-3.31/bin/cmake")));
+        Assert.Equal(".local/bin/ninja", Ssh().Spell(new ProgramLocation("ninja", ProgramFound.OffPath, "~/.local/bin/ninja")));
+        Assert.Equal(@".dotnet\tools\ninja.exe", cmd.Spell(new ProgramLocation("ninja", ProgramFound.OffPath, @"~\.dotnet\tools\ninja.exe")));
+        Assert.Equal("ninja", Ssh().Spell(new ProgramLocation("ninja", ProgramFound.OffPath, "/opt/my tools/ninja")));
+        Assert.Equal("/opt/my tools/ninja", wsl.Spell(new ProgramLocation("ninja", ProgramFound.OffPath, "/opt/my tools/ninja")));
+        Assert.Equal(
+            @"C:\Program Files\CMake\bin\cmake.exe",
+            new HostConnection { Host = HostId.Local }.Spell(new ProgramLocation("cmake", ProgramFound.OnPath, @"C:\Program Files\CMake\bin\cmake.exe")));
+        Assert.Equal("ninja", Ssh().Spell(new ProgramLocation("ninja", ProgramFound.Nowhere)));
     }
 
     /// <summary>

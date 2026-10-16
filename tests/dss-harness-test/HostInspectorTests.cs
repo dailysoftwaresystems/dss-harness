@@ -10,6 +10,7 @@ using DssHarness.Core.Processes;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 using DssHarness.Core.Secrets;
+using DssHarness.Core.Tools;
 
 namespace DssHarness.Tests;
 
@@ -976,6 +977,64 @@ public sealed class HostInspectorTests
         Assert.Equal(["/opt/homebrew/bin"], report.ProgramDirectories.Appended);
     }
 
+    /// <summary>
+    /// A look in a developer environment travels to the host with what the host declares under <c>env</c> for itself,
+    /// which the environment is set up over there as a leg's is, and the time setting it up and holding its programs to
+    /// their minimums takes; what it found comes back as the host said it.
+    /// </summary>
+    [Fact]
+    public async Task ALookInADeveloperEnvironment_TravelsWithTheHostsOwnEnvironment_AndWhatItFoundComesBack()
+    {
+        var asked = new List<HostAgentRequest>();
+        var budgets = new List<TimeSpan?>();
+        DeveloperEnvironmentPrograms[] found =
+        [
+            new() { Name = "vs", Processor = "x86_64", Programs = [new ProgramLocation("cl", ProgramFound.OnPath, "/vs/bin/cl")] },
+            new() { Name = "vs", Processor = "arm64", Unestablished = "could not be set up: vcvarsall.bat x64_arm64 exited 1" },
+        ];
+
+        using var fixture = new Fixture(PlatformId.Windows, respond: HostThat(agent: command =>
+        {
+            asked.Add(JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput.Read(), HostAgentProtocol.JsonOptions)!);
+            budgets.Add(command.Timeout);
+
+            return HostResults.Ok(JsonSerializer.Serialize(
+                new HostAgentInfo
+                {
+                    Version = Root.Version,
+                    AssemblySha256 = Root.AssemblySha256,
+                    Os = "linux",
+                    Processor = "x86_64",
+                    InDeveloperEnvironments = asked.Count == 1 ? [] : [.. found],
+                },
+                HostAgentProtocol.JsonOptions));
+        }));
+        fixture.Config.Hosts.Wsl[Distro].Env["VSCMD_SKIP_SENDTELEMETRY"] = "1";
+        fixture.Config.Tools.Add(new ToolConfig { Name = "cl", MinVersion = "19.40", Probe = new ToolProbe { Args = ["/?"] } });
+
+        await fixture.InspectAsync(HostId.Wsl(Distro));
+        var report = await fixture.InspectAsync(
+            HostId.Wsl(Distro),
+            looks:
+            [
+                new DeveloperEnvironmentLook { Name = "vs", Processor = "x86_64", Programs = ["cl"] },
+                new DeveloperEnvironmentLook { Name = "vs", Processor = "arm64", Programs = ["cl"] },
+            ]);
+
+        Assert.True(report.Available, report.Reason);
+        Assert.Empty(asked[0].InDeveloperEnvironments);
+        Assert.Collection(
+            asked[1].InDeveloperEnvironments,
+            look => Assert.Equal(("vs", "x86_64", "1"), (look.Name, look.Processor, look.Environment["VSCMD_SKIP_SENDTELEMETRY"])),
+            look => Assert.Equal(("vs", "arm64", "1"), (look.Name, look.Processor, look.Environment["VSCMD_SKIP_SENDTELEMETRY"])));
+        Assert.Equal(["cl"], asked[1].InDeveloperEnvironments[0].Programs);
+        Assert.Equal((DeveloperEnvironmentProvider.CaptureBudget + ProgramFloors.Allowance(1)) * 2, budgets[1] - budgets[0]);
+        Assert.Collection(
+            report.InDeveloperEnvironments,
+            look => Assert.Equal(("x86_64", "/vs/bin/cl", (string?)null), (look.Processor, Assert.Single(look.Programs).Path, look.Unestablished)),
+            look => Assert.Equal(("arm64", "could not be set up: vcvarsall.bat x64_arm64 exited 1"), (look.Processor, look.Unestablished)));
+    }
+
     [Fact]
     public async Task AnInstallThatFails_SaysAHostRunsOnlyPublishedVersions()
     {
@@ -1097,8 +1156,9 @@ public sealed class HostInspectorTests
 
     /// <summary>
     /// What a host found about itself is said under the name its item declares, never by an address its name
-    /// resolved to: an emulator's witness and reason, a developer environment's reason, a program's, and why its
-    /// space, or a build directory's room, went unmeasured. The build directory's path, which is matched as it is,
+    /// resolved to: an emulator's witness and reason, a developer environment's reason, a program's and what each copy
+    /// held to a minimum said, what a look in a developer environment found, and why its space, or a build directory's
+    /// room, went unmeasured. The build directory's path, which is matched as it is,
     /// stays as it was.
     /// </summary>
     [Fact]
@@ -1116,7 +1176,25 @@ public sealed class HostInspectorTests
                 {
                     ["vs"] = new DeveloperEnvironmentCheck(DeveloperEnvironmentFound.Unreadable, "vswhere could not reach 192.0.2.10", null, null),
                 },
-                Programs = [new ProgramLocation("cmake", ProgramFound.Unknown, Reason: "the share at 192.0.2.10 did not answer")],
+                Programs =
+                [
+                    new ProgramLocation("cmake", ProgramFound.Unknown, Reason: "the share at 192.0.2.10 did not answer"),
+                    new ProgramLocation("ninja", ProgramFound.FloorUnknown, "/usr/bin/ninja", "ninja on 192.0.2.10 printed nothing")
+                    {
+                        Judged = new FloorCopy("/usr/bin/ninja", null, "it printed 192.0.2.10"),
+                        PassedOver = new FloorCopy("/opt/ninja", null, "it could not reach 192.0.2.10"),
+                    },
+                ],
+                InDeveloperEnvironments =
+                [
+                    new DeveloperEnvironmentPrograms
+                    {
+                        Name = "vs",
+                        Processor = "x86_64",
+                        Programs = [new ProgramLocation("cl", ProgramFound.Unknown, Reason: "the share at 192.0.2.10 did not answer")],
+                        Unestablished = "vcvarsall.bat could not reach 192.0.2.10",
+                    },
+                ],
                 SpaceUnmeasured = "df could not reach 192.0.2.10",
                 Builds = [new BuildDirectoryRoom("/srv/repo/build", Exists: true, RecordedBytes: null, Disk: null, "df could not reach 192.0.2.10")],
             },
@@ -1129,6 +1207,13 @@ public sealed class HostInspectorTests
         Assert.Equal("host.invalid", report.Emulators["qemu-arm64"].Witnessed);
         Assert.Equal("vswhere could not reach host.invalid", report.DeveloperEnvironments["vs"].Reason);
         Assert.Equal("the share at host.invalid did not answer", report.Programs["cmake"].Reason);
+        Assert.Equal(
+            ("ninja on host.invalid printed nothing", "it printed host.invalid", "it could not reach host.invalid"),
+            (report.Programs["ninja"].Reason, report.Programs["ninja"].Judged?.Problem, report.Programs["ninja"].PassedOver?.Problem));
+        var look = Assert.Single(report.InDeveloperEnvironments);
+        Assert.Equal(
+            ("the share at host.invalid did not answer", "vcvarsall.bat could not reach host.invalid"),
+            (Assert.Single(look.Programs).Reason, look.Unestablished));
         Assert.Equal("df could not reach host.invalid", report.SpaceUnmeasured);
         Assert.Equal("df could not reach host.invalid", Assert.Single(report.Builds).Unmeasured);
         Assert.Equal("/srv/repo/build", Assert.Single(report.Builds).Path);
@@ -1496,6 +1581,7 @@ public sealed class HostInspectorTests
                 identity,
                 new EmulatorProbe(platform, processRunner, fileSystem),
                 new DeveloperEnvironmentProbe(platform, processRunner),
+                new DeveloperEnvironmentProvider(platform, processRunner, fileSystem, new ConsoleHarnessOutput(new StringWriter(), new StringWriter(), verbose: false)),
                 fileSystem,
                 HostDoubles.Floors(platform, processRunner),
                 new KeepAwake(processRunner, new ConsoleHarnessOutput(new StringWriter(), new StringWriter(), verbose: false)),
@@ -1549,7 +1635,8 @@ public sealed class HostInspectorTests
             IReadOnlyDictionary<string, EmulatorConfig>? emulators = null,
             IReadOnlyList<string>? programs = null,
             IReadOnlyDictionary<string, DeveloperEnvironmentConfig>? environments = null,
-            RoomQuestions? room = null)
+            RoomQuestions? room = null,
+            IReadOnlyList<DeveloperEnvironmentLook>? looks = null)
             => _inspector.InspectAsync(
                 _context,
                 host,
@@ -1557,6 +1644,7 @@ public sealed class HostInspectorTests
                 environments ?? new Dictionary<string, DeveloperEnvironmentConfig>(StringComparer.OrdinalIgnoreCase),
                 programs ?? [],
                 room,
+                looks,
                 TestContext.Current.CancellationToken);
 
         public void Dispose() => Repository.Dispose();

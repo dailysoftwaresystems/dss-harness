@@ -68,7 +68,7 @@ them.
 | `Secrets` | Host connection data and its permission checks (`HostSecretsStore`, `DotEnvFile`) |
 | `Sync` | Syncing a tree to hosts (`SyncService`, `SyncManifest`, `HostCopies`) |
 | `Testing` | `test` and ctest (`TestService`, `TestInvocationResolver`) |
-| `Tools` | `install-missing-tools` (`IToolProvisionService`) |
+| `Tools` | `install-missing-tools` (`IToolProvisionService`), which judges each tool by the host's own survey (`IHostInspector`) |
 | `Worktrees` | Worktrees, root litter, host copies (`WorktreeService`, `RootLitterService`) |
 
 ## 3. Layering

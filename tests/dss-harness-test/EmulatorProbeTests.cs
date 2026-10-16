@@ -175,17 +175,13 @@ public sealed class EmulatorProbeTests
 
     /// <summary>
     /// The program a witness starts, named by name, is read from the search as a requirement is: one
-    /// nobody could look for everywhere is unknown, one looked for everywhere and not found is
-    /// missing, and one held below a declared tool's minimum version is said as its search says it.
-    /// None is started: started anyway, one nobody could look for everywhere would be reported as not
-    /// found, and one below its minimum would answer for a copy a leg is not to start.
+    /// nobody could look for everywhere is unknown, and one looked for everywhere and not found is
+    /// missing. Neither is started: started anyway, one nobody could look for everywhere would be
+    /// reported as not found.
     /// </summary>
     [Theory]
     [InlineData(ProgramFound.Unreadable, "whether 'qemu-aarch64' is there could not be established: the home directory is not known here")]
     [InlineData(ProgramFound.Nowhere, "qemu-aarch64 is missing")]
-    [InlineData(ProgramFound.BelowFloor, "the home directory is not known here")]
-    [InlineData(ProgramFound.FloorShadowed, "the home directory is not known here")]
-    [InlineData(ProgramFound.FloorUnknown, "the home directory is not known here")]
     public async Task AWitnessProgramTheSearchDidNotFind_IsNeverStarted(ProgramFound found, string reason)
     {
         var runner = Substitute.For<IProcessRunner>();
@@ -209,6 +205,54 @@ public sealed class EmulatorProbeTests
         Assert.False(check.Available);
         Assert.Equal(reason, check.Reason);
         await runner.DidNotReceiveWithAnyArgs().RunAsync(default!, TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>
+    /// A requirement, and the program a witness starts, held to a declared tool's minimum version are there: the copy a leg
+    /// through the emulator starts, which the witness is started with. Whether the minimum turns a leg away is the tool's
+    /// scope, which only the leg can say (see <see cref="LegPlacementTests"/>), so no leg the tool is not declared for is
+    /// turned away from an emulator over it.
+    /// </summary>
+    [Theory]
+    [InlineData(ProgramFound.BelowFloor)]
+    [InlineData(ProgramFound.FloorShadowed)]
+    [InlineData(ProgramFound.FloorUnknown)]
+    public async Task AProgramHeldToAMinimumVersion_LeavesTheEmulatorAbleToRun_AndIsWhatItsWitnessStarts(ProgramFound found)
+    {
+        var runner = Substitute.For<IProcessRunner>();
+        runner.RunAsync(Arg.Any<ProcessRequest>(), Arg.Any<CancellationToken>())
+            .Returns(new ProcessResult(0, "aarch64", string.Empty, TimeSpan.Zero, TimedOut: false));
+        var emulator = new EmulatorConfig
+        {
+            HostOs = "linux",
+            HostProcessor = "x86_64",
+            Processor = "arm64",
+            Requires = ["qemu-aarch64-static"],
+            Witness = new EmulatorWitness { Command = ["qemu-aarch64", "./witness"], Pattern = "aarch64" },
+        };
+        var search = new ProgramSearch(
+            new Dictionary<string, ProgramLocation>(StringComparer.Ordinal)
+            {
+                ["qemu-aarch64"] = new("qemu-aarch64", found, "/usr/bin/qemu-aarch64", "below its minimum"),
+                ["qemu-aarch64-static"] = new("qemu-aarch64-static", found, "/usr/bin/qemu-aarch64-static", "below its minimum"),
+            },
+            ProgramDirectories.None);
+
+        var check = await new EmulatorProbe(Platform("linux", "x86_64"), runner, FileSystem())
+            .CheckAsync(emulator, search, TestContext.Current.CancellationToken);
+
+        Assert.True(check.Available, check.Reason);
+        await runner.Received(1).RunAsync(Arg.Is<ProcessRequest>(request => request.FileName == "qemu-aarch64"), Arg.Any<CancellationToken>());
+        Assert.Equal(["qemu-aarch64", "qemu-aarch64-static"], EmulatorProbe.ProgramsRead(emulator));
+        Assert.Empty(EmulatorProbe.ProgramsRead(new EmulatorConfig
+        {
+            HostOs = emulator.HostOs,
+            HostProcessor = emulator.HostProcessor,
+            Processor = emulator.Processor,
+            Requires = emulator.Requires,
+            Env = new(StringComparer.OrdinalIgnoreCase) { ["PATH"] = "/opt/qemu/bin" },
+            Witness = emulator.Witness,
+        }));
     }
 
     /// <summary>

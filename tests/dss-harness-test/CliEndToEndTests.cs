@@ -2030,8 +2030,9 @@ public sealed partial class CliEndToEndTests
 
     /// <summary>
     /// --dry-run reaches the leg's host and installs nothing: the tool it would install is named
-    /// with the command that would run, and the answer is still "not provisioned". The install
-    /// declared here is harmless, so a dry run that ran it anyway fails this rather than a machine.
+    /// with the command that would run - its program spelt where the host's survey found it - and
+    /// the answer is still "not provisioned". The install declared here is harmless, so a dry run
+    /// that ran it anyway fails this rather than a machine.
     /// </summary>
     [Fact]
     public async Task InstallMissingTools_DryRun_NamesTheCommand_AndRunsNothing()
@@ -2056,7 +2057,7 @@ public sealed partial class CliEndToEndTests
 
         Assert.True(document.RootElement.GetProperty("dryRun").GetBoolean());
         Assert.Equal("would install", tool.GetProperty("state").GetString());
-        Assert.Equal("would run 'dotnet --version'", tool.GetProperty("detail").GetString());
+        Assert.Matches(@"^would run '(.+[\\/])?dotnet(\.exe)? --version'$", tool.GetProperty("detail").GetString());
     }
 
     /// <summary>

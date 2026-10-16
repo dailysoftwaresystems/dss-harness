@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
 using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Output;
@@ -118,47 +119,115 @@ public sealed class ToolProvisionServiceTests
     }
 
     /// <summary>
-    /// A directory another platform's machine names - a Windows one under 'all', here for a Linux
-    /// distribution - is not one this host is asked to look in. Handed over anyway, it could not be
-    /// listed there, and a tool that is simply missing would read as unknown and never be installed.
+    /// Each host is asked its own survey once - the one a leg there is placed by - about every tool its legs need and the
+    /// program each install would run, save one run through sudo, which looks its program up itself; nothing about where
+    /// a tool is is asked of the host's shell.
     /// </summary>
     [Fact]
-    public async Task ADirectoryForAnotherPlatform_IsNeverLookedForOnAHost_SoAMissingToolIsStillInstalled()
+    public async Task EachHost_IsAskedItsOwnSurvey_AboutEveryToolItsLegsNeed_AndTheProgramEachInstallRuns()
     {
+        var brew = $"{FakeHost.Homebrew}/brew";
         using var fixture = new Fixture(
-            tools: [Apt("ninja")],
-            searchDirectories: new() { ["all"] = [@"C:\tools", "/opt/tools"] });
+            tools: [Apt("ninja"), Brew("python3")],
+            present: new() { ["ninja"] = "1.12.0" },
+            offPath: new() { [$"{FakeHost.Homebrew}/python3"] = "1.13.0", [brew] = "4.4.0" });
 
         var report = await fixture.ProvisionAsync();
 
-        var ninja = Assert.Single(Assert.Single(report.Legs).Tools, tool => tool.Tool == "ninja");
-        Assert.Equal(ToolState.Installed, ninja.State);
-
-        var listed = fixture.Host.Calls.Where(call => call.Program == "ls").SelectMany(call => call.Arguments).ToList();
-        Assert.Contains("/opt/tools/ninja", listed);
-        Assert.DoesNotContain(listed, path => path.StartsWith(@"C:\", StringComparison.Ordinal));
+        Assert.True(report.Passed);
+        var survey = Assert.Single(fixture.Survey.Surveys);
+        Assert.Equal(HostId.Wsl(Distro), survey.Host);
+        Assert.Equal(["ninja", "python3", "brew"], survey.Programs);
+        Assert.Empty(survey.Looks);
+        string[] asked = ["ninja", "python3", "brew"];
+        Assert.DoesNotContain(
+            fixture.Host.Calls,
+            call => call.Program is "ls" or "sh" or "where.exe" && call.Arguments.Any(argument => asked.Contains(argument.Split('/', ' ')[^1])));
     }
 
     /// <summary>
-    /// A tool the host could not look for everywhere it was told to is not known either way. It is
-    /// reported with the search's own reason, and nothing is installed: a second copy of a tool a
-    /// leg there can already start is the one outcome this must never produce.
+    /// A tool the host's survey could not establish is not known either way - it could not look everywhere it was told to,
+    /// or the survey itself could not be run there - and is reported with the survey's own reason, and nothing is
+    /// installed: a second copy of a tool a leg there can already start is the one outcome this must never produce.
     /// </summary>
     [Fact]
-    public async Task AToolTheHostCouldNotLookFor_IsUnknown_WithTheSearchsOwnReason_AndNothingIsInstalled()
+    public async Task AToolTheSurveyCouldNotEstablish_IsUnknown_WithItsOwnReason_AndNothingIsInstalled()
     {
-        using var fixture = new Fixture(
-            tools: [Apt("ninja")],
-            searchDirectories: new() { ["linux"] = ["~/tools"] },
-            homeUnreadable: true);
+        const string Unsearched = "the home directory is not known here, so '~/tools' could not be searched";
+
+        using var fixture = new Fixture(tools: [Apt("ninja")]);
+        fixture.Survey.Scripted = (_, program) => program == "ninja" ? new ProgramLocation(program, ProgramFound.Unreadable, Reason: Unsearched) : null;
+
+        var unsearched = Assert.Single(Assert.Single((await fixture.ProvisionAsync()).Legs).Tools, tool => tool.Tool == "ninja");
+
+        Assert.Equal((ToolState.Unknown, Unsearched), (unsearched.State, unsearched.Detail));
+
+        using var unsurveyed = new Fixture(tools: [Apt("ninja")]);
+        unsurveyed.Survey.Fails = _ => "its global .NET tools could not be listed";
+
+        var unasked = Assert.Single(Assert.Single((await unsurveyed.ProvisionAsync()).Legs).Tools, tool => tool.Tool == "ninja");
+
+        Assert.Equal((ToolState.Unknown, "the host's survey could not be run there: its global .NET tools could not be listed"), (unasked.State, unasked.Detail));
+        Assert.DoesNotContain(fixture.Host.Calls.Concat(unsurveyed.Host.Calls), call => call.Program == "sudo");
+    }
+
+    /// <summary>
+    /// A dry run on a host with no .NET SDK yet would install one, and has every other tool unknown: the survey that
+    /// judges them runs on DssHarness, which the SDK it would install is what runs; nothing is installed, and no
+    /// survey's answer is made up in its place.
+    /// </summary>
+    [Fact]
+    public async Task ADryRun_OnAHostWithNoSdkYet_HasEveryToolUnknown_AndRunsNothingThere()
+    {
+        using var fixture = new Fixture(tools: [Apt("ninja"), Apt("cmake", minVersion: "3.20.0")], present: new() { ["cmake"] = "3.16.0" });
+
+        var report = await fixture.ProvisionAsync(dryRun: true);
+        var tools = Assert.Single(report.Legs).Tools;
+
+        Assert.Equal(ToolState.WouldInstall, Assert.Single(tools, tool => tool.Tool == "dotnet").State);
+        Assert.All(
+            tools.Where(tool => tool.Tool != "dotnet"),
+            tool => Assert.Equal((ToolState.Unknown, $"the host's survey could not be run there: {FakeSurvey.NoSdk}"), (tool.State, tool.Detail)));
+        Assert.DoesNotContain(fixture.Host.Calls, call => call.Program == "sudo" || (call.Program == "sh" && call.Arguments.Count == 0));
+        Assert.False(report.Passed);
+    }
+
+    /// <summary>
+    /// A host none of whose legs needs a tool there is never surveyed: the survey brings DssHarness there to this
+    /// machine's version, for an answer nothing would read.
+    /// </summary>
+    [Fact]
+    public async Task AHostWhoseLegsNeedNoToolThere_IsNeverSurveyed()
+    {
+        using var fixture = new Fixture(tools: [new ToolConfig { Name = "cl", Platforms = ["windows"] }], sdk: true);
 
         var report = await fixture.ProvisionAsync();
 
-        var ninja = Assert.Single(Assert.Single(report.Legs).Tools, tool => tool.Tool == "ninja");
-        Assert.Equal(ToolState.Unknown, ninja.State);
-        Assert.Equal(
-            "'ninja' is not on the PATH there, and '~/tools' could not be looked in, because its home directory could not be read",
-            ninja.Detail);
+        Assert.True(report.Passed);
+        Assert.Empty(fixture.Survey.Surveys);
+        Assert.Equal(ToolState.AlreadyCurrent, Assert.Single(Assert.Single(report.Legs).Tools, tool => tool.Tool == "dotnet").State);
+    }
+
+    /// <summary>
+    /// A copy that meets the minimum behind an older one a directory raised for another tool holds - the one a leg there
+    /// starts - is reported outdated, saying which copy to update or remove, and nothing is installed: an install would
+    /// not say which copy a leg starts, as a leg turned away over it is told.
+    /// </summary>
+    [Fact]
+    public async Task ACopyAShadowedToolsLegsStart_IsOutdated_NamingWhatToUpdate_AndNothingIsInstalled()
+    {
+        const string Shadowed = "/opt/homebrew/bin/cmake is 3.20.0, below the minVersion 3.28.0 'cmake' is declared with, and a directory "
+            + "raised ahead of the PATH for another tool puts it ahead of /usr/bin/cmake, which is 3.31.0; update or remove it, so the "
+            + "copy that meets it is the one a leg starts";
+
+        using var fixture = new Fixture(tools: [Apt("cmake", minVersion: "3.28.0")], present: new() { ["cmake"] = "3.31.0" });
+        fixture.Survey.Scripted = (_, program) => program == "cmake"
+            ? new ProgramLocation(program, ProgramFound.FloorShadowed, "/opt/homebrew/bin/cmake", Shadowed) { Judged = new FloorCopy("/opt/homebrew/bin/cmake", "3.20.0", null) }
+            : null;
+
+        var cmake = Assert.Single(Assert.Single((await fixture.ProvisionAsync()).Legs).Tools, tool => tool.Tool == "cmake");
+
+        Assert.Equal((ToolState.Outdated, "3.20.0", Shadowed), (cmake.State, cmake.Version, cmake.Detail));
         Assert.DoesNotContain(fixture.Host.Calls, call => call.Program == "sudo");
     }
 
@@ -190,7 +259,8 @@ public sealed class ToolProvisionServiceTests
         // to hold one, so what it printed is scrubbed before it can be reported.
         using var fixture = new Fixture(
             tools: [Apt("ninja")],
-            installFails: $"sudo: a password was supplied: {Credential}");
+            installFails: $"sudo: a password was supplied: {Credential}",
+            sdk: true);
 
         var report = await fixture.ProvisionAsync();
 
@@ -495,7 +565,8 @@ public sealed class ToolProvisionServiceTests
             prompting: PromptAvailability.Available,
             typed: _ => Typed,
             rootPassword: _ => Typed,
-            installFails: $"sudo: a password was supplied: {Typed}");
+            installFails: $"sudo: a password was supplied: {Typed}",
+            sdk: true);
 
         var report = await fixture.ProvisionAsync();
 
@@ -643,7 +714,7 @@ public sealed class ToolProvisionServiceTests
     {
         var brew = $"{FakeHost.Homebrew}/brew";
 
-        using (var dry = new Fixture(tools: [Brew("python3")], ssh: true, offPath: new() { [brew] = "4.4.0" }))
+        using (var dry = new Fixture(tools: [Brew("python3")], ssh: true, offPath: new() { [brew] = "4.4.0" }, sdk: true))
         {
             var would = Assert.Single(Assert.Single((await dry.ProvisionAsync(dryRun: true)).Legs).Tools, entry => entry.Tool == "python3");
 
@@ -814,13 +885,13 @@ public sealed class ToolProvisionServiceTests
 
     /// <summary>
     /// What a tool printed over ssh is quoted with every address the host's name resolved to written as the
-    /// host's item declares it, as everything a host prints is.
+    /// host's item declares it, as everything a host prints is: here, the version a tool with no minimum is asked for.
     /// </summary>
     [Fact]
     public async Task WhatAToolPrintedOverSsh_NamesTheHostAsDeclared_NeverByAnAddressItsNameResolvedTo()
     {
         using var fixture = new Fixture(
-            tools: [Apt("ninja", minVersion: "1.12.0", regex: "never matches this")],
+            tools: [Apt("ninja", regex: "never matches this")],
             present: new() { ["ninja"] = "1.10.0 built on 192.0.2.10" },
             ssh: true,
             sshAddress: ResolvedName);
@@ -830,8 +901,7 @@ public sealed class ToolProvisionServiceTests
         var outcome = Assert.Single(Assert.Single(report.Legs).Tools, entry => entry.Tool == "ninja");
 
         Assert.Equal(
-            "whether a copy of 'ninja' there is at least 1.12.0, the minVersion it is declared with, could not be established: "
-            + $"/usr/bin/ninja: the probe regex of 'ninja' matched nothing in what it printed: ninja version 1.10.0 built on {ResolvedName}",
+            $"the probe regex of 'ninja' matched nothing in what it printed: ninja version 1.10.0 built on {ResolvedName}",
             outcome.Detail);
     }
 
@@ -941,12 +1011,13 @@ public sealed class ToolProvisionServiceTests
             tools: [Apt("ninja"), Apt("cmake", minVersion: "3.20.0")],
             present: new() { ["cmake"] = "3.16.0" },
             prompting: PromptAvailability.Available,
-            typed: _ => Credential);
+            typed: _ => Credential,
+            sdk: true);
 
         var report = await fixture.ProvisionAsync(dryRun: true);
         var tools = Assert.Single(report.Legs).Tools;
 
-        Assert.Equal(ToolState.WouldInstall, Assert.Single(tools, tool => tool.Tool == "dotnet").State);
+        Assert.Equal(ToolState.AlreadyCurrent, Assert.Single(tools, tool => tool.Tool == "dotnet").State);
 
         var ninja = Assert.Single(tools, tool => tool.Tool == "ninja");
         Assert.Equal(ToolState.WouldInstall, ninja.State);
@@ -1184,7 +1255,8 @@ public sealed class ToolProvisionServiceTests
         var tool = Assert.Single(Assert.Single(report.Legs).Tools);
         Assert.Equal(ToolState.Unknown, tool.State);
         Assert.StartsWith(
-            "its install reported success, and whether 'ninja' is there could not be established: 'ninja' is not on the PATH there",
+            "its install reported success, and whether 'ninja' is there could not be established: the PATH developer environment "
+            + "'vs' sets up, where the legs that need it start it, could not be set up: ",
             tool.Detail,
             StringComparison.Ordinal);
         Assert.EndsWith(Full, tool.Detail, StringComparison.Ordinal);
@@ -1193,8 +1265,8 @@ public sealed class ToolProvisionServiceTests
     }
 
     /// <summary>
-    /// A developer environment that will not set up leaves a tool the host's own PATH lacks unknown,
-    /// saying why, rather than missing: the PATH its legs would find it on could not be looked at.
+    /// A developer environment that will not set up leaves a tool unknown, saying why, rather than missing or found on the
+    /// host's own PATH: the PATH its legs would find it on could not be looked at.
     /// </summary>
     [Fact]
     public async Task AToolOffThePath_WhereTheDeveloperEnvironmentWillNotSetUp_IsUnknown_SayingWhy()
@@ -1207,9 +1279,29 @@ public sealed class ToolProvisionServiceTests
         var cl = Assert.Single(Assert.Single(report.Legs).Tools);
         Assert.Equal(ToolState.Unknown, cl.State);
         Assert.Equal(
-            "'cl' is not on the PATH there, and the PATH developer environment 'vs' sets up, where the legs that need it start it, "
+            "the PATH developer environment 'vs' sets up, where the legs that need it start it, "
             + "could not be set up: developer environment 'vs': vcvarsall.bat amd64 exited 1 and printed nothing",
             cl.Detail);
+    }
+
+    /// <summary>
+    /// A developer environment whose instance could not be looked for leaves a tool unknown too, saying why: whether the
+    /// PATH it would set up holds the tool is not known either way.
+    /// </summary>
+    [Fact]
+    public async Task AToolWhereTheDeveloperEnvironmentCouldNotBeLookedFor_IsUnknown_SayingWhy()
+    {
+        using var visualStudio = new ScriptedVisualStudio { VsWhereExitCode = 1 };
+        using var here = new VisualStudioHere(visualStudio, [new ToolConfig { Name = "cl", Toolchains = ["msvc"] }]);
+
+        var cl = Assert.Single(Assert.Single((await here.ProvisionAsync()).Legs).Tools);
+
+        Assert.Equal(ToolState.Unknown, cl.State);
+        Assert.StartsWith(
+            "the PATH developer environment 'vs' sets up, where the legs that need it start it, could not be looked at: ",
+            cl.Detail,
+            StringComparison.Ordinal);
+        Assert.Empty(visualStudio.Captures);
     }
 
     /// <summary>
@@ -1229,31 +1321,93 @@ public sealed class ToolProvisionServiceTests
     }
 
     /// <summary>
-    /// A leg on another host that starts in a developer environment finds its tools on the PATH that
-    /// environment sets up there, which this command, reaching that host through its shell, cannot set
-    /// up: a tool not on the host's own PATH is unknown, saying so, and never installed a second time.
+    /// A leg on another host that starts in a developer environment finds its tools on the PATH that environment sets up
+    /// there, which that host's own survey is asked to set up and look on, for the leg's processor: a tool below its
+    /// minimum there is one an install settles, and one the environment would not show is unknown, saying why, and never
+    /// installed a second time.
     /// </summary>
     [Fact]
-    public async Task AToolOffAnotherHostsPath_ForALegInADeveloperEnvironment_IsUnknown_NotInstalled()
+    public async Task AToolOnAnotherHost_ForALegInADeveloperEnvironment_IsJudgedOnThePathItSetsUpThere()
+    {
+        void InVisualStudio(HarnessConfig config)
+        {
+            config.DeveloperEnvironments["vs"] = new DeveloperEnvironmentConfig { Kind = DeveloperEnvironmentKinds.VisualStudio };
+            config.Toolchains["msvc"] = new ToolchainConfig { DeveloperEnvironment = "vs" };
+            config.Legs["on-distro"] = new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", Wsl = Distro, Toolchain = "msvc" };
+        }
+
+        const string Below = "no copy of 'cmake' there is at least 3.28.0, the minVersion it is declared with: /vs/bin/cmake is 3.20.0";
+        using var fixture = new Fixture(
+            tools: [Apt("cl"), Apt("cmake", minVersion: "3.28.0")],
+            present: new() { ["cmake"] = "3.31.0" },
+            configure: InVisualStudio,
+            sdk: true);
+        fixture.Survey.Looked = (_, look) => new DeveloperEnvironmentPrograms
+        {
+            Name = look.Name,
+            Processor = look.Processor,
+            Programs =
+            [
+                new ProgramLocation("cl", ProgramFound.Nowhere),
+                new ProgramLocation("cmake", ProgramFound.BelowFloor, "/vs/bin/cmake", Below) { Judged = new FloorCopy("/vs/bin/cmake", "3.20.0", null) },
+            ],
+        };
+
+        var tools = Assert.Single((await fixture.ProvisionAsync(dryRun: true)).Legs).Tools;
+
+        var look = Assert.Single(Assert.Single(fixture.Survey.Surveys).Looks);
+        Assert.Equal(("vs", "x86_64"), (look.Name, look.Processor));
+        Assert.Equal(["cl", "cmake"], look.Programs);
+        Assert.Equal((ToolState.WouldInstall, "would run 'sudo apt-get install -y cl-build'"), (tools.Single(tool => tool.Tool == "cl").State, tools.Single(tool => tool.Tool == "cl").Detail));
+        Assert.Equal((ToolState.WouldUpdate, "3.20.0"), (tools.Single(tool => tool.Tool == "cmake").State, tools.Single(tool => tool.Tool == "cmake").Version));
+
+        using var unset = new Fixture(tools: [Apt("cl")], configure: InVisualStudio, sdk: true);
+        unset.Survey.Looked = (_, look) => new DeveloperEnvironmentPrograms { Name = look.Name, Processor = look.Processor, Unestablished = "could not be set up: vcvarsall.bat exited 1" };
+
+        var cl = Assert.Single(Assert.Single((await unset.ProvisionAsync()).Legs).Tools, tool => tool.Tool == "cl");
+
+        Assert.Equal(ToolState.Unknown, cl.State);
+        Assert.Equal(
+            "the PATH developer environment 'vs' sets up, where the legs that need it start it, could not be set up: vcvarsall.bat exited 1",
+            cl.Detail);
+        Assert.DoesNotContain(unset.Host.Calls, call => call.Program == "sudo" || call.Arguments.Contains("cl-build"));
+    }
+
+    /// <summary>
+    /// Two legs on one host in one developer environment, built for two processors, are each told about a tool as the
+    /// PATH it sets up for their own processor holds it: one set up for one processor says nothing of the other's.
+    /// </summary>
+    [Fact]
+    public async Task LegsInOneDeveloperEnvironment_ForTwoProcessors_AreEachToldWhatTheirOwnLookFound()
     {
         using var fixture = new Fixture(
-            tools: [Apt("cl")],
+            tools: [Apt("cmake", minVersion: "3.28.0")],
             configure: config =>
             {
                 config.DeveloperEnvironments["vs"] = new DeveloperEnvironmentConfig { Kind = DeveloperEnvironmentKinds.VisualStudio };
                 config.Toolchains["msvc"] = new ToolchainConfig { DeveloperEnvironment = "vs" };
                 config.Legs["on-distro"] = new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", Wsl = Distro, Toolchain = "msvc" };
-            });
+                config.Legs["on-distro-arm"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", Wsl = Distro, Toolchain = "msvc" };
+            },
+            sdk: true);
+        fixture.Survey.Looked = (_, look) => look.Processor == "x86_64"
+            ? new DeveloperEnvironmentPrograms
+            {
+                Name = look.Name,
+                Processor = look.Processor,
+                Programs = [new ProgramLocation("cmake", ProgramFound.OnPath, "/vs/bin/cmake") { Judged = new FloorCopy("/vs/bin/cmake", "3.31.0", null, Meets: true) }],
+            }
+            : new DeveloperEnvironmentPrograms { Name = look.Name, Processor = look.Processor, Unestablished = "could not be set up: vcvarsall.bat x64_arm64 exited 1" };
 
         var report = await fixture.ProvisionAsync();
 
-        var cl = Assert.Single(Assert.Single(report.Legs).Tools, tool => tool.Tool == "cl");
-        Assert.Equal(ToolState.Unknown, cl.State);
+        Assert.Equal(["arm64", "x86_64"], Assert.Single(fixture.Survey.Surveys).Looks.Select(look => look.Processor).Order(StringComparer.Ordinal));
+        var native = Assert.Single(Assert.Single(report.Legs, leg => leg.Leg == "on-distro").Tools, tool => tool.Tool == "cmake");
+        var arm = Assert.Single(Assert.Single(report.Legs, leg => leg.Leg == "on-distro-arm").Tools, tool => tool.Tool == "cmake");
+        Assert.Equal((ToolState.AlreadyCurrent, "3.31.0"), (native.State, native.Version));
         Assert.Equal(
-            "'cl' is not on the PATH there, and the PATH developer environment 'vs' sets up, where the legs that need it start it, "
-            + "is set up by this command only on the machine it runs on",
-            cl.Detail);
-        Assert.DoesNotContain(fixture.Host.Calls, call => call.Program == "apt-get" || call.Arguments.Contains("cl-build"));
+            (ToolState.Unknown, "the PATH developer environment 'vs' sets up, where the legs that need it start it, could not be set up: vcvarsall.bat x64_arm64 exited 1"),
+            (arm.State, arm.Detail));
     }
 
     /// <summary>A tool brew installs, whose package is named after it.</summary>
@@ -1361,18 +1515,56 @@ public sealed class ToolProvisionServiceTests
                 new SshWakeWindow(Substitute.For<INameLookup>(), TimeProvider.System, TimeSpan.Zero),
                 new SyncedCopyRefusals(Substitute.For<IHarnessOutput>()));
 
+            // This machine's own survey, run in-process as it is for a leg here: Visual Studio's environment set up by
+            // the agent's own provider, and each copy of ninja asked its version by its path.
+            var output = new ConsoleHarnessOutput(new StringWriter(), new StringWriter(), verbose: false);
+            var processes = Substitute.For<IProcessRunner>();
+            processes.RunAsync(Arg.Any<ProcessRequest>(), Arg.Any<CancellationToken>())
+                .Returns(call => Task.FromResult(Version(call.Arg<ProcessRequest>().FileName) is { } version
+                    ? HostResults.Ok(version + "\n")
+                    : throw new InvalidOperationException($"'{call.Arg<ProcessRequest>().FileName}' was not expected to be started.")));
+            var identity = Substitute.For<IToolIdentityProvider>();
+            identity.Current.Returns(new ToolIdentity("1.2.3", "abc123"));
+            var agent = new HostAgentService(
+                platform,
+                identity,
+                new EmulatorProbe(platform, processes, fileSystem),
+                new DeveloperEnvironmentProbe(HostDoubles.Platform(PlatformId.Windows, "x86_64"), visualStudio),
+                visualStudio.Provider(),
+                fileSystem,
+                new ProgramFloors(new LocalProgramResolver(platform, permissions, () => _path.Path), processes, platform),
+                new KeepAwake(processes, output),
+                new HoldAwakeStore(fileSystem, Path.Combine(TestHost.TemporaryRoot, "holds", Guid.NewGuid().ToString("N") + ".json")),
+                new RecordingLauncher(),
+                HomeShorthand.Of(platform, fileSystem),
+                new RecordingLastResort());
+            var inspector = new HostInspector(
+                commands,
+                connector,
+                identity,
+                agent,
+                new HoldAwakeRegistry(commands, output, stopsWithin: TimeSpan.Zero),
+                Substitute.For<IWslDiskImages>(),
+                fileSystem);
+
             _service = new ToolProvisionService(
                 HostDoubles.Loader(config, _repository.Path),
                 connector,
                 commands,
                 programs,
-                new DeveloperEnvironmentProbe(HostDoubles.Platform(PlatformId.Windows, "x86_64"), visualStudio),
-                visualStudio.Provider(),
-                platform,
-                permissions,
-                new ConsoleHarnessOutput(new StringWriter(), new StringWriter(), verbose: false),
+                inspector,
+                output,
                 new FakePrompt(PromptAvailability.Unavailable));
         }
+
+        /// <summary>
+        /// What a copy of ninja reports, started by its path: Visual Studio's, under its instance, or the one an install put
+        /// on this machine's own PATH; nothing for any other program.
+        /// </summary>
+        private string? Version(string program)
+            => Path.GetFileNameWithoutExtension(program) != "ninja" ? null
+                : program.StartsWith(_visualStudio.InstallationPath, StringComparison.OrdinalIgnoreCase) ? StudioNinja
+                : InstalledNinja;
 
         /// <summary>How many times ninja's install ran.</summary>
         public int Installs => _installs;
@@ -1404,10 +1596,9 @@ public sealed class ToolProvisionServiceTests
                 return HostResults.Ok("installed\n");
             }
 
-            if (Path.GetFileNameWithoutExtension(command.Program) == "ninja")
+            if (Version(command.Program) is { } version)
             {
-                // Visual Studio's copy is started by its path, and the one on the PATH by its name.
-                return HostResults.Ok((Path.IsPathRooted(command.Program) ? StudioNinja : InstalledNinja) + "\n");
+                return HostResults.Ok(version + "\n");
             }
 
             throw HostResults.Unexpected(command);
@@ -1454,7 +1645,8 @@ public sealed class ToolProvisionServiceTests
         bool checkNeverFinishes,
         bool homeUnreadable,
         Func<HostId, HostCommand, bool>? transportStops,
-        Dictionary<string, string> offPath)
+        Dictionary<string, string> offPath,
+        bool sdk)
     {
         /// <summary>Where brew is, off the PATH, and where it installs.</summary>
         public const string Homebrew = "/opt/homebrew/bin";
@@ -1470,6 +1662,35 @@ public sealed class ToolProvisionServiceTests
 
         /// <summary>Whether one host has a program, which is not what another host has.</summary>
         public bool Has(HostId host, string program) => Present(host).ContainsKey(program);
+
+        /// <summary>Whether one host has the .NET SDK DssHarness runs on: every host had it, or an install put it there.</summary>
+        public bool HasSdk(HostId host) => sdk || _dotnet.Contains(host.ToString());
+
+        /// <summary>
+        /// Every copy of <paramref name="program"/> one host has, in the order its own survey looks - on its PATH, then off
+        /// it - with the version each reports.
+        /// </summary>
+        public IReadOnlyList<(string Path, string Version)> CopiesOf(HostId host, string program)
+            =>
+            [
+                .. Present(host).TryGetValue(program, out var onPath) ? [($"/usr/bin/{program}", onPath)] : Array.Empty<(string, string)>(),
+                .. OffPath(host).Where(entry => entry.Key.Split('/')[^1] == program).Select(entry => (entry.Key, entry.Value)),
+            ];
+
+        /// <summary>What one copy prints when its survey starts it to ask its version, or why it would not start.</summary>
+        public ProcessResult Answer(HostId host, string copy, IReadOnlyList<string> arguments)
+        {
+            if (WontStart?.Invoke(new HostCommand { Program = copy, Arguments = arguments }) == true)
+            {
+                return ProcessResult.NotRun(new ProgramStartException(copy, "it is not a program this machine can run").Message);
+            }
+
+            var name = copy.Split('/')[^1];
+
+            return CopiesOf(host, name).FirstOrDefault(found => found.Path == copy) is { Path: not null } found
+                ? HostResults.Ok($"{name} version {found.Version}\n")
+                : HostResults.Failed(127, $"{copy}: not found\n");
+        }
 
         /// <summary>
         /// The files one host has off its PATH, by path, each the version it reports; what every host was said to
@@ -1518,7 +1739,7 @@ public sealed class ToolProvisionServiceTests
             }
 
             var dotnetPath = $"{Home}/.dotnet/dotnet";
-            var dotnet = _dotnet.Contains(host.ToString());
+            var dotnet = HasSdk(host);
 
             return (command.Program, command.Arguments.FirstOrDefault()) switch
             {
@@ -1613,6 +1834,123 @@ public sealed class ToolProvisionServiceTests
         }
     }
 
+    /// <summary>
+    /// Each host's own survey, answered from what the fake host has: a program where it is - on the host's PATH, or off it -
+    /// and a declared tool with a minimum version held to it as the host's own survey holds one, its copies asked in that
+    /// order until one meets it, which is the copy a leg starts, ahead of an older one where one comes first. Every survey
+    /// is recorded, and a test can script what a host answers.
+    /// </summary>
+    /// <param name="host">What each host has.</param>
+    /// <param name="hereFindsEverything">Whether this machine finds every program, as a test about a distribution has it do.</param>
+    /// <param name="here">This machine's platform, whose floors its own survey holds; every other host is Linux.</param>
+    /// <remarks>
+    /// A host reached through a transport answers only once it has the .NET SDK, as the real survey runs there only on
+    /// DssHarness, which needs one.
+    /// </remarks>
+    private sealed class FakeSurvey(FakeHost host, bool hereFindsEverything, string here) : IHostInspector
+    {
+        /// <summary>Why a host with no SDK is not surveyed.</summary>
+        public const string NoSdk = "the .NET 10 SDK is not installed there";
+
+        private readonly List<(HostId Host, IReadOnlyList<string> Programs, IReadOnlyList<DeveloperEnvironmentLook> Looks)> _surveys = [];
+
+        /// <summary>Every survey, in order: the host, the programs it was asked to find, and where it was asked to look.</summary>
+        public IReadOnlyList<(HostId Host, IReadOnlyList<string> Programs, IReadOnlyList<DeveloperEnvironmentLook> Looks)> Surveys => _surveys;
+
+        /// <summary>What a host answers for one program, where a test scripts it; unscripted, what the host has.</summary>
+        public Func<HostId, string, ProgramLocation?>? Scripted { get; set; }
+
+        /// <summary>Why a host's survey could not be run, where a test says it could not.</summary>
+        public Func<HostId, string?>? Fails { get; set; }
+
+        /// <summary>
+        /// What looking in a developer environment found on a host, where a test scripts it; unscripted, the programs as the
+        /// host's own PATH has them, as on a host with no instance of it.
+        /// </summary>
+        public Func<HostId, DeveloperEnvironmentLook, DeveloperEnvironmentPrograms?>? Looked { get; set; }
+
+        public async Task<HostReport> InspectAsync(
+            HarnessContext context,
+            HostId inspected,
+            IReadOnlyDictionary<string, EmulatorConfig> emulators,
+            IReadOnlyDictionary<string, DeveloperEnvironmentConfig> developerEnvironments,
+            IReadOnlyList<string> programs,
+            RoomQuestions? room = null,
+            IReadOnlyList<DeveloperEnvironmentLook>? inDeveloperEnvironments = null,
+            CancellationToken cancellationToken = default)
+        {
+            var looks = inDeveloperEnvironments ?? [];
+            _surveys.Add((inspected, programs, looks));
+
+            if ((inspected.Kind != HostKind.Local && !host.HasSdk(inspected) ? NoSdk : Fails?.Invoke(inspected)) is { } why)
+            {
+                return new HostReport { Host = inspected, Reason = why };
+            }
+
+            var platformKey = inspected.Kind == HostKind.Local ? here : PlatformNames.Linux;
+            var floors = ToolFloor.Of(context.Config.Tools).Where(floor => floor.AppliesOn(platformKey)).ToList();
+            var found = new Dictionary<string, ProgramLocation>(StringComparer.Ordinal);
+
+            foreach (var program in programs.Distinct(StringComparer.Ordinal))
+            {
+                found[program] = Scripted?.Invoke(inspected, program)
+                    ?? await LocatedAsync(inspected, program, floors.FirstOrDefault(floor => floor.Name == program), cancellationToken);
+            }
+
+            return new HostReport
+            {
+                Host = inspected,
+                Os = "linux",
+                Processor = "x86_64",
+                Programs = found,
+                InDeveloperEnvironments =
+                [
+                    .. looks.Select(look => Looked?.Invoke(inspected, look) ?? new DeveloperEnvironmentPrograms
+                    {
+                        Name = look.Name,
+                        Processor = look.Processor,
+                        Programs = [.. look.Programs.Select(program => found[program])],
+                    }),
+                ],
+            };
+        }
+
+        /// <summary>Where a leg on <paramref name="inspected"/> finds <paramref name="program"/>, held to <paramref name="floor"/> where it has one.</summary>
+        private async Task<ProgramLocation> LocatedAsync(HostId inspected, string program, ToolFloor? floor, CancellationToken cancellationToken)
+        {
+            IReadOnlyList<(string Path, string Version)> copies = hereFindsEverything && inspected.Kind == HostKind.Local
+                ? [($"/usr/bin/{program}", InstalledVersion)]
+                : host.CopiesOf(inspected, program);
+
+            if (copies.Count == 0)
+            {
+                return new ProgramLocation(program, ProgramFound.Nowhere);
+            }
+
+            if (floor is null)
+            {
+                return Where(program, copies[0].Path);
+            }
+
+            var search = await floor.SearchAsync(
+                new ProgramCopies([.. copies.Select(copy => copy.Path)]),
+                (copy, _) => Task.FromResult(host.Answer(inspected, copy, floor.Args)),
+                cancellationToken);
+            var first = search.Probed[0];
+
+            return search.Chosen is { } chosen
+                ? Where(program, chosen.Copy) with { Judged = chosen, PassedOver = chosen == first ? null : first }
+                : new ProgramLocation(
+                    program,
+                    search.Below ? ProgramFound.BelowFloor : ProgramFound.FloorUnknown,
+                    first.Copy,
+                    search.Below ? search.Refusal() : search.Unestablished()) { Judged = first };
+        }
+
+        private static ProgramLocation Where(string program, string path)
+            => new(program, path.StartsWith("/usr/bin/", StringComparison.Ordinal) ? ProgramFound.OnPath : ProgramFound.OffPath, path);
+    }
+
     private sealed class Fixture : IDisposable
     {
         private readonly TempDirectory _repository = new();
@@ -1641,7 +1979,8 @@ public sealed class ToolProvisionServiceTests
             string sshAddress = "192.0.2.10",
             Dictionary<string, string>? offPath = null,
             ProcessResult? shellProbe = null,
-            string installed = InstalledVersion)
+            string installed = InstalledVersion,
+            bool sdk = false)
         {
             var declared = tools ?? [];
 
@@ -1658,7 +1997,8 @@ public sealed class ToolProvisionServiceTests
                 checkNeverFinishes,
                 homeUnreadable,
                 transportStops,
-                offPath ?? []);
+                offPath ?? [],
+                sdk);
 
             _repository.WriteFile(
                 Path.Combine(".harness-config", "wslDistros", Distro, ".env"),
@@ -1763,25 +2103,24 @@ public sealed class ToolProvisionServiceTests
                 new SshWakeWindow(Substitute.For<INameLookup>(), TimeProvider.System, TimeSpan.Zero),
                 new SyncedCopyRefusals(Substitute.For<IHarnessOutput>()));
 
-            // No developer environment is looked at or set up here: a leg starts in one only on this
-            // machine, and only where a test says so, which it does with VisualStudioHere.
-            var windows = HostDoubles.Platform(PlatformId.Windows, "x86_64");
             var output = new ConsoleHarnessOutput(Output, Error, verbose: false);
+
+            Survey = new FakeSurvey(Host, hereFindsEverything: localPlatform == PlatformId.Windows, platform.PlatformKey);
 
             _service = new ToolProvisionService(
                 HostDoubles.Loader(config, _repository.Path),
                 connector,
                 commands,
                 programs,
-                new DeveloperEnvironmentProbe(windows, Unasked()),
-                new DeveloperEnvironmentProvider(windows, Unasked(), fileSystem, output),
-                platform,
-                permissions,
+                Survey,
                 output,
                 Prompt);
         }
 
         public FakeHost Host { get; }
+
+        /// <summary>Each host's own survey.</summary>
+        public FakeSurvey Survey { get; }
 
         public FakePrompt Prompt { get; }
 
@@ -1793,16 +2132,6 @@ public sealed class ToolProvisionServiceTests
             => _service.ProvisionAsync(_repository.Path, legs, dryRun, TestContext.Current.CancellationToken);
 
         public void Dispose() => _repository.Dispose();
-
-        /// <summary>A machine whose Visual Studio nothing here may ask about.</summary>
-        private static IProcessRunner Unasked()
-        {
-            var processes = Substitute.For<IProcessRunner>();
-            processes.RunAsync(Arg.Any<ProcessRequest>(), Arg.Any<CancellationToken>())
-                .ThrowsAsync(new InvalidOperationException("No developer environment was expected to be looked at or set up."));
-
-            return processes;
-        }
 
         /// <summary>
         /// Resolves the one name an ssh host here may be declared by, <see cref="ResolvedName"/>; every other ssh

@@ -353,6 +353,72 @@ public sealed class LegPlacementTests
             (nowhereToInstall.Verdict, nowhereToInstall.Reason));
     }
 
+    /// <summary>
+    /// A program an emulator is checked with, held to a declared tool's minimum version, leaves the emulator able to run
+    /// there and turns away only a leg through it that the tool is declared for, as the leg's own programs are: below it,
+    /// a tool missing naming the install; not known to meet it, unavailable. A leg the tool is not declared for runs
+    /// through the copy there; and an emulator whose environment sets a PATH of its own holds no program from the survey.
+    /// </summary>
+    [Fact]
+    public void Place_HoldsALegThroughAnEmulator_ToTheMinimumOfAToolItsEmulatorStarts_OnlyWhereTheToolIsDeclaredForIt()
+    {
+        const string Below = "no copy of 'qemu-aarch64' there is at least 8.0.0, the minVersion it is declared with: /usr/bin/qemu-aarch64 is 6.2.0";
+        var leg = new SelectedLeg("arm", new LegConfig { Os = "linux", Processor = "arm64", Emulator = "qemu-arm64", Config = "debug" });
+
+        LegPlacement Placed(ProgramFound found, List<string>? legs = null, Dictionary<string, string>? env = null, LegWorkload? workload = null)
+        {
+            var host = Ubuntu with
+            {
+                Emulators = Checks(new EmulatorCheck(true, null, "aarch64")),
+                Programs = new Dictionary<string, ProgramLocation>(StringComparer.Ordinal)
+                {
+                    ["qemu-aarch64"] = new ProgramLocation("qemu-aarch64", found, "/usr/bin/qemu-aarch64", Below),
+                },
+            };
+            var config = new HarnessConfig
+            {
+                Hosts = Config.Hosts,
+                Emulators =
+                {
+                    ["qemu-arm64"] = new EmulatorConfig
+                    {
+                        HostOs = "linux",
+                        HostProcessor = "x86_64",
+                        Processor = "arm64",
+                        Env = env ?? new(StringComparer.OrdinalIgnoreCase),
+                        Witness = new EmulatorWitness { Command = ["qemu-aarch64", "./witness"], Pattern = "aarch64" },
+                    },
+                },
+                Tools =
+                [
+                    new ToolConfig
+                    {
+                        Name = "qemu-aarch64",
+                        Probe = new ToolProbe(),
+                        MinVersion = "8.0.0",
+                        Legs = legs,
+                        Install = { ["linux"] = new ToolInstall { Manager = "apt", Id = "qemu-user" } },
+                    },
+                ],
+            };
+
+            return LegPlacement.Place(config, leg, workload ?? LegWorkload.BuildAndTest, new Dictionary<HostId, HostReport> { [host.Host] = host });
+        }
+
+        var below = Placed(ProgramFound.BelowFloor);
+        var unknown = Placed(ProgramFound.FloorUnknown);
+
+        Assert.Equal(LegVerdict.SkippedToolMissing, below.Verdict);
+        Assert.Equal(
+            $"wsl Ubuntu: {Below}; run 'dssharness install-missing-tools --legs arm', which installs one as its tools entry declares, "
+            + "or put a copy of at least that version where a leg there finds programs: on the PATH, or in a directory searched for programs",
+            below.Reason);
+        Assert.Equal((LegVerdict.SkippedUnavailable, $"wsl Ubuntu: {Below}"), (unknown.Verdict, unknown.Reason));
+        Assert.Equal(HostId.Wsl("Ubuntu"), Placed(ProgramFound.BelowFloor, legs: ["native"]).Host?.Host);
+        Assert.Equal(HostId.Wsl("Ubuntu"), Placed(ProgramFound.BelowFloor, env: new(StringComparer.OrdinalIgnoreCase) { ["PATH"] = "/opt/qemu/bin" }).Host?.Host);
+        Assert.Equal(HostId.Wsl("Ubuntu"), Placed(ProgramFound.BelowFloor, workload: LegWorkload.Copy).Host?.Host);
+    }
+
     [Fact]
     public void TheCheck_FailsForANamedLegThatCannotRun_ButNotForADeclaredOne()
     {

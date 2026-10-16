@@ -105,6 +105,32 @@ public sealed record HostConnection
     }
 
     /// <summary>
+    /// How the copy a survey of this host found as <paramref name="location"/> is spelt to start that copy here: by its
+    /// path - one the host wrote from its home as <c>~</c> spelt from the home directory a command here starts in - where
+    /// a command line to this host can carry it, and by the program's name otherwise, which starts the copy this PATH
+    /// names.
+    /// </summary>
+    /// <param name="location">Where the host's survey found the program.</param>
+    /// <remarks>
+    /// By the path wherever it can be, and never by the name where it was found on the PATH: the survey looks in the
+    /// searched directories, and ahead of the PATH in a directory a declared tool's minimum version raised, neither of
+    /// which the PATH of a command run here names.
+    /// </remarks>
+    public string Spell(ProgramLocation location)
+    {
+        ArgumentNullException.ThrowIfNull(location);
+
+        if (location.Path is not { } path || ProcessRunner.IsPath(location.Program))
+        {
+            return location.Program;
+        }
+
+        var spelled = path.StartsWith("~/", StringComparison.Ordinal) || path.StartsWith(@"~\", StringComparison.Ordinal) ? path[2..] : path;
+
+        return Host.Kind != HostKind.Ssh || RemoteCommandLine.IsLiteral(spelled, Shell) ? spelled : location.Program;
+    }
+
+    /// <summary>
     /// Drops what was measured about <paramref name="program"/>, so that the next resolution measures
     /// it again. Used after installing one: what was true before the install is exactly what the
     /// install changed, and reusing it would start the copy that was not there.

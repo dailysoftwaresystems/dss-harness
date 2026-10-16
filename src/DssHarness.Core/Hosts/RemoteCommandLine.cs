@@ -10,7 +10,7 @@ public enum RemoteShell
 {
     /// <summary>
     /// A shell that leaves <c>%VAR%</c> alone and accepts forward slashes in a program's path: sh,
-    /// bash, zsh and fish on any system.
+    /// bash, zsh, fish and tcsh on any system.
     /// </summary>
     Standard,
 
@@ -111,6 +111,13 @@ public static class RemoteCommandLine
     /// own, written by the harness. The command itself is joined by <see cref="Join"/> as ever. PowerShell has
     /// no redirection of its output to standard error, so it writes there through .NET.
     /// </para>
+    /// <para>
+    /// The other shells write both marks through <c>sh</c>, whatever the account's own shell is. tcsh and csh have no
+    /// redirection of standard output alone to standard error: measured with tcsh 6.24, <c>1&gt;&amp;2</c> wrote the mark
+    /// into a file named <c>2</c> in the home directory and left standard error unmarked. And a shell tracing its
+    /// commands - <c>set -x</c> in a startup file - writes each one to standard error before it runs it: the trace of an
+    /// <c>echo</c> of the mark ends with the mark, as a mark line does, where the trace of <c>sh</c> ends with its quote.
+    /// </para>
     /// </remarks>
     public static string Marked(string commandLine, string mark, RemoteShell shell)
     {
@@ -125,7 +132,7 @@ public static class RemoteCommandLine
         {
             RemoteShell.Cmd => $"echo {mark}& echo {mark} 1>&2& {commandLine}",
             RemoteShell.PowerShell => $"echo {mark}; [Console]::Error.WriteLine('{mark}'); {commandLine}",
-            _ => $"echo {mark}; echo {mark} 1>&2; {commandLine}",
+            _ => $"sh -c 'echo {mark}; echo {mark} 1>&2'; {commandLine}",
         };
     }
 }

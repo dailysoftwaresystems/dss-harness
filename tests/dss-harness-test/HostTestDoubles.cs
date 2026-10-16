@@ -312,6 +312,7 @@ internal sealed class RecordingInspector(Func<HostId, HostReport> report) : IHos
         IReadOnlyDictionary<string, DeveloperEnvironmentConfig> developerEnvironments,
         IReadOnlyList<string> programs,
         RoomQuestions? room = null,
+        IReadOnlyList<DeveloperEnvironmentLook>? inDeveloperEnvironments = null,
         CancellationToken cancellationToken = default)
     {
         lock (_inspected)
@@ -367,6 +368,7 @@ internal sealed class NoHosts : IHostInspector, ISyncTransportFactory
         IReadOnlyDictionary<string, DeveloperEnvironmentConfig> developerEnvironments,
         IReadOnlyList<string> programs,
         RoomQuestions? room = null,
+        IReadOnlyList<DeveloperEnvironmentLook>? inDeveloperEnvironments = null,
         CancellationToken cancellationToken = default)
         => throw new InvalidOperationException("the test asks no host.");
 

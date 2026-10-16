@@ -2101,7 +2101,6 @@ public sealed class MutationServiceTests
             harness.GitClient,
             harness.PathBudget,
             harness.FileSystem,
-            harness.FilePermissions,
             harness.Platform,
             harness.Output);
 

@@ -81,6 +81,16 @@ public sealed class LocalProgramResolver(IHostPlatform platform, IFilePermission
         return new ProgramSearch(found, new ProgramDirectories(ahead, directoriesFound));
     }
 
+    /// <summary>Finds <paramref name="program"/> where a process started as <paramref name="search"/> says looks for it.</summary>
+    /// <param name="search">Where such a process looks.</param>
+    /// <param name="program">The name, or path, to find.</param>
+    public ProgramLocation Find(PathSearch search, string program)
+    {
+        ArgumentNullException.ThrowIfNull(search);
+
+        return search.Find(_platform, _filePermissions, program);
+    }
+
     /// <summary>Finds one program.</summary>
     /// <param name="program">The name, or path, to find.</param>
     /// <param name="directories">Where to look when the PATH does not name it.</param>

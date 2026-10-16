@@ -1521,22 +1521,34 @@ is not dependable on such a host.
     naming each copy and what it said, and `dssharness install-missing-tools --legs <leg>` where
     the tool declares an install there;
   - the copy that meets it is behind an older one in a directory raised for another tool: the leg
-    is `skipped-tool-missing`, naming both and what to update. The directories are raised in the
-    order the tools are declared, and no other order is tried;
+    is `skipped-tool-missing`, naming both and what to update. The directories go up in the order
+    that keeps every tool on a copy that meets its minimum - a directory only once each tool it
+    holds an older copy of is started from one ahead of it, the directory of a tool's first copy
+    raised too where that is what it takes - and where no order does, the tools in the way are
+    asked about their further copies for one in a directory that can go up. A tool is shadowed
+    only where nothing settles it, the directories then going up as the tools are declared; and
+    nothing beyond what a leg starts is asked where nothing is in the way;
   - no copy was shown to meet it - one could not say a version this can compare, or a place a copy
     could be was not looked in: the leg is `skipped-unavailable`, and nothing names an install,
     which would settle nothing.
 
-  A leg the tool is not declared for is turned away for none of them. A leg in a developer
+  A leg the tool is not declared for is turned away for none of them. A leg through an emulator
+  is held so over the programs its emulator is checked with too - its requirements and the program
+  its witness starts: the emulator counts a copy held to a minimum as there and starts its witness
+  with it, since whether a minimum is a leg's is the tool's scope, which only the leg can say -
+  wherever its command starts programs: a sync or a clean starts none through it, so turns no leg
+  away over them. A leg in a developer
   environment holds the copy that environment's PATH names to the tool's minimum once it is set
   up, as it looks for its programs there. A survey request carries the minimums, which its host
   holds every copy it finds to, and its answer the directories they raised beside the appended ones
-  (`appendedDirectories` on the wire, no longer every directory a leg's PATH is given): the
-  host-agent protocol's rise to 11. Measured on a Mac: the PATH of a command run over ssh
+  (`appendedDirectories` on the wire, no longer every directory a leg's PATH is given), each
+  program found with the copy judged against its minimum and the one passed over for it (`judged`,
+  `passedOver`), and the looks in developer environments `install-missing-tools` asks for
+  (`inDeveloperEnvironments`, both ways): the host-agent protocol's rise to 11. Measured on a Mac: the PATH of a command run over ssh
   named macOS's own python3, 3.9.6, and a leg whose configuration needs 3.12 ran its steps under it
   without a word, failing a self-test for a reason that named something else.
 - **No quoting.** An ssh server hands its command line to a shell, and which shell is not
-  known in advance: sh, bash, zsh, fish, cmd or PowerShell. The harness quotes for none of
+  known in advance: sh, bash, zsh, fish, tcsh, cmd or PowerShell. The harness quotes for none of
   them. The command line holds only words every one of them reads literally (letters,
   digits and `._-/=:+`), save the mark written ahead of it in the measured shell's own syntax
   (below), and anything else travels on standard input. Which shell answers is
@@ -1545,14 +1557,21 @@ is not dependable on such a host.
   its own, on two. cmd and PowerShell read a backslash literally, which a Windows path needs, and
   are asked where a program is with `where.exe` - PowerShell reads a bare `where` as its own
   Where-Object, which finds nothing and says nothing. Neither can look in a searched directory, so
-  a program off the PATH there is unknown rather than missing. PowerShell writes to standard error
+  the harness's own SDK off the PATH there is unknown rather than missing: the one program looked
+  for through a host's shell, every other being found by the DssHarness that SDK runs there.
+  PowerShell writes to standard error
   in a way of its own.
 - **What a host's shell prints first is its own.** A shell an ssh server starts can run the
   account's startup files before the command - bash run by sshd reads `~/.bashrc` - and what they
   print arrives first, on the streams the command writes. So every command the harness sends over
   ssh is preceded by its shell writing a mark of the harness's own, random for each command, as a
-  line on standard output and then on standard error, and each stream is read from after its mark:
-  what came before is neither kept nor relayed. A stream that never carries the mark - a
+  line on standard output and then on standard error, and each stream is read from after its first
+  mark line, as it arrives and as it is kept alike: what came before is neither kept nor relayed.
+  Every shell but cmd and PowerShell writes the two through `sh -c`: tcsh has no redirection of
+  standard output alone to standard error (measured with tcsh 6.24, `1>&2` wrote the mark into a
+  file named `2` and left standard error unmarked), and a shell tracing its commands under
+  `set -x` writes the trace of an `echo` of the mark to standard error, ending as the mark line
+  does, where the trace of `sh -c '...'` ends with its quote. A stream that never carries the mark - a
   connection that failed before any session - is all there is, and is kept whole, its lines
   relayed once it ends. Measured on one consumer's Mac: every command's error carried the lines
   emsdk's environment script prints, and an install's failure quoted them in place of the
@@ -1754,8 +1773,11 @@ leg names with `wsl` or `ssh` and on this machine otherwise. Its logic lives in 
 other commands share it, and `init --install-tools` calls it. Plain `init` installs nothing and
 says how: adopting the harness's files changes one tree, and an install changes machines.
 
-- **`--dry-run` installs nothing.** It reaches and asks every host exactly as a run does, and
-  reports each tool it would install or update as `would install` or `would update`, with the
+- **`--dry-run` installs no tool.** It reaches and asks every host exactly as a run does - its
+  survey included, where a tool is asked there, which puts DssHarness on a host as `legs` does and
+  needs the host's .NET SDK, so a host a dry run finds with none has every tool unknown - and
+  reports each tool it would
+  install or update as `would install` or `would update`, with the
   command that would run, `sudo` and all. Nobody is asked for a password, and no host is asked
   whether one is needed: a dry run that stopped for a password would be the install it says it
   is not. It exits `1` while anything is missing, and `--json` carries `dryRun`.
@@ -1764,7 +1786,7 @@ says how: adopting the harness's files changes one tree, and an install changes 
   cannot run DssHarness has it installed, under the home directory, where no login-free PATH
   names it — which is why every command the harness runs there spells the resolved absolute path.
   The machine running the harness is assumed to have it already.
-- **The package manager an install runs is started where the search found it**, as every other
+- **The package manager an install runs is started where the host's survey found it**, as every other
   program the harness runs on a host is: brew in `/opt/homebrew/bin`, which no login-free PATH on
   macOS names. Measured on a Mac over ssh: the survey found brew there and called it current, and
   the install then ran it by its name and failed with "command not found". One found nowhere is
@@ -1776,16 +1798,22 @@ says how: adopting the harness's files changes one tree, and an install changes 
   allowlist entry: probed where it declares a probe, reported when missing, never installed. That
   is how a program shipping with the platform, or with the repository, is allowed to appear in a
   runner's steps.
-- **A `minVersion` is judged as a leg finds the tool.** The copy found first is asked its version,
-  and where it is older, every other copy the host has - each directory its login-free PATH names,
-  then each searched directory - in that order, until one meets it: that copy is the one a leg
-  starts (see PATH truth), so the tool is current, named with the older copy it is started ahead
-  of. Judged by the first copy alone, macOS's own python3 kept a tool behind however many newer
-  copies were installed beside it. Where every copy is older, the tool is installed or updated, and
-  the copies are asked again; where none met it and a copy's version could not be read, or a place
-  a copy could be was not looked in - a Windows shell's searched directories, a path no command
-  line can carry - the tool is unknown and nothing is installed, by the rule a leg's own survey
-  holds it to. A `minVersion` is written `major.minor.patch` - the parser every
+- **A tool is judged by the host's own survey**, the one `legs` runs there, which a leg there is
+  placed by: one judge for both, so a tool is installed exactly where a leg would be turned away
+  over it, and never a second time where a leg there finds it. Before this, the command looked
+  through the host's shell on its own, and could call a tool missing or behind that a leg there
+  started. A `minVersion` is judged as a leg finds the tool: the copy found first is asked its
+  version, and where it is older, every other copy the host has - each directory its login-free
+  PATH names, then each searched directory - in that order, until one meets it: that copy is the
+  one a leg starts (see PATH truth), so the tool is current, named with the copy it is started
+  ahead of. Judged by the first copy alone, macOS's own python3 kept a tool behind however many
+  newer copies were installed beside it. Where every copy is older, the tool is installed or
+  updated, and the host is surveyed again; where the copy that meets it is behind an older one a
+  directory raised for another tool holds, the tool is outdated, naming both, and nothing is
+  installed, since an install would not change which copy a leg starts; where none met it and a
+  copy's version could not be read, or a place a copy could be was not looked in, the tool is
+  unknown and nothing is installed. A host whose survey could not run has every tool unknown,
+  saying why. A `minVersion` is written `major.minor.patch` - the parser every
   copy's version is compared with - and needs a `probe`; either is refused where it is written
   otherwise. brew installs and updates with `brew install`, which Homebrew documents as upgrading a
   formula that is installed and outdated: `brew upgrade` touches only what brew installed, never a
@@ -1808,8 +1836,9 @@ says how: adopting the harness's files changes one tree, and an install changes 
   leg, is refused when the configuration is read.
 - **Each leg is told about a tool as it will find it.** A leg whose toolchain names a developer
   environment starts every process in it, so a tool it needs is looked for on the `PATH` that
-  environment sets up for its processor, as the run looks before the leg starts: set up on this
-  machine for the look, searched, then each directory searched for programs. Found there it is
+  environment sets up for its processor, as the run looks before the leg starts: set up on the
+  leg's host for the look, by the DssHarness there, searched, then each directory searched for
+  programs. Found there it is
   started by its path for its version, and `cl` - which no plain shell has - is never reported
   missing on the leg that builds with it. Every other leg looks on its host's own `PATH`, which is
   looked at once and shared, so two legs on one host can be told different things about one tool:
@@ -1822,11 +1851,14 @@ says how: adopting the harness's files changes one tree, and an install changes 
     given.
   - **An environment with no instance leaves the host's own `PATH` all there is**, so a tool
     missing there is missing, and an install that brings Visual Studio is what would help. One that
-    could not be looked at or set up leaves a tool the host's own `PATH` lacks unknown, saying why.
-  - **Another host's is set up by the DssHarness that runs its legs there**, and this command
-    reaches that host through its shell alone: a tool its own `PATH` lacks is unknown for a leg in a
-    developer environment, never missing, and nothing is installed for it - a second copy of a tool
-    the leg finds is exactly what this command must never install.
+    could not be looked at or set up leaves a tool unknown, saying why, and nothing is installed:
+    a second copy of a tool the leg finds is exactly what this command must never install.
+  - **Every host's is set up by the DssHarness there**, the one that runs its legs, asked with the
+    survey: a look names the environment, the legs' processor and the tools, carries what the host
+    declares under `env`, which the environment is set up over as a leg's is, and comes back with
+    each tool as the PATH it set up holds it, held to its minimum. Before this, another host's
+    environment was out of this command's reach, and a tool its own `PATH` lacked was unknown for a
+    leg in one there.
 - **A privileged install takes its credential from that host's own item, on standard input
   only.** The item declares it as `SUDO_PASSWORD` in its `.env`, beside the address and user:
   `.harness-config/sshItems/<name>/.env`, or `.harness-config/wslDistros/<distro>/.env`. It never

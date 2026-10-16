@@ -152,7 +152,10 @@ public sealed record LegPlacement(SelectedLeg Leg, HostReport? Host, string? Rea
             var settings = config.Hosts.SettingsFor(here ?? candidate);
 
             var refused = MissingDeveloperEnvironment(LegPrograms.DeveloperEnvironmentOf(config, selected.Leg, workload), report)
-                ?? MissingPrograms(LegPrograms.For(config, selected.Leg, workload, settings), report, FloorRemedy(config, selected.Name, selected.Leg, report.Os));
+                ?? MissingPrograms(
+                    [.. LegPrograms.For(config, selected.Leg, workload, settings).Concat(EmulatedThrough(config, selected.Leg, workload)).Distinct(StringComparer.Ordinal)],
+                    report,
+                    FloorRemedy(config, selected.Name, selected.Leg, report.Os));
 
             return refused is { } missing
                 ? new LegPlacement(selected, null, at + missing.Reason) { Verdict = missing.Verdict }
@@ -199,6 +202,22 @@ public sealed record LegPlacement(SelectedLeg Leg, HostReport? Host, string? Rea
 
         return check.Available ? null : $"emulator '{leg.Emulator}' cannot run there: {check.Reason}";
     }
+
+    /// <summary>
+    /// The programs the emulator <paramref name="leg"/> runs through is checked with on its host (see
+    /// <see cref="EmulatorProbe.ProgramsRead"/>), which the leg starts through it, or none where it runs natively or
+    /// <paramref name="workload"/> starts no program - a copy, or a clean, starts nothing through it.
+    /// </summary>
+    /// <remarks>
+    /// Held here, with the leg's own programs, to a declared tool's minimum version that is the leg's: the check finds
+    /// a copy held to one there, since only the leg can say whether the tool is declared for it - a minimum declared
+    /// for other legs alone turned every leg through the emulator away. One missing there is no concern of this: the
+    /// emulator cannot run there, and the host was passed over before its programs were asked about.
+    /// </remarks>
+    private static IEnumerable<string> EmulatedThrough(HarnessConfig config, LegConfig leg, LegWorkload workload)
+        => workload.StartsPrograms && leg.Emulator is { } name && config.Emulators.TryGetValue(name, out var emulator)
+            ? EmulatorProbe.ProgramsRead(emulator)
+            : [];
 
     /// <summary>
     /// Why the developer environment <paramref name="name"/> cannot be set up on <paramref name="host"/>,

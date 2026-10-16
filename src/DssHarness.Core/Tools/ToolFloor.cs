@@ -68,12 +68,10 @@ public sealed record ToolFloor
     /// </summary>
     /// <param name="copies">Each copy, by its path, and where a copy could be that was not looked in.</param>
     /// <param name="probe">Starts one copy with <see cref="Args"/>.</param>
-    /// <param name="through">The connection the copies are on, whose host what they printed is quoted as declared; none for this machine.</param>
     /// <param name="cancellationToken">Stops the probes.</param>
     public async Task<FloorSearch> SearchAsync(
         ProgramCopies copies,
         Func<string, CancellationToken, Task<ProcessResult>> probe,
-        HostConnection? through,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(copies);
@@ -83,7 +81,7 @@ public sealed record ToolFloor
 
         foreach (var copy in copies.Copies)
         {
-            var judged = Judge(copy, await probe(copy, cancellationToken).ConfigureAwait(false), through);
+            var judged = Judge(copy, await probe(copy, cancellationToken).ConfigureAwait(false));
             probed.Add(judged);
 
             if (judged.Meets)
@@ -92,19 +90,18 @@ public sealed record ToolFloor
             }
         }
 
-        return new FloorSearch(this, probed, copies.Unlooked());
+        return new FloorSearch(this, probed, copies.Unsearched);
     }
 
-    /// <summary>What one copy said of its version, held to this floor.</summary>
+    /// <summary>What one copy said of its version, held to this floor, on the machine that started it.</summary>
     /// <param name="copy">The copy, as a reason names it.</param>
     /// <param name="result">What starting it with <see cref="Args"/> did.</param>
-    /// <param name="through">The connection it is on, as <see cref="SearchAsync"/> is given it.</param>
-    public FloorCopy Judge(string copy, ProcessResult result, HostConnection? through)
+    public FloorCopy Judge(string copy, ProcessResult result)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(copy);
         ArgumentNullException.ThrowIfNull(result);
 
-        var (version, problem) = ToolVersion.Of(Name, Regex, result, through);
+        var (version, problem) = ToolVersion.Of(Name, Regex, result, through: null);
 
         return problem is not null
             ? new FloorCopy(copy, version, problem)
@@ -123,6 +120,20 @@ public sealed record FloorCopy(string Copy, string? Version, string? Problem, bo
 {
     /// <summary>What it was found to be, as a reason names it.</summary>
     public string Said => Problem is { } problem ? $"{Copy}: {problem}" : $"{Copy} is {Version}";
+
+    /// <summary>
+    /// That this copy, which meets the floor, is the one a leg starts ahead of <paramref name="first"/>, the copy the
+    /// PATH names first: older or unread, or kept from going first by a directory raised for another tool.
+    /// </summary>
+    /// <param name="first">The copy the PATH names first.</param>
+    public string StartedAheadOf(FloorCopy first)
+    {
+        ArgumentNullException.ThrowIfNull(first);
+
+        var passedOver = first.Problem is null ? $"{first.Copy} ({first.Version})" : $"{first.Copy}, whose version could not be read";
+
+        return $"{Said}, which a leg there starts ahead of {passedOver}";
+    }
 }
 
 /// <summary>The copies of one tool a host asked their version, in the order they were asked, and the one that meets its floor.</summary>
@@ -179,23 +190,6 @@ public sealed record FloorSearch(ToolFloor Floor, IReadOnlyList<FloorCopy> Probe
             + $"{Chosen?.Version}; update or remove it, so the copy that meets it is the one a leg starts";
     }
 
-    /// <summary>
-    /// That the <see cref="Chosen"/> copy is started ahead of the first copy, which is older or unread, or
-    /// <see langword="null"/> where the first copy is the one chosen: the copy a terminal on the host starts is not
-    /// the one a leg there does.
-    /// </summary>
-    public string? StartedAhead()
-    {
-        if (Chosen is not { } chosen || Probed[0].Meets)
-        {
-            return null;
-        }
-
-        var first = Probed[0];
-        var passedOver = first.Problem is null ? $"{first.Copy} ({first.Version})" : $"{first.Copy}, whose version could not be read";
-
-        return $"{chosen.Said}, which a leg there starts ahead of {passedOver}";
-    }
 
     private string Said() => string.Join("; ", Probed.Select(copy => copy.Said));
 }

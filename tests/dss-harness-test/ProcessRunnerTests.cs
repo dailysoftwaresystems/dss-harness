@@ -45,6 +45,27 @@ public sealed class ProcessRunnerTests
         Assert.Equal(arguments.Select(argument => "[" + argument + "]"), Lines(result.StandardOutput));
     }
 
+    /// <summary>
+    /// A request whose caller has already given up starts nothing: started only to be stopped, a short program can finish
+    /// first - a set-up's down script did, on Linux - and be reported as having run after its time had passed.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_StartsNothing_ForACallerThatHasAlreadyGivenUp()
+    {
+        using var temp = new TempDirectory();
+        var written = temp.Combine("written");
+        var started = false;
+        using var given = new CancellationTokenSource();
+        await given.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => CreateRunner().RunAsync(
+            TestHost.ChildRequest("write-file", written, "ran") with { OnStarted = () => started = true },
+            given.Token));
+
+        Assert.False(started);
+        Assert.False(File.Exists(written));
+    }
+
     [Fact]
     public async Task RunAsync_ReportsAFailingExitCode_WithoutThrowing()
     {

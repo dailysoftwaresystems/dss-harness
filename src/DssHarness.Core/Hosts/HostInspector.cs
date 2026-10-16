@@ -88,6 +88,12 @@ public sealed record HostReport
     /// </summary>
     public Processes.ProgramDirectories ProgramDirectories { get; init; } = Processes.ProgramDirectories.None;
 
+    /// <summary>
+    /// What looking in each developer environment it was asked to look in found: each program as a leg in it starts it.
+    /// Empty where none was asked.
+    /// </summary>
+    public IReadOnlyList<DeveloperEnvironmentPrograms> InDeveloperEnvironments { get; init; } = [];
+
     /// <summary>What inspection changed on the host, such as installing DssHarness.</summary>
     public IReadOnlyList<string> Actions { get; init; } = [];
 
@@ -141,6 +147,12 @@ public interface IHostInspector
     /// <param name="developerEnvironments">The developer environments to look for there, by name.</param>
     /// <param name="programs">The programs to find there, the way a leg there will start them.</param>
     /// <param name="room">Where to measure the room there, and which build directories; none where left out.</param>
+    /// <param name="inDeveloperEnvironments">
+    /// The developer environments to set up there, each among <paramref name="developerEnvironments"/>, and the programs
+    /// to find on the PATH each sets up - each among <paramref name="programs"/> too - with the environment the host
+    /// declares for itself; none where left out. Setting one up is a leg's work, so only a command that judges what a leg
+    /// there would start asks it.
+    /// </param>
     /// <param name="cancellationToken">Stops the measuring.</param>
     Task<HostReport> InspectAsync(
         HarnessContext context,
@@ -149,6 +161,7 @@ public interface IHostInspector
         IReadOnlyDictionary<string, DeveloperEnvironmentConfig> developerEnvironments,
         IReadOnlyList<string> programs,
         RoomQuestions? room = null,
+        IReadOnlyList<DeveloperEnvironmentLook>? inDeveloperEnvironments = null,
         CancellationToken cancellationToken = default);
 }
 
@@ -174,13 +187,15 @@ public sealed record RoomQuestions(string? SpaceAt, IReadOnlyList<string> Builds
 /// <param name="SearchDirectories">The repository's <c>toolSearchDirectories</c>.</param>
 /// <param name="Floors">The declared tools' minimum versions.</param>
 /// <param name="Room">Where to measure the room, and which build directories.</param>
+/// <param name="Looks">The developer environments to set up, and what to find on the PATH each sets up.</param>
 internal sealed record HostQuestions(
     IReadOnlyDictionary<string, EmulatorConfig> Emulators,
     IReadOnlyDictionary<string, DeveloperEnvironmentConfig> DeveloperEnvironments,
     IReadOnlyList<string> Programs,
     IReadOnlyDictionary<string, List<string>> SearchDirectories,
     IReadOnlyList<ToolFloor> Floors,
-    RoomQuestions Room);
+    RoomQuestions Room,
+    IReadOnlyList<DeveloperEnvironmentLook> Looks);
 
 /// <inheritdoc cref="IHostInspector"/>
 public sealed class HostInspector(
@@ -213,6 +228,7 @@ public sealed class HostInspector(
         IReadOnlyDictionary<string, DeveloperEnvironmentConfig> developerEnvironments,
         IReadOnlyList<string> programs,
         RoomQuestions? room = null,
+        IReadOnlyList<DeveloperEnvironmentLook>? inDeveloperEnvironments = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -221,13 +237,21 @@ public sealed class HostInspector(
         ArgumentNullException.ThrowIfNull(developerEnvironments);
         ArgumentNullException.ThrowIfNull(programs);
 
+        // Over the environment the host declares for itself, read here, where the configuration is, as a leg's own
+        // environment is set up over it there.
+        var hostEnvironment = context.Config.Hosts.SettingsFor(host).Env;
+
         var questions = new HostQuestions(
             emulators,
             developerEnvironments,
             programs,
             context.Config.ToolSearchDirectories,
             ToolFloor.Of(context.Config.Tools),
-            room ?? RoomQuestions.None);
+            room ?? RoomQuestions.None,
+            [.. (inDeveloperEnvironments ?? []).Select(look => look with
+            {
+                Environment = new Dictionary<string, string>(hostEnvironment, StringComparer.OrdinalIgnoreCase),
+            })]);
 
         return host.Kind switch
         {
@@ -265,7 +289,7 @@ public sealed class HostInspector(
     private async Task<HostReport> InspectLocalAsync(HostQuestions questions, CancellationToken cancellationToken)
     {
         var info = await _agent
-            .DescribeAsync(questions.Emulators, questions.DeveloperEnvironments, questions.Programs, questions.SearchDirectories, questions.Floors, questions.Room, cancellationToken)
+            .DescribeAsync(questions.Emulators, questions.DeveloperEnvironments, questions.Programs, questions.SearchDirectories, questions.Floors, questions.Room, questions.Looks, cancellationToken)
             .ConfigureAwait(false);
 
         return Answered(new HostReport { Host = HostId.Local }, info, session: null);
@@ -507,6 +531,7 @@ public sealed class HostInspector(
                 questions.SearchDirectories,
                 StringComparer.OrdinalIgnoreCase),
             Floors = [.. questions.Floors],
+            InDeveloperEnvironments = [.. questions.Looks],
             SpaceAt = questions.Room.SpaceAt,
             Builds = [.. questions.Room.Builds],
         };
@@ -514,6 +539,7 @@ public sealed class HostInspector(
         var budget = ProbeBudget
             + (EmulatorProbe.WitnessBudget * emulators.Count)
             + (DeveloperEnvironmentProbe.ProbeBudget * questions.DeveloperEnvironments.Count)
+            + ((DeveloperEnvironmentProvider.CaptureBudget + ProgramFloors.Allowance(questions.Floors.Count)) * questions.Looks.Count)
             + ProgramFloors.Allowance(questions.Floors.Count);
 
         // One line, held open until the host has answered: a budget that runs out stops ssh or wsl.exe here,
@@ -608,7 +634,12 @@ public sealed class HostInspector(
                     check => check.Key,
                     check => check.Value with { Reason = Said(check.Value.Reason, connection) },
                     StringComparer.OrdinalIgnoreCase),
-                Programs = [.. info.Programs.Select(location => location with { Reason = Said(location.Reason, connection) })],
+                Programs = [.. info.Programs.Select(location => Said(location, connection))],
+                InDeveloperEnvironments = [.. info.InDeveloperEnvironments.Select(look => look with
+                {
+                    Programs = [.. look.Programs.Select(location => Said(location, connection))],
+                    Unestablished = Said(look.Unestablished, connection),
+                })],
                 SpaceUnmeasured = Said(info.SpaceUnmeasured, connection),
                 Builds = [.. info.Builds.Select(room => room with { Unmeasured = Said(room.Unmeasured, connection) })],
             }, new HostSession(connection, toolPath));
@@ -737,6 +768,14 @@ public sealed class HostInspector(
     /// <summary><paramref name="text"/>, which the host said, under the name the configuration declares; nothing where it said nothing.</summary>
     private static string? Said(string? text, HostConnection connection) => text is null ? null : HostProbes.AsConfigured(text, connection);
 
+    /// <summary><paramref name="location"/>, with what the host said of it - why it is held, what a copy printed - under the name the configuration declares.</summary>
+    private static ProgramLocation Said(ProgramLocation location, HostConnection connection) => location with
+    {
+        Reason = Said(location.Reason, connection),
+        Judged = location.Judged is { } judged ? judged with { Problem = Said(judged.Problem, connection) } : null,
+        PassedOver = location.PassedOver is { } first ? first with { Problem = Said(first.Problem, connection) } : null,
+    };
+
     /// <summary>What the DssHarness on a host said about it, recorded in the report.</summary>
     private static HostReport Answered(HostReport found, HostAgentInfo info, HostSession? session) => found with
     {
@@ -753,6 +792,7 @@ public sealed class HostInspector(
             .GroupBy(location => location.Program, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.Last(), StringComparer.Ordinal),
         ProgramDirectories = new Processes.ProgramDirectories(info.RaisedDirectories, info.AppendedDirectories),
+        InDeveloperEnvironments = info.InDeveloperEnvironments,
         Space = info.Space,
         SpaceUnmeasured = info.SpaceUnmeasured,
         Builds = info.Builds,

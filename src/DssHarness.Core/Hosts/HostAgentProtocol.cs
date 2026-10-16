@@ -404,6 +404,12 @@ public sealed class HostAgentRequest
     public List<Tools.ToolFloor> Floors { get; init; } = [];
 
     /// <summary>
+    /// The developer environments to set up there, each with the programs to find on the PATH it sets up, as a leg in
+    /// it would start them. Info only; asked by <c>install-missing-tools</c>, which judges a tool where its legs find it.
+    /// </summary>
+    public List<DeveloperEnvironmentLook> InDeveloperEnvironments { get; init; } = [];
+
+    /// <summary>
     /// Where to measure the room on the host's filesystem - where its copies of the repository are kept -
     /// absolute or from the home directory; <see langword="null"/> to measure none. Info only.
     /// </summary>
@@ -558,6 +564,9 @@ public sealed record HostAgentInfo
     /// </summary>
     public List<string> RaisedDirectories { get; init; } = [];
 
+    /// <summary>What looking in each developer environment the request named found, in the order it named them.</summary>
+    public List<DeveloperEnvironmentPrograms> InDeveloperEnvironments { get; init; } = [];
+
     /// <summary>
     /// The room on the filesystem the request's <see cref="HostAgentRequest.SpaceAt"/> is on; <see langword="null"/>
     /// where none was asked about, or it could not be measured.
@@ -649,4 +658,46 @@ public sealed record EmulatorCheck(bool Available, string? Reason, string? Witne
 {
     /// <summary>An emulator legs cannot run through, and why.</summary>
     public static EmulatorCheck Unavailable(string reason) => new(false, reason, null);
+}
+
+/// <summary>
+/// A developer environment to set up on a host, for a leg of one processor, and the programs to find on the PATH it
+/// sets up there: what a leg in it starts, which no survey sees until it is set up.
+/// </summary>
+public sealed record DeveloperEnvironmentLook
+{
+    /// <summary>The developer environment, as the configuration names it.</summary>
+    public required string Name { get; init; }
+
+    /// <summary>The processor of the legs it is set up for.</summary>
+    public required string Processor { get; init; }
+
+    /// <summary>The programs to find on the PATH it sets up.</summary>
+    public List<string> Programs { get; init; } = [];
+
+    /// <summary>
+    /// What the host declares under <c>env</c> for itself, which the environment is set up over, as a leg's is: filled
+    /// in by the machine that asks, which reads the configuration.
+    /// </summary>
+    public Dictionary<string, string> Environment { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+}
+
+/// <summary>What looking in one developer environment on a host found.</summary>
+public sealed record DeveloperEnvironmentPrograms
+{
+    /// <summary>The developer environment, as the configuration names it.</summary>
+    public required string Name { get; init; }
+
+    /// <summary>The processor of the legs it was set up for.</summary>
+    public required string Processor { get; init; }
+
+    /// <summary>
+    /// Each program the look named, as a leg in the environment starts it: held to a declared tool's minimum version
+    /// as the survey holds one. Where the host has no instance of the environment, as its own PATH has it, which is
+    /// all there is.
+    /// </summary>
+    public List<ProgramLocation> Programs { get; init; } = [];
+
+    /// <summary>Why the PATH it sets up could not be looked at, or <see langword="null"/> where it was.</summary>
+    public string? Unestablished { get; init; }
 }

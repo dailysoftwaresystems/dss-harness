@@ -143,6 +143,10 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             request.FileName,
             startInfo.Environment.TryGetValue(PathVariable, out var effective) ? effective : null);
 
+        // A caller that has given up already starts nothing. Started only to be stopped at once, a short program can
+        // finish first - a set-up's down script did, on Linux - and be reported as having run after its time had passed.
+        cancellationToken.ThrowIfCancellationRequested();
+
         using var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
         var stopwatch = Stopwatch.StartNew();
 

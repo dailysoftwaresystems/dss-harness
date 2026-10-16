@@ -158,7 +158,6 @@ public sealed class LegRunService(
     Git.IGitClient gitClient,
     Platform.IPathBudget pathBudget,
     IFileSystem fileSystem,
-    IFilePermissions filePermissions,
     IHostPlatform platform,
     IHarnessOutput output,
     CommandOrigin? origin = null,
@@ -181,7 +180,6 @@ public sealed class LegRunService(
     private readonly Git.IGitClient _gitClient = gitClient;
     private readonly Platform.IPathBudget _pathBudget = pathBudget;
     private readonly IFileSystem _fileSystem = fileSystem;
-    private readonly IFilePermissions _filePermissions = filePermissions;
     private readonly IHostPlatform _platform = platform;
     private readonly IHarnessOutput _output = output;
 
@@ -1145,11 +1143,11 @@ public sealed class LegRunService(
         DeveloperEnvironmentSetup setUp,
         CancellationToken cancellationToken)
     {
-        var search = PathSearch.For(PhaseEnvironment.Layered(leg.HostSettings.Env, setUp.Environment), leg.Host.ProgramDirectories);
         var programs = LegPrograms.InDeveloperEnvironment(config, leg.Leg, workload, leg.HostSettings);
         var found = await _programFloors
-            .HoldAsync(
-                programs.ToDictionary(program => program, program => search.Find(_platform, _filePermissions, program), StringComparer.Ordinal),
+            .HoldOnAsync(
+                PathSearch.For(PhaseEnvironment.Layered(leg.HostSettings.Env, setUp.Environment), leg.Host.ProgramDirectories),
+                programs,
                 ToolFloor.Of(config.Tools),
                 cancellationToken)
             .ConfigureAwait(false);
