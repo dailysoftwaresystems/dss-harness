@@ -111,7 +111,7 @@ internal static class CheckMutationsCommand
             };
 
             return request.List
-                ? await legs.ListAsync(request, cancellationToken).ConfigureAwait(false)
+                ? (await legs.ListAsync(request, cancellationToken).ConfigureAwait(false)).Outcome
                 : (await legs.RunAsync(request, run!, cancellationToken).ConfigureAwait(false)).ToOutcome(context.Json, context.Get<IHarnessOutput>().Shown);
         }, beginsRun: arguments => !arguments.GetValue(ListOption), Answer);
 

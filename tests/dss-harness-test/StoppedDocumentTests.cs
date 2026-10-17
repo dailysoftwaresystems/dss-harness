@@ -16,7 +16,7 @@ public sealed class StoppedDocumentTests
     private static readonly string[] LedgerOnly = ["passed", "cancelled", "unfinished", "complete"];
 
     /// <summary>The agent document's members, in its order.</summary>
-    private static readonly string[] AgentDocument = ["exitCode", "summary", "applied", "request", "heldNow", "heldUnread", "lines", "needs", "refusals", "folded"];
+    private static readonly string[] AgentDocument = ["exitCode", "summary", "applied", "request", "heldNow", "heldUnread", "lines", "needs", "refusals", "folded", "planned"];
 
     /// <summary>The ledger's members as a command that begins a run answers with it stopped, in its order.</summary>
     private static readonly string[] Ledger = ["exitCode", "summary", "runId", "passed", "cancelled", "unfinished", "complete", "legs"];
@@ -103,7 +103,7 @@ public sealed class StoppedDocumentTests
         {
             var document = Stopped(result);
 
-            Assert.Equal(["exitCode", "summary", "applied", "request", "heldNow", "heldUnread", "lines", "needs", "refusals", "folded"], document.Select(member => member.Key));
+            Assert.Equal(["exitCode", "summary", "applied", "request", "heldNow", "heldUnread", "lines", "needs", "refusals", "folded", "planned"], document.Select(member => member.Key));
             Assert.False(document["applied"]!.GetValue<bool>());
             Assert.Null(document["request"]);
             Assert.Null(document["heldNow"]);
@@ -112,6 +112,7 @@ public sealed class StoppedDocumentTests
             Assert.Empty(document["needs"]!.AsArray());
             Assert.Empty(document["refusals"]!.AsArray());
             Assert.Null(document["folded"]);
+            Assert.Null(document["planned"]);
         }
     }
 

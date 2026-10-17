@@ -106,7 +106,7 @@ From [`docs/architecture.md`](../../../../docs/architecture.md) "Layering", whic
   answer invariantly, and `string.Normalize` changes nothing, so never rely on Unicode normalization.
 - **Everything a build writes lands under `build/`** (`UseArtifactsOutput`): `build/bin/<Project>/<debug|release>/`,
   `build/obj/...`, packages in `build/package`. Deleting `build/` is a complete clean.
-- **Dependencies:** YamlDotNet and System.CommandLine (Core), Microsoft.Extensions.DependencyInjection (Cli), xunit v3
+- **Dependencies:** YamlDotNet, System.CommandLine and Microsoft.Extensions.DependencyInjection (Core; the Cli builds no container), xunit v3
   and NSubstitute (tests). No new package without the maintainer's approval.
 - Every file is stored and checked out with LF line endings ([`.gitattributes`](../../../../.gitattributes)); there
   is no CRLF exception.

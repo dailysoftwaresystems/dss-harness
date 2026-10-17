@@ -11,6 +11,7 @@ using DssHarness.Core.Git;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Legs;
 using DssHarness.Core.Mutations;
+using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Repository;
@@ -1056,6 +1057,37 @@ public sealed class LegRunServiceTests
         Assert.Equal(HarnessExit.Success, outcome.ExitCode);
         Assert.StartsWith(Path.Combine(tree, ".harness-config", "runs") + Path.DirectorySeparatorChar, directory, StringComparison.Ordinal);
         Assert.True(Directory.Exists(directory), $"the run named '{directory}', which it never made");
+    }
+
+    /// <summary>
+    /// A run tells a front end its directory as it is made - what it is, and its own path - so one following the run
+    /// reads its records where it is handed them and puts no path together; and that is the one record it is told of.
+    /// </summary>
+    [Fact]
+    public async Task ARun_TellsAFrontEndItsDirectory_AsItIsMade()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var sink = new RecordingSink();
+        var run = RunId.New();
+        CommandOutcome outcome;
+
+        using (var output = new EventHarnessOutput(sink, OperationId.New()))
+        {
+            outcome = await OutcomeAsync(
+                temp,
+                harness,
+                OneLeg(harness),
+                SshAndLocal(harness),
+                new LegRunRequest(temp.Path, null) { Workload = LegWorkload.Copy },
+                runId: run,
+                output: output);
+        }
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal(
+            [new RecordWritten("run directory", new HarnessLayout(temp.Path, temp.Path).RunDirectory(run.Value))],
+            sink.Seen.OfType<RecordWritten>().Select(@event => @event with { Operation = null, Sequence = 0, At = default }));
     }
 
     /// <summary>
@@ -4299,7 +4331,8 @@ public sealed class LegRunServiceTests
         RunId? runId = null,
         IHarnessContextLoader? loader = null,
         LegSetUps? setUps = null,
-        IProcessRunner? versionProbes = null)
+        IProcessRunner? versionProbes = null,
+        IHarnessOutput? output = null)
     {
         var loading = loader ?? HostDoubles.Loader(config, tree ?? temp.Path, temp.Path);
         var run = runId ?? RunId.New();
@@ -4327,7 +4360,7 @@ public sealed class LegRunServiceTests
             harness.PathBudget,
             fileSystem ?? harness.FileSystem,
             harness.Platform,
-            harness.Output,
+            output ?? harness.Output,
             origin,
             setUps);
 
@@ -4342,5 +4375,13 @@ public sealed class LegRunServiceTests
                     ?? Task.FromResult(work?.Invoke(leg) ?? new LegEntry { Leg = leg.Leg.Name, Verdict = LegVerdict.Passed });
             },
             cancellationToken ?? TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>A front end's sink of events, keeping each as it is given.</summary>
+    private sealed class RecordingSink : IRunEvents
+    {
+        public List<RunEvent> Seen { get; } = [];
+
+        public void Emit(RunEvent @event) => Seen.Add(@event);
     }
 }

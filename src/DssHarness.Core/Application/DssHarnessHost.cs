@@ -1,4 +1,5 @@
 using DssHarness.Core.Output;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace DssHarness.Core.Application;
 
@@ -15,7 +16,7 @@ namespace DssHarness.Core.Application;
 /// </remarks>
 public sealed class DssHarnessHost
 {
-    private readonly Func<SessionOptions, IServiceProvider> _services;
+    private readonly Func<SessionOptions, OperationId, IServiceProvider> _services;
     private readonly Lock _gate = new();
 
     /// <summary>
@@ -26,12 +27,13 @@ public sealed class DssHarnessHost
 
     /// <summary>Begins the host.</summary>
     /// <param name="services">
-    /// Builds the services of an operation, as the command line's own root does today; a root of this tool's own
-    /// replaces it from there.
+    /// Builds the services of an operation, given what it is asked and its id - which everything its output publishes is
+    /// stamped with, so the id is the operation's before anything of it is built. The tool's own registrations build them
+    /// for a front end that supplies only its prompt (<see cref="Composition.ServiceRegistration.Host"/>).
     /// </param>
-    public DssHarnessHost(Func<SessionOptions, IServiceProvider>? services = null)
+    public DssHarnessHost(Func<SessionOptions, OperationId, IServiceProvider>? services = null)
     {
-        _services = services ?? (_ => throw new InvalidOperationException("this host was built with no services."));
+        _services = services ?? ((_, _) => throw new InvalidOperationException("this host was built with no services."));
     }
 
     /// <summary>Begins one operation.</summary>
@@ -44,17 +46,53 @@ public sealed class DssHarnessHost
     {
         CommandSession.RequireHonoured(options, frontEnd);
 
-        var services = _services(options);
+        var id = OperationId.New();
+        var services = _services(options, id);
 
         try
         {
-            return new(this, options, frontEnd, services);
+            return new(this, options, frontEnd, services, id);
         }
         catch
         {
             // A session that could not begin owns nothing it was built: what was built for it goes now.
             (services as IDisposable)?.Dispose();
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Writes through the output an operation asked as <paramref name="options"/> say would write through, without
+    /// beginning it: for a front end that answers before any operation could begin - a command line its parser refused -
+    /// told as every line that operation would write is told, a host answering another machine writing its home as
+    /// <c>~</c>. Nothing else of it is run, and what was built for it is disposed once <paramref name="write"/> is done.
+    /// </summary>
+    /// <param name="options">What the operation would have been asked and how it would have run.</param>
+    /// <param name="write">What to write.</param>
+    /// <exception cref="InvalidOperationException">The options contradict themselves, refused before any service is built.</exception>
+    /// <exception cref="NotSupportedException">An option this build does not honour yet, refused before any service is built.</exception>
+    public async Task WriteUnbegunAsync(SessionOptions options, Action<IHarnessOutput> write)
+    {
+        ArgumentNullException.ThrowIfNull(write);
+        CommandSession.RequireHonoured(options, frontEnd: null);
+
+        var services = _services(options, OperationId.New());
+
+        try
+        {
+            write(services.GetRequiredService<IHarnessOutput>());
+        }
+        finally
+        {
+            switch (services)
+            {
+                case IAsyncDisposable asynchronous:
+                    await asynchronous.DisposeAsync().ConfigureAwait(false);
+                    break;
+                case IDisposable disposable:
+                    disposable.Dispose();
+                    break;
+            }
         }
     }
 

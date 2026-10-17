@@ -1,4 +1,5 @@
 using System.Globalization;
+using DssHarness.Core.Application;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
@@ -326,7 +327,7 @@ public sealed class SyncSource : IDisposable
 }
 
 /// <summary>Putting a host's copy of a tree in step with it.</summary>
-public interface ISyncService
+public interface ISyncService : IUseCase
 {
     /// <summary>
     /// Syncs every host the selected legs need, and reports what each one did.

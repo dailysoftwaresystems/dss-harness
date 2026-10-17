@@ -688,10 +688,13 @@ public sealed class AgentService(
         var floor = Floor(context);
         var main = context.Layout.MainCheckoutRoot;
 
+        // What its plan names, once it is measured: carried by every answer after, its dry run's and its --apply's.
+        AgentPlanned? planned = null;
+
         // Who holds what this command's --apply takes, named on every exit a dry run makes, refused or not: the refusal a
         // dry run is refused with, and the failure it meets, keep their own words and gain the holders' lines.
         CommandOutcome RefusedInDry(CommandOutcome refused)
-            => !apply ? Dry(json, context.Layout, RefreshCommand, refused, RequestStanding.Refused, main, path) : refused;
+            => !apply ? Dry(json, context.Layout, RefreshCommand, refused, RequestStanding.Refused, new Typed([], [], planned), main, path) : refused;
 
         if (_store.ReadSeed(layout, record.Name) is not { } seed)
         {
@@ -748,6 +751,8 @@ public sealed class AgentService(
                 ? Dry(json, context.Layout, RefreshCommand, CommandOutcome.Failed(HarnessExit.CommandFailed, $"{Agent(record)} was not refreshed: what it or the main tree holds cannot be read - {ex.Message.TrimEnd('.')}. Nothing was copied."), null, main, path)
                 : CommandOutcome.Failed(HarnessExit.CommandFailed, $"{Agent(record)} was not refreshed: what it or the main tree holds cannot be read - {ex.Message.TrimEnd('.')}. Nothing was copied.");
         }
+
+        planned = met.Planned = PlannedOf(plan, policy);
 
         var (moved, left, changed, inTheWay, alike) = (plan.Handed, plan.Left, plan.Changed, plan.InTheWay, plan.Alike);
 
@@ -914,6 +919,7 @@ public sealed class AgentService(
                     },
                     [.. handedLines, .. staleLines, .. mergedLines, .. alikeLines, .. leftLines, .. NotHanded(moved), .. behind]),
                 RequestStanding.Sound,
+                new Typed([], [], planned),
                 main,
                 path);
         }
@@ -1066,12 +1072,13 @@ public sealed class AgentService(
         List<string> told = [.. request.Arguments()];
         var again = OrchestrationReports.Line(RebaseCommand, [record.Orchestrator, record.Name, "--apply", .. told]);
         var (plan, stop) = await MeasuredAsync(cancellationToken).ConfigureAwait(false);
+        var planned = met.Planned = plan is null ? null : PlannedOf(plan, policy);
 
         if (stop is not null)
         {
             if (!apply)
             {
-                return Dry(json, context.Layout, RebaseCommand, stop, DryRuns.StandingOf(stop), new Typed([], RebaseReasons(plan)), path);
+                return Dry(json, context.Layout, RebaseCommand, stop, DryRuns.StandingOf(stop), new Typed([], RebaseReasons(plan), planned), path);
             }
 
             met.Reasons = RebaseReasons(plan);
@@ -1086,6 +1093,7 @@ public sealed class AgentService(
                 RebaseCommand,
                 CommandOutcome.Ok($"dry run: the base of {Lower(Agent(record))} would move {moving}; pass --apply to move it", [.. RebaseLines(plan!, applied: false)]),
                 RequestStanding.Sound,
+                new Typed([], [], planned),
                 path);
         }
 
@@ -1101,6 +1109,9 @@ public sealed class AgentService(
         await using (hold.Handles)
         {
             (plan, stop) = await MeasuredAsync(cancellationToken).ConfigureAwait(false);
+
+            // What is written is what was weighed under the hold, and what its answer names.
+            met.Planned = plan is null ? null : PlannedOf(plan, policy);
 
             if (stop is not null)
             {
@@ -1472,15 +1483,17 @@ public sealed class AgentService(
 
             if (measured.Refusal is { } refused)
             {
-                // Typed as its dry run's would be: a conflict told from every other refusal without reading a line.
-                met.Reasons = Consents(measured).Typed.Reasons;
+                // Typed as its dry run's would be, a consent nobody gave besides: a conflict told from every other refusal
+                // without reading a line.
+                met.Reasons = ApplyReasons(measured);
                 return refused;
             }
 
             var written = await WriteAsync(context, layout, record, path, seed!, measured).ConfigureAwait(false);
 
-            // What the fold wrote rides the answer as its facts, whatever form the answer is asked in.
-            met.Folded = written.Failure is null ? FoldedOf(written) : null;
+            // What the fold wrote rides the answer as its facts, whatever form the answer is asked in - as far as it went,
+            // where it stopped part way, since that much is in the main tree now.
+            met.Folded = FoldedOf(written, context);
 
             return written.Failure ?? CommandOutcome.Ok(
                 $"folded {Lower(Agent(record))}: wrote {ReportText.Counted(measured.Plan!.Written.Count, "path")} into the main tree, "
@@ -1680,8 +1693,8 @@ public sealed class AgentService(
 
             if (measured.Refusal is { } refused)
             {
-                // Typed as its dry run's would be, where the refusal is the fold's own.
-                met.Reasons = measured.Fold is { } refusedFold && ReferenceEquals(refused, refusedFold.Refusal) ? Consents(refusedFold).Typed.Reasons : [];
+                // Typed as its dry run's would be, a consent nobody gave besides, where the refusal is the fold's own.
+                met.Reasons = measured.Fold is { } refusedFold && ReferenceEquals(refused, refusedFold.Refusal) ? ApplyReasons(refusedFold) : [];
                 return refused;
             }
 
@@ -1714,13 +1727,14 @@ public sealed class AgentService(
                 var fold = measured.Fold!;
                 var written = await WriteAsync(context, layout, record, path, seed!, fold).ConfigureAwait(false);
 
+                // The work the delete folded back rides the answer as its facts, whatever form the answer is asked in - as
+                // far as it went, where it stopped part way, since that much is in the main tree now.
+                met.Folded = FoldedOf(written, context);
+
                 if (written.Failure is { } failure)
                 {
                     return failure with { Message = $"{failure.Message} Nothing was removed." };
                 }
-
-                // The work the delete folded back rides the answer as its facts, whatever form the answer is asked in.
-                met.Folded = FoldedOf(written);
 
                 seed = written.Seed;
                 lines.AddRange(OrchestrationReports.FoldAndRowLines(fold.Plan, written.Rows, layout.RowsDirectory(record.Name), applied: true));
@@ -2570,17 +2584,70 @@ public sealed class AgentService(
     private static IReadOnlyList<RefusalKind> Reasons(RequestStanding? standing, IReadOnlyList<RefusalKind> typed)
         => standing != RequestStanding.Refused ? [] : typed.Count > 0 ? typed : [RefusalKind.Other];
 
-    /// <summary>What a fold wrote, merged, handed and applied, as its answer's facts carry it.</summary>
+    /// <summary>
+    /// What a fold wrote, removed, merged, handed and applied, as its answer's facts carry it - as far as it went, where it
+    /// stopped part way - with the arm registry, merged by arm, apart from the paths merged as text; or null where it did
+    /// none of that, which is the one way an answer says a fold did nothing.
+    /// </summary>
     /// <param name="written">What writing the measured fold answered.</param>
-    private static AgentFolded FoldedOf(Written written)
+    /// <param name="context">The repository and its configuration, which name the arm registry.</param>
+    private static AgentFolded? FoldedOf(Written written, HarnessContext context)
+    {
+        var policy = TwoChangePolicy.Of(context, []);
+        var rows = written.RowsApplied ? written.Rows.Batch.Rows : [];
+        var folded = new AgentFolded(
+            written.Applied.Written,
+            written.Applied.Deleted,
+            [.. written.Applied.Merged.Where(path => policy.RuleFor(path) != TwoChangeRule.Arms)],
+            written.Applied.Merged.FirstOrDefault(path => policy.RuleFor(path) == TwoChangeRule.Arms),
+            written.Applied.Handed,
+            [.. rows.Select(row => row.Change?.To.Name).OfType<string>().Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)],
+            [.. rows.Where(row => row.Action is AnchorRowAction.New or AnchorRowAction.Changed).Select(row => row.Id)],
+            [.. rows.SelectMany(row => row.Over).Where(cell => cell.Accepted).Select(cell => cell.Cell.ToString())]);
+
+        return folded is { Written.Count: 0, Deleted.Count: 0, Merged.Count: 0, ArmRegistry: null, Handed.Count: 0, Registries.Count: 0, Rows.Count: 0, OverCells.Count: 0 }
+            ? null
+            : folded;
+    }
+
+    /// <summary>
+    /// What a refresh's plan names, as its answer's facts carry it: what it hands and what it merges, the arm registry
+    /// apart from the paths merged as text.
+    /// </summary>
+    /// <param name="plan">What the refresh measured.</param>
+    /// <param name="policy">How each path both trees changed is resolved, which names the arm registry.</param>
+    private static AgentPlanned PlannedOf(RefreshPlan plan, TwoChangePolicy policy)
+        => Planned([], [], [.. plan.Handed.Files, .. plan.Handed.Deletions], [.. plan.Merged.Select(merge => merge.Merge.Path)], policy);
+
+    /// <summary>
+    /// What a move of an agent's base names, as its answer's facts carry it: what it takes, what it keeps and what it
+    /// merges, the arm registry apart from the paths merged as text.
+    /// </summary>
+    /// <param name="plan">What the move measured.</param>
+    /// <param name="policy">How each path both changed is resolved, which names the arm registry.</param>
+    private static AgentPlanned PlannedOf(RebasePlan plan, TwoChangePolicy policy)
+        => Planned(plan.Taken, plan.Kept, [], [.. plan.Merged.Select(merge => merge.Path)], policy);
+
+    private static AgentPlanned Planned(IReadOnlyList<string> taken, IReadOnlyList<string> kept, IReadOnlyList<string> handed, IReadOnlyList<string> merged, TwoChangePolicy policy)
         => new(
-            written.Applied?.Written ?? [],
-            written.Applied?.Deleted ?? [],
-            written.Applied?.Merged ?? [],
-            written.Applied?.Handed ?? [],
-            [.. written.Rows.Batch.Rows.Select(row => row.Change?.To.Name).OfType<string>().Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)],
-            [.. written.Rows.Batch.Rows.Where(row => row.Action is AnchorRowAction.New or AnchorRowAction.Changed).Select(row => row.Id)],
-            [.. written.Rows.Batch.Rows.SelectMany(row => row.Over).Where(cell => cell.Accepted).Select(cell => cell.Cell.ToString())]);
+            taken,
+            kept,
+            handed,
+            [.. merged.Where(path => policy.RuleFor(path) != TwoChangeRule.Arms)],
+            merged.FirstOrDefault(path => policy.RuleFor(path) == TwoChangeRule.Arms));
+
+    /// <summary>
+    /// The reasons an <c>--apply</c>'s own measure refused it for, by kind: as its dry run types them, and a consent nobody
+    /// gave as something else besides - an <c>--apply</c> refuses what its dry run asks, so a request refused for a
+    /// conflicting path and a clean merge nobody asked for is never read as refused for conflicts alone.
+    /// </summary>
+    /// <param name="measured">What the --apply measured, refused.</param>
+    private static IReadOnlyList<RefusalKind> ApplyReasons(Measured measured)
+    {
+        var (_, typed) = Consents(measured);
+
+        return typed.Needs.Count > 0 && !typed.Reasons.Contains(RefusalKind.Other) ? [.. typed.Reasons, RefusalKind.Other] : typed.Reasons;
+    }
 
     /// <summary>
     /// Which git worktree a live agent's is, read before anything of it is written - its closing records it - or the failure
@@ -2649,7 +2716,9 @@ public sealed class AgentService(
                     Records(layout, record)),
                 measured.Rows,
                 seed,
-                []);
+                [],
+                applied,
+                RowsApplied: false);
         }
 
         // What is said of the kept copies stands beside the records on every way out from here, named as they stand once
@@ -2666,12 +2735,14 @@ public sealed class AgentService(
                     records),
                 measured.Rows,
                 folded,
-                notes);
+                notes,
+                applied,
+                RowsApplied: false);
         }
 
         if (measured.Request is not { Rows.Count: > 0 } request)
         {
-            return new Written(null, measured.Rows, folded, notes, applied);
+            return new Written(null, measured.Rows, folded, notes, applied, RowsApplied: true);
         }
 
         AnchorBatch batch;
@@ -2698,7 +2769,9 @@ public sealed class AgentService(
                     [.. OrchestrationReports.RowLines(batch), .. records]),
                 rows,
                 folded,
-                notes);
+                notes,
+                applied,
+                RowsApplied: false);
         }
 
         try
@@ -2722,10 +2795,12 @@ public sealed class AgentService(
                     [.. OrchestrationReports.RowLines(batch), .. records]),
                 rows,
                 folded,
-                notes);
+                notes,
+                applied,
+                RowsApplied: true);
         }
 
-        return new Written(null, rows, folded, notes, applied);
+        return new Written(null, rows, folded, notes, applied, RowsApplied: true);
     }
 
     /// <summary>
@@ -2982,7 +3057,9 @@ public sealed class AgentService(
             holders,
             answer.Outcome.Details ?? [],
             typed.Needs,
-            Reasons(answer.Standing, typed.Reasons));
+            Reasons(answer.Standing, typed.Reasons),
+            Folded: null,
+            typed.Planned);
 
         return json ? OrchestrationReports.Document(answer.Outcome, facts) : answer.Outcome with { Facts = facts };
     }
@@ -3100,7 +3177,8 @@ public sealed class AgentService(
             answered.Details ?? [],
             had?.Needs ?? [],
             had?.Refusals ?? Reasons(standing, met.Reasons),
-            met.Folded ?? had?.Folded);
+            met.Folded ?? had?.Folded,
+            had?.Planned ?? met.Planned);
 
         return json && answered.Data.Count == 0
             ? OrchestrationReports.Document(answered, facts)
@@ -3386,16 +3464,16 @@ public sealed class AgentService(
     private sealed record Measured(FoldPlan? Plan, AnchorBatchRequest? Request, IReadOnlyList<AnchorRowDeclaration> All, AgentRowsPlan Rows, CommandOutcome? Refusal);
 
     /// <summary>
-    /// What writing a fold did: why it stopped where it did, the rows as applied, the seed as recorded, and what is said of
-    /// the bytes kept of what it shares.
+    /// What writing a measured fold answered, and what it did, on every exit: why it stopped where it did, its rows as they
+    /// were applied, its seed as recorded, the fold's own paths as far as it wrote them, and its notes.
     /// </summary>
-    /// <summary>What writing a measured fold answered, and what it did: its rows as they were applied, its seed as recorded, the fold's own paths, and its notes.</summary>
     /// <param name="Failure">Why it stopped part way; null where it wrote everything.</param>
     /// <param name="Rows">The rows as applying them left them.</param>
     /// <param name="Seed">The seed as recorded.</param>
     /// <param name="Notes">What is said of the kept copies beside the records.</param>
-    /// <param name="Applied">What the fold wrote, merged, removed and handed; null where it stopped before writing everything.</param>
-    private sealed record Written(CommandOutcome? Failure, AgentRowsPlan Rows, SeedRecord Seed, IReadOnlyList<string> Notes, FoldApplied? Applied = null);
+    /// <param name="Applied">What the fold wrote, merged, removed and handed into the trees, as far as it went - all of it, or part where it stopped part way.</param>
+    /// <param name="RowsApplied">Whether its rows are in the registries: false where it stopped before applying them, or applying them failed and was put back.</param>
+    private sealed record Written(CommandOutcome? Failure, AgentRowsPlan Rows, SeedRecord Seed, IReadOnlyList<string> Notes, FoldApplied Applied, bool RowsApplied);
 
     /// <inheritdoc cref="IAgentService.CreateAsync(AgentCreateRequest, CancellationToken)"/>
     public async Task<UseCaseResult<AgentCreated>> CreateAsync(AgentCreateRequest request, CancellationToken cancellationToken = default)
@@ -3469,14 +3547,21 @@ public sealed class AgentService(
         /// <summary>What a fold applied, where this --apply wrote one; <see langword="null"/> where it folded nothing.</summary>
         public AgentFolded? Folded { get; set; }
 
+        /// <summary>What the plan of a refresh or a move of an agent's base names, once it is measured; <see langword="null"/> before.</summary>
+        public AgentPlanned? Planned { get; set; }
+
         /// <summary>The reasons the --apply's own measure was refused for, by kind, where it typed any; empty otherwise.</summary>
         public IReadOnlyList<RefusalKind> Reasons { get; set; } = [];
     }
 
-    /// <summary>What a request's standing is typed by: each consent it lacks, and each reason it is refused for, by kind.</summary>
+    /// <summary>
+    /// What a request's measure typed: each consent it lacks and each reason it is refused for, by kind, which its standing
+    /// is typed by, and what its plan names where it is a refresh's or a move of an agent's base.
+    /// </summary>
     /// <param name="Needs">Each consent the request lacks, by kind, and nothing else.</param>
     /// <param name="Reasons">Each reason its measure refused it for, by kind; empty where it typed none.</param>
-    private sealed record Typed(IReadOnlyList<ConsentKind> Needs, IReadOnlyList<RefusalKind> Reasons)
+    /// <param name="Planned">What the plan of a refresh or a move of an agent's base names; <see langword="null"/> where none was measured.</param>
+    private sealed record Typed(IReadOnlyList<ConsentKind> Needs, IReadOnlyList<RefusalKind> Reasons, AgentPlanned? Planned = null)
     {
         /// <summary>Nothing lacked and nothing typed.</summary>
         public static Typed None { get; } = new([], []);

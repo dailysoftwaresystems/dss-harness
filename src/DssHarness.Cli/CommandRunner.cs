@@ -147,16 +147,15 @@ internal static class CommandRunner
         if (Answers.TryGetValue(parseResult.CommandResult.Command, out var json) && json.Asked(flags))
         {
             // Told as every other line the command writes is told: a host answering another machine writes its home as ~.
-            await using var services = ConsoleHost.Build(new SessionOptions
-            {
-                Command = parseResult.CommandResult.Command.Name,
-                Verbose = false,
-                Prompting = false,
-                Origin = Origin.Value ?? CommandOrigin.Typed,
-            });
-            var output = services.GetRequiredService<IHarnessOutput>();
-
-            output.Data(json.Stopped(flags, HarnessExit.UsageError, parseResult.Errors[0].Message, output.Shown, run: null));
+            await Host.WriteUnbegunAsync(
+                new SessionOptions
+                {
+                    Command = parseResult.CommandResult.Command.Name,
+                    Verbose = false,
+                    Prompting = false,
+                    Origin = Origin.Value ?? CommandOrigin.Typed,
+                },
+                output => output.Data(json.Stopped(flags, HarnessExit.UsageError, parseResult.Errors[0].Message, output.Shown, run: null))).ConfigureAwait(false);
         }
 
         foreach (var error in parseResult.Errors)

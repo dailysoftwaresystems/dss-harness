@@ -95,6 +95,12 @@ public sealed class EventHarnessOutput : IHarnessOutput, IDisposable
         _draining = Task.Run(() => DrainAsync(_queued.Reader, sink));
     }
 
+    /// <summary>The operation every event this output publishes is stamped with; <see langword="null"/> where it was given none.</summary>
+    public OperationId? Operation => _operation;
+
+    /// <summary>The operation this one belongs to, which every event this output publishes names; <see langword="null"/> where there is none.</summary>
+    public OperationId? Parent => _parent;
+
     /// <inheritdoc/>
     public bool IsVerbose => _verbose;
 

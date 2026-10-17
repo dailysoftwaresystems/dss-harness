@@ -65,6 +65,19 @@ public sealed record ListedLeg(string Leg, string? Unsweepable, string RecordFil
 }
 
 /// <summary>
+/// What <c>check-mutations --list</c> answers beyond its lines: the facts its table and its document are made of, which a
+/// front end, or a step of a run, reads typed rather than parsing either.
+/// </summary>
+/// <param name="Legs">Each leg listed, in order, each with its arms.</param>
+/// <param name="Registry">The arms registry, as the configuration names it.</param>
+/// <param name="RecordDirectory">The directory the record of verdicts is kept in, absolute.</param>
+public sealed record ArmListing(IReadOnlyList<ListedLeg> Legs, string Registry, string RecordDirectory)
+{
+    /// <summary>The legs whose record could not be read, each with why (<see cref="ListedLeg.RecordUnread"/>), in order; empty where every one was.</summary>
+    public IReadOnlyList<ListedLeg> Unread => [.. Legs.Where(leg => leg.RecordUnread is not null)];
+}
+
+/// <summary>
 /// What a listing reads of one leg, beside the registry: its arms, whether it can be swept, its record, the tree's one
 /// reading, the host it names, the settings it would be swept with, and what its configure would be given.
 /// </summary>

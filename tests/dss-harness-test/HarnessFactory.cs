@@ -91,8 +91,8 @@ public sealed class HarnessFactory
             new ManagedIgnoreCheck(GitClient, FileSystem, Platform, Output),
             Platform);
 
-        OrchestrationStore = new OrchestrationStore(FileSystem);
-        OrchestrationLog = new OrchestrationLog(FileSystem, TimeProvider.System);
+        OrchestrationStore = new OrchestrationStore(FileSystem, Output);
+        OrchestrationLog = new OrchestrationLog(FileSystem, TimeProvider.System, Output);
         Transcripts = TranscriptsOver(FileSystem);
         OrchestratorService = new OrchestratorService(ContextLoader, GitClient, FileSystem, Platform, Output, WorktreeService, OrchestrationStore, OrchestrationLog, TimeProvider.System);
         AgentService = Agents(FileSystem, AnchorRegistryService);
@@ -132,8 +132,8 @@ public sealed class HarnessFactory
             anchors,
             SyncKit.Service(this, fileSystem: fileSystem, git: gitClient),
             TranscriptsOver(fileSystem),
-            new OrchestrationStore(fileSystem),
-            new OrchestrationLog(fileSystem, TimeProvider.System),
+            new OrchestrationStore(fileSystem, Output),
+            new OrchestrationLog(fileSystem, TimeProvider.System, Output),
             TimeProvider.System,
             ProcessContext);
     }

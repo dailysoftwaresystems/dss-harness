@@ -94,13 +94,28 @@ public sealed class OrchestratorService(
     private readonly OrchestrationLog _log = log;
     private readonly TimeProvider _clock = clock;
 
-    public async Task<CommandOutcome> CreateAsync(
+    public Task<CommandOutcome> CreateAsync(
         string startDirectory,
         string name,
         string model,
         int? parallel,
         string? session,
         CancellationToken cancellationToken = default)
+        => CreateAsync(startDirectory, name, model, parallel, session, mustBeNew: false, cancellationToken);
+
+    /// <summary>
+    /// Creates an orchestrator, or - where one of that name is there and <paramref name="mustBeNew"/> is not asked -
+    /// changes its limit and its session; where it is asked, a name that is taken is refused, naming its record, and
+    /// nothing is changed.
+    /// </summary>
+    private async Task<CommandOutcome> CreateAsync(
+        string startDirectory,
+        string name,
+        string model,
+        int? parallel,
+        string? session,
+        bool mustBeNew,
+        CancellationToken cancellationToken)
     {
         if ((OrchestrationRules.NameProblem(name)
             ?? OrchestrationRules.ModelProblem(model)
@@ -134,7 +149,12 @@ public sealed class OrchestratorService(
         {
             if (_store.ReadOrchestrator(orchestrator) is { } existing)
             {
-                return Change(orchestrator, existing, model, parallel, session);
+                // Decided under the same hold as the creation, so no other command can take the name between the two.
+                return mustBeNew
+                    ? CommandOutcome.Refused(
+                        $"Orchestrator '{name}' exists already - '{orchestrator.RecordFile}' is its record - and a new one was asked for: name another. "
+                        + "Nothing was changed.")
+                    : Change(orchestrator, existing, model, parallel, session);
             }
 
             // Plain worktrees and orchestrators share the names under the root: the directory named for this one is
@@ -308,15 +328,16 @@ public sealed class OrchestratorService(
 
     /// <inheritdoc cref="IOrchestratorService.CreateAsync(OrchestratorCreateRequest, CancellationToken)"/>
     /// <remarks>
-    /// The request's <see cref="OrchestratorCreateRequest.MustBeNew"/> is carried for the caller a run's start will be:
-    /// nothing here is refused for a name being taken that its own verb does not already refuse.
+    /// Where the request's <see cref="OrchestratorCreateRequest.MustBeNew"/> is set, a name that is taken is refused
+    /// (<see cref="HarnessExit.Refused"/>), naming its record, and nothing is changed: a run's start creating its own
+    /// record never writes over one someone else made.
     /// </remarks>
     public async Task<UseCaseResult<OrchestratorCreated>> CreateAsync(OrchestratorCreateRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
 
         return UseCaseResult<OrchestratorCreated>.From(
-            await CreateAsync(request.StartDirectory, request.Name, request.Model, request.Parallel, request.Session, cancellationToken).ConfigureAwait(false));
+            await CreateAsync(request.StartDirectory, request.Name, request.Model, request.Parallel, request.Session, request.MustBeNew, cancellationToken).ConfigureAwait(false));
     }
 
     /// <inheritdoc cref="IOrchestratorService.DeleteAsync(OrchestratorDeleteRequest, CancellationToken)"/>

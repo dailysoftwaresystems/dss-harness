@@ -362,6 +362,7 @@ public sealed class MutationService(
     /// </summary>
     /// <param name="request">What the command was asked to do.</param>
     /// <param name="cancellationToken">Stops the reading.</param>
+    /// <returns>The listing, as a table or as its document, carrying the facts both are made of (<see cref="ArmListing"/>).</returns>
     /// <exception cref="HarnessException">
     /// The registry, its texts or its scopes cannot be swept (<see cref="HarnessExit.ConfigInvalid"/>); <c>--legs</c> or
     /// <c>--arms</c> names something not declared (<see cref="HarnessExit.UsageError"/>); git could not say what it ignores
@@ -419,6 +420,9 @@ public sealed class MutationService(
 
         var registry = config.Mutations.Registry!;
 
+        // The facts the table and the document are made of, from the same locals, so the three cannot drift.
+        var listing = new ArmListing(listed, registry, record.Directory);
+
         // Said under --json too: a warning is for whoever reads the document, and no row of it names the file.
         foreach (var leg in listed)
         {
@@ -432,8 +436,9 @@ public sealed class MutationService(
         {
             return CommandOutcome.Ok(MutationListing.Summary(listed)) with
             {
-                Data = [MutationListing.Json(listed, registry, record.Directory, _output.Shown)],
+                Data = [MutationListing.Json(listing.Legs, listing.Registry, listing.RecordDirectory, _output.Shown)],
                 Quiet = true,
+                Facts = listing,
             };
         }
 
@@ -453,8 +458,9 @@ public sealed class MutationService(
 
         return CommandOutcome.Ok(MutationListing.Summary(listed), [MutationListing.Note]) with
         {
-            Data = MutationListing.Table(listed, _output.Shown),
+            Data = MutationListing.Table(listing.Legs, _output.Shown),
             Quiet = true,
+            Facts = listing,
         };
     }
 

@@ -39,6 +39,18 @@ internal static class HostAgentCommand
             // command it starts must know it was asked for by another machine, not typed here.
             CommandRunner.Serve(CommandOrigin.Agent);
 
+            // The request was written as UTF-8, and is read as such whatever the console's own input
+            // encoding happens to be.
+            using var input = new StreamReader(Console.OpenStandardInput(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+
+            // A session hung up is the machine that asked gone: what the request started is cancelled, as it is when
+            // the input ends, rather than this process ending where it stands with its children left running - on
+            // Linux and macOS, which leave a hang-up to the process; Windows ends one whose console closes.
+            using var hungUp = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            using var hangUp = HangUp.Cancels(hungUp);
+
+            // Begun once nothing before its disposal can throw: a session begun and never disposed would keep the
+            // services built for it, and its place among the operations its host has open.
             var session = ConsoleHost.Host.Begin(new SessionOptions
             {
                 Command = HostAgentProtocol.CommandName,
@@ -49,16 +61,6 @@ internal static class HostAgentCommand
                 Prompting = false,
                 Origin = CommandOrigin.Agent,
             });
-
-            // The request was written as UTF-8, and is read as such whatever the console's own input
-            // encoding happens to be.
-            using var input = new StreamReader(Console.OpenStandardInput(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-
-            // A session hung up is the machine that asked gone: what the request started is cancelled, as it is when
-            // the input ends, rather than this process ending where it stands with its children left running - on
-            // Linux and macOS, which leave a hang-up to the process; Windows ends one whose console closes.
-            using var hungUp = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            using var hangUp = HangUp.Cancels(hungUp);
 
             // The service reports its own ends, in the protocol the machine that asked reads: the session's own
             // lines would sit in a stream the protocol owns, so its outcome is quiet and the exit code is carried.
@@ -76,9 +78,10 @@ internal static class HostAgentCommand
                     },
                     hungUp.Token).ConfigureAwait(false);
 
-                // A failure the service threw is the session's to report, exactly as any command's is; an exit code
-                // the service answered with is its own, already said in the way the machine that asked reads.
-                return completion.Outcome is null ? completion.ExitCode : served;
+                // A failure the service threw, or a defect its end met, is the session's to report, exactly as any
+                // command's is - its body answers nothing but success - and an exit code the service answered with is
+                // its own, already said in the way the machine that asked reads.
+                return completion.ExitCode != HarnessExit.Success ? completion.ExitCode : served;
             }
         });
 

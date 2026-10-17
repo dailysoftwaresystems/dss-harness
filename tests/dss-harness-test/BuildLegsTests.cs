@@ -51,4 +51,16 @@ public sealed class BuildLegsTests
 
         LegUseCases.IsTheConfigurationsRead(refused, temp);
     }
+
+    /// <summary>
+    /// A build's request carries nothing its use case would let pass without a word: a build's work names no set-up to
+    /// bring up, so its request has no member for one, and none can be given.
+    /// </summary>
+    [Fact]
+    public void ABuildsRequest_CarriesNothingItsUseCaseWouldIgnore()
+    {
+        Assert.Equal(
+            ["Directory", "ForceLock", "Here", "InPlace", "Json", "LegNames", "LocalCopy", "Time", "UseStaged"],
+            typeof(BuildLegsRequest).GetProperties().Select(property => property.Name).Order(StringComparer.Ordinal));
+    }
 }
