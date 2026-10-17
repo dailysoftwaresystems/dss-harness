@@ -422,8 +422,8 @@ that fails again comes back by its own `onFailure`, until it passes or a person 
 `maxVisits` the run asks, with the advisor's recommended fix. A reasoning step is never recovered: a
 failed agent is tried again (`retries`, waiting `backoffSeconds`, twice as long each time) and on
 each model of its fallback, quota or a provider that fails pauses the run where it can resume, and
-what still fails is asked (`onFailure: pause`). The implementation workflow says all of it on its
-steps, so a run of it ends done or asks only what it must.
+what still fails is asked (`onFailure: pause`). The implementation workflow says all of it on its steps, so a run of it - once the engine
+that runs workflows is built - ends done or asks only what it must.
 
 An issue a reasoning step meets that was there before the run, it reports in its answer
 (`preExisting`) and never fixes itself; `onPreExisting` names the step that triages each one. That
@@ -431,8 +431,8 @@ step, at the flow's top level, says `raised: preExisting` - raised once per issu
 as the recovery is not - and `onAddress: recover`: it reproduces the issue on the run's base commit,
 gives the recovery one that is in a step's way, related to the work or critical, to fix at its root,
 and lists the rest, proven, with a title and a description, in the run's `pre-existing-issues.json`,
-shown in the pull request's body and the handoff. Where a workflow has such a step, every other
-reasoning step names it, so no issue is lost.
+shown in the pull request's body and the handoff. Where a workflow has such a step, every other reasoning step names it, so no issue is lost. This
+build checks that wiring; the engine that raises the triage and writes the list is built next.
 
 ```bash
 dssharness validate-workflow                 # check every declared workflow

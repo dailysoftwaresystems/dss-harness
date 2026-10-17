@@ -460,7 +460,8 @@ public sealed class CommandPipelineTests : IDisposable
     /// <summary>
     /// The current directory is read only where it is needed: a directory asked for whole is acted on without it, so a
     /// shell standing in a directory since removed - whose current directory Linux and macOS cannot read - still runs a
-    /// command given one; and one asked for relative to it reads it.
+    /// command given one; and one asked for relative to it reads it, and is refused as a usage error, saying what to give,
+    /// where it cannot be read.
     /// </summary>
     [Fact]
     public async Task ADirectoryAskedForWhole_IsActedOn_WithoutReadingTheCurrentDirectory()
@@ -482,8 +483,10 @@ public sealed class CommandPipelineTests : IDisposable
 
         Assert.Equal(HarnessExit.Success, wholeEnded.ExitCode);
         Assert.Equal(_tree.Path, actedOn);
-        Assert.Equal(HarnessExit.InternalError, relativeEnded.ExitCode);
-        Assert.Equal([$"test: FAIL - Unexpected FileNotFoundException: {UnreadableProcessContext.Why}"], Lines(relative.Error));
+        Assert.Equal(HarnessExit.UsageError, relativeEnded.ExitCode);
+        Assert.Equal(
+            [$"test: FAIL - the current directory cannot be read ({UnreadableProcessContext.Why}); give a whole path with --directory."],
+            Lines(relative.Error));
     }
 
     /// <summary>
