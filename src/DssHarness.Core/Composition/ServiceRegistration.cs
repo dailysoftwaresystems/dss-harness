@@ -1,5 +1,6 @@
 using DssHarness.Core.Anchors;
 using DssHarness.Core.Application;
+using DssHarness.Core.Application.Legs;
 using DssHarness.Core.Build;
 using DssHarness.Core.Ci;
 using DssHarness.Core.Commands;
@@ -179,6 +180,10 @@ public static class ServiceRegistration
         services.AddSingleton<IRepositoryTrees, RepositoryTrees>();
         services.AddSingleton<LegsService>();
         services.AddSingleton<HostExecService>();
+        services.AddSingleton<IBuildLegs, BuildLegs>();
+        services.AddSingleton<ITestLegs, TestLegs>();
+        services.AddSingleton<IRunnerLegs, RunnerLegs>();
+        services.AddSingleton<IMutationLegs, MutationLegs>();
 
         // Leg machinery. Shared by build, test, run and check-mutations, so the isolation rules cannot hold for one
         // command and not another.

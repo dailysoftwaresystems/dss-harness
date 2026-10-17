@@ -1,10 +1,6 @@
 using System.CommandLine;
-using System.Diagnostics;
+using DssHarness.Core.Application.Legs;
 using DssHarness.Core.Build;
-using DssHarness.Core.Execution;
-using DssHarness.Core.Legs;
-using DssHarness.Core.Output;
-using DssHarness.Core.Runs;
 
 namespace DssHarness.Cli.Commands;
 
@@ -60,83 +56,28 @@ internal static class BuildCommand
         {
             var arguments = context.ParseResult;
 
-            var legs = arguments.GetResult(LegsOption) is { Implicit: false }
-                ? arguments.GetValue(LegsOption) ?? []
-                : null;
-
-            var builds = context.Get<IBuildService>();
-
-            return await context.Get<LegRunService>()
+            return (await context.Get<IBuildLegs>()
                 .RunAsync(
-                    Name,
-                    run,
-                    new LegRunRequest(
-                        context.Directory,
-                        legs,
-                        arguments.GetValue(ForceLockOption),
-                        context.Json,
-                        arguments.GetValue(UseStagedOption),
-                        arguments.GetValue(TimeOption),
-                        arguments.GetValue(DispatchOptions.Here),
-                        RemoteArguments(arguments))
+                    new BuildLegsRequest
                     {
-                        Workload = LegWorkload.BuildOnly,
-                        LocalTrees = DispatchOptions.WhereWorkRuns(arguments),
+                        Directory = context.Directory,
+                        LegNames = arguments.GetResult(LegsOption) is { Implicit: false }
+                            ? arguments.GetValue(LegsOption) ?? []
+                            : null,
+                        ForceLock = arguments.GetValue(ForceLockOption),
+                        Json = context.Json,
+                        UseStaged = arguments.GetValue(UseStagedOption),
+                        Time = arguments.GetValue(TimeOption),
+                        Here = arguments.GetValue(DispatchOptions.Here),
+                        LocalCopy = arguments.GetValue(DispatchOptions.LocalCopy),
+                        InPlace = arguments.GetValue(DispatchOptions.InPlace),
                     },
-                    (work, token) => BuildLegAsync(builds, work, token),
+                    run!,
                     cancellationToken)
-                .ConfigureAwait(false);
+                .ConfigureAwait(false))
+                .ToOutcome(context.Json);
         }, JsonAnswer.Ledger(JsonOption));
 
         return command;
     }
-
-    private static async Task<LegEntry> BuildLegAsync(
-        IBuildService builds,
-        LegWork work,
-        CancellationToken cancellationToken)
-    {
-        var started = Stopwatch.GetTimestamp();
-        var leg = work.Leg;
-
-        var result = await builds
-            .BuildAsync(work.Context.Config, leg.BuildRequestFor(work.Context.Config, work.RunDirectory, work.Time), cancellationToken)
-            .ConfigureAwait(false);
-
-        return new LegEntry
-        {
-            Leg = leg.Name,
-            Verdict = result.Verdict.Verdict,
-            Detail = Detail(result),
-            Duration = Stopwatch.GetElapsedTime(started),
-            CommandTime = result.Phases.Aggregate(TimeSpan.Zero, (total, phase) => total + phase.Duration),
-            Emulated = leg.Emulated,
-            Phases = [.. result.Phases.Select(phase => new PhaseRecord(phase.Phase, phase.Duration, phase.ClockStepped))],
-            TimingNotes = result.Notes,
-            Timings = [.. result.Phases.SelectMany(phase =>
-                phase.Timings.Select(timing => new TimingMark(phase.Phase, timing.Text, timing.Value)))],
-            Compilers = result.Compilers,
-            LogTail = result.Tail,
-        };
-    }
-
-    /// <summary>
-    /// The options a host running one of this run's legs is given, so it runs the command this
-    /// machine was asked to run rather than a bare one.
-    /// </summary>
-    /// <remarks>
-    /// <c>--legs</c> and <c>--json</c> are supplied by the dispatch itself, and the lock and the
-    /// staging are this machine's decisions about its own state: a host reached for one leg takes
-    /// its own lock and acts on the copy sync just wrote.
-    /// </remarks>
-    private static IReadOnlyList<string> RemoteArguments(System.CommandLine.ParseResult arguments)
-        => arguments.GetValue(TimeOption) ? ["--time"] : [];
-
-    private static string Detail(BuildResult result)
-        => result.Verdict.Detail.Length > 0
-            ? result.Verdict.Detail
-            : result.Dependencies is { } dependencies && dependencies.Excused.Count > 0
-                ? $"{ReportText.Counted(dependencies.ObjectsRead, "object")} read, {dependencies.Excused.Count} excused"
-                : string.Empty;
-
 }

@@ -161,6 +161,20 @@ public sealed class MutationService(
     /// runs on a selected leg: each refused before any host is touched.
     /// </exception>
     public async Task<CommandOutcome> RunAsync(MutationRequest request, RunId runId, CancellationToken cancellationToken = default)
+        => (await ExecuteAsync(request, runId, cancellationToken).ConfigureAwait(false)).ToOutcome(request.Json, _output.Shown);
+
+    /// <summary>
+    /// Sweeps every selected leg and answers what the run reached, in the terms its caller answers in: the use case the
+    /// engine's mutation step calls, and the command's own body below it.
+    /// </summary>
+    /// <param name="request">What the command was asked to do.</param>
+    /// <param name="runId">The run, begun and said by the command before anything could refuse it.</param>
+    /// <param name="cancellationToken">Stops the sweep: every site is put back, here and on every host.</param>
+    /// <exception cref="HarnessException">
+    /// The registry, its texts, its scopes or <c>--arms</c> cannot be swept, a selected leg cannot be, or no selected arm
+    /// runs on a selected leg: each refused before any host is touched.
+    /// </exception>
+    public async Task<LegRunResult> ExecuteAsync(MutationRequest request, RunId runId, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(runId);
@@ -225,7 +239,7 @@ public sealed class MutationService(
         var record = new ArmVerdictRecord(_fileSystem, context.Layout);
 
         return await _legRuns
-            .RunAsync(
+            .ExecuteAsync(
                 CommandName,
                 runId,
                 new LegRunRequest(
