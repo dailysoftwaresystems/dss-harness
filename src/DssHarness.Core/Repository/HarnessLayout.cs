@@ -64,6 +64,20 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
     /// <summary>Name of the directory holding secret values actions read. Gitignored.</summary>
     public const string RunnerSecretsDirectoryName = ".secrets";
 
+    /// <summary>
+    /// Name of the directory, under the harness directory, where an orchestrator's own files are
+    /// kept - its agents, prompts and schemas - each tracked by git. The engine's run state is
+    /// elsewhere: <see cref="OrchestratorsDirectoryName"/>, at the root of the tree.
+    /// </summary>
+    public const string OrchestratorFilesDirectoryName = "orchestrators";
+
+    /// <summary>
+    /// Name of the credential slot beside those files: a directory of dotenv files holding the agent
+    /// clients' keys and settings, whose contents are gitignored and whose placeholder is tracked.
+    /// The dot keeps any orchestrator from ever having the slot's name.
+    /// </summary>
+    public const string OrchestratorsEnvSlotName = ".env";
+
     /// <summary>Name of the directory holding one subdirectory per run, with its logs. Gitignored.</summary>
     public const string RunsDirectoryName = "runs";
 
@@ -191,6 +205,47 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
     }
 
     /// <summary>
+    /// The credential slots, relative to a tree's root with forward separators: the two
+    /// connection-data slots, the runner's two value slots, and the agent clients' key slot. What
+    /// each holds is gitignored, so a worktree holds none of it and each slot is named as a path
+    /// the tree's movers never take: the ignore block is a rule a repository can edit away, and a
+    /// planted <c>.env</c> folded back could redirect a key.
+    /// </summary>
+    public static IReadOnlyList<string> SecretSlots { get; } =
+    [
+        DirectoryName + "/" + SshItemsDirectoryName,
+        DirectoryName + "/" + WslDistrosDirectoryName,
+        RunnerDirectoryRelative + "/" + RunnerEnvDirectoryName,
+        RunnerDirectoryRelative + "/" + RunnerSecretsDirectoryName,
+        OrchestratorsEnvSlotRelative,
+    ];
+
+    /// <summary>
+    /// Where the tool's own state is, relative to a tree's root with forward separators: the root
+    /// slots (<see cref="RootSlots"/>) and what it keeps under the harness directory - its runs,
+    /// its hosts' copies record, its mutation record, a worker's dependency sources, the run lock
+    /// and a synced copy's marker. One list, from the names this layout already holds, so whatever
+    /// refuses a write to the tool's own state reads the layout and not a list of its own: a place
+    /// the layout gains joins this the day it is added.
+    /// </summary>
+    /// <param name="worktreesRoot">The configured worktrees root.</param>
+    public static IReadOnlyList<string> StatePaths(string worktreesRoot)
+    {
+        ArgumentNullException.ThrowIfNull(worktreesRoot);
+
+        return
+        [
+            .. RootSlots(worktreesRoot),
+            RunsDirectoryRelative,
+            HostCopiesDirectoryRelative,
+            MutationRecordDirectoryRelative,
+            DependencySourcesDirectoryRelative,
+            DirectoryName + "/" + LockFileName,
+            DirectoryName + "/" + SyncedCopyMarkerName,
+        ];
+    }
+
+    /// <summary>
     /// Where the copy kept under <paramref name="name"/> in the slot <paramref name="slot"/> of <paramref name="tree"/>
     /// is: <c>&lt;tree&gt;/&lt;slot&gt;/&lt;name&gt;</c>, joined by the separator the tree's own path is spelt with, so a
     /// tree another machine keeps names its copies as that machine spells a path.
@@ -214,7 +269,8 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
 
     /// <summary>
     /// The directories under <see cref="DirectoryName"/> that carry a <see cref="GitKeepFileName"/>,
-    /// relative to it: the two connection-data slots, the actions, and the two value slots.
+    /// relative to it: the two connection-data slots, the actions, the two value slots and the
+    /// agent clients' key slot.
     /// </summary>
     /// <remarks>
     /// Every tree tracks them, a worktree's included, so a clone of any branch arrives with each
@@ -228,6 +284,7 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
         Path.Combine(RunnerDirectoryName, RunnerActionsDirectoryName),
         Path.Combine(RunnerDirectoryName, RunnerEnvDirectoryName),
         Path.Combine(RunnerDirectoryName, RunnerSecretsDirectoryName),
+        Path.Combine(OrchestratorFilesDirectoryName, OrchestratorsEnvSlotName),
     ];
 
     /// <summary>
@@ -312,6 +369,16 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
 
     /// <summary>The WSL distributions directory, resolved against the main checkout for the same reason.</summary>
     public string WslDistrosDirectory => Path.Combine(MainHarnessDirectory, WslDistrosDirectoryName);
+
+    /// <summary>
+    /// The agent clients' credential slot, resolved against the main checkout: its contents are
+    /// gitignored, so every worktree reads the main checkout's, and a key a machine is given is one
+    /// every tree of that repository on it can use.
+    /// </summary>
+    public string OrchestratorsEnvSlot => Path.Combine(
+        MainHarnessDirectory,
+        OrchestratorFilesDirectoryName,
+        OrchestratorsEnvSlotName);
 
     /// <summary>One ssh host's directory, holding its <c>.env</c>, its key and its known hosts.</summary>
     /// <param name="item">The item name, as <c>sshItems</c> declares it.</param>
@@ -401,6 +468,13 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
 
     /// <summary>The runs directory, relative to a tree root, with forward separators.</summary>
     public const string RunsDirectoryRelative = DirectoryName + "/" + RunsDirectoryName;
+
+    /// <summary>
+    /// The agent clients' credential slot, relative to a tree root, with forward separators: how a
+    /// floor names it and a refusal spells it.
+    /// </summary>
+    public const string OrchestratorsEnvSlotRelative =
+        DirectoryName + "/" + OrchestratorFilesDirectoryName + "/" + OrchestratorsEnvSlotName;
 
     /// <summary>
     /// The workflows directory, relative to a tree root, with forward separators: how a message and a

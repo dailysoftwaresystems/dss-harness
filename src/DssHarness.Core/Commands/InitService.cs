@@ -37,11 +37,11 @@ public sealed class InitService(
     /// <para>
     /// One shape for every directory the harness keeps in git while ignoring what is made in it: its
     /// <em>contents</em> are excluded and a placeholder is kept, which is the only way to do both, as git
-    /// cannot re-include a file whose parent directory is itself excluded. The four slots under the
-    /// harness's directory — <c>sshItems</c>, <c>wslDistros</c>, <c>runner/.env</c> and
-    /// <c>runner/.secrets</c> — are small directories a person fills by hand, and keeping each one in the
-    /// repository tells that person where the file goes. The two at the root of the tree — the worktrees
-    /// root and the directory orchestrators keep what they hold in — are kept so a clone arrives with both
+    /// cannot re-include a file whose parent directory is itself excluded. The five slots under the
+    /// harness's directory - <c>sshItems</c>, <c>wslDistros</c>, <c>runner/.env</c>, <c>runner/.secrets</c>
+    /// and the agent clients' <c>orchestrators/.env</c> - are small directories a person fills by hand, and
+    /// keeping each one in the repository tells that person where the file goes. The two at the root of the tree - the worktrees
+    /// root and the directory orchestrators keep what they hold in - are kept so a clone arrives with both
     /// in place, and the orchestrator commands make agents' worktrees and records in them.
     /// </para>
     /// <para>
@@ -97,6 +97,10 @@ public sealed class InitService(
             // Action files are tracked; the values they read are not.
             .. Slot($"{runner}/{HarnessLayout.RunnerEnvDirectoryName}", keep),
             .. Slot($"{runner}/{HarnessLayout.RunnerSecretsDirectoryName}", keep),
+
+            // The agent clients' key slot, beside the orchestrators' own tracked files. The dot
+            // keeps any orchestrator from ever having the slot's name.
+            .. Slot(HarnessLayout.OrchestratorsEnvSlotRelative, keep),
 
             // What an action's steps write, and what they asked to keep. Both sit beside the
             // action's own tracked files, at whatever depth the author grouped it to, so these are

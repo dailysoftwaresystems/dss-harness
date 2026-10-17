@@ -576,6 +576,40 @@ public static partial class LegPathNames
     }
 
     /// <summary>
+    /// Refuses a prompt's placeholder that names nothing its caller fills in: the closed check of a
+    /// text whose vocabulary the caller owns alone.
+    /// </summary>
+    /// <param name="value">The text, a prompt or a fragment of one.</param>
+    /// <param name="setting">What to call the text in a refusal.</param>
+    /// <param name="filled">Exactly the names the caller fills in, and no others.</param>
+    /// <exception cref="HarnessException">A placeholder names nothing this caller fills in.</exception>
+    /// <remarks>
+    /// Not <see cref="RefuseUnknown"/>, which reads every name of a leg as one something fills: in a
+    /// prompt <c>{os}</c> is this machine's, from the engine's own values, and <c>{buildDir}</c> is a
+    /// name nothing fills there. This takes exactly the names its caller gives, so the same owner
+    /// serves both vocabularies without a prompt's being read against a leg's.
+    /// </remarks>
+    public static void RefuseUnfilled(
+        string? value,
+        string setting,
+        IReadOnlyCollection<string> filled)
+    {
+        ArgumentNullException.ThrowIfNull(filled);
+
+        foreach (var name in NamesIn(value).Where(name => !filled.Contains(name)))
+        {
+            var names = string.Join(", ", filled.Select(spelled => $"{{{spelled}}}"));
+
+            throw new HarnessException(
+                HarnessExit.ConfigInvalid,
+                $"{setting} names '{{{name}}}', which nothing here can fill in. "
+                + (filled.Count == 0
+                    ? "No name can be filled in here."
+                    : $"The names are {names}."));
+        }
+    }
+
+    /// <summary>
     /// Every name <paramref name="value"/> asks to have filled in, in the order it names them: a
     /// doubled brace, and a group another expander owns, name none.
     /// </summary>

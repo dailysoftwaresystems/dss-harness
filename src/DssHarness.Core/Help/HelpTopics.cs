@@ -2982,6 +2982,9 @@ public static class HelpTopics
         builder.AppendLine("                                     steps and whatever those steps run");
         builder.AppendLine("  .harness-config/runner/.env/       contents ignored; values actions read");
         builder.AppendLine("  .harness-config/runner/.secrets/   contents ignored; secret values actions read");
+        builder.AppendLine($"  {HarnessLayout.OrchestratorsEnvSlotRelative}/");
+        builder.AppendLine("                                     contents ignored; the agent clients' keys and");
+        builder.AppendLine("                                     settings, read against the main checkout");
         builder.AppendLine("  .harness-config/sshItems/<name>/   ignored, and written by you, not init:");
         builder.AppendLine("                                     .env (address, user, port), .key, known_hosts");
         builder.AppendLine("  .harness-config/wslDistros/<name>/ ignored; .env (distribution, credential)");

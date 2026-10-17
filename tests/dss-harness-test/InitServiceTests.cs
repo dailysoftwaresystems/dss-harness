@@ -92,6 +92,7 @@ public sealed class InitServiceTests
         Assert.True(Directory.Exists(temp.Combine(".harness-config", "runner", "actions")));
         Assert.True(File.Exists(temp.Combine(".harness-config", "runner", ".env", ".gitkeep")));
         Assert.True(File.Exists(temp.Combine(".harness-config", "runner", ".secrets", ".gitkeep")));
+        Assert.True(File.Exists(temp.Combine(".harness-config", "orchestrators", ".env", ".gitkeep")));
         Assert.True(File.Exists(temp.Combine(".gitignore")));
 
         // A first init declares no leg, so there is nothing to install for and nothing to say about it.
@@ -873,6 +874,7 @@ public sealed class InitServiceTests
         Directory.CreateDirectory(temp.Combine(".harness-config", "wslDistros", "probe-distro"));
         File.WriteAllText(temp.Combine(".harness-config", "wslDistros", "probe-distro", ".env"), "secret");
         File.WriteAllText(temp.Combine(".harness-config", "runner", ".secrets", "token.env"), "secret");
+        File.WriteAllText(temp.Combine(".harness-config", "orchestrators", ".env", "keys.env"), "ANTHROPIC_API_KEY=secret");
 
         await harness.RunGitAsync(temp.Path, ["add", "-A"], TestContext.Current.CancellationToken);
         var tracked = await harness.RunGitAsync(
@@ -894,6 +896,7 @@ public sealed class InitServiceTests
         Assert.Contains(".harness-config/wslDistros/.gitkeep", files);
         Assert.Contains(".harness-config/runner/.env/.gitkeep", files);
         Assert.Contains(".harness-config/runner/.secrets/.gitkeep", files);
+        Assert.Contains(".harness-config/orchestrators/.env/.gitkeep", files);
 
         Assert.DoesNotContain(".harness-config/lock.json", files);
         Assert.DoesNotContain(files, file => file.Contains("wt-a", StringComparison.Ordinal));
@@ -901,6 +904,7 @@ public sealed class InitServiceTests
         Assert.DoesNotContain(files, file => file.Contains("probe-host", StringComparison.Ordinal));
         Assert.DoesNotContain(files, file => file.Contains("probe-distro", StringComparison.Ordinal));
         Assert.DoesNotContain(files, file => file.EndsWith("token.env", StringComparison.Ordinal));
+        Assert.DoesNotContain(files, file => file.EndsWith("keys.env", StringComparison.Ordinal));
     }
 
     /// <summary>

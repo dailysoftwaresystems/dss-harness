@@ -125,6 +125,23 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The layout topic names the agent clients' key slot, beside the runner's two value slots:
+    /// init creates its placeholder, and what it holds is read against the main checkout.
+    /// </summary>
+    [Fact]
+    public async Task LayoutTopic_NamesTheAgentClientsKeySlot()
+    {
+        var result = HelpText.Of("layout");
+        var prose = Prose.Words(result.StandardOutput);
+
+        Assert.Contains($"{HarnessLayout.OrchestratorsEnvSlotRelative}/", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains(
+            "the agent clients' keys and settings, read against the main checkout",
+            prose,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The verdicts topic says what becomes of a build stopped from outside, which is stopped rather than failed - but for
     /// one the harness stopped for hanging, or under another build tool - and of a run killed before it finished, which
     /// reaches no verdict and says nothing itself: the next run in its tree on that machine says it was abandoned, and
