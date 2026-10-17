@@ -57,4 +57,21 @@ public sealed class PointOfNoReturnTests
     [InlineData(new string[0], false)]
     public void ARunAskedToSetUp_IsWaitedForAfterCtrlC_AsWhatIsOnTheListIs(string[] commandLine, bool waited)
         => Assert.Equal(waited, PointOfNoReturn.Holds(commandLine));
+
+    /// <summary>
+    /// How long the command line waits is asked beside whether it waits at all: as long as a deletion expects for a
+    /// command past its point of no return, and no grace of this tool's for any other - the command line's own short
+    /// wait, which nothing here widens - so a front end holding a window open holds it exactly as long.
+    /// </summary>
+    [Theory]
+    [InlineData(new[] { WorktreeService.DeleteCommand, "w" }, 120_000)]
+    [InlineData(new[] { AgentService.FoldCommand }, 120_000)]
+    [InlineData(new[] { "test", "--set-up" }, 120_000)]
+    [InlineData(new[] { "build" }, null)]
+    [InlineData(new[] { WorktreeService.ListCommand }, null)]
+    [InlineData(new string[0], null)]
+    public void TheGraceOfACommandLine_IsAskedBesideWhetherItHoldsOne(string[] commandLine, int? waitedMilliseconds)
+        => Assert.Equal(
+            waitedMilliseconds is { } milliseconds ? TimeSpan.FromMilliseconds(milliseconds) : null,
+            PointOfNoReturn.GraceFor(commandLine));
 }

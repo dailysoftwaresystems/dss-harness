@@ -539,7 +539,9 @@ public sealed class WorktreeRemovalTests
     /// <summary>
     /// Where what holds the worktree is this command's own current directory, as when it runs inside the worktree, the
     /// refusal says so and says to run it from outside, which nothing another program closes would let go; and where
-    /// something else holds part of it too, that that is to be closed as well.
+    /// something else holds part of it too, that that is to be closed as well. The directory is read through the
+    /// process's own one reader of it, so the one said here is the one the refusal names - not whatever directory the
+    /// test runner happens to be in.
     /// </summary>
     [Fact]
     public async Task AWorktreeThisCommandRunsIn_IsRefused_SayingToRunItFromOutside()
@@ -548,7 +550,8 @@ public sealed class WorktreeRemovalTests
         var cancellationToken = TestContext.Current.CancellationToken;
         var harness = await PrepareAsync(temp);
         var path = await CreateAsync(harness, temp, "inside");
-        var here = new HeldEntry(Environment.CurrentDirectory, HeldReason);
+        harness.ProcessContext.Fixed = Path.Combine(temp.Path, "typed-from");
+        var here = new HeldEntry(harness.ProcessContext.CurrentDirectory, HeldReason);
 
         var alone = await Service(harness, harness.GitClient, new HoldsAnswered(harness.FileSystem, _ => [here]))
             .DeleteAsync(temp.Path, "inside", force: false, deleteEvidence: false, cancellationToken: cancellationToken);
@@ -855,7 +858,7 @@ public sealed class WorktreeRemovalTests
                 return null;
             },
         };
-        var service = new WorktreeService(harness.ContextLoader, git, harness.FileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.LocalTransport, harness.RunLock)
+        var service = new WorktreeService(harness.ContextLoader, git, harness.FileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.LocalTransport, harness.RunLock, harness.ProcessContext)
         {
             InterruptionGrace = TimeSpan.FromMilliseconds(400),
         };
@@ -944,7 +947,7 @@ public sealed class WorktreeRemovalTests
                 return null;
             },
         };
-        var service = new WorktreeService(harness.ContextLoader, git, harness.FileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.LocalTransport, harness.RunLock)
+        var service = new WorktreeService(harness.ContextLoader, git, harness.FileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.LocalTransport, harness.RunLock, harness.ProcessContext)
         {
             InterruptionGrace = TimeSpan.FromMilliseconds(400),
         };
@@ -984,7 +987,7 @@ public sealed class WorktreeRemovalTests
                 return result;
             },
         };
-        var service = new WorktreeService(harness.ContextLoader, git, harness.FileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.LocalTransport, harness.RunLock)
+        var service = new WorktreeService(harness.ContextLoader, git, harness.FileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.LocalTransport, harness.RunLock, harness.ProcessContext)
         {
             InterruptionGrace = TimeSpan.Zero,
         };
@@ -1111,7 +1114,7 @@ public sealed class WorktreeRemovalTests
     }
 
     private static WorktreeService Service(HarnessFactory harness, IGitClient git, IFileSystem? fileSystem = null)
-        => new(harness.ContextLoader, git, fileSystem ?? harness.FileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.Local(fileSystem ?? harness.FileSystem), harness.RunLock);
+        => new(harness.ContextLoader, git, fileSystem ?? harness.FileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.Local(fileSystem ?? harness.FileSystem), harness.RunLock, harness.ProcessContext);
 
     private static async Task<HarnessFactory> PrepareAsync(TempDirectory temp)
     {

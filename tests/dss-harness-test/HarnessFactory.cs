@@ -51,6 +51,7 @@ public sealed class HarnessFactory
         VerifyGitService = new VerifyGitService(GitClient);
 
         PathBudget = new PathBudget(Platform);
+        ProcessContext = new FixedProcessContext();
         ContextLoader = new HarnessContextLoader(
             RepositoryLocator,
             ConfigStore,
@@ -62,7 +63,7 @@ public sealed class HarnessFactory
         LocalTransport = Local(FileSystem);
         RunLock = new RunLock(FileSystem, Output, Identity);
         Slots = new HeavyLegSlots(FileSystem, Output, Identity, ScratchSlotsRecord());
-        WorktreeService = new WorktreeService(ContextLoader, GitClient, FileSystem, PathBudget, Platform, Output, HostCopies, LocalTransport, RunLock);
+        WorktreeService = new WorktreeService(ContextLoader, GitClient, FileSystem, PathBudget, Platform, Output, HostCopies, LocalTransport, RunLock, ProcessContext);
 
         AnchorRegistryLocator = new AnchorRegistryLocator(GitClient);
         AnchorRegistryLock = new NamedMutexAnchorRegistryLock(Platform, NamedMutexAnchorRegistryLock.DefaultTimeout);
@@ -123,7 +124,7 @@ public sealed class HarnessFactory
             Platform,
             Output,
             FilePermissions,
-            new WorktreeService(ContextLoader, gitClient ?? GitClient, fileSystem, PathBudget, Platform, Output, copies, Local(fileSystem), runLock),
+            new WorktreeService(ContextLoader, gitClient ?? GitClient, fileSystem, PathBudget, Platform, Output, copies, Local(fileSystem), runLock, ProcessContext),
             copies,
             runLock,
             new TreeHolders(runLock, Slots, Identity),
@@ -134,7 +135,7 @@ public sealed class HarnessFactory
             new OrchestrationStore(fileSystem),
             new OrchestrationLog(fileSystem, TimeProvider.System),
             TimeProvider.System,
-            () => CurrentDirectory ?? Directory.GetCurrentDirectory());
+            ProcessContext);
     }
 
     /// <summary>
@@ -244,8 +245,11 @@ public sealed class HarnessFactory
     /// </summary>
     public string ClaudeConfigDirectory { get; set; } = Path.Combine(Path.GetTempPath(), "dss-harness-no-claude-" + Guid.NewGuid().ToString("N"));
 
-    /// <summary>This process's working directory as the agent service sees it; the process's own where a test sets none.</summary>
-    public string? CurrentDirectory { get; set; }
+    /// <summary>
+    /// This process's working directory as the services here read it: the process's own until a test fixes one, which a
+    /// test does to say where a command was typed from.
+    /// </summary>
+    public FixedProcessContext ProcessContext { get; }
 
     /// <summary>Finds and keeps agents' Claude transcripts, under <see cref="ClaudeConfigDirectory"/>.</summary>
     public ClaudeTranscripts Transcripts { get; }

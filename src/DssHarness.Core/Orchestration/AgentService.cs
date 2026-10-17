@@ -106,7 +106,7 @@ public interface IAgentService
 /// <param name="store">The records.</param>
 /// <param name="log">The logs.</param>
 /// <param name="clock">When things happen.</param>
-/// <param name="currentDirectory">This process's working directory; the process's own where none is given.</param>
+/// <param name="processContext">This process's current directory, read per call: where a verb was typed, when none is named.</param>
 public sealed class AgentService(
     IHarnessContextLoader contextLoader,
     IGitClient gitClient,
@@ -125,7 +125,7 @@ public sealed class AgentService(
     OrchestrationStore store,
     OrchestrationLog log,
     TimeProvider clock,
-    Func<string>? currentDirectory = null) : IAgentService
+    IProcessContext processContext) : IAgentService
 {
     /// <summary>The command that creates an agent.</summary>
     public const string CreateCommand = "create-agent";
@@ -162,7 +162,7 @@ public sealed class AgentService(
     private readonly OrchestrationStore _store = store;
     private readonly OrchestrationLog _log = log;
     private readonly TimeProvider _clock = clock;
-    private readonly Func<string> _currentDirectory = currentDirectory ?? Directory.GetCurrentDirectory;
+    private readonly IProcessContext _processContext = processContext;
     private readonly AgentFold _fold = new(gitClient, fileSystem, permissions, platform);
     private readonly AgentEvidence _evidence = new(fileSystem, platform);
 
@@ -3005,7 +3005,7 @@ public sealed class AgentService(
 
     private string? StandsIn(string path)
     {
-        var here = _currentDirectory();
+        var here = _processContext.CurrentDirectory;
 
         try
         {

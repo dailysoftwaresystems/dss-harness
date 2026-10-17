@@ -258,7 +258,8 @@ public sealed class OrchestratorServiceTests
                 kit.Harness.Output,
                 kit.Harness.HostCopies,
                 kit.Harness.Local(fileSystem),
-                kit.Harness.RunLock),
+                kit.Harness.RunLock,
+                kit.Harness.ProcessContext),
             kit.Harness.OrchestrationStore,
             kit.Harness.OrchestrationLog,
             TimeProvider.System);

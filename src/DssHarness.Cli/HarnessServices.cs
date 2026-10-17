@@ -69,6 +69,7 @@ internal static class HarnessServices
             : HomeShorthand.None);
         services.AddSingleton<IHarnessOutput>(provider => new ConsoleHarnessOutput(verbose, provider.GetRequiredService<HomeShorthand>()));
         services.AddSingleton<IFileSystem, PhysicalFileSystem>();
+        services.AddSingleton<IProcessContext, ProcessContext>();
         services.AddSingleton<IProcessRunner, ProcessRunner>();
 
         // One answer per command to which variables git reads a repository from, shared by every child

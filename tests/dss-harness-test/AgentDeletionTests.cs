@@ -970,7 +970,7 @@ public sealed class AgentDeletionTests
         using var temp = new TempDirectory();
         var kit = await OrchestrationKit.PrepareAsync(temp);
         var worktree = await kit.CreateAgentAsync("ag");
-        kit.Harness.CurrentDirectory = Path.Combine(worktree, "docs");
+        kit.Harness.ProcessContext.Fixed = Path.Combine(worktree, "docs");
 
         var dry = await kit.DeleteAsync("ag", apply: false, discard: true);
         var refused = await kit.DeleteAsync("ag", apply: true, discard: true);

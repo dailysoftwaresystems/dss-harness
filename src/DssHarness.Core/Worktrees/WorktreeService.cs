@@ -150,7 +150,8 @@ public sealed class WorktreeService(
     IHarnessOutput output,
     IHostCopyRemover hostCopies,
     LocalSyncTransport local,
-    RunLock runLock) : IWorktreeService
+    RunLock runLock,
+    IProcessContext processContext) : IWorktreeService
 {
     /// <summary>The command a deletion reports under, and the one spelling of its name.</summary>
     public const string DeleteCommand = "delete-worktree";
@@ -197,6 +198,9 @@ public sealed class WorktreeService(
     /// worktree being deleted.
     /// </summary>
     private readonly RunLock _runLock = runLock;
+
+    /// <summary>The process's current directory, read per call: what "this command's own directory" means here.</summary>
+    private readonly IProcessContext _processContext = processContext;
 
     /// <summary>
     /// How long a deletion may run after an interruption before git is stopped, just before the
@@ -1664,7 +1668,7 @@ public sealed class WorktreeService(
     private string DescribeHeld(string name, IReadOnlyList<HeldEntry> held)
     {
         var again = $"'{ToolPackage.Command} {DeleteCommand} {name}'";
-        var own = held.Any(entry => PathsEqual(entry.Path, Environment.CurrentDirectory));
+        var own = held.Any(entry => PathsEqual(entry.Path, _processContext.CurrentDirectory));
         var remedy = !own ? $"Close what holds it, then run {again} again."
             : held.Count == 1 ? $"It is this command's own current directory: run {again} again from outside the worktree."
             : $"One is this command's own current directory: close what holds the rest, then run {again} again from outside the worktree.";

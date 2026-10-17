@@ -1,11 +1,12 @@
 using System.CommandLine;
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.DependencyInjection;
-using DssHarness.Core.Configuration;
+using DssHarness.Core.Application;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Output;
+using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
@@ -199,13 +200,18 @@ internal static class CommandRunner
 
             try
             {
-                if (!TryResolveDirectory(parseResult, services, out var directory, out var problem))
+                var directory = CommandDirectory.Resolve(
+                    parseResult.GetValue(GlobalOptions.Directory),
+                    services.GetRequiredService<IProcessContext>().CurrentDirectory,
+                    services.GetRequiredService<IFileSystem>());
+
+                if (!directory.Holds)
                 {
-                    return Stop(output, commandName, HarnessExit.UsageError, problem, stopped);
+                    return Stop(output, commandName, HarnessExit.UsageError, directory.Problem!, stopped);
                 }
 
                 // Its body answers with its document exactly where a stop would: --json read once, here.
-                var context = new CommandContext(services, parseResult, directory, Json: stopped is not null);
+                var context = new CommandContext(services, parseResult, directory.Directory!, Json: stopped is not null);
                 var outcome = await body(context, run, cancellationToken).ConfigureAwait(false);
 
                 Report(output, commandName, outcome, stopped);
@@ -226,8 +232,8 @@ internal static class CommandRunner
 
     /// <summary>
     /// Reports the exception that ended a command, and returns the exit code that says what it means.
-    /// The one place a failure becomes an exit code, so a command a host serves for another machine
-    /// fails exactly as a command typed here does.
+    /// What it means is read from the one table that owns it (<see cref="KnownCauses.Meaning"/>), so a
+    /// command a host serves for another machine fails exactly as a command typed here does.
     /// </summary>
     /// <param name="output">Where the command writes.</param>
     /// <param name="commandName">The command, which prefixes its failure line.</param>
@@ -238,48 +244,18 @@ internal static class CommandRunner
     /// </param>
     internal static int Fail(IHarnessOutput output, string commandName, Exception exception, Func<int, string, string>? stopped = null)
     {
-        var (exitCode, message, defect) = Meaning(exception);
+        var meaning = KnownCauses.Meaning(exception);
 
-        Stop(output, commandName, exitCode, message, stopped);
+        Stop(output, commandName, meaning.ExitCode, meaning.Message, stopped);
 
         // A defect's stack trace is there under --verbose, where someone is actually diagnosing it. It is the
         // harness's own report, which repeats the message its failure line said, so it is told as that line is.
-        if (defect && output.IsVerbose)
+        if (meaning.Defect && output.IsVerbose)
         {
             output.RawError(output.Shown(exception.ToString()));
         }
 
-        return exitCode;
-    }
-
-    /// <summary>
-    /// What <paramref name="exception"/> means: the code the command exits with, the line it ends on,
-    /// and whether it is a defect in this tool.
-    /// </summary>
-    private static (int ExitCode, string Message, bool Defect) Meaning(Exception exception)
-    {
-        // A cause both this and the leg executor know, read from the one table they share, so the
-        // same missing program means the same thing whether it stopped a command or a leg.
-        if (KnownCauses.ExitCodeFor(exception) is { } known)
-        {
-            return (known, exception.Message, false);
-        }
-
-        return exception switch
-        {
-            // The service already decided what this failure means.
-            HarnessException harness => (harness.ExitCode, harness.Message, false),
-            ConfigException => (HarnessExit.ConfigInvalid, exception.Message, false),
-
-            // Not CommandFailed: nothing ran to completion, and a caller reading a failure code
-            // would report a red verdict for an interrupted run.
-            OperationCanceledException => (HarnessExit.Cancelled, "Interrupted before completion.", false),
-
-            // A defect in the harness, not a failure of the thing being asked about. Reported as a
-            // message with a defined exit code rather than an unhandled exception, whose exit code
-            // would collide with a command's own contract.
-            _ => (HarnessExit.InternalError, $"Unexpected {exception.GetType().Name}: {exception.Message}", true),
-        };
+        return meaning.ExitCode;
     }
 
     /// <summary>
@@ -295,44 +271,6 @@ internal static class CommandRunner
 
         output.Fail(commandName, message);
         return exitCode;
-    }
-
-    /// <summary>
-    /// Resolves <c>--directory</c> to an absolute path and confirms it exists.
-    /// </summary>
-    /// <remarks>
-    /// Done once, here. Without the existence check, the first service to start a child
-    /// process in a missing directory fails with an error that names the wrong cause, and
-    /// a relative path would reach every message as a fragment rather than the directory
-    /// the user meant.
-    /// </remarks>
-    private static bool TryResolveDirectory(
-        ParseResult parseResult,
-        IServiceProvider services,
-        out string directory,
-        out string problem)
-    {
-        var requested = parseResult.GetValue(GlobalOptions.Directory) ?? System.Environment.CurrentDirectory;
-        directory = string.Empty;
-        problem = string.Empty;
-
-        try
-        {
-            directory = Path.GetFullPath(requested);
-        }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
-        {
-            problem = $"'{requested}' is not a usable directory path: {ex.Message}";
-            return false;
-        }
-
-        if (!services.GetRequiredService<IFileSystem>().DirectoryExists(directory))
-        {
-            problem = $"Directory '{directory}' does not exist.";
-            return false;
-        }
-
-        return true;
     }
 
     /// <summary>
