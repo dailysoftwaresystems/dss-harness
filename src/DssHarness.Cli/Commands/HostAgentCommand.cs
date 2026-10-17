@@ -1,9 +1,10 @@
 using System.CommandLine;
 using System.Text;
-using Microsoft.Extensions.DependencyInjection;
+using DssHarness.Core.Application;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Output;
 using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
 
 namespace DssHarness.Cli.Commands;
 
@@ -37,9 +38,16 @@ internal static class HostAgentCommand
             // command it starts must know it was asked for by another machine, not typed here.
             CommandRunner.Serve(CommandOrigin.Agent);
 
-            // Never prompting here is the point, not a default: this process serves another machine,
-            // its standard input already carries the request, and there is nobody at this end to ask.
-            await using var services = HarnessServices.Build(parseResult.GetValue(GlobalOptions.Verbose), prompting: false, CommandOrigin.Agent);
+            var session = ConsoleHost.Host.Begin(new SessionOptions
+            {
+                Command = HostAgentProtocol.CommandName,
+                Verbose = parseResult.GetValue(GlobalOptions.Verbose),
+
+                // Never prompting here is the point, not a default: this process serves another machine,
+                // its standard input already carries the request, and there is nobody at this end to ask.
+                Prompting = false,
+                Origin = CommandOrigin.Agent,
+            });
 
             // The request was written as UTF-8, and is read as such whatever the console's own input
             // encoding happens to be.
@@ -51,18 +59,25 @@ internal static class HostAgentCommand
             using var hungUp = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             using var hangUp = HangUp.Cancels(hungUp);
 
-            try
+            // The service reports its own ends, in the protocol the machine that asked reads: the session's own
+            // lines would sit in a stream the protocol owns, so its outcome is quiet and the exit code is carried.
+            var served = HarnessExit.Success;
+
+            await using (session.ConfigureAwait(false))
             {
-                return await services.GetRequiredService<HostAgentService>()
-                    .ServeAsync(input, Console.Out, Console.Error, run, hungUp.Token)
-                    .ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                // Reported, and turned into an exit code, exactly as any other command's failure is. Left to
-                // the parser, a defect would exit 1 with a stack trace, and the machine that asked would quote
-                // frames instead of the reason.
-                return CommandRunner.Fail(services.GetRequiredService<IHarnessOutput>(), HostAgentProtocol.CommandName, ex);
+                var completion = await session.RunAsync(
+                    async (scope, token) =>
+                    {
+                        var agent = (HostAgentService)scope.Services.GetService(typeof(HostAgentService))!;
+                        served = await agent.ServeAsync(input, Console.Out, Console.Error, run, token).ConfigureAwait(false);
+
+                        return new CommandOutcome(HarnessExit.Success, "served") with { Quiet = true };
+                    },
+                    hungUp.Token).ConfigureAwait(false);
+
+                // A failure the service threw is the session's to report, exactly as any command's is; an exit code
+                // the service answered with is its own, already said in the way the machine that asked reads.
+                return completion.Outcome is null ? completion.ExitCode : served;
             }
         });
 

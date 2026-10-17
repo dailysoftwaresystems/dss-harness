@@ -21,6 +21,11 @@
          set-up's up or down - into a program and its arguments without a shell (CommandLineText). The CLI
          project already depends on this package; the splitter is needed here, where those lines are read. -->
     <PackageReference Include="System.CommandLine" Version="2.0.12" />
+
+    <!-- The composition root: every service is assembled in Core (Composition\ServiceRegistration), so
+         a graphical front end begins the same operations the command line does without the command
+         line. The front end supplies the output and the prompt; the registrations are the tool's. -->
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.12" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1,7 +1,8 @@
 using System.CommandLine;
 using System.Runtime.InteropServices;
-using Microsoft.Extensions.DependencyInjection;
+using DssHarness.Core.Application;
 using DssHarness.Core.Execution;
+using DssHarness.Core.Hosts;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 
@@ -43,17 +44,31 @@ internal static class HostHoldCommand
                 ? null
                 : PosixSignalRegistration.Create(PosixSignal.SIGHUP, context => context.Cancel = true);
 
-            await using var services = HarnessServices.Build(verbose: false, prompting: false, CommandOrigin.Typed);
+            var session = ConsoleHost.Host.Begin(new SessionOptions
+            {
+                Command = HoldAwakeService.CommandName,
+                Prompting = false,
+            });
 
-            try
+            await using (session.ConfigureAwait(false))
             {
-                await services.GetRequiredService<HoldAwakeService>()
-                    .RunAsync(parseResult.GetValue(GenerationArgument)!, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or HarnessException)
-            {
-                // A hold that could not be kept ends: the machine sleeps as it would have without one.
+                await session.RunAsync(
+                    async (scope, token) =>
+                    {
+                        var holds = (HoldAwakeService)scope.Services.GetService(typeof(HoldAwakeService))!;
+
+                        try
+                        {
+                            await holds.RunAsync(parseResult.GetValue(GenerationArgument)!, token).ConfigureAwait(false);
+                        }
+                        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or HarnessException)
+                        {
+                            // A hold that could not be kept ends: the machine sleeps as it would have without one.
+                        }
+
+                        return new CommandOutcome(HarnessExit.Success, "held") with { Quiet = true };
+                    },
+                    cancellationToken).ConfigureAwait(false);
             }
 
             return HarnessExit.Success;

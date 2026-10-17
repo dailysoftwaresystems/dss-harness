@@ -62,10 +62,10 @@ internal static class CommandRunner
     private static readonly ConditionalWeakTable<Command, JsonAnswer> Answers = new();
 
     /// <summary>
-    /// The host every command runs through: one session per invocation, over the services this command line's own root
-    /// builds, the lifecycle in Core and the parsing and the console here.
+    /// The host every command runs through: one session per invocation, over the services the tool's own registrations
+    /// build, the lifecycle in Core and the parsing and the console here.
     /// </summary>
-    private static readonly DssHarnessHost Host = new(options => HarnessServices.Build(options.Verbose, options.Prompting, options.Origin));
+    private static readonly DssHarnessHost Host = ConsoleHost.Host;
 
     /// <summary>
     /// Marks what this flow runs from here on as run for <paramref name="origin"/>: by the host agent before it serves a
@@ -147,7 +147,13 @@ internal static class CommandRunner
         if (Answers.TryGetValue(parseResult.CommandResult.Command, out var json) && json.Asked(flags))
         {
             // Told as every other line the command writes is told: a host answering another machine writes its home as ~.
-            await using var services = HarnessServices.Build(verbose: false, prompting: false, Origin.Value ?? CommandOrigin.Typed);
+            await using var services = ConsoleHost.Build(new SessionOptions
+            {
+                Command = parseResult.CommandResult.Command.Name,
+                Verbose = false,
+                Prompting = false,
+                Origin = Origin.Value ?? CommandOrigin.Typed,
+            });
             var output = services.GetRequiredService<IHarnessOutput>();
 
             output.Data(json.Stopped(flags, HarnessExit.UsageError, parseResult.Errors[0].Message, output.Shown, run: null));
