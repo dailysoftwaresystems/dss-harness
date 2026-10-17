@@ -1,9 +1,11 @@
 using System.CommandLine;
 using System.Runtime.InteropServices;
-using Microsoft.Extensions.DependencyInjection;
+using DssHarness.Core.Application;
 using DssHarness.Core.Execution;
+using DssHarness.Core.Hosts;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace DssHarness.Cli.Commands;
 
@@ -43,20 +45,36 @@ internal static class HostHoldCommand
                 ? null
                 : PosixSignalRegistration.Create(PosixSignal.SIGHUP, context => context.Cancel = true);
 
-            await using var services = HarnessServices.Build(verbose: false, prompting: false, CommandOrigin.Typed);
-
-            try
+            var session = ConsoleHost.Host.Begin(new SessionOptions
             {
-                await services.GetRequiredService<HoldAwakeService>()
-                    .RunAsync(parseResult.GetValue(GenerationArgument)!, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or HarnessException)
-            {
-                // A hold that could not be kept ends: the machine sleeps as it would have without one.
-            }
+                Command = HoldAwakeService.CommandName,
+                Prompting = false,
+            });
 
-            return HarnessExit.Success;
+            await using (session.ConfigureAwait(false))
+            {
+                // A hold that could not be kept ends with 0, its body's own answer; anything else that ended it - a
+                // defect among them - exits with the code the session gave it, as every command does.
+                var completion = await session.RunAsync(
+                    async (scope, token) =>
+                    {
+                        var holds = scope.Services.GetRequiredService<HoldAwakeService>();
+
+                        try
+                        {
+                            await holds.RunAsync(parseResult.GetValue(GenerationArgument)!, token).ConfigureAwait(false);
+                        }
+                        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or HarnessException)
+                        {
+                            // A hold that could not be kept ends: the machine sleeps as it would have without one.
+                        }
+
+                        return new CommandOutcome(HarnessExit.Success, "held") with { Quiet = true };
+                    },
+                    cancellationToken).ConfigureAwait(false);
+
+                return completion.ExitCode;
+            }
         });
 
         return command;

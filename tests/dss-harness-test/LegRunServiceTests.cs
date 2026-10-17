@@ -11,6 +11,7 @@ using DssHarness.Core.Git;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Legs;
 using DssHarness.Core.Mutations;
+using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Repository;
@@ -837,6 +838,9 @@ public sealed class LegRunServiceTests
         Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
         Assert.Contains("lock.json", outcome.Message, StringComparison.Ordinal);
 
+        // A lock file nobody can read is no run to wait for: its 13 tells no caller to try again.
+        Assert.Equal(OutcomeCause.None, outcome.Cause);
+
         using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
 
         Assert.DoesNotContain(
@@ -1056,6 +1060,37 @@ public sealed class LegRunServiceTests
     }
 
     /// <summary>
+    /// A run tells a front end its directory as it is made - what it is, and its own path - so one following the run
+    /// reads its records where it is handed them and puts no path together; and that is the one record it is told of.
+    /// </summary>
+    [Fact]
+    public async Task ARun_TellsAFrontEndItsDirectory_AsItIsMade()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var sink = new RecordingSink();
+        var run = RunId.New();
+        CommandOutcome outcome;
+
+        using (var output = new EventHarnessOutput(sink, OperationId.New()))
+        {
+            outcome = await OutcomeAsync(
+                temp,
+                harness,
+                OneLeg(harness),
+                SshAndLocal(harness),
+                new LegRunRequest(temp.Path, null) { Workload = LegWorkload.Copy },
+                runId: run,
+                output: output);
+        }
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal(
+            [new RecordWritten("run directory", new HarnessLayout(temp.Path, temp.Path).RunDirectory(run.Value))],
+            sink.Seen.OfType<RecordWritten>().Select(@event => @event with { Operation = null, Sequence = 0, At = default }));
+    }
+
+    /// <summary>
     /// A leg's work here is given the repository's other trees on this machine - every tree but its own, the main
     /// checkout among them for a worktree's leg - by which whose build directory a process found beside it works in is
     /// told; and why they could not be listed, where they could not. Its own is told however the listing spells it - here
@@ -1158,6 +1193,10 @@ public sealed class LegRunServiceTests
             logs: logHeld ? new LogOwnership(new LogsOwnedElsewhere(harness.FileSystem), harness.Output, harness.Identity) : null);
 
         Assert.Equal(logHeld ? LegExit.LogHeld : HarnessExit.Refused, outcome.ExitCode);
+
+        // A run whose logs another owns is pointed elsewhere, never waited out as a lock is, and a refusal of the leg's
+        // configuration is put right: neither tells a caller to try again.
+        Assert.Equal(OutcomeCause.None, outcome.Cause);
         Assert.StartsWith(Path.Combine(temp.Path, ".harness-config", "runs") + Path.DirectorySeparatorChar, RunDirectoryOf(outcome, json), StringComparison.Ordinal);
     }
 
@@ -4081,6 +4120,64 @@ public sealed class LegRunServiceTests
             StringComparer.Ordinal);
     }
 
+    /// <summary>
+    /// A run whose legs a lock another run holds turned away ends 13, and says beside its code that the lock is why: the
+    /// one refusal a caller that can wait waits out rather than puts right - in its ledger and as text alike.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ARunWhoseLegsAHeldLockTurnedAway_SaysTheLockIsWhy(bool json)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var config = OneLeg(harness);
+        var layout = new HarnessLayout(temp.Path, temp.Path);
+
+        await using (await new RunLock(harness.FileSystem, harness.Output, harness.Identity).AcquireAsync(
+            layout,
+            new LockRequest { Host = HostId.Local.ToString(), Tree = temp.Path, Scope = LockScope.TreeExclusive, RunId = RunId.New(), Command = "fold-agent" },
+            TestContext.Current.CancellationToken))
+        {
+            var outcome = await OutcomeAsync(
+                temp,
+                harness,
+                config,
+                SshAndLocal(harness),
+                new LegRunRequest(temp.Path, null, Json: json) { Workload = LegWorkload.BuildOnly },
+                loader: LocalOnlyLoader(config, temp.Path));
+
+            Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
+            Assert.Equal(OutcomeCause.LockHeld, outcome.Cause);
+        }
+    }
+
+    /// <summary>
+    /// A run that ends 13 for anything but a lock its legs met, or ends otherwise with a leg a lock turned away among
+    /// worse, says nothing of a lock: only where a held lock is what its code says is there a run to wait for.
+    /// </summary>
+    [Theory]
+    [InlineData(LegVerdict.Passed, HarnessExit.Success)]
+    [InlineData(LegVerdict.Failed, HarnessExit.CommandFailed)]
+    [InlineData(LegVerdict.Poisoned, HarnessExit.InternalError)]
+    [InlineData(LegVerdict.RefusedLocked, HarnessExit.Refused)]
+    public async Task OnlyACodeAHeldLockDecides_SaysTheLockIsWhy(LegVerdict verdict, int exitCode)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            OneLeg(harness),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null) { Workload = LegWorkload.Copy },
+            work: leg => new LegEntry { Leg = leg.Leg.Name, Verdict = verdict, Detail = "as the leg's work said" });
+
+        Assert.Equal(exitCode, outcome.ExitCode);
+        Assert.Equal(verdict == LegVerdict.RefusedLocked ? OutcomeCause.LockHeld : OutcomeCause.None, outcome.Cause);
+    }
+
     /// <summary>A leg refused before its work began kept no records: no line names any, and its JSON holds none.</summary>
     [Fact]
     public async Task ALegRefusedBeforeItsWork_NamesNoRecords()
@@ -4234,7 +4331,8 @@ public sealed class LegRunServiceTests
         RunId? runId = null,
         IHarnessContextLoader? loader = null,
         LegSetUps? setUps = null,
-        IProcessRunner? versionProbes = null)
+        IProcessRunner? versionProbes = null,
+        IHarnessOutput? output = null)
     {
         var loading = loader ?? HostDoubles.Loader(config, tree ?? temp.Path, temp.Path);
         var run = runId ?? RunId.New();
@@ -4262,7 +4360,7 @@ public sealed class LegRunServiceTests
             harness.PathBudget,
             fileSystem ?? harness.FileSystem,
             harness.Platform,
-            harness.Output,
+            output ?? harness.Output,
             origin,
             setUps);
 
@@ -4277,5 +4375,13 @@ public sealed class LegRunServiceTests
                     ?? Task.FromResult(work?.Invoke(leg) ?? new LegEntry { Leg = leg.Leg.Name, Verdict = LegVerdict.Passed });
             },
             cancellationToken ?? TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>A front end's sink of events, keeping each as it is given.</summary>
+    private sealed class RecordingSink : IRunEvents
+    {
+        public List<RunEvent> Seen { get; } = [];
+
+        public void Emit(RunEvent @event) => Seen.Add(@event);
     }
 }

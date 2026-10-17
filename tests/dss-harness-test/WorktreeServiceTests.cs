@@ -408,6 +408,9 @@ public sealed class WorktreeServiceTests
             "Wait for it to end, or pass --force to delete the worktree with that copy in it. Nothing was removed.",
             refused.Outcome.Message,
             StringComparison.Ordinal);
+
+        // A run holding a copy is waited out, not put right: a caller that can wait is told so beside the line.
+        Assert.Equal(OutcomeCause.LockHeld, refused.Outcome.Cause);
         Assert.True(Directory.Exists(created.Path));
         Assert.True(Directory.Exists(worker));
         Assert.True(Directory.Exists(free), "a refusal removes nothing, a worker no sweep holds included");
@@ -454,7 +457,7 @@ public sealed class WorktreeServiceTests
             harness.GitClient,
             harness.Platform,
             new TakenOnceAsked(taken, "run r, process 7 on this machine"));
-        var service = new WorktreeService(harness.ContextLoader, harness.GitClient, harness.FileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, local, new RunLock(harness.FileSystem, harness.Output, harness.Identity));
+        var service = new WorktreeService(harness.ContextLoader, harness.GitClient, harness.FileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, local, new RunLock(harness.FileSystem, harness.Output, harness.Identity), harness.ProcessContext);
 
         var refused = await service.DeleteAsync(temp.Path, "wt", force: false, deleteEvidence: false, cancellationToken: cancellationToken);
 
@@ -463,6 +466,7 @@ public sealed class WorktreeServiceTests
             $"Worktree 'wt' was not deleted: a mutation worker kept in it is in use - '{taken}': a sweep still running holds it: run r, process 7 on this machine. "
             + "Wait for it to end, or pass --force to delete the worktree with that copy in it. Nothing of the worktree was removed.",
             refused.Outcome.Message);
+        Assert.Equal(OutcomeCause.LockHeld, refused.Outcome.Cause);
         Assert.True(Directory.Exists(created.Path));
         Assert.True(Directory.Exists(taken));
         Assert.False(Directory.Exists(free));
@@ -493,7 +497,7 @@ public sealed class WorktreeServiceTests
             harness.GitClient,
             harness.Platform,
             new HeldAndInterrupting(held, interruption));
-        var service = new WorktreeService(harness.ContextLoader, harness.GitClient, harness.FileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, local, new RunLock(harness.FileSystem, harness.Output, harness.Identity));
+        var service = new WorktreeService(harness.ContextLoader, harness.GitClient, harness.FileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, local, new RunLock(harness.FileSystem, harness.Output, harness.Identity), harness.ProcessContext);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
             () => service.DeleteAsync(temp.Path, "wt", force: false, deleteEvidence: false, cancellationToken: interruption.Token));
@@ -550,7 +554,7 @@ public sealed class WorktreeServiceTests
         Directory.CreateDirectory(Path.Combine(stuck, "held-build"));
 
         var disk = new CannotRemoveNamed(harness.FileSystem, "held-build");
-        var service = new WorktreeService(harness.ContextLoader, harness.GitClient, disk, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.Local(disk), new RunLock(disk, harness.Output, harness.Identity));
+        var service = new WorktreeService(harness.ContextLoader, harness.GitClient, disk, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.Local(disk), new RunLock(disk, harness.Output, harness.Identity), harness.ProcessContext);
 
         var failed = await service.DeleteAsync(temp.Path, "wt", force: false, deleteEvidence: false, cancellationToken: cancellationToken);
 
@@ -564,6 +568,9 @@ public sealed class WorktreeServiceTests
             failed.Outcome.Message,
             StringComparison.Ordinal);
         Assert.DoesNotContain("is in use", failed.Outcome.Message, StringComparison.Ordinal);
+
+        // A copy that could not be removed is put right, never waited out: no caller is told to wait for it.
+        Assert.Equal(OutcomeCause.None, failed.Outcome.Cause);
         Assert.True(Directory.Exists(created.Path));
         Assert.True(Directory.Exists(stuck));
         Assert.False(Directory.Exists(free));
@@ -621,7 +628,7 @@ public sealed class WorktreeServiceTests
 
         // Interrupted as the first worker is gone, or as something within the second has gone.
         var disk = new InterruptsOnceRemoved(harness.FileSystem, partWay ? Path.Combine(second, ".git") : first, interruption);
-        var service = new WorktreeService(harness.ContextLoader, harness.GitClient, disk, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.Local(disk), new RunLock(disk, harness.Output, harness.Identity));
+        var service = new WorktreeService(harness.ContextLoader, harness.GitClient, disk, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.Local(disk), new RunLock(disk, harness.Output, harness.Identity), harness.ProcessContext);
 
         var stopped = await service.DeleteAsync(temp.Path, "wt", force: false, deleteEvidence: false, cancellationToken: interruption.Token);
 
@@ -665,7 +672,7 @@ public sealed class WorktreeServiceTests
         var only = await WorkerAsync(harness, Slot(created.Path, "357e24cw-1"), cancellationToken);
         var size = harness.FileSystem.DirectorySize(only);
         var disk = new InterruptsOnceRemoved(harness.FileSystem, only, interruption);
-        var service = new WorktreeService(harness.ContextLoader, harness.GitClient, disk, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.Local(disk), new RunLock(disk, harness.Output, harness.Identity));
+        var service = new WorktreeService(harness.ContextLoader, harness.GitClient, disk, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.Local(disk), new RunLock(disk, harness.Output, harness.Identity), harness.ProcessContext);
 
         var stopped = await service.DeleteAsync(temp.Path, "wt", force: false, deleteEvidence: false, cancellationToken: interruption.Token);
 
@@ -698,7 +705,7 @@ public sealed class WorktreeServiceTests
 
         // Weighed once as the workers are asked about, and again as they are listed to be removed.
         var disk = new InterruptsOnceWeighedAgain(harness.FileSystem, worker, interruption);
-        var service = new WorktreeService(harness.ContextLoader, harness.GitClient, disk, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.Local(disk), new RunLock(disk, harness.Output, harness.Identity));
+        var service = new WorktreeService(harness.ContextLoader, harness.GitClient, disk, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.Local(disk), new RunLock(disk, harness.Output, harness.Identity), harness.ProcessContext);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
             () => service.DeleteAsync(temp.Path, "wt", force: false, deleteEvidence: false, cancellationToken: interruption.Token));
@@ -782,7 +789,7 @@ public sealed class WorktreeServiceTests
         }
 
         var worker = await WorkerAsync(harness, Slot(path, "357e24cw-1"), cancellationToken);
-        var service = new WorktreeService(harness.ContextLoader, harness.GitClient, disk, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.Local(disk), new RunLock(disk, harness.Output, harness.Identity));
+        var service = new WorktreeService(harness.ContextLoader, harness.GitClient, disk, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.Local(disk), new RunLock(disk, harness.Output, harness.Identity), harness.ProcessContext);
 
         var refused = await service.DeleteAsync(temp.Path, "wt", force: false, deleteEvidence: false, cancellationToken: cancellationToken);
 
@@ -816,7 +823,7 @@ public sealed class WorktreeServiceTests
         var worker = await WorkerAsync(harness, Slot(created.Path, "357e24cw-1"), cancellationToken);
         var size = harness.FileSystem.DirectorySize(worker);
         var blind = new JunctionsUnread(harness.FileSystem);
-        var service = new WorktreeService(harness.ContextLoader, harness.GitClient, blind, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.Local(blind), new RunLock(blind, harness.Output, harness.Identity));
+        var service = new WorktreeService(harness.ContextLoader, harness.GitClient, blind, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.Local(blind), new RunLock(blind, harness.Output, harness.Identity), harness.ProcessContext);
 
         var failed = await service.DeleteAsync(temp.Path, "wt", force: false, deleteEvidence: false, cancellationToken: cancellationToken);
 
@@ -902,7 +909,7 @@ public sealed class WorktreeServiceTests
                 return null;
             },
         };
-        var service = new WorktreeService(harness.ContextLoader, git, harness.FileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.LocalTransport, harness.RunLock)
+        var service = new WorktreeService(harness.ContextLoader, git, harness.FileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.LocalTransport, harness.RunLock, harness.ProcessContext)
         {
             InterruptionGrace = TimeSpan.FromMilliseconds(400),
         };
@@ -942,7 +949,7 @@ public sealed class WorktreeServiceTests
             _ => new IOException("the disk would not say."),
         };
         var blind = new CannotWeigh(harness.FileSystem, worker, raised);
-        var service = new WorktreeService(harness.ContextLoader, harness.GitClient, blind, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.Local(blind), new RunLock(blind, harness.Output, harness.Identity));
+        var service = new WorktreeService(harness.ContextLoader, harness.GitClient, blind, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.Local(blind), new RunLock(blind, harness.Output, harness.Identity), harness.ProcessContext);
         var why = keptBy == "refused" ? "the disk would not say" : $"'{Path.Combine(created.Path, HarnessLayout.MutationsDirectoryName)}' could not be looked in: the disk would not say";
 
         var failed = await service.DeleteAsync(temp.Path, "wt", force: false, deleteEvidence: false, cancellationToken: cancellationToken);

@@ -1,0 +1,198 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "clean",
+    "findings",
+    "unverified",
+    "items",
+    "preExisting"
+  ],
+  "properties": {
+    "clean": {
+      "type": "boolean",
+      "description": "True exactly when items is empty: no finding is left that a further round of this run can settle."
+    },
+    "findings": {
+      "type": "array",
+      "description": "Each thing that is not as the run says it is, or was left out, with what you checked; one only a person can settle says so, and gets no item.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "unverified": {
+      "type": "array",
+      "description": "What you could not verify, and why.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "items": {
+      "type": "array",
+      "description": "The work items of a further round that would settle the findings; empty where clean is true. At most 8, shaped as a plan's: each sized to one builder's cycle, with its own definition of done.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "title",
+          "instructions",
+          "done",
+          "ownedPaths",
+          "forbiddenPaths",
+          "reuses",
+          "creates",
+          "replaces",
+          "testFilter"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "A short name for the item: lowercase letters, digits and single hyphens."
+          },
+          "title": {
+            "type": "string",
+            "description": "One line that says what the item delivers; it becomes the subject of the item's commit."
+          },
+          "instructions": {
+            "type": "string",
+            "description": "Everything the agent that builds the item needs: what to build, where, what must hold when it is done, and what is out of its scope."
+          },
+          "done": {
+            "type": "string",
+            "description": "The item's definition of done: what must hold for the item to be finished, as statements a person or a check can answer one by one - the behaviours built, the test that pins each, and what is true of the tree when the builder reports. The builder works to it, the review weighs it and the run's final audit checks it."
+          },
+          "ownedPaths": {
+            "type": "array",
+            "description": "The path patterns this item may write. No file is matched by the patterns of two items.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "forbiddenPaths": {
+            "type": "array",
+            "description": "Path patterns this item must not touch, though they are near its work.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "reuses": {
+            "type": "array",
+            "description": "The existing code this item reuses or extends. Empty only where the repository has no machinery related to what the item needs.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "path",
+                "what"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "description": "The existing code the item builds on: a file or a directory in the repository."
+                },
+                "what": {
+                  "type": "string",
+                  "description": "What is there, and what the item uses or extends it for."
+                }
+              }
+            }
+          },
+          "creates": {
+            "type": "array",
+            "description": "What this item creates from nothing. Empty where everything it does extends what exists.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "what",
+                "why",
+                "searched"
+              ],
+              "properties": {
+                "what": {
+                  "type": "string",
+                  "description": "The new thing: a type, a service, a helper, a file."
+                },
+                "why": {
+                  "type": "string",
+                  "description": "Why nothing that exists serves, or can be extended to serve."
+                },
+                "searched": {
+                  "type": "string",
+                  "description": "What was searched for, and where, before it was decided that this has to be new."
+                }
+              }
+            }
+          },
+          "replaces": {
+            "type": "array",
+            "description": "Existing code this item refactors, rewrites or creates again because the request itself asked for that. Empty where the request asked for none; nothing else that exists is rebuilt.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "path",
+                "what"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "description": "The existing code the item rebuilds: a file or a directory in the repository."
+                },
+                "what": {
+                  "type": "string",
+                  "description": "What is rebuilt, and what becomes of the old one: rewritten in place, or removed by this item."
+                }
+              }
+            }
+          },
+          "testFilter": {
+            "type": "string",
+            "description": "The filter that selects this item's tests when the engine runs them, written in what each leg's test runner takes after its filter option, as the task lists them; it names only tests that are there or that the item writes. Empty is no filter: every test of each leg runs."
+          }
+        }
+      }
+    },
+    "preExisting": {
+      "type": "array",
+      "description": "Issues you met that were there before this run - outside what it changed - each reported and never fixed by you. Empty where you met none.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "title",
+          "description",
+          "where",
+          "evidence",
+          "blocks"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "One line: what is wrong, and where."
+          },
+          "description": {
+            "type": "string",
+            "description": "What is wrong and what it causes, as you saw it."
+          },
+          "where": {
+            "type": "array",
+            "description": "The paths, from the repository's root, or the command.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "evidence": {
+            "type": "string",
+            "description": "What you read or ran and saw, quoted: the file and its lines, or the command and what it printed."
+          },
+          "blocks": {
+            "type": "boolean",
+            "description": "True only where it stops your own work."
+          }
+        }
+      }
+    }
+  }
+}

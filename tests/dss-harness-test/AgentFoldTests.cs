@@ -1292,6 +1292,11 @@ public sealed class AgentFoldTests
         Assert.Equal(["1 path(s) declared settled by hand: the main tree's copy handed to the agent and recorded as shared:", "  a.txt"], applied.Details!.Take(2));
         Assert.Equal("one\nmain edit\nreconciled\n", OrchestrationKit.Read(worktree, "a.txt"));
         Assert.Equal(await AgentServiceTests.DigestAsync(kit.Main, "a.txt"), kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!.Paths["a.txt"]);
+
+        // What the fold did rides its answer: the one path handed, with the digest of the copy it was handed, and nothing else.
+        AgentVerbFactsTests.Same(
+            new AgentFolded([], [], [], ArmRegistry: null, [new HandedPath("a.txt", await AgentServiceTests.DigestAsync(kit.Main, "a.txt"))], [], [], []),
+            Assert.IsType<AgentVerbFacts>(applied.Facts).Folded);
     }
 
     /// <summary>

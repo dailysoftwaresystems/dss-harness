@@ -48,11 +48,25 @@ public sealed class HoldAwakeRegistry(IHostCommandRunner hostCommands, IHarnessO
     /// <summary>Asks each host this command reached that asks for a hold to hold itself awake, all at once.</summary>
     /// <param name="commandName">The command ending, which prefixes what is said.</param>
     /// <param name="cancellationToken">Stops the asking.</param>
-    public Task LeaveHoldsAsync(string commandName, CancellationToken cancellationToken)
+    /// <exception cref="AggregateException">
+    /// More than one host's hold met a defect of this tool: each of them, where awaiting them all would rethrow the first
+    /// alone and say nothing of the rest. A host that refused, could not be asked, or whose stream went is said by name
+    /// as a warning, and throws nothing.
+    /// </exception>
+    public async Task LeaveHoldsAsync(string commandName, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(commandName);
 
-        return Task.WhenAll(_reached.Values.Select(host => HoldAsync(commandName, host, cancellationToken)));
+        var holds = _reached.Values.Select(host => HoldAsync(commandName, host, cancellationToken)).ToList();
+
+        try
+        {
+            await Task.WhenAll(holds).ConfigureAwait(false);
+        }
+        catch when (holds.Count(hold => hold.IsFaulted) > 1)
+        {
+            throw new AggregateException(holds.Where(hold => hold.IsFaulted).SelectMany(hold => hold.Exception!.InnerExceptions));
+        }
     }
 
     /// <summary>
@@ -119,8 +133,10 @@ public sealed class HoldAwakeRegistry(IHostCommandRunner hostCommands, IHarnessO
                 $"{host.Host}: could not be held awake until the next command: "
                 + (said ?? (finished is { } code ? $"it exited {code}" : HostProbes.NeverFinished("the hold", result, session.Connection))));
         }
-        catch (HarnessException ex)
+        catch (Exception ex) when (ex is HarnessException or ProgramStartException or IOException or UnauthorizedAccessException)
         {
+            // A host that refused, that could not be asked or whose stream went is that host's, said by its name; each of
+            // the others is still asked, and says its own.
             _output.Warn(commandName, $"{host.Host}: could not be held awake until the next command: {ex.Message.TrimEnd('.')}");
         }
     }

@@ -1,3 +1,4 @@
+using DssHarness.Core.Configuration;
 using DssHarness.Core.Processes;
 
 namespace DssHarness.Core.Results;
@@ -43,6 +44,51 @@ public static class KnownCauses
             // Missing, or there and unable to start: either way the instrument never ran.
             ProgramStartException => HarnessExit.ToolMissing,
             _ => null,
+        };
+    }
+
+    /// <summary>What an exception that ended a command means, in the terms its front ends answer in.</summary>
+    /// <param name="ExitCode">The code the command exits with.</param>
+    /// <param name="Message">The line it ends on.</param>
+    /// <param name="Defect">Whether this is a defect in this tool, rather than a failure of the thing asked about.</param>
+    public sealed record MeaningOf(int ExitCode, string Message, bool Defect);
+
+    /// <summary>
+    /// What <paramref name="exception"/> means when it ends a command: the code the command exits with, the line it
+    /// ends on, and whether it is a defect in this tool.
+    /// </summary>
+    /// <param name="exception">What ended the command.</param>
+    /// <remarks>
+    /// The one place a failure becomes an exit code, so a command a host serves for another machine, and a command a
+    /// front end of any other kind runs, fail exactly as a command typed here does. <see cref="ExitCodeFor"/> is not
+    /// widened for this: <see cref="DssHarness.Core.Execution.LegVerdict"/>'s reading of an exception relies on its
+    /// narrow meaning through <see cref="Names"/>.
+    /// </remarks>
+    public static MeaningOf Meaning(Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+
+        // A cause both this and the leg executor know, read from the one table they share, so the
+        // same missing program means the same thing whether it stopped a command or a leg.
+        if (ExitCodeFor(exception) is { } known)
+        {
+            return new(known, exception.Message, Defect: false);
+        }
+
+        return exception switch
+        {
+            // The service already decided what this failure means.
+            HarnessException harness => new(harness.ExitCode, harness.Message, Defect: false),
+            ConfigException => new(HarnessExit.ConfigInvalid, exception.Message, Defect: false),
+
+            // Not CommandFailed: nothing ran to completion, and a caller reading a failure code
+            // would report a red verdict for an interrupted run.
+            OperationCanceledException => new(HarnessExit.Cancelled, "Interrupted before completion.", Defect: false),
+
+            // A defect in the harness, not a failure of the thing being asked about. Reported as a
+            // message with a defined exit code rather than an unhandled exception, whose exit code
+            // would collide with a command's own contract.
+            _ => new(HarnessExit.InternalError, $"Unexpected {exception.GetType().Name}: {exception.Message}", Defect: true),
         };
     }
 }

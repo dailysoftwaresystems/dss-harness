@@ -88,10 +88,27 @@ public sealed class AgentFoldMergeTests
             Assert.Single(refused.Details!, line => line.StartsWith($"  '{Both}': ", StringComparison.Ordinal)),
             StringComparison.Ordinal);
 
+        // A clean merge nobody asked for is a consent the request lacks, not a fault to put right: the refusal stands as
+        // needing one, and its facts name the kind, so a caller that asks does not read a line.
+        var dryFacts = Assert.IsType<AgentVerbFacts>(refused.Facts);
+        Assert.Equal(RequestStanding.NeedsConsent, dryFacts.Standing);
+        Assert.Equal([ConsentKind.FoldTwoChanges], dryFacts.Needs);
+        Assert.Null(dryFacts.Folded);
+
         var merged = await kit.FoldAsync(Agent, apply: true, Merging(Both));
 
         Assert.True(merged.Succeeded, OrchestrationKit.Describe(merged));
         Assert.Equal(Crlf(Text((2, "AGENT 2"), (9, "MAIN 9"))), OrchestrationKit.Read(kit.Main, Both));
+
+        // What the fold wrote rides its answer as its facts: the path it merged, and nothing else where nothing else moved.
+        var appliedFacts = Assert.IsType<AgentVerbFacts>(merged.Facts);
+        Assert.True(appliedFacts.Applied);
+        Assert.Equal(RequestStanding.Sound, appliedFacts.Standing);
+        var folded = Assert.IsType<AgentFolded>(appliedFacts.Folded);
+        Assert.Equal([Both], folded.Merged);
+        Assert.Equal([], folded.Written);
+        Assert.Equal([], folded.Deleted);
+        Assert.Equal([], folded.Handed);
     }
 
     /// <summary>An agent handed <see cref="Both"/> as the main tree held it uncommitted: a path it shares, weighed against its seed.</summary>

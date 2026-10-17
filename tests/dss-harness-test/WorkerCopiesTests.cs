@@ -53,7 +53,7 @@ public sealed class WorkerCopiesTests
         var service = SyncKit.Service(harness);
         var worker = MutationWorkers.PathOf(tree, Variant, 1);
 
-        await copies.SyncAsync(await service.ReadSourceAsync(tree, cancellationToken), worker, cancellationToken);
+        await copies.SyncAsync(await service.ReadSourceAsync(tree, cancellationToken), worker, Variant, cancellationToken);
 
         Assert.Equal("a\n", await File.ReadAllTextAsync(Path.Combine(worker, "src", "a.c"), cancellationToken));
         Assert.True(Directory.Exists(Path.Combine(worker, ".git")), "The worker is not a repository of its own.");
@@ -69,7 +69,7 @@ public sealed class WorkerCopiesTests
         await File.WriteAllTextAsync(built, "object", cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(worker, "src", "a.c"), "mutant\n", cancellationToken);
 
-        await copies.SyncAsync(await service.ReadSourceAsync(tree, cancellationToken), worker, cancellationToken);
+        await copies.SyncAsync(await service.ReadSourceAsync(tree, cancellationToken), worker, Variant, cancellationToken);
 
         Assert.Equal("a\n", await File.ReadAllTextAsync(Path.Combine(worker, "src", "a.c"), cancellationToken));
         Assert.Equal("object", await File.ReadAllTextAsync(built, cancellationToken));
@@ -93,8 +93,8 @@ public sealed class WorkerCopiesTests
 
         new MutationFixtureStore(harness.FileSystem, fixture).Write();
 
-        await copies.SyncAsync(await SyncKit.Service(harness).ReadSourceAsync(tree, cancellationToken), worker, cancellationToken);
-        await copies.SyncAsync(MutationFixture.Reading(fixture), selfTest, cancellationToken);
+        await copies.SyncAsync(await SyncKit.Service(harness).ReadSourceAsync(tree, cancellationToken), worker, Variant, cancellationToken);
+        await copies.SyncAsync(MutationFixture.Reading(fixture), selfTest, Variant, cancellationToken);
 
         Assert.Equal(Path.Combine(tree, HarnessLayout.MutationsDirectoryName), Path.GetDirectoryName(worker));
         Assert.Equal(string.Empty, (await harness.GitClient.GetLocationAsync(worker, cancellationToken))!.Prefix);
@@ -106,6 +106,146 @@ public sealed class WorkerCopiesTests
         Assert.DoesNotContain(
             (await harness.GitClient.ReadStatusAsync(tree, cancellationToken)).SelectMany(entry => entry.Paths),
             path => path.Text.StartsWith(HarnessLayout.MutationsDirectoryName, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A second sweep over a worker the first built syncs again and refuses nothing, whatever neverTransfer says: the
+    /// worker's own build directory is the sweep's, withheld by the sync itself and never counted by the delete bound.
+    /// Measured on a consumer, where a neverTransfer of its own replaced the shipped build entry and every sweep after
+    /// the first was refused (13) over the worker's own build outputs.
+    /// </summary>
+    [Fact]
+    public async Task ASecondSweepOverABuiltWorker_SyncsAgainAndRefusesNothing_WhateverNeverTransferSays()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, tree) = await PrepareAsync(
+            temp,
+            cancellationToken,
+            new HarnessConfig { Sync = new SyncConfig { NeverTransfer = ["**/.secrets"] } });
+        var copies = Copies(harness);
+        var service = SyncKit.Service(harness);
+        var worker = MutationWorkers.PathOf(tree, Variant, 1);
+
+        await copies.SyncAsync(await service.ReadSourceAsync(tree, cancellationToken), worker, Variant, cancellationToken);
+
+        // The worker's build, as the first sweep left it: more of the copy than the tree itself holds.
+        foreach (var built in Enumerable.Range(0, 10).Select(index => Path.Combine(Variant.DirectoryUnder(worker), $"a{index}.o")))
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(built)!);
+            await File.WriteAllTextAsync(built, "object", cancellationToken);
+        }
+
+        await File.WriteAllTextAsync(Path.Combine(worker, "src", "a.c"), "mutant\n", cancellationToken);
+
+        await copies.SyncAsync(await service.ReadSourceAsync(tree, cancellationToken), worker, Variant, cancellationToken);
+
+        Assert.Equal("a\n", await File.ReadAllTextAsync(Path.Combine(worker, "src", "a.c"), cancellationToken));
+        Assert.Equal(10, Directory.GetFiles(Variant.DirectoryUnder(worker)).Length);
+    }
+
+    /// <summary>
+    /// A file the tree tracks beside the worker's build directory - a toolchain file under build/, which a neverTransfer
+    /// without build carries - is carried into the worker and verified there, on its first sync and on a second over a
+    /// built worker: the sync withholds the directory the sweep builds in and no more. Withholding the whole build root,
+    /// the file was written into the worker, never seen by the verification, and every sweep failed (20).
+    /// </summary>
+    [Fact]
+    public async Task AFileTheTreeTracksBesideTheWorkersBuildDirectory_IsCarriedAndVerified_OnEverySweep()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, tree) = await PrepareAsync(
+            temp,
+            cancellationToken,
+            new HarnessConfig { Sync = new SyncConfig { NeverTransfer = ["**/.secrets"] } });
+        var copies = Copies(harness);
+        var service = SyncKit.Service(harness);
+        var worker = MutationWorkers.PathOf(tree, Variant, 1);
+
+        await TrackAsync(harness, tree, Path.Combine("build", "toolchain.cmake"), "set(CMAKE_C_COMPILER gcc)\n", cancellationToken);
+
+        await copies.SyncAsync(await service.ReadSourceAsync(tree, cancellationToken), worker, Variant, cancellationToken);
+
+        Assert.Equal("set(CMAKE_C_COMPILER gcc)\n", await File.ReadAllTextAsync(Path.Combine(worker, "build", "toolchain.cmake"), cancellationToken));
+        Assert.Contains("build/toolchain.cmake", (await harness.GitClient.ListIndexAsync(worker, cancellationToken)).Select(entry => entry.Path));
+
+        foreach (var built in Enumerable.Range(0, 10).Select(index => Path.Combine(Variant.DirectoryUnder(worker), $"a{index}.o")))
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(built)!);
+            await File.WriteAllTextAsync(built, "object", cancellationToken);
+        }
+
+        await File.WriteAllTextAsync(Path.Combine(worker, "src", "a.c"), "mutant\n", cancellationToken);
+
+        await copies.SyncAsync(await service.ReadSourceAsync(tree, cancellationToken), worker, Variant, cancellationToken);
+
+        Assert.Equal("a\n", await File.ReadAllTextAsync(Path.Combine(worker, "src", "a.c"), cancellationToken));
+        Assert.Equal("set(CMAKE_C_COMPILER gcc)\n", await File.ReadAllTextAsync(Path.Combine(worker, "build", "toolchain.cmake"), cancellationToken));
+        Assert.Equal(10, Directory.GetFiles(Variant.DirectoryUnder(worker)).Length);
+    }
+
+    /// <summary>
+    /// What the sync withholds of its own it withholds from the reading too: a file the tree tracks inside the directory
+    /// the sweep builds in is not carried into the worker, and the sync verifies. Carried, it was written into the
+    /// worker and then never seen by the verification, which reads the copy without walking what is withheld.
+    /// </summary>
+    [Fact]
+    public async Task AFileTheTreeTracksInsideTheWorkersBuildDirectory_IsNotCarried_AndTheSyncVerifies()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, tree) = await PrepareAsync(
+            temp,
+            cancellationToken,
+            new HarnessConfig { Sync = new SyncConfig { NeverTransfer = ["**/.secrets"] } });
+        var copies = Copies(harness);
+        var service = SyncKit.Service(harness);
+        var worker = MutationWorkers.PathOf(tree, Variant, 1);
+        var inside = Path.Combine(Path.GetRelativePath(tree, Variant.DirectoryUnder(tree)), "kept.txt");
+
+        await TrackAsync(harness, tree, inside, "kept\n", cancellationToken);
+
+        await copies.SyncAsync(await service.ReadSourceAsync(tree, cancellationToken), worker, Variant, cancellationToken);
+
+        Assert.Equal("a\n", await File.ReadAllTextAsync(Path.Combine(worker, "src", "a.c"), cancellationToken));
+        Assert.False(File.Exists(Path.Combine(worker, inside)), "a file inside the worker's build directory was carried");
+        Assert.DoesNotContain(inside.Replace('\\', '/'), (await harness.GitClient.ListIndexAsync(worker, cancellationToken)).Select(entry => entry.Path));
+    }
+
+    /// <summary>
+    /// The delete bound still judges what mirrors the tree: a worker holding many files the tree lacks outside its
+    /// build directory is refused (13), changing nothing, and its refusal names what a reader who typed
+    /// check-mutations can take - never --dry-run, which that command does not have.
+    /// </summary>
+    [Fact]
+    public async Task AWorkerHoldingMoreThanTheTreeMirrors_IsRefused_NamingWhatCheckMutationsCanTake()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, tree) = await PrepareAsync(
+            temp,
+            cancellationToken,
+            new HarnessConfig { Sync = new SyncConfig { NeverTransfer = ["**/.secrets"] } });
+        var copies = Copies(harness);
+        var service = SyncKit.Service(harness);
+        var worker = MutationWorkers.PathOf(tree, Variant, 1);
+
+        await copies.SyncAsync(await service.ReadSourceAsync(tree, cancellationToken), worker, Variant, cancellationToken);
+
+        foreach (var index in Enumerable.Range(0, 10))
+        {
+            temp.WriteFile(Path.Combine(Path.GetRelativePath(temp.Path, worker), "extra", $"i{index}.txt"), "x");
+        }
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(
+            async () => await copies.SyncAsync(await service.ReadSourceAsync(tree, cancellationToken), worker, Variant, cancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+        Assert.Contains("sync.maxDeleteFraction allows", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("clean --legs <leg>", refusal.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("--dry-run", refusal.Message, StringComparison.Ordinal);
+        Assert.True(File.Exists(Path.Combine(worker, "extra", "i0.txt")), "the refusal changed something");
     }
 
     /// <summary>
@@ -123,7 +263,7 @@ public sealed class WorkerCopiesTests
 
         using var first = await SyncKit.Service(harness).ReadSourceAsync(tree, cancellationToken);
 
-        await Copies(harness).SyncAsync(first, worker, cancellationToken);
+        await Copies(harness).SyncAsync(first, worker, Variant, cancellationToken);
         temp.WriteFile(Path.GetRelativePath(temp.Path, Path.Combine(worker, "build", "a.o")), new string('o', 4096));
         temp.WriteFile(Path.GetRelativePath(temp.Path, Path.Combine(tree, HarnessLayout.LegsDirectoryName, "357e24c", "src", "a.c")), "a leg's copy\n");
 
@@ -150,7 +290,7 @@ public sealed class WorkerCopiesTests
         await File.WriteAllTextAsync(Path.Combine(worker, "notes.txt"), "mine", cancellationToken);
 
         var refusal = await Assert.ThrowsAsync<HarnessException>(
-            async () => await Copies(harness).SyncAsync(await SyncKit.Service(harness).ReadSourceAsync(tree, cancellationToken), worker, cancellationToken));
+            async () => await Copies(harness).SyncAsync(await SyncKit.Service(harness).ReadSourceAsync(tree, cancellationToken), worker, Variant, cancellationToken));
 
         Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
         Assert.Equal("mine", await File.ReadAllTextAsync(Path.Combine(worker, "notes.txt"), cancellationToken));
@@ -171,10 +311,10 @@ public sealed class WorkerCopiesTests
         var reading = await SyncKit.Service(harness).ReadSourceAsync(tree, cancellationToken);
         var selfTest = MutationWorkers.Of(tree, Variant, selfTest: true);
 
-        await copies.SyncAsync(reading, MutationWorkers.PathOf(tree, Variant, 2), cancellationToken);
-        await copies.SyncAsync(reading, MutationWorkers.PathOf(tree, Variant, 1), cancellationToken);
-        await copies.SyncAsync(reading, MutationWorkers.PathOf(tree, Variant with { Sanitizer = "asan" }, 1), cancellationToken);
-        await copies.SyncAsync(reading, selfTest.PathOf(1), cancellationToken);
+        await copies.SyncAsync(reading, MutationWorkers.PathOf(tree, Variant, 2), Variant, cancellationToken);
+        await copies.SyncAsync(reading, MutationWorkers.PathOf(tree, Variant, 1), Variant, cancellationToken);
+        await copies.SyncAsync(reading, MutationWorkers.PathOf(tree, Variant with { Sanitizer = "asan" }, 1), Variant with { Sanitizer = "asan" }, cancellationToken);
+        await copies.SyncAsync(reading, selfTest.PathOf(1), Variant, cancellationToken);
         temp.WriteFile(Path.GetRelativePath(temp.Path, Path.Combine(MutationWorkers.PathOf(tree, Variant, 3), "notes.txt")), "mine");
         Directory.CreateDirectory(MutationWorkers.PathOf(tree, Variant, 10));
         Directory.CreateDirectory(MutationWorkers.Of(tree, Variant).Root + "-spare");
@@ -212,10 +352,10 @@ public sealed class WorkerCopiesTests
         var sanitized = Variant with { Sanitizer = "asan" };
         var selfTest = MutationWorkers.Of(tree, Variant, selfTest: true);
 
-        await copies.SyncAsync(reading, MutationWorkers.PathOf(tree, Variant, 2), cancellationToken);
-        await copies.SyncAsync(reading, MutationWorkers.PathOf(tree, Variant, 1), cancellationToken);
-        await copies.SyncAsync(reading, MutationWorkers.PathOf(tree, sanitized, 1), cancellationToken);
-        await copies.SyncAsync(reading, selfTest.PathOf(1), cancellationToken);
+        await copies.SyncAsync(reading, MutationWorkers.PathOf(tree, Variant, 2), Variant, cancellationToken);
+        await copies.SyncAsync(reading, MutationWorkers.PathOf(tree, Variant, 1), Variant, cancellationToken);
+        await copies.SyncAsync(reading, MutationWorkers.PathOf(tree, sanitized, 1), sanitized, cancellationToken);
+        await copies.SyncAsync(reading, selfTest.PathOf(1), Variant, cancellationToken);
         Directory.CreateDirectory(MutationWorkers.Of(tree, Variant).Root + "-spare");
         Directory.CreateDirectory(MutationWorkers.Of(tree, Variant).Root + "-01");
         Directory.CreateDirectory(tree + ".mutation-" + MutationWorkers.Of(tree, Variant).Name + "-3");
@@ -386,7 +526,7 @@ public sealed class WorkerCopiesTests
         var gone = MutationWorkers.PathOf(tree, Variant, 2);
         var somebodys = MutationWorkers.PathOf(tree, Variant, 3);
 
-        await copies.SyncAsync(await SyncKit.Service(harness).ReadSourceAsync(tree, cancellationToken), made, cancellationToken);
+        await copies.SyncAsync(await SyncKit.Service(harness).ReadSourceAsync(tree, cancellationToken), made, Variant, cancellationToken);
         Directory.CreateDirectory(somebodys);
         await File.WriteAllTextAsync(Path.Combine(somebodys, "notes.txt"), "mine", cancellationToken);
 
@@ -430,7 +570,7 @@ public sealed class WorkerCopiesTests
         temp.WriteFile(Path.Combine("legs-build", "_deps", "googletest-src", ".git", "HEAD"), "ref: refs/heads/main\n");
         temp.WriteFile(Path.Combine("opt", "json", "json.hpp"), "#pragma once\n");
 
-        await copies.SyncAsync(await service.ReadSourceAsync(tree, cancellationToken), worker, cancellationToken);
+        await copies.SyncAsync(await service.ReadSourceAsync(tree, cancellationToken), worker, Variant, cancellationToken);
 
         IReadOnlyList<FetchedReading> read =
         [
@@ -452,7 +592,7 @@ public sealed class WorkerCopiesTests
 
         // The leg's own are gone, as a clean of the leg takes them: the worker's stay, and a sync of the tree leaves them.
         Directory.Delete(googletest, recursive: true);
-        await copies.SyncAsync(await service.ReadSourceAsync(tree, cancellationToken), worker, cancellationToken);
+        await copies.SyncAsync(await service.ReadSourceAsync(tree, cancellationToken), worker, Variant, cancellationToken);
 
         Assert.Equal("int gtest;\n", File.ReadAllText(Path.Combine(kept, "src", "gtest.cc")));
 
@@ -475,7 +615,7 @@ public sealed class WorkerCopiesTests
         // A worker that keeps none is given none, and nothing is made in it.
         var other = MutationWorkers.PathOf(tree, Variant, 2);
 
-        await copies.SyncAsync(await service.ReadSourceAsync(tree, cancellationToken), other, cancellationToken);
+        await copies.SyncAsync(await service.ReadSourceAsync(tree, cancellationToken), other, Variant, cancellationToken);
         await copies.SyncFetchedAsync([], other, cancellationToken);
 
         Assert.False(Directory.Exists(FetchedSources.KeptIn(other)));
@@ -505,7 +645,7 @@ public sealed class WorkerCopiesTests
         var json = temp.Combine("opt", "json");
         var header = temp.WriteFile(Path.Combine("opt", "json", "json.hpp"), "#pragma once\n");
 
-        await copies.SyncAsync(await SyncKit.Service(harness).ReadSourceAsync(tree, cancellationToken), worker, cancellationToken);
+        await copies.SyncAsync(await SyncKit.Service(harness).ReadSourceAsync(tree, cancellationToken), worker, Variant, cancellationToken);
 
         var read = new FetchedReading(new FetchedSource("JSON", json), await copies.ReadFetchedAsync(json, cancellationToken));
 
@@ -539,7 +679,7 @@ public sealed class WorkerCopiesTests
         var stopped = new CancellationToken(canceled: true);
 
         temp.WriteFile(Path.Combine("opt", "json", "json.hpp"), "#pragma once\n");
-        await copies.SyncAsync(await SyncKit.Service(harness).ReadSourceAsync(tree, cancellationToken), worker, cancellationToken);
+        await copies.SyncAsync(await SyncKit.Service(harness).ReadSourceAsync(tree, cancellationToken), worker, Variant, cancellationToken);
 
         var read = new FetchedReading(new FetchedSource("JSON", json), await copies.ReadFetchedAsync(json, cancellationToken));
 
@@ -565,7 +705,7 @@ public sealed class WorkerCopiesTests
         var worker = MutationWorkers.PathOf(tree, Variant, 1);
         var claim = worker + MutationWorkers.ClaimSuffix;
 
-        await Copies(harness).SyncAsync(await SyncKit.Service(harness).ReadSourceAsync(tree, cancellationToken), worker, cancellationToken);
+        await Copies(harness).SyncAsync(await SyncKit.Service(harness).ReadSourceAsync(tree, cancellationToken), worker, Variant, cancellationToken);
         await File.WriteAllTextAsync(claim, "{}", cancellationToken);
 
         var stuck = new KeepsFile(harness.FileSystem, claim);
@@ -608,8 +748,26 @@ public sealed class WorkerCopiesTests
         }
     }
 
+    /// <summary>
+    /// Writes <paramref name="relative"/> into <paramref name="tree"/> and commits it, tracked though the tree's ignore
+    /// rules cover build/: a file git tracks is one no ignore rule withholds from a sync.
+    /// </summary>
+    private static async Task TrackAsync(HarnessFactory harness, string tree, string relative, string text, CancellationToken cancellationToken)
+    {
+        var file = Path.Combine(tree, relative);
+
+        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+        await File.WriteAllTextAsync(file, text, cancellationToken);
+
+        Assert.True((await harness.GitClient.RunAsync(tree, ["add", "--force", "--", relative.Replace('\\', '/')], cancellationToken: cancellationToken)).Succeeded);
+        await harness.CommitAllAsync(tree, $"track {relative}", cancellationToken);
+    }
+
     /// <summary>A tree in a repository of its own, in <paramref name="temp"/>, so the workers beside it are in it too.</summary>
-    private static async Task<(HarnessFactory Harness, string Tree)> PrepareAsync(TempDirectory temp, CancellationToken cancellationToken)
+    private static async Task<(HarnessFactory Harness, string Tree)> PrepareAsync(
+        TempDirectory temp,
+        CancellationToken cancellationToken,
+        HarnessConfig? config = null)
     {
         var harness = new HarnessFactory();
         var tree = temp.Combine("tree");
@@ -618,7 +776,7 @@ public sealed class WorkerCopiesTests
         temp.WriteFile(Path.Combine("tree", "src", "b.c"), "b\n");
         temp.WriteFile(Path.Combine("tree", ".gitignore"), "build/\n");
 
-        await harness.InitializeHarnessAsync(tree, cancellationToken, new HarnessConfig());
+        await harness.InitializeHarnessAsync(tree, cancellationToken, config ?? new HarnessConfig());
         await harness.CommitAllAsync(tree, "initial", cancellationToken);
 
         return (harness, tree);

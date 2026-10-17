@@ -113,7 +113,7 @@ the real client and intercept one call.
   or narrates. No `TODO`/`FIXME`/`HACK`; no warning suppressed without a reason beside it.
 - **Failing:** a service returns a `CommandOutcome` (`Ok`, `Usage`, `Refused`, `Failed`) or throws
   `HarnessException` with a `HarnessExit` code; it never writes to the console or calls `Environment.Exit`.
-  `CommandRunner.Meaning` alone turns exceptions into codes. Zero always means success, and "what you asked about
+  `KnownCauses.Meaning` alone turns exceptions into codes. Zero always means success, and "what you asked about
   failed" never shares a code with "the harness could not run".
 - **Refusals** are full sentences: the names and paths in single quotes, what was and was not changed ("Nothing was
   removed."), and the remedy after a semicolon. "Could not tell" refuses; it never reads as "does not exist".

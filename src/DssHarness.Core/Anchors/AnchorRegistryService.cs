@@ -1,3 +1,4 @@
+using DssHarness.Core.Application;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Hosts;
@@ -7,7 +8,7 @@ using DssHarness.Core.Results;
 namespace DssHarness.Core.Anchors;
 
 /// <summary>Adds, changes, reads and checks anchors.</summary>
-public interface IAnchorRegistryService
+public interface IAnchorRegistryService : IUseCase
 {
     /// <summary>Adds a new anchor to the registry its status belongs in.</summary>
     Task<AnchorChange> WriteAsync(string startDirectory, AnchorWriteRequest request, bool dryRun, CancellationToken cancellationToken = default);
@@ -187,6 +188,7 @@ public sealed class AnchorRegistryService(
             var texts = registries.All.ToDictionary(registry => registry.Kind, registry => Load(registry, rules).ToText());
             var outcomes = new List<AnchorRowOutcome>();
             var problems = new List<string>();
+            var unnamed = new List<string>();
             var writes = new List<(AnchorRegistry Registry, string Text)>();
 
             // What the rows made of each acceptance: a cell that loses stored text, a row already as declared - which an
@@ -235,6 +237,7 @@ public sealed class AnchorRegistryService(
                         if (!named.Contains(declared.Id))
                         {
                             refusals.Refuse(NotNamedNew(declared.Id, pending, done, registries));
+                            unnamed.Add(declared.Id);
                         }
 
                         if (declared.Priority is null)
@@ -399,7 +402,7 @@ public sealed class AnchorRegistryService(
             // Every row is checked, and every one refused is named, before any is written.
             if (problems.Count > 0 || !written || writes.Count == 0)
             {
-                return new AnchorBatch(outcomes, problems);
+                return new AnchorBatch(outcomes, problems) { UnnamedNew = [.. unnamed.Order(StringComparer.Ordinal)] };
             }
 
             var snapshot = registries.All.ToDictionary(registry => registry, registry => _fileSystem.ReadAllBytes(registry.FullPath));

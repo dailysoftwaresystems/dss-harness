@@ -108,6 +108,15 @@ public sealed class SyncConfig
     /// the floor. Build output belongs here by default because it is large and
     /// meaningless on another machine.
     /// </summary>
+    /// <remarks>
+    /// Declaring this list replaces its default value, <c>build</c> among it: a repository that
+    /// names its own paths withholds build output only by naming <c>build</c> itself. Measured on a
+    /// consumer: a list of its own was declared, the default went with it, and on a host whose leg
+    /// copy held no build directory for git's ignore listing to cover, every sweep after the first
+    /// was refused by <see cref="MaxDeleteFraction"/> over the worker's own build outputs - which no
+    /// spelling of a configuration should have to prevent. A sweep's own workers are protected in
+    /// the sync itself; every other copy is protected by this list.
+    /// </remarks>
     public List<string> NeverTransfer { get; init; } = ["build"];
 
     /// <summary>

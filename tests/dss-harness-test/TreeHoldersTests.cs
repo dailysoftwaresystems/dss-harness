@@ -1146,14 +1146,17 @@ public sealed class TreeHoldersTests
     }
 
     /// <summary>
-    /// What an --apply refused at its hold answers with <c>--json</c>: exit 13 and one document - applied, request sound,
-    /// its summary the refusal's, and the one run it met in <c>heldNow</c>, holding <paramref name="tree"/>, said as a
-    /// <c>held now:</c> line says it.
+    /// What an --apply refused at its hold answers with <c>--json</c>: exit 13, its cause the lock that run holds, and one
+    /// document - applied, request sound, its summary the refusal's, and the one run it met in <c>heldNow</c>, holding
+    /// <paramref name="tree"/>, said as a <c>held now:</c> line says it.
     /// </summary>
     private static void AnsweredAsHeld(CommandOutcome answered, string tree, RunId run)
     {
         Assert.Equal(HarnessExit.Refused, answered.ExitCode);
         Assert.EndsWith("Nothing was changed; run it again once that is done.", answered.Message, StringComparison.Ordinal);
+
+        // The one refusal a caller waits out, said beside the code as the document is: a run in the way, nothing to correct.
+        Assert.Equal(OutcomeCause.LockHeld, answered.Cause);
         var document = JsonNode.Parse(answered.Data.Single())!;
         Assert.Equal(HarnessExit.Refused, document["exitCode"]!.GetValue<int>());
         Assert.True(document["applied"]!.GetValue<bool>());

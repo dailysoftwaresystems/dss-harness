@@ -16,7 +16,7 @@ public sealed class StoppedDocumentTests
     private static readonly string[] LedgerOnly = ["passed", "cancelled", "unfinished", "complete"];
 
     /// <summary>The agent document's members, in its order.</summary>
-    private static readonly string[] AgentDocument = ["exitCode", "summary", "applied", "request", "heldNow", "heldUnread", "lines"];
+    private static readonly string[] AgentDocument = ["exitCode", "summary", "applied", "request", "heldNow", "heldUnread", "lines", "needs", "refusals", "folded", "planned"];
 
     /// <summary>The ledger's members as a command that begins a run answers with it stopped, in its order.</summary>
     private static readonly string[] Ledger = ["exitCode", "summary", "runId", "passed", "cancelled", "unfinished", "complete", "legs"];
@@ -43,6 +43,8 @@ public sealed class StoppedDocumentTests
         ["check-anchor-citations"] = ["exitCode", "summary", "subject", "roots", "filesScanned", "citationsFound", "registryRows", "passed", "unresolved"],
         ["fix-line-endings"] = ["exitCode", "summary", "scope", "check", "considered", "binary", "undeclared", "excluded", "changed"],
         ["check-ci-legs"] = ["exitCode", "summary", "branch", "runs"],
+        ["validate-workflow"] = ["exitCode", "summary", "workflows", "passed"],
+        ["export-workflow"] = ["exitCode", "summary", "workflow", "shipped", "destination", "files"],
         ["legs"] = ["exitCode", "summary", "legs", "hosts"],
         ["install-missing-tools"] = ["exitCode", "summary", "dryRun", "legs"],
         ["build"] = Ledger,
@@ -63,6 +65,7 @@ public sealed class StoppedDocumentTests
     {
         ["fix-line-endings"] = ("--check", "check"),
         ["install-missing-tools"] = ("--dry-run", "dryRun"),
+        ["export-workflow"] = ("--shipped", "shipped"),
     };
 
     private static CancellationToken Token => TestContext.Current.CancellationToken;
@@ -84,7 +87,7 @@ public sealed class StoppedDocumentTests
     /// <summary>
     /// An agent verb stopped before its body - its --directory not there, or a directory no repository holds - answers
     /// with the agent document: applied false, request null, nobody asked who holds anything (heldNow null, heldUnread
-    /// null), no lines - and nothing of the leg ledger.
+    /// null), no lines, nothing needed, no reason typed and nothing folded - and nothing of the leg ledger.
     /// </summary>
     [Fact]
     public async Task AnAgentVerbThatStops_AnswersWithTheAgentDocument_Empty()
@@ -100,12 +103,16 @@ public sealed class StoppedDocumentTests
         {
             var document = Stopped(result);
 
-            Assert.Equal(["exitCode", "summary", "applied", "request", "heldNow", "heldUnread", "lines"], document.Select(member => member.Key));
+            Assert.Equal(["exitCode", "summary", "applied", "request", "heldNow", "heldUnread", "lines", "needs", "refusals", "folded", "planned"], document.Select(member => member.Key));
             Assert.False(document["applied"]!.GetValue<bool>());
             Assert.Null(document["request"]);
             Assert.Null(document["heldNow"]);
             Assert.Null(document["heldUnread"]);
             Assert.Empty(document["lines"]!.AsArray());
+            Assert.Empty(document["needs"]!.AsArray());
+            Assert.Empty(document["refusals"]!.AsArray());
+            Assert.Null(document["folded"]);
+            Assert.Null(document["planned"]);
         }
     }
 
@@ -416,15 +423,15 @@ public sealed class StoppedDocumentTests
         Assert.Contains(
             "Every other command asked for `--json` that stops before it has anything of its own to say answers in its own document's "
                 + "shape, never the ledger's: the agent verbs with the agent document, empty; `list-orchestrator`, `list-worktree`, `legs`, "
-                + "`install-missing-tools`, `check-ci-legs`, `check-anchor-citations`, `check-anchor-balance`, `fix-line-endings`, `up` "
-                + "and `down` with their own document holding nothing, after `exitCode` and `summary` (`ReportJson.Stopped`); `check-mutations --list` with "
+                + "`install-missing-tools`, `check-ci-legs`, `check-anchor-citations`, `check-anchor-balance`, `fix-line-endings`, `validate-workflow`, "
+                + "`export-workflow`, `up` and `down` with their own document holding nothing, after `exitCode` and `summary` (`ReportJson.Stopped`); `check-mutations --list` with "
                 + "its listing, no legs; and `read-anchor` and `read-anchors`, whose document is an array, with that array empty - the "
                 + "process's exit code and the line it ends on say the rest. Each command registers which where it is wired "
                 + "(`CommandRunner.Wire`, `JsonAnswer`), so the plumbing answers for it without choosing by its name: where the parser "
                 + "refuses its command line, the first error the line it ends on, wherever the parser itself read `--json` as that "
                 + "command's own and set - never as another option's value, after `--`, before the command's name or given twice with "
                 + "a value each (`CommandRunner.UnparsedAsync`); where it stops the command itself; and where the body answers with no "
-                + "document - a usage error or a refusal returned before anything is weighed (`CommandRunner.Report`): a command asked "
+                + "document - a usage error or a refusal returned before anything is weighed (the session's own report, `CommandSession.RunAsync`): a command asked "
                 + "for `--json` answers with one document on every exit save its usage and a `--json` given twice with a value each.",
             architecture,
             StringComparison.Ordinal);
@@ -450,8 +457,8 @@ public sealed class StoppedDocumentTests
         Assert.Contains(
             "A command stopped before anything is weighed - a command line the parser refuses, a `--directory` that is not there, a "
                 + "repository not initialised, another usage error, or a refusal met before then, an agent that is not there among them - answers with the same document, empty "
-                + "(`OrchestrationReports.Stopped`): `applied` false, `request`, `heldNow` and `heldUnread` null, no `lines`, its "
-                + "`exitCode` and `summary` the code it exits with and the line it ends on.",
+                + "(`OrchestrationReports.Stopped`): `applied` false, `request`, `heldNow` and `heldUnread` null, no `lines`, no "
+                + "`needs`, no `refusals`, and `folded` and `planned` null, its `exitCode` and `summary` the code it exits with and the line it ends on.",
             architecture,
             StringComparison.Ordinal);
 

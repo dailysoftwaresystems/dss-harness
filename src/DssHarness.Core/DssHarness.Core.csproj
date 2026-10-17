@@ -21,6 +21,11 @@
          set-up's up or down - into a program and its arguments without a shell (CommandLineText). The CLI
          project already depends on this package; the splitter is needed here, where those lines are read. -->
     <PackageReference Include="System.CommandLine" Version="2.0.12" />
+
+    <!-- The composition root: every service is assembled in Core (Composition\ServiceRegistration), so
+         a graphical front end begins the same operations the command line does without the command
+         line. The front end supplies the output and the prompt; the registrations are the tool's. -->
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.12" />
   </ItemGroup>
 
   <ItemGroup>
@@ -29,6 +34,15 @@
     <None Remove="Anchors/Templates/anchor-registry.md" />
     <EmbeddedResource Include="Anchors/Templates/anchor-registry.md"
                       LogicalName="DssHarness.Core.Anchors.Templates.anchor-registry.md" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The implementation workflow init writes: its definition and every file the definition names -
+         agent files, prompts, schemas, the bar for recommendations - kept beside the engine that
+         reads them, embedded whole under the workflow's own layout, so every build of the tool
+         carries the very workflow its own tests validate. -->
+    <EmbeddedResource Include="Orchestration/Flow/Templates/**/*"
+                      LogicalName="DssHarness.Core.WorkflowTemplates/%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 
   <ItemGroup>

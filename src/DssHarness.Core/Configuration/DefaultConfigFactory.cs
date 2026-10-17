@@ -1,3 +1,4 @@
+using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Projects;
 using DssHarness.Core.Testing;
 
@@ -32,6 +33,10 @@ public static class DefaultConfigFactory
                 ["debug"] = new BuildConfiguration { CmakeBuildType = "Debug", DotnetConfiguration = "Debug", DartMode = "debug" },
                 ["release"] = new BuildConfiguration { CmakeBuildType = "Release", DotnetConfiguration = "Release", DartMode = "release" },
             },
+
+            // The implementation workflow, declared by name: its definition is the file init writes under
+            // workflows/implementation/, never an entry in this file.
+            Workflows = [WorkflowTemplates.ShippedWorkflowName],
         };
 
         AddToolchains(config, detected);

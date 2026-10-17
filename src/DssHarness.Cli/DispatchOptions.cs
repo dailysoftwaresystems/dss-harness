@@ -1,6 +1,5 @@
 using System.CommandLine;
 using DssHarness.Core.Hosts;
-using DssHarness.Core.Legs;
 using DssHarness.Core.Results;
 using DssHarness.Core.Runs;
 using DssHarness.Core.SetUps;
@@ -75,24 +74,4 @@ internal static class DispatchOptions
     {
         Description = "Bring up the set-ups each leg's work names under setUp before that work starts, on the machine that runs it, and down after it. Without it, none is.",
     };
-
-    /// <summary>
-    /// Where this run's own legs work, as the two options say it - or the refusal where they say opposite things, which is
-    /// about the command line alone and costs no configuration read to name.
-    /// </summary>
-    /// <param name="arguments">The command line.</param>
-    /// <exception cref="HarnessException">Both options were given (<see cref="HarnessExit.UsageError"/>).</exception>
-    internal static LocalTrees WhereWorkRuns(System.CommandLine.ParseResult arguments)
-    {
-        var copy = arguments.GetValue(LocalCopy);
-        var inPlace = arguments.GetValue(InPlace);
-
-        return copy && inPlace
-            ? throw new HarnessException(
-                HarnessExit.UsageError,
-                "--local-copy and --in-place say opposite things about where this run's own legs work. Give one.")
-            : copy ? LocalTrees.Copy
-            : inPlace ? LocalTrees.InPlace
-            : LocalTrees.AsConfigured;
-    }
 }

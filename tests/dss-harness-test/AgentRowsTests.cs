@@ -245,6 +245,33 @@ public sealed class AgentRowsTests
     }
 
     /// <summary>
+    /// A deletion whose fold went in and whose rows then failed to write stops part way: incomplete, its worktree still
+    /// there, and its answer says what the fold wrote - in the main tree whatever stopped it after.
+    /// </summary>
+    [Fact]
+    public async Task ADeletionWhoseRowsFailToWrite_AfterItsFold_SaysWhatItWrote_AndKeepsItsWorktree()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        kit.FileRow("ag", Id, Row);
+        var agents = kit.Harness.Agents(kit.Harness.FileSystem, new FailingWrites(kit.Harness.AnchorRegistryService));
+
+        var stopped = await agents.DeleteAsync(kit.Main, "o1", "ag", OrchestrationKit.Making(Id), apply: true, discardUncommitted: false, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
+        Assert.Equal(
+            "Agent 'ag' of 'o1' is folded into the main tree, and applying its rows failed: The registry is being used by another process. "
+                + "Its worktree is kept. Correct the cause and run again: the fold finds its own writes recorded as shared, and a row already as "
+                + "declared is not written again. Nothing was removed.",
+            stopped.Message);
+        Assert.Equal("two\nagent edit\n", OrchestrationKit.Read(kit.Main, "b.txt"));
+        Assert.True(Directory.Exists(worktree));
+        AgentVerbFactsTests.Same(new AgentFolded(["b.txt"], [], [], ArmRegistry: null, [], [], [], []), Assert.IsType<AgentVerbFacts>(stopped.Facts).Folded);
+    }
+
+    /// <summary>
     /// Rows that fail to write once the fold is in leave the command incomplete, saying so; run again, the fold finds its
     /// own writes shared and the rows go in.
     /// </summary>
@@ -263,6 +290,10 @@ public sealed class AgentRowsTests
         Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
         Assert.StartsWith("Agent 'ag' of 'o1' is folded into the main tree, and applying its rows failed", stopped.Message);
         Assert.Equal("two\nagent edit\n", OrchestrationKit.Read(kit.Main, "b.txt"));
+
+        // What it wrote is in the main tree whatever stopped it after, and its answer says so - no row among it, none
+        // having gone in.
+        AgentVerbFactsTests.Same(new AgentFolded(["b.txt"], [], [], ArmRegistry: null, [], [], [], []), Assert.IsType<AgentVerbFacts>(stopped.Facts).Folded);
 
         var again = await kit.FoldAsync("ag", apply: true, OrchestrationKit.Making(Id));
 
@@ -288,6 +319,7 @@ public sealed class AgentRowsTests
         Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
         Assert.StartsWith("Agent 'ag' of 'o1' is folded into the main tree, and applying its rows failed", stopped.Message);
         Assert.Equal("{", OrchestrationKit.Read(kit.Main, Path.Combine(".harness-config", "config.json")));
+        AgentVerbFactsTests.Same(new AgentFolded([".harness-config/config.json"], [], [], ArmRegistry: null, [], [], [], []), Assert.IsType<AgentVerbFacts>(stopped.Facts).Folded);
     }
 
     /// <summary>
@@ -342,8 +374,14 @@ public sealed class AgentRowsTests
         kit.FileRow("ag", Id, new Dictionary<string, string>(Row) { ["closing"] = "another plan" });
 
         var dry = await kit.FoldAsync("ag", apply: false);
+        var deleting = await kit.DeleteAsync("ag", apply: false);
         var refused = await kit.FoldAsync("ag", apply: true);
 
+        // The one consent each dry run lacks, by kind and nothing else: a caller asks its question without reading a line.
+        Assert.Equal(RequestStanding.NeedsConsent, Facts(dry).Standing);
+        Assert.Equal([ConsentKind.FoldLostRows], Facts(dry).Needs);
+        Assert.Equal(RequestStanding.NeedsConsent, Facts(deleting).Standing);
+        Assert.Equal([ConsentKind.FoldLostRows], Facts(deleting).Needs);
         Assert.Equal(HarnessExit.Refused, dry.ExitCode);
         Assert.Contains("--accept-lost", dry.Message);
         Assert.Contains($"  {Id}: changes closing (its stored text not kept)", dry.Details!);
@@ -358,6 +396,7 @@ public sealed class AgentRowsTests
         Assert.True(accepted.Succeeded, OrchestrationKit.Describe(accepted));
         Assert.Equal("another plan", (await RowAsync(kit)).ClosingWork);
         Assert.Equal("two\nagent edit\n", OrchestrationKit.Read(kit.Main, "b.txt"));
+        AgentVerbFactsTests.Same(new AgentFolded(["b.txt"], [], [], ArmRegistry: null, [], ["pending"], [Id], []), Facts(accepted).Folded);
     }
 
     /// <summary>
@@ -382,7 +421,18 @@ public sealed class AgentRowsTests
 
         Assert.Equal(HarnessExit.Refused, unnamed.ExitCode);
         Assert.Contains(unnamed.Details!, line => line.Contains($"'{Id}' has no row in either registry, and it was not named new", StringComparison.Ordinal));
+
+        // A row nobody named new is the one consent that refusal is: it stands as needing one, its facts naming the kind -
+        // while the misspelled allowances beside it, refusing for what they name and not for what the request lacks, stand
+        // refused as ever.
+        var unnamedFacts = Assert.IsType<AgentVerbFacts>(unnamed.Facts);
+        Assert.Equal(RequestStanding.NeedsConsent, unnamedFacts.Standing);
+        Assert.Equal([ConsentKind.FoldNewRows], unnamedFacts.Needs);
+
         Assert.Equal(HarnessExit.Refused, stale.ExitCode);
+        var staleFacts = Assert.IsType<AgentVerbFacts>(stale.Facts);
+        Assert.Equal(RequestStanding.Refused, staleFacts.Standing);
+        Assert.Equal([], staleFacts.Needs);
         Assert.Contains($"  refused: --new D-TEST-AGENT-NINE names no row filed in '{kit.Layout.RowsDirectory("ag")}': drop it, or correct the id.", stale.Details!);
         Assert.Contains($"  refused: --accept-lost {Id}:closing names a cell that keeps its stored text here: drop it, or correct it.", stale.Details!);
         Assert.Contains($"  refused: --accept-lost D-TEST-AGENT-NINE:closing names no row filed in '{kit.Layout.RowsDirectory("ag")}': drop it, or correct the id.", stale.Details!);
@@ -399,6 +449,9 @@ public sealed class AgentRowsTests
 
         Assert.True(deleted.Succeeded, OrchestrationKit.Describe(deleted));
         Assert.Equal("the fix", (await RowAsync(kit)).ClosingWork);
+
+        // The delete's fold-back rides its answer too: the row it applied among its facts, the fold's output.
+        Assert.Equal([Id], Assert.IsType<AgentFolded>(Assert.IsType<AgentVerbFacts>(deleted.Facts).Folded).Rows);
     }
 
     /// <summary>
@@ -451,6 +504,8 @@ public sealed class AgentRowsTests
         var over = await kit.FoldAsync("ag", apply: true, new FoldAllowances { AcceptOver = [$"{Id}:closing"] });
 
         Assert.Equal(HarnessExit.Refused, dry.ExitCode);
+        Assert.Equal(RequestStanding.NeedsConsent, Facts(dry).Standing);
+        Assert.Equal([ConsentKind.FoldOverCells], Facts(dry).Needs);
         Assert.Contains($"    its Closing work was changed by the registries and by the agent since its earlier fold, and the agent's is written only with --accept-over {Id}:closing", dry.Details!);
         Assert.Contains("      the registries: see src/ [-main_x.c-] {+main_x.c, mended by hand+}", dry.Details!);
         Assert.Contains("      the agent:      [-see src/ main_x.c-] {+the fix, made better+}", dry.Details!);
@@ -460,6 +515,7 @@ public sealed class AgentRowsTests
         Assert.Contains($"  refused: {Id}: its closing was changed by the registries and by the agent since an earlier fold of this agent applied it, so the agent's text is written over the registries' only with --accept-over {Id}:closing; the dry run shows the three texts.", lostAlone.Details!);
         Assert.True(over.Succeeded, OrchestrationKit.Describe(over));
         Assert.Equal("the fix, made better", (await RowAsync(kit)).ClosingWork);
+        AgentVerbFactsTests.Same(new AgentFolded([], [], [], ArmRegistry: null, [], ["pending"], [Id], [$"{Id}:closing"]), Facts(over).Folded);
     }
 
     /// <summary>
@@ -788,8 +844,37 @@ public sealed class AgentRowsTests
         Assert.Equal("two\n", OrchestrationKit.Read(kit.Main, "b.txt"));
     }
 
+    /// <summary>
+    /// Rows or registries that cannot be read leave a dry run as its failure: its own code, and no request weighed - never
+    /// a consent nobody gave, since nothing that would have counted one was read. A deletion's dry run alike.
+    /// </summary>
+    [Fact]
+    public async Task RowsThatCannotBeWeighed_LeaveADryRunAsItsFailure_NeverNeedingAConsent()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        kit.FileRow("ag", Id, Row);
+        var agents = kit.Harness.Agents(kit.Harness.FileSystem, new UnreadableRegistries(kit.Harness.AnchorRegistryService));
+
+        var folding = await agents.FoldAsync(kit.Main, "o1", "ag", OrchestrationKit.Making(Id), apply: false, Token, json: true);
+        var deleting = await agents.DeleteAsync(kit.Main, "o1", "ag", OrchestrationKit.Making(Id), apply: false, discardUncommitted: false, Token);
+
+        Assert.Equal(HarnessExit.CommandFailed, folding.ExitCode);
+        Assert.StartsWith("Agent 'ag' of 'o1' was not folded: its rows, or the registries they go in, cannot be read - ", folding.Message);
+        Assert.Null(Assert.IsType<AgentVerbFacts>(folding.Facts).Standing);
+        Assert.Empty(Assert.IsType<AgentVerbFacts>(folding.Facts).Needs);
+        Assert.Null(System.Text.Json.Nodes.JsonNode.Parse(Assert.Single(folding.Data))!["request"]);
+        Assert.Equal(HarnessExit.CommandFailed, deleting.ExitCode);
+        Assert.StartsWith("Agent 'ag' of 'o1' was not deleted: its rows, or the registries they go in, cannot be read - ", deleting.Message);
+        Assert.Null(Assert.IsType<AgentVerbFacts>(deleting.Facts).Standing);
+    }
+
     private static async Task<AnchorRow> RowAsync(OrchestrationKit kit)
         => Assert.Single(Assert.Single((await kit.Harness.AnchorRegistryService.ReadAsync(kit.Main, [Id], AnchorScope.All, Token)).Results).Matches).Row;
+
+    private static AgentVerbFacts Facts(CommandOutcome outcome) => Assert.IsType<AgentVerbFacts>(outcome.Facts);
 
     private static async Task<string> StatusAsync(OrchestrationKit kit)
         => Assert.Single(Assert.Single((await kit.Harness.AnchorRegistryService.ReadAsync(kit.Main, [Id], AnchorScope.All, Token)).Results).Matches).Row.Status;

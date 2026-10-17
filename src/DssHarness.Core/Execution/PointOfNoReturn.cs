@@ -59,4 +59,14 @@ public static class PointOfNoReturn
     /// <param name="grace">How long the command line waits for the command once interrupted.</param>
     public static TimeSpan StoppedAfter(TimeSpan grace)
         => grace - TimeSpan.FromTicks(Math.Min(TimeSpan.FromSeconds(10).Ticks, grace.Ticks / 4));
+
+    /// <summary>
+    /// How long the command line waits for the command <paramref name="commandLine"/> types once interrupted: as long
+    /// as a deletion expects where it passes a point of no return, and this tool's own answer of none where it does
+    /// not - <see langword="null"/>, which leaves the command line's own short wait as it is. A front end that holds a
+    /// window open while a command runs holds it by this, for as long as the command asks.
+    /// </summary>
+    /// <param name="commandLine">The command's name, then its arguments as typed.</param>
+    public static TimeSpan? GraceFor(IReadOnlyList<string> commandLine)
+        => Holds(commandLine) ? WorktreeService.DefaultInterruptionGrace : null;
 }

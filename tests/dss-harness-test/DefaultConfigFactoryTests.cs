@@ -3,6 +3,7 @@ using System.Text.RegularExpressions;
 using DssHarness.Core.Build;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Projects;
 
@@ -25,6 +26,26 @@ public sealed class DefaultConfigFactoryTests
         Assert.Equal(".worktrees", Create(new DetectedProject("cmake", ".", "CMakeLists.txt")).Worktrees.Root);
         Assert.Equal(".worktrees", DefaultConfigFactory.Create([], Os, Processor).Worktrees.Root);
         Assert.Equal(".harness-config/worktrees", new WorktreeSettings().Root);
+    }
+
+    /// <summary>
+    /// The seeded configuration declares the implementation workflow by name and nothing else: its definition is the file init
+    /// writes under workflows/implementation/, never an entry in config.json, and the seed validates and round-trips with the
+    /// declaration in it.
+    /// </summary>
+    [Fact]
+    public void TheSeededConfiguration_DeclaresTheImplementationWorkflow_ByNameAlone()
+    {
+        var config = Create(new DetectedProject("cmake", ".", "CMakeLists.txt"));
+
+        Assert.Equal([WorkflowTemplates.ShippedWorkflowName], config.Workflows);
+
+        using var written = new TempDirectory();
+        var file = written.Combine("config.json");
+        var store = new JsonConfigStore(new PhysicalFileSystem(FilePermissionsFactory.Create()));
+
+        store.Save(file, config);
+        Assert.Equal(config.Workflows, store.Load(file).Workflows);
     }
 
     [Fact]

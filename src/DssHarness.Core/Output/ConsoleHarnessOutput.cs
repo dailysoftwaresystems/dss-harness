@@ -14,113 +14,76 @@ namespace DssHarness.Core.Output;
 /// How the machine's home directory is written in every line of the harness's own: as <c>~</c> on a host
 /// answering another machine (see <see cref="HomeShorthand"/>), and as it is where this is left out.
 /// </param>
-public sealed class ConsoleHarnessOutput(TextWriter standardOutput, TextWriter standardError, bool verbose, HomeShorthand? home = null)
+/// <param name="operation">The operation every event is stamped with, where it has an id.</param>
+/// <param name="parent">The operation this one belongs to, which every event names, where there is one.</param>
+/// <remarks>
+/// The console as a front end: every line an event's text form, rendered by <see cref="TextRunEvents"/> under the
+/// publisher's lock. What this class has always written it still writes, byte for byte - the tests that hold those
+/// lines are the regression - and what is new, <see cref="IHarnessOutput.Publish"/>, reaches the same renderer.
+/// </remarks>
+public sealed class ConsoleHarnessOutput(
+    TextWriter standardOutput,
+    TextWriter standardError,
+    bool verbose,
+    HomeShorthand? home = null,
+    OperationId? operation = null,
+    OperationId? parent = null)
     : IHarnessOutput
 {
-    private readonly TextWriter _out = standardOutput;
-    private readonly TextWriter _error = standardError;
-    private readonly HomeShorthand _home = home ?? HomeShorthand.None;
-    private readonly Lock _gate = new();
-    private bool _dataOnly;
+    private readonly EventHarnessOutput _output = new(new TextRunEvents(standardOutput, standardError, verbose, home), operation, parent);
 
     /// <summary>Writes to the process console.</summary>
     /// <param name="verbose">Whether detail is shown.</param>
     /// <param name="home">How the machine's home directory is written in every line of the harness's own.</param>
-    public ConsoleHarnessOutput(bool verbose, HomeShorthand? home = null)
-        : this(Console.Out, Console.Error, verbose, home)
+    /// <param name="operation">The operation every event is stamped with, where it has an id.</param>
+    /// <param name="parent">The operation this one belongs to, which every event names, where there is one.</param>
+    public ConsoleHarnessOutput(bool verbose, HomeShorthand? home = null, OperationId? operation = null, OperationId? parent = null)
+        : this(Console.Out, Console.Error, verbose, home, operation, parent)
     {
     }
 
-    public bool IsVerbose { get; } = verbose;
+    /// <inheritdoc cref="EventHarnessOutput.Operation"/>
+    public OperationId? Operation => _output.Operation;
 
-    public bool IsDataOnly
-    {
-        get
-        {
-            lock (_gate)
-            {
-                return _dataOnly;
-            }
-        }
-    }
+    /// <inheritdoc cref="EventHarnessOutput.Parent"/>
+    public OperationId? Parent => _output.Parent;
 
-    public void Ok(string command, string message) => Write(Progress, $"{command}: OK - {Own(message)}");
+    /// <inheritdoc/>
+    public bool IsVerbose => _output.IsVerbose;
 
-    public void Fail(string command, string message) => Write(_error, FailureLine.For(command, Own(message)));
+    /// <inheritdoc/>
+    public bool IsDataOnly => _output.IsDataOnly;
 
-    public void Warn(string command, string message) => Write(_error, $"{command}: WARN - {Own(message)}");
+    /// <inheritdoc/>
+    public void Publish(RunEvent @event) => _output.Publish(@event);
 
-    public void Info(string command, string message) => Write(Progress, $"{command}: {Own(message)}");
+    /// <inheritdoc/>
+    public void Ok(string command, string message) => _output.Ok(command, message);
 
-    public void Detail(string command, string message)
-    {
-        if (IsVerbose)
-        {
-            Write(Progress, $"{command}: {Own(message)}");
-        }
-    }
+    /// <inheritdoc/>
+    public void Fail(string command, string message) => _output.Fail(command, message);
 
-    public void Data(string text) => Write(_out, text);
+    /// <inheritdoc/>
+    public void Warn(string command, string message) => _output.Warn(command, message);
 
-    public void Raw(string line) => Write(Progress, line);
+    /// <inheritdoc/>
+    public void Info(string command, string message) => _output.Info(command, message);
 
-    public void RawError(string line) => Write(_error, line);
+    /// <inheritdoc/>
+    public void Detail(string command, string message) => _output.Detail(command, message);
 
-    public string Shown(string text) => _home.Shown(text);
+    /// <inheritdoc/>
+    public void Data(string text) => _output.Data(text);
 
-    public IDisposable DataOnly()
-    {
-        lock (_gate)
-        {
-            var before = _dataOnly;
-            _dataOnly = true;
-            return new DataOnlyScope(this, before);
-        }
-    }
+    /// <inheritdoc/>
+    public void Raw(string line) => _output.Raw(line);
 
-    /// <summary>
-    /// Where anything that is not the command's answer goes. Standard error while a document is
-    /// being written, so the document is the only thing on standard output.
-    /// </summary>
-    private TextWriter Progress
-    {
-        get
-        {
-            lock (_gate)
-            {
-                return _dataOnly ? _error : _out;
-            }
-        }
-    }
+    /// <inheritdoc/>
+    public void RawError(string line) => _output.RawError(line);
 
-    /// <summary>
-    /// A line of the harness's own, as its reader is told it - except a row quoting what a program printed,
-    /// which is written as the program printed it.
-    /// </summary>
-    private string Own(string message) => QuotedLine.Is(message) ? message : _home.Shown(message);
+    /// <inheritdoc/>
+    public string Shown(string text) => _output.Shown(text);
 
-    private void Write(TextWriter writer, string line)
-    {
-        lock (_gate)
-        {
-            writer.WriteLine(line);
-        }
-    }
-
-    /// <summary>
-    /// Puts back what it found, so a scope opened inside another - a leg run inside a command that
-    /// already answers with data - leaves the outer one standing when it closes.
-    /// </summary>
-    private sealed class DataOnlyScope(ConsoleHarnessOutput output, bool before) : IDisposable
-    {
-        private readonly ConsoleHarnessOutput _output = output;
-
-        public void Dispose()
-        {
-            lock (_output._gate)
-            {
-                _output._dataOnly = before;
-            }
-        }
-    }
+    /// <inheritdoc/>
+    public IDisposable DataOnly() => _output.DataOnly();
 }

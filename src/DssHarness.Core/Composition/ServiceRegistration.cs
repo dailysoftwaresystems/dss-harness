@@ -1,5 +1,6 @@
-using Microsoft.Extensions.DependencyInjection;
 using DssHarness.Core.Anchors;
+using DssHarness.Core.Application;
+using DssHarness.Core.Application.Legs;
 using DssHarness.Core.Build;
 using DssHarness.Core.Ci;
 using DssHarness.Core.Commands;
@@ -12,6 +13,7 @@ using DssHarness.Core.Legs;
 using DssHarness.Core.LineEndings;
 using DssHarness.Core.Mutations;
 using DssHarness.Core.Orchestration;
+using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
@@ -25,28 +27,75 @@ using DssHarness.Core.Sync;
 using DssHarness.Core.Testing;
 using DssHarness.Core.Tools;
 using DssHarness.Core.Worktrees;
+using Microsoft.Extensions.DependencyInjection;
 
-namespace DssHarness.Cli;
+namespace DssHarness.Core.Composition;
 
 /// <summary>
-/// The composition root. Every dependency is assembled here so that no service
-/// constructs its own collaborators and every one of them stays substitutable.
+/// The tool's own registrations: every dependency assembled in one place, so that no service constructs its own
+/// collaborators and every one of them stays substitutable.
 /// </summary>
-internal static class HarnessServices
+/// <remarks>
+/// The front end that begins a session supplies who it may ask; the registrations are the same
+/// whatever front end it is, which is what makes a graphical one possible without a second composition root drifting
+/// beside this one.
+/// </remarks>
+public static class ServiceRegistration
 {
-    /// <summary>Builds the service provider for one command invocation.</summary>
-    /// <param name="verbose">Whether detail and child process output are shown.</param>
-    /// <param name="prompting">
-    /// Whether a password may be asked for at the terminal. False under <c>--no-prompt</c>, and for
-    /// a process serving another machine, which has nobody to ask.
+    /// <summary>
+    /// The host of a front end that supplies the one thing the core cannot do for itself - ask for a superuser password
+    /// at its own terminal - and nothing else: each operation it begins is given services of its own, built here from
+    /// this tool's registrations, written through the console and stamped with that operation's id and its parent's.
+    /// </summary>
+    /// <param name="prompt">
+    /// How a superuser password is asked, given the operation's output and options; <see langword="null"/> for nobody
+    /// to ask (<see cref="NobodyToAsk"/>).
     /// </param>
-    /// <param name="origin">
-    /// Who the command runs for: somebody typing it here, this machine's host agent, or a command the DssHarness on another
-    /// machine asked that agent to run, with what it says of it beside the command line.
+    /// <returns>The host, one per process.</returns>
+    /// <remarks>
+    /// The one place a provider is built for an operation, so a front end - the command line among them - builds none of
+    /// its own and needs no container to begin one.
+    /// </remarks>
+    public static DssHarnessHost Host(Func<IHarnessOutput, SessionOptions, ISuperuserPrompt>? prompt = null)
+        => new((options, operation) => new ServiceCollection()
+            .AddDssHarness(
+                options,
+                operation,
+                prompt: prompt is null ? null : provider => prompt(provider.GetRequiredService<IHarnessOutput>(), options))
+            .BuildServiceProvider());
+
+    /// <summary>
+    /// Registers every service of this tool for one operation, as the options of that operation ask for them.
+    /// </summary>
+    /// <param name="services">The collection to register them in.</param>
+    /// <param name="options">What the operation is asked and how it runs.</param>
+    /// <param name="operation">
+    /// The operation's id, which the console output stamps every event with, beside its parent
+    /// (<see cref="SessionOptions.Parent"/>); an output supplied stamps its own.
     /// </param>
-    internal static ServiceProvider Build(bool verbose, bool prompting, CommandOrigin origin)
+    /// <param name="output">
+    /// Where the operation writes; <see langword="null"/> for the console, which <see cref="Host"/> leaves it - a front
+    /// end of its own supplies its own.
+    /// </param>
+    /// <param name="prompt">
+    /// How a superuser password is asked of whoever is there; <see langword="null"/> for nobody to ask
+    /// (<see cref="NobodyToAsk"/>), which refuses whatever a superuser must grant as a run with no credential always
+    /// was. Reading a terminal without echoing what is typed is the one thing the core cannot do for itself, so the
+    /// front end supplies it.
+    /// </param>
+    /// <returns>The collection, registered.</returns>
+    public static IServiceCollection AddDssHarness(
+        this IServiceCollection services,
+        SessionOptions options,
+        OperationId operation,
+        Func<IServiceProvider, IHarnessOutput>? output = null,
+        Func<IServiceProvider, ISuperuserPrompt>? prompt = null)
     {
-        var services = new ServiceCollection();
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(options);
+
+        var verbose = options.Verbose;
+        var origin = options.Origin;
 
         services.AddSingleton(origin);
 
@@ -62,12 +111,15 @@ internal static class HarnessServices
         services.AddSingleton<IProcessIdentity, ProcessIdentity>();
 
         // A host answering another machine writes its home as ~ in what it tells that machine; a command
-        // typed here writes its own paths as they are.
+        // typed here writes its own paths as they are. The machine is asked through the overload that survives one
+        // this build does not support: the output is what says so, in the failure line the machine that asked reads,
+        // and an output that could not be built would take the reason with it.
         services.AddSingleton(provider => origin.ServesAnotherMachine
             ? HomeShorthand.Of(provider.GetRequiredService<IHostPlatform>, provider.GetRequiredService<IFileSystem>())
             : HomeShorthand.None);
-        services.AddSingleton<IHarnessOutput>(provider => new ConsoleHarnessOutput(verbose, provider.GetRequiredService<HomeShorthand>()));
+        services.AddSingleton<IHarnessOutput>(output ?? (provider => new ConsoleHarnessOutput(verbose, provider.GetRequiredService<HomeShorthand>(), operation, options.Parent)));
         services.AddSingleton<IFileSystem, PhysicalFileSystem>();
+        services.AddSingleton<IProcessContext, ProcessContext>();
         services.AddSingleton<IProcessRunner, ProcessRunner>();
 
         // One answer per command to which variables git reads a repository from, shared by every child
@@ -100,6 +152,8 @@ internal static class HarnessServices
         services.AddSingleton<ClaudeTranscripts>();
         services.AddSingleton<IOrchestratorService, OrchestratorService>();
         services.AddSingleton<IAgentService, AgentService>();
+        services.AddSingleton<IWorkflowValidationService, WorkflowValidationService>();
+        services.AddSingleton<IWorkflowExportService, WorkflowExportService>();
 
         services.AddSingleton<IToolIdentityProvider, EntryAssemblyToolIdentityProvider>();
         services.AddSingleton<IHostCommandRunner, HostCommandRunner>();
@@ -148,17 +202,19 @@ internal static class HarnessServices
 
         services.AddSingleton<IHostInspector, HostInspector>();
 
-        // Reading a terminal without echoing what is typed is the one thing the core cannot do for
-        // itself, so it is supplied here, exactly as the console writer above is. Whether anybody is
-        // there to ask is measured by the implementation; this only carries the refusal to ask.
-        services.AddSingleton<ISuperuserPrompt>(provider => new ConsoleSuperuserPrompt(
-            provider.GetRequiredService<IHarnessOutput>(),
-            prompting));
+        // The front end's own way of asking for a password, where it has one: whether anybody is there to
+        // ask is the front end's fact, measured by its implementation; this only carries the refusal to ask. A front
+        // end that supplies none runs with nobody to ask, refused as a run with no credential always was.
+        services.AddSingleton<ISuperuserPrompt>(prompt ?? (_ => new NobodyToAsk()));
 
         services.AddSingleton<IToolProvisionService, ToolProvisionService>();
         services.AddSingleton<IRepositoryTrees, RepositoryTrees>();
         services.AddSingleton<LegsService>();
         services.AddSingleton<HostExecService>();
+        services.AddSingleton<IBuildLegs, BuildLegs>();
+        services.AddSingleton<ITestLegs, TestLegs>();
+        services.AddSingleton<IRunnerLegs, RunnerLegs>();
+        services.AddSingleton<IMutationLegs, MutationLegs>();
 
         // Leg machinery. Shared by build, test, run and check-mutations, so the isolation rules cannot hold for one
         // command and not another.
@@ -250,6 +306,6 @@ internal static class HarnessServices
         services.AddSingleton<VerifyGitService>();
         services.AddSingleton<InitService>();
 
-        return services.BuildServiceProvider();
+        return services;
     }
 }

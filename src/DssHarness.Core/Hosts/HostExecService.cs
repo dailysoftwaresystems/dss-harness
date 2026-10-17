@@ -1,3 +1,4 @@
+using DssHarness.Core.Application;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
@@ -18,7 +19,7 @@ public sealed class HostExecService(
     IHostCommandRunner hostCommands,
     IHostPlatform platform,
     IHarnessOutput output,
-    SyncedCopyRefusals copyRefusals)
+    SyncedCopyRefusals copyRefusals) : IUseCase
 {
     /// <summary>The command's name, which prefixes what it reports.</summary>
     public const string CommandName = "host-exec";

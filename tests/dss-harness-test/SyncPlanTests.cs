@@ -168,6 +168,61 @@ public sealed class SyncPlanTests
         Assert.Single(plan.Deletes);
     }
 
+    /// <summary>
+    /// What one sync's own caller keeps in the copy it is syncing - a sweep's build in its own worker - is withheld
+    /// and protected by that sync alone, whatever the configuration says; everything else the copy holds is judged
+    /// as always, and the configuration's own statements are untouched by the asking.
+    /// </summary>
+    [Fact]
+    public void WhatOneSyncWithholdsForItsOwnCopy_IsProtectedFromDeletion_WhateverTheConfigurationSays()
+    {
+        // Measured on a consumer: a neverTransfer of its own replaced the default build entry, and on
+        // a host whose leg copy held no build directory for git's ignore listing to cover, the
+        // worker's own build outputs were counted as deletions and every sweep after the first was
+        // refused.
+        var configured = new SyncExclusions(new SyncConfig { NeverTransfer = ["**/.secrets"] }, ".harness-config/worktrees");
+        var forAWorker = configured.With(["build"]);
+
+        Assert.False(configured.IsProtectedFromDeletion("build/x86_64-gcc-debug/a.o"));
+        Assert.True(forAWorker.IsProtectedFromDeletion("build/x86_64-gcc-debug/a.o"));
+        Assert.True(forAWorker.IsWithheldFromTransfer("build/x86_64-gcc-debug/a.o"));
+        Assert.False(forAWorker.IsProtectedFromDeletion("extra/a.c"));
+
+        // The asking changes nothing about the policy it was asked of.
+        Assert.Equal(configured.Excluded, forAWorker.Excluded);
+        Assert.Equal(configured.IsProtectedFromDeletion(".git/objects/aa"), forAWorker.IsProtectedFromDeletion(".git/objects/aa"));
+
+        var destination = Manifest(("src/a.c", "a"), ("build/x86_64-gcc-debug/a.o", "object"), ("build/x86_64-gcc-debug/b.o", "object"));
+        var plan = SyncPlan.Between(Manifest(("src/a.c", "a")), destination, forAWorker);
+
+        Assert.Empty(plan.Deletes);
+    }
+
+    /// <summary>
+    /// A sweep's worker is refused over the delete bound where check-mutations was typed, which takes no
+    /// --dry-run: its refusal names raising the bound and removing the workers, never a list to run with
+    /// --dry-run for. The sync command's own reader is still told about --dry-run, which is the way to the list.
+    /// </summary>
+    [Fact]
+    public void OverTheBound_ForASweepsWorker_NamesWhatCheckMutationsTakes_NeverADryRun()
+    {
+        var destination = Manifest(("a.c", "1"), ("b.c", "2"), ("c.c", "3"), ("d.c", "4"));
+        var plan = SyncPlan.Between(Manifest(("a.c", "1")), destination, Default);
+
+        var refusal = plan.OverTheBound(destination, SyncConfig.DefaultMaxDeleteFraction, reader: SyncBoundReader.Sweep);
+
+        Assert.NotNull(refusal);
+        Assert.Contains("would delete 3", refusal, StringComparison.Ordinal);
+        Assert.Contains("sync.maxDeleteFraction allows", refusal, StringComparison.Ordinal);
+        Assert.Contains("clean --legs <leg>", refusal, StringComparison.Ordinal);
+        Assert.DoesNotContain("--dry-run", refusal, StringComparison.Ordinal);
+
+        var forTheSyncCommand = plan.OverTheBound(destination, SyncConfig.DefaultMaxDeleteFraction);
+
+        Assert.NotNull(forTheSyncCommand);
+        Assert.Contains("--dry-run", forTheSyncCommand, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void AFractionOfZero_AllowsAnyDeletion()
     {

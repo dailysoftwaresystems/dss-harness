@@ -221,6 +221,7 @@ internal sealed record TwoChangeOffer
         Shown = shown;
         None = none;
         Registry = registry;
+        Conflicts = false;
     }
 
     /// <summary>The path.</summary>
@@ -228,6 +229,12 @@ internal sealed record TwoChangeOffer
 
     /// <summary>How the path is resolved.</summary>
     public TwoChangeRule Rule { get; }
+
+    /// <summary>
+    /// Whether the three met and conflicted: the one refusal a merge cannot answer, told apart from a clean merge nobody
+    /// asked for and from a merge never offered, so a reader of the plan need not read a line to know it.
+    /// </summary>
+    public bool Conflicts { get; private set; }
 
     /// <summary>The merged bytes as the tree would hold them, where the merge is clean; null otherwise.</summary>
     public byte[]? Working { get; }
@@ -293,7 +300,11 @@ internal sealed record TwoChangeOffer
     /// <param name="said">The same, with the way on, to end the line that refuses the path.</param>
     /// <param name="shown">The conflicts, as a block printed under the refusals.</param>
     public static TwoChangeOffer Conflicting(string path, TwoChangeRule rule, string gives, string said, IReadOnlyList<string> shown)
-        => new(path, rule, null, false, gives, said, string.Empty, shown, null);
+    {
+        var offered = new TwoChangeOffer(path, rule, null, false, gives, said, string.Empty, shown, null);
+        offered.Conflicts = true;
+        return offered;
+    }
 
     /// <summary>A clean merge.</summary>
     /// <param name="path">The path.</param>
