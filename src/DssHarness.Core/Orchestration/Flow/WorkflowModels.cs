@@ -11,7 +11,10 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="MaxReasoningAgents">Reasoning agents the run may have at once, where the file says.</param>
 /// <param name="MaxParallelProcesses">Steps that run legs the run may have at once, where the file says.</param>
 /// <param name="MaxOpenAgents">Agents with a worktree the run may have open at once, where the file says.</param>
-/// <param name="MaxRetries">Retries an incomplete step is given, where the file says.</param>
+/// <param name="MaxRetries">
+/// Retries an incomplete step is given, and a reasoning step whose agent failed, on each model it may use, where the file
+/// says.
+/// </param>
 /// <param name="MaxInstances">The most step instances a run of this workflow may have, where the file says.</param>
 /// <param name="PushCheckpoints">Whether checkpoint commits are pushed as they are made.</param>
 /// <param name="HandoffSeconds">How long a paused reasoning step is given to write its handoff.</param>
@@ -97,8 +100,8 @@ public sealed record FlowRecover(int? MaxVisits, IReadOnlyList<WorkflowStep> Ste
 
     /// <summary>
     /// The <c>onSuccess</c> that sends the run back to the step that gave the recovery its failure, to run again from
-    /// where it stopped - a build, a test, a commit, whatever failed - once what stood in its way was put right: a machine
-    /// step runs again whole, a reasoning step goes on from its handoff.
+    /// where it stopped - a build, a test, a commit, whatever failed - once what stood in its way was put right. That step
+    /// is never a reasoning step, which is never recovered, so it runs again whole.
     /// </summary>
     public const string FailedStep = "failed-step";
 
@@ -110,6 +113,9 @@ public sealed record FlowRecover(int? MaxVisits, IReadOnlyList<WorkflowStep> Ste
 
     /// <summary>The <c>onFailure</c> that ends the run failed on a failure inside the recovery.</summary>
     public const string StopOnFailure = "stop";
+
+    /// <summary>Every <c>onFailure</c> a recovery may say, in the order a refusal lists them.</summary>
+    public static IReadOnlyList<string> Failures { get; } = [PauseOnFailure, StopOnFailure];
 }
 
 /// <summary>What a whole run's reasoning may cost, and the reserve that pauses the run before it is spent.</summary>
@@ -298,7 +304,10 @@ public sealed record WorkflowStep
     /// <summary>Every <c>onFailure</c> a step may say, in the order a refusal lists them.</summary>
     public static IReadOnlyList<string> FailurePolicies { get; } = ["stop", "pause", "continue", Recover];
 
-    /// <summary>Retries the step is given where it ends incomplete, where the file says.</summary>
+    /// <summary>
+    /// Retries the step is given where it ends incomplete - a reasoning step also where its agent failed, on each model it
+    /// may use - where the file says.
+    /// </summary>
     public int? Retries { get; init; }
 
     /// <summary>Whether the step runs even where its dependencies did not reach it.</summary>
@@ -355,7 +364,10 @@ public sealed record WorkflowStep
     /// <summary>The prompt file the step is asked with, relative to the workflow's directory.</summary>
     public string? Prompt { get; init; }
 
-    /// <summary>The prompt file a step that goes on with another's work is asked with, in place of <see cref="Prompt"/>.</summary>
+    /// <summary>
+    /// The prompt file a step that goes on with its own work (<see cref="Resume"/> names itself) is asked with when it
+    /// runs again, in place of <see cref="Prompt"/>.
+    /// </summary>
     public string? ResumePrompt { get; init; }
 
     /// <summary>The JSON schema file the step's answer is held to, relative to the workflow's directory.</summary>

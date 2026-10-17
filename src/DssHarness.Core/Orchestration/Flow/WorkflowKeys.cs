@@ -22,7 +22,7 @@ public static class WorkflowKeys
         new("maxParallelProcesses", "steps that run legs a run has at once; absent, 1"),
         new("maxOpenAgents", "agents with a worktree a run has open at once; absent, maxReasoningAgents"),
         new("maxRetries", "retries an incomplete step is given, and a reasoning step whose agent failed, on each model it may use; absent, 3"),
-        new("backoffSeconds", "seconds a reasoning step waits before it is tried again, twice as long before each later try, at most 900; absent, 30"),
+        new("backoffSeconds", $"seconds a reasoning step waits before it is tried again, twice as long before each later try, at most {WorkflowStep.MostBackoffSeconds}; absent, {WorkflowStep.DefaultBackoffSeconds}"),
         new("maxInstances", "the most step instances a run may have; absent, 5000"),
         new("pushCheckpoints", "push checkpoint commits as they are made; absent, the final push alone"),
         new("handoffSeconds", "how long a paused reasoning step is given to write its handoff; absent, 180"),
@@ -45,7 +45,7 @@ public static class WorkflowKeys
         new("steps", "the recovery's own steps, taking the keys the flow's steps take; they read the step that failed as source, and see every step of the flow") { Required = true },
         new("onSuccess", "where the run goes once the recovery's steps are done: failed-step, the step that gave it its failure, which runs again from where it stopped") { Required = true },
         new("onFailure", "what a failure inside the recovery does once its steps' retries are spent: pause, a person is asked, or stop - never recover, since no step calls itself") { Required = true },
-        new("maxVisits", "how often the recovery may take the failures of one step in one scope, from 1 to 99; absent, it goes on until the step passes or a person is asked; past it the run asks (recoveryBound), with the advisor's recommended fix"),
+        new("maxVisits", $"how often the recovery may take the failures of one step in one scope, from 1 to {FlowRecover.MostVisits}; absent, the engine's bound of {FlowRecover.MostVisits} visits of one step in one scope; past it the run asks (recoveryBound), with the advisor's recommended fix"),
     ];
 
     /// <summary>What one declared input takes.</summary>
@@ -98,7 +98,7 @@ public static class WorkflowKeys
         new("client", "the client, where the provider is reached two ways"),
         new("kinds", "the question kinds this advisor is asked about; absent, every one"),
         new("retries", "how often its agent is tried again where it failed, on each model it may use; absent, maxRetries"),
-        new("backoffSeconds", "seconds it waits before it is tried again, twice as long before each later try, at most 900; absent, the workflow's backoffSeconds"),
+        new("backoffSeconds", $"seconds it waits before it is tried again, twice as long before each later try, at most {WorkflowStep.MostBackoffSeconds}; absent, the workflow's backoffSeconds"),
     ];
 
     /// <summary>What the <c>reporter</c> section takes.</summary>
@@ -108,7 +108,7 @@ public static class WorkflowKeys
         new("statusPrompt", "the prompt file a status question is answered with") { Required = true },
         new("askPrompt", "the prompt file a free question is answered with") { Required = true },
         new("retries", "how often its agent is tried again where it failed, on each model it may use; absent, maxRetries"),
-        new("backoffSeconds", "seconds it waits before it is tried again, twice as long before each later try, at most 900; absent, the workflow's backoffSeconds"),
+        new("backoffSeconds", $"seconds it waits before it is tried again, twice as long before each later try, at most {WorkflowStep.MostBackoffSeconds}; absent, the workflow's backoffSeconds"),
         new("tier", "a name for a class of model, resolved by the configuration's agent tiers"),
         new("model", "the model outright, whose provider, key and client follow from it"),
         new("effort", "the effort the model is asked for"),
