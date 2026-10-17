@@ -321,7 +321,7 @@ public sealed class LegLedger(IHarnessOutput output, string commandName, bool di
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(leg);
 
-        _output.Info(_commandName, $"{leg}: {message}");
+        _output.Publish(new LegProgressed(_commandName, leg, message));
     }
 
     /// <summary>
@@ -335,7 +335,7 @@ public sealed class LegLedger(IHarnessOutput output, string commandName, bool di
 
         if (!_dispatched)
         {
-            _output.Info(_commandName, message);
+            _output.Publish(new LegsAnnounced(_commandName, message));
         }
     }
 
@@ -358,7 +358,7 @@ public sealed class LegLedger(IHarnessOutput output, string commandName, bool di
 
         if (!_dispatched)
         {
-            Transition(leg, $"starting on {host}{worksIn}");
+            _output.Publish(new LegStarting(_commandName, leg, host, worksIn));
         }
     }
 
@@ -413,9 +413,7 @@ public sealed class LegLedger(IHarnessOutput output, string commandName, bool di
             return;
         }
 
-        var said = LedgerReport.Marked(entry.Detail, entry.Tree, [], entry.Compilers, entry.DeveloperEnvironment, entry.SetUps, entry.Admission, testCountNote: null);
-
-        Transition(entry.Leg, Verdicts.Display(entry.Verdict) + (said.Length > 0 ? $" ({said})" : string.Empty));
+        _output.Publish(new LegFinished(_commandName, entry));
 
         // Where the leg's own records are, said as its verdict is - and in the same words the run's closing lines say
         // it, so the two cannot drift: a reader who follows the line finds the leg's logs, here or on a host.

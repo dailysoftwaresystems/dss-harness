@@ -206,16 +206,7 @@ public sealed class PhaseRunner(
             // reads a log has to know about it.
             if (_output.IsVerbose)
             {
-                var tagged = $"{request.Leg}/{request.Phase}: {line}";
-
-                if (error)
-                {
-                    _output.RawError(tagged);
-                }
-                else
-                {
-                    _output.Raw(tagged);
-                }
+                _output.Publish(new PhaseLine(request.Leg, request.Phase, line, error));
             }
         }
 

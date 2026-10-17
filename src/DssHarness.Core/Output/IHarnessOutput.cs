@@ -18,6 +18,13 @@ public interface IHarnessOutput
     /// </summary>
     bool IsDataOnly { get; }
 
+    /// <summary>
+    /// Tells of what happened, typed, to every sink beside the terminal: the event is stamped here with the operation,
+    /// the sequence and the time, and the console's line - where it has one - is the event's own text form.
+    /// </summary>
+    /// <param name="event">What happened.</param>
+    void Publish(RunEvent @event);
+
     /// <summary>Reports success: <c>&lt;command&gt;: OK - &lt;message&gt;</c>.</summary>
     void Ok(string command, string message);
 
