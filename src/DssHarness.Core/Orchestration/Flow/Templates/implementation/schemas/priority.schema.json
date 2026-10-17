@@ -24,7 +24,7 @@
     },
     "blockers": {
       "type": "array",
-      "description": "Open work that stands in the way of the priority and that this run can do, the most pressing first.",
+      "description": "Open work that stands in the way of the priority and that this run can do, the most pressing first: each names the work, where it is (a path, a CI leg or a test) and what you read that shows it.",
       "items": {
         "type": "string"
       }

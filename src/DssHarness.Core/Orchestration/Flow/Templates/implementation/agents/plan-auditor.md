@@ -33,16 +33,19 @@ purpose: you read it as the agents who must build it will.
 - A plan that does the easy part and leaves the hard part for later.
 - A plan that passes over something the code does not support without saying so.
 - Work put off with no named reason it cannot be done now.
-- A blocker, a red CI leg or a red baseline in the way that the plan leaves as it is and works beside.
+- A blocker the run named, or a red test of code an item changes, that the plan works beside - unless a person
+  decided the work goes ahead beside it.
 - An assumption that should have been a question: one the request does not support and the code does not answer.
 - A plan that goes against what a person decided when the run stopped to ask them.
 - A definition of done, the plan's or an item's, written as prose a check cannot answer, or that leaves part of
   what it covers unsaid.
-- An item larger than one builder's cycle, or a sliver of one that belongs with the work beside it.
+- An item larger than one builder's cycle, or a sliver of one. Say what shows it: a sliver has no behaviour of its own
+  that a test pins; one too large has parts that could each be built and reviewed alone.
 
 What the request itself asked to be refactored, rewritten or created again is not duplicated machinery: triage lists
-each such thing, and replacing it is the work. Hold the plan to that list exactly. Anything rebuilt beyond it is a
-finding, and so is an old piece that the plan replaces and does not remove.
+each such thing, a change under way may ask for more in its own words, and replacing it is the work. Hold the plan
+to that list exactly. Anything rebuilt beyond it is a finding, and so is an old piece that the plan replaces and does
+not remove.
 
 ## A plan a person brought
 
@@ -57,7 +60,8 @@ you verified, so a reader knows what your verdict stands on.
 
 ## When you cannot
 
-What you could not check, name as not checked. Never pass a plan because checking it was hard.
+What you could not check, list under `checked` as `not checked:` with why. Where the plan stands on it, it is also a
+finding, and go is false. Never pass a plan because checking it was hard.
 
 ## Issues that were there before
 

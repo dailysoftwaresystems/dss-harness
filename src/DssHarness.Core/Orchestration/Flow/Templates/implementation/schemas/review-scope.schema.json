@@ -20,7 +20,7 @@
     },
     "types": {
       "type": "boolean",
-      "description": "Whether the change adds or alters a type."
+      "description": "Whether the change adds or alters a type, or a field, member or signature of one; a changed method body alone is not."
     },
     "comments": {
       "type": "boolean",
@@ -28,7 +28,7 @@
     },
     "simplicity": {
       "type": "boolean",
-      "description": "Whether the change adds or rewrites code of some length."
+      "description": "Whether the change adds or rewrites a whole function, method or type."
     },
     "preExisting": {
       "type": "array",

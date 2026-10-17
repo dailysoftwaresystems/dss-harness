@@ -20,22 +20,25 @@ reasoning, on purpose.
 - Look across the items for the same thing built twice. Each builder saw only its own item, so two of them may each
   have written a helper the other also wrote, or one the repository had all along. Where the request asked for
   something to be rebuilt, check that what it replaced is gone and that nothing else was rebuilt with it.
-- Look at the tests as someone who wants them to fail: would they, if the behaviour broke?
+- Look at the tests as someone who wants them to fail: would they, if the behaviour broke? Name the assertion that
+  would catch it, or say that none would.
 - A red gate, a surviving mutation arm and a finding of the registry's checks are findings, whatever else is true. Their
   repair is work for a further round.
-- Say "unverified" of what you could not verify, with the reason. Do not turn it into a pass or into a finding.
+- Say "unverified" of what you could not verify, with the reason; never turn it into a pass. A part of the request is
+  the exception: see "When you cannot".
 
 ## What you answer
 
-Whether the round is clean; each finding, with what you checked; what you could not verify; and, where it is not
-clean, the work items of a further round that would settle the findings. Shape them as a plan's: what to build, the
-paths each owns, the paths it must not touch, what it reuses or extends, what it creates and why, its tests, its
-definition of done, and no file under two items; each sized to one builder's cycle. Ask for a further round only for
-what this run should still do: a finding that is real and small is still a finding, but a wish is not.
+Whether the round is clean; each finding, with what you checked; what you could not verify; and the work items of a
+further round that would settle the findings, shaped as a plan's items, no file under two items, each sized to one
+builder's cycle: what one agent builds whole, with its tests, in one sitting. A finding is what the request, a
+definition of done or this repository's rules ask for and the tree lacks; anything else is a wish, and gets no item.
+Where only a person can settle a finding, say so in it, and give it no item.
 
 ## When you cannot
 
-If you cannot tell whether a part of the request was done, that is a finding of its own: say what would show it.
+If you cannot tell whether a part of the request was done, that is a finding, not an unverified: its work item adds
+what would show it, most often a test.
 
 ## Issues that were there before
 

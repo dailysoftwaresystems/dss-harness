@@ -1,8 +1,8 @@
-## What this does
+## What was asked
 
 {intake.triage.summary}
 
-## How
+## The plan
 
 {planning.plan.latest.summary}
 
@@ -21,6 +21,10 @@
 ## Left by the reviews and the audit
 
 {run.leftover}
+
+## Found by the last audit, and not settled
+
+{rounds.self-audit.findings}
 
 ## Assumed without asking
 

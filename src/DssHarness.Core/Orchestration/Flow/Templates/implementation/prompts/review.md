@@ -19,11 +19,13 @@ What its builder was asked to do:
 ## The change
 
 It is what this run changed under the item's paths since commit `{orient.startCommit}`, as it now stands in the main
-tree, folded and committed: `git diff {orient.startCommit} HEAD -- <paths>` shows it. Read the code around it in the
-main tree too; a change is right or wrong in its surroundings.
+tree, folded and committed: `git diff {orient.startCommit} HEAD -- <paths>` shows it, with the item's paths after
+`--`. In a later round or a repair it can also hold earlier work in the same paths: report on that only where this
+item's instructions or definition of done concern it. Read the code around it in the main tree too; a change is right
+or wrong in its surroundings.
 
-This is round {iteration} of the review of this item. You are not told what earlier rounds found: review what is there
-now.
+This is round {iteration} of the review of this item. You are told nothing of earlier rounds but what its builder
+declined, below: review what is there now.
 
 ## What its builder declined
 
@@ -36,8 +38,8 @@ again, and say in its text why the reason does not hold. Entries of other aspect
 
 ## What to return
 
-Whether the change has anything of your aspect, and each finding: your aspect, the file and line, what is wrong and
-why and what would put it right, how much it matters, and whether it is in production code. A statement of the item's
-definition of done that the change does not hold is a finding of the aspect it belongs to.
+Whether the change has anything of your aspect, and each finding: your aspect, the file and line, what goes wrong and
+in which case, what would put it right, how much it matters, and whether it is in production code. A statement of the
+item's definition of done that the change does not hold is a `correctness` finding; other aspects leave it.
 
 Report what you confirmed in the code. An empty list is the answer for a change with nothing wrong in your aspect.

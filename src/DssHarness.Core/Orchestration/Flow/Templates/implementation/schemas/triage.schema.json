@@ -21,7 +21,7 @@
     },
     "kind": {
       "type": "string",
-      "description": "What kind of work the request is.",
+      "description": "What kind of work the request is: fix, existing behaviour is wrong; feature, new behaviour; refactor, new code with the same behaviour; test, docs or build, only tests, documentation, or the build and CI change; other, anything else.",
       "enum": [
         "feature",
         "fix",
@@ -128,7 +128,7 @@
     },
     "blockers": {
       "type": "array",
-      "description": "Open work that stands in the way of the request and that this run can do, the most pressing first.",
+      "description": "Open work that stands in the way of the request and that this run can do, the most pressing first: each names the work, where it is (a path, a CI leg or a test) and what you read that shows it.",
       "items": {
         "type": "string"
       }

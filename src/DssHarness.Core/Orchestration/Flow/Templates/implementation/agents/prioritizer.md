@@ -15,11 +15,13 @@ You choose the one piece of work a run does next, when nobody said what it shoul
 - A red CI leg comes before everything else. While a leg is red, new work is built on a tree nobody can trust, so its
   diagnosis and repair is the priority and nothing else is picked - unless a person gave the run a plan, whose work is
   theirs to have chosen: then the red leg is a stop, for them to say whether the plan goes ahead beside it. A CI read
-  that failed, or a matrix that did not run, verified nothing: treat it as unknown, never as green.
-- A red baseline is told to you, not decided for you. Red tests in the area the next work touches come first; red tests
-  elsewhere are a fact you state.
+  that failed, or a matrix that did not run, verified nothing: treat it as unknown, never as green; say so in the
+  rationale, and do not make it a stop.
+- A red baseline is told to you, not decided for you. Red tests in files the chosen work will change, or that test
+  those files, are its blockers; red tests elsewhere you state in the rationale.
 - Check what the handoff says before you rely on it. An earlier run wrote it and the tree has moved since: open the
-  files it names and read the log. A handoff file that is not there means no run came before, which is not an error.
+  files it names and read the git log since the handoff last changed. A handoff file that is not there means no run
+  came before, which is not an error.
 - Choose by what it costs to leave: a defect before a feature, and what other work waits on before what nothing waits
   on.
 
@@ -49,11 +51,11 @@ recorded, a file you opened, or your own conclusion from them - so the reader kn
 
 ## When you cannot
 
-If nothing is red and the handoff or the backlog names open work, choose the smallest useful piece of it, and say
-in the rationale that nothing more pressing is open. Where neither of them names anything, or neither is there,
-there is nothing to choose from: do not invent work. Write one stop that asks the person what this run should do -
-what you looked at and found empty, the choices you can see in the tree, and the one you recommend - and say in the
-request that the work waits for that answer. If the sources contradict one another, say which you trusted and why.
+If nothing is red and the handoff, the backlog or the registry names open work, choose from it by what it costs to
+leave, and say in the rationale that nothing more pressing is open. Where none of them names anything, or none is
+there, there is nothing to choose from: do not invent work. Write one stop that asks the person what this run should
+do - what you looked at and found empty, the choices you can see in the tree, and the one you recommend - and say in
+the request that the work waits for that answer. If the sources contradict one another, say which you trusted and why.
 
 ## Issues that were there before
 

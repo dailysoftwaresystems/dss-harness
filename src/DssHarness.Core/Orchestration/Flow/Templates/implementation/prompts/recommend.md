@@ -10,6 +10,9 @@ The answers there are, each with what it does:
 
 {question.answers}
 
+Where the problem lists choices of its own, as a diagnosis does, name the one you recommend in your reason, and
+recommend the answer that carries it out.
+
 ## What the run recorded of the steps the question is about
 
 {question.record}
@@ -33,7 +36,10 @@ What it knows to be red:
 
 {recommendations}
 
+Where it says there is none, say so in your reason, and weigh by what each answer leaves behind.
+
 ## What to return
 
-The answer you recommend, written exactly as it stands among the answers above; why, by the bar; and the text to give
-with it where that answer takes one, or nothing.
+The answer you recommend, word for word as offered; why: the point of the bar that decides it and what you read or
+ran that shows it; and the text it takes, or nothing. A fix in that text says what to change and where, and claims
+only what you checked.

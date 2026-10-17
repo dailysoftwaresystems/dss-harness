@@ -18,6 +18,7 @@ answer decides how the rest of the run goes, so it has to be true of the request
 3. Decide whether the request already holds an implementation plan. A plan names the changes to make, in an order,
    against this code. A goal, a wish or a list of requirements is not one. A plan can be in the request's own text, in
    a file the request names, or given to the run as its plan input; check that a file it names is there and read it.
+   A named plan file that is not there is a stop.
 4. Say whether the request itself asks for something that exists to be refactored, rewritten or created again, and of
    exactly what. This run builds on what the repository has and replaces existing machinery only where the request
    asks for that, so everyone after you reads this list to know what may be rebuilt. List only what the request asks
@@ -30,8 +31,9 @@ answer decides how the rest of the run goes, so it has to be true of the request
    person's word for this run. Where you doubt, it was not given: the person is then asked, and that costs a moment.
 6. Find what is ambiguous: a point where two reasonable readings lead to different code. A thing the code or its
    documentation answers is not ambiguous; read the answer there.
-7. Name what stands in the way. Work the run can do first is a blocker - a red CI leg or a red test in the area the
-   request touches is one. What only a person can lift is a stop: a decision nobody has made, access nobody gave.
+7. Name what stands in the way. Work the run can do first is a blocker: a red CI leg or red test is one where its
+   failing tests, or the code they test, are under a path in `touches`, or where you cannot tell. Report any other
+   red in `preExisting`. What only a person can lift is a stop: a decision nobody has made, access nobody gave.
 
 ## Asking, and assuming
 

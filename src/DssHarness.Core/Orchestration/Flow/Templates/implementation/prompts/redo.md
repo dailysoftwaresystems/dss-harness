@@ -10,6 +10,8 @@ What the change means for this item: {piece.changed}
 - What is taken back: {piece.undo}
 - What is done in its place: {piece.instead}
 
+An empty line means the change names nothing there.
+
 ## The item as it now is
 
 {item.title}
@@ -21,6 +23,7 @@ What the change means for this item: {piece.changed}
 - What must hold when your work is finished, the item's definition of done as it now is, checked statement by
   statement before you report: {item.done}
 - The filter that selects your tests when the engine runs them: `{item.testFilter}`; empty, every test runs
+- How the engine runs the tests, leg by leg: {orient.tests}
 - The existing code this item reuses or extends, and for what: {item.reuses}
 - What this item creates from nothing, with why nothing that exists serves: {item.creates}
 - What this item replaces because the request asked for it to be rebuilt, and what becomes of the old one:
@@ -49,10 +52,10 @@ when you report.
    of it standing beside what takes its place.
 4. Build what the item now asks for, with a test for each behaviour that fails when the behaviour is broken, and
    change the tests of what you kept where the change makes them say something else.
-5. Build and run your tests, where the repository's tools let you.
-6. Where the repository keeps a registry: a row the earlier work filed for something that is now gone is settled by
-   the registry's own rule, not deleted; file a row where the new work calls for one, in the rows directory your
-   run context names.
+5. Build and run your tests as the engine runs them. Where you cannot, say why in what you ran.
+6. Registry rows, where this repository keeps an anchor registry ({orient.anchors}): do not delete a row the earlier
+   work filed for something now gone; name it in your summary. File a row only for what you leave for later, in the
+   rows directory your run context names, and cite its id where the work belongs.
 
 ## What to return
 

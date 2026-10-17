@@ -20,6 +20,9 @@ What the change means for this item: {piece.changed}
 - The paths you must not touch: {item.forbiddenPaths}
 - What must hold once it is taken back, checked statement by statement before you report: {item.done}
 - The filter that selects the tests the engine runs when you report: `{item.testFilter}`; empty, every test runs
+- How the engine runs the tests, leg by leg: {orient.tests}
+
+The plan this item was part of, as it now is: {planning.plan.latest.summary}
 
 ## What the item built
 
@@ -38,12 +41,15 @@ when you report. Taking an item back is a change like any other: built, tested, 
 
 1. For each path the item wrote: where the item created the file, remove it; where it changed a file that was
    there, put back what the item changed and nothing else. A later change by other work in the same file stays.
+   Read what the item changed in the commits the account names (`git show <commit> -- <path>`).
 2. Put back what the item deleted or replaced, where the plan as it now is still needs it.
-3. Remove the tests that exist only for what you removed. Do not remove a test to make a red result go away.
+3. Remove the tests that exist only for what you removed. Do not remove a test to make a red result go away. Where
+   the filter above names one you remove, list that as what you cannot do.
 4. Look for what came to depend on the item since: a caller, a registration, a document, a configuration entry.
-   Each is either yours to put right inside your paths, or something to report, with the path.
-5. Build and run the tests, where the repository's tools let you: the rest has to stand without the item.
-6. Where the repository keeps a registry, a row the item filed is settled by the registry's own rule, not deleted.
+   Put right each one inside your paths; list each outside them as what you cannot do, with the path.
+5. Build and run the tests as the engine runs them: the rest has to stand without the item. Where you cannot, say
+   why in what you ran.
+6. Do not delete a registry row the item filed; name it in your summary.
 
 Where something of the item cannot be taken back without breaking work that was built on it, do not force it:
 leave it, and say exactly what is left and why.

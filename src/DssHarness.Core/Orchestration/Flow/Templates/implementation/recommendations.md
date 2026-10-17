@@ -25,8 +25,9 @@ you never want, and what to do when in doubt.
 
 ## When in doubt
 
-Where none of the choices meets the bar, say so, and recommend stopping for a person over going on. Where what the
-question stands on could not be checked, say what was not checked.
+Where none of the choices meets the bar, say so, and recommend the choice that goes no further without a person; where
+every choice goes on, the one whose mistake is easiest to undo. Where what the question stands on could not be
+checked, say what was not checked.
 
 ## What every recommendation says
 

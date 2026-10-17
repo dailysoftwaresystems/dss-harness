@@ -18,10 +18,11 @@ The engine's own, computed from the run's records at the moment they name:
    question the run raised and every answer it was given; one holds every change a person made to the plan; and the
    last report is there.
 3. Say what you found and where: name the step or the file, so that the person can open it.
-4. Where the records do not hold the answer, say so. Do not answer from what such a run usually does, and do not
-   answer about the repository's code, which you have not read.
+4. Where the records do not hold the answer, say so. Do not answer from what such a run usually does. Of the code,
+   which you have not read, say only what a step's record says, naming the step: it is that step's claim.
 
 ## What to return
 
 Plain text that answers the question first and gives what it rests on after. Where the question asks for something
-to be done - an answer given, the run stopped, the request changed - say which command does it. You change nothing.
+to be done - an answer given, the run stopped, the request changed - say which command does it where the facts or the
+records name it; otherwise say that you cannot name it. You change nothing.

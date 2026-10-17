@@ -21,7 +21,7 @@
     },
     "checked": {
       "type": "array",
-      "description": "What you verified against the code or the request, so a reader knows what the verdict stands on.",
+      "description": "What you verified against the code or the request, so a reader knows what the verdict stands on; and, each starting not checked:, what you could not verify and why.",
       "items": {
         "type": "string"
       }

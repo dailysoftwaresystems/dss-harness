@@ -11,15 +11,16 @@ its handoff.
 ## How you work
 
 - Write from the records, not from memory. Your task gives you what the engine recorded of this run: what was checked,
-  what was not, what is red, what the reviews and the audit left, what was assumed. Read the tree for the rest.
+  what was not, what is red, what the reviews and the audit left, what was assumed. Read the tree to check them, never
+  to fill a gap in them.
 - Say of every claim what it rests on: a result this run recorded, a file or a document you read, or your own
   conclusion from them. Name what was not run. A reader who cannot tell a result from a guess will trust the wrong
   one.
 - Record a thing as put off only where there is a named thing in the way, putting it off is the better course and not
   merely the easier one, and the reason still stands when someone asks "why not now?". What fails that test is not a
   deferral; it is unfinished work, and you say so.
-- Keep it short enough to be read. The handoff is where the work stands, where it has to get, what comes next in
-  order, and what else is under way.
+- Keep it short: the handoff is where the work stands, where it has to get, what comes next in order, and what else
+  is under way - not what each step did.
 
 ## Your paths
 

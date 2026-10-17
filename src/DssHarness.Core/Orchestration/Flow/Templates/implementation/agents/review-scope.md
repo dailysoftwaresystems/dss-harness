@@ -18,9 +18,10 @@ For each aspect, answer yes where the change adds or alters something of its kin
 
 - errors: code that handles a failure - a catch, an error return, a retry, a fallback, a cleanup on failure.
 - tests: a test, or behaviour a test should hold.
-- types: a type - a class, a record, an interface, a schema, an enumeration.
+- types: a type, or a field, member or signature of one - a class, a record, an interface, a schema, an enumeration. A
+  changed method body alone is not.
 - comments: a comment or documentation.
-- simplicity: new or rewritten code of some length, as opposed to a few changed lines.
+- simplicity: a whole function, method or type, new or rewritten, as opposed to lines changed inside one.
 
 ## When you are not sure
 

@@ -6,6 +6,8 @@ Plan the work of this run.
 
 Where nothing stands above this line, the run's prioritiser chose the work: {intake.priority.request}
 
+Where it chose no work, what the person decided, below, is the request.
+
 ## What triage found
 
 - Title: {intake.triage.title}
@@ -38,8 +40,8 @@ What only a person could lift, as it was put to them, each with its choices and 
 
 What the person decided about it: {blocked.text}
 
-An empty list means the run met nothing of that kind and asked nobody: the line under it then says that the step
-which asks left no output. Where the person decided something, the plan holds to it.
+An empty list means nothing stood in the way and nobody was asked. Where the person decided something, the plan
+holds to it.
 
 Where a line says that a step left no output, that thing was not read or did not run in this run: it is unknown, and never a pass.
 
@@ -76,21 +78,20 @@ item.
    one builder's cycle: as much work as one agent builds whole in a single sitting, with its tests - never more than
    that, and never a sliver of one; an item too small to fill a builder is merged with the work beside it. Items are
    built at the same time: none may need another's result. Leave nothing inside an item that you already know only a
-   person can give: ask it now, where you may. A builder that finds part of its item cannot be done says so, and a
-   person is asked before anything of the item is folded.
-6. For each item, write instructions a builder with none of this conversation can follow, its definition of done -
-   what must hold when it is finished, as statements a person or a check can answer one by one: the behaviours built,
-   the test that pins each, and what is true of the tree when the builder reports - the paths it owns, the paths it
-   must not touch, and the filter that selects its tests; then what it reuses or extends, by path and for what; what
-   it creates, each with why nothing that exists serves and what you searched for and where; and what it replaces
-   because the request asked, by path, with what becomes of the old one.
+   person can give: ask it now, or, where you may not, leave it out and name it in the summary. A builder that finds
+   part of its item cannot be done says so, and a person is asked before anything of the item is folded.
+6. For each item write: instructions a builder with none of this conversation can follow; its definition of done, as
+   statements a check can answer one by one - each behaviour, the test that pins it, and what is true of the tree
+   when the builder reports; the paths it owns and the paths it must not touch; its test filter; what it reuses, by
+   path and for what; what it creates, with why nothing that exists serves and where you searched; and what it
+   replaces because the request asked, by path, with what becomes of the old one.
 
 ## What to return
 
-A summary of the plan; the plan's definition of done - what holds when the whole plan is built, as statements a check
-can answer one by one, which the run's final audit holds every round against; whether it was built on a plan a person
-gave or made here; each departure from a given plan, with its reason; the items; and under `scope` an empty list,
-since nothing is being updated.
+A summary of the plan, naming each part of the request no item covers, with the reason; the plan's definition of
+done - what holds when the whole plan is built, as statements a check can answer one by one, which the run's final
+audit holds every round against; whether it was built on a plan a person gave or made here; each departure from a
+given plan, with its reason; the items; and under `scope` an empty list, since nothing is being updated.
 
 A machine checks the items before anyone builds them: every name valid, no file under two items, forbidden paths kept,
 every path an item reuses or replaces there in the tree, and every item saying what it reuses, creates or replaces.

@@ -13,7 +13,7 @@
   "properties": {
     "summary": {
       "type": "string",
-      "description": "The plan in a few sentences: what will be built, in what order, and why this way."
+      "description": "The plan in a few sentences: what will be built, in what order, why this way, and its risks. It also names each part of the request no item covers, with why; each audit finding you hold wrong, with what shows it; and, after an update, what the change was."
     },
     "done": {
       "type": "string",
@@ -86,14 +86,14 @@
           },
           "ownedPaths": {
             "type": "array",
-            "description": "The path patterns this item may write. No file is matched by the patterns of two items.",
+            "description": "The path patterns this item may write, from the repository's root: a file, or a glob where ** matches any depth (src/Orders/**). No file is matched by the patterns of two items.",
             "items": {
               "type": "string"
             }
           },
           "forbiddenPaths": {
             "type": "array",
-            "description": "Path patterns this item must not touch, though they are near its work.",
+            "description": "Path patterns, written as ownedPaths are, that this item must not touch, though they are near its work.",
             "items": {
               "type": "string"
             }
@@ -239,14 +239,14 @@
               },
               "ownedPaths": {
                 "type": "array",
-                "description": "The path patterns this item may write. No file is matched by the patterns of two items.",
+                "description": "The path patterns this item may write, from the repository's root: a file, or a glob where ** matches any depth (src/Orders/**). No file is matched by the patterns of two items.",
                 "items": {
                   "type": "string"
                 }
               },
               "forbiddenPaths": {
                 "type": "array",
-                "description": "Path patterns this item must not touch, though they are near its work.",
+                "description": "Path patterns, written as ownedPaths are, that this item must not touch, though they are near its work.",
                 "items": {
                   "type": "string"
                 }

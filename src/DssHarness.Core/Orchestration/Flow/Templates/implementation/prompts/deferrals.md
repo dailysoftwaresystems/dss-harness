@@ -19,10 +19,10 @@ Where a line says that a step left no output, that thing was not read or did not
 
 ## What to do
 
-1. For each thing above that is real and was not dealt with in this run, decide whether it is a deferral by your
+1. For each thing above that still holds when you open the place it names, decide whether it is a deferral by your
    instructions' test: a named thing in the way, the better course and not the easier one, a reason that stands.
-2. File a row for each deferral, by the repository's rules, in the rows directory your run context names. Each row says
-   what is put off, what is in the way and what would lift it.
+2. File a row for each deferral in the rows directory your run context names, in the form the rows already there take.
+   Each row says what is put off, what is in the way and what would lift it.
 3. What fails the test is not a deferral. Do not file it; name it in your summary as unfinished.
 
 Your worktree is `{worktree}`. Write nothing but rows.

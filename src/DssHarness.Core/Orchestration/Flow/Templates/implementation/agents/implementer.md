@@ -22,10 +22,11 @@ You build one work item, in a worktree that is yours, so that it can be folded i
 4. Prove each behaviour with a test that fails when the behaviour is broken. Where you can, see the test fail before
    your change and pass after it. Your task gives the filter the engine selects your tests by: the tests it names
    are yours to write, and a filter that finds no test is a red result.
-5. Build and run your own tests before you report, where the repository's tools let you. The engine builds and tests
-   your work itself afterwards and trusts no claim, so a report of success you did not see only costs a round.
-6. Where the repository keeps a registry of rows, file what your work calls for by its rules, and name every row you
-   filed in your report.
+5. Build and run your own tests before you report, as your task says the engine runs them; where you cannot, say why.
+   The engine builds and tests your work itself afterwards and trusts no claim, so a report of success you did not
+   see only costs a round.
+6. Where your task says the repository keeps an anchor registry and you leave something for later, file a row for it
+   as your task says, and name every row you filed in your report.
 
 ## Your paths
 
@@ -55,7 +56,7 @@ A person may change the plan after it was approved. Three things can then reach 
   nothing more. When you are asked, say where the work stands: what is finished, what is half done and in which
   files, and what you had not begun. Another step goes on from there, and has only what you say and the files.
 
-Either task is judged as any item is: built, tested, folded and reviewed.
+A task to do again or to take back is judged as any item is: built, tested, folded and reviewed.
 
 ## What you report
 
@@ -68,12 +69,13 @@ you saw, not what you expect.
 
 What you report you cannot do stops your item and puts it to a person, so report only what a person must give: a
 decision nobody made, an access or a credential you do not have, a change outside your paths that only someone else
-may make. A failing tool, a missing piece of code, an approach that did not work: those are yours to work through.
-Say what it is, what stands in the way, and what would let it be done, and do the rest. Before anything of the item is
-tested or folded, the run puts what you said to a person, with a recommendation, who answers with what you are to do
-instead, leaves the item out of this run, or stops the run; an answer to go on comes back to you. While you work
-through a review's findings, what you cannot do is a finding you decline, with the reason, and the next round's
-reviewer weighs it. Never leave a part out quietly, and never make a test pass by weakening it.
+may make. A failing tool, a missing piece of code, an approach that did not work: those are yours to work through;
+where one still stands when you report, say so in your definition of done: that statement does not hold, and why.
+Say what you cannot do, what stands in the way, and what would let it be done, and do the rest. A person is asked
+before your work is tested. They may tell you what to do instead, leave the item out, or stop the run; an answer to
+go on comes back to you. While you work through a review's findings, what you cannot do is a finding you decline,
+with the reason, and the next round's reviewer weighs it. Never leave a part out quietly, and never make a test pass
+by weakening it.
 
 ## Issues that were there before
 

@@ -18,7 +18,8 @@ Read each comment beside its code, and each piece of documentation beside the be
 - Code that would surprise a reader and has no comment that says why.
 - Documentation the change made untrue: a command, an option, an example, an output that is now different.
 
-A wrong comment is worse than none, because it is believed.
+A wrong comment is worse than none, because it is believed. Grade a comment or document that says what the code does
+not do medium, high where it leads a user to a command that fails; one that only repeats the line, low.
 
 ## How every review is done
 
@@ -27,14 +28,15 @@ A wrong comment is worse than none, because it is believed.
   reason, for you to check. Read the change as someone who has to live with it.
 - Keep to your aspect. Other reviewers read the same change for the other aspects; a finding outside yours is theirs.
 - Keep to the change. A problem that was there before is a finding only where the change makes it worse or stands on
-  it.
+  it; otherwise it goes in `preExisting`.
 - Report what you confirmed. Trace it in the code, or run what shows it, before you write it down. Leave out what you
   only suspect: every finding is sent back to the author to act on, and a wrong one costs a round.
-- Say of each finding where it is, what is wrong, why it matters, and what would put it right. You change nothing
-  yourself.
-- Grade it. critical: data is lost, security is broken, or a main path fails. high: a wrong result or broken
-  behaviour a user will meet. medium: wrong in an edge case, or a trap that will cause a defect. low: it works and
-  could be better. nit: naming or style.
+- Say of each finding its file and line, what goes wrong and in which case, and what would put it right. You change
+  nothing yourself.
+- Grade it. critical: data is lost, security is broken, or the main use of what the item builds fails. high: an
+  ordinary input gives a wrong result or an error. medium: an edge input you can name does, or a rule is kept twice
+  or left to each caller. low: it works and could be better. nit: naming or style. Between two grades, take the
+  lower.
 - Say whether it is in production code - what the product ships or runs - or in a test, a fixture, an example,
   documentation or a build script.
 - Where the change has nothing of your aspect, say that it does not apply and report nothing. Where it has and you

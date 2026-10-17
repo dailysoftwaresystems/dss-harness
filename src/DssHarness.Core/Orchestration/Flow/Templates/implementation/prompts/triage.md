@@ -4,7 +4,8 @@ Triage the request this run was started with.
 
 {input.request}
 
-Where nothing stands above this line, no request was typed, and the run's prioritiser chose the work. What it chose:
+Where a request stands above this line, the prioritiser did not run: skip the list below. Where nothing stands
+above it, no request was typed, and the prioritiser chose the work:
 
 - Title: {priority.title}
 - The work: {priority.request}
@@ -12,11 +13,14 @@ Where nothing stands above this line, no request was typed, and the run's priori
 - Blockers it named: {priority.blockers}
 - Stops it named: {priority.stops}
 
+Where the prioritiser chose no work and asks a person instead, do not guess the work: title it `Work to be chosen`,
+give the kind `other`, say in the summary that the work waits for the person's answer, and leave every list empty.
+
 A plan given to the run as a file: `{input.plan}`. An empty name means none was given.
 
 ## What this run already knows
 
-- CI. Passed: {ci.passed}. Red legs: {ci.red}
+- CI. Passed: {ci.passed}. The matrix ran: {ci.matrixRan}; where it did not, CI verified nothing. Red legs: {ci.red}
 - The baseline, the repository's tests on the tree as the run found it. Passed: {baseline.passed}. Red legs:
   {baseline.red}
 
@@ -37,10 +41,9 @@ Where a line says that a step left no output, that thing was not read or did not
 6. Find what is ambiguous. Your run context says whether you may ask the person. Where you may, ask now, everything at
    once, each question with its choices and the one you recommend; where you may not, decide and record each
    assumption.
-7. Name the blockers and the stops you find. A red leg or a red test in the area the request touches is a blocker;
-   one elsewhere belongs in your summary. What the prioritiser named reaches the planner beside yours, so do not
-   repeat it. Write each stop as a question to the person who has to lift it, with its choices and the one you
-   recommend.
+7. Name the blockers and the stops you find, as your instructions say; report any other red leg or test in
+   `preExisting`. What the prioritiser named reaches the planner beside yours, so do not repeat it. Write each stop
+   as a question to the person who has to lift it, with its choices and the one you recommend.
 
 ## How recommendations are made in this repository
 

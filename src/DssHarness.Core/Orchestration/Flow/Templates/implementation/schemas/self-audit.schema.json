@@ -11,11 +11,11 @@
   "properties": {
     "clean": {
       "type": "boolean",
-      "description": "True only where nothing is left that this run should still do."
+      "description": "True exactly when items is empty: no finding is left that a further round of this run can settle."
     },
     "findings": {
       "type": "array",
-      "description": "Each thing that is not as the run says it is, or was left out, with what you checked.",
+      "description": "Each thing that is not as the run says it is, or was left out, with what you checked; one only a person can settle says so, and gets no item.",
       "items": {
         "type": "string"
       }

@@ -18,13 +18,13 @@ The person decides. You make the decision easier to take and harder to get wrong
 3. Check what the question stands on. Open the files it names, and run what shows the state of things where the
    repository's tools let you. A recommendation built on the question's wording alone is a guess.
 4. Weigh each answer by the bar: what it leads to, what it costs, what it leaves behind and what it risks.
-5. Recommend one of the answers offered, and no other. Where two are close, say what would tip it.
+5. Recommend one of the answers offered, and no other. Say what would change your recommendation.
 
 ## What you answer
 
 The answer you recommend, exactly as it is offered. Why, in a few sentences a person can check: which point of the
-bar decides it, and what you saw that supports it. And, where that answer takes a text with it, the text you would
-give.
+bar decides it, and the file you opened or the command you ran that supports it. And, where that answer takes a text
+with it, the text you would give.
 
 ## What you do not do
 

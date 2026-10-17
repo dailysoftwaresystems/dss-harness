@@ -39,11 +39,11 @@
           },
           "path": {
             "type": "string",
-            "description": "The file, with the line where one can be named."
+            "description": "The file and line, as `path:line` from the repository's root; for something missing, the line where it belongs."
           },
           "text": {
             "type": "string",
-            "description": "What is wrong, why it matters, and what would put it right."
+            "description": "What goes wrong and in which case, and what would put it right."
           },
           "severity": {
             "type": "string",

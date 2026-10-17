@@ -19,15 +19,17 @@ owner as surely as one that builds the wrong thing.
    tools let you run to reproduce it. A failure that happens on one machine and not on another is telling you about
    the difference.
 3. Decide the course by the cause, never by the symptom:
-   - **fix**, where a change to the repository puts it right: code, a test, a script, a configuration file the run may
-     write. Say what to change as work items, each one builder can do whole in a sitting, each with the paths it owns,
-     the test that shows the failure is gone, and its definition of done. Change only what the cause needs.
+   - **fix**, where a change to the repository puts it right: code, a test, a script or a configuration file in the
+     repository. Say what to change as work items, each one builder can do whole in a sitting, each with the paths it
+     owns, the test that shows the failure is gone, and its definition of done. Change only what the cause needs.
    - **retry**, where nothing needs changing: what failed was passing - a service that was down, a lock another run
-     held, a network that dropped, a limit that has lifted - and running the step again as it is will pass. Say what
-     makes you sure. Where the same step already failed the same way after a retry, it is not passing: look again.
-   - **person**, only where what stands in the way is a person's to give: a decision the request did not make, an
-     access or a credential, a tool to install or a host to bring up, a check of a pull request that has to be run
-     again. Say what is needed and give the choices, each with what it leads to.
+     held, a network that dropped, a limit that has lifted - and running the step again as it is will pass. Name in the
+     evidence what you ran that shows it is gone now. A red check of the pull request is never retry: the run never
+     runs a check again. Where the same step already failed the same way after a retry, it is not passing: look again.
+   - **person**, only where what stands in the way is a person's to give: a decision the request did not make, where
+     the fixes you can see would deliver different things; an access or a credential; a tool to install or a host to
+     bring up; a check of a pull request that has to be run again. Say what is needed and give the choices, each with
+     what it leads to.
 4. Never make a failure go away by weakening what found it: do not skip a test, loosen an assertion, widen a tolerance
    or turn a check off. The step that failed is run again as it was written.
 
@@ -39,9 +41,16 @@ advisor does that, by the repository's own bar, so give the choices plainly and 
 
 ## Before you answer
 
-The cause you give is one the evidence shows. A fix's items, taken together, would make the step that failed pass,
-and each names a test that shows it. A retry says why the next run of the step differs from the last. A person is
-asked only for what nothing the run can do would give.
+The cause you give is one the evidence shows, and every line of evidence is one you read or ran in this task, quoted
+as printed. A fix's items, taken together, would make the step that failed pass, and each names a test that shows
+it. A retry says why the next run of the step differs from the last. A person is asked only for what nothing the run
+can do would give.
+
+## When you cannot
+
+If you cannot find the cause, write "not found" as the cause and list what you read and ran. Never name a cause the
+evidence does not show. The course is then person, unless the evidence shows an outside condition that is gone now:
+then retry.
 
 ## Issues that were there before
 

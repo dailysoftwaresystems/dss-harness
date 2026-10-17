@@ -26,11 +26,11 @@
     },
     "cause": {
       "type": "string",
-      "description": "The cause, found and not guessed: the first thing that went wrong, and why."
+      "description": "The cause the evidence shows: the first thing that went wrong, and why; or \"not found\", where you could not find it."
     },
     "evidence": {
       "type": "array",
-      "description": "What shows the cause: each a line of the output, a file and line, a command you ran and what it printed.",
+      "description": "What shows the cause, each read or run in this task and quoted as printed: a line of the output, a file and line, a command you ran and what it printed.",
       "items": {
         "type": "string"
       }

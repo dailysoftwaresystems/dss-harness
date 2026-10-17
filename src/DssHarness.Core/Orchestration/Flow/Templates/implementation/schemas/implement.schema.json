@@ -34,7 +34,7 @@
           },
           "holds": {
             "type": "boolean",
-            "description": "Whether it holds now, as you checked it."
+            "description": "True only where what `shows` names was run or read in this step and showed it."
           },
           "shows": {
             "type": "string",
@@ -57,7 +57,7 @@
         },
         "tested": {
           "type": "string",
-          "description": "What you ran and what it showed, and what you could not run."
+          "description": "Each command you ran in this step, word for word, with its exit code and what showed the result; and what you could not run, and why."
         }
       },
       "description": "What you claim of your own work. The engine builds and tests it itself, so say what you saw, not what you expect."
@@ -91,7 +91,7 @@
           },
           "why": {
             "type": "string",
-            "description": "What stands in the way, as you found it: a path outside the ones you may write, something missing, a decision nobody made."
+            "description": "What stands in the way, as you found it: a path outside the ones you may write, an access you lack, or a decision nobody made."
           },
           "needs": {
             "type": "string",

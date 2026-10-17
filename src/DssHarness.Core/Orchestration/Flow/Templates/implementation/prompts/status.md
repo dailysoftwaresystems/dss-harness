@@ -25,4 +25,4 @@ them, and add no number they do not hold.
 ## What to return
 
 Plain text, a dozen lines at most, with no heading. Where something a person should act on stands out - a question
-that waits, a failure, a step that has run far longer than its like - say it first.
+that waits, a failure, a step that has run longer than every earlier instance of it in this run - say it first.
