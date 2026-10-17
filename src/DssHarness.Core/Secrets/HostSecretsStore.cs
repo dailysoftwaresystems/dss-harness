@@ -54,22 +54,27 @@ public sealed class HostSecretsStore(IFileSystem fileSystem, IFilePermissions fi
     public const string SuperuserKey = "SUDO_PASSWORD";
 
     /// <summary>The keys an ssh item's <c>.env</c> declares.</summary>
-    private static readonly ExpectedKey[] SshKeys =
+    private static readonly ItemKey[] SshKeys =
     [
         new(AddressKey, "the machine's address"),
         new(UserKey, "the user ssh logs in as"),
         new(PortKey, "the port ssh connects to", SshItem.DefaultPort.ToString(CultureInfo.InvariantCulture)),
+        new(SuperuserKey, "the superuser credential a privileged install needs", Secret: true, Optional: true),
     ];
 
     /// <summary>The keys a WSL item's <c>.env</c> declares.</summary>
-    private static readonly ExpectedKey[] WslKeys =
+    private static readonly ItemKey[] WslKeys =
     [
         new(DistributionKey, "the distribution, spelt as WSL lists it"),
+        new(SuperuserKey, "the superuser credential a privileged install needs", Secret: true, Optional: true),
     ];
 
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly IFilePermissions _filePermissions = filePermissions;
     private readonly IHostPlatform _platform = platform;
+
+    /// <summary>The rules an item's environment file is held to, in one place.</summary>
+    private readonly ItemEnvironment _environment = new(fileSystem, filePermissions);
 
     public SecretsRead<SshItem> ReadSshItem(HarnessLayout layout, string name)
     {
@@ -189,10 +194,10 @@ public sealed class HostSecretsStore(IFileSystem fileSystem, IFilePermissions fi
     private (Dictionary<string, string>? Values, string Problem) ReadEnvironment(
         HarnessLayout layout,
         string directory,
-        IReadOnlyList<ExpectedKey> expected)
+        IReadOnlyList<ItemKey> expected)
     {
         var file = EnvironmentFile(directory);
-        var required = string.Join(" and ", expected.Where(key => key.Fallback is null).Select(key => key.Name));
+        var required = string.Join(" and ", expected.Where(key => key.Required).Select(key => key.Name));
 
         if (!_fileSystem.DirectoryExists(directory))
         {
@@ -212,52 +217,13 @@ public sealed class HostSecretsStore(IFileSystem fileSystem, IFilePermissions fi
             return (null, noFile);
         }
 
-        // Whoever can change this file can point the connection at another machine, or at another user
-        // on this one, so it is refused before it is believed.
-        if (_filePermissions.IsWritableByOthers(file))
-        {
-            return (null, $"other users can change '{Show(layout, file)}', and whoever can change it can point "
-                + $"this host at another machine; {HowToProtect(file)}");
-        }
-
-        var values = new Dictionary<string, string>(
-            DotEnvFile.Read(_fileSystem.ReadAllText(file)),
-            StringComparer.Ordinal);
-
-        // Readable is as bad as writable once this file holds a password: it is where a privileged
-        // install reads one from, and a credential every account on the machine can read has already
-        // been shared. Asked only when there is one, because an address, a user name and a port are
-        // not secrets, and refusing a world-readable file that holds only those would demand a
-        // permission change for nothing.
-        if (values.ContainsKey(SuperuserKey) && !_filePermissions.IsPrivate(file))
-        {
-            return (null, $"other users can read '{Show(layout, file)}', and it holds this host's "
-                + $"{SuperuserKey}; {HowToProtect(file)}");
-        }
-
-        foreach (var key in expected)
-        {
-            if (!values.TryGetValue(key.Name, out var value))
-            {
-                if (key.Fallback is null)
-                {
-                    return (null, $"'{Show(layout, file)}' declares no '{key.Name}'; add {key.Name}=, holding {key.Purpose}");
-                }
-
-                values[key.Name] = key.Fallback;
-            }
-            else if (value.Length == 0)
-            {
-                if (key.Fallback is null)
-                {
-                    return (null, $"'{key.Name}' in '{Show(layout, file)}' is blank; give it {key.Purpose}");
-                }
-
-                values[key.Name] = key.Fallback;
-            }
-        }
-
-        return (values, string.Empty);
+        return _environment.Read(
+            file,
+            Show(layout, file),
+            HowToProtect(file),
+            "and whoever can change it can point this host at another machine",
+            "this host's",
+            expected);
     }
 
     private string? Absent(HarnessLayout layout, string path, string purpose)
@@ -271,10 +237,4 @@ public sealed class HostSecretsStore(IFileSystem fileSystem, IFilePermissions fi
     /// <summary>A path as this repository spells it, which is where the reader has to go to fix it.</summary>
     private static string Show(HarnessLayout layout, string path)
         => Path.GetRelativePath(layout.MainCheckoutRoot, path).Replace('\\', '/');
-
-    /// <summary>One key an item's <c>.env</c> declares.</summary>
-    /// <param name="Name">The key.</param>
-    /// <param name="Purpose">What it holds, said the way a refusal asks for it.</param>
-    /// <param name="Fallback">What it means when it is left out, or <see langword="null"/> when it is required.</param>
-    private sealed record ExpectedKey(string Name, string Purpose, string? Fallback = null);
 }

@@ -176,6 +176,22 @@ public sealed class ActionValues : ILineMask
         return [.. arguments.Select(Redact)];
     }
 
+    /// <summary>Whether any element of <paramref name="arguments"/> holds a secret value.</summary>
+    /// <remarks>
+    /// The check every built argument list is held to before the command it carries is started: a
+    /// value given with an input, or held in a values directory, reaches the list all the same once
+    /// its name is filled in, and the log header, the process table and any error quoting the
+    /// command would all carry it. Handing a secret over is the environment's job.
+    /// </remarks>
+    /// <param name="arguments">The argument list a command is about to be started with.</param>
+    public bool HoldsASecret(IReadOnlyList<string> arguments)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+
+        return _secrets.Count > 0
+            && arguments.Any(argument => !string.Equals(Redact(argument), argument, StringComparison.Ordinal));
+    }
+
     /// <summary>
     /// The secret values themselves.
     /// </summary>
@@ -273,15 +289,14 @@ public sealed class ActionValuesReader(IFileSystem fileSystem, IHarnessOutput ou
     }
 
     /// <summary>
-    /// The definitions one dotenv file holds.
+    /// The definitions one dotenv file holds, every problem it has reported together with the line
+    /// it was found at.
     /// </summary>
     /// <remarks>
-    /// <c>NAME=value</c> lines, blank lines skipped, and a line whose first non-space character is
-    /// <c>#</c> treated as a comment. A <c>#</c> anywhere else is an ordinary character and stays in
-    /// the value: a generated credential contains one often enough that stripping it would produce a
-    /// value that is almost right, which fails later and somewhere else. A value wrapped in a
-    /// matching pair of quotes has them removed, so a value with leading or trailing spaces can be
-    /// written down.
+    /// Read through the one <c>NAME=value</c> line scanner (<see cref="DotEnvFile.Scan"/>). This
+    /// reader feeds a command's environment, so it is the stricter of the two: a line that defines
+    /// nothing is a problem named by its line, and a name with whitespace in it is not a name at
+    /// all.
     /// </remarks>
     /// <param name="text">The file's contents.</param>
     /// <param name="path">Where it came from, quoted in any problem.</param>
@@ -296,42 +311,25 @@ public sealed class ActionValuesReader(IFileSystem fileSystem, IHarnessOutput ou
         ArgumentNullException.ThrowIfNull(problems);
 
         var entries = new List<KeyValuePair<string, string>>();
-        var lines = text.Split('\n');
 
-        for (var index = 0; index < lines.Length; index++)
+        foreach (var line in DotEnvFile.Scan(text))
         {
-            var line = lines[index].Trim();
-            var number = index + 1;
-
-            if (line.Length == 0 || line[0] == '#')
+            if (line.Name is not { } name)
             {
-                continue;
-            }
-
-            var separator = line.IndexOf('=', StringComparison.Ordinal);
-
-            if (separator < 0)
-            {
-                problems.Add($"'{path}' line {number}: no '=', so nothing is defined here.");
-                continue;
-            }
-
-            var name = line[..separator].Trim();
-
-            if (name.Length == 0)
-            {
-                problems.Add($"'{path}' line {number}: the name before '=' is empty.");
+                problems.Add(line.Fault == DotEnvLineFault.NoEquals
+                    ? $"'{path}' line {line.Number}: no '=', so nothing is defined here."
+                    : $"'{path}' line {line.Number}: the name before '=' is empty.");
                 continue;
             }
 
             if (name.Any(char.IsWhiteSpace))
             {
-                problems.Add($"'{path}' line {number}: '{name}' is not a name; "
+                problems.Add($"'{path}' line {line.Number}: '{name}' is not a name; "
                     + "an environment variable's name holds no spaces.");
                 continue;
             }
 
-            entries.Add(new KeyValuePair<string, string>(name, DotEnvFile.Unquote(line[(separator + 1)..].Trim())));
+            entries.Add(new KeyValuePair<string, string>(name, line.Value!));
         }
 
         return entries;

@@ -18,9 +18,11 @@ public sealed record PhaseTiming(string Pattern, string Text, string Value);
 /// <param name="Phase">The phase's name, which also names its log file.</param>
 /// <param name="ExitCode">The code the process reported, read from the process and not through a pipe or a wrapper.</param>
 /// <param name="Stalled">
-/// Whether the phase went <see cref="StallSeconds"/> without a line on either stream and was stopped
-/// as hung. A stall bound rather than a time budget: output cadence stays stable even when total
-/// duration does not, so an honest run that simply takes longer than someone guessed is never killed.
+/// Whether the phase was stopped by the bound in force: it went <see cref="StallSeconds"/> without a
+/// line on either stream and was stopped as hung, or it ran past the wall-clock bound its request
+/// declared and was stopped by that. A silence bound rather than a time budget is the default: output
+/// cadence stays stable even when total duration does not, so an honest run that simply takes longer
+/// than someone guessed is never killed - unless the phase itself declared the guess.
 /// </param>
 /// <param name="StallSeconds">The bound that was in force; zero means none was.</param>
 /// <param name="Witnessed">
@@ -120,9 +122,13 @@ public sealed record PhaseResult(
     {
         if (Stalled)
         {
+            // Named by whichever bound stopped it: the silence bound where one was in force, and the
+            // phase's own wall-clock bound where the only bound was the one it declared.
             return ReachedVerdict.Of(
                 LegVerdict.Failed,
-                $"{Phase} hung: no output for {StallSeconds}s");
+                StallSeconds > 0
+                    ? $"{Phase} hung: no output for {StallSeconds}s"
+                    : $"{Phase} passed its own wall-clock bound and was stopped");
         }
 
         if (ExitCode != 0)

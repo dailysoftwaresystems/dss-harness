@@ -3,6 +3,7 @@ using System.Text;
 using DssHarness.Core.Execution;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
+using DssHarness.Core.Runners;
 
 namespace DssHarness.Tests;
 
@@ -490,6 +491,127 @@ public sealed class PhaseRunnerTests
         Assert.True(result.ClockStepped, $"a step of {step} went unrecorded; the phase measured a drift of {result.ClockDrift}");
         Assert.True(result.ClockDrift >= step.Duration() - TimeSpan.FromSeconds(1), $"a step of {step} measured as {result.ClockDrift}");
     }
+
+    /// <summary>
+    /// A phase hands its child the standard input it declares: the child reads it to its end, which
+    /// is how a phase's child is driven by what it is given rather than by what is typed at a
+    /// terminal nobody is watching.
+    /// </summary>
+    [Fact]
+    public async Task AChildIsGivenTheStandardInputItsPhaseDeclares_AndSeesItsEnd()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        var result = await Runner(factory).RunAsync(
+            Child("echo-stdin", temp.Combine("input.log")) with
+            {
+                StandardInput = ChildInput.Of("written into the child's input"),
+                SuccessPattern = @"\[written into the child's input\]",
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.Witnessed, "the child did not read back what the phase wrote to it");
+        Assert.True(result.Passed);
+    }
+
+    /// <summary>
+    /// A phase that declares a line callback is handed each line of either stream as it is kept -
+    /// masked, as the log holds it - for a reader that takes each line as one answer. A callback
+    /// handed the line before the mask would be the one place a secret reached whole.
+    /// </summary>
+    [Fact]
+    public async Task APhaseThatDeclaresALineCallback_IsHandedEachLineAsItIsKept_Masked()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        // The callback is raised on the reader threads of the child's streams, so the test's list
+        // is guarded as the callback's contract says an implementation must be.
+        var gate = new Lock();
+        var seen = new List<string>();
+
+        var result = await Runner(factory).RunAsync(
+            Child("echo-args", temp.Combine("lines.log"), "plain", "hunter2") with
+            {
+                Mask = ValuesWithSecret("hunter2"),
+                OnLine = line => { lock (gate) { seen.Add(line); } },
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, result.ExitCode);
+        lock (gate)
+        {
+            Assert.Equal(["[plain]", "[***]"], seen);
+        }
+    }
+
+    /// <summary>
+    /// A phase that declares a wall-clock bound of its own is stopped by it even with a silence
+    /// bound in force that never fires: a child that says nothing and never ends is bounded by what
+    /// asked for it, not by a guess about how long its work should take.
+    /// </summary>
+    [Fact]
+    public async Task APhaseThatDeclaresAWallClockBound_IsStoppedByIt()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        var result = await Runner(factory).RunAsync(
+            Child("sleep", temp.Combine("bound.log"), "30000") with
+            {
+                Timeout = TimeSpan.FromSeconds(2),
+
+                // A silence bound far past the wall-clock one, so the test proves it is the
+                // wall-clock bound that stops the child and not the silence machinery.
+                StallSeconds = 60,
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.Stalled, "a child asleep for thirty seconds was not stopped by a two-second bound");
+        Assert.False(result.Passed);
+        Assert.True(result.Duration < TimeSpan.FromSeconds(20), $"the bound took {result.Duration} to fire");
+    }
+
+    /// <summary>
+    /// A phase that declares whole lines is handed each line whole, however long: a reader that
+    /// takes each line as one answer entire - a line of it is one answer - must not be handed a
+    /// piece of one, which is what a line past the runner's own line bound would otherwise arrive
+    /// as.
+    /// </summary>
+    [Fact]
+    public async Task APhaseThatDeclaresWholeLines_IsHandedEachLineWholeHoweverLong()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        // The callback is raised on the reader threads of the child's streams, so the test's list
+        // is guarded as the callback's contract says an implementation must be.
+        var gate = new Lock();
+        var seen = new List<string>();
+
+        var result = await Runner(factory).RunAsync(
+            Child("flood", temp.Combine("whole.log"), "0", "0", "40000") with
+            {
+                WholeLines = true,
+                OnLine = line => { lock (gate) { seen.Add(line); } },
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, result.ExitCode);
+
+        lock (gate)
+        {
+            var line = Assert.Single(seen);
+            Assert.Equal(new string('g', 40000), line);
+        }
+    }
+
+    /// <summary>The mask of a phase carrying one secret, for a test of what a line callback is handed.</summary>
+    private static ActionValues ValuesWithSecret(string secret)
+        => new(
+            new Dictionary<string, string>(StringComparer.Ordinal),
+            new Dictionary<string, string>(StringComparer.Ordinal) { ["credential"] = secret });
 
     private static PhaseRunner Runner(HarnessFactory factory)
         => new(factory.ProcessRunner, factory.FileSystem, factory.Output);

@@ -76,6 +76,43 @@ public sealed record PhaseRequest
     /// a line too long to keep whole may be cut, since a secret cut in two is masked in neither piece.
     /// </remarks>
     public ILineMask? Mask { get; init; }
+
+    /// <summary>
+    /// What is written to the child's standard input, which is then closed so the child sees its end;
+    /// <see langword="null"/> gives it an input that ends at once, as a phase's child always had.
+    /// </summary>
+    public ChildInput? StandardInput { get; init; }
+
+    /// <summary>
+    /// Invoked for each line of either stream as it is kept - masked, written to the log and read by
+    /// the witness - for a reader that takes each line as one answer and keeps what it needs of them
+    /// itself. Each stream's lines arrive in their order and the two streams interleave as the child
+    /// wrote them; raised on background threads, so implementations must be thread safe.
+    /// </summary>
+    /// <remarks>
+    /// Unless <see cref="WholeLines"/> is declared, a line longer than
+    /// <see cref="ProcessRunner.LongestLine"/> characters arrives in pieces of at most that many,
+    /// never held whole.
+    /// </remarks>
+    public Action<string>? OnLine { get; init; }
+
+    /// <summary>
+    /// Wall-clock bound on the whole phase, or <see langword="null"/> for none. The silence bound
+    /// (<see cref="StallSeconds"/>) is the one in force for a phase that declares none of its own:
+    /// a wall-clock budget is a guess about workload size, and an honest run that exceeds it gets
+    /// stopped - which is what a phase is allowed to ask for where the run is bounded outside, by
+    /// what asked for it.
+    /// </summary>
+    public TimeSpan? Timeout { get; init; }
+
+    /// <summary>
+    /// Whether each line the child prints is handed on whole to <see cref="OnLine"/>, however long,
+    /// rather than in pieces of at most <see cref="ProcessRunner.LongestLine"/> characters. For a
+    /// reader that takes each line as one answer, where a line is one answer entire and a piece of
+    /// one is not: the log keeps the line either way, and what is read of the output is read back
+    /// from there.
+    /// </summary>
+    public bool WholeLines { get; init; }
 }
 
 /// <summary>
@@ -84,8 +121,9 @@ public sealed record PhaseRequest
 /// <remarks>
 /// The rules here are the ones a green result stops meaning anything without: the exit code is read
 /// from the process, a declared pattern must match the command's own output, a phase is bounded by
-/// its silence rather than by a guess at how long it should take, and every duration comes from the
-/// monotonic clock while the wall clock is watched for the steps one host makes every few seconds.
+/// its silence rather than by a guess at how long it should take unless it declares a wall-clock
+/// bound of its own, and every duration comes from the monotonic clock while the wall clock is
+/// watched for the steps one host makes every few seconds.
 /// <para>
 /// The child's output goes to the phase's log and nowhere else whole. Each line is read once, as it
 /// arrives - for the witness, the timing marks and the last lines - and what is kept of it is bounded
@@ -198,6 +236,10 @@ public sealed class PhaseRunner(
                 reading.Read(line);
             }
 
+            // The line is kept, and this is where a reader that takes each line as one answer sees it:
+            // masked, as the log holds it, and after it is kept.
+            request.OnLine?.Invoke(line);
+
             // Progress is one line per leg transition, not a stream of child output; the child's own
             // output is echoed only when it was asked for. Echoed, it says which leg and phase wrote
             // it: legs run at the same time, so without that the terminal carries several children's
@@ -217,19 +259,22 @@ public sealed class PhaseRunner(
             WorkingDirectory = request.WorkingDirectory,
             Environment = request.Environment,
             ProgramDirectories = request.ProgramDirectories,
+            StandardInput = request.StandardInput,
             OnStarted = clock.Saw,
             OnOutputLine = line => Line(line, error: false),
             OnErrorLine = line => Line(line, error: true),
 
             // Taken line by line, and kept above as each line is read: the runner keeps the end of
-            // each stream and nothing more, and hands on a line that never ends in pieces, cut where
-            // the mask parts no secret.
-            OutputKept = StreamKept.Tail,
-            ErrorKept = StreamKept.Tail,
+            // each stream and nothing more, and hands on a line whole - or, where the phase's reader
+            // takes each line as one answer entire, hands it on whole however long - never a line in
+            // pieces save where a piece is all a line too long to keep can be.
+            OutputKept = request.WholeLines ? StreamKept.TailOfWholeLines : StreamKept.Tail,
+            ErrorKept = request.WholeLines ? StreamKept.TailOfWholeLines : StreamKept.Tail,
             CutLine = request.Mask is { } cutting ? cutting.Cut : null,
 
-            // Deliberately no Timeout: a wall-clock budget is a guess about workload size, and an
-            // honest run that exceeds it gets killed. The stall bound below is the bound in force.
+            // A wall-clock bound only where the phase declares one of its own; the stall bound below
+            // is the one in force otherwise, for the reason the class remarks give.
+            Timeout = request.Timeout,
         };
 
         var startedUtc = _wallClock.GetUtcNow();
@@ -565,64 +610,5 @@ public sealed class PhaseRunner(
                 }
             }
         }
-    }
-
-    /// <summary>
-    /// How long the phase has run and how long it has been silent, both from the monotonic clock.
-    /// A wall clock cannot answer either question on a host whose clock steps forward by 25 seconds
-    /// every few seconds: the phase would look hung the moment the clock moved.
-    /// </summary>
-    private sealed class StallClock
-    {
-        /// <summary>What <see cref="_lastOutputMs"/> holds before the child has started.</summary>
-        private const long NotYet = -1;
-
-        private readonly Stopwatch _elapsed = Stopwatch.StartNew();
-        private long _lastOutputMs = NotYet;
-
-        /// <summary>How long the phase has run.</summary>
-        public TimeSpan Elapsed => _elapsed.Elapsed;
-
-        /// <summary>
-        /// How long since the last line on either stream, and nothing at all until the child is
-        /// running. A process that has not started yet has not been quiet: the time spent starting
-        /// one belongs to this tool, and counting it against the child makes a machine under load
-        /// look like a hung command. That window has a bound of its own, in
-        /// <see cref="Overdue(TimeSpan, TimeSpan)"/>.
-        /// </summary>
-        public TimeSpan Quiet
-        {
-            get
-            {
-                var last = Interlocked.Read(ref _lastOutputMs);
-
-                return last == NotYet
-                    ? TimeSpan.Zero
-                    : TimeSpan.FromMilliseconds(_elapsed.ElapsedMilliseconds - last);
-            }
-        }
-
-        /// <summary>
-        /// Whether the phase is past whichever bound is in force: how long the child may take to
-        /// start before it has started, how long it may stay silent after.
-        /// </summary>
-        /// <param name="quiet">How long the child may say nothing.</param>
-        /// <param name="starting">How long the child may take to start.</param>
-        /// <remarks>
-        /// Two bounds rather than one because they measure different things. Counting the launch as
-        /// silence makes a slow machine read as a hung command, which is the defect this clock was
-        /// written for; leaving the launch unmeasured makes an unreachable PATH entry a phase that
-        /// never ends and never reports.
-        /// </remarks>
-        public bool Overdue(TimeSpan quiet, TimeSpan starting)
-            => Interlocked.Read(ref _lastOutputMs) == NotYet
-                ? _elapsed.Elapsed >= starting
-                : Quiet >= quiet;
-
-        /// <summary>
-        /// Records that the child started, or said something. Called from the thread that starts the
-        /// child and from the reader threads of both streams, so it is interlocked.
-        /// </summary>
-        public void Saw() => Interlocked.Exchange(ref _lastOutputMs, _elapsed.ElapsedMilliseconds);
     }
 }

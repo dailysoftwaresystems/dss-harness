@@ -265,6 +265,66 @@ public sealed class HostSecretsStoreTests
         Assert.False(values.ContainsKey("not a pair"));
     }
 
+    /// <summary>
+    /// An environment file holding a key the item declares secret is refused where other users can
+    /// read it, naming the key: the rule reads the declared kind of key, not a name spelled inside
+    /// it, so a second reader with a secret of another name is held to it by declaring the key. The
+    /// readable check is scoped to the <c>.env</c> on the ssh side, whose key file of its own would
+    /// otherwise be the refusal this measures.
+    /// </summary>
+    [Theory]
+    [InlineData("ssh")]
+    [InlineData("wsl")]
+    public void AnEnvHoldingAKeyDeclaredSecret_OtherUsersCanRead_IsRefused_NamingTheKey(string kind)
+    {
+        using var repository = new TempDirectory();
+        var fixture = new Fixture(repository);
+
+        if (kind == "ssh")
+        {
+            fixture.WriteSshItem(Item, "ADDRESS=host.invalid\nUSER=harness\nSUDO_PASSWORD=hunter2\n");
+            fixture.Permissions
+                .IsPrivate(Arg.Is<string>(path => path.EndsWith(".env", StringComparison.Ordinal)))
+                .Returns(false);
+        }
+        else
+        {
+            repository.WriteFile(
+                Path.Combine(".harness-config", "wslDistros", Item, ".env"),
+                "DISTRO=Ubuntu\nSUDO_PASSWORD=hunter2\n");
+            fixture.Permissions.IsPrivate(Arg.Any<string>()).Returns(false);
+        }
+
+        var problem = kind == "ssh"
+            ? fixture.Store.ReadSshItem(fixture.Layout, Item).Problem
+            : fixture.Store.ReadWslItem(fixture.Layout, Item).Problem;
+
+        Assert.Contains(
+            $"other users can read '.harness-config/{(kind == "ssh" ? "sshItems" : "wslDistros")}/{Item}/.env', "
+                + "and it holds this host's SUDO_PASSWORD; make it private with: chmod 600",
+            problem,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A key the item declares optional may be written blank: it means none, and no refusal comes of
+    /// it - a host whose superuser needs no password is not made to tighten a file that already
+    /// holds no credential worth reading.
+    /// </summary>
+    [Fact]
+    public void AnOptionalKeyWrittenBlank_MeansNone_IsNoRefusal_AndHandsOnNoCredential()
+    {
+        using var repository = new TempDirectory();
+        var fixture = new Fixture(repository);
+        fixture.WriteSshItem(Item, "ADDRESS=host.invalid\nUSER=harness\nSUDO_PASSWORD=\n");
+
+        var read = fixture.Store.ReadSshItem(fixture.Layout, Item);
+
+        Assert.Equal(string.Empty, read.Problem);
+        Assert.NotNull(read.Item);
+        Assert.Null(read.Item.Superuser);
+    }
+
     private sealed class Fixture
     {
         private readonly TempDirectory _repository;

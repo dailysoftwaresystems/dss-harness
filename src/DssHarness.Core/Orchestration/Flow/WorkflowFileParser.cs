@@ -2,6 +2,7 @@ using System.Diagnostics;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Output;
 using DssHarness.Core.Results;
+using DssHarness.Core.Yaml;
 using YamlDotNet.Core;
 using YamlDotNet.RepresentationModel;
 
@@ -12,10 +13,9 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Parsed through YamlDotNet's representation model rather than its serialiser, as an action file is,
-/// for the same two reasons: the position of the key that was wrong, and the fact that a key was not
-/// recognised at all. A silently ignored key is a rule nobody applied, and the configuration reader
-/// elsewhere in this repository refuses one for the same reason.
+/// Parsed through the one YAML reader, <see cref="YamlReading"/>, which owns the reasons it reads
+/// YamlDotNet's representation model rather than a serialiser: the position of the key that was
+/// wrong, and the fact that a key was not recognised at all.
 /// </para>
 /// <para>
 /// Every problem in a file is collected and reported together, each with the line and column it was
@@ -56,7 +56,12 @@ public static class WorkflowFileParser
         ArgumentNullException.ThrowIfNull(text);
 
         var problems = new List<string>();
-        var root = LoadRoot(text, problems);
+        var root = !Bounded(text, problems)
+            ? null
+            : YamlReading.Root(
+                text,
+                "a workflow's definition holds one, so that nothing has to decide which of them a run ran",
+                problems);
 
         if (root is null)
         {
@@ -92,11 +97,11 @@ public static class WorkflowFileParser
             switch (key)
             {
                 case "name":
-                    name = RequireScalar(value, "name", problems);
+                    name = YamlReading.RequireScalar(value, "name", problems);
                     break;
 
                 case "description":
-                    description = RequireScalar(value, "description", problems);
+                    description = YamlReading.RequireScalar(value, "description", problems);
                     break;
 
                 case "maxReasoningAgents":
@@ -124,7 +129,7 @@ public static class WorkflowFileParser
                     break;
 
                 case "pushCheckpoints":
-                    pushCheckpoints = RequireBoolean(value, "pushCheckpoints", problems);
+                    pushCheckpoints = YamlReading.RequireBoolean(value, "pushCheckpoints", problems);
                     break;
 
                 case "handoffSeconds":
@@ -136,7 +141,7 @@ public static class WorkflowFileParser
                     break;
 
                 case "recommendations":
-                    recommendations = RequireScalar(value, "recommendations", problems);
+                    recommendations = YamlReading.RequireScalar(value, "recommendations", problems);
                     break;
 
                 case "advisor":
@@ -158,7 +163,7 @@ public static class WorkflowFileParser
                     {
                         if (!answers.TryAdd(kind, answer))
                         {
-                            problems.Add(At(value, $"answers names the kind '{kind}' more than once"));
+                            problems.Add(YamlReading.At(value, $"answers names the kind '{kind}' more than once"));
                         }
                     }
 
@@ -232,7 +237,7 @@ public static class WorkflowFileParser
     {
         if (node is not YamlMappingNode mapping)
         {
-            problems.Add(At(node, "'recover' is not a mapping of keys."));
+            problems.Add(YamlReading.At(node, "'recover' is not a mapping of keys."));
             return null;
         }
 
@@ -244,7 +249,7 @@ public static class WorkflowFileParser
 
         if (onSuccess is not null && !FlowRecover.Successes.Contains(onSuccess, StringComparer.Ordinal))
         {
-            problems.Add(At(NodeIn(keys, "onSuccess")!, $"'recover.onSuccess' is '{onSuccess}', which is none of {string.Join(", ", FlowRecover.Successes.Select(known => $"'{known}'"))}; a recovery sends the run back to the step that gave it its failure, to run again once it was put right."));
+            problems.Add(YamlReading.At(NodeIn(keys, "onSuccess")!, $"'recover.onSuccess' is '{onSuccess}', which is none of {string.Join(", ", FlowRecover.Successes.Select(known => $"'{known}'"))}; a recovery sends the run back to the step that gave it its failure, to run again once it was put right."));
             onSuccess = null;
         }
 
@@ -252,13 +257,13 @@ public static class WorkflowFileParser
         // value that is no policy at all is refused here, naming what a recovery may say.
         if (onFailure is not null && !WorkflowStep.FailurePolicies.Contains(onFailure, StringComparer.Ordinal))
         {
-            problems.Add(At(NodeIn(keys, "onFailure")!, $"'recover.onFailure' is '{onFailure}', which is none of {string.Join(", ", FlowRecover.Failures.Select(known => $"'{known}'"))}; a failure the recovery's own work meets asks a person, or ends the run."));
+            problems.Add(YamlReading.At(NodeIn(keys, "onFailure")!, $"'recover.onFailure' is '{onFailure}', which is none of {string.Join(", ", FlowRecover.Failures.Select(known => $"'{known}'"))}; a failure the recovery's own work meets asks a person, or ends the run."));
             onFailure = null;
         }
 
         if (stepsNode is null)
         {
-            problems.Add(At(node, "'recover' holds no 'steps'; a recovery that runs nothing would put nothing right, and the step that failed would run again unchanged."));
+            problems.Add(YamlReading.At(node, "'recover' holds no 'steps'; a recovery that runs nothing would put nothing right, and the step that failed would run again unchanged."));
             return null;
         }
 
@@ -271,7 +276,7 @@ public static class WorkflowFileParser
     {
         if (node is not YamlMappingNode mapping)
         {
-            problems.Add(At(node, "'budget' is not a mapping of keys."));
+            problems.Add(YamlReading.At(node, "'budget' is not a mapping of keys."));
             return null;
         }
 
@@ -314,7 +319,7 @@ public static class WorkflowFileParser
     {
         if (node is not YamlMappingNode mapping)
         {
-            problems.Add(At(node, "'advisor' is not a mapping of keys."));
+            problems.Add(YamlReading.At(node, "'advisor' is not a mapping of keys."));
             return null;
         }
 
@@ -340,7 +345,7 @@ public static class WorkflowFileParser
     {
         if (node is not YamlMappingNode mapping)
         {
-            problems.Add(At(node, "'reporter' is not a mapping of keys."));
+            problems.Add(YamlReading.At(node, "'reporter' is not a mapping of keys."));
             return null;
         }
 
@@ -378,15 +383,15 @@ public static class WorkflowFileParser
             switch (key)
             {
                 case "tier":
-                    tier = RequireScalar(value, $"{owner}.tier", problems);
+                    tier = YamlReading.RequireScalar(value, $"{owner}.tier", problems);
                     break;
 
                 case "model":
-                    model = RequireScalar(value, $"{owner}.model", problems);
+                    model = YamlReading.RequireScalar(value, $"{owner}.model", problems);
                     break;
 
                 case "effort":
-                    effort = RequireScalar(value, $"{owner}.effort", problems);
+                    effort = YamlReading.RequireScalar(value, $"{owner}.effort", problems);
                     break;
 
                 case "fallback":
@@ -394,11 +399,11 @@ public static class WorkflowFileParser
                     break;
 
                 case "provider":
-                    provider = RequireScalar(value, $"{owner}.provider", problems);
+                    provider = YamlReading.RequireScalar(value, $"{owner}.provider", problems);
                     break;
 
                 case "client":
-                    client = RequireScalar(value, $"{owner}.client", problems);
+                    client = YamlReading.RequireScalar(value, $"{owner}.client", problems);
                     break;
 
                 // Read by the caller, which owns them: the agent each runs, which both require, the
@@ -424,7 +429,7 @@ public static class WorkflowFileParser
     {
         if (node is not YamlMappingNode mapping)
         {
-            problems.Add(At(node, "'amend' is not a mapping of keys."));
+            problems.Add(YamlReading.At(node, "'amend' is not a mapping of keys."));
             return null;
         }
 
@@ -441,7 +446,7 @@ public static class WorkflowFileParser
             switch (key)
             {
                 case "input":
-                    input = RequireScalar(value, "amend.input", problems);
+                    input = YamlReading.RequireScalar(value, "amend.input", problems);
                     break;
 
                 case "changedAnswerMinutes":
@@ -449,7 +454,7 @@ public static class WorkflowFileParser
                     break;
 
                 case "before":
-                    before = RequireScalar(value, "amend.before", problems);
+                    before = YamlReading.RequireScalar(value, "amend.before", problems);
                     break;
 
                 case "step":
@@ -461,7 +466,7 @@ public static class WorkflowFileParser
                     break;
 
                 case "then":
-                    then = RequireScalar(value, "amend.then", problems);
+                    then = YamlReading.RequireScalar(value, "amend.then", problems);
                     break;
 
                 case "maxAddedIterations":
@@ -492,7 +497,7 @@ public static class WorkflowFileParser
     {
         if (node is not YamlMappingNode mapping)
         {
-            problems.Add(At(node, $"'{owner}' is not a mapping of question kind to answer."));
+            problems.Add(YamlReading.At(node, $"'{owner}' is not a mapping of question kind to answer."));
             yield break;
         }
 
@@ -500,7 +505,7 @@ public static class WorkflowFileParser
 
         foreach (var (keyNode, valueNode) in mapping.Children)
         {
-            var kind = KeyOf(keyNode, problems);
+            var kind = YamlReading.KeyOf(keyNode, problems);
 
             if (kind is null)
             {
@@ -516,7 +521,7 @@ public static class WorkflowFileParser
 
             if (valueNode is not YamlMappingNode declaration)
             {
-                problems.Add(At(valueNode, $"{owner}.{kind} is neither the answer alone nor a mapping of '{string.Join("', '", answerKeys)}'"));
+                problems.Add(YamlReading.At(valueNode, $"{owner}.{kind} is neither the answer alone nor a mapping of '{string.Join("', '", answerKeys)}'"));
                 continue;
             }
 
@@ -548,13 +553,13 @@ public static class WorkflowFileParser
 
         if (kind is not null && !FlowInput.Kinds.Contains(kind, StringComparer.Ordinal))
         {
-            problems.Add(At(declaration, $"{owner}.kind is '{kind}', which is neither of {string.Join(" nor ", FlowInput.Kinds)}."));
+            problems.Add(YamlReading.At(declaration, $"{owner}.kind is '{kind}', which is neither of {string.Join(" nor ", FlowInput.Kinds)}."));
             kind = null;
         }
 
         if (kind == FlowInput.FileKind && options.Count > 0)
         {
-            problems.Add(At(declaration, $"{owner} declares options and the kind '{FlowInput.FileKind}': options list what a '{FlowInput.TextKind}' input takes, and a file input is a path, checked when the run starts."));
+            problems.Add(YamlReading.At(declaration, $"{owner} declares options and the kind '{FlowInput.FileKind}': options list what a '{FlowInput.TextKind}' input takes, and a file input is a path, checked when the run starts."));
         }
 
         yield return new FlowInput(name, description, kind ?? FlowInput.TextKind, fallback, required, options);
@@ -598,7 +603,7 @@ public static class WorkflowFileParser
 
         if (node is not YamlSequenceNode sequence)
         {
-            problems.Add(At(node, $"'{owner}' is not a sequence."));
+            problems.Add(YamlReading.At(node, $"'{owner}' is not a sequence."));
             yield break;
         }
 
@@ -608,7 +613,7 @@ public static class WorkflowFileParser
         {
             if (child is not YamlMappingNode mapping)
             {
-                problems.Add(At(child, $"an entry of '{owner}' is not a mapping of '{string.Join("', '", KeyDescription.Names(declarationKeys))}'"));
+                problems.Add(YamlReading.At(child, $"an entry of '{owner}' is not a mapping of '{string.Join("', '", KeyDescription.Names(declarationKeys))}'"));
                 continue;
             }
 
@@ -622,7 +627,7 @@ public static class WorkflowFileParser
 
             if (names.Contains(name, StringComparer.Ordinal))
             {
-                problems.Add(At(child, $"'{owner}' names '{name}' more than once; a name is one value, and a second would leave what everything reads it as depending on where it sat in the file."));
+                problems.Add(YamlReading.At(child, $"'{owner}' names '{name}' more than once; a name is one value, and a second would leave what everything reads it as depending on where it sat in the file."));
                 continue;
             }
 
@@ -639,13 +644,13 @@ public static class WorkflowFileParser
     {
         if (node is not YamlSequenceNode sequence)
         {
-            problems.Add(At(node, "'steps' is not a sequence."));
+            problems.Add(YamlReading.At(node, "'steps' is not a sequence."));
             yield break;
         }
 
         if (sequence.Children.Count == 0)
         {
-            problems.Add(At(node, "'steps' is empty; a group that runs nothing would end at once, and its run with it."));
+            problems.Add(YamlReading.At(node, "'steps' is empty; a group that runs nothing would end at once, and its run with it."));
             yield break;
         }
 
@@ -666,34 +671,34 @@ public static class WorkflowFileParser
     {
         if (node is not YamlMappingNode mapping)
         {
-            problems.Add(At(node, "a step is not a mapping of keys."));
+            problems.Add(YamlReading.At(node, "a step is not a mapping of keys."));
             yield break;
         }
 
         var keys = CollectKeys(mapping, "a step", [.. KeyDescription.Names(WorkflowStepTypes.Common), .. KeyDescription.Names(WorkflowStepTypes.Group), .. WorkflowStepTypes.AllKeys], problems);
         // A name or a type written as a list or a mapping is refused naming the key, never read as one left out.
         var nameNode = keys.FirstOrDefault(entry => entry.Key == "name").Value;
-        var name = nameNode is null ? null : ScalarOf(nameNode);
+        var name = nameNode is null ? null : YamlReading.ScalarOf(nameNode);
 
         if (nameNode is not null && name is null)
         {
-            problems.Add(At(nameNode, "a step's 'name' is not a single value."));
+            problems.Add(YamlReading.At(nameNode, "a step's 'name' is not a single value."));
         }
 
         // The step's name, bare, as every key under it is named in a problem: 'orient.dependsOn'.
         var where = name is null ? "a step" : name;
         var typeNode = keys.FirstOrDefault(entry => entry.Key == "type").Value;
-        var type = typeNode is null ? null : RequireScalar(typeNode, $"{where}.type", problems);
+        var type = typeNode is null ? null : YamlReading.RequireScalar(typeNode, $"{where}.type", problems);
         var typed = type is null ? null : WorkflowStepTypes.Find(type);
 
         if (type is not null && typed is null)
         {
-            problems.Add(At(typeNode!, $"'{type}' is not a step type. Known: {string.Join(", ", WorkflowStepTypes.All.Select(known => $"'{known.Type}'"))}."));
+            problems.Add(YamlReading.At(typeNode!, $"'{type}' is not a step type. Known: {string.Join(", ", WorkflowStepTypes.All.Select(known => $"'{known.Type}'"))}."));
         }
 
         if (type is not null && keys.Any(entry => entry.Key == "steps"))
         {
-            problems.Add(At(node, $"{where} names the type '{type}' and holds steps; a group holds steps and names no type, and a typed step runs one thing."));
+            problems.Add(YamlReading.At(node, $"{where} names the type '{type}' and holds steps; a group holds steps and names no type, and a typed step runs one thing."));
         }
 
         // A group's own keys, checked against the group's table; a typed step's against its type's.
@@ -715,7 +720,7 @@ public static class WorkflowFileParser
                     ? $"; it is one of a {taken.Type} step"
                     : typed is not null && KeyDescription.Names(WorkflowStepTypes.Group).Contains(key, StringComparer.Ordinal) ? "; it is one of a group, which names no type" : "";
 
-                problems.Add(At(value, $"'{key}' is not a key of {owner}{takenBy}."));
+                problems.Add(YamlReading.At(value, $"'{key}' is not a key of {owner}{takenBy}."));
             }
         }
 
@@ -744,7 +749,7 @@ public static class WorkflowFileParser
             {
                 if (!stepAnswers.TryAdd(kind, answer))
                 {
-                    problems.Add(At(answersNode, $"{where}.answers names the kind '{kind}' more than once"));
+                    problems.Add(YamlReading.At(answersNode, $"{where}.answers names the kind '{kind}' more than once"));
                 }
             }
 
@@ -757,7 +762,7 @@ public static class WorkflowFileParser
         {
             if (onNode is not YamlMappingNode onMapping)
             {
-                problems.Add(At(onNode, $"'{where}.on' is not a mapping of '{string.Join("', '", KeyDescription.Names(WorkflowStepTypes.OnKeys))}'"));
+                problems.Add(YamlReading.At(onNode, $"'{where}.on' is not a mapping of '{string.Join("', '", KeyDescription.Names(WorkflowStepTypes.OnKeys))}'"));
             }
             else
             {
@@ -768,7 +773,7 @@ public static class WorkflowFileParser
 
                 if (outcome is not null && !FlowOn.Outcomes.Contains(outcome, StringComparer.Ordinal))
                 {
-                    problems.Add(At(onNode, $"{where}.on.outcome is '{outcome}', which is none of {string.Join(", ", FlowOn.Outcomes.Select(known => $"'{known}'"))}."));
+                    problems.Add(YamlReading.At(onNode, $"{where}.on.outcome is '{outcome}', which is none of {string.Join(", ", FlowOn.Outcomes.Select(known => $"'{known}'"))}."));
                     outcome = null;
                 }
 
@@ -794,11 +799,11 @@ public static class WorkflowFileParser
             // what is left to refuse here is a step that names no type at all.
             if (stepsNode is null && typeNode is null)
             {
-                problems.Add(At(node, $"{where} names no type and holds no steps; a step does one thing, and a group holds steps of their own."));
+                problems.Add(YamlReading.At(node, $"{where} names no type and holds no steps; a step does one thing, and a group holds steps of their own."));
             }
             else if (depth >= MaxDepth && stepsNode is not null)
             {
-                problems.Add(At(stepsNode, $"{where} holds steps {depth + 1} levels deep; steps nest at most {MaxDepth}."));
+                problems.Add(YamlReading.At(stepsNode, $"{where} holds steps {depth + 1} levels deep; steps nest at most {MaxDepth}."));
             }
             else if (stepsNode is not null)
             {
@@ -821,7 +826,7 @@ public static class WorkflowFileParser
         {
             if (nameNode is null)
             {
-                problems.Add(At(node, "a step names no 'name'; what dependsOn, on, resume and expressions read would have nothing to read."));
+                problems.Add(YamlReading.At(node, "a step names no 'name'; what dependsOn, on, resume and expressions read would have nothing to read."));
             }
 
             yield break;
@@ -831,7 +836,7 @@ public static class WorkflowFileParser
         {
             if (!keys.Any(entry => string.Equals(entry.Key, required, StringComparison.Ordinal)))
             {
-                problems.Add(At(node, $"{where} names no '{required}'; a {typed!.Type} step is refused without it."));
+                problems.Add(YamlReading.At(node, $"{where} names no '{required}'; a {typed!.Type} step is refused without it."));
             }
         }
 
@@ -1065,7 +1070,7 @@ public static class WorkflowFileParser
 
         if (node is not YamlMappingNode mapping)
         {
-            problems.Add(At(node, $"'{where}.repeat' is not a mapping of '{string.Join("', '", KeyDescription.Names(WorkflowStepTypes.RepeatKeys))}'"));
+            problems.Add(YamlReading.At(node, $"'{where}.repeat' is not a mapping of '{string.Join("', '", KeyDescription.Names(WorkflowStepTypes.RepeatKeys))}'"));
             return null;
         }
 
@@ -1096,7 +1101,7 @@ public static class WorkflowFileParser
 
         if (node is not YamlMappingNode mapping)
         {
-            problems.Add(At(node, $"'{where}.allow' is not a mapping of '{string.Join("', '", KeyDescription.Names(WorkflowStepTypes.AllowKeys))}'"));
+            problems.Add(YamlReading.At(node, $"'{where}.allow' is not a mapping of '{string.Join("', '", KeyDescription.Names(WorkflowStepTypes.AllowKeys))}'"));
             return null;
         }
 
@@ -1121,7 +1126,7 @@ public static class WorkflowFileParser
 
         if (node is not YamlSequenceNode sequence)
         {
-            problems.Add(At(node, $"'{where}.preAnswer' is not a sequence."));
+            problems.Add(YamlReading.At(node, $"'{where}.preAnswer' is not a sequence."));
             return [];
         }
 
@@ -1133,7 +1138,7 @@ public static class WorkflowFileParser
         {
             if (child is not YamlMappingNode mapping)
             {
-                problems.Add(At(child, $"an entry of '{where}.preAnswer' is not a mapping of '{string.Join("', '", KeyDescription.Names(WorkflowStepTypes.PreAnswerKeys))}'"));
+                problems.Add(YamlReading.At(child, $"an entry of '{where}.preAnswer' is not a mapping of '{string.Join("', '", KeyDescription.Names(WorkflowStepTypes.PreAnswerKeys))}'"));
                 continue;
             }
 
@@ -1148,7 +1153,7 @@ public static class WorkflowFileParser
             {
                 if (quoteNode is not YamlMappingNode quoteMapping)
                 {
-                    problems.Add(At(quoteNode, $"'{where}.preAnswer.quote' is not a mapping of '{string.Join("', '", KeyDescription.Names(WorkflowStepTypes.QuoteKeys))}'"));
+                    problems.Add(YamlReading.At(quoteNode, $"'{where}.preAnswer.quote' is not a mapping of '{string.Join("', '", KeyDescription.Names(WorkflowStepTypes.QuoteKeys))}'"));
                 }
                 else
                 {
@@ -1170,46 +1175,6 @@ public static class WorkflowFileParser
         }
 
         return answers;
-    }
-
-    private static YamlMappingNode? LoadRoot(string text, List<string> problems)
-    {
-        if (!Bounded(text, problems))
-        {
-            return null;
-        }
-
-        var stream = new YamlStream();
-
-        try
-        {
-            stream.Load(new StringReader(text));
-        }
-        catch (YamlException exception)
-        {
-            problems.Add($"line {exception.Start.Line}, column {exception.Start.Column}: the file is not valid YAML ({exception.Message}).");
-            return null;
-        }
-
-        if (stream.Documents.Count == 0)
-        {
-            problems.Add("the file is empty.");
-            return null;
-        }
-
-        if (stream.Documents.Count > 1)
-        {
-            problems.Add($"the file holds {stream.Documents.Count} YAML documents; a workflow's definition holds one, so that nothing has to decide which of them a run ran.");
-            return null;
-        }
-
-        if (stream.Documents[0].RootNode is YamlMappingNode mapping)
-        {
-            return mapping;
-        }
-
-        problems.Add(At(stream.Documents[0].RootNode, "the file's top level is not a mapping of keys."));
-        return null;
     }
 
     /// <summary>
@@ -1270,7 +1235,7 @@ public static class WorkflowFileParser
 
         foreach (var (keyNode, valueNode) in mapping.Children)
         {
-            var key = KeyOf(keyNode, problems);
+            var key = YamlReading.KeyOf(keyNode, problems);
 
             if (key is null)
             {
@@ -1279,13 +1244,13 @@ public static class WorkflowFileParser
 
             if (!seen.Add(key))
             {
-                problems.Add(At(keyNode, $"'{key}' is written twice in {what}; a key is one value"));
+                problems.Add(YamlReading.At(keyNode, $"'{key}' is written twice in {what}; a key is one value"));
                 continue;
             }
 
             if (!known.Contains(key, StringComparer.Ordinal))
             {
-                problems.Add(At(keyNode, $"'{key}' is not a key of {what}. Known: '{string.Join("', '", known)}'."));
+                problems.Add(YamlReading.At(keyNode, $"'{key}' is not a key of {what}. Known: '{string.Join("', '", known)}'."));
                 continue;
             }
 
@@ -1295,32 +1260,8 @@ public static class WorkflowFileParser
         return keys;
     }
 
-    private static string? KeyOf(YamlNode node, List<string> problems)
-    {
-        if (node is YamlScalarNode { Value: { } value })
-        {
-            return value;
-        }
-
-        problems.Add(At(node, "a key is not a plain name."));
-        return null;
-    }
-
-    private static string? ScalarOf(YamlNode node) => node is YamlScalarNode { Value: { } value } ? value : null;
-
-    private static string? RequireScalar(YamlNode node, string what, List<string> problems)
-    {
-        if (node is YamlScalarNode { Value: { } value })
-        {
-            return value;
-        }
-
-        problems.Add(At(node, $"'{what}' is not a single value."));
-        return null;
-    }
-
     private static string? ScalarIn(IReadOnlyList<(string Key, YamlNode Value)> keys, string what, List<string> problems)
-        => keys.Where(entry => string.Equals(entry.Key, KeyNameOf(what), StringComparison.Ordinal)).Select(entry => RequireScalar(entry.Value, what, problems)).FirstOrDefault();
+        => keys.Where(entry => string.Equals(entry.Key, KeyNameOf(what), StringComparison.Ordinal)).Select(entry => YamlReading.RequireScalar(entry.Value, what, problems)).FirstOrDefault();
 
     private static string? RequireScalarIn(IReadOnlyList<(string Key, YamlNode Value)> keys, string what, List<string> problems)
     {
@@ -1332,36 +1273,18 @@ public static class WorkflowFileParser
             return null;
         }
 
-        return RequireScalar(found.Value, what, problems);
+        return YamlReading.RequireScalar(found.Value, what, problems);
     }
 
     private static YamlNode? NodeIn(IReadOnlyList<(string Key, YamlNode Value)> keys, string key)
         => keys.FirstOrDefault(entry => string.Equals(entry.Key, key, StringComparison.Ordinal)).Value;
 
-    private static bool? RequireBoolean(YamlNode node, string what, List<string> problems)
-    {
-        var text = RequireScalar(node, what, problems);
-
-        if (text is null)
-        {
-            return null;
-        }
-
-        if (bool.TryParse(text, out var value))
-        {
-            return value;
-        }
-
-        problems.Add(At(node, $"'{what}' is '{text}', which is not true or false."));
-        return null;
-    }
-
     private static bool? BooleanIn(IReadOnlyList<(string Key, YamlNode Value)> keys, string what, List<string> problems)
-        => keys.Where(entry => string.Equals(entry.Key, KeyNameOf(what), StringComparison.Ordinal)).Select(entry => RequireBoolean(entry.Value, what, problems)).FirstOrDefault();
+        => keys.Where(entry => string.Equals(entry.Key, KeyNameOf(what), StringComparison.Ordinal)).Select(entry => YamlReading.RequireBoolean(entry.Value, what, problems)).FirstOrDefault();
 
     private static int? RequireInt(YamlNode node, string what, List<string> problems)
     {
-        var text = RequireScalar(node, what, problems);
+        var text = YamlReading.RequireScalar(node, what, problems);
 
         if (text is null)
         {
@@ -1373,7 +1296,7 @@ public static class WorkflowFileParser
             return value;
         }
 
-        problems.Add(At(node, $"'{what}' is '{text}', which is not a whole number."));
+        problems.Add(YamlReading.At(node, $"'{what}' is '{text}', which is not a whole number."));
         return null;
     }
 
@@ -1382,7 +1305,7 @@ public static class WorkflowFileParser
 
     private static long? RequireLong(YamlNode node, string what, List<string> problems)
     {
-        var text = RequireScalar(node, what, problems);
+        var text = YamlReading.RequireScalar(node, what, problems);
 
         if (text is null)
         {
@@ -1394,13 +1317,13 @@ public static class WorkflowFileParser
             return value;
         }
 
-        problems.Add(At(node, $"'{what}' is '{text}', which is not a whole number."));
+        problems.Add(YamlReading.At(node, $"'{what}' is '{text}', which is not a whole number."));
         return null;
     }
 
     private static double? RequireDouble(YamlNode node, string what, List<string> problems)
     {
-        var text = RequireScalar(node, what, problems);
+        var text = YamlReading.RequireScalar(node, what, problems);
 
         if (text is null)
         {
@@ -1412,7 +1335,7 @@ public static class WorkflowFileParser
             return value;
         }
 
-        problems.Add(At(node, $"'{what}' is '{text}', which is not a number."));
+        problems.Add(YamlReading.At(node, $"'{what}' is '{text}', which is not a number."));
         return null;
     }
 
@@ -1420,7 +1343,7 @@ public static class WorkflowFileParser
     {
         if (node is not YamlSequenceNode sequence)
         {
-            problems.Add(At(node, $"'{what}' is not a list."));
+            problems.Add(YamlReading.At(node, $"'{what}' is not a list."));
             return [];
         }
 
@@ -1428,7 +1351,7 @@ public static class WorkflowFileParser
 
         foreach (var child in sequence.Children)
         {
-            if (RequireScalar(child, $"one entry of '{what}'", problems) is { } value)
+            if (YamlReading.RequireScalar(child, $"one entry of '{what}'", problems) is { } value)
             {
                 values.Add(value);
             }
@@ -1444,7 +1367,7 @@ public static class WorkflowFileParser
     {
         if (node is not YamlSequenceNode sequence)
         {
-            problems.Add(At(node, $"'{what}' is not a list."));
+            problems.Add(YamlReading.At(node, $"'{what}' is not a list."));
             return [];
         }
 
@@ -1468,7 +1391,7 @@ public static class WorkflowFileParser
     {
         if (node is not YamlMappingNode mapping)
         {
-            problems.Add(At(node, $"'{what}' is not a mapping of name to value."));
+            problems.Add(YamlReading.At(node, $"'{what}' is not a mapping of name to value."));
             return new Dictionary<string, string>(StringComparer.Ordinal);
         }
 
@@ -1476,7 +1399,7 @@ public static class WorkflowFileParser
 
         foreach (var (keyNode, valueNode) in mapping.Children)
         {
-            var key = KeyOf(keyNode, problems);
+            var key = YamlReading.KeyOf(keyNode, problems);
 
             if (key is null)
             {
@@ -1484,9 +1407,9 @@ public static class WorkflowFileParser
             }
 
             // A name written twice comes through YAML where a tag sets the two apart, and is refused here by name.
-            if (RequireScalar(valueNode, $"{what}.{key}", problems) is { } value && !values.TryAdd(key, value))
+            if (YamlReading.RequireScalar(valueNode, $"{what}.{key}", problems) is { } value && !values.TryAdd(key, value))
             {
-                problems.Add(At(keyNode, $"'{what}' names '{key}' more than once"));
+                problems.Add(YamlReading.At(keyNode, $"'{what}' names '{key}' more than once"));
             }
         }
 
@@ -1547,7 +1470,7 @@ public static class WorkflowFileParser
     {
         if (NodeIn(keys, KeyNameOf(what)) is YamlSequenceNode { Children.Count: 0 } empty)
         {
-            problems.Add(At(empty, $"'{what}' is given empty, which is never read as {leftOut}: {name}, or leave the key out for {leftOut}."));
+            problems.Add(YamlReading.At(empty, $"'{what}' is given empty, which is never read as {leftOut}: {name}, or leave the key out for {leftOut}."));
         }
     }
 
@@ -1561,9 +1484,6 @@ public static class WorkflowFileParser
     /// </summary>
     private static UnreachableException Unread(string key)
         => new($"'{key}' is a key workflow files take, and nothing reads it.");
-
-    private static string At(YamlNode node, string message)
-        => $"line {node.Start.Line}, column {node.Start.Column}: {message}";
 
     private static HarnessException Refuse(string path, IReadOnlyList<string> problems)
     {
