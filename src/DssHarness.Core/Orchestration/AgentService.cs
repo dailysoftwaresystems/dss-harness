@@ -1,6 +1,7 @@
 using System.Runtime.ExceptionServices;
 using System.Text.Json;
 using DssHarness.Core.Anchors;
+using DssHarness.Core.Application;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
@@ -16,7 +17,7 @@ using DssHarness.Core.Worktrees;
 namespace DssHarness.Core.Orchestration;
 
 /// <summary>Creating, seeding, refreshing, rebasing, folding and deleting an orchestrator's agents.</summary>
-public interface IAgentService
+public interface IAgentService : IUseCase
 {
     /// <summary>
     /// Creates an agent of an orchestrator: its record, its worktree below the directory named for the orchestrator,
@@ -79,6 +80,42 @@ public interface IAgentService
         bool discardUncommitted,
         CancellationToken cancellationToken = default,
         bool json = false);
+
+    /// <summary>
+    /// Creates an agent, as the request says: the answer carries what its making knows beyond its lines, where its
+    /// worktree is and what its seed recorded, as <see cref="AgentCreated"/> facts.
+    /// </summary>
+    Task<UseCaseResult<AgentCreated>> CreateAsync(AgentCreateRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Seeds a live agent again, as the request says: the answer carries what it was handed, as
+    /// <see cref="AgentSeeded"/> facts.
+    /// </summary>
+    Task<UseCaseResult<AgentSeeded>> SeedAsync(AgentSeedRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Hands a live agent what the request weighs, as the request says: the answer carries
+    /// <see cref="AgentVerbFacts"/>, whatever form it is asked in.
+    /// </summary>
+    Task<UseCaseResult<AgentVerbFacts>> RefreshAsync(RefreshAgentRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Moves a live agent's base, as the request says: the answer carries <see cref="AgentVerbFacts"/>, whatever form
+    /// it is asked in.
+    /// </summary>
+    Task<UseCaseResult<AgentVerbFacts>> RebaseAsync(RebaseAgentRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Folds a live agent's work into the main tree, as the request says: the answer carries
+    /// <see cref="AgentVerbFacts"/>, whatever form it is asked in - what the fold wrote among them, where it wrote.
+    /// </summary>
+    Task<UseCaseResult<AgentVerbFacts>> FoldAsync(FoldAgentRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Deletes an agent, as the request says: the answer carries <see cref="AgentVerbFacts"/>, whatever form it is
+    /// asked in - what its last fold wrote among them, where it wrote one.
+    /// </summary>
+    Task<UseCaseResult<AgentVerbFacts>> DeleteAsync(DeleteAgentRequest request, CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc cref="IAgentService"/>
@@ -305,7 +342,7 @@ public sealed class AgentService(
                 return _log.Record(layout, orchestrator, CreateCommand, GiveBack(layout, agent, created.Outcome with { Message = $"{created.Outcome.Message.TrimEnd('.')}. No agent was created." }));
             }
 
-            return _log.Record(layout, agent, CreateCommand, await FinishMakingAsync(context, layout, agent, created, handable, empty).ConfigureAwait(false));
+            return _log.Record(layout, agent, CreateCommand, await FinishMakingAsync(context, layout, agent, created, handable, empty, session).ConfigureAwait(false));
         }
     }
 
@@ -337,7 +374,8 @@ public sealed class AgentService(
         string agent,
         WorktreeOutcome created,
         Handable handable,
-        bool empty)
+        bool empty,
+        string? session)
     {
         var orchestrator = layout.Name;
         var what = $"Agent '{agent}' of '{orchestrator}' was created at '{created.Path}'";
@@ -388,7 +426,12 @@ public sealed class AgentService(
                     $"plans {layout.PlansDirectory(agent)}",
                     $"work {layout.WorkDirectory(agent)}",
                     $"rows {layout.RowsDirectory(agent)}",
-                ]);
+                ])
+                with
+            {
+                // What the making knows beyond its lines rides it: where the worktree is, what it was made from and handed.
+                Facts = new AgentCreated(orchestrator, agent, created.Path, baseCommit, empty, session),
+            };
         }
         catch (Exception ex) when (Unfinished(ex))
         {
@@ -569,12 +612,14 @@ public sealed class AgentService(
                     previous is { } before && before.Weighed.Any()
                         ? $"seeded {Lower(Agent(record))} with nothing more, as asked: what it was handed before stays recorded"
                         : $"seeded {Lower(Agent(record))} with nothing, as asked",
-                    [.. await BehindAsync(main, record).ConfigureAwait(false), .. notes, .. SeedRecords(layout, record.Name)]);
+                    [.. await BehindAsync(main, record).ConfigureAwait(false), .. notes, .. SeedRecords(layout, record.Name)])
+                    with { Facts = new AgentSeeded(record.Orchestrator, record.Name, Empty: true, Handed: 0) };
             }
 
             return CommandOutcome.Ok(
                 $"seeded {Lower(Agent(record))} with {ReportText.Counted(handed, "path")}",
-                [.. NotHanded(handable), .. await BehindAsync(main, record).ConfigureAwait(false), .. notes, .. SeedRecords(layout, record.Name)]);
+                [.. NotHanded(handable), .. await BehindAsync(main, record).ConfigureAwait(false), .. notes, .. SeedRecords(layout, record.Name)])
+                with { Facts = new AgentSeeded(record.Orchestrator, record.Name, Empty: false, Handed: handed) };
         }
     }
 
@@ -1384,9 +1429,11 @@ public sealed class AgentService(
         {
             var measured = await MeasureAsync(context, layout, record, path, seed!, allowances, deleting: false, AnchorBatchMode.Plan, cancellationToken).ConfigureAwait(false);
 
+            var (standing, needs) = Consents(measured);
+
             if (measured.Refusal is { } refused)
             {
-                return Dry(json, context.Layout, FoldCommand, refused, DryRuns.StandingOf(refused), heldTrees);
+                return Dry(json, context.Layout, FoldCommand, refused, standing, needs, heldTrees);
             }
 
             var (tail, line) = Ending(FoldCommand, record, allowances, measured.Rows.Batch, "write them");
@@ -1399,7 +1446,8 @@ public sealed class AgentService(
                     $"dry run: folding {Lower(Agent(record))} writes {ReportText.Counted(measured.Plan!.Written.Count, "path")} into the main tree, "
                     + $"{Merging(measured.Plan, "merges")}{Handing(measured.Plan, "hands")}removes {measured.Plan.Deleted.Count} and applies {ReportText.Counted(measured.Rows.Planned, "row")}; {tail}",
                     [.. OrchestrationReports.FoldAndRowLines(measured.Plan, measured.Rows, layout.RowsDirectory(record.Name), applied: false), .. line]),
-                Consenting(measured.Rows.Batch),
+                standing,
+                needs,
                 heldTrees);
         }
 
@@ -1421,6 +1469,9 @@ public sealed class AgentService(
             }
 
             var written = await WriteAsync(context, layout, record, path, seed!, measured).ConfigureAwait(false);
+
+            // What the fold wrote rides the answer as its facts, whatever form the answer is asked in.
+            met.Folded = written.Failure is null ? FoldedOf(written) : null;
 
             return written.Failure ?? CommandOutcome.Ok(
                 $"folded {Lower(Agent(record))}: wrote {ReportText.Counted(measured.Plan!.Written.Count, "path")} into the main tree, "
@@ -1557,7 +1608,9 @@ public sealed class AgentService(
 
             if (dry.Refusal is { } refusal)
             {
-                return Dry(json, context.Layout, DeleteCommand, refusal, DryRuns.StandingOf(refusal), context.Layout.MainCheckoutRoot, path);
+                var (refusedStanding, refusedNeeds) = dry.Fold is { } measuredFold ? Consents(measuredFold) : (DryRuns.StandingOf(refusal), []);
+
+                return Dry(json, context.Layout, DeleteCommand, refusal, refusedStanding, refusedNeeds, context.Layout.MainCheckoutRoot, path);
             }
 
             // Which git worktree this is, as its --apply reads it before it writes: one that cannot be read fails both alike.
@@ -1587,11 +1640,14 @@ public sealed class AgentService(
                     .. line,
                 ]);
 
+            var (closingStanding, closingNeeds) = dry.Fold is { } fold ? Consents(fold) : (RequestStanding.Sound, (IReadOnlyList<ConsentKind>)[]);
+
             return await DryRemovalAsync(
                 json,
                 target,
                 planned,
-                dry.Fold is { } fold ? Consenting(fold.Rows.Batch) : RequestStanding.Sound,
+                closingStanding,
+                closingNeeds,
                 cancellationToken,
                 context.Layout.MainCheckoutRoot,
                 path).ConfigureAwait(false);
@@ -1646,6 +1702,9 @@ public sealed class AgentService(
                 {
                     return failure with { Message = $"{failure.Message} Nothing was removed." };
                 }
+
+                // The work the delete folded back rides the answer as its facts, whatever form the answer is asked in.
+                met.Folded = FoldedOf(written);
 
                 seed = written.Seed;
                 lines.AddRange(OrchestrationReports.FoldAndRowLines(fold.Plan, written.Rows, layout.RowsDirectory(record.Name), applied: true));
@@ -1870,6 +1929,7 @@ public sealed class AgentService(
                 target,
                 CommandOutcome.Ok($"dry run: {Lower(was)}; pass --apply to {(target.Standing.Kind == Standing.Gone ? "finish the removal" : "keep its evidence again and finish the removal")}"),
                 RequestStanding.Sound,
+                [],
                 cancellationToken,
                 path).ConfigureAwait(false);
         }
@@ -1955,6 +2015,7 @@ public sealed class AgentService(
                     + "transcripts, once git's record of its worktree and every copy of it on a host are gone",
                     [TranscriptsPlan(record)]),
                 RequestStanding.Sound,
+                [],
                 cancellationToken,
                 target.Path).ConfigureAwait(false);
         }
@@ -2390,6 +2451,62 @@ public sealed class AgentService(
         => rows.Unaccepted.Count + rows.UnacceptedOver.Count > 0 ? RequestStanding.NeedsConsent : RequestStanding.Sound;
 
     /// <summary>
+    /// The consents a measured fold or closing lacks, and how its request stands with them. The cells a plan shows are the
+    /// consents they always were; and where the measurement refused the request, rows no registry holds that nobody named
+    /// new and clean merges nobody asked for are consents it lacks too - the whole refusal, where each of its problems is
+    /// one of those, is the consent it sounds like rather than a fault to put right, and stands as needing one. Any other
+    /// refusal - a path that conflicts, a misspelled option, a row that does not read - is put right, and stands as it did.
+    /// </summary>
+    /// <param name="measured">What the fold measured, or a closing's fold.</param>
+    private static (RequestStanding? Standing, IReadOnlyList<ConsentKind> Needs) Consents(Measured measured)
+    {
+        List<ConsentKind> needs = [];
+
+        if (measured.Rows.Batch.UnnamedNew.Count > 0)
+        {
+            needs.Add(ConsentKind.FoldNewRows);
+        }
+
+        if (measured.Rows.Batch.Unaccepted.Count > 0)
+        {
+            needs.Add(ConsentKind.FoldLostRows);
+        }
+
+        if (measured.Rows.Batch.UnacceptedOver.Count > 0)
+        {
+            needs.Add(ConsentKind.FoldOverCells);
+        }
+
+        if (measured.Plan?.Mergeable.Count > 0)
+        {
+            needs.Add(ConsentKind.FoldTwoChanges);
+        }
+
+        if (measured.Refusal is { } refused)
+        {
+            var onlyConsents = measured.Plan is { } plan
+                && plan.Refusals.Count == plan.Mergeable.Count
+                && measured.Rows.Batch.Problems.Count == measured.Rows.Batch.UnnamedNew.Count;
+
+            return (onlyConsents ? RequestStanding.NeedsConsent : DryRuns.StandingOf(refused), needs);
+        }
+
+        return (Consenting(measured.Rows.Batch), needs);
+    }
+
+    /// <summary>What a fold wrote, merged, handed and applied, as its answer's facts carry it.</summary>
+    /// <param name="written">What writing the measured fold answered.</param>
+    private static AgentFolded FoldedOf(Written written)
+        => new(
+            written.Applied?.Written ?? [],
+            written.Applied?.Deleted ?? [],
+            written.Applied?.Merged ?? [],
+            written.Applied?.Handed ?? [],
+            [.. written.Rows.Batch.Rows.Select(row => row.Change?.To.Name).OfType<string>().Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)],
+            [.. written.Rows.Batch.Rows.Where(row => row.Action is AnchorRowAction.New or AnchorRowAction.Changed).Select(row => row.Id)],
+            [.. written.Rows.Batch.Rows.SelectMany(row => row.Over).Where(cell => cell.Accepted).Select(cell => cell.Cell.ToString())]);
+
+    /// <summary>
     /// Which git worktree a live agent's is, read before anything of it is written - its closing records it - or the failure
     /// that ends a deletion where it cannot be read: the same for a dry run as for its --apply.
     /// </summary>
@@ -2478,7 +2595,7 @@ public sealed class AgentService(
 
         if (measured.Request is not { Rows.Count: > 0 } request)
         {
-            return new Written(null, measured.Rows, folded, notes);
+            return new Written(null, measured.Rows, folded, notes, applied);
         }
 
         AnchorBatch batch;
@@ -2532,7 +2649,7 @@ public sealed class AgentService(
                 notes);
         }
 
-        return new Written(null, rows, folded, notes);
+        return new Written(null, rows, folded, notes, applied);
     }
 
     /// <summary>
@@ -2746,27 +2863,50 @@ public sealed class AgentService(
     /// <param name="standing">How the request stands; null where what it weighs could not be read.</param>
     /// <param name="trees">The trees its --apply takes, by their own paths.</param>
     private CommandOutcome Dry(bool json, HarnessLayout layout, string command, CommandOutcome planned, RequestStanding? standing, params string[] trees)
+        => Dry(json, layout, command, planned, standing, [], trees);
+
+    /// <summary>The answer a dry run gives, wanting no consent.</summary>
+    /// <param name="json">Whether to answer with one JSON document.</param>
+    /// <param name="layout">The repository, whose main checkout holds the lock file.</param>
+    /// <param name="command">The command whose --apply takes the trees.</param>
+    /// <param name="planned">What the verb composed: its summary and its lines, or the failure or refusal it met.</param>
+    /// <param name="standing">How the request stands; null where what it weighs could not be read.</param>
+    /// <param name="needs">Each consent the request lacks, by kind, and nothing else.</param>
+    /// <param name="trees">The trees its --apply takes, by their own paths.</param>
+    private CommandOutcome Dry(bool json, HarnessLayout layout, string command, CommandOutcome planned, RequestStanding? standing, IReadOnlyList<ConsentKind> needs, params string[] trees)
     {
         ArgumentNullException.ThrowIfNull(planned);
 
         var holders = _treeHolders.Read(layout, Holds(command, RunId.New(), trees), [], []);
 
-        return Dry(json, planned, standing, holders);
+        return Dry(json, planned, standing, needs, holders);
     }
 
-    /// <summary>The answer a dry run gives, its holders already read.</summary>
+    /// <summary>The answer a dry run gives, its holders already read, wanting no consent.</summary>
     /// <param name="json">Whether to answer with one JSON document.</param>
     /// <param name="planned">What the verb composed.</param>
     /// <param name="standing">How the request stands; null where what it weighs could not be read.</param>
     /// <param name="holders">Who holds what its --apply takes.</param>
     private static CommandOutcome Dry(bool json, CommandOutcome planned, RequestStanding? standing, TreeHeld holders)
+        => Dry(json, planned, standing, [], holders);
+
+    /// <summary>The answer a dry run gives, its holders already read.</summary>
+    /// <param name="json">Whether to answer with one JSON document.</param>
+    /// <param name="planned">What the verb composed.</param>
+    /// <param name="standing">How the request stands; null where what it weighs could not be read.</param>
+    /// <param name="needs">Each consent the request lacks, by kind, and nothing else.</param>
+    /// <param name="holders">Who holds what its --apply takes.</param>
+    private static CommandOutcome Dry(bool json, CommandOutcome planned, RequestStanding? standing, IReadOnlyList<ConsentKind> needs, TreeHeld holders)
     {
         var answer = DryRuns.Answer(
             planned with { Details = [.. planned.Details ?? [], .. HolderLines(holders)] },
             standing,
             holders);
 
-        return json ? OrchestrationReports.Document(answer.Outcome, applied: false, answer.Standing, holders) : answer.Outcome;
+        // The facts ride the answer whatever form it is asked in: the engine reads them typed, the document says them its way.
+        var facts = new AgentVerbFacts(answer.Outcome.ExitCode, answer.Outcome.Message, Applied: false, answer.Standing, holders, answer.Outcome.Details ?? [], needs);
+
+        return json ? OrchestrationReports.Document(facts) : answer.Outcome with { Facts = facts };
     }
 
     /// <summary>
@@ -2784,9 +2924,10 @@ public sealed class AgentService(
     /// <param name="target">The agent whose deletion is asked about.</param>
     /// <param name="planned">What the dry run composed: its summary and its lines.</param>
     /// <param name="standing">How the request stands.</param>
+    /// <param name="needs">Each consent the request lacks, by kind, and nothing else.</param>
     /// <param name="cancellationToken">Stops the asking.</param>
     /// <param name="trees">The trees its --apply takes, by their own paths.</param>
-    private async Task<CommandOutcome> DryRemovalAsync(bool json, Target target, CommandOutcome planned, RequestStanding? standing, CancellationToken cancellationToken, params string[] trees)
+    private async Task<CommandOutcome> DryRemovalAsync(bool json, Target target, CommandOutcome planned, RequestStanding? standing, IReadOnlyList<ConsentKind> needs, CancellationToken cancellationToken, params string[] trees)
     {
         ArgumentNullException.ThrowIfNull(planned);
 
@@ -2795,7 +2936,7 @@ public sealed class AgentService(
 
         if (unread is not null)
         {
-            return Dry(json, unread with { Details = planned.Details }, RequestStanding.Refused, _treeHolders.Read(layout, Holds(DeleteCommand, RunId.New(), trees), [], []));
+            return Dry(json, unread with { Details = planned.Details }, RequestStanding.Refused, needs, _treeHolders.Read(layout, Holds(DeleteCommand, RunId.New(), trees), [], []));
         }
 
         var leftInIt = await _worktrees.CopiesHeldAsync(target.Address.Name, layout, target.Path, cancellationToken).ConfigureAwait(false);
@@ -2804,7 +2945,7 @@ public sealed class AgentService(
         // rule's row for it; and what is kept in the worktree that the removal cannot take as it stands is weighed by that
         // rule, in its order, with every holder: below a lock that cannot be read and a tree a run holds, either of which
         // refuses the --apply before it goes anywhere near the removal.
-        return Dry(json, planned, standing, _treeHolders.Read(layout, Holds(DeleteCommand, RunId.New(), trees), copies, leftInIt));
+        return Dry(json, planned, standing, needs, _treeHolders.Read(layout, Holds(DeleteCommand, RunId.New(), trees), copies, leftInIt));
     }
 
     /// <summary>
@@ -2861,16 +3002,30 @@ public sealed class AgentService(
     /// What fold-agent, refresh-agent, rebase-agent or delete-agent answers once its outcome is in: one document where
     /// <paramref name="json"/> asks and the outcome brings none - an --apply refused at its hold sound, nothing in it to
     /// correct, the run it met in heldNow, as its dry run at that moment answers; any other as it stands, nobody asked -
-    /// and the outcome itself otherwise.
+    /// and the outcome itself otherwise. Either way the answer carries its facts, composed here: what a dry run already
+    /// knew keeps what it knew, and what an --apply wrote rides with it.
     /// </summary>
     /// <param name="answered">The outcome, with its log's line where an --apply wrote one.</param>
     /// <param name="apply">Whether --apply was given.</param>
     /// <param name="json">Whether to answer with one JSON document.</param>
-    /// <param name="met">The run the --apply's hold met, where one was in its way.</param>
+    /// <param name="met">The run the --apply's hold met, where one was in its way, and what it folded, where it folded.</param>
     private static CommandOutcome Answered(CommandOutcome answered, bool apply, bool json, HoldersMet met)
-        => json && answered.Data.Count == 0
-            ? OrchestrationReports.Document(answered, apply, met.Held is null ? StandingOfApply(answered) : RequestStanding.Sound, met.Held)
-            : answered;
+    {
+        var had = answered.Facts as AgentVerbFacts;
+        var facts = new AgentVerbFacts(
+            answered.ExitCode,
+            answered.Message,
+            apply,
+            had?.Standing ?? (met.Held is null ? StandingOfApply(answered) : RequestStanding.Sound),
+            had?.Holders ?? met.Held,
+            answered.Details ?? [],
+            had?.Needs ?? [],
+            met.Folded ?? had?.Folded);
+
+        return json && answered.Data.Count == 0
+            ? OrchestrationReports.Document(facts)
+            : answered with { Facts = facts };
+    }
 
     /// <summary>
     /// Takes each of <paramref name="trees"/> on this machine whole, as a sync takes a copy: no leg builds in it, and no other
@@ -2896,7 +3051,12 @@ public sealed class AgentService(
                     met.Held = refused.Held;
                 }
 
-                return new Hold(new Handles([]), CommandOutcome.Refused($"{refused.Said} Nothing was changed; run it again once that is done."), runId);
+                return new Hold(new Handles([]), CommandOutcome.Refused($"{refused.Said} Nothing was changed; run it again once that is done.")
+                with
+                {
+                    // A run in the way is waited out, not put right: the caller that can try again knows to.
+                    Cause = OutcomeCause.LockHeld,
+                }, runId);
             }
 
             handles.Add(handle);
@@ -3131,7 +3291,67 @@ public sealed class AgentService(
     /// What writing a fold did: why it stopped where it did, the rows as applied, the seed as recorded, and what is said of
     /// the bytes kept of what it shares.
     /// </summary>
-    private sealed record Written(CommandOutcome? Failure, AgentRowsPlan Rows, SeedRecord Seed, IReadOnlyList<string> Notes);
+    /// <summary>What writing a measured fold answered, and what it did: its rows as they were applied, its seed as recorded, the fold's own paths, and its notes.</summary>
+    /// <param name="Failure">Why it stopped part way; null where it wrote everything.</param>
+    /// <param name="Rows">The rows as applying them left them.</param>
+    /// <param name="Seed">The seed as recorded.</param>
+    /// <param name="Notes">What is said of the kept copies beside the records.</param>
+    /// <param name="Applied">What the fold wrote, merged, removed and handed; null where it stopped before writing everything.</param>
+    private sealed record Written(CommandOutcome? Failure, AgentRowsPlan Rows, SeedRecord Seed, IReadOnlyList<string> Notes, FoldApplied? Applied = null);
+
+    /// <inheritdoc cref="IAgentService.CreateAsync(AgentCreateRequest, CancellationToken)"/>
+    public async Task<UseCaseResult<AgentCreated>> CreateAsync(AgentCreateRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        return UseCaseResult<AgentCreated>.From(
+            await CreateAsync(request.StartDirectory, request.Orchestrator, request.Agent, request.Model, request.Empty, request.Session, cancellationToken).ConfigureAwait(false));
+    }
+
+    /// <inheritdoc cref="IAgentService.SeedAsync(AgentSeedRequest, CancellationToken)"/>
+    public async Task<UseCaseResult<AgentSeeded>> SeedAsync(AgentSeedRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        return UseCaseResult<AgentSeeded>.From(
+            await SeedAsync(request.StartDirectory, request.Orchestrator, request.Agent, request.Empty, request.Force, cancellationToken).ConfigureAwait(false));
+    }
+
+    /// <inheritdoc cref="IAgentService.RefreshAsync(RefreshAgentRequest, CancellationToken)"/>
+    public async Task<UseCaseResult<AgentVerbFacts>> RefreshAsync(RefreshAgentRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        return UseCaseResult<AgentVerbFacts>.From(
+            await RefreshAsync(request.StartDirectory, request.Orchestrator, request.Agent, request.Request, request.Apply, cancellationToken, request.Json).ConfigureAwait(false));
+    }
+
+    /// <inheritdoc cref="IAgentService.RebaseAsync(RebaseAgentRequest, CancellationToken)"/>
+    public async Task<UseCaseResult<AgentVerbFacts>> RebaseAsync(RebaseAgentRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        return UseCaseResult<AgentVerbFacts>.From(
+            await RebaseAsync(request.StartDirectory, request.Orchestrator, request.Agent, request.Request, request.Apply, cancellationToken, request.Json).ConfigureAwait(false));
+    }
+
+    /// <inheritdoc cref="IAgentService.FoldAsync(FoldAgentRequest, CancellationToken)"/>
+    public async Task<UseCaseResult<AgentVerbFacts>> FoldAsync(FoldAgentRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        return UseCaseResult<AgentVerbFacts>.From(
+            await FoldAsync(request.StartDirectory, request.Orchestrator, request.Agent, request.Allowances, request.Apply, cancellationToken, request.Json).ConfigureAwait(false));
+    }
+
+    /// <inheritdoc cref="IAgentService.DeleteAsync(DeleteAgentRequest, CancellationToken)"/>
+    public async Task<UseCaseResult<AgentVerbFacts>> DeleteAsync(DeleteAgentRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        return UseCaseResult<AgentVerbFacts>.From(
+            await DeleteAsync(request.StartDirectory, request.Orchestrator, request.Agent, request.Allowances, request.Apply, request.DiscardUncommitted, cancellationToken, request.Json).ConfigureAwait(false));
+    }
 
     /// <summary>What deleting a live agent measured before writing anything, and why it cannot go on where it cannot.</summary>
     private sealed record ClosingMeasure(Measured? Fold, IReadOnlyList<string> Discarded, EvidenceFound Evidence, CommandOutcome? Refusal);
@@ -3147,6 +3367,9 @@ public sealed class AgentService(
     {
         /// <summary>The run met, as a dry run at that moment names it; <see langword="null"/> where no hold was refused.</summary>
         public TreeHeld? Held { get; set; }
+
+        /// <summary>What a fold applied, where this --apply wrote one; <see langword="null"/> where it folded nothing.</summary>
+        public AgentFolded? Folded { get; set; }
     }
 
     /// <summary>Locks let go together, in the reverse of the order they were taken.</summary>

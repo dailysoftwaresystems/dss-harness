@@ -37,6 +37,12 @@ public sealed record LegRunResult(
     string? MutationRecord = null)
 {
     /// <summary>
+    /// Why the run ended as it did, where its exit code and its lines cannot say: <see cref="OutcomeCause.LockHeld"/>
+    /// marks the run whose logs another run owns, which a caller that can try again waits out.
+    /// </summary>
+    public OutcomeCause Cause { get; init; }
+
+    /// <summary>
     /// The answer a command gives of this run: asked for data, the ledger is the whole of standard output whatever
     /// ended the run; as text, a table of what reached a verdict and the line it ends on.
     /// </summary>
@@ -53,6 +59,7 @@ public sealed record LegRunResult(
 
                 // The document is the whole answer; one more line would be one more thing for a reader to strip.
                 Quiet = true,
+                Cause = Cause,
             }
-            : new CommandOutcome(ExitCode, Message, Details);
+            : new CommandOutcome(ExitCode, Message, Details) { Cause = Cause };
 }

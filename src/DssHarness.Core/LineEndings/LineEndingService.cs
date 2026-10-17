@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using DssHarness.Core.Application;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
 using DssHarness.Core.Output;
@@ -62,7 +63,7 @@ public sealed record LineEndingReport(
     IReadOnlyList<LineEndingChange> Changed);
 
 /// <summary>Applies the repository's declared line-ending policy to the files on disk.</summary>
-public interface ILineEndingService
+public interface ILineEndingService : IUseCase
 {
     /// <summary>Applies the policy, or reports what applying it would change.</summary>
     /// <param name="startDirectory">A directory inside the repository.</param>

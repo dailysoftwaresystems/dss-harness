@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using DssHarness.Core.Application;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
@@ -16,7 +17,7 @@ using DssHarness.Core.Sync;
 namespace DssHarness.Core.Worktrees;
 
 /// <summary>Creating, listing and removing development worktrees.</summary>
-public interface IWorktreeService
+public interface IWorktreeService : IUseCase
 {
     /// <summary>Creates a worktree, generating its name when <paramref name="useRandomName"/> is set.</summary>
     /// <exception cref="HarnessException">

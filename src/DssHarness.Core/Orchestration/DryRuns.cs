@@ -92,7 +92,12 @@ public static class DryRuns
             return new(
                 CommandOutcome.Refused(
                     standing == RequestStanding.Sound ? $"{planned.Message}, {TreeHolders.Blocked}" : $"{planned.Message}{TreeHolders.AlsoHeld}",
-                    planned.Details),
+                    planned.Details)
+                with
+                {
+                    // A run in the way is waited out, not put right: the caller that can try again knows to.
+                    Cause = OutcomeCause.LockHeld,
+                },
                 standing);
         }
 

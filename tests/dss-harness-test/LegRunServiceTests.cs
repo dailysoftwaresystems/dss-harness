@@ -1158,6 +1158,9 @@ public sealed class LegRunServiceTests
             logs: logHeld ? new LogOwnership(new LogsOwnedElsewhere(harness.FileSystem), harness.Output, harness.Identity) : null);
 
         Assert.Equal(logHeld ? LegExit.LogHeld : HarnessExit.Refused, outcome.ExitCode);
+
+        // A run whose logs another owns is waited out, not put right: the one thing the exit code cannot say.
+        Assert.Equal(logHeld ? OutcomeCause.LockHeld : OutcomeCause.None, outcome.Cause);
         Assert.StartsWith(Path.Combine(temp.Path, ".harness-config", "runs") + Path.DirectorySeparatorChar, RunDirectoryOf(outcome, json), StringComparison.Ordinal);
     }
 

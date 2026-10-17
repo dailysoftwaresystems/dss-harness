@@ -311,7 +311,8 @@ public sealed class LegRunService(
                 held,
                 LedgerReport.From([.. skipped, .. placed.Select(leg => leg.Entry(LegVerdict.LogHeld, held))], factor),
                 [$"logs: {runDirectory}"],
-                runDirectory);
+                runDirectory,
+                cause: OutcomeCause.LockHeld);
         }
 
         // Trees another run holds, by tree: a verdict for the legs that need one, as a variant
@@ -650,6 +651,7 @@ public sealed class LegRunService(
     /// <param name="runDirectory">
     /// Where the run keeps its records, once it has a directory; <see langword="null"/> before.
     /// </param>
+    /// <param name="cause">Why the run ended as it did, where its exit code and its lines cannot say.</param>
     /// <remarks>
     /// Asked for data, the ledger is the whole of standard output whatever ended the run: the document,
     /// with the code and the line the process ends on. Written as text instead - a table, a list of
@@ -664,7 +666,8 @@ public sealed class LegRunService(
         string message,
         LedgerReport reached,
         IReadOnlyList<string> details,
-        string? runDirectory)
+        string? runDirectory,
+        OutcomeCause cause = OutcomeCause.None)
         => new(
             commandName,
             runId,
@@ -677,7 +680,10 @@ public sealed class LegRunService(
             Unfinished: [],
             [.. details, .. reached.LeftRunningSaid],
             Stopped: true,
-            request.MutationRecord);
+            request.MutationRecord)
+        {
+            Cause = cause,
+        };
 
     /// <summary>
     /// Where a run's records are, as its text form says it: this run's directory, then each leg's own directory of

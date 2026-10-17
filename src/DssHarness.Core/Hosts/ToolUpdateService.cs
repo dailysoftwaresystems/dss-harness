@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Reflection;
+using DssHarness.Core.Application;
 using DssHarness.Core.Execution;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Output;
@@ -88,7 +89,7 @@ public sealed class ToolUpdateService(
     IOwnProgram program,
     IHostPlatform platform,
     IHarnessOutput output,
-    Func<TimeSpan, CancellationToken, Task>? wait = null)
+    Func<TimeSpan, CancellationToken, Task>? wait = null) : IUseCase
 {
     /// <summary>The command, as it is typed and as it reports.</summary>
     public const string CommandName = "update-tool";

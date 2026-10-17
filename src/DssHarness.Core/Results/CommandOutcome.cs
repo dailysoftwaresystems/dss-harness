@@ -25,6 +25,24 @@ public sealed record CommandOutcome(int ExitCode, string Message, IReadOnlyList<
     /// </summary>
     public bool Quiet { get; init; }
 
+    /// <summary>
+    /// What the outcome knows beyond its code and its lines, attached where it is composed from the same locals that
+    /// build its text, so the two cannot drift: the typed answer of a command, read by a use case's caller through
+    /// <c>UseCaseResult&lt;T&gt;.From</c> rather than off the text; <see langword="null"/> where the outcome carries none.
+    /// </summary>
+    /// <remarks>
+    /// Held as <see cref="object"/> because one record serves each command that has one; the use case that attaches it
+    /// is the one that reads it back, by its own type.
+    /// </remarks>
+    public object? Facts { get; init; }
+
+    /// <summary>
+    /// Why the outcome ended as it did, where its exit code and its lines cannot say: <see cref="OutcomeCause.LockHeld"/>
+    /// marks the one kind of refusal a caller waits on rather than puts right - a lock another run holds - set by every
+    /// place one refuses.
+    /// </summary>
+    public OutcomeCause Cause { get; init; }
+
     /// <summary>A successful outcome.</summary>
     public static CommandOutcome Ok(string message, IReadOnlyList<string>? details = null)
         => new(HarnessExit.Success, message, details);

@@ -382,7 +382,18 @@ public sealed class AgentRowsTests
 
         Assert.Equal(HarnessExit.Refused, unnamed.ExitCode);
         Assert.Contains(unnamed.Details!, line => line.Contains($"'{Id}' has no row in either registry, and it was not named new", StringComparison.Ordinal));
+
+        // A row nobody named new is the one consent that refusal is: it stands as needing one, its facts naming the kind -
+        // while the misspelled allowances beside it, refusing for what they name and not for what the request lacks, stand
+        // refused as ever.
+        var unnamedFacts = Assert.IsType<AgentVerbFacts>(unnamed.Facts);
+        Assert.Equal(RequestStanding.NeedsConsent, unnamedFacts.Standing);
+        Assert.Equal([ConsentKind.FoldNewRows], unnamedFacts.Needs);
+
         Assert.Equal(HarnessExit.Refused, stale.ExitCode);
+        var staleFacts = Assert.IsType<AgentVerbFacts>(stale.Facts);
+        Assert.Equal(RequestStanding.Refused, staleFacts.Standing);
+        Assert.Equal([], staleFacts.Needs);
         Assert.Contains($"  refused: --new D-TEST-AGENT-NINE names no row filed in '{kit.Layout.RowsDirectory("ag")}': drop it, or correct the id.", stale.Details!);
         Assert.Contains($"  refused: --accept-lost {Id}:closing names a cell that keeps its stored text here: drop it, or correct it.", stale.Details!);
         Assert.Contains($"  refused: --accept-lost D-TEST-AGENT-NINE:closing names no row filed in '{kit.Layout.RowsDirectory("ag")}': drop it, or correct the id.", stale.Details!);
@@ -399,6 +410,9 @@ public sealed class AgentRowsTests
 
         Assert.True(deleted.Succeeded, OrchestrationKit.Describe(deleted));
         Assert.Equal("the fix", (await RowAsync(kit)).ClosingWork);
+
+        // The delete's fold-back rides its answer too: the row it applied among its facts, the fold's output.
+        Assert.Equal([Id], Assert.IsType<AgentFolded>(Assert.IsType<AgentVerbFacts>(deleted.Facts).Folded).Rows);
     }
 
     /// <summary>

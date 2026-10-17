@@ -53,6 +53,12 @@ public sealed record FoldPlan
     /// <summary>The refused paths whose three-way merge is clean and was not asked for: what naming each to be merged would write.</summary>
     public required IReadOnlyList<string> Mergeable { get; init; }
 
+    /// <summary>
+    /// The refused paths whose three-way merge conflicts: the one refusal a merge cannot answer, which no consent lifts and
+    /// a person reconciles. Empty where none conflicts.
+    /// </summary>
+    public required IReadOnlyList<string> Conflicting { get; init; }
+
     /// <summary>The paths the agent shares with the main tree: handed to it, or written or removed by an earlier fold.</summary>
     public required IReadOnlySet<string> Seeded { get; init; }
 
@@ -129,6 +135,12 @@ public sealed record RebasePlan
 
     /// <summary>The refused paths whose three-way merge is clean and was not asked for: what naming each to be merged would write.</summary>
     public required IReadOnlyList<string> Mergeable { get; init; }
+
+    /// <summary>
+    /// The refused paths whose three-way merge conflicts: the one refusal a merge cannot answer, which no consent lifts and
+    /// a person reconciles. Empty where none conflicts.
+    /// </summary>
+    public required IReadOnlyList<string> Conflicting { get; init; }
 
     /// <summary>
     /// What git is asked to write first as the new base holds it: every taken path but those in <see cref="WrittenLast"/>,
@@ -705,6 +717,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         var merged = new List<MergedPath>();
         var shown = new List<string>();
         var mergeableUnasked = new List<string>();
+        var conflicting = new List<string>();
 
         foreach (var (offer, why, into) in weighed)
         {
@@ -724,6 +737,10 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             if (offer.IsClean)
             {
                 mergeableUnasked.Add(path);
+            }
+            else if (offer.Conflicts)
+            {
+                conflicting.Add(path);
             }
         }
 
@@ -824,6 +841,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             Refusals = [.. refused.OrderBy(refusal => refusal.Path, StringComparer.Ordinal).Select(refusal => refusal.Why)],
             Shown = shown,
             Mergeable = mergeableUnasked,
+            Conflicting = conflicting,
             Seeded = seed.Weighed.ToHashSet(StringComparer.Ordinal),
             AgentContent = agentContent,
             MainContent = mainContent,
@@ -2153,6 +2171,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         var merged = new List<MergedPath>();
         var shown = new List<string>();
         var mergeable = new List<string>();
+        var conflicting = new List<string>();
 
         foreach (var (offer, why, into) in weighed)
         {
@@ -2168,6 +2187,10 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             if (offer.IsClean)
             {
                 mergeable.Add(offer.Path);
+            }
+            else if (offer.Conflicts)
+            {
+                conflicting.Add(offer.Path);
             }
         }
 
@@ -2287,6 +2310,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             Refusals = [.. refused.OrderBy(refusal => refusal.Path, StringComparer.Ordinal).Select(refusal => refusal.Why)],
             Shown = shown,
             Mergeable = mergeable,
+            Conflicting = conflicting,
             Written = [.. taken.Except(last, StringComparer.Ordinal)],
             WrittenLast = last,
             RenamedFrom = [.. renamed.Where(rename => takenPaths.Contains(rename.Key) && takenPaths.Contains(rename.Value)).Select(rename => rename.Value)],

@@ -1,4 +1,5 @@
 using DssHarness.Core.Anchors;
+using DssHarness.Core.Application;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
@@ -24,7 +25,7 @@ public sealed class InitService(
     IToolProvisionService toolProvisionService,
     IGitClient gitClient,
     ManagedIgnoreCheck managedIgnoreCheck,
-    IHostPlatform platform)
+    IHostPlatform platform) : IUseCase
 {
     /// <summary>
     /// Builds the ignore rules the harness owns, from the layout constants rather than by repeating

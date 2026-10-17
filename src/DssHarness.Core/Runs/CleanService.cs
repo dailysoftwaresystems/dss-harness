@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using DssHarness.Core.Application;
 using DssHarness.Core.Build;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
@@ -86,7 +87,7 @@ public sealed class CleanService(
     IFileSystem fileSystem,
     IHostPlatform platform,
     IHarnessOutput output,
-    IRepositoryTrees trees)
+    IRepositoryTrees trees) : IUseCase
 {
     /// <summary>The command, as it is typed and as it reports.</summary>
     public const string CommandName = "clean";

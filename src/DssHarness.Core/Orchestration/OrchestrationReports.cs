@@ -479,15 +479,13 @@ public static class OrchestrationReports
     /// output: what <see cref="CommandOutcome"/> already is - its code, its last line, its lines - with the two things the
     /// code cannot say: what is wanted of the caller, and who holds what its --apply needs.
     /// </summary>
-    /// <param name="outcome">The outcome as the command answered it.</param>
-    /// <param name="applied">Whether --apply was given.</param>
-    /// <param name="standing">What is wanted of the caller; null where what the command weighs could not be read.</param>
-    /// <param name="holders">Who holds what the --apply takes, where the command asked; null where it asked nobody.</param>
-    /// <returns>The same outcome, answering with the document; its exit code and its failure line are unchanged.</returns>
-    public static CommandOutcome Document(CommandOutcome outcome, bool applied, RequestStanding? standing, TreeHeld? holders)
+    /// <param name="facts">What the answer knows beyond its lines: the document is this, serialised.</param>
+    /// <returns>The outcome, answering with the document; its exit code and its failure line are unchanged.</returns>
+    public static CommandOutcome Document(AgentVerbFacts facts)
     {
-        ArgumentNullException.ThrowIfNull(outcome);
+        ArgumentNullException.ThrowIfNull(facts);
 
+        var holders = facts.Holders;
         var heldNow = new JsonArray();
 
         foreach (var holder in holders?.Holders ?? [])
@@ -514,7 +512,7 @@ public static class OrchestrationReports
                     HolderStanding.HoldsSlot => "holds-slot",
                     HolderStanding.OnHost => "on-host",
                     null => null,
-                    var unknown => throw new ArgumentOutOfRangeException(nameof(holders), unknown, "Not where a holder's leg can stand."),
+                    var unknown => throw new ArgumentOutOfRangeException(nameof(facts), unknown, "Not where a holder's leg can stand."),
                 },
                 ["ahead"] = holder.Ahead,
                 ["said"] = holder.Said,
@@ -523,16 +521,17 @@ public static class OrchestrationReports
 
         var lines = new JsonArray();
 
-        foreach (var line in outcome.Details ?? [])
+        foreach (var line in facts.Lines)
         {
             lines.Add(line);
         }
 
         // Null where the lock file could not be read - nobody was named, and heldUnread says why - and an empty array
-        // where it was read and nobody held.
-        var document = AgentDocument(outcome.ExitCode, outcome.Message, applied, standing, holders is { Unread: not null } ? null : heldNow, holders?.Unread, lines);
+        // where it was read and nobody held. What the facts know beyond this - the consents a request lacks, what a fold
+        // wrote - the engine reads typed off the record, and the document leaves to its lines, which said it first.
+        var document = AgentDocument(facts.ExitCode, facts.Summary, facts.Applied, facts.Standing, holders is { Unread: not null } ? null : heldNow, holders?.Unread, lines);
 
-        return outcome with { Data = [document], Quiet = true };
+        return new CommandOutcome(facts.ExitCode, facts.Summary) { Data = [document], Quiet = true, Facts = facts };
     }
 
     /// <summary>

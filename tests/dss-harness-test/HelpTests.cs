@@ -2513,7 +2513,7 @@ public sealed partial class HelpTests
             + "writing - a file changed after it was weighed, a write "
             + "that fails - is not in a dry run, so 0 never promises that the --apply will finish. --json answers with one "
             + "document, the whole of standard output, whose request member says what is wanted of you - 'sound' (nothing; wait, "
-            + "where heldNow names a holder), 'needs-consent' (name the cells the dry run shows) or 'refused' (put right what the "
+            + "where heldNow names a holder), 'needs-consent' (give what the dry run names: cells, rows or paths) or 'refused' (put right what the "
             + "last line names) - and whose heldNow holds each holder that decides its code: each a 'held now:' line names, with "
             + "where its leg stands - null for a leg of this machine where this machine's record of heavy legs cannot be read - "
             + "and each holding a copy kept in the "
