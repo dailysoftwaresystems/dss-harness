@@ -350,7 +350,9 @@ steps:
             repeat:
               until: 'empty(review.findings)'
               rounds: 3
-              blocking: "any(review.findings, it.production && it.severity != 'low' && it.severity != 'nit')"
+              # Three passes at most; while a critical, high or medium finding stands the loop goes on -
+              # only a low or a nit may outlive the count, and each that does is written to the backlog.
+              blocking: "any(review.findings, it.severity != 'low' && it.severity != 'nit')"
               blockersLimitRounds: 3
               leftover: 'review.findings'
             answers:

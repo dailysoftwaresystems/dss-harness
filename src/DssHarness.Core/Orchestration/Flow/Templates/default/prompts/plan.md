@@ -72,19 +72,25 @@ item.
 4. Where something is open that changes the design, your run context says whether you may ask the person. Ask now,
    everything at once, each question with its choices and the one you recommend by the bar above; or decide, and
    record each assumption.
-5. Design the work, then split it into at most 8 items by sets of files, as your instructions say. Items are built at
-   the same time: none may need another's result. Leave nothing inside an item that you already know only a person
-   can give: ask it now, where you may. A builder that finds part of its item cannot be done says so, and a person is asked before
-   anything of the item is folded.
-6. For each item, write instructions a builder with none of this conversation can follow, the paths it owns, the paths
-   it must not touch, and the filter that selects its tests; then what it reuses or extends, by path and for what;
-   what it creates, each with why nothing that exists serves and what you searched for and where; and what it
-   replaces because the request asked, by path, with what becomes of the old one.
+5. Design the work, then split it into at most 8 items by sets of files, as your instructions say. Size each item to
+   one builder's cycle: as much work as one agent builds whole in a single sitting, with its tests - never more than
+   that, and never a sliver of one; an item too small to fill a builder is merged with the work beside it. Items are
+   built at the same time: none may need another's result. Leave nothing inside an item that you already know only a
+   person can give: ask it now, where you may. A builder that finds part of its item cannot be done says so, and a
+   person is asked before anything of the item is folded.
+6. For each item, write instructions a builder with none of this conversation can follow, its definition of done -
+   what must hold when it is finished, as statements a person or a check can answer one by one: the behaviours built,
+   the test that pins each, and what is true of the tree when the builder reports - the paths it owns, the paths it
+   must not touch, and the filter that selects its tests; then what it reuses or extends, by path and for what; what
+   it creates, each with why nothing that exists serves and what you searched for and where; and what it replaces
+   because the request asked, by path, with what becomes of the old one.
 
 ## What to return
 
-A summary of the plan; whether it was built on a plan a person gave or made here; each departure from a given plan,
-with its reason; the items; and under `scope` an empty list, since nothing is being updated.
+A summary of the plan; the plan's definition of done - what holds when the whole plan is built, as statements a check
+can answer one by one, which the run's final audit holds every round against; whether it was built on a plan a person
+gave or made here; each departure from a given plan, with its reason; the items; and under `scope` an empty list,
+since nothing is being updated.
 
 A machine checks the items before anyone builds them: every name valid, no file under two items, forbidden paths kept,
 every path an item reuses or replaces there in the tree, and every item saying what it reuses, creates or replaces.

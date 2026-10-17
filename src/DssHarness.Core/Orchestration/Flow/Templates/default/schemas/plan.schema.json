@@ -3,6 +3,7 @@
   "additionalProperties": false,
   "required": [
     "summary",
+    "done",
     "source",
     "departures",
     "items",
@@ -12,6 +13,10 @@
     "summary": {
       "type": "string",
       "description": "The plan in a few sentences: what will be built, in what order, and why this way."
+    },
+    "done": {
+      "type": "string",
+      "description": "The plan's definition of done: what holds when this whole plan is built - the request answered, each item's own definition of done met, the repository's checks green. Written as statements a check can answer one by one; the run's final audit holds the round against it."
     },
     "source": {
       "type": "string",
@@ -45,7 +50,7 @@
     },
     "items": {
       "type": "array",
-      "description": "The work items, at most 8. Items run side by side, so none may need another's result.",
+      "description": "The work items, at most 8. Each is sized to one builder's cycle: as much work as one agent builds whole in a single sitting, with its tests - never more than that, and never a sliver of it. Items run side by side, so none may need another's result.",
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -53,6 +58,7 @@
           "name",
           "title",
           "instructions",
+          "done",
           "ownedPaths",
           "forbiddenPaths",
           "reuses",
@@ -72,6 +78,10 @@
           "instructions": {
             "type": "string",
             "description": "Everything the agent that builds the item needs: what to build, where, what must hold when it is done, and what is out of its scope."
+          },
+          "done": {
+            "type": "string",
+            "description": "The item's definition of done: what must hold for the item to be finished, as statements a person or a check can answer one by one - the behaviours built, the test that pins each, and what is true of the tree when the builder reports. The builder works to it, the review weighs it and the run's final audit checks it."
           },
           "ownedPaths": {
             "type": "array",
@@ -201,6 +211,7 @@
               "name",
               "title",
               "instructions",
+              "done",
               "ownedPaths",
               "forbiddenPaths",
               "reuses",
@@ -220,6 +231,10 @@
               "instructions": {
                 "type": "string",
                 "description": "Everything the agent that builds the item needs: what to build, where, what must hold when it is done, and what is out of its scope."
+              },
+              "done": {
+                "type": "string",
+                "description": "The item's definition of done: what must hold for the item to be finished, as statements a person or a check can answer one by one - the behaviours built, the test that pins each, and what is true of the tree when the builder reports."
               },
               "ownedPaths": {
                 "type": "array",

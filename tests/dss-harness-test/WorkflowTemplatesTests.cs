@@ -1,3 +1,4 @@
+using System.Text.Json;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Platform;
@@ -90,6 +91,53 @@ public sealed class WorkflowTemplatesTests
 
         Assert.Empty(WorkflowTemplates.EnsureDefault(arranged, fileSystem));
         Assert.Empty(Directory.GetFiles(arranged, "*", SearchOption.AllDirectories));
+    }
+
+    /// <summary>
+    /// The method this build ships plans and reviews by (user, 2026-10-17): a plan's items are sized to one builder's
+    /// cycle each, every item and the plan itself carry a definition of done, and the review loop stands while a
+    /// critical, high or medium finding does - only a low or a nit may outlive its three rounds. Held on the two
+    /// shipped files that say it, so a change of method is a change of those files and of this test together.
+    /// </summary>
+    [Fact]
+    public void TheShippedMethod_PlansByDefinitionsOfDone_AndStandsWhileAMediumFindingDoes()
+    {
+        var schema = JsonDocument.Parse(Read("schemas/plan.schema.json")).RootElement;
+
+        Assert.Contains(schema.GetProperty("required").EnumerateArray(), required => required.GetString() == "done");
+        Assert.Contains("one builder's cycle", schema.GetProperty("properties").GetProperty("items").GetProperty("description").GetString(), StringComparison.Ordinal);
+
+        var item = schema.GetProperty("properties").GetProperty("items").GetProperty("items");
+
+        Assert.Contains(item.GetProperty("required").EnumerateArray(), required => required.GetString() == "done");
+        Assert.Equal("string", item.GetProperty("properties").GetProperty("done").GetProperty("type").GetString());
+
+        var piece = schema.GetProperty("properties").GetProperty("scope").GetProperty("items").GetProperty("properties").GetProperty("item");
+
+        Assert.Contains(piece.GetProperty("required").EnumerateArray(), required => required.GetString() == "done");
+
+        var workflow = Read("default.yml");
+
+        Assert.Contains("rounds: 3", workflow, StringComparison.Ordinal);
+        Assert.Contains(
+            "blocking: \"any(review.findings, it.severity != 'low' && it.severity != 'nit')\"",
+            workflow,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("it.production && it.severity", workflow, StringComparison.Ordinal);
+    }
+
+    private static string Read(string below)
+    {
+        var assembly = typeof(WorkflowTemplates).Assembly;
+
+        // The name's tail is spelt with the machine's separator; the match is made on the '/' form.
+        var name = assembly.GetManifestResourceNames()
+            .Single(resource => resource.Replace('\\', '/').Contains(".WorkflowTemplates/", StringComparison.Ordinal)
+                && resource.Replace('\\', '/').EndsWith("/" + below, StringComparison.Ordinal));
+
+        using var reader = new StreamReader(assembly.GetManifestResourceStream(name)!);
+
+        return reader.ReadToEnd();
     }
 
     private static int Count(IReadOnlyList<WorkflowStep> steps, string? type = null)

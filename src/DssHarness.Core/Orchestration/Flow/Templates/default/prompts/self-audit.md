@@ -16,6 +16,10 @@ it replaces.
 
 The plan: {planning.plan.latest.summary}
 
+The plan's definition of done, which this round is held against statement by statement:
+
+{planning.plan.latest.done}
+
 Its items:
 
 {planning.plan.latest.items}
@@ -57,7 +61,8 @@ Where a line says that a step left no output, that thing was not read or did not
 
 ## What to do
 
-1. Hold the request and each item of this round against the tree: is each part there, and is it what was asked?
+1. Hold the request, the plan's definition of done and each item of this round against the tree: is each statement
+   of each met, or named among what is left, and is each part there and what was asked?
 2. Look for what was left out without being said. A work item a person chose to leave out, when its builder said it
    could not do it, is said: it shows above among what was not checked, with that reason. It is no finding and gets
    no work item: a person decided it, and the run's report lists it.

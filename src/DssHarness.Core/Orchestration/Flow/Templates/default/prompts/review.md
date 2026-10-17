@@ -10,6 +10,7 @@ What its builder was asked to do:
 
 - The paths the item owns: {item.ownedPaths}
 - The paths it had to leave alone: {item.forbiddenPaths}
+- What must hold when the item is finished, its definition of done: {item.done}
 - The existing code it was to reuse or extend: {item.reuses}
 - What it was to create from nothing, and why nothing that exists served: {item.creates}
 - What it was to replace because the request asked for it to be rebuilt, and what was to become of the old one:
@@ -36,6 +37,7 @@ again, and say in its text why the reason does not hold. Entries of other aspect
 ## What to return
 
 Whether the change has anything of your aspect, and each finding: your aspect, the file and line, what is wrong and
-why and what would put it right, how much it matters, and whether it is in production code.
+why and what would put it right, how much it matters, and whether it is in production code. A statement of the item's
+definition of done that the change does not hold is a finding of the aspect it belongs to.
 
 Report what you confirmed in the code. An empty list is the answer for a change with nothing wrong in your aspect.
