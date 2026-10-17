@@ -1132,7 +1132,7 @@ against the table that owns it (`WorkflowStepTypes`, which the parser reads exac
 workflows` lists from, so what is listed is what is read), every step, input, param and output an
 expression or a template names, every question kind an answer names, and every file the
 definition points at, beside the definition that names it - a runner or a leg no configuration
-declares is said the same way. Every problem is collected and reported together (12), without
+declares is said the same way. Every problem is collected and reported together (13), without
 running anything; the structural rules live in Core (`WorkflowValidator`), pure, so the engine can
 run them at the start of a run without reading a file. This build checks workflow definitions and
 does not run them: the engine that runs them - the coordinator, the agents, the steps over the

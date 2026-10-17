@@ -2930,7 +2930,7 @@ internal static class HelpCommand
             + "and 'any(list, test)' for whether any member meets a test written with 'it' for the member: every step, input and param it "
             + "names must be declared before it, and a placeholder in braces - '{step.member}' - in a prompt or a template key reads the same "
             + $"names. '{ToolPackage.Command} validate-workflow' checks all of it - the shape of every key, every name an expression reads, every file "
-            + "the definition names - and refuses (12) naming each problem, without running anything.");
+            + "the definition names - and refuses (13) naming each problem, without running anything.");
 
         return builder.ToString();
     }

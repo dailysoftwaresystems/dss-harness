@@ -2641,6 +2641,13 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains("params - its own knobs, defaulted in the file and read as param.<name>", prose, StringComparison.Ordinal);
 
+        // The refusal's code is the one the command answers with, held here so the sentence cannot drift from it.
+        Assert.Contains(
+            "'dssharness validate-workflow' checks all of it - the shape of every key, every name an expression reads, every file the "
+                + "definition names - and refuses (13) naming each problem, without running anything.",
+            prose,
+            StringComparison.Ordinal);
+
         // Every key of the file, of every step and of every group, from the tables the reader reads.
         Assert.All(WorkflowKeys.File, key => Assert.Contains($"  {key.Name}", result.StandardOutput, StringComparison.Ordinal));
         Assert.All(WorkflowStepTypes.Common, key => Assert.Contains($"  {key.Name}", result.StandardOutput, StringComparison.Ordinal));
