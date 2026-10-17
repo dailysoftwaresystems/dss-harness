@@ -77,22 +77,10 @@ internal static class DispatchOptions
     };
 
     /// <summary>
-    /// Where this run's own legs work, as the two options say it - or the refusal where they say opposite things, which is
-    /// about the command line alone and costs no configuration read to name.
+    /// Where this run's own legs work, as the two options say it - the rule itself, and its refusal, are
+    /// <see cref="LegTrees.Asked"/>, in the core, which placing a leg asks beside.
     /// </summary>
     /// <param name="arguments">The command line.</param>
-    /// <exception cref="HarnessException">Both options were given (<see cref="HarnessExit.UsageError"/>).</exception>
     internal static LocalTrees WhereWorkRuns(System.CommandLine.ParseResult arguments)
-    {
-        var copy = arguments.GetValue(LocalCopy);
-        var inPlace = arguments.GetValue(InPlace);
-
-        return copy && inPlace
-            ? throw new HarnessException(
-                HarnessExit.UsageError,
-                "--local-copy and --in-place say opposite things about where this run's own legs work. Give one.")
-            : copy ? LocalTrees.Copy
-            : inPlace ? LocalTrees.InPlace
-            : LocalTrees.AsConfigured;
-    }
+        => LegTrees.Asked(arguments.GetValue(LocalCopy), arguments.GetValue(InPlace));
 }

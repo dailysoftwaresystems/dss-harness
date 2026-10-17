@@ -38,6 +38,22 @@ public sealed record LegTree(string Here, string Work, bool LocalCopy, string? K
 public static class LegTrees
 {
     /// <summary>
+    /// Where this run's own legs work, as its command line's two options say it - or the refusal where they say opposite
+    /// things, which is about the command line alone and costs no configuration read to name.
+    /// </summary>
+    /// <param name="localCopy">Whether <c>--local-copy</c> was given.</param>
+    /// <param name="inPlace">Whether <c>--in-place</c> was given.</param>
+    /// <exception cref="HarnessException">Both were given (<see cref="HarnessExit.UsageError"/>).</exception>
+    public static LocalTrees Asked(bool localCopy, bool inPlace)
+        => localCopy && inPlace
+            ? throw new HarnessException(
+                HarnessExit.UsageError,
+                "--local-copy and --in-place say opposite things about where this run's own legs work. Give one.")
+            : localCopy ? LocalTrees.Copy
+            : inPlace ? LocalTrees.InPlace
+            : LocalTrees.AsConfigured;
+
+    /// <summary>
     /// Whether the configuration has <paramref name="leg"/> work in a copy of its tree where this machine runs it: its own
     /// key, else the repository's default. The one expression of the configuration's half of that order of precedence,
     /// which nothing else repeats.
