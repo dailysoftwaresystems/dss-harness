@@ -26,4 +26,11 @@
 
 {run.assumptions}
 
+## Issues found that were there before
+
+Each was proven on the commit the run began from, and left for a person: none was related to this work, critical, or
+in its way.
+
+{run.preExisting}
+
 Opened by an unattended run. It was not merged and will not be: merging is a person's.

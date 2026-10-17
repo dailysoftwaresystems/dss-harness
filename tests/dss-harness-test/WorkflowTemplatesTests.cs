@@ -23,9 +23,9 @@ public sealed class WorkflowTemplatesTests
         var definition = WorkflowTemplates.ShippedDefinition();
 
         Assert.Equal(WorkflowTemplates.ShippedWorkflowName, definition.Name);
-        Assert.Equal(79, Count(definition.Steps));
+        Assert.Equal(80, Count(definition.Steps));
         Assert.Equal(46, Count(definition.Recover!.Steps));
-        Assert.Equal(45, Count([.. definition.Steps, .. definition.Recover.Steps], "reason"));
+        Assert.Equal(46, Count([.. definition.Steps, .. definition.Recover.Steps], "reason"));
         Assert.Equal(5, definition.Inputs.Count);
     }
 
@@ -164,7 +164,7 @@ public sealed class WorkflowTemplatesTests
         string[] chosen = ["model", "tier", "effort"];
         var agents = WorkflowTemplates.Files.Where(file => file.StartsWith("agents/", StringComparison.Ordinal)).ToList();
 
-        Assert.Equal(17, agents.Count);
+        Assert.Equal(18, agents.Count);
 
         foreach (var agent in agents)
         {
@@ -254,6 +254,7 @@ public sealed class WorkflowTemplatesTests
 
         var passedOver = new List<string>();
         var untried = new List<string>();
+        var untriaged = new List<string>();
         var otherwise = new List<string>();
         var asking = new List<string>();
 
@@ -280,6 +281,14 @@ public sealed class WorkflowTemplatesTests
 
         Assert.Equal(["blocked", "planning.approval", "rounds.items.item-blocked", "recover.direction", "recover.remedies.item-blocked"], asking);
 
+        // Every reasoning step - the recovery's among them - sends what it met that was there before the run to the one
+        // triage step, which is raised by such an issue, never scheduled, and gives one it decides to fix to the recovery.
+        Assert.Empty(untriaged);
+        var triage = Assert.Single(definition.Steps, step => step.Raised is not null);
+        Assert.Equal(
+            ("triage-pre-existing-issue", "reason", WorkflowStep.RaisedByPreExisting, WorkflowStep.Recover, (string?)null),
+            (triage.Name, triage.Type, triage.Raised, triage.OnAddress, triage.OnPreExisting));
+
         return;
 
         void Walk(IReadOnlyList<WorkflowStep> steps, string? parent, string? inherited, bool recovering)
@@ -304,6 +313,11 @@ public sealed class WorkflowTemplatesTests
                     untried.Add(path);
                 }
 
+                if (step.Type == "reason" && step.Raised is null && step.OnPreExisting != "triage-pre-existing-issue")
+                {
+                    untriaged.Add(path);
+                }
+
                 if (step.Type == "pause" && !step.Answers.ContainsKey("pause"))
                 {
                     asking.Add(path);
@@ -312,6 +326,30 @@ public sealed class WorkflowTemplatesTests
                 Walk(step.Steps, path, effective, recovering);
             }
         }
+    }
+
+    /// <summary>
+    /// The help, the README and the architecture say how a pre-existing issue is reported, triaged, fixed at its root or
+    /// listed, as the grammar has it.
+    /// </summary>
+    [Fact]
+    public void TheHelpTheReadmeAndTheArchitecture_SayWhereAPreExistingIssueGoes()
+    {
+        var help = Prose.Words(DssHarness.Core.Help.HelpTopics.Render("workflows"));
+        var readme = Prose.Document("README.md");
+        var architecture = Prose.Document("docs", "architecture.md");
+
+        Assert.Contains(
+            $"That step says raised: {WorkflowStep.RaisedByPreExisting} - it is raised once per issue and never scheduled, as the recovery is not - and "
+                + "onAddress: recover: it reproduces the issue on the run's base commit, gives the recovery one that is in a step's way, related to "
+                + "the work or critical, to fix at its root",
+            help,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "lists the rest, proven, with a title and a description, in the run's `pre-existing-issues.json`, shown in the pull request's body and the handoff",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains("The validator holds the wiring (V51): the triage is at the top level, waits for nothing and is waited for by none", architecture, StringComparison.Ordinal);
     }
 
     /// <summary>

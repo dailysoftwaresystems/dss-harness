@@ -315,9 +315,9 @@ public static class WorkflowValidator
                 return;
             }
 
-            if (!_entries.Any(entry => entry.Step.OnFailure == WorkflowStep.Recover))
+            if (!_entries.Any(entry => entry.Step.OnFailure == WorkflowStep.Recover || entry.Step.OnAddress == WorkflowStep.Recover))
             {
-                _problems.Add("the workflow declares recover, and no step gives it a failure; a step says onFailure: recover, itself or through a group around it, for its failures to reach it");
+                _problems.Add("the workflow declares recover, and no step gives it a failure or an issue to fix; a step says onFailure: recover, itself or through a group around it, for its failures to reach it, or onAddress: recover for the pre-existing issues it decides to fix");
             }
 
             // The recovery's own onFailure is what a failure of one of its steps does where the step says none, as a
@@ -798,6 +798,7 @@ public static class WorkflowValidator
             Within(step.AskRounds, 1, 5, $"{where}: askRounds");
             Within(step.BackoffSeconds, 1, WorkflowStep.MostBackoffSeconds, $"{where}: backoffSeconds");
             ModelRules(step.Tier, step.Model, where);
+            PreExistingRules(entry, where);
         }
 
         /// <summary>A reasoning step's own access: one that writes works in the worktree it names, and one that reads names none and writes nothing.</summary>
@@ -1376,9 +1377,17 @@ public static class WorkflowValidator
                     return;
 
                 case "source":
-                    if (!Inside(entry, scope => scope.On is not null) && !InRecovery(entry))
+                    if (!Inside(entry, scope => scope.On is not null) && !InRecovery(entry) && entry.Step.Raised is null)
                     {
-                        _problems.Add($"'{what}' reads '{read.Whole}', whose 'source' names the step whose ending raised a handler, and '{entry.Path}' is neither a handler, nor in one, nor a step of the recovery");
+                        _problems.Add($"'{what}' reads '{read.Whole}', whose 'source' names the step whose ending raised a handler, and '{entry.Path}' is neither a handler, nor in one, nor a step of the recovery, nor one raised by a pre-existing issue");
+                    }
+
+                    return;
+
+                case "issue":
+                    if (!InRecovery(entry) && entry.Step.Raised is null)
+                    {
+                        _problems.Add($"'{what}' reads '{read.Whole}', whose 'issue' is the pre-existing issue a step reported, and '{entry.Path}' is neither raised by one nor a step of the recovery that fixes one");
                     }
 
                     return;
@@ -1613,6 +1622,103 @@ public static class WorkflowValidator
         /// </summary>
         private static string CallsItself(string where, string how)
             => $"{where} {how}, and so calls itself; a step never does - one that is to run again after it failed says retries";
+
+        /// <summary>
+        /// V51: a reason step's pre-existing issues go to a step of the flow's top level that is raised by them, never
+        /// scheduled, and that sends one it decides to fix to the recovery; where a workflow has such a step, every other
+        /// reason step names it, so no issue a step meets is lost.
+        /// </summary>
+        private void PreExistingRules(Entry entry, string where)
+        {
+            var step = entry.Step;
+
+            if (step.Raised is not null)
+            {
+                RaisedRules(entry, where);
+            }
+            else if (step.OnAddress is not null)
+            {
+                _problems.Add($"{where} says onAddress and is not raised by a pre-existing issue; onAddress says where a step raised by one sends an issue it decides to fix");
+            }
+
+            if (step.Raised is not null)
+            {
+                return;
+            }
+
+            if (step.OnPreExisting is { } named)
+            {
+                var triage = _entries.FirstOrDefault(other => other.ParentPath is null && other != _recover && other.Step.Name == named);
+
+                if (triage is null)
+                {
+                    _problems.Add($"{where} says onPreExisting: '{named}', which is no step of the flow's top level; the step that triages a reported issue is one the whole flow names");
+                }
+                else if (triage.Step.Raised != WorkflowStep.RaisedByPreExisting)
+                {
+                    _problems.Add($"{where} says onPreExisting: '{named}', which says no raised: {WorkflowStep.RaisedByPreExisting}; the step that triages a reported issue is raised by it, never scheduled");
+                }
+            }
+            else if (Triages().FirstOrDefault() is { } triage)
+            {
+                _problems.Add($"{where} says no onPreExisting while '{triage.Step.Name}' triages pre-existing issues; every reasoning step names the step its issues go to, so none it meets is lost");
+            }
+        }
+
+        /// <summary>A step raised by a pre-existing issue: at the top level, triggered only, and sending a fix to the recovery.</summary>
+        private void RaisedRules(Entry entry, string where)
+        {
+            var step = entry.Step;
+
+            if (entry.ParentPath is not null)
+            {
+                _problems.Add($"{where} says raised: {WorkflowStep.RaisedByPreExisting} and is not a step of the flow's top level; the step that triages a reported issue is one every step of the flow can name");
+            }
+
+            // Triggered only, as the recovery is: nothing schedules it, so nothing it waits for and nothing that waits for it.
+            if (step.DependsOn is [var first, ..])
+            {
+                _problems.Add($"{where} is raised by a pre-existing issue and also depends on '{first}'; a raised step waits for the issue it is given and for nothing else");
+            }
+
+            if (_entries.FirstOrDefault(other => other.Step.DependsOn.Contains(step.Name, StringComparer.Ordinal) && other.ParentPath == entry.ParentPath) is { } waiting)
+            {
+                _problems.Add($"{where} is raised by a pre-existing issue, and '{waiting.Path}' depends on it; a raised step is never scheduled, so nothing waits for it");
+            }
+
+            if (step.On is not null)
+            {
+                _problems.Add($"{where} is raised by a pre-existing issue and by another step's ending (on); a step is raised one way");
+            }
+
+            if (step.When is not null)
+            {
+                _problems.Add($"{where} is raised by a pre-existing issue and says when; every issue raised to it is triaged");
+            }
+
+            if (step.Always is true)
+            {
+                _problems.Add($"{where} is raised by a pre-existing issue and is always; a step runs at the session's end or for an issue, never both");
+            }
+
+            if (step.OnAddress is null)
+            {
+                _problems.Add($"{where} is raised by a pre-existing issue and says no onAddress; an issue it decides to fix goes to the recovery: say onAddress: {WorkflowStep.Recover}");
+            }
+            else if (_definition.Recover is null)
+            {
+                _problems.Add($"{where} says onAddress: {WorkflowStep.Recover}, and the workflow declares no recover; an issue to fix at its root is the recovery's work");
+            }
+
+            if (step.OnPreExisting is not null)
+            {
+                _problems.Add(CallsItself(where, "is raised by a pre-existing issue and sends the issues it meets to be triaged (onPreExisting)"));
+            }
+        }
+
+        /// <summary>The steps of the flow's top level raised by a pre-existing issue, in the order declared.</summary>
+        private IEnumerable<Entry> Triages()
+            => _entries.Where(entry => entry.ParentPath is null && entry != _recover && entry.Step.Raised == WorkflowStep.RaisedByPreExisting);
 
         private void Within(int? value, int least, int most, string what)
         {

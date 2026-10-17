@@ -59,7 +59,7 @@ public static class WorkflowTemplates
         "prioritizer", "triage", "planner", "plan-auditor", "implementer",
         "review-scope", "reviewer-correctness", "reviewer-errors", "reviewer-tests",
         "reviewer-types", "reviewer-comments", "reviewer-simplicity",
-        "scribe", "auditor", "diagnostician", "advisor", "reporter",
+        "scribe", "auditor", "diagnostician", "pre-existing-triage", "advisor", "reporter",
     ];
 
     /// <summary>The prompt files the implementation workflow names.</summary>
@@ -70,7 +70,7 @@ public static class WorkflowTemplates
         "review-scope", "review", "rework",
         "deferrals", "handoff",
         "self-audit", "pr-body",
-        "diagnose", "rediagnose", "redirect", "remedy",
+        "diagnose", "rediagnose", "redirect", "remedy", "pre-existing",
         "recommend", "status", "ask",
     ];
 
@@ -78,7 +78,7 @@ public static class WorkflowTemplates
     private static IReadOnlyList<string> Schemas =>
     [
         "priority", "triage", "plan", "plan-audit", "implement",
-        "review-scope", "review", "self-audit", "summary", "diagnosis",
+        "review-scope", "review", "self-audit", "summary", "diagnosis", "pre-existing",
     ];
 
     /// <summary>

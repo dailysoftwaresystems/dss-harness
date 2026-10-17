@@ -7,7 +7,8 @@
     "source",
     "departures",
     "items",
-    "scope"
+    "scope",
+    "preExisting"
   ],
   "properties": {
     "summary": {
@@ -347,6 +348,46 @@
           "instead": {
             "type": "string",
             "description": "What is done in its place. Empty where nothing is."
+          }
+        }
+      }
+    },
+    "preExisting": {
+      "type": "array",
+      "description": "Issues you met that were there before this run - outside what it changed - each reported and never fixed by you. Empty where you met none.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "title",
+          "description",
+          "where",
+          "evidence",
+          "blocks"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "One line: what is wrong, and where."
+          },
+          "description": {
+            "type": "string",
+            "description": "What is wrong and what it causes, as you saw it."
+          },
+          "where": {
+            "type": "array",
+            "description": "The paths, from the repository's root, or the command.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "evidence": {
+            "type": "string",
+            "description": "What you read or ran and saw, quoted: the file and its lines, or the command and what it printed."
+          },
+          "blocks": {
+            "type": "boolean",
+            "description": "True only where it stops your own work."
           }
         }
       }

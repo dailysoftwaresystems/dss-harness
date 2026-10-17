@@ -1164,6 +1164,19 @@ reasoning step; its recovery diagnoses the failure (`diagnose`, which goes on wi
 the visits), asks a person only for what only a person can give (`direction`), and builds, tests,
 folds and reviews its fix as a round's work items are.
 
+A pre-existing issue - one a reasoning step meets that was there before the run - is reported in the
+step's answer (`preExisting`, a member of every shipped reasoning schema) and triaged by the step its
+`onPreExisting` names: a reason step of the flow's top level that says `raised: preExisting`, which
+nothing schedules, and `onAddress: recover`. The validator holds the wiring (V51): the triage is at
+the top level, waits for nothing and is waited for by none, takes no `on`, `when` or `always`, sends
+a fix to a declared `recover`, and names no triage of its own, which would be it calling itself;
+where a workflow has one, every other reasoning step names it. Its agent reproduces the issue on the
+base commit and answers `fix` (in a step's way, related to the work, or critical: given to the
+recovery, the step it was in the way of running again after), `list` (added, proven, to the run's
+`pre-existing-issues.json`, shown in the pull request's body and the handoff), `duplicate` or
+`unproven`. The engine that raises it and writes the list is the next thing built; `issue` and
+`source` are read only by the triage and the recovery.
+
 `validate-workflow` checks a declared workflow, or every one declared: the file's shape, every key
 against the table that owns it (`WorkflowStepTypes`, which the parser reads exactly and `help
 workflows` lists from, so what is listed is what is read), every step, input, param and output an

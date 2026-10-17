@@ -27,7 +27,7 @@ public sealed class WorkflowValidationServiceTests
         var report = await Service(repository).CheckAsync(repository.Path, named: null, cancellationToken);
 
         Assert.True(report.Passed);
-        Assert.Equal($"ok {Shown(Default)} (79 steps, 46 recovering, 45 reasoning)", Assert.Single(report.Lines));
+        Assert.Equal($"ok {Shown(Default)} (80 steps, 46 recovering, 46 reasoning)", Assert.Single(report.Lines));
 
         var outcome = WorkflowValidationReports.Render(report, json: false);
 
@@ -118,7 +118,7 @@ public sealed class WorkflowValidationServiceTests
 
         Assert.Equal(
             [
-                $"ok {Shown(Default)} (79 steps, 46 recovering, 45 reasoning)",
+                $"ok {Shown(Default)} (80 steps, 46 recovering, 46 reasoning)",
                 $"{Shown("small")}: 'agents/implementer.md', step 'make''s agent, is not at '.harness-config/workflows/small/agents/implementer.md'; write it there, beside the definition that names it",
                 $"{Shown("small")}: 'agents/worker.md', step 'draft''s agent, is not at '.harness-config/workflows/small/agents/worker.md'; write it there, beside the definition that names it",
                 $"{Shown("small")}: 'prompts/work.md', step 'draft''s prompt, is not at '.harness-config/workflows/small/prompts/work.md'; write it there, beside the definition that names it",
@@ -459,7 +459,7 @@ public sealed class WorkflowValidationServiceTests
         Assert.Equal(
             [
                 $"{Shown("small")} could not be read: {Held.Why}",
-                $"ok {Shown(Default)} (79 steps, 46 recovering, 45 reasoning)",
+                $"ok {Shown(Default)} (80 steps, 46 recovering, 46 reasoning)",
             ],
             report.Lines);
     }

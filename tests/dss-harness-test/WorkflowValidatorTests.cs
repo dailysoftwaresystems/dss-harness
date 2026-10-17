@@ -17,6 +17,190 @@ public sealed class WorkflowValidatorTests
         => [.. WorkflowValidator.Validate(Parse(text), hasCommitTemplate: false)];
 
     /// <summary>
+    /// V51: a reasoning step's pre-existing issues go to a step of the flow's top level raised by them - never scheduled,
+    /// as the recovery is not - which gives one it decides to fix to the recovery. A workflow wired so holds; and where it
+    /// has such a step, a reasoning step that names none is refused, so no issue a step meets is lost. The recovery is
+    /// reached by the triage's onAddress alone.
+    /// </summary>
+    [Fact]
+    public void PreExistingIssues_GoToARaisedTriage_ThatSendsAFixToTheRecovery_AndEveryReasoningStepNamesIt()
+    {
+        Assert.Empty(Problems(PreExisting("")));
+
+        Assert.Equal(
+            ["step 'other' says no onPreExisting while 'triage-pre-existing-issue' triages pre-existing issues; every reasoning step names the step its issues go to, so none it meets is lost"],
+            Problems(PreExisting(
+                """
+                  - name: other
+                    type: reason
+                    agent: planner
+                    prompt: prompts/plan.md
+                    outputs: schemas/plan.json
+                """)));
+    }
+
+    /// <summary>
+    /// The issue a step reported is read by the step raised by it and by the recovery that fixes one - with the step
+    /// that reported it, as source - and by nothing else.
+    /// </summary>
+    [Fact]
+    public void AReportedIssue_IsReadByItsTriageAndTheRecovery_AndNothingElse()
+    {
+        Assert.Equal(
+            ["'plan.when' reads 'issue.title', whose 'issue' is the pre-existing issue a step reported, and 'plan' is neither raised by one nor a step of the recovery that fixes one"],
+            Problems(
+                """
+                name: default
+                steps:
+                  - name: plan
+                    type: reason
+                    agent: planner
+                    prompt: prompts/plan.md
+                    outputs: schemas/plan.json
+                    when: "!empty(issue.title)"
+                    onPreExisting: triage-pre-existing-issue
+                  - name: triage-pre-existing-issue
+                    type: reason
+                    agent: pre-existing-triage
+                    prompt: prompts/pre-existing.md
+                    outputs: schemas/pre-existing.json
+                    raised: preExisting
+                    onAddress: recover
+                recover:
+                  onSuccess: failed-step
+                  onFailure: pause
+                  steps:
+                    - name: diagnose
+                      type: orient
+                      when: "!empty(issue.title) && !empty(source.title)"
+                """));
+    }
+
+    /// <summary>
+    /// V51: each way a pre-existing issue's wiring can be wrong is refused by name - an onPreExisting that names no step
+    /// of the top level, or one not raised by an issue; a raised step that is scheduled after all (it waits, is waited
+    /// for, says on, when or always), sits in a group, sends a fix nowhere, or sends its own issues to be triaged, which
+    /// is it calling itself; and onAddress where nothing raised the step.
+    /// </summary>
+    [Fact]
+    public void APreExistingIssuesWiring_ThatIsWrong_IsRefusedEachWay()
+    {
+        Assert.Equal(
+            [
+                "step 'orient' says onPreExisting: 'plan', which says no raised: preExisting; the step that triages a reported issue is raised by it, never scheduled",
+                "step 'plan' says onPreExisting: 'ghost', which is no step of the flow's top level; the step that triages a reported issue is one the whole flow names",
+                "step 'scheduled' says onPreExisting: 'orient', which says no raised: preExisting; the step that triages a reported issue is raised by it, never scheduled",
+            ],
+            Problems(
+                """
+                name: default
+                steps:
+                  - name: orient
+                    type: reason
+                    agent: triage
+                    prompt: prompts/triage.md
+                    outputs: schemas/triage.json
+                    onPreExisting: plan
+                  - name: plan
+                    type: reason
+                    agent: planner
+                    prompt: prompts/plan.md
+                    outputs: schemas/plan.json
+                    onPreExisting: ghost
+                  - name: scheduled
+                    type: reason
+                    agent: planner
+                    prompt: prompts/plan.md
+                    outputs: schemas/plan.json
+                    onPreExisting: orient
+                """));
+
+        Assert.Equal(
+            [
+                "step 'plan' says onAddress and is not raised by a pre-existing issue; onAddress says where a step raised by one sends an issue it decides to fix",
+                "step 'triage-pre-existing-issue' is raised by a pre-existing issue and also depends on 'plan'; a raised step waits for the issue it is given and for nothing else",
+                "step 'triage-pre-existing-issue' is raised by a pre-existing issue, and 'after' depends on it; a raised step is never scheduled, so nothing waits for it",
+                "step 'triage-pre-existing-issue' is raised by a pre-existing issue and says when; every issue raised to it is triaged",
+                "step 'triage-pre-existing-issue' is raised by a pre-existing issue and says no onAddress; an issue it decides to fix goes to the recovery: say onAddress: recover",
+                "step 'triage-pre-existing-issue' is raised by a pre-existing issue and sends the issues it meets to be triaged (onPreExisting), and so calls itself; a step never does - one that is to run again after it failed says retries",
+            ],
+            Problems(
+                """
+                name: default
+                steps:
+                  - name: plan
+                    type: reason
+                    agent: planner
+                    prompt: prompts/plan.md
+                    outputs: schemas/plan.json
+                    onPreExisting: triage-pre-existing-issue
+                    onAddress: recover
+                  - name: triage-pre-existing-issue
+                    type: reason
+                    agent: pre-existing-triage
+                    prompt: prompts/pre-existing.md
+                    outputs: schemas/pre-existing.json
+                    raised: preExisting
+                    dependsOn: [plan]
+                    when: "plan.go"
+                    onPreExisting: triage-pre-existing-issue
+                  - name: after
+                    type: orient
+                    dependsOn: [triage-pre-existing-issue]
+                """));
+
+        Assert.Equal(
+            [
+                "step 'items.inner' says raised: preExisting and is not a step of the flow's top level; the step that triages a reported issue is one every step of the flow can name",
+                "step 'items.inner' says onAddress: recover, and the workflow declares no recover; an issue to fix at its root is the recovery's work",
+            ],
+            Problems(
+                """
+                name: default
+                steps:
+                  - name: items
+                    steps:
+                      - name: inner
+                        type: reason
+                        agent: pre-existing-triage
+                        prompt: prompts/pre-existing.md
+                        outputs: schemas/pre-existing.json
+                        raised: preExisting
+                        onAddress: recover
+                """));
+    }
+
+    /// <summary>
+    /// A workflow whose reasoning steps send their pre-existing issues to a raised triage that gives a fix to the
+    /// recovery, with <paramref name="more"/> steps after it.
+    /// </summary>
+    private static string PreExisting(string more)
+        => $"""
+            name: default
+            steps:
+              - name: plan
+                type: reason
+                agent: planner
+                prompt: prompts/plan.md
+                outputs: schemas/plan.json
+                onPreExisting: triage-pre-existing-issue
+              - name: triage-pre-existing-issue
+                type: reason
+                agent: pre-existing-triage
+                prompt: prompts/pre-existing.md
+                outputs: schemas/pre-existing.json
+                raised: preExisting
+                onAddress: recover
+            {more}
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: diagnose
+                  type: orient
+            """;
+
+    /// <summary>
     /// An expression reads its own siblings, the siblings of the groups holding it, and steps by their path from the
     /// root - and nothing else. The shipped default flow's own expressions are the shape of this.
     /// </summary>
@@ -864,9 +1048,9 @@ public sealed class WorkflowValidatorTests
         Assert.Equal(
             [
                 "recover.maxVisits must be from 1 to 99, found 0",
-                "the workflow declares recover, and no step gives it a failure; a step says onFailure: recover, itself or through a group around it, for its failures to reach it",
+                "the workflow declares recover, and no step gives it a failure or an issue to fix; a step says onFailure: recover, itself or through a group around it, for its failures to reach it, or onAddress: recover for the pre-existing issues it decides to fix",
                 "'reads-recovery.when' reads 'recover.diagnose.ok': the recovery's steps are read by their own names inside it, and nothing outside it reads them",
-                "'reads-source.when' reads 'source.code', whose 'source' names the step whose ending raised a handler, and 'reads-source' is neither a handler, nor in one, nor a step of the recovery",
+                "'reads-source.when' reads 'source.code', whose 'source' names the step whose ending raised a handler, and 'reads-source' is neither a handler, nor in one, nor a step of the recovery, nor one raised by a pre-existing issue",
                 "step 'recover.fixes.verify' is a step of the recovery and gives its failure to the recovery, and so calls itself; a step never does - one that is to run again after it failed says retries",
                 "amend.step names 'recover.diagnose', a step of the recovery; a plan update is planned and placed by the flow's own steps",
                 "amend.whenAddScope names 'recover.diagnose', a step of the recovery; a plan update is planned and placed by the flow's own steps",
@@ -1543,7 +1727,7 @@ public sealed class WorkflowValidatorTests
             "recommendations", "update", "piece", "status", "true", "false", "null", "empty", "any",
             "outcome", "code", "error", "question", "latest", "assumptions",
             "worktree", "work", "plans", "rows", "orchestrator", "agent", "step", "os",
-            "param",
+            "param", "issue",
         ];
 
         Assert.Equal(reserved.Order(StringComparer.Ordinal), WorkflowExpressions.ReservedNames.Order(StringComparer.Ordinal));

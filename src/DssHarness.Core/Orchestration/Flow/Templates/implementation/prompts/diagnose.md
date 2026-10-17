@@ -13,6 +13,11 @@ is:
 
 Where the step failed because a question about it was answered so, the question's kind: {source.question}
 
+Where `{source.step}` is `triage-pre-existing-issue`, nothing failed: you are given an issue that was there before the
+run, proven on the base commit `{orient.startCommit}`, to fix at its root. What it is: {source.title}. {source.description}
+Where: {source.where}. Its proof: {source.proof}. Then the first statement of each item's definition of done is that
+the proof no longer shows the issue, in place of the step passing.
+
 This is the recovery's first visit for this step. Should what you decide not put it right - the step fails again, or
 the work you set out fails - you are asked again, with what happened, and you go on from here.
 

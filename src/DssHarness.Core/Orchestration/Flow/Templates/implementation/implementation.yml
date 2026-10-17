@@ -12,7 +12,9 @@
 # step that failed runs again ('onSuccess: failed-step'). A person is asked where the
 # diagnosis says only a person can lift what stands in the way, with the advisor's
 # recommendation and the choices; where a step still fails after five recoveries; and
-# at the end, for what the run left.
+# at the end, for what the run left. An issue a step meets that was there before the run is
+# fixed at its root the same way where it is in the way, related to the work or critical,
+# and otherwise listed, proven, for the person ('onPreExisting', at the end of the flow).
 name: implementation
 description: From a request to a pull request whose checks are green - triage, a plan that is audited and approved, each work item built in an agent of its own and reviewed, the gate, a self-audit, the handoff, the pull request, and its checks.
 maxReasoningAgents: 4
@@ -121,6 +123,7 @@ steps:
         retries: 3
         backoffSeconds: 30
         onFailure: pause
+        onPreExisting: triage-pre-existing-issue
         prompt: prompts/priority.md
         outputs: schemas/priority.schema.json
       - name: triage
@@ -133,6 +136,7 @@ steps:
         retries: 3
         backoffSeconds: 30
         onFailure: pause
+        onPreExisting: triage-pre-existing-issue
         prompt: prompts/triage.md
         outputs: schemas/triage.schema.json
   - name: blocked
@@ -163,6 +167,7 @@ steps:
         retries: 3
         backoffSeconds: 30
         onFailure: pause
+        onPreExisting: triage-pre-existing-issue
         prompt: prompts/plan.md
         resumePrompt: prompts/replan.md
         outputs: schemas/plan.schema.json
@@ -182,6 +187,7 @@ steps:
         retries: 3
         backoffSeconds: 30
         onFailure: pause
+        onPreExisting: triage-pre-existing-issue
         prompt: prompts/plan-audit.md
         outputs: schemas/plan-audit.schema.json
       - name: approval
@@ -212,6 +218,7 @@ steps:
         retries: 3
         backoffSeconds: 30
         onFailure: pause
+        onPreExisting: triage-pre-existing-issue
         prompt: prompts/plan-update.md
         outputs: schemas/plan.schema.json
   - name: rounds
@@ -262,6 +269,7 @@ steps:
             retries: 3
             backoffSeconds: 30
             onFailure: pause
+            onPreExisting: triage-pre-existing-issue
             prompt: prompts/implement.md
             outputs: schemas/implement.schema.json
           - name: redo
@@ -275,6 +283,7 @@ steps:
             retries: 3
             backoffSeconds: 30
             onFailure: pause
+            onPreExisting: triage-pre-existing-issue
             prompt: prompts/redo.md
             outputs: schemas/implement.schema.json
           - name: undo
@@ -288,6 +297,7 @@ steps:
             retries: 3
             backoffSeconds: 30
             onFailure: pause
+            onPreExisting: triage-pre-existing-issue
             prompt: prompts/undo.md
             outputs: schemas/implement.schema.json
           - name: item-blocked
@@ -312,6 +322,7 @@ steps:
             retries: 3
             backoffSeconds: 30
             onFailure: pause
+            onPreExisting: triage-pre-existing-issue
             prompt: prompts/unblock.md
             outputs: schemas/implement.schema.json
           - name: verify
@@ -333,6 +344,7 @@ steps:
             retries: 3
             backoffSeconds: 30
             onFailure: pause
+            onPreExisting: triage-pre-existing-issue
             prompt: prompts/mend.md
             outputs: schemas/implement.schema.json
           - name: fold
@@ -374,6 +386,7 @@ steps:
                 retries: 3
                 backoffSeconds: 30
                 onFailure: pause
+                onPreExisting: triage-pre-existing-issue
                 prompt: prompts/reconcile.md
                 outputs: schemas/implement.schema.json
           - name: fold-checks
@@ -401,6 +414,7 @@ steps:
             retries: 3
             backoffSeconds: 30
             onFailure: pause
+            onPreExisting: triage-pre-existing-issue
             prompt: prompts/anchors.md
             outputs: schemas/implement.schema.json
           - name: checkpoint
@@ -448,6 +462,7 @@ steps:
                 retries: 3
                 backoffSeconds: 30
                 onFailure: pause
+                onPreExisting: triage-pre-existing-issue
                 prompt: prompts/review-scope.md
                 outputs: schemas/review-scope.schema.json
               - name: review
@@ -464,6 +479,7 @@ steps:
                     retries: 3
                     backoffSeconds: 30
                     onFailure: pause
+                    onPreExisting: triage-pre-existing-issue
                     prompt: prompts/review.md
                     outputs: schemas/review.schema.json
                   - name: errors
@@ -476,6 +492,7 @@ steps:
                     retries: 3
                     backoffSeconds: 30
                     onFailure: pause
+                    onPreExisting: triage-pre-existing-issue
                     prompt: prompts/review.md
                     outputs: schemas/review.schema.json
                   - name: tests
@@ -488,6 +505,7 @@ steps:
                     retries: 3
                     backoffSeconds: 30
                     onFailure: pause
+                    onPreExisting: triage-pre-existing-issue
                     prompt: prompts/review.md
                     outputs: schemas/review.schema.json
                   - name: types
@@ -500,6 +518,7 @@ steps:
                     retries: 3
                     backoffSeconds: 30
                     onFailure: pause
+                    onPreExisting: triage-pre-existing-issue
                     prompt: prompts/review.md
                     outputs: schemas/review.schema.json
                   - name: comments
@@ -512,6 +531,7 @@ steps:
                     retries: 3
                     backoffSeconds: 30
                     onFailure: pause
+                    onPreExisting: triage-pre-existing-issue
                     prompt: prompts/review.md
                     outputs: schemas/review.schema.json
                   - name: simplicity
@@ -524,6 +544,7 @@ steps:
                     retries: 3
                     backoffSeconds: 30
                     onFailure: pause
+                    onPreExisting: triage-pre-existing-issue
                     prompt: prompts/review.md
                     outputs: schemas/review.schema.json
               - name: revise
@@ -537,6 +558,7 @@ steps:
                     retries: 3
                     backoffSeconds: 30
                     onFailure: pause
+                    onPreExisting: triage-pre-existing-issue
                     prompt: prompts/rework.md
                     outputs: schemas/implement.schema.json
                   - name: reverify
@@ -558,6 +580,7 @@ steps:
                     retries: 3
                     backoffSeconds: 30
                     onFailure: pause
+                    onPreExisting: triage-pre-existing-issue
                     prompt: prompts/mend.md
                     outputs: schemas/implement.schema.json
                   - name: refold
@@ -598,6 +621,7 @@ steps:
                         retries: 3
                         backoffSeconds: 30
                         onFailure: pause
+                        onPreExisting: triage-pre-existing-issue
                         prompt: prompts/reconcile.md
                         outputs: schemas/implement.schema.json
                   - name: recheck
@@ -625,6 +649,7 @@ steps:
                     retries: 3
                     backoffSeconds: 30
                     onFailure: pause
+                    onPreExisting: triage-pre-existing-issue
                     prompt: prompts/anchors.md
                     outputs: schemas/implement.schema.json
                   - name: recheckpoint
@@ -704,6 +729,7 @@ steps:
         retries: 3
         backoffSeconds: 30
         onFailure: pause
+        onPreExisting: triage-pre-existing-issue
         prompt: prompts/self-audit.md
         outputs: schemas/self-audit.schema.json
   - name: notes
@@ -723,6 +749,7 @@ steps:
     retries: 3
     backoffSeconds: 30
     onFailure: pause
+    onPreExisting: triage-pre-existing-issue
     prompt: prompts/deferrals.md
     outputs: schemas/summary.schema.json
   - name: handoff
@@ -736,6 +763,7 @@ steps:
     retries: 3
     backoffSeconds: 30
     onFailure: pause
+    onPreExisting: triage-pre-existing-issue
     prompt: prompts/handoff.md
     outputs: schemas/summary.schema.json
   - name: notes-fold
@@ -773,6 +801,7 @@ steps:
     retries: 3
     backoffSeconds: 30
     onFailure: pause
+    onPreExisting: triage-pre-existing-issue
     prompt: prompts/anchors.md
     outputs: schemas/summary.schema.json
   - name: notes-release
@@ -816,6 +845,23 @@ steps:
         answer: more
         times: 2
     onFailure: recover
+  # Raised once for each issue a reasoning step reports as there before the run - never
+  # scheduled, as the recovery is not. It checks the issue on the base commit, then gives it
+  # to the recovery to fix at its root now (onAddress: recover) where it is in a step's way,
+  # related to the work or critical; otherwise it is added, proven, to the run's
+  # pre-existing-issues.json, shown in the pull request and the handoff.
+  - name: triage-pre-existing-issue
+    type: reason
+    agent: pre-existing-triage
+    tier: balanced
+    effort: medium
+    raised: preExisting
+    onAddress: recover
+    retries: 3
+    backoffSeconds: 30
+    onFailure: pause
+    prompt: prompts/pre-existing.md
+    outputs: schemas/pre-existing.schema.json
 recover:
   # Reached by every step of the flow that says onFailure: recover - a test, a fold, a
   # commit, a push, the wait for the checks; never a reasoning step, whose failure is tried again,
@@ -840,6 +886,7 @@ recover:
       retries: 3
       backoffSeconds: 30
       onFailure: pause
+      onPreExisting: triage-pre-existing-issue
       prompt: prompts/diagnose.md
       resumePrompt: prompts/rediagnose.md
       outputs: schemas/diagnosis.schema.json
@@ -863,6 +910,7 @@ recover:
       retries: 3
       backoffSeconds: 30
       onFailure: pause
+      onPreExisting: triage-pre-existing-issue
       prompt: prompts/redirect.md
       outputs: schemas/diagnosis.schema.json
     - name: remedies
@@ -885,6 +933,7 @@ recover:
           retries: 3
           backoffSeconds: 30
           onFailure: pause
+          onPreExisting: triage-pre-existing-issue
           prompt: prompts/remedy.md
           outputs: schemas/implement.schema.json
         - name: item-blocked
@@ -908,6 +957,7 @@ recover:
           retries: 3
           backoffSeconds: 30
           onFailure: pause
+          onPreExisting: triage-pre-existing-issue
           prompt: prompts/unblock.md
           outputs: schemas/implement.schema.json
         - name: verify
@@ -928,6 +978,7 @@ recover:
           retries: 3
           backoffSeconds: 30
           onFailure: pause
+          onPreExisting: triage-pre-existing-issue
           prompt: prompts/mend.md
           outputs: schemas/implement.schema.json
         - name: fold
@@ -967,6 +1018,7 @@ recover:
               retries: 3
               backoffSeconds: 30
               onFailure: pause
+              onPreExisting: triage-pre-existing-issue
               prompt: prompts/reconcile.md
               outputs: schemas/implement.schema.json
         - name: fold-checks
@@ -993,6 +1045,7 @@ recover:
           retries: 3
           backoffSeconds: 30
           onFailure: pause
+          onPreExisting: triage-pre-existing-issue
           prompt: prompts/anchors.md
           outputs: schemas/implement.schema.json
         - name: checkpoint
@@ -1037,6 +1090,7 @@ recover:
               retries: 3
               backoffSeconds: 30
               onFailure: pause
+              onPreExisting: triage-pre-existing-issue
               prompt: prompts/review-scope.md
               outputs: schemas/review-scope.schema.json
             - name: review
@@ -1052,6 +1106,7 @@ recover:
                   retries: 3
                   backoffSeconds: 30
                   onFailure: pause
+                  onPreExisting: triage-pre-existing-issue
                   prompt: prompts/review.md
                   outputs: schemas/review.schema.json
                 - name: errors
@@ -1064,6 +1119,7 @@ recover:
                   retries: 3
                   backoffSeconds: 30
                   onFailure: pause
+                  onPreExisting: triage-pre-existing-issue
                   prompt: prompts/review.md
                   outputs: schemas/review.schema.json
                 - name: tests
@@ -1076,6 +1132,7 @@ recover:
                   retries: 3
                   backoffSeconds: 30
                   onFailure: pause
+                  onPreExisting: triage-pre-existing-issue
                   prompt: prompts/review.md
                   outputs: schemas/review.schema.json
                 - name: types
@@ -1088,6 +1145,7 @@ recover:
                   retries: 3
                   backoffSeconds: 30
                   onFailure: pause
+                  onPreExisting: triage-pre-existing-issue
                   prompt: prompts/review.md
                   outputs: schemas/review.schema.json
                 - name: comments
@@ -1100,6 +1158,7 @@ recover:
                   retries: 3
                   backoffSeconds: 30
                   onFailure: pause
+                  onPreExisting: triage-pre-existing-issue
                   prompt: prompts/review.md
                   outputs: schemas/review.schema.json
                 - name: simplicity
@@ -1112,6 +1171,7 @@ recover:
                   retries: 3
                   backoffSeconds: 30
                   onFailure: pause
+                  onPreExisting: triage-pre-existing-issue
                   prompt: prompts/review.md
                   outputs: schemas/review.schema.json
             - name: revise
@@ -1124,6 +1184,7 @@ recover:
                   retries: 3
                   backoffSeconds: 30
                   onFailure: pause
+                  onPreExisting: triage-pre-existing-issue
                   prompt: prompts/rework.md
                   outputs: schemas/implement.schema.json
                 - name: reverify
@@ -1144,6 +1205,7 @@ recover:
                   retries: 3
                   backoffSeconds: 30
                   onFailure: pause
+                  onPreExisting: triage-pre-existing-issue
                   prompt: prompts/mend.md
                   outputs: schemas/implement.schema.json
                 - name: refold
@@ -1182,6 +1244,7 @@ recover:
                       retries: 3
                       backoffSeconds: 30
                       onFailure: pause
+                      onPreExisting: triage-pre-existing-issue
                       prompt: prompts/reconcile.md
                       outputs: schemas/implement.schema.json
                 - name: recheck
@@ -1208,6 +1271,7 @@ recover:
                   retries: 3
                   backoffSeconds: 30
                   onFailure: pause
+                  onPreExisting: triage-pre-existing-issue
                   prompt: prompts/anchors.md
                   outputs: schemas/implement.schema.json
                 - name: recheckpoint

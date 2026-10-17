@@ -14,6 +14,8 @@ them, and add no number they do not hold.
 2. Say what is happening now, in two or three sentences that someone who has not watched can follow: which stage of
    the work the run is at, and what the steps in progress are doing.
 3. Say what is done and what is left, by the work and not by counts alone.
+   Where the records' `pre-existing-issues.json` lists issues found that were there before the run, say how many, and
+   name each by its title.
 4. Say what the run waits for, where it waits: a question a person has to answer, with the command that answers it;
    a plan that is being updated; a check of the pull request.
 5. Say when it may finish, as the range the facts give and by what the facts say it rests on. Where the facts give

@@ -382,6 +382,27 @@ public sealed record WorkflowStep
     /// <summary>The reason step whose work this one goes on with.</summary>
     public string? Resume { get; init; }
 
+    /// <summary>
+    /// The step of the flow's top level that triages each issue this reason step reports as there before the run: one
+    /// that says <c>raised: preExisting</c>, raised once for each issue.
+    /// </summary>
+    public string? OnPreExisting { get; init; }
+
+    /// <summary>
+    /// What raises this reason step in place of the schedule: <see cref="RaisedByPreExisting"/>, an issue a step reported as
+    /// there before the run. A raised step is never scheduled.
+    /// </summary>
+    public string? Raised { get; init; }
+
+    /// <summary>The <c>raised</c> of a step raised by each pre-existing issue a step reports.</summary>
+    public const string RaisedByPreExisting = "preExisting";
+
+    /// <summary>
+    /// Where a step raised by a pre-existing issue sends one it decides to fix: <see cref="Recover"/>, the recovery, which
+    /// fixes it at its root as it fixes a failure.
+    /// </summary>
+    public string? OnAddress { get; init; }
+
     /// <summary>Whether the step is never given the author's work to go on with.</summary>
     public bool? Independent { get; init; }
 

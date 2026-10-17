@@ -33,6 +33,7 @@ log.
 - The gate of the last round. Passed: {rounds.gate.passed}
 - The mutation sweep of the last round. Passed: {rounds.mutations.passed}
 - What was put off: {deferrals.summary}
+- The issues found that were there before the run and were left, each proven, with its id: {run.preExisting}
 
 Where a line says that a step left no output, that thing was not read or did not run in this run: it is unknown, and never a pass.
 
