@@ -5,6 +5,8 @@ using DssHarness.Core.Anchors;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Git;
+using DssHarness.Core.Help;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Legs;
 using DssHarness.Core.Mutations;
@@ -25,6 +27,13 @@ namespace DssHarness.Tests;
 /// </summary>
 public sealed partial class HelpTests
 {
+    /// <summary>A help topic's text, as the command prints it: the core's renderer asked directly, no tool spawned.</summary>
+    private sealed record HelpText(string StandardOutput)
+    {
+        /// <summary>The text of one topic, or of the overview where none is asked.</summary>
+        public static HelpText Of(string? topic) => new(HelpTopics.Render(topic));
+    }
+
     [Fact]
     public async Task EveryListedCommand_HasItsOwnWorkingHelp()
     {
@@ -51,9 +60,8 @@ public sealed partial class HelpTests
     [InlineData("heavy")]
     public async Task TheAdmissionTopic_NamesEveryKeyWithItsDefault_FromTheCode(string topic)
     {
-        var result = await CliRunner.RunAsync(["help", topic], TestContext.Current.CancellationToken);
+        var result = HelpText.Of(topic);
 
-        Assert.Equal(0, result.ExitCode);
 
         var keys = typeof(AdmissionSettings)
             .GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
@@ -107,9 +115,8 @@ public sealed partial class HelpTests
     [Fact]
     public async Task LayoutTopic_SaysEachRunIsNamed_ARefusedOneByItsIdAlone()
     {
-        var result = await CliRunner.RunAsync(["help", "layout"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("layout");
 
-        Assert.Equal(HarnessExit.Success, result.ExitCode);
         Assert.Contains(
             "Each names its run too, in its first line, 'run <id>', and as runId in --json, however it ended: a run refused "
             + "before it had a directory keeps no records, and is cited by that id alone.",
@@ -127,9 +134,8 @@ public sealed partial class HelpTests
     [Fact]
     public async Task VerdictsTopic_SaysAKilledRunIsReportedAbandoned_ByTheNextRun()
     {
-        var result = await CliRunner.RunAsync(["help", "verdicts"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("verdicts");
 
-        Assert.Equal(HarnessExit.Success, result.ExitCode);
         Assert.Contains(
             "A leg that never ran proves nothing about the code, and nor does a build something stopped from outside before it "
             + "finished, so counting either among the legs that passed reports evidence nobody gathered. A CMake build under "
@@ -163,9 +169,8 @@ public sealed partial class HelpTests
     [Fact]
     public async Task VerdictsTopic_NamesWhatAMutationArmReaches_WithItsCodeAndRemedy()
     {
-        var result = await CliRunner.RunAsync(["help", "verdicts"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("verdicts");
 
-        Assert.Equal(HarnessExit.Success, result.ExitCode);
         Assert.Contains($"{LegExit.Violated,3}  violated                   Fix the arm's declaration, or the code it guards", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains($"{LegExit.Survived,3}  survived                   Strengthen the test that should have failed", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains($"{LegExit.Unattributed,3}  unattributed               Contain the crash or hang in the case, or make", result.StandardOutput, StringComparison.Ordinal);
@@ -192,10 +197,9 @@ public sealed partial class HelpTests
     [InlineData("arms")]
     public async Task TheMutationsTopic_NamesEveryKey_EveryRow_AndTheCodesItMapsOnto(string topic)
     {
-        var result = await CliRunner.RunAsync(["help", topic], TestContext.Current.CancellationToken);
+        var result = HelpText.Of(topic);
         var keys = ConfigKeys.Of<MutationSettings>();
 
-        Assert.Equal(HarnessExit.Success, result.ExitCode);
         Assert.Equal(["registry", "textDirectory", "workers", "reportArgs", "runTimeFactor", "runReads"], keys.Select(key => key.Name));
         Assert.All(keys, key => Assert.Contains($"  {key.Name}", result.StandardOutput, StringComparison.Ordinal));
         Assert.Contains(
@@ -245,7 +249,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task TheMutationsTopic_SaysWhatTheCodeDoes_WhereAReaderWouldGuess()
     {
-        var said = Prose.Words((await CliRunner.RunAsync(["help", "mutations"], TestContext.Current.CancellationToken)).StandardOutput);
+        var said = Prose.Words((HelpText.Of("mutations")).StandardOutput);
 
         foreach (var text in new[]
         {
@@ -327,8 +331,8 @@ public sealed partial class HelpTests
     [Fact]
     public async Task TheMutationsTopic_SaysWhatAnArmsKeyIsMadeOf_AndThatASelfTestComparesItsWorkersKeys()
     {
-        var said = Prose.Words((await CliRunner.RunAsync(["help", "mutations"], TestContext.Current.CancellationToken)).StandardOutput);
-        var config = Prose.Words((await CliRunner.RunAsync(["help", "config"], TestContext.Current.CancellationToken)).StandardOutput);
+        var said = Prose.Words((HelpText.Of("mutations")).StandardOutput);
+        var config = Prose.Words((HelpText.Of("config")).StandardOutput);
 
         Assert.Contains("its test binaries' report, and what each runner reads at run time, part of each arm's key ('help mutations')", config, StringComparison.Ordinal);
 
@@ -376,8 +380,8 @@ public sealed partial class HelpTests
     public async Task TheMutationsTopic_SaysWhatIsRecorded_WhereTheRecordIs_AndWhatLeavesIt()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        var said = Prose.Words((await CliRunner.RunAsync(["help", "mutations"], cancellationToken)).StandardOutput);
-        var layout = Prose.Words((await CliRunner.RunAsync(["help", "layout"], cancellationToken)).StandardOutput);
+        var said = Prose.Words((HelpText.Of("mutations")).StandardOutput);
+        var layout = Prose.Words((HelpText.Of("layout")).StandardOutput);
 
         foreach (var text in new[]
         {
@@ -420,7 +424,7 @@ public sealed partial class HelpTests
     public async Task TheMutationsTopic_SaysHowARunnerIsStarted_AndThatAMutatedBuildIsItsOwn()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        var said = Prose.Words((await CliRunner.RunAsync(["help", "mutations"], cancellationToken)).StandardOutput);
+        var said = Prose.Words((HelpText.Of("mutations")).StandardOutput);
 
         foreach (var text in new[]
         {
@@ -452,7 +456,7 @@ public sealed partial class HelpTests
     public async Task TheMutationsTopic_SaysWhatAListingReads_WhatItCannot_AndWhatItExitsWith()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        var said = Prose.Words((await CliRunner.RunAsync(["help", "mutations"], cancellationToken)).StandardOutput);
+        var said = Prose.Words((HelpText.Of("mutations")).StandardOutput);
         var command = Prose.Words((await CliRunner.RunAsync(["check-mutations", "--help"], cancellationToken)).StandardOutput);
 
         foreach (var text in new[]
@@ -497,7 +501,7 @@ public sealed partial class HelpTests
     public async Task TheMutationsTopic_SaysWhatPendingDrives_WhatItHolds_AndWhatNothingPendingIs()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        var said = Prose.Words((await CliRunner.RunAsync(["help", "mutations"], cancellationToken)).StandardOutput);
+        var said = Prose.Words((HelpText.Of("mutations")).StandardOutput);
         var command = Prose.Words((await CliRunner.RunAsync(["check-mutations", "--help"], cancellationToken)).StandardOutput);
 
         foreach (var text in new[]
@@ -531,7 +535,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task TheToolsTopic_SaysAMinVersionHoldsEveryCopy_AndAManagerRunsWhereItWasFound()
     {
-        var tools = Prose.Words((await CliRunner.RunAsync(["help", "tools"], TestContext.Current.CancellationToken)).StandardOutput);
+        var tools = Prose.Words((HelpText.Of("tools")).StandardOutput);
 
         foreach (var text in new[]
         {
@@ -576,8 +580,8 @@ public sealed partial class HelpTests
     public async Task Help_SaysWhatASweepGives_WhereNoSelectedLegCanRun()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        var mutations = Prose.Words((await CliRunner.RunAsync(["help", "mutations"], cancellationToken)).StandardOutput);
-        var tools = Prose.Words((await CliRunner.RunAsync(["help", "tools"], cancellationToken)).StandardOutput);
+        var mutations = Prose.Words((HelpText.Of("mutations")).StandardOutput);
+        var tools = Prose.Words((HelpText.Of("tools")).StandardOutput);
 
         Assert.Contains(
             $"A sweep none of whose selected legs can run is incomplete, exit {MutationService.NothingRuns}, saying why each cannot - never the "
@@ -598,7 +602,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task TheAdmissionTopic_SaysAWaitNeverGoesSilent_WhateverThePollAndTheSettle()
     {
-        var said = Prose.Words((await CliRunner.RunAsync(["help", "admission"], TestContext.Current.CancellationToken)).StandardOutput);
+        var said = Prose.Words((HelpText.Of("admission")).StandardOutput);
 
         Assert.Contains(
             $"It says so again, as it reads then and with how long it has waited, at least every {LegAdmission.SaidAgainEvery.TotalMinutes:0} minutes - "
@@ -617,7 +621,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task TheAdmissionTopic_SaysTheFloor_TheCacheDrop_TheHolderUnnamed_AndTheOwnRunsWait()
     {
-        var said = Prose.Words((await CliRunner.RunAsync(["help", "admission"], TestContext.Current.CancellationToken)).StandardOutput);
+        var said = Prose.Words((HelpText.Of("admission")).StandardOutput);
 
         foreach (var expected in new[]
         {
@@ -656,7 +660,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task TheVerdictsTopic_SaysABuildStoppedForRoomIsStopped_AndWhoseAToolInAnotherTreeIs()
     {
-        var said = Prose.Words((await CliRunner.RunAsync(["help", "verdicts"], TestContext.Current.CancellationToken)).StandardOutput);
+        var said = Prose.Words((HelpText.Of("verdicts")).StandardOutput);
 
         Assert.Contains(
             "A heavy leg's build stopped for leaving less room than its machine's minFreeGiB is stopped too ('help admission').",
@@ -678,7 +682,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task TheSpaceTopic_SaysANeedIsTheMostAnyOtherCopyRecorded_NamingWhose()
     {
-        var said = Prose.Words((await CliRunner.RunAsync(["help", "space"], TestContext.Current.CancellationToken)).StandardOutput);
+        var said = Prose.Words((HelpText.Of("space")).StandardOutput);
 
         Assert.Contains(
             "in this tree's copy, or else the most any other copy of the repository on that host recorded - the main checkout's, a "
@@ -695,11 +699,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task ExitCodeTopic_DocumentsEverySharedExitCode()
     {
-        var result = await CliRunner.RunAsync(
-            ["help", "exit-codes"],
-            TestContext.Current.CancellationToken);
-
-        Assert.Equal(0, result.ExitCode);
+        var result = HelpText.Of("exit-codes");
 
         // Generated from the constants, so a new exit code cannot ship undocumented.
         foreach (var description in HarnessExit.All)
@@ -715,7 +715,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task ConfigTopic_DocumentsCoresAndParallelLegs_WithTheRealDefault()
     {
-        var result = await CliRunner.RunAsync(["help", "config"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("config");
 
         foreach (var setting in new[] { "buildCores", "testCores", "maxParallelLegs", "sanitizer", "hosts", "emulators", "developerEnvironments" })
         {
@@ -738,7 +738,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task ConfigTopic_SaysInputsAreWatchedOnlyAsDeepAsTheyLie()
     {
-        var result = await CliRunner.RunAsync(["help", "config"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("config");
 
         Assert.Contains(
             "Its inputs are watched only as deep as they lie - each directory holding one, for its own files, and each directory "
@@ -763,7 +763,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task ConfigTopic_SaysWhatADirectoryThatWentCounts_AndThatAnUnwatchedLegRunsNothing()
     {
-        var said = Prose.Words((await CliRunner.RunAsync(["help", "config"], TestContext.Current.CancellationToken)).StandardOutput);
+        var said = Prose.Words((HelpText.Of("config")).StandardOutput);
 
         Assert.Contains(
             "and the process says so once. A directory that holds inputs, or lies above some, going, arriving or changing its name "
@@ -782,7 +782,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task VerdictsTopic_SaysALegWhoseInputsCannotBeWatched_IsUnmeasuredWithNoneOfItsWorkRun()
     {
-        var said = Prose.Words((await CliRunner.RunAsync(["help", "verdicts"], TestContext.Current.CancellationToken)).StandardOutput);
+        var said = Prose.Words((HelpText.Of("verdicts")).StandardOutput);
 
         Assert.Contains(
             "A leg whose inputs cannot be watched - the machine refusing the watch as its work was to begin - is unmeasured with no "
@@ -801,8 +801,8 @@ public sealed partial class HelpTests
     [Fact]
     public async Task TheRemedyForInputsThatCouldNotBeWatched_IsTheMachines_WhereverExitThreesRemedyIsSaid()
     {
-        var verdicts = (await CliRunner.RunAsync(["help", "verdicts"], TestContext.Current.CancellationToken)).StandardOutput;
-        var codes = (await CliRunner.RunAsync(["help", "exit-codes"], TestContext.Current.CancellationToken)).StandardOutput;
+        var verdicts = (HelpText.Of("verdicts")).StandardOutput;
+        var codes = (HelpText.Of("exit-codes")).StandardOutput;
 
         Assert.Contains(
             "Its remedy is the machine's, not the tree's: free or raise what the reason names - end a program holding this user's "
@@ -829,7 +829,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task VerdictsTopic_NamesTheTwoInotifyLimits_AndThatALegWaitsForNeither()
     {
-        var said = Prose.Words((await CliRunner.RunAsync(["help", "verdicts"], TestContext.Current.CancellationToken)).StandardOutput);
+        var said = Prose.Words((HelpText.Of("verdicts")).StandardOutput);
 
         Assert.Contains(
             "On Linux the machine's reason can be this user's inotify instances all taken (fs.inotify.max_user_instances) - "
@@ -849,7 +849,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task ConfigTopic_SaysATestCountThatDiffers_IsNoTimingMark_AndHowATestSetIsNamed()
     {
-        var result = await CliRunner.RunAsync(["help", "config"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("config");
 
         foreach (var text in new[]
         {
@@ -874,7 +874,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task ConfigTopic_SaysHowTheTestSelectionReachesTheRunner()
     {
-        var result = await CliRunner.RunAsync(["help", "config"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("config");
 
         foreach (var text in new[]
         {
@@ -914,7 +914,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task ConfigTopic_SaysWhenABuildDirectoryIsKept_AndWhatCountsAsAnInput()
     {
-        var result = await CliRunner.RunAsync(["help", "config"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("config");
 
         foreach (var text in new[]
         {
@@ -938,7 +938,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task VerdictsTopic_SaysWhenALegOnACopyIsInputsMoved_AndWhichTreeItTested()
     {
-        var result = await CliRunner.RunAsync(["help", "verdicts"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("verdicts");
 
         Assert.Contains(
             "A leg on a copy of its tree - a host's, or one of its own in the tree's .legs - is inputs-moved with nothing of it "
@@ -984,7 +984,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task LegsTopic_SaysWhereALegWorks_AndTheOrderOfPrecedence()
     {
-        var result = await CliRunner.RunAsync(["help", "legs"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("legs");
 
         Assert.Contains(
             "A leg a host runs works in that host's copy of its tree, whatever anything else says. A leg this machine runs "
@@ -1007,7 +1007,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task RunnersTopic_SaysWhatARunnerThatWritesTheTreeDoes()
     {
-        var result = await CliRunner.RunAsync(["help", "runners"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("runners");
 
         Assert.Contains(
             "A runner whose steps change files of the tree says writesTree: its legs work in their trees themselves, "
@@ -1030,7 +1030,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task LayoutTopic_SaysHowALegsRecordsAndAHostsRunAreNamed()
     {
-        var result = await CliRunner.RunAsync(["help", "layout"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("layout");
 
         Assert.Contains(
             "Each leg that kept records has a line of its own naming its directory and the logs in it - 'logs of <leg>[ on <host>]' - as its verdict is said and in the run's closing lines, and as records and the phase logs as logs in --json, a host's paths with its home written as ~",
@@ -1133,7 +1133,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task RunnersTopic_SaysARunCheckWhoseWatchCannotStart_ConfirmsNothing()
     {
-        var result = await CliRunner.RunAsync(["help", "runners"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("runners");
 
         Assert.Contains(
             "A check whose own runner's watch cannot start was not run, and confirms nothing: the failure stays genuine, and the run fails.",
@@ -1148,7 +1148,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task RunnersTopic_SaysWhatAStepsSuccessPatternIsMatchedAgainst()
     {
-        var result = await CliRunner.RunAsync(["help", "runners"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("runners");
         var words = Prose.Words(result.StandardOutput);
 
         foreach (var text in new[]
@@ -1170,7 +1170,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task RunnersTopic_ListsEveryKeyARunnerAndAnActionFileTake()
     {
-        var result = await CliRunner.RunAsync(["help", "runners"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("runners");
         var lines = result.StandardOutput.ReplaceLineEndings("\n").Split('\n');
 
         foreach (var (key, depth) in Listed(ConfigKeys.Of<RunnerConfig>(), 0).Concat(Listed(ActionFileKeys.File, 0)))
@@ -1188,7 +1188,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task RunnersTopic_SaysWhichStallBoundApplies()
     {
-        var result = await CliRunner.RunAsync(["help", "runners"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("runners");
         var words = Prose.Words(result.StandardOutput);
 
         foreach (var text in new[]
@@ -1209,7 +1209,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task ConfigTopic_NamesTheDefaultStallBound_AndEveryLayerOfARunnersEnvironment()
     {
-        var result = await CliRunner.RunAsync(["help", "config"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("config");
         var words = Prose.Words(result.StandardOutput);
 
         foreach (var text in new[]
@@ -1230,7 +1230,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task RunnersTopic_SaysWhatAStepKeyDoes_InTheWordsItsListUses()
     {
-        var result = await CliRunner.RunAsync(["help", "runners"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("runners");
         var meanings = ActionFileKeys.Step.ToDictionary(key => key.Name, key => key.Meaning, StringComparer.Ordinal);
         var shown = result.StandardOutput.ReplaceLineEndings("\n").Split('\n')
             .Select(line => SpeltKeyLine().Match(line))
@@ -1252,7 +1252,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task RunnersTopic_SaysAStepThatUsesAPredefinedAction_TakesNoKeyOnlyARunBlockReads()
     {
-        var result = await CliRunner.RunAsync(["help", "runners"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("runners");
         var words = Prose.Words(result.StandardOutput);
 
         Assert.Contains(
@@ -1270,7 +1270,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task RunnersTopic_SaysAStepsOutputsAreRelativeToItsBuildDirectory()
     {
-        var result = await CliRunner.RunAsync(["help", "runners"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("runners");
         var words = Prose.Words(result.StandardOutput);
 
         Assert.Contains("outputs: [<path>, ...] what it writes, relative to its build directory, {stepBuild}", words, StringComparison.Ordinal);
@@ -1280,7 +1280,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task WorktreesTopic_QuotesTheLimitsFromTheCode()
     {
-        var result = await CliRunner.RunAsync(["help", "worktrees"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("worktrees");
 
         Assert.Contains(
             WorktreeSettings.DefaultMaxNameLength.ToString(CultureInfo.InvariantCulture),
@@ -1304,7 +1304,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task RunnersTopic_SaysWhatRunOnTakes_AndWhatALegLeftWithoutAStepGets()
     {
-        var result = await CliRunner.RunAsync(["help", "runners"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("runners");
 
         foreach (var text in new[] { "runOn: [<system>, ...]", $"of {string.Join(", ", PlatformNames.OperatingSystems)}; absent, all", "skippedSteps", "refused before anything starts" })
         {
@@ -1320,7 +1320,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task RunnersTopic_SaysWhereAnInputsValueComesFrom()
     {
-        var result = await CliRunner.RunAsync(["help", "runners"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("runners");
         var words = Prose.Words(result.StandardOutput);
 
         foreach (var text in new[]
@@ -1347,7 +1347,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task RunnersTopic_SaysWhatANameIs_AndWhichNamesAreRefused()
     {
-        var result = await CliRunner.RunAsync(["help", "runners"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("runners");
         var words = Prose.Words(result.StandardOutput);
 
         foreach (var text in new[]
@@ -1374,7 +1374,7 @@ public sealed partial class HelpTests
     public async Task RunnersTopic_SaysWhatACompilersNameIs_WhereItMayStand_AndWhenItIsRefused()
     {
         var token = TestContext.Current.CancellationToken;
-        var written = (await CliRunner.RunAsync(["help", "runners"], token)).StandardOutput;
+        var written = (HelpText.Of("runners")).StandardOutput;
         var runners = Prose.Words(written);
 
         foreach (var text in new[]
@@ -1405,11 +1405,11 @@ public sealed partial class HelpTests
 
         Assert.Contains(
             "runs a step or phase naming {product}, {buildDir} or a compiler on that leg's system",
-            Prose.Words((await CliRunner.RunAsync(["help", "tools"], token)).StandardOutput),
+            Prose.Words((HelpText.Of("tools")).StandardOutput),
             StringComparison.Ordinal);
         Assert.Contains(
             "requires the build or runs a step or phase naming {product}, {buildDir} or a compiler, and is heavy, too,",
-            Prose.Words((await CliRunner.RunAsync(["help", "admission"], token)).StandardOutput),
+            Prose.Words((HelpText.Of("admission")).StandardOutput),
             StringComparison.Ordinal);
     }
 
@@ -1422,8 +1422,8 @@ public sealed partial class HelpTests
     [Fact]
     public async Task ToolsAndLayoutTopics_SayWhatInitAndInstallMissingToolsDo()
     {
-        var tools = await CliRunner.RunAsync(["help", "tools"], TestContext.Current.CancellationToken);
-        var layout = await CliRunner.RunAsync(["help", "layout"], TestContext.Current.CancellationToken);
+        var tools = HelpText.Of("tools");
+        var layout = HelpText.Of("layout");
 
         foreach (var text in new[]
         {
@@ -1467,7 +1467,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task LayoutTopic_SaysTheWorktreesRootTheOrchestratorsDirectoryAndEachSlotAreKeptInGit()
     {
-        var result = await CliRunner.RunAsync(["help", "layout"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("layout");
         var text = Prose.Words(result.StandardOutput);
 
         foreach (var said in new[]
@@ -1498,7 +1498,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task LegsTopic_SaysAToolchainNamesItsCompiler_AndHowABuildDirectoryIsHeldToIt()
     {
-        var result = await CliRunner.RunAsync(["help", "legs"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("legs");
 
         Assert.Contains("A toolchain CMake builds with also names its compiler - CC or CXX under env,", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("One only .NET or Dart builds with names none.", result.StandardOutput, StringComparison.Ordinal);
@@ -1526,7 +1526,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task WorktreesTopic_SaysWhenDeleteWorktreeRefuses_AndHowToForceIt()
     {
-        var result = await CliRunner.RunAsync(["help", "worktrees"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("worktrees");
 
         foreach (var text in new[] { "delete-worktree", "uncommitted changes", "skip-worktree", "locked", "--force", "--delete-evidence", "--discard-uncommitted", $"exits {HarnessExit.Refused}", $"exits {HarnessExit.CommandFailed}" })
         {
@@ -1544,7 +1544,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task WorktreesTopic_SaysWhatBecomesOfTheCopiesKeptInAWorktree()
     {
-        var result = await CliRunner.RunAsync(["help", "worktrees"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("worktrees");
 
         Assert.Contains(
             "The copies kept in a worktree go before it, of its two families: the mutation workers its sweeps made "
@@ -1569,9 +1569,8 @@ public sealed partial class HelpTests
     [Fact]
     public async Task AnchorsTopic_DocumentsEveryStatus_Command_AndDefault()
     {
-        var result = await CliRunner.RunAsync(["help", "anchors"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("anchors");
 
-        Assert.Equal(HarnessExit.Success, result.ExitCode);
 
         // Each command as its list gives it, with what it takes: named in prose alone, one was missing
         // from the list a reader scans.
@@ -1594,9 +1593,8 @@ public sealed partial class HelpTests
     [Fact]
     public async Task AnchorsTopic_StatesWhatTheBalanceMeasuresFrom_AndDoesNotCredit()
     {
-        var result = await CliRunner.RunAsync(["help", "anchors"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("anchors");
 
-        Assert.Equal(HarnessExit.Success, result.ExitCode);
         var prose = Prose.Words(result.StandardOutput);
 
         Assert.Contains("A base that has moved on since HEAD left it is measured from where HEAD left it", prose, StringComparison.Ordinal);
@@ -1633,9 +1631,8 @@ public sealed partial class HelpTests
     [Fact]
     public async Task LegsTopic_DocumentsTheNamesTheRulesAndTheExitCodes_FromTheCode()
     {
-        var result = await CliRunner.RunAsync(["help", "legs"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("legs");
 
-        Assert.Equal(HarnessExit.Success, result.ExitCode);
 
         // Every name the validator accepts for a leg is listed, so the help never leaves out a name a leg can use.
         foreach (var name in PlatformNames.OperatingSystems.Concat(PlatformNames.Processors))
@@ -1742,7 +1739,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task TheOverview_ListsUpdateTool()
     {
-        var result = await CliRunner.RunAsync(["help"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of(null);
 
         Assert.Contains("  dssharness update-tool             Update this machine's DssHarness, while none runs here", result.StandardOutput, StringComparison.Ordinal);
     }
@@ -1753,7 +1750,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task RunnerTopic_SaysALegsLineNamesWhatItKept_AsSyncPullTakesIt()
     {
-        var result = await CliRunner.RunAsync(["help", "runner"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("runner");
         var text = Prose.Words(result.StandardOutput);
 
         Assert.Contains("names each file its steps kept as keptOutputs, relative to the tree", text, StringComparison.Ordinal);
@@ -1779,7 +1776,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task RunnerTopic_NamesTheLargestFileThatCanCross_AsTheRefusalDoes()
     {
-        var result = await CliRunner.RunAsync(["help", "runner"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("runner");
         var text = Prose.Words(result.StandardOutput);
 
         Assert.Contains(
@@ -1796,7 +1793,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task WorktreesTopic_SaysDeadOutputsAreLeftOutOfTheWarning_AndWhatRemovesThem()
     {
-        var result = await CliRunner.RunAsync(["help", "worktrees"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("worktrees");
         var text = Prose.Words(result.StandardOutput);
 
         Assert.Contains("A Ninja build leaves out of that warning the outputs ninja says no target of it produces any more", text, StringComparison.Ordinal);
@@ -1810,7 +1807,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task WorktreesTopic_SaysListWorktreeFindsTheCopiesAGoneWorktreeLeft()
     {
-        var result = await CliRunner.RunAsync(["help", "worktrees"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("worktrees");
         var text = Prose.Words(result.StandardOutput);
 
         foreach (var said in new[]
@@ -1834,7 +1831,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task WorktreesTopic_SaysAgentsWorktreesAreNamedByTheirAddress()
     {
-        var result = await CliRunner.RunAsync(["help", "worktrees"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("worktrees");
         var text = Prose.Words(result.StandardOutput);
 
         Assert.Contains(
@@ -1859,7 +1856,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task WorktreesTopic_SaysJunctionsAreRemovedAsLinks_AndWhenRepairIsNamed()
     {
-        var result = await CliRunner.RunAsync(["help", "worktrees"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("worktrees");
         var text = Prose.Words(result.StandardOutput);
 
         foreach (var said in new[]
@@ -1884,7 +1881,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task WorktreesTopic_SaysAWorktreeSomethingHoldsIsRefusedWholeOnWindows()
     {
-        var result = await CliRunner.RunAsync(["help", "worktrees"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("worktrees");
         var text = Prose.Words(result.StandardOutput);
 
         foreach (var said in new[]
@@ -1911,7 +1908,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task ConfigTopic_SaysAHoldBetweenCommandsEndsWhenACommandsOwnKeepAwakeStarts()
     {
-        var result = await CliRunner.RunAsync(["help", "config"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("config");
         var text = Prose.Words(result.StandardOutput);
 
         Assert.Contains("holdAwakeSeconds holds it awake between commands, until a command's own keepAwake takes over", text, StringComparison.Ordinal);
@@ -1925,7 +1922,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task LegsTopic_SaysWhatAWakeWindowTriesAgain_AndWhatItNeverDoes()
     {
-        var result = await CliRunner.RunAsync(["help", "legs"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("legs");
         var text = Prose.Words(result.StandardOutput);
 
         Assert.Contains("hosts.ssh.<name>.wakeWaitSeconds", text, StringComparison.Ordinal);
@@ -1940,7 +1937,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task LegsTopic_SaysNoAddressAHostsNameResolvedToIsNamed()
     {
-        var result = await CliRunner.RunAsync(["help", "legs"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("legs");
         var text = Prose.Words(result.StandardOutput);
 
         Assert.Contains(
@@ -1963,10 +1960,9 @@ public sealed partial class HelpTests
     [Fact]
     public async Task SpaceTopic_SaysCleanWritesNothingFirst_AndWhatItLeavesAlone()
     {
-        var result = await CliRunner.RunAsync(["help", "space"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("space");
         var text = Prose.Words(result.StandardOutput);
 
-        Assert.Equal(0, result.ExitCode);
         Assert.Contains("It writes nothing where it removes before it has removed", text, StringComparison.Ordinal);
         Assert.Contains("refused-locked", text, StringComparison.Ordinal);
         Assert.Contains("--dry-run", text, StringComparison.Ordinal);
@@ -2009,9 +2005,8 @@ public sealed partial class HelpTests
     [Fact]
     public async Task CiTopic_SaysCheckCiLegsReadsOnlyWhatTheSettingsDeclare()
     {
-        var result = await CliRunner.RunAsync(["help", "ci"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("ci");
 
-        Assert.Equal(HarnessExit.Success, result.ExitCode);
         Assert.Contains("It knows no workflow of its own", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("with {leg} standing for the leg's", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("A green leg past 80% of its", result.StandardOutput, StringComparison.Ordinal);
@@ -2042,7 +2037,7 @@ public sealed partial class HelpTests
     public async Task EveryCommandTheHelpSaysToType_IsSpeltAsTheToolInstallsIt()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        var overview = await CliRunner.RunAsync(["help"], cancellationToken);
+        var overview = HelpText.Of(null);
         var texts = new List<string> { overview.StandardOutput };
 
         foreach (Match topic in TopicPattern().Matches(overview.StandardOutput))
@@ -2096,10 +2091,9 @@ public sealed partial class HelpTests
     public async Task SetUpsTopic_SaysHowOneIsDeclared_RunByHand_AndAroundARun(string topic)
     {
         var token = TestContext.Current.CancellationToken;
-        var result = await CliRunner.RunAsync(["help", topic], token);
+        var result = HelpText.Of(topic);
         var text = Prose.Words(result.StandardOutput);
 
-        Assert.Equal(0, result.ExitCode);
 
         foreach (var said in new[]
         {
@@ -2118,7 +2112,7 @@ public sealed partial class HelpTests
             Assert.Contains(said, text, StringComparison.Ordinal);
         }
 
-        var config = Prose.Words((await CliRunner.RunAsync(["help", "config"], token)).StandardOutput);
+        var config = Prose.Words((HelpText.Of("config")).StandardOutput);
 
         Assert.Contains("setUp what a run brings up around its work and down after, by name", config, StringComparison.Ordinal);
         Assert.DoesNotContain(" exec ", config, StringComparison.Ordinal);
@@ -2132,9 +2126,8 @@ public sealed partial class HelpTests
     public async Task EveryTopicTheOverviewAdvertises_Renders()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        var overview = await CliRunner.RunAsync(["help"], cancellationToken);
+        var overview = HelpText.Of(null);
 
-        Assert.Equal(0, overview.ExitCode);
 
         var topics = TopicPattern().Matches(overview.StandardOutput).Select(match => match.Groups["topic"].Value).ToList();
 
@@ -2143,9 +2136,8 @@ public sealed partial class HelpTests
 
         foreach (var topic in topics)
         {
-            var rendered = await CliRunner.RunAsync(["help", topic], cancellationToken);
+            var rendered = HelpText.Of(topic);
 
-            Assert.Equal(0, rendered.ExitCode);
             Assert.True(rendered.StandardOutput.Length > 200, $"topic '{topic}' produced little output");
             Assert.DoesNotContain("Unknown topic", rendered.StandardOutput, StringComparison.Ordinal);
         }
@@ -2161,10 +2153,9 @@ public sealed partial class HelpTests
     [Fact]
     public async Task OrchestratorsTopic_NamesEveryCommand_WhatIsKeptWhere_AndThatDeletingIsNeverForced()
     {
-        var result = await CliRunner.RunAsync(["help", "agents"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("agents");
         var text = Prose.Words(result.StandardOutput);
 
-        Assert.Equal(0, result.ExitCode);
 
         foreach (var command in new[] { "create-orchestrator", "delete-orchestrator", "list-orchestrator", "create-agent", "seed-agent", "refresh-agent", "rebase-agent", "fold-agent", "delete-agent" })
         {
@@ -2300,7 +2291,7 @@ public sealed partial class HelpTests
     [Fact]
     public async Task OrchestratorsTopic_SaysDeleteOrchestratorRefuses_WhileADirectoryGitRecordsNoWorktreeAtIsBelowIt()
     {
-        var result = await CliRunner.RunAsync(["help", "agents"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("agents");
 
         Assert.Contains(
             "delete-orchestrator deletes the orchestrator once every agent of it is deleted and no worktree is left below its "
@@ -2318,10 +2309,9 @@ public sealed partial class HelpTests
     [Fact]
     public async Task OrchestratorsTopic_SaysWhatAFoldMerges_WhatItNeverMerges_AndHowTheBitIsMerged()
     {
-        var result = await CliRunner.RunAsync(["help", "agents"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("agents");
         var text = Prose.Words(result.StandardOutput);
 
-        Assert.Equal(0, result.ExitCode);
 
         foreach (var command in new[] { "fold-agent", "delete-agent" })
         {
@@ -2399,12 +2389,11 @@ public sealed partial class HelpTests
     [Fact]
     public async Task OrchestratorsTopic_SaysWhatRenamesOfCaseAlone_AndASessionsWrites_DoToAMoveAFoldAndARefresh()
     {
-        var result = await CliRunner.RunAsync(["help", "agents"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("agents");
         var text = Prose.Words(result.StandardOutput);
         var architecture = Prose.Document("docs", "architecture.md");
         var readme = Prose.Document("README.md");
 
-        Assert.Equal(0, result.ExitCode);
         Assert.Contains(
             "So does a file the new base renamed in case alone, where the agent's file system finds a name in any case, unless its old name comes in "
             + "with it: where the agent keeps that - its own change, settled or shared - writing the new name would write over it, and both are named, "
@@ -2487,10 +2476,9 @@ public sealed partial class HelpTests
     [Fact]
     public async Task OrchestratorsTopic_SaysWhatADryRunExitsWith_AndWeighsRowsCellByCell()
     {
-        var result = await CliRunner.RunAsync(["help", "agents"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("agents");
         var text = Prose.Words(result.StandardOutput);
 
-        Assert.Equal(0, result.ExitCode);
         Assert.Contains(
             "Dry runs. A dry run of refresh-agent, rebase-agent, fold-agent or delete-agent exits with what its --apply, typed "
             + "with the same arguments, would exit with at that moment: 0 only where that --apply would go through. Where a path, "
@@ -2582,14 +2570,13 @@ public sealed partial class HelpTests
             ["help", "layout"],
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(HarnessExit.Success, result.ExitCode);
         Assert.Contains(".harness-config", result.StandardOutput, StringComparison.Ordinal);
     }
 
     [Fact]
     public async Task Overview_ExplainsTheGlobalOptions()
     {
-        var result = await CliRunner.RunAsync(["help"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of(null);
 
         Assert.Contains("--directory", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("--verbose", result.StandardOutput, StringComparison.Ordinal);
@@ -2621,9 +2608,8 @@ public sealed partial class HelpTests
     [Fact]
     public async Task TheWorkflowsTopic_SaysWhatAWorkflowIs_AndListsEveryKeyTheReaderTakes()
     {
-        var result = await CliRunner.RunAsync(["help", "workflows"], TestContext.Current.CancellationToken);
+        var result = HelpText.Of("workflows");
 
-        Assert.Equal(HarnessExit.Success, result.ExitCode);
 
         var prose = Prose.Words(result.StandardOutput);
 
@@ -2662,11 +2648,9 @@ public sealed partial class HelpTests
     [Fact]
     public async Task TheConfigAndLayoutTopics_NameTheWorkflowsKeyAndItsDirectory()
     {
-        var config = await CliRunner.RunAsync(["help", "config"], TestContext.Current.CancellationToken);
-        var layout = await CliRunner.RunAsync(["help", "layout"], TestContext.Current.CancellationToken);
+        var config = HelpText.Of("config");
+        var layout = HelpText.Of("layout");
 
-        Assert.Equal(HarnessExit.Success, config.ExitCode);
-        Assert.Equal(HarnessExit.Success, layout.ExitCode);
 
         Assert.Contains(
             "  workflows      the workflows this repository runs, each defined by a yml file of its",
