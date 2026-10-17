@@ -53,7 +53,9 @@ internal static class HostHoldCommand
 
             await using (session.ConfigureAwait(false))
             {
-                await session.RunAsync(
+                // A hold that could not be kept ends with 0, its body's own answer; anything else that ended it - a
+                // defect among them - exits with the code the session gave it, as every command does.
+                var completion = await session.RunAsync(
                     async (scope, token) =>
                     {
                         var holds = scope.Services.GetRequiredService<HoldAwakeService>();
@@ -70,9 +72,9 @@ internal static class HostHoldCommand
                         return new CommandOutcome(HarnessExit.Success, "held") with { Quiet = true };
                     },
                     cancellationToken).ConfigureAwait(false);
-            }
 
-            return HarnessExit.Success;
+                return completion.ExitCode;
+            }
         });
 
         return command;

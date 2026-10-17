@@ -477,8 +477,8 @@ public static class OrchestrationReports
     /// <summary>
     /// The outcome of fold-agent, delete-agent, refresh-agent or rebase-agent as one JSON document, the whole of standard
     /// output: its facts serialised member by member - its code, its last line, its lines, with what the code cannot say:
-    /// what is wanted of the caller, who holds what its --apply needs, each consent it lacks, why it is refused, and what
-    /// a fold wrote.
+    /// what is wanted of the caller, who holds what its --apply needs, each consent it lacks, why it is refused, what a
+    /// fold wrote, and what the plan of a refresh or a move of an agent's base names.
     /// </summary>
     /// <param name="outcome">The outcome as the command answered it, which keeps everything but its document.</param>
     /// <param name="facts">What the answer knows beyond its lines: the document is this, serialised.</param>
@@ -544,7 +544,8 @@ public static class OrchestrationReports
             lines,
             facts.Needs,
             facts.Refusals,
-            facts.Folded);
+            facts.Folded,
+            facts.Planned);
 
         return outcome with { Data = [document], Quiet = true, Facts = facts };
     }
@@ -553,12 +554,12 @@ public static class OrchestrationReports
     /// The document fold-agent, delete-agent, refresh-agent or rebase-agent answers with where it stops before it weighs
     /// anything - a --directory that does not exist, a repository not initialised, a usage error, an agent that is not
     /// there: the same document, empty - nothing applied, no request weighed, nobody asked who holds anything, no lines,
-    /// nothing needed, no reason typed and nothing folded - with the code it exits with and the line it ends on.
+    /// nothing needed, no reason typed, nothing folded and no plan - with the code it exits with and the line it ends on.
     /// </summary>
     /// <param name="exitCode">The code the command exits with.</param>
     /// <param name="summary">The line it ends on.</param>
     public static string Stopped(int exitCode, string summary)
-        => AgentDocument(exitCode, summary, applied: false, standing: null, heldNow: null, heldUnread: null, [], needs: [], refusals: [], folded: null);
+        => AgentDocument(exitCode, summary, applied: false, standing: null, heldNow: null, heldUnread: null, [], needs: [], refusals: [], folded: null, planned: null);
 
     /// <summary>The name a consent's kind has in the document.</summary>
     /// <param name="kind">The kind.</param>
@@ -591,7 +592,8 @@ public static class OrchestrationReports
         JsonArray lines,
         IReadOnlyList<ConsentKind> needs,
         IReadOnlyList<RefusalKind> refusals,
-        AgentFolded? folded)
+        AgentFolded? folded,
+        AgentPlanned? planned)
         => new JsonObject
         {
             ["exitCode"] = exitCode,
@@ -616,10 +618,21 @@ public static class OrchestrationReports
                     ["written"] = Texts(folded.Written),
                     ["deleted"] = Texts(folded.Deleted),
                     ["merged"] = Texts(folded.Merged),
+                    ["armRegistry"] = folded.ArmRegistry,
                     ["handed"] = new JsonArray([.. folded.Handed.Select(handed => (JsonNode?)new JsonObject { ["path"] = handed.Path, ["digest"] = handed.Digest })]),
                     ["registries"] = Texts(folded.Registries),
                     ["rows"] = Texts(folded.Rows),
                     ["overCells"] = Texts(folded.OverCells),
+                },
+            ["planned"] = planned is null
+                ? null
+                : new JsonObject
+                {
+                    ["taken"] = Texts(planned.Taken),
+                    ["kept"] = Texts(planned.Kept),
+                    ["handed"] = Texts(planned.Handed),
+                    ["merged"] = Texts(planned.Merged),
+                    ["armRegistry"] = planned.ArmRegistry,
                 },
         }.ToJsonString(ReportJson.Options);
 

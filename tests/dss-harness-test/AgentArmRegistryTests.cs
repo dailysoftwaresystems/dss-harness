@@ -41,6 +41,11 @@ public sealed class AgentArmRegistryTests
 
     private static SeedRecord Seed(OrchestrationKit kit) => kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, Agent)!;
 
+    private static AgentVerbFacts Facts(CommandOutcome outcome) => Assert.IsType<AgentVerbFacts>(outcome.Facts);
+
+    /// <summary>The three texts arm <paramref name="id"/> cites, in path order.</summary>
+    private static string[] TextsOf(string id) => [$"{Texts}/{id}.after", $"{Texts}/{id}.before", $"{Texts}/{id}.diag"];
+
     private static string Digest(string text) => FileContentHash.Of(Encoding.UTF8.GetBytes(text));
 
     /// <summary>Writes the three texts arm <paramref name="id"/> cites into <paramref name="root"/>.</summary>
@@ -119,6 +124,10 @@ public sealed class AgentArmRegistryTests
         Assert.Equal("x <= beta", OrchestrationKit.Read(worktree, $"{Texts}/beta.before"));
         Assert.Equal(Text(Arm("alpha"), Arm("beta")), OrchestrationKit.Read(kit.Main, Registry));
         Assert.Equal(Digest(Text(Arm("alpha"), Arm("beta"))), Seed(kit).Paths[Registry]);
+
+        // What its plan named rides each answer: the texts handed, and the registry merged by arm apart from what is merged as text.
+        AgentVerbFactsTests.Same(new AgentPlanned([], [], TextsOf("beta"), [], Registry), Facts(dry).Planned);
+        AgentVerbFactsTests.Same(new AgentPlanned([], [], TextsOf("beta"), [], Registry), Facts(applied).Planned);
     }
 
     /// <summary>
@@ -237,6 +246,9 @@ public sealed class AgentArmRegistryTests
         Assert.Equal(merged, OrchestrationKit.Read(worktree, Registry));
         Assert.Equal("x <= gamma", OrchestrationKit.Read(kit.Main, $"{Texts}/gamma.before"));
         Assert.Equal(Digest(merged), Seed(kit).Paths[Registry]);
+
+        // What the fold did rides its answer: the texts written, and the registry merged by arm apart from what is merged as text.
+        AgentVerbFactsTests.Same(new AgentFolded(TextsOf("gamma"), [], [], Registry, [], [], [], []), Facts(applied).Folded);
     }
 
     /// <summary>An arm both trees changed differently refuses the fold, nothing written, the arm shown with each side's version.</summary>
@@ -477,6 +489,9 @@ public sealed class AgentArmRegistryTests
         Assert.Equal(Text(Arm("alpha"), Arm("beta"), Arm("gamma")), OrchestrationKit.Read(worktree, Registry));
         Assert.Equal("x <= beta", OrchestrationKit.Read(worktree, $"{Texts}/beta.before"));
         Assert.False(Seed(kit).Paths.ContainsKey(Registry));
+
+        // What its plan named rides its answer: the texts the new base brings, and the registry merged by arm apart from what is merged as text.
+        AgentVerbFactsTests.Same(new AgentPlanned(TextsOf("beta"), [], [], [], Registry), Facts(moved).Planned);
     }
 
     /// <summary>A registry the agent made where the new base brings one is merged by arm from nothing, on a move as in a fold.</summary>

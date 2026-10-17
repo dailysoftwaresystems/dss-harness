@@ -33,6 +33,33 @@ public sealed class LedgerReportTests
     }
 
     /// <summary>
+    /// A run is a lock to wait on only where every leg that did not pass met a lock another run holds: one where a leg
+    /// failed beside a leg refused-locked exits 13 all the same - refused-locked ranks above a failure - and would fail
+    /// again once the lock was let go, so it is no lock to wait on; nor is one with a leg unreached, or still running.
+    /// </summary>
+    [Theory]
+    [InlineData(LegVerdict.Passed, null, OutcomeCause.LockHeld)]
+    [InlineData(LegVerdict.SkippedNotSelected, null, OutcomeCause.LockHeld)]
+    [InlineData(LegVerdict.RefusedLocked, null, OutcomeCause.LockHeld)]
+    [InlineData(LegVerdict.Failed, null, OutcomeCause.None)]
+    [InlineData(LegVerdict.Violated, null, OutcomeCause.None)]
+    [InlineData(LegVerdict.SkippedUnavailable, null, OutcomeCause.None)]
+    [InlineData(LegVerdict.Passed, "c", OutcomeCause.None)]
+    public void ARunIsALockToWaitOn_OnlyWhereEveryLegThatDidNotPassMetAHeldLock(LegVerdict other, string? unfinished, OutcomeCause cause)
+    {
+        var report = LedgerReport.From(
+        [
+            Entry("a", LegVerdict.RefusedLocked, TimeSpan.FromSeconds(1), "held by run r1"),
+            Entry("b", other, TimeSpan.FromSeconds(1), string.Empty),
+        ],
+        durationWarningFactor: 0);
+        IReadOnlyList<string> left = unfinished is null ? [] : [unfinished];
+
+        Assert.Equal(HarnessExit.Refused, report.ExitCodeGiven(cancelled: false, left));
+        Assert.Equal(cause, report.CauseGiven(cancelled: false, left));
+    }
+
+    /// <summary>
     /// The document names where the run keeps its records, and a leg another host ran names that
     /// host's own; a run that kept none, and a leg this machine ran, name nothing.
     /// </summary>

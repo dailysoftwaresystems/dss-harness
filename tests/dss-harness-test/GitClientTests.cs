@@ -3013,6 +3013,27 @@ public sealed class GitClientProtocolTests
             Assert.Single(requests).Arguments);
     }
 
+    /// <summary>
+    /// Commits counted in a repository's git directory are asked for with every revision before a '--': that directory is
+    /// the command's work tree too, where a file named HEAD always sits, and a git that reads a name both ways refuses it
+    /// as ambiguous rather than guessing.
+    /// </summary>
+    [Fact]
+    public async Task CountRepositoryCommitsAsync_EndsTheRevisionsWithADoubleDash()
+    {
+        var (git, requests) = Scripted(Exited(0, "3\n"));
+
+        var counted = await git.CountRepositoryCommitsAsync(
+            "/repo/.git",
+            ["HEAD", "--branches", "--not", "--remotes", "--tags"],
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(3, counted);
+        Assert.Equal(
+            ["--git-dir=/repo/.git", "--work-tree=/repo/.git", "rev-list", "--count", "HEAD", "--branches", "--not", "--remotes", "--tags", "--"],
+            Assert.Single(requests).Arguments);
+    }
+
     /// <summary>Whether a clone is shallow is git's answer, and no answer where git fails or echoes a question it does not know.</summary>
     [Fact]
     public async Task IsShallowAsync_IsGitsAnswer_OrNoneWhereGitGivesNone()

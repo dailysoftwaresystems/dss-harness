@@ -316,6 +316,9 @@ public sealed class LegRunService(
                 runDirectory);
         }
 
+        // Made as it was claimed: a front end is told where the run's records are as they begin, not only once it ends.
+        _output.Publish(new RecordWritten("run directory", runDirectory));
+
         // Trees another run holds, by tree: a verdict for the legs that need one, as a variant
         // another run holds is, and no end to the legs that do not.
         var lockedTrees = new ConcurrentDictionary<string, string>(LegPlan.TreeKeyComparer);

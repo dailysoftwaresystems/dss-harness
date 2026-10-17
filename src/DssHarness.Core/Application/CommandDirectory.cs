@@ -24,14 +24,18 @@ public static class CommandDirectory
     /// Resolves <paramref name="requested"/> to an absolute path and confirms it exists.
     /// </summary>
     /// <param name="requested">The directory as it was asked for; <see langword="null"/> where the command was given none.</param>
-    /// <param name="current">The process's current directory, read per call, which stands in where none was asked for.</param>
+    /// <param name="current">
+    /// Reads the process's current directory, which stands in where none was asked for and makes a relative one whole:
+    /// asked only then, never where the directory asked for is whole already, so a shell standing in a directory since
+    /// removed - whose current directory Linux and macOS cannot read - can still name another.
+    /// </param>
     /// <param name="fileSystem">Says whether the directory is there.</param>
     /// <remarks>
     /// Done once, before a command's body runs. Without the existence check, the first service to start a child
     /// process in a missing directory fails with an error that names the wrong cause, and a relative path would reach
     /// every message as a fragment rather than the directory the user meant.
     /// </remarks>
-    public static ResolvedDirectory Resolve(string? requested, string current, IFileSystem fileSystem)
+    public static ResolvedDirectory Resolve(string? requested, Func<string> current, IFileSystem fileSystem)
     {
         ArgumentNullException.ThrowIfNull(current);
         ArgumentNullException.ThrowIfNull(fileSystem);
@@ -43,13 +47,14 @@ public static class CommandDirectory
             return new(null, $"'{requested}' is not a usable directory path: it names no directory.");
         }
 
-        var given = requested ?? current;
+        var here = requested is not null && Path.IsPathFullyQualified(requested) ? null : current();
+        var given = requested ?? here!;
 
         try
         {
             // Relative against the current directory it was handed, not the process's own: the reader of that
             // directory is the seam, and what it answers is what "here" means here.
-            var directory = Path.GetFullPath(given, current);
+            var directory = here is null ? Path.GetFullPath(given) : Path.GetFullPath(given, here);
 
             return fileSystem.DirectoryExists(directory)
                 ? new(directory, null)

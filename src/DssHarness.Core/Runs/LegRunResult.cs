@@ -8,7 +8,10 @@ namespace DssHarness.Core.Runs;
 /// where its records are - the answer of a command that runs legs, in the terms its caller answers in.
 /// </summary>
 /// <param name="Command">The command the run reports under.</param>
-/// <param name="Run">The run, begun before anything could refuse it.</param>
+/// <param name="Run">
+/// The run, begun before anything could refuse it; <see langword="null"/> for a command that keeps no runs - clean, which
+/// writes nothing on a machine before it has removed what it came to remove.
+/// </param>
 /// <param name="RunDirectory">Where the run keeps its records, once it has a directory; <see langword="null"/> before.</param>
 /// <param name="Report">The ledger, every leg's line in it.</param>
 /// <param name="ExitCode">The code its caller exits with.</param>
@@ -26,7 +29,7 @@ namespace DssHarness.Core.Runs;
 /// </param>
 public sealed record LegRunResult(
     string Command,
-    RunId Run,
+    RunId? Run,
     string? RunDirectory,
     LedgerReport Report,
     int ExitCode,
@@ -39,9 +42,10 @@ public sealed record LegRunResult(
 {
     /// <summary>
     /// Why the run ended as it did, where its exit code and its lines cannot say: <see cref="OutcomeCause.LockHeld"/>
-    /// where its code is <see cref="HarnessExit.Refused"/> because a lock another run holds refused its legs - the
-    /// worst verdict of its ledger <see cref="LegVerdict.RefusedLocked"/>, as <see cref="LedgerReport.CauseGiven"/>
-    /// reads it - which a caller that can try again waits out; <see cref="OutcomeCause.None"/> otherwise, a run whose
+    /// where its code is <see cref="HarnessExit.Refused"/> because a lock another run holds refused its legs and nothing
+    /// else went wrong - every leg of its ledger that did not pass <see cref="LegVerdict.RefusedLocked"/>, as
+    /// <see cref="LedgerReport.CauseGiven"/> reads it - which a caller that can try again waits out;
+    /// <see cref="OutcomeCause.None"/> otherwise, a run where a leg failed beside one a lock refused and a run whose
     /// logs another run owns (<see cref="LegExit.LogHeld"/>) among them, which is pointed elsewhere and never retried.
     /// </summary>
     public OutcomeCause Cause { get; init; }

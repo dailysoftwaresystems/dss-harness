@@ -42,23 +42,41 @@ public enum RefusalKind
 
 /// <summary>
 /// What a fold, or the work a delete folds back, did: every path it touched and every row it applied, which nothing
-/// else reports as one answer.
+/// else reports as one answer - what it did before it stopped, where it stopped part way.
 /// </summary>
 /// <param name="Written">The paths written into the main tree, in order.</param>
 /// <param name="Deleted">The paths removed from it, in order.</param>
-/// <param name="Merged">The paths merged into both trees, in order.</param>
+/// <param name="Merged">The paths merged into both trees, in order, as text: never the arm registry, which is <paramref name="ArmRegistry"/>.</param>
+/// <param name="ArmRegistry">The arm registry, as git names it, where the fold merged it into both trees by arm; <see langword="null"/> where it merged none.</param>
 /// <param name="Handed">The paths settled by hand handed to the agent, in order, each with the digest it was handed.</param>
-/// <param name="Registries">The registries its rows changed, by name.</param>
-/// <param name="Rows">The ids of the rows it applied: the fold's output.</param>
-/// <param name="OverCells">The cells both changed that its <c>--accept-over</c> took, as cells are named.</param>
+/// <param name="Registries">The registries its rows changed, by name; empty where its rows were not applied.</param>
+/// <param name="Rows">The ids of the rows it applied: the fold's output; empty where its rows were not applied.</param>
+/// <param name="OverCells">The cells both changed that its <c>--accept-over</c> took, as cells are named; empty where its rows were not applied.</param>
 public sealed record AgentFolded(
     IReadOnlyList<string> Written,
     IReadOnlyList<string> Deleted,
     IReadOnlyList<string> Merged,
+    string? ArmRegistry,
     IReadOnlyList<HandedPath> Handed,
     IReadOnlyList<string> Registries,
     IReadOnlyList<string> Rows,
     IReadOnlyList<string> OverCells);
+
+/// <summary>
+/// What a refresh's plan, or a move of an agent's base, names for each path it weighed: what a dry run would do and an
+/// <c>--apply</c> set out to, as measured - which nothing else reports as one answer.
+/// </summary>
+/// <param name="Taken">The paths a move of its base takes into its worktree as the new base holds them, in order; empty for a refresh.</param>
+/// <param name="Kept">The paths a move of its base keeps as they are, shared with the main tree, in order; empty for a refresh.</param>
+/// <param name="Handed">The paths a refresh hands it from the main tree - each file copied and each deletion made - in order; empty for a move of its base.</param>
+/// <param name="Merged">The paths both changed whose three-way merge is taken, in order, as text: never the arm registry, which is <paramref name="ArmRegistry"/>.</param>
+/// <param name="ArmRegistry">The arm registry, as git names it, where it is merged by arm; <see langword="null"/> where it is not.</param>
+public sealed record AgentPlanned(
+    IReadOnlyList<string> Taken,
+    IReadOnlyList<string> Kept,
+    IReadOnlyList<string> Handed,
+    IReadOnlyList<string> Merged,
+    string? ArmRegistry);
 
 /// <summary>
 /// What one answer of fold-agent, delete-agent, refresh-agent or rebase-agent knows beyond its lines: the document the
@@ -88,8 +106,14 @@ public sealed record AgentFolded(
 /// is the one whose reasons are exactly <see cref="RefusalKind.Conflict"/>.
 /// </param>
 /// <param name="Folded">
-/// What a fold wrote, merged, handed and applied - fold-agent's <c>--apply</c>, and delete-agent's, which folds back
-/// what is left of the agent first; null for every other answer and a fold that wrote nothing.
+/// What a fold wrote, removed, merged, handed and applied - fold-agent's <c>--apply</c>, and delete-agent's, which folds
+/// back what is left of the agent first - whether it went through or stopped part way after writing some of it (21);
+/// null for every other answer, and wherever it wrote, removed, merged, handed and applied nothing at all - a fold of
+/// nothing and a deletion that folds nothing among them.
+/// </param>
+/// <param name="Planned">
+/// What the plan of refresh-agent or rebase-agent names, wherever it was measured, its dry run's and its
+/// <c>--apply</c>'s alike; null for fold-agent and delete-agent, and where no plan was measured.
 /// </param>
 public sealed record AgentVerbFacts(
     int ExitCode,
@@ -100,4 +124,5 @@ public sealed record AgentVerbFacts(
     IReadOnlyList<string> Lines,
     IReadOnlyList<ConsentKind> Needs,
     IReadOnlyList<RefusalKind> Refusals,
-    AgentFolded? Folded = null);
+    AgentFolded? Folded = null,
+    AgentPlanned? Planned = null);

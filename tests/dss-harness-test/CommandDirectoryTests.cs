@@ -17,7 +17,7 @@ public sealed class CommandDirectoryTests : IDisposable
     [Fact]
     public void ADirectoryAskedForRelative_IsAnsweredAbsolute_AgainstTheCurrentOne()
     {
-        var answer = CommandDirectory.Resolve(".", _current.Path, _fileSystem);
+        var answer = CommandDirectory.Resolve(".", () => _current.Path, _fileSystem);
 
         Assert.True(answer.Holds);
         Assert.Equal(Path.GetFullPath(_current.Path), answer.Directory);
@@ -28,7 +28,7 @@ public sealed class CommandDirectoryTests : IDisposable
     [Fact]
     public void WhereNoDirectoryIsAskedFor_TheCurrentOneIsActedOn()
     {
-        var answer = CommandDirectory.Resolve(null, _current.Path, _fileSystem);
+        var answer = CommandDirectory.Resolve(null, () => _current.Path, _fileSystem);
 
         Assert.True(answer.Holds);
         Assert.Equal(Path.GetFullPath(_current.Path), answer.Directory);
@@ -41,7 +41,7 @@ public sealed class CommandDirectoryTests : IDisposable
     [Fact]
     public void ADirectoryThatIsNotThere_IsRefused_NamingItAbsolute()
     {
-        var answer = CommandDirectory.Resolve("not-there", _current.Path, _fileSystem);
+        var answer = CommandDirectory.Resolve("not-there", () => _current.Path, _fileSystem);
 
         Assert.False(answer.Holds);
         Assert.Null(answer.Directory);
@@ -55,7 +55,7 @@ public sealed class CommandDirectoryTests : IDisposable
     [Fact]
     public void APathThatCannotBeUsed_SaysSo_NamingWhatWasAskedFor()
     {
-        var answer = CommandDirectory.Resolve("not\0a\0directory", _current.Path, _fileSystem);
+        var answer = CommandDirectory.Resolve("not\0a\0directory", () => _current.Path, _fileSystem);
 
         Assert.False(answer.Holds);
         Assert.Null(answer.Directory);
@@ -71,11 +71,33 @@ public sealed class CommandDirectoryTests : IDisposable
     [InlineData("   ")]
     public void ADirectoryAskedForBlank_IsRefused_NeverTakenForTheCurrentOne(string blank)
     {
-        var answer = CommandDirectory.Resolve(blank, _current.Path, _fileSystem);
+        var answer = CommandDirectory.Resolve(blank, () => _current.Path, _fileSystem);
 
         Assert.False(answer.Holds);
         Assert.Null(answer.Directory);
         Assert.Equal($"'{blank}' is not a usable directory path: it names no directory.", answer.Problem);
+    }
+
+    /// <summary>
+    /// A directory asked for whole is resolved without the current directory being read at all: a shell standing in a
+    /// directory since removed, whose current directory Linux and macOS cannot read, still runs a command given another.
+    /// </summary>
+    [Fact]
+    public void ADirectoryAskedForWhole_IsResolved_WithoutTheCurrentDirectoryBeingRead()
+    {
+        var read = 0;
+
+        var answer = CommandDirectory.Resolve(
+            _current.Path,
+            () =>
+            {
+                read++;
+                throw new FileNotFoundException("the directory this process stands in was removed");
+            },
+            _fileSystem);
+
+        Assert.Equal(new ResolvedDirectory(Path.GetFullPath(_current.Path), null), answer);
+        Assert.Equal(0, read);
     }
 
     /// <inheritdoc/>

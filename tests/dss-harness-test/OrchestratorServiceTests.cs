@@ -38,6 +38,32 @@ public sealed class OrchestratorServiceTests
     }
 
     /// <summary>
+    /// A create that must make a new orchestrator - a run's start making its own record - is refused where the name is
+    /// taken, naming its record, and changes nothing of it, what a create run again would change among it; a name not
+    /// taken is made as any create makes one.
+    /// </summary>
+    [Fact]
+    public async Task ACreateThatMustBeNew_IsRefusedWhereTheNameIsTaken_ChangingNothing()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var orchestrators = (IOrchestratorService)kit.Harness.OrchestratorService;
+        var before = File.ReadAllText(kit.Layout.RecordFile);
+
+        var taken = await orchestrators.CreateAsync(new OrchestratorCreateRequest(kit.Main, "o1", "model-a", Parallel: 6, Session: "sess-9", MustBeNew: true), Token);
+        var fresh = await orchestrators.CreateAsync(new OrchestratorCreateRequest(kit.Main, "o2", "model-a", Parallel: null, Session: null, MustBeNew: true), Token);
+
+        Assert.Equal(HarnessExit.Refused, taken.Outcome.ExitCode);
+        Assert.Equal(
+            $"Orchestrator 'o1' exists already - '{kit.Layout.RecordFile}' is its record - and a new one was asked for: name another. Nothing was changed.",
+            taken.Outcome.Message);
+        Assert.Null(taken.Facts);
+        Assert.Equal(before, File.ReadAllText(kit.Layout.RecordFile));
+        Assert.True(fresh.Outcome.Succeeded, OrchestrationKit.Describe(fresh.Outcome));
+        Assert.Equal(new OrchestratorCreated("o2", Existed: false, OrchestratorRecord.DefaultParallel, Session: null), fresh.Facts);
+    }
+
+    /// <summary>
     /// An orchestrator whose directory git would not ignore is refused: what it keeps is machine-local, and committed it
     /// would travel to every clone.
     /// </summary>

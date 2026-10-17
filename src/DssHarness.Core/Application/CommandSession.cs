@@ -50,7 +50,7 @@ public sealed class CommandSession : IAsyncDisposable
     /// <summary>The run this operation began; <see langword="null"/> where its request began none.</summary>
     public RunId? Run { get; }
 
-    internal CommandSession(DssHarnessHost host, SessionOptions options, SessionFrontEnd? frontEnd, IServiceProvider services)
+    internal CommandSession(DssHarnessHost host, SessionOptions options, SessionFrontEnd? frontEnd, IServiceProvider services, OperationId id)
     {
         ArgumentNullException.ThrowIfNull(host);
         ArgumentNullException.ThrowIfNull(options);
@@ -68,7 +68,7 @@ public sealed class CommandSession : IAsyncDisposable
         _output = services.GetRequiredService<IHarnessOutput>();
         _stopped = frontEnd?.Stopped;
 
-        Id = OperationId.New();
+        Id = id;
         Run = options.BeginsRun ? RunId.New() : null;
 
         // Open to the ends its own steps hand it from here until its own end takes them.
@@ -81,7 +81,10 @@ public sealed class CommandSession : IAsyncDisposable
     /// </summary>
     /// <param name="body">What the operation does, given its scope.</param>
     /// <param name="cancellationToken">What cancels the body.</param>
-    /// <returns>How the operation ended.</returns>
+    /// <returns>
+    /// How the operation ended: with the code a defect has where one of its ends met a defect of this tool, whatever its
+    /// body answered, since the failure line it was said with would otherwise sit beside a code that says all went well.
+    /// </returns>
     public async Task<CommandCompletion> RunAsync(Func<CommandScope, CancellationToken, Task<CommandOutcome>> body, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(body);
@@ -97,15 +100,18 @@ public sealed class CommandSession : IAsyncDisposable
             _output.Publish(new RunBegan(_options.Command, Run));
         }
 
-        CommandCompletion completion;
+        CommandCompletion? completion = null;
+        bool defective;
 
         try
         {
             try
             {
+                // The current directory is read only where none was asked for, or one relative to it: a shell standing in a
+                // directory since removed can still name another.
                 var resolved = CommandDirectory.Resolve(
                     _options.Directory,
-                    _services.GetRequiredService<IProcessContext>().CurrentDirectory,
+                    () => _services.GetRequiredService<IProcessContext>().CurrentDirectory,
                     _services.GetRequiredService<IFileSystem>());
 
                 if (!resolved.Holds)
@@ -133,10 +139,10 @@ public sealed class CommandSession : IAsyncDisposable
         {
             // However the operation ended - its body returning, an exception, a cancellation - what it leaves is
             // said, and its end is awaited or handed to the operation it is a step of.
-            await EndAsync().ConfigureAwait(false);
+            defective = await EndAsync().ConfigureAwait(false);
         }
 
-        return completion;
+        return defective ? completion with { ExitCode = HarnessExit.InternalError } : completion;
     }
 
     /// <inheritdoc/>
@@ -144,7 +150,8 @@ public sealed class CommandSession : IAsyncDisposable
     /// Where this operation's end was handed to the operation it is a step of, that end takes what was handed to this
     /// one and disposes its services once it has run on them, so nothing of either is touched here. Otherwise an end
     /// handed to this operation that its own end never took - one handed to an operation never run - runs here, so none
-    /// is lost, and its services are disposed.
+    /// is lost, and its services are disposed. What such an end meets is said as an end met in a run says it, a defect
+    /// as a failure; an operation never run has no exit code for it to change.
     /// </remarks>
     public async ValueTask DisposeAsync()
     {
@@ -161,8 +168,9 @@ public sealed class CommandSession : IAsyncDisposable
 
     /// <summary>
     /// Refuses what a session would otherwise ignore or cannot honour, before any service is built for it: a step's end
-    /// handed to no operation, a document with no stopped form to answer a stop with, and the options and parts of a
-    /// front end a later slice gives their meaning, which this build would otherwise run without a word.
+    /// handed to no operation, a document with no stopped form to answer a stop with, a stopped form for an operation
+    /// that answers with no document, and the options and parts of a front end not honoured yet, which
+    /// this build would otherwise run without a word.
     /// </summary>
     /// <param name="options">What the operation is asked and how it runs.</param>
     /// <param name="frontEnd">What the front end supplies.</param>
@@ -182,6 +190,13 @@ public sealed class CommandSession : IAsyncDisposable
         {
             throw new InvalidOperationException(
                 $"'{options.Command}' answers with a document of its own, and its front end supplies no stopped form ({nameof(SessionFrontEnd.Stopped)}) to answer a stop with.");
+        }
+
+        if (options.Document == DocumentKind.None && frontEnd?.Stopped is not null)
+        {
+            throw new InvalidOperationException(
+                $"'{options.Command}' answers with no document ({nameof(DocumentKind)}.{nameof(DocumentKind.None)}), and its front end supplies a stopped form "
+                + $"({nameof(SessionFrontEnd.Stopped)}) it would answer a stop with all the same: a document nobody asked for.");
         }
 
         if (options.PausesOnInterrupt)
@@ -213,26 +228,31 @@ public sealed class CommandSession : IAsyncDisposable
     /// where the one before it threw. A step whose run has already taken its ends runs its own at once, since nothing
     /// else ever would.
     /// </summary>
-    private async Task EndAsync()
+    /// <returns>Whether an end this operation ran met a defect of this tool, which the operation then ends with.</returns>
+    private async Task<bool> EndAsync()
     {
         if (_options.DefersCommandEnd && _host.Defer(_options.Parent!.Value, HandedEndAsync))
         {
             _endHandedOn = true;
-            return;
+            return false;
         }
 
-        await OwnEndAsync().ConfigureAwait(false);
+        return await OwnEndAsync().ConfigureAwait(false);
     }
 
     /// <summary>
     /// This operation's end, as the operation it is a step of runs it: on this operation's services, which it then
-    /// disposes - they are kept until now for it.
+    /// disposes - they are kept until now for it. A defect it met is said on this operation's own output and ends the
+    /// operation it was handed to as a defect ends one (<see cref="DefectSaid"/>).
     /// </summary>
     private async Task HandedEndAsync()
     {
         try
         {
-            await OwnEndAsync().ConfigureAwait(false);
+            if (await OwnEndAsync().ConfigureAwait(false))
+            {
+                throw new DefectSaid(_options.Command);
+            }
         }
         finally
         {
@@ -240,8 +260,12 @@ public sealed class CommandSession : IAsyncDisposable
         }
     }
 
-    private async Task OwnEndAsync()
+    /// <summary>This operation's own end, then every end handed to it, then the event that says it ended.</summary>
+    /// <returns>Whether any of them met a defect of this tool.</returns>
+    private async Task<bool> OwnEndAsync()
     {
+        var defective = false;
+
         try
         {
             // However the operation ended: after each host's own refusal and the operation's conclusion, and with each
@@ -251,45 +275,76 @@ public sealed class CommandSession : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            Warn("this operation's own end could not run", ex);
+            defective = Said("this operation's own end could not run", ex);
         }
 
-        await RunHandedEndsAsync().ConfigureAwait(false);
+        defective |= await RunHandedEndsAsync().ConfigureAwait(false);
         _output.Publish(new CommandEnded(_options.Command));
+        return defective;
     }
 
     /// <summary>Runs every end an operation of its own handed to this one, in the order they were handed, each even where the one before it threw.</summary>
-    private async Task RunHandedEndsAsync()
+    /// <returns>Whether any of them met a defect of this tool.</returns>
+    private async Task<bool> RunHandedEndsAsync()
     {
+        var defective = false;
+
         foreach (var deferred in _host.TakeDeferred(Id))
         {
             try
             {
                 await deferred().ConfigureAwait(false);
             }
+            catch (DefectSaid)
+            {
+                // Said already, on the output of the operation whose end it was.
+                defective = true;
+            }
             catch (Exception ex)
             {
-                // An end that throws is said as a warning and changes no exit code: the operation is over, and one
-                // unfinished end never stops the rest from running.
-                Warn("an end this operation was handed could not run", ex);
+                // One unfinished end never stops the rest from running.
+                defective |= Said("an end this operation was handed could not run", ex);
             }
         }
+
+        return defective;
     }
 
     /// <summary>
-    /// Says an end that could not run, as what ended it means (<see cref="KnownCauses.Meaning"/>): a defect's trace there
-    /// under verbose, where someone is actually diagnosing it, as a command's own failure shows it.
+    /// Says each failure an end met, as what it means (<see cref="KnownCauses.Meaning"/>): one an end is expected to meet
+    /// as a warning that changes no exit code, since the operation's work is done - a host or a stream gone
+    /// (<see cref="IOException"/>, <see cref="UnauthorizedAccessException"/>), or a cause this tool already names, a
+    /// refusal it worded, a program that would not start and a cancellation among them; and a defect of this tool as a
+    /// failure, its trace under verbose where someone is actually diagnosing it, as a command's own failure shows it. The
+    /// failures of several hosts at once are said one by one.
     /// </summary>
-    private void Warn(string what, Exception exception)
+    /// <param name="what">Which end could not run, as the line begins.</param>
+    /// <param name="exception">What it threw.</param>
+    /// <returns>Whether any of it was a defect, which the operation then ends with.</returns>
+    private bool Said(string what, Exception exception)
     {
-        var meaning = KnownCauses.Meaning(exception);
+        var defective = false;
 
-        _output.Warn(_options.Command, $"{what}: {meaning.Message}");
-
-        if (meaning.Defect && _output.IsVerbose)
+        foreach (var failure in exception is AggregateException several ? several.Flatten().InnerExceptions : [exception])
         {
-            _output.RawError(_output.Shown(exception.ToString()));
+            var meaning = KnownCauses.Meaning(failure);
+
+            if (failure is IOException or UnauthorizedAccessException || !meaning.Defect)
+            {
+                _output.Warn(_options.Command, $"{what}: {meaning.Message}");
+                continue;
+            }
+
+            defective = true;
+            _output.Fail(_options.Command, $"{what}: {meaning.Message}");
+
+            if (_output.IsVerbose)
+            {
+                _output.RawError(_output.Shown(failure.ToString()));
+            }
         }
+
+        return defective;
     }
 
     private async ValueTask DisposeServicesAsync()
@@ -336,6 +391,14 @@ public sealed class CommandSession : IAsyncDisposable
     }
 
     private SessionContext Context() => new(_options, Id, Run, _output);
+
+    /// <summary>
+    /// A defect an operation's handed end met, said on that operation's own output, carried to the operation it was
+    /// handed to: that one ends as a defect ends one, and says nothing of it twice.
+    /// </summary>
+    /// <param name="command">The operation whose end it was.</param>
+    private sealed class DefectSaid(string command)
+        : Exception($"'{command}' met a defect of this tool at its end, said in its own output.");
 }
 
 /// <summary>What a command body receives: its services, its directory, its run, and the pause a safe one is asked by.</summary>

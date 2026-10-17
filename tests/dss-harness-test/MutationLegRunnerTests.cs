@@ -233,6 +233,24 @@ public sealed class MutationLegRunnerTests
     }
 
     /// <summary>
+    /// Each worker is synced for the leg's own variant, its sanitizer included: the sync withholds the build directory that
+    /// variant names in the worker as the sweep's own, and a variant without the sanitizer names another directory, so the
+    /// build the sweep keeps warm there would be judged as what mirrors the tree.
+    /// </summary>
+    [Fact]
+    public async Task EachWorker_IsSyncedForTheLegsOwnVariant_ItsSanitizerIncluded()
+    {
+        var sanitized = Variant with { Sanitizer = "asan" };
+        using var sweep = new Sweep { LegVariant = sanitized };
+
+        await sweep.RunAsync([ChargeBound, DepthType]);
+
+        Assert.Equal(
+            [(sweep.Worker(1), sanitized), (sweep.Worker(2), sanitized)],
+            sweep.Copies.Synced.Select(sync => (sync.Worker, sync.Variant)).OrderBy(sync => sync.Worker, StringComparer.Ordinal));
+    }
+
+    /// <summary>
     /// A worker an earlier sweep left holds its copy already, so making it again claims no room for one; a worker not yet
     /// made claims the room its copy takes.
     /// </summary>
@@ -3821,6 +3839,9 @@ public sealed class MutationLegRunnerTests
 
         public int Workers { get; init; } = 2;
 
+        /// <summary>The variant the leg builds: the native debug build, unless a test says another.</summary>
+        public VariantKey LegVariant { get; init; } = Variant;
+
         public long? ExpectedBuildBytes { get; init; }
 
         public bool Force { get; init; }
@@ -3912,7 +3933,7 @@ public sealed class MutationLegRunnerTests
         public SyncSource? Reading => Reader?.Reading;
 
         /// <summary>The family the sweep keeps its workers in: the variant's own beside the tree, unless a test says another.</summary>
-        public WorkerFamily Family { get => field ?? MutationWorkers.Of(Tree, Variant); set; }
+        public WorkerFamily Family { get => field ?? MutationWorkers.Of(Tree, LegVariant); set; }
 
         public string Worker(int number) => Family.PathOf(number);
 
@@ -3940,16 +3961,16 @@ public sealed class MutationLegRunnerTests
             {
                 project.CacheVars[name] = value;
             }
-            var host = new HostReport { Host = Host, Os = os, Processor = Variant.Processor, ProgramDirectories = DssHarness.Core.Processes.ProgramDirectories.After(ProgramDirectories) };
+            var host = new HostReport { Host = Host, Os = os, Processor = LegVariant.Processor, ProgramDirectories = DssHarness.Core.Processes.ProgramDirectories.After(ProgramDirectories) };
             var leg = new PlacedLeg(
                 LegName,
-                new LegConfig { Os = os, Processor = Variant.Processor, Config = "debug" },
+                new LegConfig { Os = os, Processor = LegVariant.Processor, Config = LegVariant.Config, Sanitizer = LegVariant.Sanitizer },
                 host,
                 project,
-                Variant,
+                LegVariant,
                 Tree,
                 Tree,
-                Variant.DirectoryUnder(Tree),
+                LegVariant.DirectoryUnder(Tree),
                 new LocalHostConfig { Env = HostEnv },
                 Emulated: false);
 
@@ -4005,7 +4026,7 @@ public sealed class MutationLegRunnerTests
                     Hold = Hold,
                     Arms = new LegArms(driven, unselected ?? []),
                     Settings = settings,
-                    SweepSettings = SweepSettings.Of(config, Variant, project, Test, os, settings, HostEnv),
+                    SweepSettings = SweepSettings.Of(config, LegVariant, project, Test, os, settings, HostEnv),
                     ComparesKeys = ComparesKeys,
                     Sink = Sink,
                     Recorded = Recorded,
@@ -4087,7 +4108,8 @@ public sealed class MutationLegRunnerTests
 
         public List<WorkerCopy> Listed { get; } = [];
 
-        public ConcurrentQueue<(SyncSource Reading, string Worker)> Synced { get; } = new();
+        /// <summary>Each worker synced, with the reading it was made from and the variant it was synced for, in the order synced.</summary>
+        public ConcurrentQueue<(SyncSource Reading, string Worker, VariantKey Variant)> Synced { get; } = new();
 
         public ConcurrentQueue<(string Worker, bool Force)> Claimed { get; } = new();
 
@@ -4171,7 +4193,7 @@ public sealed class MutationLegRunnerTests
                 File.Copy(Path.Combine(tree, file), copied, overwrite: true);
             }
 
-            Synced.Enqueue((source, worker));
+            Synced.Enqueue((source, worker, variant));
             AfterSync(worker);
 
             return Task.CompletedTask;

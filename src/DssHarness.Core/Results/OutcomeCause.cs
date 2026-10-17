@@ -15,7 +15,7 @@ public enum OutcomeCause
     /// it. Set where exactly that is the answer: the <c>--apply</c> of refresh-, rebase-, fold- or delete-agent refused at
     /// its hold (13); their dry run refused for a run holding a tree that <c>--apply</c> takes, where the request is
     /// otherwise sound and nothing kept in the worktree stops its removal (13); a run of legs - build, test, run, a sweep,
-    /// clean - whose 13 its worst verdict, refused-locked, decides (<c>LedgerReport.CauseGiven</c>); and delete-worktree
+    /// clean - that exits 13 with every leg that did not pass refused-locked (<c>LedgerReport.CauseGiven</c>); and delete-worktree
     /// refused over a copy kept in the worktree that a run or a sweep holds (13). Never for a run whose logs another run
     /// owns (6), which is pointed elsewhere, a lock file that cannot be read, or a run holding only copies a deletion
     /// removes (21).

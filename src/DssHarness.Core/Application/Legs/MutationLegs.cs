@@ -26,8 +26,11 @@ public interface IMutationLegs : IUseCase
     /// </summary>
     /// <param name="request">What was asked.</param>
     /// <param name="cancellationToken">Stops the reading.</param>
-    /// <returns>The listing, rendered as the command always answers it.</returns>
-    Task<CommandOutcome> ListAsync(MutationLegsRequest request, CancellationToken cancellationToken = default);
+    /// <returns>
+    /// The listing, rendered as the command always answers it, and typed: each leg's arms, the registry, the record's
+    /// directory and the records that could not be read (<see cref="ArmListing"/>).
+    /// </returns>
+    Task<UseCaseResult<ArmListing>> ListAsync(MutationLegsRequest request, CancellationToken cancellationToken = default);
 }
 
 /// <summary>What a sweep or a listing was asked: the arms, and the three shapes a sweep can take.</summary>
@@ -76,7 +79,7 @@ public sealed class MutationLegs(MutationService sweeps) : IMutationLegs
     }
 
     /// <inheritdoc/>
-    public async Task<CommandOutcome> ListAsync(MutationLegsRequest request, CancellationToken cancellationToken = default)
+    public async Task<UseCaseResult<ArmListing>> ListAsync(MutationLegsRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
 
@@ -85,7 +88,7 @@ public sealed class MutationLegs(MutationService sweeps) : IMutationLegs
             throw new HarnessException(HarnessExit.UsageError, refusal);
         }
 
-        return await _sweeps.ListAsync(Request(request), cancellationToken).ConfigureAwait(false);
+        return UseCaseResult<ArmListing>.From(await _sweeps.ListAsync(Request(request), cancellationToken).ConfigureAwait(false));
     }
 
     /// <summary>

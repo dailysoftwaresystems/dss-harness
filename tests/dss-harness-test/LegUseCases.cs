@@ -1,5 +1,6 @@
 using DssHarness.Core.Application;
 using DssHarness.Core.Composition;
+using DssHarness.Core.Output;
 using DssHarness.Core.Results;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -21,7 +22,7 @@ internal static class LegUseCases
     /// <param name="command">The command the operation runs as.</param>
     internal static ServiceProvider Of(HarnessFactory harness, string command)
         => new ServiceCollection()
-            .AddDssHarness(new SessionOptions { Command = command, Prompting = false }, output: _ => harness.Output)
+            .AddDssHarness(new SessionOptions { Command = command, Prompting = false }, OperationId.New(), output: _ => harness.Output)
             .BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true });
 
     /// <summary>

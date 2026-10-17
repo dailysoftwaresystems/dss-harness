@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Application;
 using DssHarness.Core.Execution;
@@ -21,6 +22,9 @@ public sealed class AgentVerbFactsTests
     /// <summary>The file both trees change.</summary>
     private const string Both = "src/m.txt";
 
+    /// <summary>A second file both trees change, at lines a three-way merge takes cleanly.</summary>
+    private const string Clean = "src/n.txt";
+
     private const string RowId = "D-TEST-AGENT-ROW";
 
     private static readonly Dictionary<string, string> Row = new()
@@ -36,10 +40,11 @@ public sealed class AgentVerbFactsTests
 
     /// <summary>
     /// The document is the facts serialised, member by member: beside what it always said, each consent the request
-    /// lacks, each reason it is refused for, and what a fold wrote - so a script and a step of a run read one thing.
+    /// lacks, each reason it is refused for, what a fold wrote - the arm registry merged by arm apart from the paths
+    /// merged as text - and what a refresh's or a move's plan names, so a script and a step of a run read one thing.
     /// </summary>
     [Fact]
-    public void TheDocument_IsTheFactsSerialised_NeedsRefusalsAndFoldedAmongThem()
+    public void TheDocument_IsTheFactsSerialised_NeedsRefusalsFoldedAndPlannedAmongThem()
     {
         var outcome = CommandOutcome.Refused("refused", ["a line"]);
         var facts = new AgentVerbFacts(
@@ -51,18 +56,22 @@ public sealed class AgentVerbFactsTests
             ["a line"],
             [ConsentKind.FoldNewRows, ConsentKind.FoldLostRows, ConsentKind.FoldOverCells, ConsentKind.FoldTwoChanges],
             [RefusalKind.Conflict, RefusalKind.Other],
-            new AgentFolded(["a.txt"], ["gone.txt"], [Both], [new HandedPath("h.txt", "abc"), new HandedPath("d.txt", null)], ["decisions"], [RowId], [$"{RowId}:closing"]));
+            new AgentFolded(["a.txt"], ["gone.txt"], [Both], "mutations/arms.txt", [new HandedPath("h.txt", "abc"), new HandedPath("d.txt", null)], ["decisions"], [RowId], [$"{RowId}:closing"]),
+            new AgentPlanned(["t.txt"], ["k.txt"], ["h.txt"], [Both], ArmRegistry: null));
 
         var document = JsonNode.Parse(Assert.Single(OrchestrationReports.Document(outcome, facts).Data))!.AsObject();
 
         Assert.Equal(
-            ["exitCode", "summary", "applied", "request", "heldNow", "heldUnread", "lines", "needs", "refusals", "folded"],
+            ["exitCode", "summary", "applied", "request", "heldNow", "heldUnread", "lines", "needs", "refusals", "folded", "planned"],
             document.Select(member => member.Key));
         Assert.Equal(["fold-new-rows", "fold-lost-rows", "fold-over-cells", "fold-two-changes"], Texts(document["needs"]));
         Assert.Equal(["conflict", "other"], Texts(document["refusals"]));
         Assert.Equal(
-            """{"written":["a.txt"],"deleted":["gone.txt"],"merged":["src/m.txt"],"handed":[{"path":"h.txt","digest":"abc"},{"path":"d.txt","digest":null}],"registries":["decisions"],"rows":["D-TEST-AGENT-ROW"],"overCells":["D-TEST-AGENT-ROW:closing"]}""",
+            """{"written":["a.txt"],"deleted":["gone.txt"],"merged":["src/m.txt"],"armRegistry":"mutations/arms.txt","handed":[{"path":"h.txt","digest":"abc"},{"path":"d.txt","digest":null}],"registries":["decisions"],"rows":["D-TEST-AGENT-ROW"],"overCells":["D-TEST-AGENT-ROW:closing"]}""",
             document["folded"]!.ToJsonString());
+        Assert.Equal(
+            """{"taken":["t.txt"],"kept":["k.txt"],"handed":["h.txt"],"merged":["src/m.txt"],"armRegistry":null}""",
+            document["planned"]!.ToJsonString());
     }
 
     /// <summary>
@@ -135,9 +144,120 @@ public sealed class AgentVerbFactsTests
     }
 
     /// <summary>
+    /// An --apply refused for a path whose merge conflicts and for a clean merge nobody asked for is refused for both, the
+    /// consent nobody gave as something else: an --apply refuses what its dry run asks, so it is never read as refused for
+    /// conflicting merges alone - which a step of a run would put to a person as one, and the --apply would still refuse.
+    /// Its dry run asks for the consent and is refused for the conflict, each in its own member.
+    /// </summary>
+    [Fact]
+    public async Task AnApplyRefusedForAConflict_AndForAMergeNobodyAskedFor_IsRefusedForBoth()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, Both, AgentFoldMergeTests.Text());
+        OrchestrationKit.Write(kit.Main, Clean, AgentFoldMergeTests.Text());
+        await kit.Harness.CommitAllAsync(kit.Main, "two files both trees will change", Token);
+        var worktree = await kit.CreateAgentAsync(Agent);
+        OrchestrationKit.Write(worktree, Both, AgentFoldMergeTests.Text((2, "AGENT 2")));
+        OrchestrationKit.Write(kit.Main, Both, AgentFoldMergeTests.Text((2, "MAIN 2")));
+        OrchestrationKit.Write(worktree, Clean, AgentFoldMergeTests.Text((2, "AGENT 2")));
+        OrchestrationKit.Write(kit.Main, Clean, AgentFoldMergeTests.Text((9, "MAIN 9")));
+
+        var dry = Facts(await kit.FoldAsync(Agent, apply: false));
+        var applied = Facts(await kit.FoldAsync(Agent, apply: true));
+
+        Assert.Equal(RequestStanding.Refused, dry.Standing);
+        Assert.Equal([ConsentKind.FoldTwoChanges], dry.Needs);
+        Assert.Equal([RefusalKind.Conflict], dry.Refusals);
+        Assert.Equal(RequestStanding.Refused, applied.Standing);
+        Assert.Empty(applied.Needs);
+        Assert.Equal([RefusalKind.Conflict, RefusalKind.Other], applied.Refusals);
+        Assert.Null(applied.Folded);
+    }
+
+    /// <summary>
+    /// What a fold did rides its answer whole - every path written and removed, exactly - and a fold that did nothing at
+    /// all carries none, the one way an answer says so: a fold of an agent with no work, as a deletion that folds nothing.
+    /// </summary>
+    [Fact]
+    public async Task WhatAFoldDid_RidesItsAnswer_AndOneThatDidNothingCarriesNone()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync("idle");
+        var worktree = await kit.CreateAgentAsync(Agent);
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        File.Delete(Path.Combine(worktree, "docs", "x.md"));
+        var discarding = await kit.CreateAgentAsync("discarding");
+        OrchestrationKit.Write(discarding, "a.txt", "one\nnot kept\n");
+
+        var nothing = await kit.FoldAsync("idle", apply: true);
+        var folded = await kit.FoldAsync(Agent, apply: true);
+        var discarded = await kit.DeleteAsync("discarding", apply: true, discard: true);
+
+        Assert.True(nothing.Succeeded, OrchestrationKit.Describe(nothing));
+        Assert.Null(Facts(nothing).Folded);
+        Assert.True(folded.Succeeded, OrchestrationKit.Describe(folded));
+        Same(new AgentFolded(["b.txt"], ["docs/x.md"], [], ArmRegistry: null, [], [], [], []), Facts(folded).Folded);
+        Assert.True(discarded.Succeeded, OrchestrationKit.Describe(discarded));
+        Assert.Null(Facts(discarded).Folded);
+    }
+
+    /// <summary>
+    /// A refresh and a move of an agent's base carry what their plan names, their dry run's and their --apply's alike: what
+    /// a refresh hands and a move takes and keeps - so a step of a run reads what the plan was without reading a line.
+    /// </summary>
+    [Fact]
+    public async Task ARefreshAndAMoveOfItsBase_CarryWhatTheirPlanNames()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, "h.txt", "handed\n");
+        await kit.CreateAgentAsync(Agent);
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit\n");
+
+        var refreshDry = Facts(await kit.Harness.AgentService.RefreshAsync(kit.Main, OrchestrationKit.Orchestrator, Agent, RefreshRequest.Under("a.txt"), apply: false, Token));
+        var refreshed = Facts(await kit.Harness.AgentService.RefreshAsync(kit.Main, OrchestrationKit.Orchestrator, Agent, RefreshRequest.Under("a.txt"), apply: true, Token));
+
+        OrchestrationKit.Write(kit.Main, "c.txt", "new\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "the main tree moves on", Token);
+
+        var moveDry = Facts(await kit.Harness.AgentService.RebaseAsync(kit.Main, OrchestrationKit.Orchestrator, Agent, new RebaseRequest(), apply: false, Token));
+        var moved = Facts(await kit.Harness.AgentService.RebaseAsync(kit.Main, OrchestrationKit.Orchestrator, Agent, new RebaseRequest(), apply: true, Token));
+
+        Same(new AgentPlanned([], [], ["a.txt"], [], ArmRegistry: null), refreshDry.Planned);
+        Same(new AgentPlanned([], [], ["a.txt"], [], ArmRegistry: null), refreshed.Planned);
+        Same(new AgentPlanned(["c.txt"], ["a.txt", "h.txt"], [], [], ArmRegistry: null), moveDry.Planned);
+        Same(new AgentPlanned(["c.txt"], ["a.txt", "h.txt"], [], [], ArmRegistry: null), moved.Planned);
+        Assert.Null(refreshed.Folded);
+    }
+
+    /// <summary>
+    /// A refusal that is not over a conflict - a refresh told to leave out a path it would not hand, a misspelling most
+    /// likely - is typed as something else, its plan carried all the same.
+    /// </summary>
+    [Fact]
+    public async Task ARefreshRefusedForAnythingElse_IsTypedAsSuch()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync(Agent);
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit\n");
+
+        var refused = await kit.Harness.AgentService.RefreshAsync(
+            kit.Main, OrchestrationKit.Orchestrator, Agent, RefreshRequest.Under("a.txt") with { Except = ["a.txx"] }, apply: false, Token);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal(RequestStanding.Refused, Facts(refused).Standing);
+        Assert.Equal([RefusalKind.Other], Facts(refused).Refusals);
+        Same(new AgentPlanned([], [], ["a.txt"], [], ArmRegistry: null), Facts(refused).Planned);
+    }
+
+    /// <summary>
     /// A path both trees changed whose merge conflicts is typed among the refusals as a conflict, apart from every other
-    /// refusal - a dry run of a fold and of a deletion alike, and an --apply - so a request refused for conflicting merges
-    /// alone is told from any other without reading a line; and a misspelled option beside it is something else.
+    /// refusal - a dry run of a fold and of a deletion alike, and the --apply of each - so a request refused for
+    /// conflicting merges alone is told from any other without reading a line; and a misspelled option beside it is
+    /// something else.
     /// </summary>
     [Fact]
     public async Task AConflictingMerge_IsTypedAsAConflict_ApartFromEveryOtherRefusal()
@@ -151,6 +271,7 @@ public sealed class AgentVerbFactsTests
         var withATypo = Facts(await kit.FoldAsync(Agent, apply: false, new FoldAllowances { Merge = ["src/typo.txt"] }));
         var deleting = Facts(await kit.DeleteAsync(Agent, apply: false));
         var applying = Facts(await kit.FoldAsync(Agent, apply: true));
+        var deletingApplied = Facts(await kit.DeleteAsync(Agent, apply: true));
         var document = JsonNode.Parse(Assert.Single(
             (await kit.Harness.AgentService.FoldAsync(kit.Main, OrchestrationKit.Orchestrator, Agent, new FoldAllowances(), apply: false, Token, json: true)).Data))!;
 
@@ -163,6 +284,10 @@ public sealed class AgentVerbFactsTests
         Assert.Equal([RefusalKind.Conflict], deleting.Refusals);
         Assert.Equal(RequestStanding.Refused, applying.Standing);
         Assert.Equal([RefusalKind.Conflict], applying.Refusals);
+        Assert.Equal(RequestStanding.Refused, deletingApplied.Standing);
+        Assert.Equal([RefusalKind.Conflict], deletingApplied.Refusals);
+        Assert.Null(deletingApplied.Folded);
+        Assert.Equal(AgentStates.Live, kit.Record(Agent).State);
         Assert.Equal(["conflict"], Texts(document["refusals"]));
         Assert.Equal([], Texts(document["needs"]));
         Assert.Equal("refused", document["request"]!.GetValue<string>());
@@ -358,6 +483,14 @@ public sealed class AgentVerbFactsTests
     }
 
     private static AgentVerbFacts Facts(CommandOutcome outcome) => Assert.IsType<AgentVerbFacts>(outcome.Facts);
+
+    /// <summary>
+    /// That <paramref name="actual"/> holds exactly what <paramref name="expected"/> does, member by member and each list
+    /// in its order: a record's own equality compares its lists by reference.
+    /// </summary>
+    internal static void Same<T>(T expected, T? actual)
+        where T : class
+        => Assert.Equal(JsonSerializer.Serialize(expected), actual is null ? "null" : JsonSerializer.Serialize(actual));
 
     /// <summary>
     /// That <paramref name="answer"/> carries the facts of an answer stopped before anything was weighed: its own code and

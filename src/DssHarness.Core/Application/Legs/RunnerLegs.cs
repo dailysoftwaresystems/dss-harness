@@ -30,7 +30,7 @@ public interface IRunnerLegs : IUseCase
 }
 
 /// <summary>What a run of a runner was asked: the runner, its inputs, and the manual steps of its action to run.</summary>
-public sealed record RunnerLegsRequest : LegCommandRequest
+public sealed record RunnerLegsRequest : LegWorkWithSetUpsRequest
 {
     /// <summary>The predefined runner to run, as <c>predefinedRunners</c> names it.</summary>
     public required string Runner { get; init; }

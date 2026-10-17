@@ -43,10 +43,36 @@ namespace DssHarness.Core.Composition;
 public static class ServiceRegistration
 {
     /// <summary>
+    /// The host of a front end that supplies the one thing the core cannot do for itself - ask for a superuser password
+    /// at its own terminal - and nothing else: each operation it begins is given services of its own, built here from
+    /// this tool's registrations, written through the console and stamped with that operation's id and its parent's.
+    /// </summary>
+    /// <param name="prompt">
+    /// How a superuser password is asked, given the operation's output and options; <see langword="null"/> for nobody
+    /// to ask (<see cref="NobodyToAsk"/>).
+    /// </param>
+    /// <returns>The host, one per process.</returns>
+    /// <remarks>
+    /// The one place a provider is built for an operation, so a front end - the command line among them - builds none of
+    /// its own and needs no container to begin one.
+    /// </remarks>
+    public static DssHarnessHost Host(Func<IHarnessOutput, SessionOptions, ISuperuserPrompt>? prompt = null)
+        => new((options, operation) => new ServiceCollection()
+            .AddDssHarness(
+                options,
+                operation,
+                prompt: prompt is null ? null : provider => prompt(provider.GetRequiredService<IHarnessOutput>(), options))
+            .BuildServiceProvider());
+
+    /// <summary>
     /// Registers every service of this tool for one operation, as the options of that operation ask for them.
     /// </summary>
     /// <param name="services">The collection to register them in.</param>
     /// <param name="options">What the operation is asked and how it runs.</param>
+    /// <param name="operation">
+    /// The operation's id, which every event its output publishes is stamped with, beside its parent
+    /// (<see cref="SessionOptions.Parent"/>).
+    /// </param>
     /// <param name="output">
     /// Where the operation writes; <see langword="null"/> for the console, which is what the command line supplies -
     /// a front end of its own supplies its own.
@@ -61,6 +87,7 @@ public static class ServiceRegistration
     public static IServiceCollection AddDssHarness(
         this IServiceCollection services,
         SessionOptions options,
+        OperationId operation,
         Func<IServiceProvider, IHarnessOutput>? output = null,
         Func<IServiceProvider, ISuperuserPrompt>? prompt = null)
     {
@@ -90,7 +117,7 @@ public static class ServiceRegistration
         services.AddSingleton(provider => origin.ServesAnotherMachine
             ? HomeShorthand.Of(provider.GetRequiredService<IHostPlatform>, provider.GetRequiredService<IFileSystem>())
             : HomeShorthand.None);
-        services.AddSingleton<IHarnessOutput>(output ?? (provider => new ConsoleHarnessOutput(verbose, provider.GetRequiredService<HomeShorthand>())));
+        services.AddSingleton<IHarnessOutput>(output ?? (provider => new ConsoleHarnessOutput(verbose, provider.GetRequiredService<HomeShorthand>(), operation, options.Parent)));
         services.AddSingleton<IFileSystem, PhysicalFileSystem>();
         services.AddSingleton<IProcessContext, ProcessContext>();
         services.AddSingleton<IProcessRunner, ProcessRunner>();

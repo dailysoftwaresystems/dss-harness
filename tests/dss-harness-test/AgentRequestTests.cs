@@ -29,17 +29,18 @@ public sealed class AgentRequestTests
     {
         using var temp = new TempDirectory();
         var kit = await OrchestrationKit.PrepareAsync(temp);
+        var head = await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", TestContext.Current.CancellationToken);
 
         var created = await kit.Harness.AgentService.CreateAsync(new AgentCreateRequest(kit.Main, OrchestrationKit.Orchestrator, "ag", "model-b", Empty: true, Session: null), TestContext.Current.CancellationToken);
 
         Assert.True(created.Outcome.Succeeded, OrchestrationKit.Describe(created.Outcome));
         var facts = created.Facts;
         Assert.NotNull(facts);
-        Assert.Equal("ag", facts.Name);
-        Assert.True(facts.Empty);
-        Assert.Equal(OrchestrationKit.Orchestrator, facts.Orchestrator);
-        Assert.False(string.IsNullOrEmpty(facts.Base));
-        Assert.EndsWith("ag", facts.Worktree, StringComparison.Ordinal);
+        Assert.Equal(
+            (OrchestrationKit.Orchestrator, "ag", head, true, (string?)null),
+            (facts.Orchestrator, facts.Name, facts.Base, facts.Empty, facts.Session));
+        // Compared as the platform compares paths: a drive letter's case names the same worktree.
+        PathAssert.Same(kit.Worktree("ag"), facts.Worktree);
 
         var seeded = await kit.Harness.AgentService.SeedAsync(new AgentSeedRequest(kit.Main, OrchestrationKit.Orchestrator, "ag", Empty: false, Force: false), TestContext.Current.CancellationToken);
 
@@ -76,7 +77,12 @@ public sealed class AgentRequestTests
         Assert.Equal([], asText.Facts?.Needs);
 
         // Nobody was asked who holds anything, and nobody does: the holders are read, and hold nothing.
-        Assert.False(asText.Facts?.Holders?.HoldsATree ?? false);
+        var holders = asText.Facts?.Holders;
+        Assert.NotNull(holders);
+        Assert.Empty(holders.Holders);
+        Assert.Null(holders.Unread);
+        Assert.Null(holders.StandingUnread);
+        Assert.Empty(holders.KeptCopies);
 
         // The document is the whole of standard output; the same facts ride it as ride the text.
         Assert.NotEmpty(asDocument.Outcome.Data);
@@ -92,7 +98,7 @@ public sealed class AgentRequestTests
     public void TheServicesThatAlreadyWereUseCases_Are()
     {
         using var provider = new ServiceCollection()
-            .AddDssHarness(new SessionOptions { Command = "test" })
+            .AddDssHarness(new SessionOptions { Command = "test" }, Core.Output.OperationId.New())
             .BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true });
 
         foreach (var service in new IUseCase[]

@@ -356,6 +356,48 @@ public sealed class HoldAwakeTests
         Assert.DoesNotContain("192.0.2.10", error.ToString(), StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Every host a hold could not be asked of is said by its own name, each of them: one whose stream went is no more
+    /// the first host's failure than the last's, and an await of them all would have thrown the first alone, out of the
+    /// command's end, saying nothing of the rest.
+    /// </summary>
+    [Fact]
+    public async Task EveryHostAHoldCouldNotBeAskedOf_IsSaidByItsName_NotTheFirstAlone()
+    {
+        var hosts = new ScriptedHostCommands((connection, _) => throw new IOException($"the connection to {connection.Host.Name} went"));
+        var error = new StringWriter();
+        var registry = new HoldAwakeRegistry(hosts, new ConsoleHarnessOutput(new StringWriter(), error, verbose: false));
+
+        registry.Reached(Reached(HostId.Ssh("mac"), hold: 600));
+        registry.Reached(Reached(HostId.Ssh("mini"), hold: 600));
+        await registry.LeaveHoldsAsync("test", TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            [
+                "test: WARN - ssh mac: could not be held awake until the next command: the connection to mac went",
+                "test: WARN - ssh mini: could not be held awake until the next command: the connection to mini went",
+            ],
+            error.ToString().Split(error.NewLine, StringSplitOptions.RemoveEmptyEntries).Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// A defect of this tool met holding several hosts is thrown for each of them, every one, for the command's end to
+    /// say: an await of them all would have thrown the first alone and lost the rest.
+    /// </summary>
+    [Fact]
+    public async Task ADefectMetHoldingSeveralHosts_IsThrownForEachOfThem()
+    {
+        var hosts = new ScriptedHostCommands((connection, _) => throw new InvalidOperationException($"{connection.Host.Name} broke"));
+        var registry = new HoldAwakeRegistry(hosts, new ConsoleHarnessOutput(new StringWriter(), new StringWriter(), verbose: false));
+
+        registry.Reached(Reached(HostId.Ssh("mac"), hold: 600));
+        registry.Reached(Reached(HostId.Ssh("mini"), hold: 600));
+
+        var thrown = await Assert.ThrowsAsync<AggregateException>(() => registry.LeaveHoldsAsync("test", TestContext.Current.CancellationToken));
+
+        Assert.Equal(["mac broke", "mini broke"], thrown.InnerExceptions.Select(inner => Assert.IsType<InvalidOperationException>(inner).Message).Order(StringComparer.Ordinal));
+    }
+
     private const string Nonce = "0123456789abcdef0123456789abcdef";
 
     private static HoldAwakeStore Store(TempDirectory temp)

@@ -569,6 +569,10 @@ public sealed class AgentDeletionTests
         Assert.Equal("refused", document["request"]!.GetValue<string>());
         Assert.Empty(document["heldNow"]!.AsArray());
 
+        // Refused for what no measure typed - copies its removal cannot take - which is something else than a conflict.
+        Assert.Equal([RefusalKind.Other], Assert.IsType<AgentVerbFacts>(dry.Facts).Refusals);
+        Assert.Equal(["other"], document["refusals"]!.AsArray().Select(reason => reason!.GetValue<string>()));
+
         var applied = await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: true, discardUncommitted: false, Token);
 
         Assert.Equal(HarnessExit.Incomplete, applied.ExitCode);

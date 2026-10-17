@@ -22,7 +22,7 @@ public interface ITestLegs : IUseCase
 }
 
 /// <summary>What a test run was asked: the legs, and which of their tests.</summary>
-public sealed record TestLegsRequest : LegCommandRequest
+public sealed record TestLegsRequest : LegWorkWithSetUpsRequest
 {
     /// <summary>The tests to run, as the runner's own filter takes it; <see langword="null"/> for all of them.</summary>
     public string? Filter { get; init; }

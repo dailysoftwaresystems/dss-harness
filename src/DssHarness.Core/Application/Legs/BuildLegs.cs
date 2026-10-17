@@ -10,10 +10,8 @@ namespace DssHarness.Core.Application.Legs;
 
 /// <summary>
 /// What every command that runs legs was asked, as its command line gave it: the directory, the legs, the lock, the
-/// staging, the timing, the host dispatching here - and the two options that say where this run's own legs work, whose
-/// rule (<see cref="DssHarness.Core.Legs.LegTrees.Asked(bool, bool)"/>) is asked in the core: by a build and a test before
-/// any configuration is read, and by a run of a runner once the runner it names is read, since whether that runner writes
-/// the tree is part of where its legs work.
+/// staging and the host dispatching here - and nothing a command among them does not honour, so no request carries a
+/// value its use case would let pass without a word (<see cref="LegWorkRequest"/>, <see cref="LegWorkWithSetUpsRequest"/>).
 /// </summary>
 public abstract record LegCommandRequest
 {
@@ -32,23 +30,40 @@ public abstract record LegCommandRequest
     /// <summary>Run on what a previous sync staged, making nothing.</summary>
     public bool UseStaged { get; init; }
 
-    /// <summary>Report the profile timing.</summary>
-    public bool Time { get; init; }
-
     /// <summary>
     /// The host this machine is to the machine that dispatched a leg here, or <see langword="null"/> where this
     /// machine placed it itself.
     /// </summary>
     public HostId? Here { get; init; }
+}
 
-    /// <summary>Whether each leg brings up the set-ups its work names before that work, and down after it.</summary>
-    public bool SetUp { get; init; }
+/// <summary>
+/// What a build, a test run and a run of a runner were asked beyond what every command that runs legs takes: the timing,
+/// and the two options that say where this run's own legs work, whose rule
+/// (<see cref="DssHarness.Core.Legs.LegTrees.Asked(bool, bool)"/>) is asked in the core: by a build and a test before any
+/// configuration is read, and by a run of a runner once the runner it names is read, since whether that runner writes
+/// the tree is part of where its legs work. A sweep of check-mutations takes none of them, and its request has none.
+/// </summary>
+public abstract record LegWorkRequest : LegCommandRequest
+{
+    /// <summary>Report the profile timing.</summary>
+    public bool Time { get; init; }
 
     /// <summary>Whether <c>--local-copy</c> was given.</summary>
     public bool LocalCopy { get; init; }
 
     /// <summary>Whether <c>--in-place</c> was given.</summary>
     public bool InPlace { get; init; }
+}
+
+/// <summary>
+/// What a test run and a run of a runner were asked beyond a build: whether each leg brings up the set-ups its work names.
+/// A build's work names none, and its request has no such question.
+/// </summary>
+public abstract record LegWorkWithSetUpsRequest : LegWorkRequest
+{
+    /// <summary>Whether each leg brings up the set-ups its work names before that work, and down after it.</summary>
+    public bool SetUp { get; init; }
 }
 
 /// <summary>
@@ -65,8 +80,8 @@ public interface IBuildLegs : IUseCase
     Task<LegRunResult> RunAsync(BuildLegsRequest request, RunId run, CancellationToken cancellationToken = default);
 }
 
-/// <summary>What a build was asked: the legs, and nothing beyond what every command that runs legs takes.</summary>
-public sealed record BuildLegsRequest : LegCommandRequest;
+/// <summary>What a build was asked: the legs, and nothing beyond what every command whose legs do work in a tree takes.</summary>
+public sealed record BuildLegsRequest : LegWorkRequest;
 
 /// <summary>
 /// Builds every selected leg, each in its own variant-keyed build directory, and checks that it produced what the

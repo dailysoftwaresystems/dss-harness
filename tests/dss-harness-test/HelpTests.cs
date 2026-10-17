@@ -1614,18 +1614,18 @@ public sealed partial class HelpTests
     /// The citation check says what it cannot see - a break inside a segment, with no hyphen on either
     /// side - both where its command is described and in the topic that lists it.
     /// </summary>
-    [Theory]
-    [InlineData("help", "anchors")]
-    [InlineData("check-anchor-citations", "--help")]
-    public async Task TheCitationCheck_StatesTheOneWrapItCannotSee(string first, string second)
+    [Fact]
+    public async Task TheCitationCheck_StatesTheOneWrapItCannotSee()
     {
-        var result = await CliRunner.RunAsync([first, second], TestContext.Current.CancellationToken);
+        // A command's own --help is built by the command line from where it declares the command, so only the tool itself
+        // prints it; the topic is the core's, and is asked of its renderer.
+        var described = await CliRunner.RunAsync(["check-anchor-citations", "--help"], TestContext.Current.CancellationToken);
+        var listed = HelpText.Of("anchors");
 
-        Assert.Equal(HarnessExit.Success, result.ExitCode);
+        Assert.Equal(HarnessExit.Success, described.ExitCode);
         // Read as prose: a description is wrapped to the terminal, with its continuation indented.
-        var prose = Prose.Words(result.StandardOutput);
-
-        Assert.Contains("with no hyphen on either side", prose, StringComparison.Ordinal);
+        Assert.Contains("with no hyphen on either side", Prose.Words(described.StandardOutput), StringComparison.Ordinal);
+        Assert.Contains("with no hyphen on either side", Prose.Words(listed.StandardOutput), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -2036,13 +2036,12 @@ public sealed partial class HelpTests
     [Fact]
     public async Task EveryCommandTheHelpSaysToType_IsSpeltAsTheToolInstallsIt()
     {
-        var cancellationToken = TestContext.Current.CancellationToken;
         var overview = HelpText.Of(null);
         var texts = new List<string> { overview.StandardOutput };
 
         foreach (Match topic in TopicPattern().Matches(overview.StandardOutput))
         {
-            texts.Add((await CliRunner.RunAsync(["help", topic.Groups["topic"].Value], cancellationToken)).StandardOutput);
+            texts.Add(HelpText.Of(topic.Groups["topic"].Value).StandardOutput);
         }
 
         var commands = InstalledCommandPattern().Matches(overview.StandardOutput)
@@ -2570,14 +2569,17 @@ public sealed partial class HelpTests
         Assert.DoesNotContain("Unknown topic", result.StandardOutput, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A known topic is recognised and rendered: what the command writes to standard output with exit 0, where an unknown
+    /// one is written to standard error as a usage error.
+    /// </summary>
     [Fact]
-    public async Task KnownTopic_Succeeds_AndWritesToStandardOutput()
+    public async Task KnownTopic_IsRecognised_AndRendersItsText()
     {
-        var result = await CliRunner.RunAsync(
-            ["help", "layout"],
-            TestContext.Current.CancellationToken);
+        var recognised = HelpTopics.TryRender("layout", out var text);
 
-        Assert.Contains(".harness-config", result.StandardOutput, StringComparison.Ordinal);
+        Assert.True(recognised);
+        Assert.Contains(".harness-config", text, StringComparison.Ordinal);
     }
 
     [Fact]
