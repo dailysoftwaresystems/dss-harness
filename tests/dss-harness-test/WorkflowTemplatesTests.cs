@@ -1,9 +1,11 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Results;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Repository;
+using NamedFiles = DssHarness.Core.Orchestration.Flow.WorkflowFiles;
 
 namespace DssHarness.Tests;
 
@@ -152,6 +154,66 @@ public sealed class WorkflowTemplatesTests
 
         Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
         Assert.False(File.Exists(Path.Combine(directory, "prompts", "triage.md")));
+    }
+
+    /// <summary>
+    /// A repository's own definition that could not be read, where a shipped file is missing, refuses (13) saying why:
+    /// which files it names cannot be told, and none is written in its place.
+    /// </summary>
+    [Fact]
+    public void ARepositorysOwnDefinitionThatCouldNotBeRead_IsRefused_AndNothingIsWritten()
+    {
+        using var temp = new TempDirectory();
+        var real = new PhysicalFileSystem(FilePermissionsFactory.Create());
+        var name = WorkflowTemplates.ShippedWorkflowName;
+        var workflows = temp.Combine("tree", ".harness-config", "workflows");
+        var directory = Path.Combine(workflows, name);
+
+        WorkflowTemplates.EnsureShipped(workflows, real);
+        File.Delete(Path.Combine(directory, "prompts", "plan.md"));
+
+        var refusal = Assert.Throws<HarnessException>(() => WorkflowTemplates.EnsureShipped(workflows, new UnreadDefinition(real, $"{name}.yml")));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+        Assert.Equal(
+            $".harness-config/workflows/{name}/{name}.yml is the repository's own definition of the {name} workflow, and could not be read "
+                + "(it is held), so which shipped files it names cannot be told, and none was written; run 'dssharness init' again once it reads.",
+            refusal.Message);
+        Assert.False(File.Exists(Path.Combine(directory, "prompts", "plan.md")));
+    }
+
+    /// <summary>
+    /// Every reasoning step of the shipped flow but the triage answers with a schema that holds preExisting - required, a
+    /// list of what it met that was there before the run - and the triage's own schema holds what it decides.
+    /// </summary>
+    [Fact]
+    public void EveryShippedReasoningSchema_HoldsPreExisting_AndTheTriagesHoldsWhatItDecides()
+    {
+        var definition = WorkflowTemplates.ShippedDefinition();
+        var schemas = NamedFiles.Steps(definition)
+            .Where(entry => entry.Step.Type == "reason" && entry.Step.Raised is null)
+            .Select(entry => entry.Step.Outputs!)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        Assert.Equal(10, schemas.Count);
+
+        foreach (var schema in schemas)
+        {
+            var root = JsonNode.Parse(WorkflowTemplates.TextOf(schema)!)!.AsObject();
+            var reported = root["properties"]!["preExisting"]!;
+
+            Assert.Contains("preExisting", root["required"]!.AsArray().Select(member => member!.GetValue<string>()));
+            Assert.Equal("array", reported["type"]!.GetValue<string>());
+            Assert.Equal(["title", "description", "where", "evidence", "blocks"], reported["items"]!["required"]!.AsArray().Select(member => member!.GetValue<string>()));
+        }
+
+        var triage = JsonNode.Parse(WorkflowTemplates.TextOf("schemas/pre-existing.schema.json")!)!.AsObject();
+
+        Assert.Equal(
+            ["course", "title", "description", "where", "proof", "blocks", "related", "critical", "why", "duplicates"],
+            triage["required"]!.AsArray().Select(member => member!.GetValue<string>()));
+        Assert.Equal(["fix", "list", "duplicate", "unproven"], triage["properties"]!["course"]!["enum"]!.AsArray().Select(value => value!.GetValue<string>()));
     }
 
     /// <summary>
@@ -349,7 +411,10 @@ public sealed class WorkflowTemplatesTests
             "lists the rest, proven, with a title and a description, in the run's `pre-existing-issues.json`, shown in the pull request's body and the handoff",
             readme,
             StringComparison.Ordinal);
-        Assert.Contains("The validator holds the wiring (V51): the triage is at the top level, waits for nothing and is waited for by none", architecture, StringComparison.Ordinal);
+        Assert.Contains(
+            "The validator holds the wiring (V51): the triage is at the top level, waits for nothing, nothing waits for it and no handler sends the run to it",
+            architecture,
+            StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -395,4 +460,11 @@ public sealed class WorkflowTemplatesTests
     private static int Count(IReadOnlyList<WorkflowStep> steps, string? type = null)
         => steps.Count(step => type is null || step.Type == type)
             + steps.Where(step => step.Steps.Count > 0).Sum(step => Count(step.Steps, type));
+
+    /// <summary>The real file system, but one file by its name cannot be read, as one another process holds.</summary>
+    private sealed class UnreadDefinition(IFileSystem inner, string name) : PassThroughFileSystem(inner)
+    {
+        public override string ReadAllText(string path)
+            => Path.GetFileName(path) == name ? throw new IOException("it is held.") : base.ReadAllText(path);
+    }
 }

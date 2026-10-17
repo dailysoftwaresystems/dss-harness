@@ -35,14 +35,15 @@ work now, not a log.
 - The gate of the last round. Passed: {rounds.gate.passed}
 - The mutation sweep of the last round. Passed: {rounds.mutations.passed}
 - What was put off, where the repository keeps a registry: {deferrals.summary}
-- The issues that were there before the run and were left, each proven, with its id: {run.preExisting}
+- The issues found that were there before the run, each proven, with its id and whether it was fixed or listed: {run.preExisting}
 
 Where a line says that a step left no output, that thing was not read or did not run in this run: it is unknown, and never a pass.
 
 ## What to write
 
 1. Where the work stands: what this run built, and what state the tree is in.
-2. Where it has to get: what the request asked that is not there yet, including any work item a person chose to skip.
+2. Where it has to get: what the request asked that is not there yet, including any work item a person chose to skip;
+   and each issue listed above as found before the run and left.
 3. What comes next, in order, with the reason for the order.
 4. What else is under way: only what the old handoff, the backlog or the tree shows still stands; none, where nothing
    does.

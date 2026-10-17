@@ -25,7 +25,7 @@ Where a line says that a step left no output, that thing was not read or did not
 2. Read the backlog and the open rows.
 3. Weigh CI and the baseline. A red CI leg is the priority, and its repair is the work; with a plan given, it is a
    stop instead, for a person to say whether the plan goes ahead beside it. Red baseline tests in files the work will
-   change, or that test them, are its blockers; others you state in the rationale.
+   change, or that test them, are its blockers; others you report in `preExisting`.
 4. Choose one piece of work, and find what stands in its way. Where nothing is red and no source above names open
    work, there is nothing to choose from: choose nothing, and write one stop that asks the person what this run
    should do, with the choices you can see and the one you recommend. Say in the request that the work waits for

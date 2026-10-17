@@ -23,7 +23,7 @@ Every red result the run knows of, those from before its changes among them:
 4. Build and run the tests again as the engine runs them. Where you cannot, say why in what you ran.
 
 Keep to the paths your task allows. A red result that was there before this run - a test red before its changes, a
-missing tool - is not yours to fix: report it in `preExisting`, quoting the line above or of the output that shows it
+missing tool - is not yours to fix unless your item was set to fix it: report it in `preExisting`, quoting the line above or of the output that shows it
 red before the run's changes, with `blocks` true where it stops your work. Without such a line, it is yours.
 
 ## What to return

@@ -13,6 +13,20 @@ public sealed class CommandDirectoryTests : IDisposable
     private readonly TempDirectory _current = new();
     private readonly PhysicalFileSystem _fileSystem = new(FilePermissionsFactory.Create());
 
+    /// <summary>
+    /// A current directory the system cannot read - a shell standing in a directory since removed - leaves a command given
+    /// no whole --directory nowhere to stand: it is refused, saying so and what to give, never a defect of the tool.
+    /// </summary>
+    [Fact]
+    public void ACurrentDirectoryThatCannotBeRead_IsRefused_SayingWhatToGive()
+    {
+        var unread = CommandDirectory.Resolve(null, () => throw new FileNotFoundException("gone."), new PhysicalFileSystem(FilePermissionsFactory.Create()));
+        var relative = CommandDirectory.Resolve("sub", () => throw new FileNotFoundException("gone."), new PhysicalFileSystem(FilePermissionsFactory.Create()));
+
+        Assert.Equal((null, "the current directory cannot be read (gone); give a whole path with --directory."), (unread.Directory, unread.Problem));
+        Assert.Equal((null, "the current directory cannot be read (gone); give a whole path with --directory."), (relative.Directory, relative.Problem));
+    }
+
     /// <summary>A directory asked for relative is answered absolute, against the current one.</summary>
     [Fact]
     public void ADirectoryAskedForRelative_IsAnsweredAbsolute_AgainstTheCurrentOne()

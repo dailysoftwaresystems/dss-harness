@@ -21,7 +21,8 @@ run, proven on the base commit `{orient.startCommit}`, to fix at its root. Read 
 - Where: {source.where}
 - Its proof: {source.proof}
 
-Its course is fix, or person where the fix needs what only a person can give; never retry, since nothing failed. The
+Its course is fix, or person where the fix needs what only a person can give; never retry, since nothing failed, and
+never report it in `preExisting` again. The
 first statement of each item's definition of done is then that the proof no longer shows the issue.
 
 This is the recovery's first visit for this step. Should what you decide not put it right - the step fails again, or

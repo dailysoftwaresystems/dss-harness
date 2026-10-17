@@ -36,7 +36,7 @@ namespace DssHarness.Core.Composition;
 /// collaborators and every one of them stays substitutable.
 /// </summary>
 /// <remarks>
-/// The front end that begins a session supplies where it writes and who it may ask; the registrations are the same
+/// The front end that begins a session supplies who it may ask; the registrations are the same
 /// whatever front end it is, which is what makes a graphical one possible without a second composition root drifting
 /// beside this one.
 /// </remarks>
@@ -70,12 +70,12 @@ public static class ServiceRegistration
     /// <param name="services">The collection to register them in.</param>
     /// <param name="options">What the operation is asked and how it runs.</param>
     /// <param name="operation">
-    /// The operation's id, which every event its output publishes is stamped with, beside its parent
-    /// (<see cref="SessionOptions.Parent"/>).
+    /// The operation's id, which the console output stamps every event with, beside its parent
+    /// (<see cref="SessionOptions.Parent"/>); an output supplied stamps its own.
     /// </param>
     /// <param name="output">
-    /// Where the operation writes; <see langword="null"/> for the console, which is what the command line supplies -
-    /// a front end of its own supplies its own.
+    /// Where the operation writes; <see langword="null"/> for the console, which <see cref="Host"/> leaves it - a front
+    /// end of its own supplies its own.
     /// </param>
     /// <param name="prompt">
     /// How a superuser password is asked of whoever is there; <see langword="null"/> for nobody to ask

@@ -32,8 +32,8 @@
 
 ## Issues found that were there before
 
-Each was proven on the commit the run began from, and left for a person: none was related to this work, critical, or
-in its way.
+Each was proven on the commit the run began from. One marked fixed was in this work's way, related to it or critical,
+and was fixed at its root in this run; one marked listed was none of these, and is left for a person.
 
 {run.preExisting}
 

@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Hosts;
@@ -40,6 +42,15 @@ public sealed class CommandSession : IAsyncDisposable
     /// services, so they are that end's to dispose once it has run, and never this session's.
     /// </summary>
     private bool _endHandedOn;
+
+    /// <summary>Whether the operation's end met a defect, once it has run; <see langword="null"/> until it has.</summary>
+    private bool? _defective;
+
+    /// <summary>
+    /// Whether the end ran before the operation said how it ended - where a document is asked for - and the event that
+    /// says it ended is still to be published, after that.
+    /// </summary>
+    private bool _endedUnsaid;
 
     /// <summary>Set once the services are disposed, by whichever of this session and its handed end disposes them.</summary>
     private int _servicesDisposed;
@@ -101,7 +112,6 @@ public sealed class CommandSession : IAsyncDisposable
         }
 
         CommandCompletion? completion = null;
-        bool defective;
 
         try
         {
@@ -116,12 +126,17 @@ public sealed class CommandSession : IAsyncDisposable
 
                 if (!resolved.Holds)
                 {
-                    completion = Stop(HarnessExit.UsageError, resolved.Problem!);
+                    completion = await StopAsync(HarnessExit.UsageError, resolved.Problem!).ConfigureAwait(false);
                 }
                 else
                 {
                     var scope = new CommandScope(_services, resolved.Directory!, Run, _pause.Token);
                     var outcome = await body(scope, cancellationToken).ConfigureAwait(false);
+
+                    if (await EndedDefectiveAsync().ConfigureAwait(false))
+                    {
+                        outcome = DefectiveEnd(outcome);
+                    }
 
                     // Its body answers with its document exactly where a stop would: the stopped form read once, here.
                     var stopped = _stopped is not null && outcome.Data.Count == 0 ? _stopped(Context(), outcome.ExitCode, outcome.Message) : null;
@@ -132,17 +147,77 @@ public sealed class CommandSession : IAsyncDisposable
             }
             catch (Exception ex)
             {
-                completion = Fail(ex);
+                completion = await FailAsync(ex).ConfigureAwait(false);
             }
         }
         finally
         {
             // However the operation ended - its body returning, an exception, a cancellation - what it leaves is
-            // said, and its end is awaited or handed to the operation it is a step of.
-            defective = await EndAsync().ConfigureAwait(false);
+            // said, and its end is awaited or handed to the operation it is a step of, once.
+            if (_defective is null)
+            {
+                _defective = await EndAsync().ConfigureAwait(false);
+            }
+            else if (_endedUnsaid)
+            {
+                // The end ran first, for the document's code; that it ended is said last, as it always is.
+                _output.Publish(new CommandEnded(_options.Command));
+            }
         }
 
-        return defective ? completion with { ExitCode = HarnessExit.InternalError } : completion;
+        return _defective is true ? completion with { ExitCode = HarnessExit.InternalError } : completion;
+    }
+
+    /// <summary>
+    /// Where a document is asked for, runs the end now - once - and says whether it met a defect: a document says the code
+    /// the process exits with, and nothing can be taken back once written, so a defect the end meets is the document's
+    /// code too. Where none is asked for, the end runs after the operation has said how it ended, and nothing is said here.
+    /// </summary>
+    private async Task<bool> EndedDefectiveAsync()
+    {
+        if (_options.Document == DocumentKind.None)
+        {
+            return false;
+        }
+
+        if (_defective is null)
+        {
+            _defective = await EndAsync(sayEnded: false).ConfigureAwait(false);
+            _endedUnsaid = !_endHandedOn;
+        }
+
+        return _defective is true;
+    }
+
+    /// <summary>
+    /// <paramref name="outcome"/> as an operation whose end met a defect answers it: the code a defect has, in the outcome
+    /// and in each document it carries that says a code - its other members as the body gave them, the failure itself
+    /// already said where the end met it.
+    /// </summary>
+    private static CommandOutcome DefectiveEnd(CommandOutcome outcome)
+        => outcome with
+        {
+            ExitCode = HarnessExit.InternalError,
+            Data = [.. outcome.Data.Select(Recoded)],
+        };
+
+    /// <summary>A document whose root says an <c>exitCode</c>, saying the code a defect has; any other, as it was.</summary>
+    private static string Recoded(string document)
+    {
+        try
+        {
+            if (JsonNode.Parse(document) is JsonObject root && root.ContainsKey("exitCode"))
+            {
+                root["exitCode"] = HarnessExit.InternalError;
+                return root.ToJsonString(ReportJson.Options);
+            }
+        }
+        catch (JsonException)
+        {
+            // Not a JSON document: it says no code to change.
+        }
+
+        return document;
     }
 
     /// <inheritdoc/>
@@ -229,7 +304,8 @@ public sealed class CommandSession : IAsyncDisposable
     /// else ever would.
     /// </summary>
     /// <returns>Whether an end this operation ran met a defect of this tool, which the operation then ends with.</returns>
-    private async Task<bool> EndAsync()
+    /// <param name="sayEnded">Whether the event that says the operation ended is published when its own end has run.</param>
+    private async Task<bool> EndAsync(bool sayEnded = true)
     {
         if (_options.DefersCommandEnd && _host.Defer(_options.Parent!.Value, HandedEndAsync))
         {
@@ -237,7 +313,7 @@ public sealed class CommandSession : IAsyncDisposable
             return false;
         }
 
-        return await OwnEndAsync().ConfigureAwait(false);
+        return await OwnEndAsync(sayEnded).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -261,8 +337,9 @@ public sealed class CommandSession : IAsyncDisposable
     }
 
     /// <summary>This operation's own end, then every end handed to it, then the event that says it ended.</summary>
+    /// <param name="sayEnded">Whether the event that says it ended is published here, or left to the one who ran it early.</param>
     /// <returns>Whether any of them met a defect of this tool.</returns>
-    private async Task<bool> OwnEndAsync()
+    private async Task<bool> OwnEndAsync(bool sayEnded = true)
     {
         var defective = false;
 
@@ -279,7 +356,12 @@ public sealed class CommandSession : IAsyncDisposable
         }
 
         defective |= await RunHandedEndsAsync().ConfigureAwait(false);
-        _output.Publish(new CommandEnded(_options.Command));
+
+        if (sayEnded)
+        {
+            _output.Publish(new CommandEnded(_options.Command));
+        }
+
         return defective;
     }
 
@@ -369,9 +451,10 @@ public sealed class CommandSession : IAsyncDisposable
     /// Ends the operation that did not succeed: with its document first, as the whole of standard output, when it was
     /// asked for one, and then the line that says why.
     /// </summary>
-    private CommandCompletion Stop(int exitCode, string message)
+    private async Task<CommandCompletion> StopAsync(int exitCode, string message)
     {
-        var document = _stopped is not null ? _stopped(Context(), exitCode, message) : null;
+        var said = await EndedDefectiveAsync().ConfigureAwait(false) ? HarnessExit.InternalError : exitCode;
+        var document = _stopped is not null ? _stopped(Context(), said, message) : null;
         _output.Publish(new CommandFailed(_options.Command, exitCode, message, Defect: false, StoppedDocument: document));
         return new(exitCode, null, Run);
     }
@@ -380,10 +463,11 @@ public sealed class CommandSession : IAsyncDisposable
     /// Reports the exception that ended the operation: what it means, read from the one table that owns the answer,
     /// and the defect's trace there under verbose where someone is actually diagnosing it.
     /// </summary>
-    private CommandCompletion Fail(Exception exception)
+    private async Task<CommandCompletion> FailAsync(Exception exception)
     {
         var meaning = KnownCauses.Meaning(exception);
-        var document = _stopped is not null ? _stopped(Context(), meaning.ExitCode, meaning.Message) : null;
+        var said = await EndedDefectiveAsync().ConfigureAwait(false) ? HarnessExit.InternalError : meaning.ExitCode;
+        var document = _stopped is not null ? _stopped(Context(), said, meaning.Message) : null;
         var trace = meaning.Defect ? _output.Shown(exception.ToString()) : null;
 
         _output.Publish(new CommandFailed(_options.Command, meaning.ExitCode, meaning.Message, meaning.Defect, trace, document));

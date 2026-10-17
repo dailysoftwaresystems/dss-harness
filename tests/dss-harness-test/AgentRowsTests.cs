@@ -245,6 +245,33 @@ public sealed class AgentRowsTests
     }
 
     /// <summary>
+    /// A deletion whose fold went in and whose rows then failed to write stops part way: incomplete, its worktree still
+    /// there, and its answer says what the fold wrote - in the main tree whatever stopped it after.
+    /// </summary>
+    [Fact]
+    public async Task ADeletionWhoseRowsFailToWrite_AfterItsFold_SaysWhatItWrote_AndKeepsItsWorktree()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        kit.FileRow("ag", Id, Row);
+        var agents = kit.Harness.Agents(kit.Harness.FileSystem, new FailingWrites(kit.Harness.AnchorRegistryService));
+
+        var stopped = await agents.DeleteAsync(kit.Main, "o1", "ag", OrchestrationKit.Making(Id), apply: true, discardUncommitted: false, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
+        Assert.Equal(
+            "Agent 'ag' of 'o1' is folded into the main tree, and applying its rows failed: The registry is being used by another process. "
+                + "Its worktree is kept. Correct the cause and run again: the fold finds its own writes recorded as shared, and a row already as "
+                + "declared is not written again. Nothing was removed.",
+            stopped.Message);
+        Assert.Equal("two\nagent edit\n", OrchestrationKit.Read(kit.Main, "b.txt"));
+        Assert.True(Directory.Exists(worktree));
+        AgentVerbFactsTests.Same(new AgentFolded(["b.txt"], [], [], ArmRegistry: null, [], [], [], []), Assert.IsType<AgentVerbFacts>(stopped.Facts).Folded);
+    }
+
+    /// <summary>
     /// Rows that fail to write once the fold is in leave the command incomplete, saying so; run again, the fold finds its
     /// own writes shared and the rows go in.
     /// </summary>

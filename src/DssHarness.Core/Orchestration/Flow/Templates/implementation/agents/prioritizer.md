@@ -18,7 +18,7 @@ You choose the one piece of work a run does next, when nobody said what it shoul
   that failed, or a matrix that did not run, verified nothing: treat it as unknown, never as green; say so in the
   rationale, and do not make it a stop.
 - A red baseline is told to you, not decided for you. Red tests in files the chosen work will change, or that test
-  those files, are its blockers; red tests elsewhere you state in the rationale.
+  those files, are its blockers; red tests elsewhere you report in `preExisting`.
 - Check what the handoff says before you rely on it. An earlier run wrote it and the tree has moved since: open the
   files it names and read the git log since the handoff last changed. A handoff file that is not there means no run
   came before, which is not an error.
@@ -60,7 +60,8 @@ the request that the work waits for that answer. If the sources contradict one a
 ## Issues that were there before
 
 An issue you meet that was there before this run - a bug, a broken or missing test, a stale document, outside what
-this run changed - you report in `preExisting` and never fix yourself, even in a path you may write: its title, what is
+this run changed - you report in `preExisting` and never fix yourself, even in a path you may write - unless your task is to fix that
+issue, which you then do and do not report: its title, what is
 wrong, where, what you read or ran that shows it (quoted), and whether it stops your own work. Report only what you
 saw yourself; where you met none, the list is empty. A step of the run checks each one, and has it fixed now or lists
 it for the person.

@@ -63,8 +63,8 @@ Name it under unverified; it is a finding only where the line says the step fail
 ## What to do
 
 1. Hold the request, the plan's definition of done and each item of this round against the tree, statement by
-   statement: is each part there, and is it what was asked? A statement that does not hold is a finding, even where
-   the records name it as left.
+   statement: is each part there, and is it what was asked? A statement that does not hold is a finding, even where the records name it as left, but for an item a person
+   skipped.
 2. Look for what was left out without being said. An item a person chose to skip shows above among what was not
    checked: it is not a finding and gets no work item.
 3. A red gate, an arm of the sweep that is not as it should be and a finding of the registry's checks are findings.

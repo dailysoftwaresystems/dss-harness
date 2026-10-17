@@ -1129,8 +1129,9 @@ missing - the whole set where the repository has no definition of it yet, and wh
 the shipped files that definition names, so a file taken out with its step stays out - and keeps
 each one that is there, whatever it holds, saying how many it kept: an init that stopped part way is
 finished by the next, and a file a repository edited is never written over. A configuration that
-does not declare it gets none of it. A file the disk will not write refuses init (13), naming the
-files written before it, which stay. The shipped set is held to every rule a repository's workflow
+does not declare it gets none of it. A file the disk will not write refuses init (13), naming the files written before it, which stay;
+and where a file is missing and the repository's own definition does not read, init refuses (12; 13
+where it cannot be read) and writes none, since which files it names cannot be told. The shipped set is held to every rule a repository's workflow
 is by this build's own tests, so a build whose own workflow does not hold fails before it ships.
 
 A definition declares `inputs` - the values a run is started with, each with a kind, a default and
@@ -1165,17 +1166,16 @@ the visits), asks a person only for what only a person can give (`direction`), a
 folds and reviews its fix as a round's work items are.
 
 A pre-existing issue - one a reasoning step meets that was there before the run - is reported in the
-step's answer (`preExisting`, a member of every shipped reasoning schema) and triaged by the step its
+step's answer (`preExisting`, a member of every shipped reasoning schema but the triage's) and triaged by the step its
 `onPreExisting` names: a reason step of the flow's top level that says `raised: preExisting`, which
-nothing schedules, and `onAddress: recover`. The validator holds the wiring (V51): the triage is at
-the top level, waits for nothing and is waited for by none, takes no `on`, `when` or `always`, sends
+nothing schedules, and `onAddress: recover`. The validator holds the wiring (V51): the triage is at the top level, waits for nothing, nothing waits for it and no handler sends the run to it, it
+takes no `on`, `when` or `always`, sends
 a fix to a declared `recover`, and names no triage of its own, which would be it calling itself;
 where a workflow has one, every other reasoning step names it. Its agent reproduces the issue on the
 base commit and answers `fix` (in a step's way, related to the work, or critical: given to the
 recovery, the step it was in the way of running again after), `list` (added, proven, to the run's
 `pre-existing-issues.json`, shown in the pull request's body and the handoff), `duplicate` or
-`unproven`. The engine that raises it and writes the list is the next thing built; `issue` and
-`source` are read only by the triage and the recovery.
+`unproven`. The engine that raises it and writes the list is the next thing built; `issue` is read only by the triage and the recovery, and `source` by them and by a handler.
 
 `validate-workflow` checks a declared workflow, or every one declared: the file's shape, every key
 against the table that owns it (`WorkflowStepTypes`, which the parser reads exactly and `help

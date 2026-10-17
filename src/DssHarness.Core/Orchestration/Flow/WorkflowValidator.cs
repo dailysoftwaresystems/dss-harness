@@ -625,6 +625,10 @@ public static class WorkflowValidator
             {
                 _problems.Add(CallsItself(where, "sends the run back to itself"));
             }
+            else if (Scope(entry, then) is { Step.Raised: not null } raised)
+            {
+                _problems.Add($"{where} sends the run to '{raised.Path}', which is raised by a pre-existing issue and never scheduled; nothing sends the run to it");
+            }
             else if (Scope(entry, then) is not { } target)
             {
                 _problems.Add($"{where} sends the run to '{then}', which is no step it sees; a redirect goes to a step beside it or beside a group around it, never into a group from outside");
@@ -1617,7 +1621,7 @@ public static class WorkflowValidator
         }
 
         /// <summary>
-        /// The one rule every self-call breaks: no step sends its own failure - or its own ending - back to itself, since
+        /// The one rule every self-call breaks: no step sends its own failure, ending or reported issues back to itself, since
         /// a step that is to run again after it failed says <c>retries</c>, and the recovery's own steps have theirs.
         /// </summary>
         private static string CallsItself(string where, string how)

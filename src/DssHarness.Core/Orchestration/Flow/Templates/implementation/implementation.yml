@@ -6,7 +6,7 @@
 #
 # A run of it ends done, or asks a person only what a person must settle. Every step of
 # the flow says what its failure does, itself or through its group: 'onFailure: recover'
-# on every step but a reasoning one gives a failure no handler takes to
+# on every step but a reasoning one, the CI read and the catch-ups gives a failure no handler takes to
 # 'recover', at the end of this file, where an agent finds what went wrong and, where the
 # run can put it right, builds, reviews and folds the fix as a work item is; then the
 # step that failed runs again ('onSuccess: failed-step'). A person is asked where the
@@ -863,8 +863,9 @@ steps:
     prompt: prompts/pre-existing.md
     outputs: schemas/pre-existing.schema.json
 recover:
-  # Reached by every step of the flow that says onFailure: recover - a test, a fold, a
-  # commit, a push, the wait for the checks; never a reasoning step, whose failure is tried again,
+  # Reached by a failure of a step that says onFailure: recover - a test, a fold, a commit,
+  # a push, the wait for the checks - and by an issue triage-pre-existing-issue sends to be
+  # fixed; never by a reasoning step's own failure, which is tried again,
   # on its fallback, and then asked. Once its steps are done, the step that gave it its
   # failure runs again from where it stopped (onSuccess: failed-step), now that what stood
   # in its way was put right. Should that step fail again, its own onFailure: recover brings

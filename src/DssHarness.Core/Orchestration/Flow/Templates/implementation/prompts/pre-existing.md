@@ -28,15 +28,18 @@ The plan, and its items with the paths each owns:
 
 Where a line above says that a step left no output, that step has not run yet: judge `related` by the request alone.
 
-The issues already listed, each with its id, title and where; empty where none is:
+Every issue taken so far, each with its id, what became of it (listed, being fixed, or fixed), its title and where;
+empty where none is:
 
 {run.preExisting}
 
 ## What to do
 
-1. Reproduce it on `{orient.startCommit}`, read-only: quote what you read, or keep the command and what it printed.
-2. Choose the course: `unproven` where you could not reproduce it; `duplicate` where the list above holds it; `fix`
-   where it blocks that step, is related or is critical; `list` where none of these holds.
+1. Reproduce it on `{orient.startCommit}`, read-only: quote what you read at that commit, or keep a command that reads it
+   and what it printed.
+2. Choose the course: `unproven` where you could not reproduce it; `duplicate` where the list above holds it,
+   whatever became of it; `fix` where it blocks that step, is related or is critical; `list` where none of these
+   holds.
 3. Write the title and the description from what you proved.
 
 ## What to return

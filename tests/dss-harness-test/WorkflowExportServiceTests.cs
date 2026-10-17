@@ -208,6 +208,26 @@ public sealed class WorkflowExportServiceTests
     }
 
     /// <summary>
+    /// A failed export takes back its own folder, and of the folders it made above it only those still empty: one another
+    /// export has since written into is that export's, and stays with what it holds.
+    /// </summary>
+    [Fact]
+    public async Task AFailedExport_KeepsAFolderAboveItThatAnotherHasSinceWrittenInto()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var other = temp.Combine("out", "other", "other.yml");
+        var meanwhile = new FailingWrites(harness.FileSystem, failOn: 3, keep: false, beforeFailing: () => temp.WriteFile(Path.Combine("out", "other", "other.yml"), "theirs\n"));
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(harness, meanwhile)
+            .ExportAsync(temp.Path, new WorkflowExportRequest(Shipped, temp.Combine("out"), Shipped: true), Token));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+        Assert.False(Directory.Exists(temp.Combine("out", Shipped)));
+        Assert.Equal("theirs\n", await File.ReadAllTextAsync(other, Token));
+    }
+
+    /// <summary>
     /// An export stopped while it writes takes back what it wrote and is the cancellation it was; where what it wrote
     /// cannot be taken back, it ends as cancelled (130), saying what is left and why.
     /// </summary>
@@ -393,7 +413,7 @@ public sealed class WorkflowExportServiceTests
     /// The real file system, but the write numbered <c>failOn</c> fails with a full disk; where <c>keep</c> is set, the
     /// folder an export would take back is held, and cannot be.
     /// </summary>
-    private sealed class FailingWrites(IFileSystem inner, int failOn, bool keep, (int After, CancellationTokenSource Source)? stop = null) : PassThroughFileSystem(inner)
+    private sealed class FailingWrites(IFileSystem inner, int failOn, bool keep, (int After, CancellationTokenSource Source)? stop = null, Action? beforeFailing = null) : PassThroughFileSystem(inner)
     {
         private int _writes;
 
@@ -401,6 +421,7 @@ public sealed class WorkflowExportServiceTests
         {
             if (++_writes == failOn)
             {
+                beforeFailing?.Invoke();
                 throw new IOException("the disk is full.");
             }
 

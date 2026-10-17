@@ -119,9 +119,10 @@ public sealed class WorkflowExportService(
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or OperationCanceledException)
             {
-                // Taken back whole, with every folder the export made above it: a folder with part of a workflow in it
-                // would read as a workflow that names files it does not have.
-                var left = TakeBack(made);
+                // Taken back whole, with every folder the export made above it that is still empty: a folder with part
+                // of a workflow in it would read as a workflow that names files it does not have, and a folder above it
+                // another export has since written into is that export's.
+                var left = TakeBack(destination, made);
 
                 if (ex is OperationCanceledException && left is null)
                 {
@@ -234,19 +235,35 @@ public sealed class WorkflowExportService(
             $"{name}{HarnessLayout.WorkflowFileExtension}",
         ];
 
-    /// <summary>Removes the outermost folder an export that failed made, and all it holds; says why where it cannot.</summary>
-    private string? TakeBack(string destination)
+    /// <summary>
+    /// Removes the workflow's own folder, and all it holds, then each folder the export made above it, up to
+    /// <paramref name="made"/>, while it is empty; says why where it cannot.
+    /// </summary>
+    private string? TakeBack(string destination, string made)
     {
         try
         {
             _fileSystem.DeleteDirectory(destination);
+
+            // Each folder above it the export made, up to the outermost, while nothing else has come to be in it.
+            for (var folder = destination; folder != made && Path.GetDirectoryName(folder) is { } parent; folder = parent)
+            {
+                if (_fileSystem.EnumerateFiles(parent, recursive: true).Any() || _fileSystem.EnumerateDirectories(parent).Any())
+                {
+                    break;
+                }
+
+                _fileSystem.DeleteDirectory(parent);
+            }
+
             return null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            return $"what was written before it could not be taken back from '{destination}': {ex.Message.TrimEnd('.')}";
+            return $"what was written before it could not be taken back from '{made}': {ex.Message.TrimEnd('.')}";
         }
     }
+
 }
 
 /// <summary>Turns what export-workflow wrote into what it prints.</summary>

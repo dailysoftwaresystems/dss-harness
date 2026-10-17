@@ -2863,8 +2863,10 @@ public static class HelpTopics
         builder.AppendLine("init writes each of its files that is missing - the whole set where the repository has no");
         builder.AppendLine("definition of it yet, and where it has one only the shipped files that definition names,");
         builder.AppendLine("so a file taken out with its step stays out - and keeps each one that is there,");
-        builder.AppendLine("whatever it holds, so an init that stopped part way is finished by the next; nothing");
-        builder.AppendLine("that exists is ever overwritten, and a config that does not declare it gets none of it.");
+        builder.AppendLine("whatever it holds, so an init that stopped part way is finished by the next - where a");
+        builder.AppendLine("file is missing and the definition there does not read, init refuses (12; 13 where it");
+        builder.AppendLine("cannot be read), since which files it names cannot be told; nothing that exists is ever");
+        builder.AppendLine("overwritten, and a config that does not declare it gets none of it.");
         builder.AppendLine("The name is the folder's, the file's and the name: key's alike, one word, and a");
         builder.AppendLine("disagreement among the three is refused when the file is read.");
         builder.AppendLine();

@@ -152,10 +152,14 @@ public static class WorkflowFileParser
                     break;
 
                 case "answers":
-                    // A kind written twice is a key written twice, refused by YAML itself before anything is read.
+                    // YAML refuses a key written twice only where both are written alike; one tagged apart (!!str) comes
+                    // through, and is refused here by name.
                     foreach (var (kind, answer) in ReadAnswers(value, "answers", problems))
                     {
-                        answers.Add(kind, answer);
+                        if (!answers.TryAdd(kind, answer))
+                        {
+                            problems.Add(At(value, $"answers names the kind '{kind}' more than once"));
+                        }
                     }
 
                     break;
@@ -733,8 +737,16 @@ public static class WorkflowFileParser
 
         if (answersNode is not null)
         {
-            // A kind written twice is a key written twice, refused by YAML itself before anything is read.
-            var stepAnswers = ReadAnswers(answersNode, $"{where}.answers", problems).ToDictionary(read => read.Kind, read => read.Answer, StringComparer.Ordinal);
+            // A kind written twice comes through YAML where a tag sets the two apart, and is refused here by name.
+            var stepAnswers = new Dictionary<string, FlowAnswer>(StringComparer.Ordinal);
+
+            foreach (var (kind, answer) in ReadAnswers(answersNode, $"{where}.answers", problems))
+            {
+                if (!stepAnswers.TryAdd(kind, answer))
+                {
+                    problems.Add(At(answersNode, $"{where}.answers names the kind '{kind}' more than once"));
+                }
+            }
 
             step = step with { Answers = stepAnswers };
         }
@@ -1247,12 +1259,14 @@ public static class WorkflowFileParser
     }
 
     /// <summary>
-    /// One mapping's keys, read once: a key no list names is refused here, before any reader looks at its value. A key
-    /// written twice is refused by YAML itself, as a file that does not read.
+    /// One mapping's keys, read once: a key no list names is refused here, before any reader looks at its value, and so is
+    /// a key written twice - YAML refuses one only where both are written alike, and one tagged apart (<c>!!str</c>) would
+    /// otherwise be read in place of nothing.
     /// </summary>
     private static List<(string Key, YamlNode Value)> CollectKeys(YamlMappingNode mapping, string what, IReadOnlyList<string> known, List<string> problems)
     {
         var keys = new List<(string Key, YamlNode Value)>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var (keyNode, valueNode) in mapping.Children)
         {
@@ -1260,6 +1274,12 @@ public static class WorkflowFileParser
 
             if (key is null)
             {
+                continue;
+            }
+
+            if (!seen.Add(key))
+            {
+                problems.Add(At(keyNode, $"'{key}' is written twice in {what}; a key is one value"));
                 continue;
             }
 
@@ -1463,10 +1483,10 @@ public static class WorkflowFileParser
                 continue;
             }
 
-            // A name written twice is a key written twice, refused by YAML itself before anything is read.
-            if (RequireScalar(valueNode, $"{what}.{key}", problems) is { } value)
+            // A name written twice comes through YAML where a tag sets the two apart, and is refused here by name.
+            if (RequireScalar(valueNode, $"{what}.{key}", problems) is { } value && !values.TryAdd(key, value))
             {
-                values.Add(key, value);
+                problems.Add(At(keyNode, $"'{what}' names '{key}' more than once"));
             }
         }
 

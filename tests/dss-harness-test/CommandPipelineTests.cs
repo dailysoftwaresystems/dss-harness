@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using DssHarness.Core.Application;
 using DssHarness.Core.Application.Legs;
 using DssHarness.Core.Composition;
@@ -232,6 +233,47 @@ public sealed class CommandPipelineTests : IDisposable
         Assert.Equal(
             [$"test: FAIL - this operation's own end could not run: Unexpected InvalidOperationException: No service for type '{typeof(CommandEnd).FullName}' has been registered."],
             Lines(kit.Error));
+    }
+
+    /// <summary>
+    /// A document says the code the process exits with, a defect its end meets included: where a document is asked for,
+    /// the end runs before it is written - the answered document's code made the defect's, its other members as the body
+    /// gave them, and a stopped one's too - and the event that says the operation ended still comes last.
+    /// </summary>
+    [Fact]
+    public async Task ADocument_SaysTheCodeTheProcessExitsWith_ADefectAtItsEndIncluded()
+    {
+        static string Stopped(SessionContext context, int code, string summary)
+            => new JsonObject { ["exitCode"] = code, ["summary"] = summary, ["legs"] = new JsonArray() }.ToJsonString();
+
+        var answered = Begin(document: DocumentKind.Own, stopped: Stopped);
+        var answeredEnded = await answered.Session.RunAsync(
+            (_, _) =>
+            {
+                answered.Host.Defer(answered.Session.Id, () => throw new InvalidOperationException("boom"));
+                return Task.FromResult(CommandOutcome.Ok("done") with { Data = ["""{"exitCode":0,"summary":"done","legs":["a"]}"""], Quiet = true });
+            },
+            CancellationToken.None);
+
+        var failed = Begin(document: DocumentKind.Own, stopped: Stopped);
+        var failedEnded = await failed.Session.RunAsync(
+            (_, _) =>
+            {
+                failed.Host.Defer(failed.Session.Id, () => throw new InvalidOperationException("boom"));
+                throw new HarnessException(HarnessExit.Refused, "refused");
+            },
+            CancellationToken.None);
+
+        var answeredDocument = JsonNode.Parse(answered.Output.ToString())!.AsObject();
+        var failedDocument = JsonNode.Parse(failed.Output.ToString())!.AsObject();
+
+        Assert.Equal((HarnessExit.InternalError, HarnessExit.InternalError), (answeredEnded.ExitCode, failedEnded.ExitCode));
+        Assert.Equal(
+            (HarnessExit.InternalError, "done", "a"),
+            (answeredDocument["exitCode"]!.GetValue<int>(), answeredDocument["summary"]!.GetValue<string>(), answeredDocument["legs"]![0]!.GetValue<string>()));
+        Assert.Equal(
+            (HarnessExit.InternalError, "refused"),
+            (failedDocument["exitCode"]!.GetValue<int>(), failedDocument["summary"]!.GetValue<string>()));
     }
 
     /// <summary>

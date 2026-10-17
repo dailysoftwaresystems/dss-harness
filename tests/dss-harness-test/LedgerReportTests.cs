@@ -60,6 +60,27 @@ public sealed class LedgerReportTests
     }
 
     /// <summary>
+    /// A leg refused at a held lock beside one that passed but left a set-up up is no lock to wait on: waited out, the run
+    /// would meet what that set-up still holds.
+    /// </summary>
+    [Fact]
+    public void ARunThatLeftASetUpUp_IsNoLockToWaitOn_ThoughItsOtherLegMetAHeldLock()
+    {
+        var report = LedgerReport.From(
+        [
+            Entry("a", LegVerdict.RefusedLocked, TimeSpan.FromSeconds(1), "held by run r1"),
+            Entry("b", LegVerdict.Passed, TimeSpan.FromSeconds(1), string.Empty) with
+            {
+                SetUps = [new SetUpFact("e2e", SetUpFact.BroughtUp, SetUpFact.Failed, "'down.cmd' exited 1")],
+            },
+        ],
+        durationWarningFactor: 0);
+
+        Assert.Equal(HarnessExit.Refused, report.ExitCodeGiven(cancelled: false, []));
+        Assert.Equal(OutcomeCause.None, report.CauseGiven(cancelled: false, []));
+    }
+
+    /// <summary>
     /// The document names where the run keeps its records, and a leg another host ran names that
     /// host's own; a run that kept none, and a leg this machine ran, name nothing.
     /// </summary>

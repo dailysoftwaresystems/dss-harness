@@ -10,7 +10,7 @@ public sealed class WorkflowValidatorTests
 {
     /// <summary>Parses a definition, refusing a file that does not read: these tests are of the rules over one that does.</summary>
     private static WorkflowDefinition Parse(string text)
-        => WorkflowFileParser.Parse("workflows/implementation/default.yml", text);
+        => WorkflowFileParser.Parse("workflows/implementation/implementation.yml", text);
 
     /// <summary>Every problem of a definition read under a configuration that declares no commit template, as most are.</summary>
     private static IReadOnlyList<string> Problems(string text)
@@ -171,6 +171,65 @@ public sealed class WorkflowValidatorTests
     }
 
     /// <summary>
+    /// V51: a raised step is raised one way - never also by another step's ending, never always - and no handler sends the
+    /// run to it; it reads the issue it is given and the step that reported it, as the recovery does.
+    /// </summary>
+    [Fact]
+    public void ARaisedStep_IsRaisedOneWay_NoHandlerSendsTheRunToIt_AndItReadsItsIssue()
+    {
+        Assert.Equal(
+            [
+                "step 'triage-pre-existing-issue' is raised by 'plan' and is always; an always step is started by the end of the session, never by a step",
+                "step 'triage-pre-existing-issue' is raised by a pre-existing issue and by another step's ending (on); a step is raised one way",
+                "step 'triage-pre-existing-issue' is raised by a pre-existing issue and is always; a step runs at the session's end or for an issue, never both",
+                "step 'redo' sends the run to 'triage-pre-existing-issue', which is raised by a pre-existing issue and never scheduled; nothing sends the run to it",
+            ],
+            Problems(
+                """
+                name: default
+                steps:
+                  - name: plan
+                    type: reason
+                    agent: planner
+                    prompt: prompts/plan.md
+                    outputs: schemas/plan.json
+                    onPreExisting: triage-pre-existing-issue
+                  - name: triage-pre-existing-issue
+                    type: reason
+                    agent: pre-existing-triage
+                    prompt: prompts/pre-existing.md
+                    outputs: schemas/pre-existing.json
+                    raised: preExisting
+                    onAddress: recover
+                    on:
+                      step: plan
+                      outcome: failure
+                    always: true
+                  - name: redo
+                    type: orient
+                    on:
+                      step: plan
+                      outcome: failure
+                    then: triage-pre-existing-issue
+                recover:
+                  onSuccess: failed-step
+                  onFailure: pause
+                  steps:
+                    - name: diagnose
+                      type: orient
+                """));
+
+        // Its own reads of the issue and of the step that reported it are refused by nothing: the one refusal is of the
+        // when it may not say.
+        Assert.Equal(
+            ["step 'triage-pre-existing-issue' is raised by a pre-existing issue and says when; every issue raised to it is triaged"],
+            Problems(PreExisting("").Replace(
+                "    raised: preExisting\n",
+                "    raised: preExisting\n    when: \"!empty(issue.title) && !empty(source.step)\"\n",
+                StringComparison.Ordinal)));
+    }
+
+    /// <summary>
     /// A workflow whose reasoning steps send their pre-existing issues to a raised triage that gives a fix to the
     /// recovery, with <paramref name="more"/> steps after it.
     /// </summary>
@@ -202,7 +261,7 @@ public sealed class WorkflowValidatorTests
 
     /// <summary>
     /// An expression reads its own siblings, the siblings of the groups holding it, and steps by their path from the
-    /// root - and nothing else. The shipped default flow's own expressions are the shape of this.
+    /// root - and nothing else. The shipped implementation flow's own expressions are the shape of this.
     /// </summary>
     [Fact]
     public void AnExpression_ReadsSiblingsAncestorSiblingsAndRootPaths_AndNothingElse()
@@ -1540,6 +1599,7 @@ public sealed class WorkflowValidatorTests
                 "group 'rounds': repeat.rounds must be from 1 to 20, found 21",
                 "group 'rounds': repeat.blockersLimitRounds must be from 1 to 20, found 0",
                 "amend.changedAnswerMinutes must be from 1 to 60, found 61",
+                "amend.maxAddedIterations must be from 0 to 10, found 11",
             ],
             Problems(
                 """
@@ -1591,6 +1651,7 @@ public sealed class WorkflowValidatorTests
                         type: orient
                 amend:
                   changedAnswerMinutes: 61
+                  maxAddedIterations: 11
                   step: replan
                   scope: 'replan.scope'
                   whenAddScope: replan

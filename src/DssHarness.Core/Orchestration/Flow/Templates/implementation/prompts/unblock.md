@@ -13,7 +13,7 @@ what stood in the way.
 1. Read the answer against what you said. Where it settles what stood in the way, do what you could not do before.
 2. Where it tells you to do something else instead, do that. Where that needs a path outside the ones your task
    allows, list it again as what you cannot do: the engine refuses that write.
-3. Where it leaves a point open, decide as the answer would have you, and list what you assumed under `assumptions`.
+3. Where it leaves a point open, decide as the answer would have you, and say in your summary what you assumed.
 4. Build and run your tests as before. Where you cannot, say why in what you ran.
 
 ## What to return

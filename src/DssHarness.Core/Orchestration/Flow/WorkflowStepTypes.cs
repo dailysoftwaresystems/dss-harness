@@ -243,7 +243,7 @@ public static class WorkflowStepTypes
     /// <summary>The keys every leg step takes, shared by <c>build</c>, <c>test</c>, <c>run</c> and <c>check-mutations</c>.</summary>
     private static IReadOnlyList<KeyDescription> LegKeys =>
     [
-        new("legs", "the legs it runs, by name; absent, every declared leg"),
+        new("legs", "the legs or leg sets it runs, by name; absent, every declared leg"),
         new("in", "the create-agent step whose agent's worktree it works in"),
         new("failOn", "what a red leg does: red (the default) or never"),
     ];

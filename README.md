@@ -407,8 +407,9 @@ file the definition names: its agent files, its prompts, its schemas. `init` wri
 implementation workflow, and declares it in the config it creates. Where `config.json` declares
 `implementation`, `init` writes each of its files that is missing - the whole set where the
 repository has no definition of it yet, and where it has one only the shipped files that definition
-names, so a file taken out with its step stays out - and keeps each one that is there, whatever it
-holds, so an `init` that stopped part way is finished by the next; nothing that exists is ever
+names, so a file taken out with its step stays out - and keeps each one that is there, whatever it holds, so an `init` that stopped part way is finished by the next - where a file is
+missing and the definition there does not read, init refuses (12; 13 where it cannot be read), since
+which files it names cannot be told; nothing that exists is ever
 overwritten, and a config that does not declare it gets none of it. A config written before
 workflows declares none: add `"workflows": ["implementation"]` and run `init` to have it.
 

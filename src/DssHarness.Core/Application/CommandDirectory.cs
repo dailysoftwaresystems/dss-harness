@@ -47,7 +47,19 @@ public static class CommandDirectory
             return new(null, $"'{requested}' is not a usable directory path: it names no directory.");
         }
 
-        var here = requested is not null && Path.IsPathFullyQualified(requested) ? null : current();
+        string? here;
+
+        try
+        {
+            here = requested is not null && Path.IsPathFullyQualified(requested) ? null : current();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // A shell standing in a directory since removed: Linux and macOS cannot read it, and the command has nowhere
+            // to stand but where it is told.
+            return new(null, $"the current directory cannot be read ({ex.Message.TrimEnd('.')}); give a whole path with --directory.");
+        }
+
         var given = requested ?? here!;
 
         try

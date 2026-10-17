@@ -10,7 +10,7 @@ namespace DssHarness.Tests;
 public sealed class WorkflowFileParserTests
 {
     /// <summary>Where every file of these tests is said to have been read from.</summary>
-    private const string FilePath = "workflows/implementation/default.yml";
+    private const string FilePath = "workflows/implementation/implementation.yml";
 
     /// <summary>Parses <paramref name="text"/>, answering its refusal rather than throwing it.</summary>
     private static WorkflowDefinition? Parse(string text)
@@ -36,6 +36,73 @@ public sealed class WorkflowFileParserTests
         Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
 
         return refusal.Message.Split(Environment.NewLine).Skip(1).Select(line => line.TrimStart(' ', '-', ' ')).ToList();
+    }
+
+    /// <summary>
+    /// YAML refuses a key written twice only where both are written alike; one tagged apart (!!str) comes through, and is
+    /// refused here by name - a step's key, a kind an answers map names, and a name a map of values gives - never read in
+    /// place of nothing, and never the tool's own failure.
+    /// </summary>
+    [Fact]
+    public void AKeyWrittenTwice_TaggedApart_IsRefusedByName()
+    {
+        Assert.Equal(
+            [
+                "line 3, column 3: answers names the kind 'loopBound' more than once",
+                "line 9, column 5: 'name' is written twice in a step; a key is one value",
+                "line 15, column 7: run.answers names the kind 'loopBound' more than once",
+                "line 21, column 7: 'run.inputs' names 'count' more than once",
+            ],
+            Problems(
+                """
+                name: x
+                answers:
+                  loopBound:
+                    answer: fail
+                  !!str loopBound:
+                    answer: accept
+                steps:
+                  - name: build
+                    !!str name: other
+                    type: build
+                  - name: run
+                    type: run
+                    runner: r
+                    answers:
+                      loopBound:
+                        answer: fail
+                      !!str loopBound:
+                        answer: accept
+                    inputs:
+                      count: '1'
+                      !!str count: '2'
+                """));
+    }
+
+    /// <summary>
+    /// A step is raised by a pre-existing issue and nothing else, and sends one to fix to the recovery and nowhere else:
+    /// any other value of raised or onAddress is refused, naming the one it takes.
+    /// </summary>
+    [Fact]
+    public void RaisedAndOnAddress_TakeTheirOneValue()
+    {
+        Assert.Equal(
+            [
+                "'triage.raised' is 'failure', which is none of 'preExisting'.",
+                "'triage.onAddress' is 'pause', which is none of 'recover'.",
+            ],
+            Problems(
+                """
+                name: x
+                steps:
+                  - name: triage
+                    type: reason
+                    agent: pre-existing-triage
+                    prompt: prompts/pre-existing.md
+                    outputs: schemas/pre-existing.json
+                    raised: failure
+                    onAddress: pause
+                """));
     }
 
     /// <summary>The least a file can be: a name and one step, which the whole of the model reads back.</summary>

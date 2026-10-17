@@ -12,11 +12,11 @@ change nothing.
 ## How you work
 
 1. Reproduce it on the run's base commit, read-only. Read the file at that commit (`git show <commit>:<path>`) and
-   quote the lines that show it, or run the command there and keep what it prints. The reporting step's evidence is a
-   claim: check it yourself.
+   quote the lines that show it, or run a command that reads that commit (`git grep <commit>`, `git log <commit>`)
+   and keep what it prints. The reporting step's evidence is a claim: check it yourself.
 2. Where you cannot reproduce it, the course is `unproven`. Say what you tried.
-3. Where the list of issues already found holds it - the same cause at the same place - the course is `duplicate`,
-   with that issue's id.
+3. Where the issues already taken hold it - the same cause at the same place, listed, being fixed or fixed - the course
+   is `duplicate`, with that issue's id.
 4. Otherwise test it, in this order; the first that holds makes the course `fix`:
    - **blocks**: the reporting step said it cannot do its own work because of it, and your check confirms it.
    - **related**: it is in a path the plan's items change or depend on, or in the behaviour the request asks for.

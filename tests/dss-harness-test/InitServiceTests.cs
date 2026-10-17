@@ -311,7 +311,9 @@ public sealed class InitServiceTests
             $"Where `config.json` declares `{name}`, `init` writes each of its files that is missing - the whole set where the repository "
                 + "has no definition of it yet, and where it has one only the shipped files that definition names, so a file taken out with "
                 + "its step stays out - and keeps each one that is there, "
-                + "whatever it holds, so an `init` that stopped part way is finished by the next; nothing that exists is ever overwritten, "
+                + "whatever it holds, so an `init` that stopped part way is finished by the next - where a file is missing and the definition "
+                + "there does not read, init refuses (12; 13 where it cannot be read), since which files it names cannot be told; nothing that "
+                + "exists is ever overwritten, "
                 + $"and a config that does not declare it gets none of it. A config written before workflows declares none: add `\"workflows\": [\"{name}\"]` "
                 + "and run `init` to have it.",
             Prose.Document("README.md"),
@@ -322,7 +324,9 @@ public sealed class InitServiceTests
                 + "taken out with its step stays out - and keeps each one that is there, "
                 + "whatever it holds, saying how many it kept: an init that stopped part way is finished by the next, and a file a repository "
                 + "edited is never written over. A configuration that does not declare it gets none of it. A file the disk will not write "
-                + $"refuses init ({HarnessExit.Refused}), naming the files written before it, which stay.",
+                + $"refuses init ({HarnessExit.Refused}), naming the files written before it, which stay; and where a file is missing and the "
+                + $"repository's own definition does not read, init refuses ({HarnessExit.ConfigInvalid}; {HarnessExit.Refused} where it cannot be "
+                + "read) and writes none, since which files it names cannot be told.",
             Prose.Document("docs", "architecture.md"),
             StringComparison.Ordinal);
     }
