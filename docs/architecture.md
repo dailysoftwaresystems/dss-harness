@@ -51,7 +51,8 @@ which operating system it runs on and builds what differs by it. Everything abov
 on `IHostPlatform`, `IFilePermissions`, `IProcessTable`, `IProcessRunner` and `IFileSystem`.
 Below that seam a few primitives ask the runtime for one fact each, where nothing else is
 asked - `PhysicalFileSystem`, `ProcessRunner`, `DetachedProcessLauncher`, `UserState`,
-`WslDiskImages`, `CMakeToolchainReader` and the command that holds a host awake.
+`WslDiskImages`, `CMakeToolchainReader`, `ProcessContext` (the process's current directory) and the
+command that holds a host awake.
 
 A platform-specific implementation is created only where behaviour genuinely
 differs. Today that is three families of behaviour.
@@ -1159,9 +1160,9 @@ comes back by its own `onFailure`, until it passes or a person is asked; past `m
 fix. A reasoning step is never recovered, by its own word or a group's: its agent is tried again
 (`retries`, waiting `backoffSeconds`, twice as long each time, at most 900) and on each model of its
 fallback, an account at its limit or a provider that fails is a pause that resumes it, and what
-still fails is asked. The implementation workflow writes `onFailure: recover` on every step that
-builds, tests, folds, checks, commits, pushes or waits, and `onFailure: pause` on every reasoning
-step; its recovery diagnoses the failure (`diagnose`, which goes on with its own conversation across
+still fails is asked. The implementation workflow writes `onFailure: recover` on every step of its flow that tests, folds,
+checks, commits, pushes or waits - itself or through its group - and `onFailure: pause` on every
+reasoning step; its recovery diagnoses the failure (`diagnose`, which goes on with its own conversation across
 the visits), asks a person only for what only a person can give (`direction`), and builds, tests,
 folds and reviews its fix as a round's work items are.
 
@@ -1188,9 +1189,11 @@ a workflow - its yml and every file it names, the one list `validate-workflow` a
 there (13 where it is). A declared workflow is exported once its check holds (12 where it does
 not), from the definition and the directory that check found, so what is copied is what was
 checked, each file byte for byte and proved where it lands (`VerifiedFileCopy`); with `--shipped`
-it is the implementation workflow as this build ships it, held to the same rules, written as
+it is the implementation workflow as this build ships it, held to `WorkflowValidator`'s rules as for a
+configuration with no `commit.template`, written as
 `init` writes it. The yml is written last, and a file that cannot be written takes back what was
-written before it, so a folder with part of a workflow in it is never left behind.
+written before it, with every folder the export made, so a folder with part of a workflow in it is never
+left behind - or the refusal says why it could not be taken back.
 
 ## Anchor registries
 
@@ -2431,7 +2434,7 @@ tool replaces, where a green result had quietly stopped meaning anything.
   `--json` as that command's own and set - never as another option's value, after `--`, before
   the command's name or given twice with a value each (`CommandRunner.UnparsedAsync`); where it
   stops the command itself; and where the body answers with no document - a usage error or a
-  refusal returned before anything is weighed (`CommandRunner.Report`): a command asked for
+  refusal returned before anything is weighed (the session's own report, `CommandSession.RunAsync`): a command asked for
   `--json` answers with one document on every exit save its usage and a `--json` given twice
   with a value each.
 - One reader reads a command line's flags wherever the parser may have refused it

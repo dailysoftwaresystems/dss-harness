@@ -76,7 +76,7 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `fold-agent <o> <a> [--apply] [--json] [--merge <path>] [--settled <path>] [--new <ID>] [--accept-lost <ID>:<cell>] [--accept-over <ID>:<cell>]` | Fold an agent's own work into the main tree and apply the rows it filed, every refusal named before anything is written and the rows all or nothing; a path both trees changed is refused with what a three-way merge of it gives, and a clean merge written into both trees only where `--merge` names it - the arm registry is merged by arm, unasked, and taken where the result reads as a registry; a path reconciled in the main tree by hand and named with `--settled` is handed to the agent as the main tree holds it and recorded as shared; a row is made only where `--new` names it, and a cell that does not keep its stored text written only where `--accept-lost` names it; a row an earlier fold applied is weighed cell by cell against what the registries took since - their change kept where the agent made none, and a cell both changed otherwise written only where `--accept-over` names it; a rename of case alone the agent made is refused, saying to `git mv -f` it in the main tree, and once made there is weighed against the base's file under its old name; its worktree is kept |
 | `delete-agent <o> <a> [--apply] [--json] [--merge <path>] [--settled <path>] [--new <ID>] [--accept-lost <ID>:<cell>] [--accept-over <ID>:<cell>] [--discard-uncommitted]` | Fold what is left and apply its rows, keep its evidence and transcripts, then remove its worktree and its copies on hosts |
 | `list-orchestrator [<o>] [--json]` | List orchestrators, their agents and where each stands |
-| `validate-workflow [<workflow>]` | Check the workflows `workflows` in config.json declares: that each yml definition reads, holds and names files that are there (`help workflows`). Nothing is run |
+| `validate-workflow [<workflow>] [--json]` | Check the workflows `workflows` in config.json declares: that each yml definition reads, holds and names files that are there (`help workflows`). Nothing is run |
 | `export-workflow <workflow> --to <dir> [--shipped] [--json]` | Copy a workflow - its yml and every file it names - into `<dir>/<workflow>/`: a declared one once it holds (12 where it does not), byte for byte, or with `--shipped` the one this tool ships, to make a version of your own. Refused (13) where that folder is there; a file that cannot be written takes back what was written |
 | `delete-orchestrator <o> [--delete-evidence]` | Delete an orchestrator once every agent of it is deleted and nothing is left below its directory under the worktrees root - no worktree, and no directory with a `.git` of its own, each named and refused (13) until then; its agents' evidence and transcripts go only with `--delete-evidence` |
 | `check-root-litter` | Report files left loose at the root of the checkout, ignored ones included |
@@ -434,8 +434,8 @@ dssharness help workflows                    # the file, every step type and eve
 no other - into `<dir>/<workflow>/`, a folder of its own that must not be there (13 where it is):
 a declared one once it holds (12 where it does not, naming each problem), byte for byte, or, with
 `--shipped`, the implementation workflow as this tool ships it, which is how a version of your own
-starts. A file that cannot be written takes back what was written before it, so no folder is left
-with part of a workflow in it.
+starts. A file that cannot be written takes back what was written before it, with every folder the export
+made, so no folder is left with part of a workflow in it - or the refusal says why it could not.
 
 This build checks workflow definitions - the shape of every key, every step, input, param and
 output an expression names, every file the definition points at - and refuses (12) naming each

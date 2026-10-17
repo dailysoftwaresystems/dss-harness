@@ -3,9 +3,9 @@ using DssHarness.Core.Repository;
 namespace DssHarness.Core.Orchestration.Flow;
 
 /// <summary>
-/// The files a workflow's definition names, relative to its own directory: the one list both the check that each is
-/// there (<c>validate-workflow</c>) and <c>init</c>, which writes the shipped files a definition names and no other,
-/// read.
+/// The files a workflow's definition names, relative to its own directory: the one list the check that each is there
+/// (<c>validate-workflow</c>), <c>init</c>, which writes the shipped files a definition names and no other, and
+/// <c>export-workflow</c>, which copies them, read.
 /// </summary>
 public static class WorkflowFiles
 {

@@ -2666,8 +2666,9 @@ public sealed partial class HelpTests
 
         // The refusals' codes are the ones the command answers with, held here so the sentence cannot drift from them.
         Assert.Contains(
-            "'dssharness validate-workflow' checks all of it - the shape of every key, every name an expression reads, every file the "
-                + $"definition names - and refuses ({HarnessExit.ConfigInvalid}) naming each problem, without running anything, as a "
+            "'dssharness validate-workflow' checks the definition - the shape of every key, every name an expression or a template key "
+                + "reads, every file the definition names; a prompt's own placeholders are not read yet - and refuses "
+                + $"({HarnessExit.ConfigInvalid}) naming each problem, without running anything, as a "
                 + "config.json that does not hold is refused. Where config.json declares no workflow there is nothing to check, and it "
                 + $"is refused ({HarnessExit.Refused}), saying that \"workflows\": [\"{WorkflowTemplates.ShippedWorkflowName}\"] "
                 + "declares the one init writes.",

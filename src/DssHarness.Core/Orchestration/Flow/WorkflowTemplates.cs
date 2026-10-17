@@ -30,7 +30,7 @@ public sealed record ShippedWorkflowFiles(IReadOnlyList<string> Created, int Kep
 /// the set is embedded, before the first is written.
 /// </para>
 /// <para>
-/// Nothing that already exists is ever written over (user, 2026-10-10): each file of the workflow
+/// Nothing that already exists is ever written over: each file of the workflow
 /// that is there is kept, whatever it holds, and only one that is missing is written - so an init
 /// that stopped part way is finished by the next, and a file a repository edited stays its own.
 /// </para>
@@ -53,7 +53,7 @@ public static class WorkflowTemplates
     /// </summary>
     private static readonly Lazy<IReadOnlyDictionary<string, string>> Embedded = new(ReadEmbedded);
 
-    /// <summary>The agent files the implementation workflow names, in the order its steps name them.</summary>
+    /// <summary>The agent files the implementation workflow names.</summary>
     private static IReadOnlyList<string> Agents =>
     [
         "prioritizer", "triage", "planner", "plan-auditor", "implementer",
@@ -95,8 +95,9 @@ public static class WorkflowTemplates
     ];
 
     /// <summary>
-    /// The implementation workflow's definition, read back from this build's own embedded set, parsed and
-    /// held to every rule a repository's workflow is held to.
+    /// The implementation workflow's definition, read back from this build's own embedded set, parsed and held to
+    /// <see cref="WorkflowValidator"/>'s rules as for a configuration with no <c>commit.template</c>. What only a
+    /// repository can answer - its files, its legs and runners - is <c>validate-workflow</c>'s to check there.
     /// </summary>
     /// <exception cref="HarnessException">
     /// This build's own embedded set is broken: a file is missing, or the definition does not hold.
@@ -154,9 +155,11 @@ public static class WorkflowTemplates
     /// <param name="fileSystem">Writes the files.</param>
     /// <returns>The files written, in the order they were, and how many were kept.</returns>
     /// <exception cref="HarnessException">
-    /// A file could not be written (<see cref="HarnessExit.Refused"/>): the refusal names it and each file
-    /// written before it, which stay, and init run again writes what is still missing. Or this build
-    /// embeds a file of the set no more (<see cref="HarnessExit.InternalError"/>), and nothing is written.
+    /// The repository's own definition does not read (<see cref="HarnessExit.ConfigInvalid"/>) or cannot be read
+    /// (<see cref="HarnessExit.Refused"/>), so which shipped files it names cannot be told, and nothing is written. A
+    /// file could not be written (<see cref="HarnessExit.Refused"/>): the refusal names it and each file written before
+    /// it, which stay, and init run again writes what is still missing. Or this build embeds a file of the set no more
+    /// (<see cref="HarnessExit.InternalError"/>), and nothing is written.
     /// </exception>
     public static ShippedWorkflowFiles EnsureShipped(string workflowsDirectory, IFileSystem fileSystem)
     {
@@ -166,9 +169,16 @@ public static class WorkflowTemplates
         // The workflow's own directory, under the workflows directory: everything the definition
         // names lives beside it.
         var directory = Path.Combine(workflowsDirectory, ShippedWorkflowName);
-        var wanted = Wanted(directory, fileSystem);
-        var missing = wanted.Where(file => !fileSystem.FileExists(PathOf(directory, file))).ToList();
         var kept = Files.Count(file => fileSystem.FileExists(PathOf(directory, file)));
+
+        // Every shipped file there leaves nothing to write, whatever the definition names; only where one is missing is
+        // the definition asked which of them it wants back.
+        if (kept == Files.Count)
+        {
+            return new ShippedWorkflowFiles([], kept);
+        }
+
+        var missing = Wanted(directory, fileSystem).Where(file => !fileSystem.FileExists(PathOf(directory, file))).ToList();
 
         if (missing.Count == 0)
         {
@@ -215,9 +225,12 @@ public static class WorkflowTemplates
     /// <summary>
     /// The shipped files <c>init</c> may write into <paramref name="directory"/>: the whole set where the repository has
     /// no definition of the workflow yet; where it has one, the shipped files that definition names, and no other - a
-    /// file a repository took out with its step is not written back (part 05) - and none where the definition does not
-    /// read, since only its check can say what it names.
+    /// file a repository took out with its step is not written back.
     /// </summary>
+    /// <exception cref="HarnessException">
+    /// The definition there does not read (<see cref="HarnessExit.ConfigInvalid"/>), or could not be read
+    /// (<see cref="HarnessExit.Refused"/>): which files it names cannot be told, and none is written in its place.
+    /// </exception>
     private static IReadOnlyList<string> Wanted(string directory, IFileSystem fileSystem)
     {
         var definition = PathOf(directory, $"{ShippedWorkflowName}{HarnessLayout.WorkflowFileExtension}");
@@ -227,15 +240,32 @@ public static class WorkflowTemplates
             return Files;
         }
 
+        var unread = $"{Shown($"{ShippedWorkflowName}{HarnessLayout.WorkflowFileExtension}")} is the repository's own definition of the "
+            + $"{ShippedWorkflowName} workflow, and";
+        var after = $"so which shipped files it names cannot be told, and none was written; run '{ToolPackage.Command} init' again once it reads";
+        string text;
+
         try
         {
-            var named = WorkflowFiles.All(WorkflowFileParser.Parse(definition, fileSystem.ReadAllText(definition)));
+            text = fileSystem.ReadAllText(definition);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new HarnessException(HarnessExit.Refused, $"{unread} could not be read ({ex.Message.TrimEnd('.')}), {after}.", ex);
+        }
+
+        try
+        {
+            var named = WorkflowFiles.All(WorkflowFileParser.Parse(definition, text));
 
             return [.. Files.Where(file => named.Contains(file, StringComparer.Ordinal))];
         }
-        catch (Exception ex) when (ex is HarnessException or IOException or UnauthorizedAccessException)
+        catch (HarnessException ex)
         {
-            return [];
+            throw new HarnessException(
+                HarnessExit.ConfigInvalid,
+                $"{unread} does not read, {after} ('{ToolPackage.Command} {WorkflowValidationService.CommandName} {ShippedWorkflowName}' says the same):{Environment.NewLine}{ex.Message}",
+                ex);
         }
     }
 

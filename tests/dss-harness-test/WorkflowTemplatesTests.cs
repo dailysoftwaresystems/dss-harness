@@ -1,6 +1,7 @@
 using System.Text.Json;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration.Flow;
+using DssHarness.Core.Results;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Repository;
 
@@ -142,10 +143,40 @@ public sealed class WorkflowTemplatesTests
             written.Created);
         Assert.Equal(1, written.Kept);
 
+        // A definition that does not read says nothing of what it names: nothing is written in its place, and the refusal
+        // says why, as configuration that does not hold.
         File.WriteAllText(Path.Combine(directory, $"{name}.yml"), "name: [unclosed\n");
         File.Delete(Path.Combine(directory, "prompts", "triage.md"));
 
-        Assert.Empty(WorkflowTemplates.EnsureShipped(workflows, fileSystem).Created);
+        var refusal = Assert.Throws<HarnessException>(() => WorkflowTemplates.EnsureShipped(workflows, fileSystem));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.False(File.Exists(Path.Combine(directory, "prompts", "triage.md")));
+    }
+
+    /// <summary>
+    /// No shipped agent file names a model, a tier or an effort: which model a step runs on is the step's to say, in the
+    /// workflow's yml, so an agent file a repository reuses in a workflow of its own brings no choice of model with it.
+    /// </summary>
+    [Fact]
+    public void NoShippedAgentFile_NamesAModelATierOrAnEffort()
+    {
+        string[] chosen = ["model", "tier", "effort"];
+        var agents = WorkflowTemplates.Files.Where(file => file.StartsWith("agents/", StringComparison.Ordinal)).ToList();
+
+        Assert.Equal(17, agents.Count);
+
+        foreach (var agent in agents)
+        {
+            var lines = WorkflowTemplates.TextOf(agent)!.Split('\n');
+            var close = Array.IndexOf(lines, "---", 1);
+
+            Assert.True(lines[0] == "---" && close > 0, $"{agent} opens with no front matter");
+
+            var keys = lines[1..close].Select(line => line.Split(':')[0].Trim());
+
+            Assert.Empty(keys.Intersect(chosen, StringComparer.Ordinal));
+        }
     }
 
     /// <summary>

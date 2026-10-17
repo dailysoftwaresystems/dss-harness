@@ -210,12 +210,12 @@ public sealed class WorkflowValidationServiceTests
         Assert.False(report.Passed);
         Assert.Equal(
             [
-                ".harness-config/workflows/small/small.yml: step 'build' names the leg 'ghost', which 'ghost' is not declared under legs. Nothing is declared there.",
+                ".harness-config/workflows/small/small.yml: step 'build' names 'ghost', which is neither a leg nor a leg set: 'ghost' is not declared under legs or legSets. Nothing is declared there.",
                 ".harness-config/workflows/small/small.yml: 'agents/implementer.md', step 'make''s agent, is not at '.harness-config/workflows/small/agents/implementer.md'; write it there, beside the definition that names it",
                 ".harness-config/workflows/small/small.yml: 'agents/worker.md', step 'work''s agent, is not at '.harness-config/workflows/small/agents/worker.md'; write it there, beside the definition that names it",
                 ".harness-config/workflows/small/small.yml: 'prompts/work.md', step 'work''s prompt, is not at '.harness-config/workflows/small/prompts/work.md'; write it there, beside the definition that names it",
                 ".harness-config/workflows/small/small.yml: 'schemas/work.json', step 'work''s outputs, is not at '.harness-config/workflows/small/schemas/work.json'; write it there, beside the definition that names it",
-                ".harness-config/workflows/small/small.yml: step 'corpus' runs 'missing-runner', which 'missing-runner' is not declared under predefinedRunners. Nothing is declared there.",
+                ".harness-config/workflows/small/small.yml: step 'corpus' runs 'missing-runner': 'missing-runner' is not declared under predefinedRunners. Nothing is declared there.",
             ],
             report.Lines);
     }
@@ -625,6 +625,97 @@ public sealed class WorkflowValidationServiceTests
     }
 
     /// <summary>
+    /// A file the definition names that is a link out of the workflow's directory is refused, as the definition is:
+    /// what a reviewer reads in the directory is what the workflow runs. Skipped where this machine does not let this
+    /// user make a symbolic link to a file.
+    /// </summary>
+    [Fact]
+    public async Task ANamedFileLinkingOutOfItsDirectory_IsRefused()
+    {
+        using var repository = await RepositoryAsync(new HarnessConfig { Workflows = ["small"] });
+        using var elsewhere = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Path.Combine(repository.Path, ".harness-config", "workflows", "small");
+        var target = elsewhere.WriteFile("work.md", "elsewhere\n");
+
+        await WriteAsync(repository, "small", Work, cancellationToken, "agents/worker.md", "schemas/work.json");
+        Directory.CreateDirectory(Path.Combine(directory, "prompts"));
+        TestLinks.OrSkip(() => File.CreateSymbolicLink(Path.Combine(directory, "prompts", "work.md"), target));
+
+        var report = await Service(repository).CheckAsync(repository.Path, "small", cancellationToken);
+        var fileSystem = repository.Harness.FileSystem;
+
+        Assert.Equal(
+            [
+                $"{Shown("small")}: 'prompts/work.md', step 'work''s prompt, leads to '{fileSystem.ResolveLinks(target)}', which is outside "
+                    + $"'{Path.TrimEndingDirectorySeparator(fileSystem.ResolveLinks(directory))}'; "
+                    + "every file a workflow names is relative to '.harness-config/workflows/small/', as an action's are to its own directory",
+            ],
+            report.Lines);
+    }
+
+    /// <summary>
+    /// A file the file system would not look at - the definition, or one it names - is said so, with why, and never as
+    /// a file that is not there: the person is not sent to write one that may be there.
+    /// </summary>
+    [Fact]
+    public async Task AFileThatCouldNotBeLookedAt_IsSaidSo_NeverAsNotThere()
+    {
+        using var repository = await RepositoryAsync(new HarnessConfig { Workflows = ["small"] });
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        await WriteAsync(repository, "small", Work, cancellationToken, "agents/worker.md", "prompts/work.md", "schemas/work.json");
+
+        var prompt = await Service(repository, new Unlooked(repository.Harness.FileSystem, "work.md")).CheckAsync(repository.Path, "small", cancellationToken);
+        var definition = await Service(repository, new Unlooked(repository.Harness.FileSystem, "small.yml")).CheckAsync(repository.Path, "small", cancellationToken);
+
+        Assert.Equal(
+            [$"{Shown("small")}: 'prompts/work.md', step 'work''s prompt, could not be looked at: the disk would not say"],
+            prompt.Lines);
+        Assert.Equal([$"{Shown("small")} could not be looked at: the disk would not say"], definition.Lines);
+    }
+
+    /// <summary>
+    /// A step's legs may name a leg set as --legs does; a name that is neither is refused, naming every leg and every set
+    /// the configuration declares.
+    /// </summary>
+    [Fact]
+    public async Task AStepsLegs_MayNameALegSet_AndANameThatIsNeither_IsRefused()
+    {
+        using var repository = await RepositoryAsync(
+            new HarnessConfig
+            {
+                Workflows = ["small"],
+                BuildConfigs = { ["debug"] = new BuildConfiguration() },
+                Legs = { ["linux-x64"] = HostDoubles.Leg("linux", "x86_64") },
+                LegSets = { ["linux"] = ["linux-x64"] },
+            });
+
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        await WriteAsync(
+            repository,
+            "small",
+            """
+            name: small
+            steps:
+              - name: build
+                type: build
+                legs: [linux, linux-x64, ghost]
+            """,
+            cancellationToken);
+
+        var report = await Service(repository).CheckAsync(repository.Path, "small", cancellationToken);
+
+        Assert.Equal(
+            [
+                $"{Shown("small")}: step 'build' names 'ghost', which is neither a leg nor a leg set: 'ghost' is not declared under legs or legSets. "
+                    + "Declared: linux, linux-x64.",
+            ],
+            report.Lines);
+    }
+
+    /// <summary>
     /// The README and the architecture say the codes validate-workflow answers with - a definition that does not hold as
     /// configuration that does not, and none declared as a request with nothing to check - held to the constants.
     /// </summary>
@@ -685,6 +776,26 @@ public sealed class WorkflowValidationServiceTests
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             await File.WriteAllTextAsync(path, file.EndsWith(".json", StringComparison.Ordinal) ? "{}\n" : "text\n", cancellationToken);
         }
+    }
+
+    /// <summary>A workflow of one reasoning step, whose agent, prompt and schema are files of its own.</summary>
+    private const string Work = """
+        name: small
+        steps:
+          - name: work
+            type: reason
+            agent: worker
+            prompt: prompts/work.md
+            outputs: schemas/work.json
+        """;
+
+    /// <summary>The real file system, but one file by its name is a file it would not look at, as a disk that refuses says.</summary>
+    private sealed class Unlooked(IFileSystem inner, string name) : PassThroughFileSystem(inner)
+    {
+        public override bool FileExists(string path) => Path.GetFileName(path) != name && base.FileExists(path);
+
+        public override PathKind KindOf(string path)
+            => Path.GetFileName(path) == name ? throw new UnauthorizedAccessException("the disk would not say.") : base.KindOf(path);
     }
 
     private static WorkflowValidationService Service(Repository repository, IFileSystem? fileSystem = null)

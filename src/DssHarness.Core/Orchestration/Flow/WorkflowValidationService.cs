@@ -119,9 +119,11 @@ public sealed class WorkflowValidationService(
     {
         var file = context.Layout.WorkflowFile(name);
 
-        if (!_fileSystem.FileExists(file))
+        if (!IsFile(file, out var unlooked))
         {
-            return new WorkflowCheck(name, [$"{Shown(name)} is not there; a workflow is defined by that file, written by 'dssharness init' where it is the implementation one"]);
+            return new WorkflowCheck(name, [unlooked is null
+                ? $"{Shown(name)} is not there; a workflow is defined by that file, written by 'dssharness init' where it is the implementation one"
+                : $"{Shown(name)} could not be looked at: {unlooked}"]);
         }
 
         // Where the workflow's directory and its definition lead, every link along them followed, before a word of it is
@@ -257,7 +259,7 @@ public sealed class WorkflowValidationService(
 
             if (step.Runner is not null && !config.PredefinedRunners.ContainsKey(step.Runner))
             {
-                problems.Add($"{where} runs '{step.Runner}', which " + DeclaredName.NotDeclared(step.Runner, "predefinedRunners", config.PredefinedRunners.Keys));
+                problems.Add($"{where} runs '{step.Runner}': " + DeclaredName.NotDeclared(step.Runner, "predefinedRunners", config.PredefinedRunners.Keys));
             }
 
             if (step.Runner is not null
@@ -268,9 +270,12 @@ public sealed class WorkflowValidationService(
                 problems.Add($"{where} runs '{step.Runner}', which writes the tree, and names no 'in'; a runner that changes files works in an agent's worktree, never in the main tree");
             }
 
-            foreach (var leg in step.Legs.Where(leg => !config.Legs.ContainsKey(leg)))
+            // A leg set is named where a leg is, as --legs takes one.
+            foreach (var leg in step.Legs.Where(leg => !config.Legs.ContainsKey(leg) && !config.LegSets.ContainsKey(leg)))
             {
-                problems.Add($"{where} names the leg '{leg}', which " + DeclaredName.NotDeclared(leg, "legs", config.Legs.Keys));
+                problems.Add(
+                    $"{where} names '{leg}', which is neither a leg nor a leg set: "
+                        + DeclaredName.NotDeclared(leg, "legs or legSets", [.. config.Legs.Keys, .. config.LegSets.Keys]));
             }
         }
 
@@ -340,9 +345,41 @@ public sealed class WorkflowValidationService(
             return $"'{named}', {what}, leads to '{path}', which is outside '{directory}'; every file a workflow names is relative to '{relative}', as an action's are to its own directory";
         }
 
-        return _fileSystem.FileExists(path)
-            ? null
-            : $"'{named}', {what}, is not at '{relative}{named.Replace('\\', '/')}'; write it there, beside the definition that names it";
+        if (IsFile(path, out var unlooked))
+        {
+            return null;
+        }
+
+        return unlooked is null
+            ? $"'{named}', {what}, is not at '{relative}{named.Replace('\\', '/')}'; write it there, beside the definition that names it"
+            : $"'{named}', {what}, could not be looked at: {unlooked}";
+    }
+
+    /// <summary>
+    /// Whether a file is at <paramref name="path"/>; where none is, <paramref name="unlooked"/> says why the file system
+    /// would not look, or is <see langword="null"/> where it looked and found nothing - a file that could not be looked
+    /// at is never reported as missing, and the person is not sent to write one that may be there.
+    /// </summary>
+    private bool IsFile(string path, out string? unlooked)
+    {
+        unlooked = null;
+
+        if (_fileSystem.FileExists(path))
+        {
+            return true;
+        }
+
+        // FileExists answers false where it could not look; the kind of what is there raises instead.
+        try
+        {
+            _ = _fileSystem.KindOf(path);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            unlooked = exception.Message.TrimEnd('.');
+        }
+
+        return false;
     }
 
     /// <summary>That a schema file is there, can be read, and holds a JSON object.</summary>

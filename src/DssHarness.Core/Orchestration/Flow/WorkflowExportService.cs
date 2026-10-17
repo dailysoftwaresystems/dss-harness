@@ -48,9 +48,10 @@ public interface IWorkflowExportService : IUseCase
     /// <exception cref="HarnessException">
     /// A workflow nobody declared, the shipped one asked for under a name it does not have, or no folder to write to
     /// (<see cref="HarnessExit.UsageError"/>); a declared workflow that does not hold (<see cref="HarnessExit.ConfigInvalid"/>,
-    /// naming each problem); a folder for it that is there already, or a file that could not be written
-    /// (<see cref="HarnessExit.Refused"/>). Nothing is left written by any of them: what was written before a failure is
-    /// taken back, or the refusal says why it could not be.
+    /// naming each problem); a folder for it that is there already or could not be looked at, or a file that could not be
+    /// written (<see cref="HarnessExit.Refused"/>); stopped while it wrote (<see cref="HarnessExit.Cancelled"/>, where
+    /// what it wrote could not be taken back; otherwise the cancellation itself). What was written before a failure is
+    /// taken back, every folder the export made with it, or the refusal says why it could not be.
     /// </exception>
     Task<WorkflowExport> ExportAsync(string startDirectory, WorkflowExportRequest request, CancellationToken cancellationToken = default);
 }
@@ -87,14 +88,24 @@ public sealed class WorkflowExportService(
             : await DeclaredAsync(startDirectory, request.Workflow, cancellationToken).ConfigureAwait(false);
 
         var destination = Path.Combine(Path.GetFullPath(request.To, _process.CurrentDirectory), request.Workflow);
+        string made;
 
-        // A folder of its own, never one that is there: what is written is the workflow and nothing else, and nothing a
-        // person put there is written over or mixed with it.
-        if (_fileSystem.KindOf(destination) != PathKind.None)
+        try
         {
-            throw new HarnessException(
-                HarnessExit.Refused,
-                $"'{destination}' is there already; {CommandName} writes a workflow into a folder of its own that it makes, and never into or over one that is there. Nothing was written.");
+            // A folder of its own, never one that is there: what is written is the workflow and nothing else, and nothing a
+            // person put there is written over or mixed with it.
+            if (_fileSystem.KindOf(destination) != PathKind.None)
+            {
+                throw new HarnessException(
+                    HarnessExit.Refused,
+                    $"'{destination}' is there already; {CommandName} writes a workflow into a folder of its own that it makes, and never into or over one that is there. Nothing was written.");
+            }
+
+            made = Outermost(destination);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new HarnessException(HarnessExit.Refused, $"'{destination}' could not be looked at: {ex.Message.TrimEnd('.')}. Nothing was written.", ex);
         }
 
         var written = new List<string>();
@@ -103,29 +114,48 @@ public sealed class WorkflowExportService(
         {
             try
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 await write(Path.Combine(destination, file.Replace('/', Path.DirectorySeparatorChar))).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or OperationCanceledException)
             {
-                // Taken back whole: a folder with part of a workflow in it would read as a workflow that names files it
-                // does not have.
-                var left = TakeBack(destination);
+                // Taken back whole, with every folder the export made above it: a folder with part of a workflow in it
+                // would read as a workflow that names files it does not have.
+                var left = TakeBack(made);
 
                 if (ex is OperationCanceledException && left is null)
                 {
                     throw;
                 }
 
-                var why = ex is OperationCanceledException ? "the export was stopped" : ex.Message.TrimEnd('.');
-                var after = left ?? $"what was written before it was taken back, and '{destination}' is not there";
+                var stopped = ex is OperationCanceledException;
+                var why = stopped ? "the export was stopped" : ex.Message.TrimEnd('.');
+                var after = left ?? $"what was written before it was taken back, and '{made}' is not there";
 
-                throw new HarnessException(HarnessExit.Refused, $"'{file}' could not be written to '{destination}': {why}; {after}.", ex);
+                throw new HarnessException(stopped ? HarnessExit.Cancelled : HarnessExit.Refused, $"'{file}' could not be written to '{destination}': {why}; {after}.", ex);
             }
 
             written.Add(file);
         }
 
         return new WorkflowExport(request.Workflow, request.Shipped, destination, written);
+    }
+
+    /// <summary>
+    /// The outermost folder the export makes on the way to <paramref name="destination"/>: the destination itself where the
+    /// folder it is made in is there, else the first of the folders above it that is not - what a failed export takes back,
+    /// so no folder it made is left behind.
+    /// </summary>
+    private string Outermost(string destination)
+    {
+        var made = destination;
+
+        while (Path.GetDirectoryName(made) is { } parent && _fileSystem.KindOf(parent) == PathKind.None)
+        {
+            made = parent;
+        }
+
+        return made;
     }
 
     /// <summary>
@@ -160,8 +190,8 @@ public sealed class WorkflowExportService(
     }
 
     /// <summary>
-    /// The files of the workflow this tool ships, read from this build and held to every rule a declared one is
-    /// (<see cref="WorkflowTemplates.ShippedDefinition"/>), each written as <c>init</c> writes it.
+    /// The files of the workflow this tool ships, read from this build and held to <see cref="WorkflowValidator"/>'s
+    /// rules (<see cref="WorkflowTemplates.ShippedDefinition"/>), each written as <c>init</c> writes it.
     /// </summary>
     private IReadOnlyList<(string File, Func<string, Task> Write)> Shipped(string name)
     {
@@ -204,7 +234,7 @@ public sealed class WorkflowExportService(
             $"{name}{HarnessLayout.WorkflowFileExtension}",
         ];
 
-    /// <summary>Removes the folder an export that failed made; says why where it cannot.</summary>
+    /// <summary>Removes the outermost folder an export that failed made, and all it holds; says why where it cannot.</summary>
     private string? TakeBack(string destination)
     {
         try

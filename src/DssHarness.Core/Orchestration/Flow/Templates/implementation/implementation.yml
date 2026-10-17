@@ -4,8 +4,9 @@
 # its checks. Written by 'dssharness init'; every path this file names is relative
 # to this workflow's own directory.
 #
-# A run of it ends done, or asks a person only what a person must settle. Every step
-# says what its failure does: 'onFailure: recover' gives a failure no handler takes to
+# A run of it ends done, or asks a person only what a person must settle. Every step of
+# the flow says what its failure does, itself or through its group: 'onFailure: recover'
+# on every step but a reasoning one gives a failure no handler takes to
 # 'recover', at the end of this file, where an agent finds what went wrong and, where the
 # run can put it right, builds, reviews and folds the fix as a work item is; then the
 # step that failed runs again ('onSuccess: failed-step'). A person is asked where the
@@ -20,7 +21,7 @@ maxOpenAgents: 4
 maxRetries: 3
 # Every agent this file runs - each reasoning step, the advisor, the reporter - says how it is
 # tried again where it failed: three times on each model it may use, waiting 30 seconds before
-# the first try and twice as long before each later one, before its fallback's next model, and
+# the first retry and twice as long before each later one, before its fallback's next model, and
 # only then asks (onFailure: pause). These two are what a step a repository adds gets where it
 # says neither.
 backoffSeconds: 30
@@ -816,8 +817,8 @@ steps:
         times: 2
     onFailure: recover
 recover:
-  # Reached by every step that says onFailure: recover - a build, a test, a fold, a commit,
-  # a push, the wait for the checks; never a reasoning step, whose failure is tried again,
+  # Reached by every step of the flow that says onFailure: recover - a test, a fold, a
+  # commit, a push, the wait for the checks; never a reasoning step, whose failure is tried again,
   # on its fallback, and then asked. Once its steps are done, the step that gave it its
   # failure runs again from where it stopped (onSuccess: failed-step), now that what stood
   # in its way was put right. Should that step fail again, its own onFailure: recover brings

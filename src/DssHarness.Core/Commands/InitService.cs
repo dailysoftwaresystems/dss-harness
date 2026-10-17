@@ -267,8 +267,9 @@ public sealed class InitService(
             EnsurePlaceholderDirectory(root, directory, actions);
         }
 
-        // The implementation workflow's own files, where the configuration declares it - the one init creates does: each one
-        // missing is written and each one there is kept, whatever it holds, so an init that stopped part way is finished
+        // The implementation workflow's own files, where the configuration declares it - the one init creates does: the
+        // whole set where the repository has no definition of it yet, and where it has one, only the missing shipped files
+        // that definition names; each one there is kept, whatever it holds, so an init that stopped part way is finished
         // by this one. A configuration that does not declare it has its own arrangement, and nothing is written for it.
         if ((config.Workflows ?? []).Contains(WorkflowTemplates.ShippedWorkflowName, StringComparer.Ordinal))
         {
@@ -278,9 +279,10 @@ public sealed class InitService(
             {
                 workflow = WorkflowTemplates.EnsureShipped(layout.WorkflowsDirectory, _fileSystem);
             }
-            catch (HarnessException ex) when (ex.ExitCode == HarnessExit.Refused)
+            catch (HarnessException ex) when (ex.ExitCode is HarnessExit.Refused or HarnessExit.ConfigInvalid)
             {
-                // Refused with every line of what init had done by then: the refusal names what it wrote of the workflow.
+                // Refused with every line of what init had done by then: the refusal names what it wrote of the workflow,
+                // or the repository's own definition that says nothing init can go by.
                 return CommandOutcome.Failed(ex.ExitCode, ex.Message, actions);
             }
 

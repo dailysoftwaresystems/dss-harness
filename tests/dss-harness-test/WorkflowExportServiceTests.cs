@@ -180,7 +180,8 @@ public sealed class WorkflowExportServiceTests
 
     /// <summary>
     /// A file that cannot be written is refused (13) naming it and why, and what was written before it is taken back with
-    /// the folder made for it; where that cannot be, the refusal says so, with why.
+    /// every folder the export made, those above the workflow's own included; where that cannot be, the refusal says so,
+    /// with why.
     /// </summary>
     [Fact]
     public async Task AFileThatCannotBeWritten_IsRefused_AndWhatWasWrittenIsTakenBack_OrSaidWhereItCannotBe()
@@ -190,20 +191,61 @@ public sealed class WorkflowExportServiceTests
         var takenBack = new FailingWrites(harness.FileSystem, failOn: 3, keep: false);
         var kept = new FailingWrites(harness.FileSystem, failOn: 3, keep: true);
 
-        var refused = await Assert.ThrowsAsync<HarnessException>(() => Service(harness, takenBack).ExportAsync(temp.Path, new WorkflowExportRequest(Shipped, temp.Combine("a"), Shipped: true), Token));
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => Service(harness, takenBack).ExportAsync(temp.Path, new WorkflowExportRequest(Shipped, temp.Combine("a", "deeper"), Shipped: true), Token));
         var left = await Assert.ThrowsAsync<HarnessException>(() => Service(harness, kept).ExportAsync(temp.Path, new WorkflowExportRequest(Shipped, temp.Combine("b"), Shipped: true), Token));
 
         var third = WorkflowTemplates.Files.Count > 2 ? ExportOrder()[2] : throw new InvalidOperationException("the shipped set is too small");
-        var a = temp.Combine("a", Shipped);
+        var a = temp.Combine("a", "deeper", Shipped);
         var b = temp.Combine("b", Shipped);
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
-        Assert.Equal($"'{third}' could not be written to '{a}': the disk is full; what was written before it was taken back, and '{a}' is not there.", refused.Message);
-        Assert.False(Directory.Exists(a));
+        Assert.Equal($"'{third}' could not be written to '{a}': the disk is full; what was written before it was taken back, and '{temp.Combine("a")}' is not there.", refused.Message);
+        Assert.False(Directory.Exists(temp.Combine("a")));
 
         Assert.Equal(HarnessExit.Refused, left.ExitCode);
-        Assert.Equal($"'{third}' could not be written to '{b}': the disk is full; what was written before it could not be taken back from '{b}': it is held.", left.Message);
+        Assert.Equal($"'{third}' could not be written to '{b}': the disk is full; what was written before it could not be taken back from '{temp.Combine("b")}': it is held.", left.Message);
         Assert.Equal(2, FilesUnder(b).Count);
+    }
+
+    /// <summary>
+    /// An export stopped while it writes takes back what it wrote and is the cancellation it was; where what it wrote
+    /// cannot be taken back, it ends as cancelled (130), saying what is left and why.
+    /// </summary>
+    [Fact]
+    public async Task AnExportStoppedWhileItWrites_TakesBackWhatItWrote_OrSaysWhatIsLeft()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        using var first = new CancellationTokenSource();
+        using var second = new CancellationTokenSource();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Service(harness, new FailingWrites(harness.FileSystem, failOn: 0, keep: false, stop: (2, first)))
+            .ExportAsync(temp.Path, new WorkflowExportRequest(Shipped, temp.Combine("a"), Shipped: true), first.Token));
+        var left = await Assert.ThrowsAsync<HarnessException>(() => Service(harness, new FailingWrites(harness.FileSystem, failOn: 0, keep: true, stop: (2, second)))
+            .ExportAsync(temp.Path, new WorkflowExportRequest(Shipped, temp.Combine("b"), Shipped: true), second.Token));
+
+        var third = ExportOrder()[2];
+
+        Assert.False(Directory.Exists(temp.Combine("a")));
+        Assert.Equal(HarnessExit.Cancelled, left.ExitCode);
+        Assert.Equal(
+            $"'{third}' could not be written to '{temp.Combine("b", Shipped)}': the export was stopped; what was written before it could not be taken back from '{temp.Combine("b")}': it is held.",
+            left.Message);
+    }
+
+    /// <summary>A folder to export into that cannot be looked at is refused (13), saying why, and nothing is written.</summary>
+    [Fact]
+    public async Task AFolderThatCannotBeLookedAt_IsRefused()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(harness, new UnlookedKind(harness.FileSystem))
+            .ExportAsync(temp.Path, new WorkflowExportRequest(Shipped, temp.Combine("out"), Shipped: true), Token));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+        Assert.Equal($"'{temp.Combine("out", Shipped)}' could not be looked at: the disk would not say. Nothing was written.", refusal.Message);
+        Assert.False(Directory.Exists(temp.Combine("out")));
     }
 
     /// <summary>
@@ -280,14 +322,18 @@ public sealed class WorkflowExportServiceTests
         Assert.Contains(
             "'dssharness export-workflow <name> --to <dir>' copies a workflow - its yml and every file it names, and no other - into <dir>/<name>/, a folder of its own that must not be "
                 + $"there (13 where it is): a declared one once it holds (12 where it does not), byte for byte, or, with --shipped, the {Shipped} workflow as this tool ships it, to make a "
-                + "version of your own. A file that cannot be written takes back what was written before it.",
+                + "version of your own. A file that cannot be written takes back what was written before it, or says why it could not.",
             help,
             StringComparison.Ordinal);
         Assert.Contains(
             "`export-workflow <workflow> --to <dir>` copies a workflow - its yml and every file it names, and no other - into `<dir>/<workflow>/`, a folder of its own that must not be there (13 where it is)",
             readme,
             StringComparison.Ordinal);
-        Assert.Contains("A file that cannot be written takes back what was written before it, so no folder is left with part of a workflow in it.", readme, StringComparison.Ordinal);
+        Assert.Contains(
+            "A file that cannot be written takes back what was written before it, with every folder the export made, so no folder is left with "
+                + "part of a workflow in it - or the refusal says why it could not.",
+            readme,
+            StringComparison.Ordinal);
         Assert.Contains("A declared workflow is exported once its check holds (12 where it does not), from the definition and the directory that check found", architecture, StringComparison.Ordinal);
         Assert.Contains("The yml is written last, and a file that cannot be written takes back what was written before it", architecture, StringComparison.Ordinal);
     }
@@ -337,11 +383,17 @@ public sealed class WorkflowExportServiceTests
         public void Dispose() => Tree.Dispose();
     }
 
+    /// <summary>The real file system, but one that will not say what is at any path, as a disk that refuses says.</summary>
+    private sealed class UnlookedKind(IFileSystem inner) : PassThroughFileSystem(inner)
+    {
+        public override PathKind KindOf(string path) => throw new UnauthorizedAccessException("the disk would not say.");
+    }
+
     /// <summary>
     /// The real file system, but the write numbered <c>failOn</c> fails with a full disk; where <c>keep</c> is set, the
     /// folder an export would take back is held, and cannot be.
     /// </summary>
-    private sealed class FailingWrites(IFileSystem inner, int failOn, bool keep) : PassThroughFileSystem(inner)
+    private sealed class FailingWrites(IFileSystem inner, int failOn, bool keep, (int After, CancellationTokenSource Source)? stop = null) : PassThroughFileSystem(inner)
     {
         private int _writes;
 
@@ -353,6 +405,12 @@ public sealed class WorkflowExportServiceTests
             }
 
             base.WriteAllTextAtomic(path, contents);
+
+            // Stopped once this many files are written, as a person's interrupt would stop it between two.
+            if (stop is { } asked && _writes == asked.After)
+            {
+                asked.Source.Cancel();
+            }
         }
 
         public override void DeleteDirectory(string path)

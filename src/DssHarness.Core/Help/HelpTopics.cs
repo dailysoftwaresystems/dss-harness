@@ -2870,7 +2870,8 @@ public static class HelpTopics
         builder.AppendLine("file it names, and no other - into <dir>/<name>/, a folder of its own that must not be");
         builder.AppendLine("there (13 where it is): a declared one once it holds (12 where it does not), byte for");
         builder.AppendLine($"byte, or, with --shipped, the {WorkflowTemplates.ShippedWorkflowName} workflow as this tool ships it, to make a");
-        builder.AppendLine("version of your own. A file that cannot be written takes back what was written before it.");
+        builder.AppendLine("version of your own. A file that cannot be written takes back what was written before it, or");
+        builder.AppendLine("says why it could not.");
         builder.AppendLine();
         builder.AppendLine("A workflow declares inputs - the values a run is started with, each with a kind, a");
         builder.AppendLine("default and the options it takes; params - its own knobs, defaulted in the file and read");
@@ -2937,9 +2938,10 @@ public static class HelpTopics
             builder,
             $"An expression reads names joined by &&, ||, !, ==, != and ?? with ( ) to group, 'empty(x)' for whether a read holds nothing "
             + "and 'any(list, test)' for whether any member meets a test written with 'it' for the member: every step, input and param it "
-            + "names must be declared before it, and a placeholder in braces - '{step.member}' - in a prompt or a template key reads the same "
-            + $"names. '{ToolPackage.Command} validate-workflow' checks all of it - the shape of every key, every name an expression reads, every file "
-            + $"the definition names - and refuses ({HarnessExit.ConfigInvalid}) naming each problem, without running anything, as a "
+            + "names must be declared before it, and a placeholder in braces - '{step.member}' - in a template key reads the same names, as "
+            + $"one in a prompt does. '{ToolPackage.Command} validate-workflow' checks the definition - the shape of every key, every name an "
+            + "expression or a template key reads, every file the definition names; a prompt's own placeholders are not read yet - and "
+            + $"refuses ({HarnessExit.ConfigInvalid}) naming each problem, without running anything, as a "
             + "config.json that does not hold is refused. Where config.json declares no workflow there is nothing to check, and it is "
             + $"refused ({HarnessExit.Refused}), saying that \"workflows\": [\"{WorkflowTemplates.ShippedWorkflowName}\"] declares the one init writes.");
 

@@ -163,6 +163,38 @@ public sealed class InitServiceTests
     }
 
     /// <summary>
+    /// A repository's own definition that does not read, where a shipped file is missing, refuses init as configuration
+    /// that does not hold (12), naming the definition and every problem in it: which files it names cannot be told, so
+    /// the missing file is not written in its place. With every shipped file there, nothing is asked of the definition.
+    /// </summary>
+    [Fact]
+    public async Task InitializeAsync_RefusesARepositorysOwnDefinitionThatDoesNotRead_WhereAFileIsMissing()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var token = TestContext.Current.CancellationToken;
+        var name = WorkflowTemplates.ShippedWorkflowName;
+        await harness.InitializeGitRepositoryAsync(temp.Path, token);
+        await harness.InitService.InitializeAsync(temp.Path, token);
+        await File.WriteAllTextAsync(WorkflowFile(temp, $"{name}.yml"), "name: [unclosed\n", token);
+
+        var everyFileThere = await harness.InitService.InitializeAsync(temp.Path, token);
+
+        File.Delete(WorkflowFile(temp, "agents/planner.md"));
+        var outcome = await harness.InitService.InitializeAsync(temp.Path, token);
+
+        Assert.True(everyFileThere.Succeeded, everyFileThere.Message);
+        Assert.Equal(HarnessExit.ConfigInvalid, outcome.ExitCode);
+        Assert.StartsWith(
+            $".harness-config/workflows/{name}/{name}.yml is the repository's own definition of the {name} workflow, and does not read, "
+                + "so which shipped files it names cannot be told, and none was written; run 'dssharness init' again once it reads "
+                + $"('dssharness validate-workflow {name}' says the same):{Environment.NewLine}'{WorkflowFile(temp, $"{name}.yml")}' has 1 problem(s):",
+            outcome.Message,
+            StringComparison.Ordinal);
+        Assert.False(File.Exists(WorkflowFile(temp, "agents/planner.md")));
+    }
+
+    /// <summary>
     /// A configuration that does not declare the implementation workflow - a repository's own arrangement, or one written before
     /// workflows were - gets none of it: init writes nothing under the workflows directory and says nothing of it.
     /// </summary>
