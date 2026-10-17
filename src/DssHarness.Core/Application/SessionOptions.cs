@@ -33,7 +33,11 @@ public sealed record SessionOptions
     /// </summary>
     public bool BeginsRun { get; init; }
 
-    /// <summary>Whether the operation answers with a document, and whose; <see cref="DocumentKind.None"/> where it answers with none.</summary>
+    /// <summary>
+    /// Whether the operation answers with a document, and whose; <see cref="DocumentKind.None"/> where it answers with
+    /// none. <see cref="DocumentKind.Own"/> needs the front end's stopped form (<see cref="SessionFrontEnd.Stopped"/>), and
+    /// a session begun without one is refused (<see cref="InvalidOperationException"/>).
+    /// </summary>
     public DocumentKind Document { get; init; } = DocumentKind.None;
 
     /// <summary>The operation this one belongs to - a step of an orchestrator run, naming the run - where there is one.</summary>
@@ -42,13 +46,22 @@ public sealed record SessionOptions
     /// <summary>
     /// Whether this operation's own end - what it says and leaves on the hosts it reached - is left to its
     /// <see cref="Parent"/> to await, as a step of a run leaves it to the run: the end runs however the outer
-    /// operation ended, never cut short by this one finishing.
+    /// operation ended, never cut short by this one finishing, on this operation's services, which are kept for it. A
+    /// session begun with this and no <see cref="Parent"/> is refused (<see cref="InvalidOperationException"/>); one whose
+    /// outer operation has already taken its ends runs its own at once.
     /// </summary>
     public bool DefersCommandEnd { get; init; }
 
-    /// <summary>Whether a first interrupt asks this operation for a safe pause, and only a second cancels it.</summary>
+    /// <summary>
+    /// Whether a first interrupt asks this operation for a safe pause, and only a second cancels it. Refused with
+    /// <see cref="NotSupportedException"/> until the run verbs of an orchestrator run honour it: every interrupt still
+    /// cancels, and a session that asked otherwise would be told nothing.
+    /// </summary>
     public bool PausesOnInterrupt { get; init; }
 
-    /// <summary>Whether what this operation starts is out of reach of an interrupt typed at the terminal.</summary>
+    /// <summary>
+    /// Whether what this operation starts is out of reach of an interrupt typed at the terminal. Refused with
+    /// <see cref="NotSupportedException"/> until a process can be started that way, which this build cannot do yet.
+    /// </summary>
     public bool ApartFromTerminal { get; init; }
 }

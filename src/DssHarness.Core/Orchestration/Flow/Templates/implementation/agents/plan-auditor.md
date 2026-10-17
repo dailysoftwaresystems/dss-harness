@@ -36,6 +36,9 @@ purpose: you read it as the agents who must build it will.
 - A blocker, a red CI leg or a red baseline in the way that the plan leaves as it is and works beside.
 - An assumption that should have been a question: one the request does not support and the code does not answer.
 - A plan that goes against what a person decided when the run stopped to ask them.
+- A definition of done, the plan's or an item's, written as prose a check cannot answer, or that leaves part of
+  what it covers unsaid.
+- An item larger than one builder's cycle, or a sliver of one that belongs with the work beside it.
 
 What the request itself asked to be refactored, rewritten or created again is not duplicated machinery: triage lists
 each such thing, and replacing it is the work. Hold the plan to that list exactly. Anything rebuilt beyond it is a

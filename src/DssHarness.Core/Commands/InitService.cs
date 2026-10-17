@@ -5,6 +5,7 @@ using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Orchestration.Flow;
+using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Projects;
 using DssHarness.Core.Repository;
@@ -266,13 +267,31 @@ public sealed class InitService(
             EnsurePlaceholderDirectory(root, directory, actions);
         }
 
-        // The default workflow's own files, where the repository has no workflows directory at all:
-        // one that is there is a repository's own arrangement, and nothing is written into it.
-        foreach (var written in WorkflowTemplates.EnsureDefault(
-                     Path.Combine(layout.HarnessDirectory, HarnessLayout.WorkflowsDirectoryName),
-                     _fileSystem))
+        // The implementation workflow's own files, where the configuration declares it - the one init creates does: each one
+        // missing is written and each one there is kept, whatever it holds, so an init that stopped part way is finished
+        // by this one. A configuration that does not declare it has its own arrangement, and nothing is written for it.
+        if ((config.Workflows ?? []).Contains(WorkflowTemplates.ShippedWorkflowName, StringComparer.Ordinal))
         {
-            actions.Add($"created {written}");
+            ShippedWorkflowFiles workflow;
+
+            try
+            {
+                workflow = WorkflowTemplates.EnsureShipped(layout.WorkflowsDirectory, _fileSystem);
+            }
+            catch (HarnessException ex) when (ex.ExitCode == HarnessExit.Refused)
+            {
+                // Refused with every line of what init had done by then: the refusal names what it wrote of the workflow.
+                return CommandOutcome.Failed(ex.ExitCode, ex.Message, actions);
+            }
+
+            actions.AddRange(workflow.Created.Select(file => $"created {file}"));
+
+            if (workflow.Kept > 0)
+            {
+                actions.Add(
+                    $"kept    {HarnessLayout.WorkflowsDirectoryRelative}/{WorkflowTemplates.ShippedWorkflowName}/ "
+                    + $"({ReportText.Counted(workflow.Kept, "file")} already present)");
+            }
         }
 
         var gitIgnorePath = Path.Combine(root, ".gitignore");

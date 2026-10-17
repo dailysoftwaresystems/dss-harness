@@ -1,10 +1,15 @@
 using DssHarness.Core.Application;
+using DssHarness.Core.Application.Legs;
+using DssHarness.Core.Composition;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
+using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
+using DssHarness.Core.Secrets;
+using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
 
 namespace DssHarness.Tests;
@@ -176,7 +181,228 @@ public sealed class CommandPipelineTests : IDisposable
 
         Assert.Equal(ended == "answered" ? HarnessExit.Success : HarnessExit.Refused, completion.ExitCode);
         Assert.Equal(["one", "two"], ran);
-        Assert.Contains(Lines(kit.Error), line => line.Contains("could not run: the host is gone", StringComparison.Ordinal));
+        Assert.Contains("test: WARN - an end this operation was handed could not run: Unexpected IOException: the host is gone", Lines(kit.Error));
+    }
+
+    /// <summary>
+    /// The operation's own end that cannot run is said as a warning, as a handed end that cannot is: the ends handed to
+    /// it still run, the operation still ends with what its body answered, and nothing escapes its lifecycle.
+    /// </summary>
+    [Fact]
+    public async Task AnOwnEndThatCannotRun_IsSaidAsAWarning_AndTheEndsHandedToItStillRun()
+    {
+        var kit = Begin();
+        var ran = new List<string>();
+        kit.Services.Remove(typeof(CommandEnd));
+
+        var completion = await kit.Session.RunAsync(
+            (_, _) =>
+            {
+                kit.Host.Defer(kit.Session.Id, () => { ran.Add("handed"); return Task.CompletedTask; });
+                return Task.FromResult(CommandOutcome.Ok("done"));
+            },
+            CancellationToken.None);
+
+        Assert.Equal(HarnessExit.Success, completion.ExitCode);
+        Assert.Equal(["handed"], ran);
+        Assert.Equal(
+            [$"test: WARN - this operation's own end could not run: Unexpected InvalidOperationException: No service for type '{typeof(CommandEnd).FullName}' has been registered."],
+            Lines(kit.Error));
+    }
+
+    /// <summary>
+    /// A handed end that fails for a defect of this tool shows the defect's trace under verbose, as a command's own failure
+    /// does, and only there: a warning that hid it would leave a defect nobody could diagnose.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AHandedEndsDefect_ShowsItsTraceOnlyUnderVerbose(bool verbose)
+    {
+        var kit = Begin(verbose: verbose);
+
+        await kit.Session.RunAsync(
+            (_, _) =>
+            {
+                kit.Host.Defer(kit.Session.Id, () => throw new InvalidOperationException("boom"));
+                return Task.FromResult(CommandOutcome.Ok("done"));
+            },
+            CancellationToken.None);
+
+        var lines = Lines(kit.Error);
+
+        Assert.Equal("test: WARN - an end this operation was handed could not run: Unexpected InvalidOperationException: boom", lines[0]);
+        Assert.Equal(verbose, lines.Any(line => line.StartsWith("   at ", StringComparison.Ordinal)));
+        Assert.Equal(verbose ? "System.InvalidOperationException: boom" : null, lines.ElementAtOrDefault(1));
+    }
+
+    /// <summary>
+    /// A step whose run has already taken its ends - or that names no operation this host began - runs its own end at
+    /// once: handed to nobody, it would never run at all.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AStepWhoseRunTookItsEndsAlready_RunsItsOwnAtOnce(bool parentRan)
+    {
+        var kit = Begin();
+
+        if (parentRan)
+        {
+            await kit.Session.RunAsync((_, _) => Task.FromResult(CommandOutcome.Ok("the run's answer")), CancellationToken.None);
+        }
+
+        var step = kit.Step(parentRan ? kit.Session.Id : OperationId.New());
+        step.Refusals.Refused();
+
+        var stepEnded = await step.Session.RunAsync((_, _) => Task.FromResult(CommandOutcome.Ok("the step's answer")), CancellationToken.None);
+
+        Assert.Equal(HarnessExit.Success, stepEnded.ExitCode);
+        Assert.Equal([$"step: WARN - {HostConnector.SyncedCopyNotice}."], Lines(step.Error));
+    }
+
+    /// <summary>
+    /// A step's end runs on its own services, though its session is disposed as real code disposes it: they are kept for
+    /// that end, and disposed once it has run - so what it says reaches the step's own output, never one already closed.
+    /// </summary>
+    [Fact]
+    public async Task AStepsHandedEnd_RunsOnItsOwnServices_DisposedOnlyOnceItHasRun()
+    {
+        var kit = Begin();
+        var sink = new RecordingSink();
+        var stepOutput = new EventHarnessOutput(sink, OperationId.New());
+        var refusals = new SyncedCopyRefusals(stepOutput);
+        refusals.Refused();
+        var stepServices = new Services(new Dictionary<Type, object?>
+        {
+            [typeof(IHarnessOutput)] = stepOutput,
+            [typeof(IProcessContext)] = new FixedProcessContext(),
+            [typeof(IFileSystem)] = new PhysicalFileSystem(FilePermissionsFactory.Create()),
+            [typeof(CommandEnd)] = new CommandEnd(refusals, new HoldAwakeRegistry(Substitute.For<IHostCommandRunner>(), stepOutput)),
+        });
+        var keptWhileTheRunWent = false;
+
+        var completion = await kit.Session.RunAsync(
+            async (_, _) =>
+            {
+                NextServices = stepServices;
+                var step = kit.Host.Begin(new SessionOptions { Command = "step", Parent = kit.Session.Id, DefersCommandEnd = true });
+
+                await using (step.ConfigureAwait(false))
+                {
+                    await step.RunAsync((_, _) => Task.FromResult(CommandOutcome.Ok("the step's answer")), CancellationToken.None);
+                }
+
+                keptWhileTheRunWent = !stepServices.Disposed;
+                return CommandOutcome.Ok("the run's answer");
+            },
+            CancellationToken.None);
+
+        Assert.Equal(HarnessExit.Success, completion.ExitCode);
+        Assert.True(keptWhileTheRunWent, "the step's services were disposed with its session, before its end had run on them");
+        Assert.True(stepServices.Disposed);
+        Assert.Equal(
+            [typeof(CommandBegan), typeof(CommandReported), typeof(TextLine), typeof(CommandEnded)],
+            sink.Seen.Select(@event => @event.GetType()));
+        Assert.Equal(new TextLine(LineKind.Warn, "step", HostConnector.SyncedCopyNotice + "."), sink.Seen[2] with { Operation = null, Sequence = 0, At = default });
+    }
+
+    /// <summary>
+    /// A session that would ignore what it is asked, or could not keep it, is refused before any service is built for it:
+    /// an end left to nobody, a document with no stopped form, and the options and parts of a front end a later slice
+    /// gives their meaning - each said, never run without a word.
+    /// </summary>
+    [Fact]
+    public void ASessionThatWouldIgnoreWhatItIsAsked_IsRefused_BeforeAnyServiceIsBuilt()
+    {
+        var built = 0;
+        var host = new DssHarnessHost(_ =>
+        {
+            built++;
+            return new Services([]);
+        });
+
+        Assert.Equal(
+            "'test' leaves its end to the operation it is a step of, and names none (Parent): nobody would ever run it.",
+            Assert.Throws<InvalidOperationException>(() => host.Begin(new SessionOptions { Command = "test", DefersCommandEnd = true })).Message);
+        Assert.Equal(
+            "'test' answers with a document of its own, and its front end supplies no stopped form (Stopped) to answer a stop with.",
+            Assert.Throws<InvalidOperationException>(() => host.Begin(new SessionOptions { Command = "test", Document = DocumentKind.Own })).Message);
+        Assert.Equal(
+            "PausesOnInterrupt is honoured by the run verbs of an orchestrator run, which this build does not have yet: every interrupt still cancels.",
+            Assert.Throws<NotSupportedException>(() => host.Begin(new SessionOptions { Command = "test", PausesOnInterrupt = true })).Message);
+        Assert.Equal(
+            "ApartFromTerminal is honoured once a process can be started apart from the terminal (ProcessRequest), which this build cannot do "
+                + "yet: what an operation starts is in reach of an interrupt.",
+            Assert.Throws<NotSupportedException>(() => host.Begin(new SessionOptions { Command = "test", ApartFromTerminal = true })).Message);
+        Assert.Equal(
+            "A front end's own Output is honoured once a front end other than the command line builds an operation's services, which this "
+                + "build does not have yet: an operation writes and asks through the services its host builds.",
+            Assert.Throws<NotSupportedException>(() => host.Begin(
+                new SessionOptions { Command = "test" },
+                new SessionFrontEnd(Output: _ => new EventHarnessOutput(new TextRunEvents(TextWriter.Null, TextWriter.Null, verbose: false))))).Message);
+        Assert.Equal(
+            "A front end's own Prompt is honoured once a front end other than the command line builds an operation's services, which this "
+                + "build does not have yet: an operation writes and asks through the services its host builds.",
+            Assert.Throws<NotSupportedException>(() => host.Begin(
+                new SessionOptions { Command = "test" },
+                new SessionFrontEnd(Prompt: _ => Substitute.For<ISuperuserPrompt>()))).Message);
+        Assert.Equal(0, built);
+    }
+
+    /// <summary>
+    /// A use case its operation's services do not build is a defect said by name - which registration is missing - never
+    /// a null reference nobody can trace.
+    /// </summary>
+    [Fact]
+    public async Task AUseCaseNotRegistered_IsADefectSaidByName()
+    {
+        var kit = Begin();
+
+        var completion = await kit.Session.RunAsync((scope, _) => Task.FromResult(scope.Use<IBuildLegs>() is null ? CommandOutcome.Ok("none") : CommandOutcome.Ok("one")), CancellationToken.None);
+
+        Assert.Equal(HarnessExit.InternalError, completion.ExitCode);
+        Assert.Equal(
+            [$"test: FAIL - Unexpected InvalidOperationException: No service for type '{typeof(IBuildLegs).FullName}' has been registered."],
+            Lines(kit.Error));
+    }
+
+    /// <summary>
+    /// A machine this build cannot run on is told why in the failure line, which the machine that asked a host reads:
+    /// the output that line is written through is built whatever the machine is, so the session begins, its body's
+    /// failure is reported, and its end that cannot run either is said - never a trace the command line prints and an
+    /// exit code that collides with verify-git's.
+    /// </summary>
+    [Fact]
+    public async Task AMachineThisBuildCannotRunOn_IsToldWhy_InTheFailureLine()
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+        var options = new SessionOptions { Command = HostAgentProtocol.CommandName, Prompting = false, Origin = CommandOrigin.Agent };
+        var host = new DssHarnessHost(
+            _ => new ServiceCollection()
+                .AddDssHarness(options, output: provider => new ConsoleHarnessOutput(output, error, verbose: false, provider.GetRequiredService<HomeShorthand>()))
+                .AddSingleton<IHostPlatform>(_ => throw new PlatformNotSupportedException("DssHarness supports Windows, Linux and macOS only."))
+                .BuildServiceProvider());
+
+        var session = host.Begin(options);
+
+        await using (session.ConfigureAwait(false))
+        {
+            var completion = await session.RunAsync(
+                (scope, _) => Task.FromResult(scope.Services.GetRequiredService<HostAgentService>() is null ? CommandOutcome.Ok("none") : CommandOutcome.Ok("served")),
+                CancellationToken.None);
+
+            Assert.Equal(HarnessExit.InternalError, completion.ExitCode);
+        }
+
+        Assert.Equal(
+            [
+                $"{HostAgentProtocol.CommandName}: FAIL - Unexpected PlatformNotSupportedException: DssHarness supports Windows, Linux and macOS only.",
+                $"{HostAgentProtocol.CommandName}: WARN - this operation's own end could not run: Unexpected PlatformNotSupportedException: DssHarness supports Windows, Linux and macOS only.",
+            ],
+            Lines(error));
+        Assert.Empty(Lines(output));
     }
 
     /// <summary>
@@ -371,6 +597,10 @@ public sealed class CommandPipelineTests : IDisposable
             => new(command, defers: true, parent: parent, verbose: false, directory: null, beginsRun: false, document: DocumentKind.None, stopped: null, owner: _owner, sharedHost: Host);
     }
 
+    /// <summary>
+    /// An operation's services, built by hand: each asked for by its type, and on disposal each that is disposable
+    /// disposed, as a provider disposes the singletons it built.
+    /// </summary>
     private sealed class Services(Dictionary<Type, object?> singletons) : IServiceProvider, IAsyncDisposable
     {
         private readonly Dictionary<Type, object?> _singletons = singletons;
@@ -379,10 +609,27 @@ public sealed class CommandPipelineTests : IDisposable
 
         public object? GetService(Type serviceType) => _singletons.TryGetValue(serviceType, out var service) ? service : null;
 
+        /// <summary>Takes a service away, as a registration missing from the root would leave it.</summary>
+        public void Remove(Type serviceType) => _singletons.Remove(serviceType);
+
         public ValueTask DisposeAsync()
         {
             Disposed = true;
+
+            foreach (var disposable in _singletons.Values.OfType<IDisposable>())
+            {
+                disposable.Dispose();
+            }
+
             return ValueTask.CompletedTask;
         }
+    }
+
+    /// <summary>A front end's sink of events, keeping each as it is given.</summary>
+    private sealed class RecordingSink : IRunEvents
+    {
+        public List<RunEvent> Seen { get; } = [];
+
+        public void Emit(RunEvent @event) => Seen.Add(@event);
     }
 }

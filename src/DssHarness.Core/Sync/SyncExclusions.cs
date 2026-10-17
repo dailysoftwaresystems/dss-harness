@@ -90,7 +90,7 @@ public sealed class SyncExclusions
     /// <summary>
     /// This policy with <paramref name="withheld"/> withheld too - not transferred, and protected from deletion -
     /// for the one sync that asks: what that sync's own caller keeps in the copy it is syncing, as a sweep keeps the
-    /// build directory it made in its own worker. The configuration's own statements are untouched.
+    /// directory its build writes in its own worker. The configuration's own statements are untouched.
     /// </summary>
     /// <param name="withheld">The paths to add, spelled as the configuration spells them.</param>
     public SyncExclusions With(IReadOnlyList<string> withheld)

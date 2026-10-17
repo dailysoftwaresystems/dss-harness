@@ -62,6 +62,22 @@ public sealed class CommandDirectoryTests : IDisposable
         Assert.StartsWith("'not\0a\0directory' is not a usable directory path: ", answer.Problem, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A directory asked for blank names none, and is refused naming what was asked for - never made whole against the
+    /// current directory, which would act on a tree nobody asked for.
+    /// </summary>
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void ADirectoryAskedForBlank_IsRefused_NeverTakenForTheCurrentOne(string blank)
+    {
+        var answer = CommandDirectory.Resolve(blank, _current.Path, _fileSystem);
+
+        Assert.False(answer.Holds);
+        Assert.Null(answer.Directory);
+        Assert.Equal($"'{blank}' is not a usable directory path: it names no directory.", answer.Problem);
+    }
+
     /// <inheritdoc/>
     public void Dispose() => _current.Dispose();
 }

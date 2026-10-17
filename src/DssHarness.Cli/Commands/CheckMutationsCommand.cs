@@ -1,6 +1,7 @@
 using System.CommandLine;
 using DssHarness.Core.Application.Legs;
 using DssHarness.Core.Mutations;
+using DssHarness.Core.Output;
 
 namespace DssHarness.Cli.Commands;
 
@@ -111,7 +112,7 @@ internal static class CheckMutationsCommand
 
             return request.List
                 ? await legs.ListAsync(request, cancellationToken).ConfigureAwait(false)
-                : (await legs.RunAsync(request, run!, cancellationToken).ConfigureAwait(false)).ToOutcome(context.Json);
+                : (await legs.RunAsync(request, run!, cancellationToken).ConfigureAwait(false)).ToOutcome(context.Json, context.Get<IHarnessOutput>().Shown);
         }, beginsRun: arguments => !arguments.GetValue(ListOption), Answer);
 
         return command;

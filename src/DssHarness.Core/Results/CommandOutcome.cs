@@ -38,8 +38,8 @@ public sealed record CommandOutcome(int ExitCode, string Message, IReadOnlyList<
 
     /// <summary>
     /// Why the outcome ended as it did, where its exit code and its lines cannot say: <see cref="OutcomeCause.LockHeld"/>
-    /// marks the one kind of refusal a caller waits on rather than puts right - a lock another run holds - set by every
-    /// place one refuses.
+    /// marks the one kind of refusal a caller waits on rather than puts right - a lock another run holds, and nothing
+    /// else in the way - set by each place that refuses so, which <see cref="OutcomeCause.LockHeld"/> lists.
     /// </summary>
     public OutcomeCause Cause { get; init; }
 

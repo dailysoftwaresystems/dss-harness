@@ -802,6 +802,33 @@ public sealed class AgentRowsTests
         Assert.Equal("two\n", OrchestrationKit.Read(kit.Main, "b.txt"));
     }
 
+    /// <summary>
+    /// Rows or registries that cannot be read leave a dry run as its failure: its own code, and no request weighed - never
+    /// a consent nobody gave, since nothing that would have counted one was read. A deletion's dry run alike.
+    /// </summary>
+    [Fact]
+    public async Task RowsThatCannotBeWeighed_LeaveADryRunAsItsFailure_NeverNeedingAConsent()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        kit.FileRow("ag", Id, Row);
+        var agents = kit.Harness.Agents(kit.Harness.FileSystem, new UnreadableRegistries(kit.Harness.AnchorRegistryService));
+
+        var folding = await agents.FoldAsync(kit.Main, "o1", "ag", OrchestrationKit.Making(Id), apply: false, Token, json: true);
+        var deleting = await agents.DeleteAsync(kit.Main, "o1", "ag", OrchestrationKit.Making(Id), apply: false, discardUncommitted: false, Token);
+
+        Assert.Equal(HarnessExit.CommandFailed, folding.ExitCode);
+        Assert.StartsWith("Agent 'ag' of 'o1' was not folded: its rows, or the registries they go in, cannot be read - ", folding.Message);
+        Assert.Null(Assert.IsType<AgentVerbFacts>(folding.Facts).Standing);
+        Assert.Empty(Assert.IsType<AgentVerbFacts>(folding.Facts).Needs);
+        Assert.Null(System.Text.Json.Nodes.JsonNode.Parse(Assert.Single(folding.Data))!["request"]);
+        Assert.Equal(HarnessExit.CommandFailed, deleting.ExitCode);
+        Assert.StartsWith("Agent 'ag' of 'o1' was not deleted: its rows, or the registries they go in, cannot be read - ", deleting.Message);
+        Assert.Null(Assert.IsType<AgentVerbFacts>(deleting.Facts).Standing);
+    }
+
     private static async Task<AnchorRow> RowAsync(OrchestrationKit kit)
         => Assert.Single(Assert.Single((await kit.Harness.AnchorRegistryService.ReadAsync(kit.Main, [Id], AnchorScope.All, Token)).Results).Matches).Row;
 

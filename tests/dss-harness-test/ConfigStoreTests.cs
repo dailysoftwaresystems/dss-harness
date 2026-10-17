@@ -1446,15 +1446,22 @@ public sealed class ConfigStoreTests
 
     /// <summary>
     /// The workflows a configuration declares are names and nothing else: an empty list is refused as an empty list is,
-    /// a name a workflow's directory cannot carry is refused naming the one-word spelling, two that differ only by case
-    /// are refused as one directory on a file system that does not tell them apart, and the slot the run's keys are read
-    /// from is no workflow's name.
+    /// saying that leaving the key out declares no workflow; a name a workflow's directory cannot carry - a separator, a
+    /// drive, a character some file system refuses, a dot or a space at either end - is refused naming the one-word spelling; one
+    /// named twice is said to be, and two that differ only by case are refused as one directory on a file system that
+    /// does not tell them apart; and the slot the run's keys are read from is no workflow's name.
     /// </summary>
     [Theory]
-    [InlineData("""{ "workflows": [] }""", "workflows is given empty, which is never read as its file, as workflows/<name>/<name>.yml: name a workflow, or leave the key out for its file, as workflows/<name>/<name>.yml")]
+    [InlineData("""{ "workflows": [] }""", "workflows is given empty, which is never read as no workflow: name a workflow, or leave the key out for no workflow")]
     [InlineData("""{ "workflows": ["release/one"] }""", "workflows: 'release/one' holds a path separator; a workflow is named in one word, as '.harness-config/workflows/<name>/<name>.yml', and its files live in its directory of that name")]
     [InlineData("""{ "workflows": ["default", "Default"] }""", "workflows names 'Default' and 'default', which differ only by case; a workflow directory is the file system's to tell apart, and not every file system does")]
+    [InlineData("""{ "workflows": ["release", "release"] }""", "workflows names 'release' twice; declare each workflow once")]
     [InlineData("""{ "workflows": [".env"] }""", "workflows: '.env' is the name the workflows directory keeps for the slot the run's keys are read from; call the workflow something else, as '.harness-config/workflows/<name>/<name>.yml'")]
+    [InlineData("""{ "workflows": [".."] }""", "workflows: '..' starts or ends with a dot or a space; a workflow is named in one word, as '.harness-config/workflows/<name>/<name>.yml'")]
+    [InlineData("""{ "workflows": ["release."] }""", "workflows: 'release.' starts or ends with a dot or a space; a workflow is named in one word, as '.harness-config/workflows/<name>/<name>.yml'")]
+    [InlineData("""{ "workflows": [" release"] }""", "workflows: ' release' starts or ends with a dot or a space; a workflow is named in one word, as '.harness-config/workflows/<name>/<name>.yml'")]
+    [InlineData("""{ "workflows": ["a:b"] }""", "workflows: 'a:b' is an absolute path; a workflow is named in one word, as '.harness-config/workflows/<name>/<name>.yml'")]
+    [InlineData("""{ "workflows": ["re:lease"] }""", "workflows: 're:lease' holds a character no file name can carry on every platform this tool runs on; a workflow is named in one word, as '.harness-config/workflows/<name>/<name>.yml'")]
     public void Load_RefusesAWorkflowNameAWorkflowsDirectoryCannotCarry(string json, string expected)
     {
         var exception = LoadInvalid(json);

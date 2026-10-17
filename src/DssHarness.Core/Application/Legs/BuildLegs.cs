@@ -11,7 +11,9 @@ namespace DssHarness.Core.Application.Legs;
 /// <summary>
 /// What every command that runs legs was asked, as its command line gave it: the directory, the legs, the lock, the
 /// staging, the timing, the host dispatching here - and the two options that say where this run's own legs work, whose
-/// rule (<see cref="DssHarness.Core.Legs.LegTrees.Asked(bool, bool)"/>) is asked in the core, before any configuration is read.
+/// rule (<see cref="DssHarness.Core.Legs.LegTrees.Asked(bool, bool)"/>) is asked in the core: by a build and a test before
+/// any configuration is read, and by a run of a runner once the runner it names is read, since whether that runner writes
+/// the tree is part of where its legs work.
 /// </summary>
 public abstract record LegCommandRequest
 {
@@ -50,8 +52,8 @@ public abstract record LegCommandRequest
 }
 
 /// <summary>
-/// Builds every selected leg: the use case the <c>build</c> command runs and the engine's build step calls, over the
-/// leg machinery both share.
+/// Builds every selected leg: the use case the <c>build</c> command runs, and a step of an orchestrator run will call,
+/// over the leg machinery both share.
 /// </summary>
 public interface IBuildLegs : IUseCase
 {

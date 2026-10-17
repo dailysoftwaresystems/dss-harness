@@ -476,13 +476,19 @@ public static class OrchestrationReports
 
     /// <summary>
     /// The outcome of fold-agent, delete-agent, refresh-agent or rebase-agent as one JSON document, the whole of standard
-    /// output: what <see cref="CommandOutcome"/> already is - its code, its last line, its lines - with the two things the
-    /// code cannot say: what is wanted of the caller, and who holds what its --apply needs.
+    /// output: its facts serialised member by member - its code, its last line, its lines, with what the code cannot say:
+    /// what is wanted of the caller, who holds what its --apply needs, each consent it lacks, why it is refused, and what
+    /// a fold wrote.
     /// </summary>
+    /// <param name="outcome">The outcome as the command answered it, which keeps everything but its document.</param>
     /// <param name="facts">What the answer knows beyond its lines: the document is this, serialised.</param>
-    /// <returns>The outcome, answering with the document; its exit code and its failure line are unchanged.</returns>
-    public static CommandOutcome Document(AgentVerbFacts facts)
+    /// <returns>
+    /// The same outcome, answering with the document and carrying the facts: its exit code, its cause, its lines and its
+    /// failure line are unchanged.
+    /// </returns>
+    public static CommandOutcome Document(CommandOutcome outcome, AgentVerbFacts facts)
     {
+        ArgumentNullException.ThrowIfNull(outcome);
         ArgumentNullException.ThrowIfNull(facts);
 
         var holders = facts.Holders;
@@ -527,26 +533,65 @@ public static class OrchestrationReports
         }
 
         // Null where the lock file could not be read - nobody was named, and heldUnread says why - and an empty array
-        // where it was read and nobody held. What the facts know beyond this - the consents a request lacks, what a fold
-        // wrote - the engine reads typed off the record, and the document leaves to its lines, which said it first.
-        var document = AgentDocument(facts.ExitCode, facts.Summary, facts.Applied, facts.Standing, holders is { Unread: not null } ? null : heldNow, holders?.Unread, lines);
+        // where it was read and nobody held.
+        var document = AgentDocument(
+            facts.ExitCode,
+            facts.Summary,
+            facts.Applied,
+            facts.Standing,
+            holders is { Unread: not null } ? null : heldNow,
+            holders?.Unread,
+            lines,
+            facts.Needs,
+            facts.Refusals,
+            facts.Folded);
 
-        return new CommandOutcome(facts.ExitCode, facts.Summary) { Data = [document], Quiet = true, Facts = facts };
+        return outcome with { Data = [document], Quiet = true, Facts = facts };
     }
 
     /// <summary>
     /// The document fold-agent, delete-agent, refresh-agent or rebase-agent answers with where it stops before it weighs
-    /// anything - a --directory that does not exist, a repository not initialised, a usage error: the same document,
-    /// empty - nothing applied, no request weighed, nobody asked who holds anything, no lines - with the code it exits
-    /// with and the line it ends on.
+    /// anything - a --directory that does not exist, a repository not initialised, a usage error, an agent that is not
+    /// there: the same document, empty - nothing applied, no request weighed, nobody asked who holds anything, no lines,
+    /// nothing needed, no reason typed and nothing folded - with the code it exits with and the line it ends on.
     /// </summary>
     /// <param name="exitCode">The code the command exits with.</param>
     /// <param name="summary">The line it ends on.</param>
     public static string Stopped(int exitCode, string summary)
-        => AgentDocument(exitCode, summary, applied: false, standing: null, heldNow: null, heldUnread: null, []);
+        => AgentDocument(exitCode, summary, applied: false, standing: null, heldNow: null, heldUnread: null, [], needs: [], refusals: [], folded: null);
+
+    /// <summary>The name a consent's kind has in the document.</summary>
+    /// <param name="kind">The kind.</param>
+    public static string Named(ConsentKind kind) => kind switch
+    {
+        ConsentKind.FoldNewRows => "fold-new-rows",
+        ConsentKind.FoldLostRows => "fold-lost-rows",
+        ConsentKind.FoldOverCells => "fold-over-cells",
+        ConsentKind.FoldTwoChanges => "fold-two-changes",
+        _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Not a consent a request can lack."),
+    };
+
+    /// <summary>The name a refusal's kind has in the document.</summary>
+    /// <param name="kind">The kind.</param>
+    public static string Named(RefusalKind kind) => kind switch
+    {
+        RefusalKind.Conflict => "conflict",
+        RefusalKind.Other => "other",
+        _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Not a reason a request is refused for."),
+    };
 
     /// <summary>The one document of the four verbs, member by member, as text.</summary>
-    private static string AgentDocument(int exitCode, string summary, bool applied, RequestStanding? standing, JsonArray? heldNow, string? heldUnread, JsonArray lines)
+    private static string AgentDocument(
+        int exitCode,
+        string summary,
+        bool applied,
+        RequestStanding? standing,
+        JsonArray? heldNow,
+        string? heldUnread,
+        JsonArray lines,
+        IReadOnlyList<ConsentKind> needs,
+        IReadOnlyList<RefusalKind> refusals,
+        AgentFolded? folded)
         => new JsonObject
         {
             ["exitCode"] = exitCode,
@@ -562,7 +607,24 @@ public static class OrchestrationReports
             ["heldNow"] = heldNow,
             ["heldUnread"] = heldUnread,
             ["lines"] = lines,
+            ["needs"] = Texts(needs.Select(Named)),
+            ["refusals"] = Texts(refusals.Select(Named)),
+            ["folded"] = folded is null
+                ? null
+                : new JsonObject
+                {
+                    ["written"] = Texts(folded.Written),
+                    ["deleted"] = Texts(folded.Deleted),
+                    ["merged"] = Texts(folded.Merged),
+                    ["handed"] = new JsonArray([.. folded.Handed.Select(handed => (JsonNode?)new JsonObject { ["path"] = handed.Path, ["digest"] = handed.Digest })]),
+                    ["registries"] = Texts(folded.Registries),
+                    ["rows"] = Texts(folded.Rows),
+                    ["overCells"] = Texts(folded.OverCells),
+                },
         }.ToJsonString(ReportJson.Options);
+
+    /// <summary><paramref name="texts"/> as a document's array of strings, in order.</summary>
+    private static JsonArray Texts(IEnumerable<string> texts) => new([.. texts.Select(text => (JsonNode?)text)]);
 
     /// <summary>An agent's base as reports name it, where none may be recorded.</summary>
     /// <param name="commit">The commit, or null where none is recorded.</param>

@@ -32,6 +32,7 @@ public static class WorkflowExpressions
         "it", "empty", "any", "skill", "source", "recommendations",
         "question", "latest", "visit", "piece", "update", "status",
         "outcome", "code", "error", "answer", "assumptions", "leftover", "ran", "notRun", "red",
+        "worktree", "iteration", "index", "recover",
     ];
 
     /// <summary>The literals an identifier can be without naming anything.</summary>
@@ -48,9 +49,10 @@ public static class WorkflowExpressions
     /// Every name <paramref name="expression"/> reads, in the order it reads them, once each.
     /// </summary>
     /// <param name="expression">An expression, or a template's text.</param>
+    /// <remarks>An empty expression reads nothing; that it is empty is the validator's to refuse.</remarks>
     public static IReadOnlyList<Read> ReadsOf(string expression)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(expression);
+        ArgumentNullException.ThrowIfNull(expression);
 
         var reads = new List<Read>();
         var index = 0;
@@ -138,9 +140,10 @@ public static class WorkflowExpressions
     /// templates sit in the text, once each.
     /// </summary>
     /// <param name="text">A template's text: any run of it may hold one or more <c>{...}</c> placeholders.</param>
+    /// <remarks>An empty text reads nothing; that it is empty is the validator's to refuse.</remarks>
     public static IReadOnlyList<Read> TemplateReads(string text)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(text);
+        ArgumentNullException.ThrowIfNull(text);
 
         var reads = new List<Read>();
 
@@ -178,10 +181,98 @@ public static class WorkflowExpressions
         return reads;
     }
 
+    /// <summary>
+    /// What is wrong with how <paramref name="expression"/> is written, where something is: a quoted string or a
+    /// placeholder left open, or parentheses that do not pair. A read past such a place is never reached, so a name
+    /// misspelt there would pass unseen; the expression is refused instead, with where it went wrong.
+    /// </summary>
+    /// <param name="expression">An expression.</param>
+    /// <returns>The problem, in words, or <see langword="null"/> where the expression is written whole.</returns>
+    public static string? SyntaxProblem(string expression)
+    {
+        ArgumentNullException.ThrowIfNull(expression);
+
+        var depth = 0;
+
+        for (var index = 0; index < expression.Length; index++)
+        {
+            switch (expression[index])
+            {
+                case '\'' or '"':
+                    var end = expression.IndexOf(expression[index], index + 1);
+
+                    if (end < 0)
+                    {
+                        return $"the quote at column {index + 1} is never closed";
+                    }
+
+                    index = end;
+                    break;
+
+                case '{':
+                    var close = expression.IndexOfAny(['}', '{'], index + 1);
+
+                    if (close < 0 || expression[close] != '}')
+                    {
+                        return $"the placeholder at column {index + 1} is never closed";
+                    }
+
+                    index = close;
+                    break;
+
+                case '(':
+                    depth++;
+                    break;
+
+                case ')':
+                    if (--depth < 0)
+                    {
+                        return $"the parenthesis at column {index + 1} closes nothing that was opened";
+                    }
+
+                    break;
+            }
+        }
+
+        return depth > 0 ? $"{depth} parenthes{(depth == 1 ? "is is" : "es are")} opened and never closed" : null;
+    }
+
+    /// <summary>
+    /// What is wrong with how a template's <paramref name="text"/> is written, where something is: a placeholder left
+    /// open, after which nothing the text reads would be seen.
+    /// </summary>
+    /// <param name="text">A template's text.</param>
+    /// <returns>The problem, in words, or <see langword="null"/> where every placeholder is closed.</returns>
+    public static string? TemplateSyntaxProblem(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+
+        for (var index = text.IndexOf('{'); index >= 0; index = text.IndexOf('{', index + 1))
+        {
+            // A placeholder is closed on its own line, before the next one opens: a '}' further on closes another.
+            var end = text.IndexOfAny(['}', '{', '\n'], index + 1);
+
+            if (end < 0 || text[end] != '}')
+            {
+                return $"the placeholder at column {ColumnOf(text, index)} of line {LineOf(text, index)} is never closed";
+            }
+
+            index = end;
+        }
+
+        return null;
+    }
+
     /// <summary>Whether <paramref name="name"/> is one of the words that name no step.</summary>
     /// <param name="name">A step's name, or a read's first segment.</param>
     public static bool IsReserved(string name)
         => ReservedRoots.Contains(name, StringComparer.Ordinal);
+
+    /// <summary>The line, counted from 1, that <paramref name="index"/> sits on in <paramref name="text"/>.</summary>
+    private static int LineOf(string text, int index) => text[..index].Count(character => character == '\n') + 1;
+
+    /// <summary>The column, counted from 1, that <paramref name="index"/> sits at on its own line.</summary>
+    private static int ColumnOf(string text, int index) => index - text[..index].LastIndexOf('\n');
 
     private static void Add(List<Read> reads, string name, bool Template, bool insideAny)
     {

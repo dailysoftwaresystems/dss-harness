@@ -1,4 +1,6 @@
+using System.Text.Json;
 using DssHarness.Core.Configuration;
+using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Results;
 using DssHarness.Core.Runners;
@@ -13,11 +15,11 @@ namespace DssHarness.Tests;
 public sealed class WorkflowValidationServiceTests
 {
     /// <summary>
-    /// The default workflow, initialized into a repository and declared in its config, passes its check: the one line
+    /// The implementation workflow, initialized into a repository and declared in its config, passes its check: the one line
     /// says what it is, and the outcome says every one checked.
     /// </summary>
     [Fact]
-    public async Task TheDefaultWorkflow_InitializedIntoARepository_PassesItsCheck()
+    public async Task TheImplementationWorkflow_InitializedIntoARepository_PassesItsCheck()
     {
         using var repository = await RepositoryAsync(config: null);
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -25,7 +27,7 @@ public sealed class WorkflowValidationServiceTests
         var report = await Service(repository).CheckAsync(repository.Path, named: null, cancellationToken);
 
         Assert.True(report.Passed);
-        Assert.Equal("ok .harness-config/workflows/default/default.yml (94 steps, 31 reasoning)", Assert.Single(report.Lines));
+        Assert.Equal($"ok {Shown(Default)} (79 steps, 46 recovering, 45 reasoning)", Assert.Single(report.Lines));
 
         var outcome = WorkflowValidationReports.Render(report, json: false);
 
@@ -33,21 +35,102 @@ public sealed class WorkflowValidationServiceTests
         Assert.Equal("1 workflow(s) checked, all valid", outcome.Message);
     }
 
-    /// <summary>A workflow whose file is not there is said so, naming where it was looked for and what writes it.</summary>
+    /// <summary>
+    /// A workflow whose file is not there is said so, naming where it was looked for and what writes it; and refused as a
+    /// configuration that does not hold is (12), counting the one workflow with problems.
+    /// </summary>
     [Fact]
-    public async Task AWorkflowWhoseFileIsNotThere_IsSaidSo()
+    public async Task AWorkflowWhoseFileIsNotThere_IsSaidSo_AndRefusedAsConfigurationThatDoesNotHold()
     {
         using var repository = await RepositoryAsync(config: null);
-        File.Delete(Path.Combine(repository.Path, ".harness-config", "workflows", "default", "default.yml"));
+        File.Delete(Path.Combine(repository.Path, ".harness-config", "workflows", Default, $"{Default}.yml"));
 
         var report = await Service(repository).CheckAsync(repository.Path, named: null, TestContext.Current.CancellationToken);
 
         Assert.False(report.Passed);
         Assert.Equal(
-            ".harness-config/workflows/default/default.yml is not there; a workflow is defined by that file, written by 'dssharness init' where it is the default one",
+            $"{Shown(Default)} is not there; a workflow is defined by that file, written by 'dssharness init' where it is the implementation one",
             Assert.Single(report.Lines));
 
-        Assert.Equal(HarnessExit.Refused, WorkflowValidationReports.Render(report, json: false).ExitCode);
+        var outcome = WorkflowValidationReports.Render(report, json: false);
+
+        Assert.Equal(HarnessExit.ConfigInvalid, outcome.ExitCode);
+        Assert.Equal("0 workflow(s) valid, 1 with problems. Nothing was run.", outcome.Message);
+    }
+
+    /// <summary>
+    /// A configuration that declares no workflow - every one written before workflows were - has nothing to check: that
+    /// is said, with what declares the one init writes, and refused (13), never passed as an empty check, nor counted as
+    /// "0 valid, 0 with problems" with no reason.
+    /// </summary>
+    [Fact]
+    public async Task AConfigurationDeclaringNoWorkflow_IsRefused_SayingHowToDeclareTheImplementationOne()
+    {
+        using var repository = await RepositoryAsync(new HarnessConfig());
+
+        var report = await Service(repository).CheckAsync(repository.Path, named: null, TestContext.Current.CancellationToken);
+
+        Assert.False(report.Passed);
+        Assert.Empty(report.Workflows);
+
+        var outcome = WorkflowValidationReports.Render(report, json: true);
+
+        Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
+        Assert.Equal(
+            $"config.json declares no workflow, so there is none to check; \"workflows\": [\"{Default}\"] declares the one "
+                + "'dssharness init' writes, and init then writes its files. Nothing was run.",
+            outcome.Message);
+
+        using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
+
+        Assert.Equal("""{"workflows":[],"passed":false}""", JsonSerializer.Serialize(document.RootElement));
+    }
+
+    /// <summary>
+    /// The summary counts workflows, never problems: a workflow with three problems beside one that holds is one valid and
+    /// one with problems, however many lines its problems take.
+    /// </summary>
+    [Fact]
+    public async Task TheSummary_CountsWorkflows_NotTheirProblems()
+    {
+        using var repository = await RepositoryAsync(new HarnessConfig { Workflows = [Default, "small"] });
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        await WriteAsync(
+            repository,
+            "small",
+            """
+            name: small
+            steps:
+              - name: make
+                type: create-agent
+                agent: implementer
+              - name: work
+                type: reason
+                agent: worker
+                prompt: prompts/work.md
+                outputs: schemas/work.json
+                dependsOn: [make]
+            """,
+            cancellationToken);
+
+        var report = await Service(repository).CheckAsync(repository.Path, named: null, cancellationToken);
+
+        Assert.Equal(
+            [
+                $"ok {Shown(Default)} (79 steps, 46 recovering, 45 reasoning)",
+                $"{Shown("small")}: 'agents/implementer.md', step 'make''s agent, is not at '.harness-config/workflows/small/agents/implementer.md'; write it there, beside the definition that names it",
+                $"{Shown("small")}: 'agents/worker.md', step 'work''s agent, is not at '.harness-config/workflows/small/agents/worker.md'; write it there, beside the definition that names it",
+                $"{Shown("small")}: 'prompts/work.md', step 'work''s prompt, is not at '.harness-config/workflows/small/prompts/work.md'; write it there, beside the definition that names it",
+                $"{Shown("small")}: 'schemas/work.json', step 'work''s outputs, is not at '.harness-config/workflows/small/schemas/work.json'; write it there, beside the definition that names it",
+            ],
+            report.Lines);
+        Assert.Equal([true, false], report.Workflows.Select(workflow => workflow.Holds));
+
+        var outcome = WorkflowValidationReports.Render(report, json: false);
+
+        Assert.Equal(HarnessExit.ConfigInvalid, outcome.ExitCode);
+        Assert.Equal("1 workflow(s) valid, 1 with problems. Nothing was run.", outcome.Message);
     }
 
     /// <summary>A workflow nobody declared is a usage error, naming what is declared and where the file would be.</summary>
@@ -60,7 +143,7 @@ public sealed class WorkflowValidationServiceTests
 
         Assert.Equal(HarnessExit.UsageError, refusal.ExitCode);
         Assert.Equal(
-            "'release' is not declared under workflows. Declared: default. A workflow is defined by '.harness-config/workflows/release/release.yml'.",
+            $"'release' is not declared under workflows. Declared: {Default}. A workflow is defined by '.harness-config/workflows/release/release.yml'.",
             refusal.Message);
     }
 
@@ -72,21 +155,20 @@ public sealed class WorkflowValidationServiceTests
     public async Task AFileNamingAnotherName_IsRefused()
     {
         using var repository = await RepositoryAsync(config: null);
-        var file = Path.Combine(repository.Path, ".harness-config", "workflows", "default", "default.yml");
+        var file = Path.Combine(repository.Path, ".harness-config", "workflows", Default, $"{Default}.yml");
         var read = await File.ReadAllTextAsync(file, TestContext.Current.CancellationToken);
 
         await File.WriteAllTextAsync(
             file,
-            read.Replace("name: default", "name: release", StringComparison.Ordinal),
+            read.Replace($"name: {Default}", "name: release", StringComparison.Ordinal),
             TestContext.Current.CancellationToken);
 
         var report = await Service(repository).CheckAsync(repository.Path, named: null, TestContext.Current.CancellationToken);
 
         Assert.False(report.Passed);
-        Assert.StartsWith(
-            ".harness-config/workflows/default/default.yml names itself 'release'",
-            Assert.Single(report.Lines),
-            StringComparison.Ordinal);
+        Assert.Equal(
+            $"{Shown(Default)} names itself 'release'; a workflow's name is its directory's and its file's, said again in the file so a copied directory cannot pass as the workflow it was copied from",
+            Assert.Single(report.Lines));
     }
 
     /// <summary>
@@ -98,10 +180,10 @@ public sealed class WorkflowValidationServiceTests
     {
         using var repository = await RepositoryAsync(new HarnessConfig { Workflows = ["small"] });
         var cancellationToken = TestContext.Current.CancellationToken;
-        var directory = Path.Combine(repository.Path, ".harness-config", "workflows", "small");
-        Directory.CreateDirectory(directory);
-        await File.WriteAllTextAsync(
-            Path.Combine(directory, "small.yml"),
+
+        await WriteAsync(
+            repository,
+            "small",
             """
             name: small
             steps:
@@ -139,39 +221,307 @@ public sealed class WorkflowValidationServiceTests
     }
 
     /// <summary>
-    /// A definition whose file names a path leaving the workflow's directory is refused: what a reviewer reads there is
-    /// what the workflow runs, as an action's files are to its own directory.
+    /// The recovery's steps name files as the flow's do, and each is held to the workflow's directory the same way, said
+    /// under the recovery's own path.
     /// </summary>
     [Fact]
-    public async Task APathLeavingTheWorkflowsOwnDirectory_IsRefused()
+    public async Task FilesTheRecoveryNames_AreEachSaid_AsTheFlowsAre()
     {
         using var repository = await RepositoryAsync(new HarnessConfig { Workflows = ["small"] });
         var cancellationToken = TestContext.Current.CancellationToken;
-        var directory = Path.Combine(repository.Path, ".harness-config", "workflows", "small");
-        Directory.CreateDirectory(Path.Combine(directory, "agents"));
-        Directory.CreateDirectory(Path.Combine(directory, "schemas"));
-        await File.WriteAllTextAsync(Path.Combine(directory, "agents", "implementer.md"), "works\n", cancellationToken);
-        await File.WriteAllTextAsync(Path.Combine(directory, "schemas", "work.json"), "{}\n", cancellationToken);
-        await File.WriteAllTextAsync(
-            Path.Combine(directory, "small.yml"),
+
+        await WriteAsync(
+            repository,
+            "small",
             """
             name: small
             steps:
-              - name: work
-                type: reason
-                agent: implementer
-                prompt: ../default/prompts/work.md
-                outputs: schemas/work.json
+              - name: orient
+                type: orient
+                onFailure: recover
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: diagnose
+                  type: reason
+                  agent: diagnostician
+                  prompt: prompts/diagnose.md
+                  outputs: schemas/diagnosis.json
             """,
             cancellationToken);
 
         var report = await Service(repository).CheckAsync(repository.Path, "small", cancellationToken);
 
         Assert.False(report.Passed);
-        var line = Assert.Single(report.Lines);
+        Assert.Equal(
+            [
+                ".harness-config/workflows/small/small.yml: 'agents/diagnostician.md', step 'recover.diagnose''s agent, is not at '.harness-config/workflows/small/agents/diagnostician.md'; write it there, beside the definition that names it",
+                ".harness-config/workflows/small/small.yml: 'prompts/diagnose.md', step 'recover.diagnose''s prompt, is not at '.harness-config/workflows/small/prompts/diagnose.md'; write it there, beside the definition that names it",
+                ".harness-config/workflows/small/small.yml: 'schemas/diagnosis.json', step 'recover.diagnose''s outputs, is not at '.harness-config/workflows/small/schemas/diagnosis.json'; write it there, beside the definition that names it",
+            ],
+            report.Lines);
+    }
 
-        Assert.StartsWith(".harness-config/workflows/small/small.yml", line, StringComparison.Ordinal);
-        Assert.Contains("leaves the workflow's directory", line, StringComparison.Ordinal);
+    /// <summary>
+    /// Every file a definition names beyond its steps' agents, prompts and schemas is held to the workflow's directory the
+    /// same way: the bar for recommendations, the advisor's agent and prompt, the reporter's agent and both its prompts,
+    /// a step's resume prompt and a pull request's body - each said where it is not there.
+    /// </summary>
+    [Fact]
+    public async Task TheBarTheAdvisorTheReporterAResumePromptAndABody_AreEachHeldToTheWorkflowsDirectory()
+    {
+        using var repository = await RepositoryAsync(new HarnessConfig { Workflows = ["small"] });
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        await WriteAsync(
+            repository,
+            "small",
+            """
+            name: small
+            recommendations: bar.md
+            advisor:
+              agent: counsel
+              prompt: prompts/counsel.md
+            reporter:
+              agent: teller
+              statusPrompt: prompts/status.md
+              askPrompt: prompts/ask.md
+            steps:
+              - name: work
+                type: reason
+                agent: worker
+                resume: work
+                prompt: prompts/work.md
+                resumePrompt: prompts/again.md
+                outputs: schemas/work.json
+              - name: pr
+                type: pull-request
+                dependsOn: [work]
+                title: 'work'
+                body: prompts/body.md
+            """,
+            cancellationToken,
+            "agents/worker.md",
+            "prompts/work.md",
+            "schemas/work.json");
+
+        var report = await Service(repository).CheckAsync(repository.Path, "small", cancellationToken);
+
+        Assert.Equal(
+            [
+                .. new[]
+                {
+                    "'bar.md', the bar for recommendations, is not at '.harness-config/workflows/small/bar.md'",
+                    "'agents/counsel.md', the agent the advisor runs, is not at '.harness-config/workflows/small/agents/counsel.md'",
+                    "'prompts/counsel.md', the advisor's prompt, is not at '.harness-config/workflows/small/prompts/counsel.md'",
+                    "'agents/teller.md', the agent the reporter's status prompt runs, is not at '.harness-config/workflows/small/agents/teller.md'",
+                    "'prompts/status.md', the reporter's status prompt's prompt, is not at '.harness-config/workflows/small/prompts/status.md'",
+                    "'agents/teller.md', the agent the reporter's ask prompt runs, is not at '.harness-config/workflows/small/agents/teller.md'",
+                    "'prompts/ask.md', the reporter's ask prompt's prompt, is not at '.harness-config/workflows/small/prompts/ask.md'",
+                    "'prompts/again.md', step 'work''s resume prompt, is not at '.harness-config/workflows/small/prompts/again.md'",
+                    "'prompts/body.md', step 'pr''s body, is not at '.harness-config/workflows/small/prompts/body.md'",
+                }.Select(problem => $"{Shown("small")}: {problem}; write it there, beside the definition that names it"),
+            ],
+            report.Lines);
+    }
+
+    /// <summary>
+    /// A path a definition names that is not spelt as one inside the workflow's directory is refused before anything is
+    /// looked at: rooted by any platform's rules - a drive as well as a leading slash, whichever machine reads it - or
+    /// holding '..', '.' or an empty part, as an action's path is.
+    /// </summary>
+    [Fact]
+    public async Task APathNotSpeltInsideTheWorkflowsDirectory_IsRefused_OnEveryPlatformAlike()
+    {
+        using var repository = await RepositoryAsync(new HarnessConfig { Workflows = ["small"] });
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        await WriteAsync(
+            repository,
+            "small",
+            """
+            name: small
+            steps:
+              - name: rooted
+                type: reason
+                agent: worker
+                prompt: /prompts/work.md
+                outputs: schemas/work.json
+              - name: drive
+                type: reason
+                agent: worker
+                prompt: C:/prompts/work.md
+                outputs: schemas/work.json
+              - name: climbs
+                type: reason
+                agent: worker
+                prompt: ../default/prompts/work.md
+                outputs: schemas/work.json
+              - name: here
+                type: reason
+                agent: worker
+                prompt: ./prompts/work.md
+                outputs: schemas/work.json
+              - name: gap
+                type: reason
+                agent: worker
+                prompt: prompts//work.md
+                outputs: schemas/work.json
+            """,
+            cancellationToken,
+            "agents/worker.md",
+            "prompts/work.md",
+            "schemas/work.json");
+
+        var report = await Service(repository).CheckAsync(repository.Path, "small", cancellationToken);
+        var relative = "'.harness-config/workflows/small/'";
+
+        Assert.Equal(
+            [
+                $"{Shown("small")}: '/prompts/work.md', step 'rooted''s prompt, is an absolute path; every file a workflow names is relative to {relative}, as an action's are to its own directory",
+                $"{Shown("small")}: 'C:/prompts/work.md', step 'drive''s prompt, is an absolute path; every file a workflow names is relative to {relative}, as an action's are to its own directory",
+                $"{Shown("small")}: '../default/prompts/work.md', step 'climbs''s prompt, does not name a file inside the workflow's directory; every file a workflow names is relative to {relative}, without '.', '..' or an empty part, as an action's are to its own directory",
+                $"{Shown("small")}: './prompts/work.md', step 'here''s prompt, does not name a file inside the workflow's directory; every file a workflow names is relative to {relative}, without '.', '..' or an empty part, as an action's are to its own directory",
+                $"{Shown("small")}: 'prompts//work.md', step 'gap''s prompt, does not name a file inside the workflow's directory; every file a workflow names is relative to {relative}, without '.', '..' or an empty part, as an action's are to its own directory",
+            ],
+            report.Lines);
+    }
+
+    /// <summary>
+    /// A schema is a JSON object: one that does not read as JSON is said with the reader's reason, and one that reads as
+    /// another value - a list - is said to hold no object.
+    /// </summary>
+    [Fact]
+    public async Task ASchemaThatIsNoJsonObject_IsSaid()
+    {
+        using var repository = await RepositoryAsync(new HarnessConfig { Workflows = ["small"] });
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        await WriteAsync(
+            repository,
+            "small",
+            """
+            name: small
+            steps:
+              - name: broken
+                type: reason
+                agent: worker
+                prompt: prompts/work.md
+                outputs: schemas/broken.json
+              - name: listed
+                type: reason
+                agent: worker
+                prompt: prompts/work.md
+                outputs: schemas/listed.json
+            """,
+            cancellationToken,
+            "agents/worker.md",
+            "prompts/work.md",
+            "schemas/broken.json",
+            "schemas/listed.json");
+        await File.WriteAllTextAsync(Path.Combine(repository.Path, ".harness-config", "workflows", "small", "schemas", "broken.json"), "{ not json", cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(repository.Path, ".harness-config", "workflows", "small", "schemas", "listed.json"), "[]", cancellationToken);
+
+        var report = await Service(repository).CheckAsync(repository.Path, "small", cancellationToken);
+
+        Assert.Equal(
+            [
+                $"{Shown("small")}: 'schemas/broken.json', step 'broken''s outputs, is not valid JSON ({JsonReason("{ not json")})",
+                $"{Shown("small")}: 'schemas/listed.json', step 'listed''s outputs, holds no JSON object; a schema is a mapping of properties",
+            ],
+            report.Lines);
+    }
+
+    /// <summary>
+    /// A definition the disk will not give up - held by another process, or not this user's to read - is that workflow's
+    /// problem, named with the disk's reason, and every other declared workflow is still checked: raised, it ended the
+    /// whole check as the tool's own failure (70).
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ADefinitionThatCannotBeRead_IsThatWorkflowsProblem_AndEveryOtherIsStillChecked(bool denied)
+    {
+        using var repository = await RepositoryAsync(new HarnessConfig { Workflows = ["small", Default] });
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        await WriteAsync(repository, "small", "name: small\nsteps: []\n", cancellationToken);
+
+        var held = new Held(repository.Harness.FileSystem, Path.Combine(repository.Path, ".harness-config", "workflows", "small", "small.yml"), denied);
+        var report = await Service(repository, held).CheckAsync(repository.Path, named: null, cancellationToken);
+
+        Assert.Equal(
+            [
+                $"{Shown("small")} could not be read: {Held.Why}",
+                $"ok {Shown(Default)} (79 steps, 46 recovering, 45 reasoning)",
+            ],
+            report.Lines);
+    }
+
+    /// <summary>A schema the disk will not give up is a problem naming it, with the disk's reason, as a missing one is.</summary>
+    [Fact]
+    public async Task ASchemaThatCannotBeRead_IsAProblemNamingIt()
+    {
+        using var repository = await RepositoryAsync(new HarnessConfig { Workflows = ["small"] });
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        await WriteAsync(
+            repository,
+            "small",
+            """
+            name: small
+            steps:
+              - name: work
+                type: reason
+                agent: worker
+                prompt: prompts/work.md
+                outputs: schemas/work.json
+            """,
+            cancellationToken,
+            "agents/worker.md",
+            "prompts/work.md",
+            "schemas/work.json");
+
+        var held = new Held(repository.Harness.FileSystem, Path.Combine(repository.Path, ".harness-config", "workflows", "small", "schemas", "work.json"));
+        var report = await Service(repository, held).CheckAsync(repository.Path, "small", cancellationToken);
+
+        Assert.Equal(
+            [$"{Shown("small")}: 'schemas/work.json', step 'work''s outputs, could not be read: {Held.Why}"],
+            report.Lines);
+    }
+
+    /// <summary>
+    /// A commit step writes the message the configuration leaves it: the same definition holds where config.json declares a
+    /// commit.template, and is refused where it declares none - the service hands the validator what the configuration says.
+    /// </summary>
+    [Fact]
+    public async Task ACommitStepsMessage_IsJudgedByTheConfigurationsCommitTemplate()
+    {
+        const string Definition = """
+            name: small
+            steps:
+              - name: make
+                type: create-agent
+                agent: worker
+              - name: save
+                type: commit
+                dependsOn: [make]
+            """;
+
+        using var templated = await RepositoryAsync(new HarnessConfig { Workflows = ["small"], Commit = new CommitConfig { Template = "work" } });
+        using var plain = await RepositoryAsync(new HarnessConfig { Workflows = ["small"] });
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        await WriteAsync(templated, "small", Definition, cancellationToken, "agents/worker.md");
+        await WriteAsync(plain, "small", Definition, cancellationToken, "agents/worker.md");
+
+        Assert.Equal(
+            [$"ok {Shown("small")} (2 steps, 0 reasoning)"],
+            (await Service(templated).CheckAsync(templated.Path, "small", cancellationToken)).Lines);
+        Assert.Equal(
+            [$"{Shown("small")}: step 'save' names no message and the configuration declares no commit.template; one of the two writes the commit's message"],
+            (await Service(plain).CheckAsync(plain.Path, "small", cancellationToken)).Lines);
     }
 
     /// <summary>
@@ -196,10 +546,10 @@ public sealed class WorkflowValidationServiceTests
             });
 
         var cancellationToken = TestContext.Current.CancellationToken;
-        var directory = Path.Combine(repository.Path, ".harness-config", "workflows", "small");
-        Directory.CreateDirectory(directory);
-        await File.WriteAllTextAsync(
-            Path.Combine(directory, "small.yml"),
+
+        await WriteAsync(
+            repository,
+            "small",
             """
             name: small
             steps:
@@ -217,8 +567,128 @@ public sealed class WorkflowValidationServiceTests
             report.Lines);
     }
 
-    private static WorkflowValidationService Service(Repository repository)
-        => new(repository.Harness.ContextLoader, repository.Harness.FileSystem, repository.Harness.Platform);
+    /// <summary>
+    /// A workflow's directory that is a link out of the repository is refused before a word of it is read, though every
+    /// file it names is beside its definition there: the files a definition names are held to its directory, so the
+    /// directory is held to the workflows directory, once its links are followed, as an action's file is.
+    /// </summary>
+    [Fact]
+    public async Task AWorkflowsDirectoryLinkingOutOfTheRepository_IsRefused()
+    {
+        using var repository = await RepositoryAsync(new HarnessConfig { Workflows = ["small"] });
+        using var elsewhere = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var link = Path.Combine(repository.Path, ".harness-config", "workflows", "small");
+
+        elsewhere.WriteFile("small.yml", "name: small\nsteps: []\n");
+        TestLinks.OrSkip(() => TestLinks.DirectoryLink(link, elsewhere.Path));
+
+        var report = await Service(repository).CheckAsync(repository.Path, "small", cancellationToken);
+        var fileSystem = repository.Harness.FileSystem;
+
+        Assert.Equal(
+            [
+                $"{Shown("small")}: its directory leads to '{Path.TrimEndingDirectorySeparator(fileSystem.ResolveLinks(elsewhere.Path))}', which is outside "
+                    + $"'{Path.TrimEndingDirectorySeparator(fileSystem.ResolveLinks(Path.Combine(repository.Path, ".harness-config", "workflows")))}'; "
+                    + "a workflow's directory is the repository's own, so that what a reviewer reads there is what the workflow runs",
+            ],
+            report.Lines);
+    }
+
+    /// <summary>
+    /// A definition file that is a link out of its workflow's directory is refused, as a file the definition names is: what
+    /// a reviewer reads in the directory is what the workflow runs. Skipped where this machine does not let this user make
+    /// a symbolic link to a file.
+    /// </summary>
+    [Fact]
+    public async Task ADefinitionLinkingOutOfItsDirectory_IsRefused()
+    {
+        using var repository = await RepositoryAsync(new HarnessConfig { Workflows = ["small"] });
+        using var elsewhere = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Path.Combine(repository.Path, ".harness-config", "workflows", "small");
+        var target = elsewhere.WriteFile("small.yml", "name: small\nsteps: []\n");
+
+        Directory.CreateDirectory(directory);
+        TestLinks.OrSkip(() => File.CreateSymbolicLink(Path.Combine(directory, "small.yml"), target));
+
+        var report = await Service(repository).CheckAsync(repository.Path, "small", cancellationToken);
+        var fileSystem = repository.Harness.FileSystem;
+
+        Assert.Equal(
+            [
+                $"{Shown("small")} leads to '{fileSystem.ResolveLinks(target)}', which is outside "
+                    + $"'{Path.TrimEndingDirectorySeparator(fileSystem.ResolveLinks(directory))}'; "
+                    + "a workflow's definition is a file of its own directory, so that what a reviewer reads there is what the workflow runs",
+            ],
+            report.Lines);
+    }
+
+    /// <summary>
+    /// The README and the architecture say the codes validate-workflow answers with - a definition that does not hold as
+    /// configuration that does not, and none declared as a request with nothing to check - held to the constants.
+    /// </summary>
+    [Fact]
+    public void TheReadmeAndTheArchitecture_SayTheCodesValidateWorkflowAnswersWith()
+    {
+        var readme = Prose.Document("README.md");
+        var architecture = Prose.Document("docs", "architecture.md");
+
+        Assert.Contains(
+            $"and refuses ({HarnessExit.ConfigInvalid}) naming each problem, without running anything, as a `config.json` that does not hold is "
+                + $"refused. A `config.json` that declares no workflow has nothing to check and is refused ({HarnessExit.Refused}), saying how to "
+                + "declare the implementation one.",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"Every problem is collected and reported together ({HarnessExit.ConfigInvalid}), without running anything: a definition that does "
+                + "not hold is configuration that does not, refused with the code `config.json`, an action file or the parser itself is. A "
+                + $"`config.json` that declares no workflow has nothing to check, and is refused ({HarnessExit.Refused}), saying that "
+                + $"`\"workflows\": [\"{Default}\"]` declares the one `init` writes; an empty answer is never read as a pass.",
+            architecture,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>The workflow this tool ships, by the one name the code gives it.</summary>
+    private static string Default => WorkflowTemplates.ShippedWorkflowName;
+
+    /// <summary>A workflow's definition, as a line names it.</summary>
+    private static string Shown(string name) => $".harness-config/workflows/{name}/{name}.yml";
+
+    /// <summary>Why the JSON reader refuses <paramref name="text"/>, in its own words, as a problem line quotes it.</summary>
+    private static string JsonReason(string text)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(text);
+        }
+        catch (JsonException ex)
+        {
+            return ex.Message;
+        }
+
+        throw new InvalidOperationException($"'{text}' read as JSON.");
+    }
+
+    /// <summary>Writes the definition of <paramref name="name"/> and each of <paramref name="files"/> beside it, as their own paths.</summary>
+    private static async Task WriteAsync(Repository repository, string name, string definition, CancellationToken cancellationToken, params string[] files)
+    {
+        var directory = Path.Combine(repository.Path, ".harness-config", "workflows", name);
+
+        Directory.CreateDirectory(directory);
+        await File.WriteAllTextAsync(Path.Combine(directory, $"{name}.yml"), definition, cancellationToken);
+
+        foreach (var file in files)
+        {
+            var path = Path.Combine([directory, .. file.Split('/')]);
+
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            await File.WriteAllTextAsync(path, file.EndsWith(".json", StringComparison.Ordinal) ? "{}\n" : "text\n", cancellationToken);
+        }
+    }
+
+    private static WorkflowValidationService Service(Repository repository, IFileSystem? fileSystem = null)
+        => new(repository.Harness.ContextLoader, fileSystem ?? repository.Harness.FileSystem, repository.Harness.Platform);
 
     /// <summary>
     /// A repository of one commit whose config declares the workflows asked for, with the default's files written where
@@ -234,12 +704,12 @@ public sealed class WorkflowValidationServiceTests
         await harness.InitializeHarnessAsync(
             temp.Path,
             cancellationToken,
-            config ?? new HarnessConfig { Workflows = [WorkflowTemplates.DefaultWorkflowName] });
+            config ?? new HarnessConfig { Workflows = [Default] });
         await harness.CommitAllAsync(temp.Path, "initial", cancellationToken);
 
-        if (config is null || (config.Workflows ?? []).Contains(WorkflowTemplates.DefaultWorkflowName))
+        if (config is null || (config.Workflows ?? []).Contains(Default))
         {
-            WorkflowTemplates.EnsureDefault(Path.Combine(temp.Path, ".harness-config", "workflows"), harness.FileSystem);
+            WorkflowTemplates.EnsureShipped(Path.Combine(temp.Path, ".harness-config", "workflows"), harness.FileSystem);
         }
 
         return new Repository(harness, temp);

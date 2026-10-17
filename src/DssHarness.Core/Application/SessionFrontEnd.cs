@@ -16,12 +16,15 @@ public sealed record SessionContext(SessionOptions Options, OperationId Id, RunI
 /// of one that answers with a document says where it stops before its body has an answer.
 /// </summary>
 /// <param name="Output">
-/// Where the operation writes; <see langword="null"/> to use the one its services were built with, which is what the
-/// command line does today - its provider builds one - and what a graphical front end does not, supplying its own.
+/// Where the operation writes, for a front end that supplies its own. Refused with
+/// <see cref="NotSupportedException"/> when the session begins, until a front end other than the command line builds
+/// an operation's services: an operation writes through the output its host's services build, which is what the command
+/// line supplies, and an output given here would otherwise be ignored without a word. <see langword="null"/>, as the
+/// command line gives it.
 /// </param>
 /// <param name="Prompt">
-/// How a superuser password is asked of whoever is there; <see langword="null"/> to use the one its services were
-/// built with.
+/// How a superuser password is asked of whoever is there, for a front end that supplies its own. Refused as
+/// <paramref name="Output"/> is, and for the same reason; <see langword="null"/>, as the command line gives it.
 /// </param>
 /// <param name="Stopped">
 /// The stopped form of the operation's document, given the code it exits with and the line it ends on;

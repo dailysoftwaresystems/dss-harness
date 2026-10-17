@@ -5,6 +5,7 @@ using DssHarness.Core.Execution;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace DssHarness.Cli.Commands;
 
@@ -55,7 +56,7 @@ internal static class HostHoldCommand
                 await session.RunAsync(
                     async (scope, token) =>
                     {
-                        var holds = (HoldAwakeService)scope.Services.GetService(typeof(HoldAwakeService))!;
+                        var holds = scope.Services.GetRequiredService<HoldAwakeService>();
 
                         try
                         {

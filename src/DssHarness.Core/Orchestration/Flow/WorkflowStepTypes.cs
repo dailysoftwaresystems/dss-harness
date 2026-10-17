@@ -24,15 +24,13 @@ public static class WorkflowStepTypes
 {
     /// <summary>One step type: its own keys, beyond the common ones, and its rules.</summary>
     /// <param name="Type">The type, as a step's <c>type</c> key spells it.</param>
-    /// <param name="Keys">The keys this type takes beyond the common ones.</param>
-    /// <param name="Required">Which of <paramref name="Type"/>'s own keys the step must name.</param>
+    /// <param name="Keys">
+    /// The keys this type takes beyond the common ones, each marked where the step must name it: the parser refuses a
+    /// step without one, and <c>help workflows</c> says so, from this one list.
+    /// </param>
     /// <param name="TemplateKeys">
     /// Which of the type's keys are templates, filled from the run's own names: a scalar key by its
     /// whole value, a list key by each member, a map key by each value.
-    /// </param>
-    /// <param name="ListKeys">
-    /// Which of the type's keys take a list written out or an expression that yields one, in place of
-    /// a list written out alone.
     /// </param>
     /// <param name="FailOnDefault">
     /// The default of the type's <c>failOn</c> key - <c>red</c> or <c>never</c> - for the types that
@@ -41,13 +39,14 @@ public static class WorkflowStepTypes
     public sealed record StepType(
         string Type,
         IReadOnlyList<KeyDescription> Keys,
-        IReadOnlyList<string> Required,
         IReadOnlyList<string> TemplateKeys,
-        IReadOnlyList<string> ListKeys,
         string? FailOnDefault)
     {
         /// <summary>Whether the type checks something, so that its verdicts can be red.</summary>
         public bool IsCheck => FailOnDefault is not null;
+
+        /// <summary>Which of the type's own keys the step must name: those <see cref="Keys"/> marks required.</summary>
+        public IReadOnlyList<string> Required => [.. Keys.Where(key => key.Required).Select(key => key.Name)];
     }
 
     /// <summary>The keys every step takes, group or typed step alike.</summary>
@@ -58,15 +57,15 @@ public static class WorkflowStepTypes
         new("type", "what runs: one of the types 'help workflows' lists; absent, the step is a group"),
         new("dependsOn", "steps this one waits for, by name, each declared before it among its siblings"),
         new("when", "an expression that says whether the step runs at all"),
-        new("onFailure", "what a failure does: stop (the default), pause or continue"),
-        new("retries", "retries the step is given where it ends incomplete"),
+        new("onFailure", "what a failure nothing handles does: stop, pause, continue, or recover - give it to the workflow's recover; absent, its group's, and at the top stop; never back to the step itself, which says retries"),
+        new("retries", "retries the step is given where it ends incomplete - a reasoning step also where its agent failed, on each model it may use; absent, maxRetries"),
         new("always", "run even where the dependencies did not reach this step"),
         new("alone", "run with nothing beside it"),
-        new("skippable", "the step may be skipped, said so in the report, where its when does not hold"),
+        new("skippable", "a question about the step's failure offers skip, which ends it skipped and lets what depends on it go on"),
         new("answers", "answers this step gives to question kinds, beforehand") { Keys = AnswerKeys },
         new("on", "the ending of another step that raises this one; it is never started by the schedule") { Keys = OnKeys },
         new("then", "the step the run goes back to once this handler is done"),
-        new("maxVisits", "how often this handler may be raised; past it the run asks"),
+        new("maxVisits", "how often this handler may be raised in one scope, from 1 to 20; absent, 3; past it the run asks"),
     ];
 
     /// <summary>The keys a group takes, beyond the common ones: it names no type.</summary>
@@ -81,26 +80,20 @@ public static class WorkflowStepTypes
     /// <summary>Every type, in the order <c>help workflows</c> lists them.</summary>
     public static IReadOnlyList<StepType> All { get; } =
     [
-        new(
-            "orient",
-            [],
-            [],
-            [],
-            [],
-            null),
+        new("orient", [], [], null),
         new(
             "reason",
             [
-                new("agent", "the agent definition, as agents/<name>.md in the workflow's directory"),
+                new("agent", "the agent definition, as agents/<name>.md in the workflow's directory; absent, the agent of the step it resumes"),
                 new("tier", "a name for a class of model, resolved by the configuration's agent tiers"),
                 new("model", "the model outright, whose provider, key and client follow from it"),
                 new("effort", "the effort the model is asked for"),
                 new("fallback", "models to go on with, in order, when the one serving declines or its account is at its limit"),
                 new("provider", "the provider, where the model alone does not say it"),
                 new("client", "the client, where the provider is reached two ways"),
-                new("prompt", "the prompt file the step is asked with"),
+                new("prompt", "the prompt file the step is asked with") { Required = true },
                 new("resumePrompt", "the prompt file a step that goes on with another's work is asked with, in place of prompt"),
-                new("outputs", "the JSON schema file the step's answer is held to"),
+                new("outputs", "the JSON schema file the step's answer is held to") { Required = true },
                 new("access", "read (the default), or write: in an agent's worktree, with 'in' naming it"),
                 new("in", "the create-agent step whose agent's worktree the step works in; required where access is write"),
                 new("resume", "the reason step whose work this one goes on with"),
@@ -108,66 +101,35 @@ public static class WorkflowStepTypes
                 new("restrictions", "restrictions the agent works under, beyond the workflow's own"),
                 new("writes", "the paths a writing step may write"),
                 new("ask", "the step may put its questions to a person; one that may not writes its assumptions down"),
-                new("askRounds", "how often a step that asks may ask before it goes on with what it has"),
+                new("askRounds", "how often a step that asks may ask before it goes on with what it has, from 1 to 5; absent, 2"),
+                new("backoffSeconds", "seconds the step waits before it is tried again after its agent failed, twice as long before each later try, at most 900; absent, the workflow's backoffSeconds"),
             ],
-            ["prompt", "outputs"],
             [],
-            ["writes"],
             null),
-        new(
-            "build",
-            LegKeys,
-            [],
-            [],
-            [],
-            "red"),
-        new(
-            "test",
-            [.. LegKeys, .. TestKeys],
-            [],
-            ["filter", "exclude", "labels"],
-            [],
-            "red"),
-        new(
-            "run",
-            [.. LegKeys, new("runner", "the predefined runner the step runs"), RunInputs],
-            ["runner"],
-            ["inputs"],
-            [],
-            "red"),
+        new("build", LegKeys, [], "red"),
+        new("test", [.. LegKeys, .. TestKeys], ["filter", "exclude", "labels"], "red"),
+        new("run", [.. LegKeys, new("runner", "the predefined runner the step runs") { Required = true }, RunInputs], ["inputs"], "red"),
         new(
             "check-mutations",
             [.. LegKeys, new("arms", "the arms it runs, by id; absent, every arm"), new("pending", "drive only the arms with no recorded passed that still holds")],
             [],
-            [],
-            [],
             "red"),
         new(
             "create-agent",
-            [new("agent", "the agent definition, as agents/<name>.md in the workflow's directory"), new("empty", "make the agent with nothing handed to it")],
-            ["agent"],
-            [],
+            [new("agent", "the agent definition, as agents/<name>.md in the workflow's directory") { Required = true }, new("empty", "make the agent with nothing handed to it")],
             [],
             null),
-        new(
-            "fold",
-            FoldKeys,
-            [],
-            [],
-            FoldListKeys,
-            null),
+        new("fold", FoldKeys, [], null),
         new(
             "delete-agent",
-            [.. FoldKeys, new("discardUncommitted", "discard what is not committed rather than folding it")],
+            [.. FoldKeys, new("discardUncommitted", "discard what is not committed rather than folding it; it then folds nothing, and takes no allow and no within")],
             [],
-            [],
-            FoldListKeys,
             null),
         new(
             "refresh",
             [
                 new("of", "the create-agent step whose agent the step works on"),
-                new("others", "every live agent of the run that has a worktree, but the step's own"),
+                new("others", "a create-agent step: the step works on every other live agent of the run that has a worktree, each on its own"),
                 new("paths", "the paths it weighs; absent, what its of and its keys say"),
                 new("all", "weigh every path the main tree moved, in place of paths"),
                 new("except", "paths the agent changed, left as it changed them"),
@@ -175,48 +137,36 @@ public static class WorkflowStepTypes
                 new("merge", "paths both trees changed whose clean three-way merge it takes"),
             ],
             [],
-            [],
-            ["paths", "except", "stale", "merge"],
             null),
         new(
             "rebase",
             [
                 new("of", "the create-agent step whose agent the step works on"),
-                new("others", "every live agent of the run that has a worktree, but the step's own"),
+                new("others", "a create-agent step: the step works on every other live agent of the run that has a worktree, each on its own"),
                 new("settled", "paths reconciled by hand: written out only, a person's answer"),
                 new("merge", "paths both trees changed whose clean three-way merge it takes"),
             ],
             [],
-            [],
-            ["merge"],
             null),
         new(
             "validate-plan",
-            [new("items", "an expression yielding the work items to check"), new("scope", "an expression yielding the pieces of a plan update, checked with them")],
-            ["items"],
-            [],
+            [new("items", "an expression yielding the work items to check") { Required = true }, new("scope", "an expression yielding the pieces of a plan update, checked with them")],
             [],
             null),
         new(
             "anchor-balance",
             [new("base", "the commit it measures from"), new("rows", "the row ids it is held to; absent, the whole tree"), new("failOn", "what a red finding does: red (the default) or never")],
-            [],
             ["base"],
-            ["rows"],
             "red"),
         new(
             "anchor-citations",
             [new("subject", "what it judges: currentTree (the default), currentCommit or currentPullRequest"), new("paths", "the files it is held to; absent, the whole tree"), new("failOn", "what a red finding does: red (the default) or never")],
             [],
-            [],
-            ["paths"],
             "red"),
         new(
             "ci-read",
             [new("branch", "the branch it reads"), new("limit", "how many of the branch's runs it looks at"), new("timeoutMinutes", "minutes the read is given"), new("failOn", "what a red leg does: never (the default) or red")],
-            [],
             ["branch"],
-            [],
             "never"),
         new(
             "ci-wait",
@@ -229,35 +179,33 @@ public static class WorkflowStepTypes
                 new("timeoutMinutes", "minutes one read is given"),
                 new("failOn", "what a red check does: red (the default) or never"),
             ],
-            [],
             ["commit"],
-            [],
             "red"),
         new(
             "commit",
             [new("message", "the commit message it writes; required where the config declares no commit.template"), new("variables", "the values the message template reads"), new("timeoutMinutes", "minutes git is given")],
-            [],
             ["message", "variables"],
-            [],
             null),
         new(
             "push",
             [new("remote", "the remote it pushes to; absent, the tracked one"), new("checkpoint", "push a checkpoint commit"), new("timeoutMinutes", "minutes git is given")],
             [],
-            [],
-            [],
             null),
         new(
             "pull-request",
-            [new("title", "the pull request's title"), new("body", "the file holding the pull request's body"), new("base", "the branch it goes to; absent, the remote's default branch"), new("draft", "open it as a draft"), new("timeoutMinutes", "minutes the forge is given")],
-            ["title", "body"],
+            [
+                new("title", "the pull request's title") { Required = true },
+                new("body", "the file holding the pull request's body") { Required = true },
+                new("base", "the branch it goes to; absent, the remote's default branch"),
+                new("draft", "open it as a draft"),
+                new("timeoutMinutes", "minutes the forge is given"),
+            ],
             ["title", "base"],
-            [],
             null),
         new(
             "pause",
             [
-                new("question", "the question it puts to a person"),
+                new("question", "the question it puts to a person") { Required = true },
                 new("options", "the answers it offers"),
                 new("text", "the options that need a text with them"),
                 new("person", "only a person may answer, and no configuration answers beforehand"),
@@ -265,8 +213,6 @@ public static class WorkflowStepTypes
                 new("preAnswer", "answers the person gave beforehand with the run's input") { Keys = PreAnswerKeys },
             ],
             ["question"],
-            ["question"],
-            [],
             null),
     ];
 
@@ -314,14 +260,10 @@ public static class WorkflowStepTypes
     /// <summary>The keys the fold family takes, shared by <c>fold</c> and <c>delete-agent</c>.</summary>
     private static IReadOnlyList<KeyDescription> FoldKeys =>
     [
-        new("of", "the create-agent step whose agent the step works on"),
-        new("others", "every live agent of the run that has a worktree, but the step's own"),
+        new("of", "the create-agent step whose agent the step works on") { Required = true },
         new("allow", "what it may carry, member for member the fold command's options") { Keys = AllowKeys },
         new("within", "the paths it may write"),
     ];
-
-    /// <summary>Which of the fold family's keys take a list or an expression.</summary>
-    private static IReadOnlyList<string> FoldListKeys => ["allow.new", "allow.merge", "within"];
 
     /// <summary>What one <c>on</c> block takes.</summary>
     public static IReadOnlyList<KeyDescription> OnKeys =>
@@ -335,10 +277,10 @@ public static class WorkflowStepTypes
     public static IReadOnlyList<KeyDescription> RepeatKeys =>
     [
         new("until", "the expression every iteration is followed by while it is false") { Required = true },
-        new("maxIterations", "the most iterations, however until reads"),
-        new("rounds", "the rounds in which every false until is followed; given with blocking, not with maxIterations"),
+        new("maxIterations", "the most iterations, however until reads, from 1 to 20"),
+        new("rounds", "the rounds in which every false until is followed, from 1 to 20; given with blocking, not with maxIterations"),
         new("blocking", "the expression that says, past the rounds, whether what is left must still be dealt with"),
-        new("blockersLimitRounds", "further rounds past rounds while blocking holds"),
+        new("blockersLimitRounds", "further rounds past rounds while blocking holds, from 1 to 20 (absent, 3); false, none but the workflow's budget"),
         new("leftover", "where what the loop left is written"),
     ];
 
@@ -372,7 +314,7 @@ public static class WorkflowStepTypes
     public static IReadOnlyList<KeyDescription> AnswerKeys =>
     [
         new("answer", "the answer, spelled as the question's options spell it") { Required = true },
-        new("times", "how often the same answer is given where the question lets the same thing go on"),
-        new("then", "the step the run is sent to once the answer is given"),
+        new("times", "how often more, retry or compact is given, from 1 to 20, before the question is asked of a person - or answered then"),
+        new("then", "the answer given once times are spent, one that ends the matter: accept, allow, merge, stay, skip, fail or abort"),
     ];
 }

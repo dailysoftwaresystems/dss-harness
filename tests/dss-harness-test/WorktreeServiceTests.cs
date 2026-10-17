@@ -408,6 +408,9 @@ public sealed class WorktreeServiceTests
             "Wait for it to end, or pass --force to delete the worktree with that copy in it. Nothing was removed.",
             refused.Outcome.Message,
             StringComparison.Ordinal);
+
+        // A run holding a copy is waited out, not put right: a caller that can wait is told so beside the line.
+        Assert.Equal(OutcomeCause.LockHeld, refused.Outcome.Cause);
         Assert.True(Directory.Exists(created.Path));
         Assert.True(Directory.Exists(worker));
         Assert.True(Directory.Exists(free), "a refusal removes nothing, a worker no sweep holds included");
@@ -463,6 +466,7 @@ public sealed class WorktreeServiceTests
             $"Worktree 'wt' was not deleted: a mutation worker kept in it is in use - '{taken}': a sweep still running holds it: run r, process 7 on this machine. "
             + "Wait for it to end, or pass --force to delete the worktree with that copy in it. Nothing of the worktree was removed.",
             refused.Outcome.Message);
+        Assert.Equal(OutcomeCause.LockHeld, refused.Outcome.Cause);
         Assert.True(Directory.Exists(created.Path));
         Assert.True(Directory.Exists(taken));
         Assert.False(Directory.Exists(free));
@@ -564,6 +568,9 @@ public sealed class WorktreeServiceTests
             failed.Outcome.Message,
             StringComparison.Ordinal);
         Assert.DoesNotContain("is in use", failed.Outcome.Message, StringComparison.Ordinal);
+
+        // A copy that could not be removed is put right, never waited out: no caller is told to wait for it.
+        Assert.Equal(OutcomeCause.None, failed.Outcome.Cause);
         Assert.True(Directory.Exists(created.Path));
         Assert.True(Directory.Exists(stuck));
         Assert.False(Directory.Exists(free));

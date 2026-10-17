@@ -724,7 +724,8 @@ public sealed class WorktreeService(
 
         // What keeps the worktree, of what became of the copies kept in it - one a sweep or a run holds, one that could
         // not be removed or told, or none that could be looked for - or null. Each is said as what it is, in the words a
-        // host's copy kept says it in (KeptCopyLine.Keeping): only one a run still holds ends by waiting.
+        // host's copy kept says it in (KeptCopyLine.Keeping): only one a run still holds ends by waiting, and that one
+        // alone says so to a caller that can wait (OutcomeCause.LockHeld).
         WorktreeOutcome? Kept(WorkersGone gone, string nothing)
             => gone.Kept is { } kept
                 ? WorktreeOutcome.Failed(CommandOutcome.Failed(
@@ -732,7 +733,10 @@ public sealed class WorktreeService(
                     $"Worktree '{worktreeName}' was not deleted: {KeptCopyLine.Keeping(kept, gone.KeptMember)}. "
                         + (kept.Verdict == LegVerdict.RefusedLocked ? "Wait for it to end" : "Put that right and try again")
                         + $", or pass --force to delete the worktree with that copy in it. {nothing}.",
-                    gone.Lines))
+                    gone.Lines) with
+                {
+                    Cause = kept.Verdict == LegVerdict.RefusedLocked ? OutcomeCause.LockHeld : OutcomeCause.None,
+                })
                 : gone.Failure is { } failure
                     ? WorktreeOutcome.Failed(CommandOutcome.Failed(
                         gone.ExitCode!.Value,

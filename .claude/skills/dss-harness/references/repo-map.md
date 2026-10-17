@@ -16,7 +16,7 @@ the version program as solution items.
 
 | Project | What it is |
 |---|---|
-| [`src/DssHarness.Cli`](../../../../src/DssHarness.Cli/DssHarness.Cli.csproj) | The tool: assembly `dssharness`, packed as the .NET tool `DssHarness` with command `dssharness`. Argument parsing and dependency wiring only. Holds the one `<Version>` |
+| [`src/DssHarness.Cli`](../../../../src/DssHarness.Cli/DssHarness.Cli.csproj) | The tool: assembly `dssharness`, packed as the .NET tool `DssHarness` with command `dssharness`. Argument parsing, the console and the exit code only; the registrations are Core's. Holds the one `<Version>` |
 | [`src/DssHarness.Core`](../../../../src/DssHarness.Core/DssHarness.Core.csproj) | Every service, model and abstraction. Grants `InternalsVisibleTo` to the test project alone. Embeds the anchor-registry template and the mutation fixture |
 | [`tests/dss-harness-test`](../../../../tests/dss-harness-test/dss-harness-test.csproj) | The xunit v3 suite, an executable on the Microsoft Testing Platform runner. Namespace `DssHarness.Tests`, one flat directory. Embeds three workflows so tests can pin them |
 
@@ -32,17 +32,20 @@ them.
 | File | Holds |
 |---|---|
 | `Program.cs` | Registers every command and runs the parser |
-| `CommandRunner.cs` | `Wire(...)`, `CommandContext` (`Get<T>()`, `Directory`, `Json`), and the one place an exception becomes an exit code (`Meaning`) |
+| `CommandRunner.cs` | `Wire(...)`, `CommandContext` (`Get<T>()`, `Directory`, `Json`): an adapter from the parse to a session (`SessionOptions`) of the core's host |
+| `ConsoleHost.cs` | The host every command runs through, over the core's registrations with the console's prompt |
 | `GlobalOptions.cs` | `-v`, `-C/--directory`, `--no-prompt`, added to a command by `AddTo` |
 | `CommandFlags.cs` | Reads flags from a parse that may have been refused, never throwing |
 | `JsonAnswer.cs` | Each command's `--json` document for an exit its body never reached (refused, usage error, throw) |
-| `HarnessServices.cs` | The dependency-injection composition root |
-| `Commands/` | One static `XCommand.Create()` per command (several per file for the anchor, agent, orchestrator and worktree families). `HelpCommand.cs` holds every `help` topic's text |
+| `Commands/` | One static `XCommand.Create()` per command (several per file for the anchor, agent, orchestrator and worktree families). `HelpCommand.cs` declares `help` and asks the core's `HelpTopics` for its text |
 
 **Core** (`src/DssHarness.Core`), one folder per concern:
 
 | Folder | Concern (key types) |
 |---|---|
+| `Application` | The lifecycle every command shares and the use cases a front end calls (`DssHarnessHost`, `CommandSession`, `SessionOptions`, `UseCaseResult<T>`, `Legs/BuildLegs`, `TestLegs`, `RunnerLegs`, `MutationLegs`) |
+| `Composition` | The dependency-injection registrations, every front end's alike (`ServiceRegistration.AddDssHarness`) |
+| `Help` | Every `help` topic's text, held to the code (`HelpTopics`) |
 | `Anchors` | Anchor registry rows, balance and citations (`IAnchorRegistryService`, `AnchorBalanceService`, `AnchorCitationService`) |
 | `Build` | Build adapters and CMake/Ninja inspection (`BuildService`, `BuildDirectoryGuard`, `CMakeToolchainReader`) |
 | `Ci` | `check-ci-legs` (`CiLegsService`) |
@@ -61,7 +64,7 @@ them.
 | `Processes` | `IProcessRunner`/`ProcessRunner`, `ProcessRequest`/`ProcessResult`, `CommandLineText` (the one no-shell line splitter) |
 | `Projects` | What `init` detects and seeds (`IProjectDetector`) |
 | `Repository` | The harness context and layout, `GitIgnoreManager` |
-| `Results` | `CommandOutcome`, `HarnessException`, `HarnessExit` (the shared exit codes) |
+| `Results` | `CommandOutcome`, `HarnessException`, `HarnessExit` (the shared exit codes), `KnownCauses.Meaning` (the one place an exception becomes an exit code), `OutcomeCause` |
 | `Runners` | Predefined runners and action files (`RunnerRunService`, `ActionFileParser`) |
 | `Runs` | Leg runs, remote runs, `clean` (`LegRunService`, `RemoteLegRunner`, `CleanService`) |
 | `SetUps` | `up`/`down` and a run's `--set-up`: lines, shared holds, bringing up around a leg (`SetUpService`, `SetUpHolds`, `LegSetUps`) |
@@ -75,7 +78,8 @@ them.
 
 From [`docs/architecture.md`](../../../../docs/architecture.md) "Layering", which is the authority:
 
-- **Cli wires, Core works.** `Program.cs` parses arguments and wires dependencies; every rule lives in Core, which
+- **Cli wires, Core works.** `Program.cs` parses arguments and begins each command as a session of Core's host, over
+  Core's own registrations (`ServiceRegistration.AddDssHarness`); every rule lives in Core, which
   never references Cli. The assembly boundary enforces it.
 - **The operating system is learned in one layer.** `HostPlatform`, `FilePermissionsFactory` and
   `ProcessTableFactory` decide what differs by OS. Everything above depends on `IHostPlatform`, `IFilePermissions`,

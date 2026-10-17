@@ -28,11 +28,18 @@ public static class WorkflowFileParser
 {
     /// <summary>How deep steps may nest: a group's steps inside a group's steps, and so on.</summary>
     /// <remarks>
-    /// Bounded here, in the reader, because the file could nest deeper than any reader could bear
-    /// before anything else looks at it; the same number is the validator's rule, and the two are
-    /// one rule said twice by one owner.
+    /// Bounded here, in the reader, the one owner of the rule: a step nested deeper is refused before anything reads
+    /// it. The file's YAML is bounded before that, more loosely (<see cref="MaxYamlDepth"/>), so that no file can nest
+    /// deeper than the reader itself can bear.
     /// </remarks>
     public const int MaxDepth = 10;
+
+    /// <summary>
+    /// How deep the file's YAML may nest at all - mappings and lists inside one another - before it is read into
+    /// nodes. A definition that keeps to <see cref="MaxDepth"/> nests a few levels for each level of steps; one past
+    /// this bound is no definition, and reading it whole could exhaust the reader before any rule saw it.
+    /// </summary>
+    public const int MaxYamlDepth = 64;
 
     /// <summary>Top-level keys a workflow file takes.</summary>
     private static readonly IReadOnlyList<string> FileKeys = KeyDescription.Names(WorkflowKeys.File);
@@ -64,6 +71,7 @@ public static class WorkflowFileParser
         int? maxParallelProcesses = null;
         int? maxOpenAgents = null;
         int? maxRetries = null;
+        int? backoffSeconds = null;
         int? maxInstances = null;
         bool? pushCheckpoints = null;
         int? handoffSeconds = null;
@@ -77,6 +85,7 @@ public static class WorkflowFileParser
         var parameters = new List<FlowParam>();
         var outputs = new List<WorkflowOutput>();
         List<WorkflowStep>? steps = null;
+        FlowRecover? recover = null;
 
         foreach (var (key, value) in keys)
         {
@@ -104,6 +113,10 @@ public static class WorkflowFileParser
 
                 case "maxRetries":
                     maxRetries = RequireInt(value, "maxRetries", problems);
+                    break;
+
+                case "backoffSeconds":
+                    backoffSeconds = RequireInt(value, "backoffSeconds", problems);
                     break;
 
                 case "maxInstances":
@@ -165,6 +178,10 @@ public static class WorkflowFileParser
                     steps = [.. ReadSteps(value, 1, problems)];
                     break;
 
+                case "recover":
+                    recover = ReadRecover(value, problems);
+                    break;
+
                 default:
                     throw Unread(key);
             }
@@ -202,7 +219,48 @@ public static class WorkflowFileParser
                 outputs,
                 steps ?? [],
                 path)
+            {
+                Recover = recover,
+                BackoffSeconds = backoffSeconds,
+            }
             : throw Refuse(path, problems);
+    }
+
+    private static FlowRecover? ReadRecover(YamlNode node, List<string> problems)
+    {
+        if (node is not YamlMappingNode mapping)
+        {
+            problems.Add(At(node, "'recover' is not a mapping of keys."));
+            return null;
+        }
+
+        var keys = CollectKeys(mapping, "recover", KeyDescription.Names(WorkflowKeys.Recover), problems);
+        var maxVisits = IntIn(keys, "recover.maxVisits", problems);
+        var onSuccess = RequireScalarIn(keys, "recover.onSuccess", problems);
+        var onFailure = RequireScalarIn(keys, "recover.onFailure", problems);
+        var stepsNode = NodeIn(keys, "steps");
+
+        if (onSuccess is not null && !FlowRecover.Successes.Contains(onSuccess, StringComparer.Ordinal))
+        {
+            problems.Add(At(NodeIn(keys, "onSuccess")!, $"'recover.onSuccess' is '{onSuccess}', which is none of {string.Join(", ", FlowRecover.Successes.Select(known => $"'{known}'"))}; a recovery sends the run back to the step that gave it its failure, to run again once it was put right."));
+            onSuccess = null;
+        }
+
+        if (onFailure is not null && !WorkflowStep.FailurePolicies.Contains(onFailure, StringComparer.Ordinal))
+        {
+            problems.Add(At(NodeIn(keys, "onFailure")!, $"'recover.onFailure' is '{onFailure}', which is none of {string.Join(", ", WorkflowStep.FailurePolicies.Select(known => $"'{known}'"))}."));
+            onFailure = null;
+        }
+
+        if (stepsNode is null)
+        {
+            problems.Add(At(node, "'recover' holds no 'steps'; a recovery that runs nothing would put nothing right, and the step that failed would run again unchanged."));
+            return null;
+        }
+
+        var steps = ReadSteps(stepsNode, 1, problems).ToList();
+
+        return onSuccess is null || onFailure is null ? null : new FlowRecover(maxVisits, steps, onSuccess, onFailure);
     }
 
     private static FlowBudget? ReadBudget(YamlNode node, List<string> problems)
@@ -258,15 +316,20 @@ public static class WorkflowFileParser
 
         var keys = CollectKeys(mapping, "advisor", KeyDescription.Names(WorkflowKeys.Advisor), problems);
         var read = ReadAgentSelection(keys, "advisor", problems);
+        var agent = RequireScalarIn(keys, "advisor.agent", problems);
         var prompt = RequireScalarIn(keys, "advisor.prompt", problems);
         var kinds = StringListIn(keys, "advisor.kinds", problems) ?? [];
 
-        if (read.Agent is null || prompt is null)
+        if (agent is null || prompt is null)
         {
             return null;
         }
 
-        return new FlowAdvisor(read.Agent, prompt, read.Tier, read.Model, read.Effort, read.Fallback, read.Provider, read.Client, kinds);
+        return new FlowAdvisor(agent, prompt, read.Tier, read.Model, read.Effort, read.Fallback, read.Provider, read.Client, kinds)
+        {
+            Retries = IntIn(keys, "advisor.retries", problems),
+            BackoffSeconds = IntIn(keys, "advisor.backoffSeconds", problems),
+        };
     }
 
     private static FlowReporter? ReadReporter(YamlNode node, List<string> problems)
@@ -279,22 +342,26 @@ public static class WorkflowFileParser
 
         var keys = CollectKeys(mapping, "reporter", KeyDescription.Names(WorkflowKeys.Reporter), problems);
         var read = ReadAgentSelection(keys, "reporter", problems);
+        var agent = RequireScalarIn(keys, "reporter.agent", problems);
         var statusPrompt = RequireScalarIn(keys, "reporter.statusPrompt", problems);
         var askPrompt = RequireScalarIn(keys, "reporter.askPrompt", problems);
 
-        if (read.Agent is null || statusPrompt is null || askPrompt is null)
+        if (agent is null || statusPrompt is null || askPrompt is null)
         {
             return null;
         }
 
-        return new FlowReporter(read.Agent, statusPrompt, askPrompt, read.Tier, read.Model, read.Effort, read.Fallback, read.Provider, read.Client);
+        return new FlowReporter(agent, statusPrompt, askPrompt, read.Tier, read.Model, read.Effort, read.Fallback, read.Provider, read.Client)
+        {
+            Retries = IntIn(keys, "reporter.retries", problems),
+            BackoffSeconds = IntIn(keys, "reporter.backoffSeconds", problems),
+        };
     }
 
-    /// <summary>The keys <c>advisor</c> and <c>reporter</c> share: how each names the agent it runs.</summary>
-    private static (string? Agent, string? Tier, string? Model, string? Effort, IReadOnlyList<string> Fallback, string? Provider, string? Client)
+    /// <summary>The keys <c>advisor</c> and <c>reporter</c> share: how each picks the model its agent runs on.</summary>
+    private static (string? Tier, string? Model, string? Effort, IReadOnlyList<string> Fallback, string? Provider, string? Client)
         ReadAgentSelection(List<(string Key, YamlNode Value)> keys, string owner, List<string> problems)
     {
-        string? agent = null;
         string? tier = null;
         string? model = null;
         string? effort = null;
@@ -306,10 +373,6 @@ public static class WorkflowFileParser
         {
             switch (key)
             {
-                case "agent":
-                    agent = RequireScalar(value, $"{owner}.agent", problems);
-                    break;
-
                 case "tier":
                     tier = RequireScalar(value, $"{owner}.tier", problems);
                     break;
@@ -334,8 +397,11 @@ public static class WorkflowFileParser
                     client = RequireScalar(value, $"{owner}.client", problems);
                     break;
 
-                // Read by the caller, which owns them: the prompts each of advisor and reporter is
-                // asked with, and the kinds an advisor is asked about.
+                // Read by the caller, which owns them: the agent each runs, which both require, the
+                // prompts each is asked with, the kinds an advisor is asked about, and how each is tried again.
+                case "retries":
+                case "backoffSeconds":
+                case "agent":
                 case "prompt":
                 case "statusPrompt":
                 case "askPrompt":
@@ -347,7 +413,7 @@ public static class WorkflowFileParser
             }
         }
 
-        return (agent, tier, model, effort, fallback, provider, client);
+        return (tier, model, effort, fallback, provider, client);
     }
 
     private static FlowAmend? ReadAmend(YamlNode node, List<string> problems)
@@ -625,13 +691,18 @@ public static class WorkflowFileParser
         foreach (var (key, value) in keys)
         {
             // A key no table lists was refused where the keys were collected; what is left to refuse
-            // here is a key that belongs to a step this one is not.
-            if (!allowed.Contains(key, StringComparer.Ordinal) && WorkflowStepTypes.AllKeys.Contains(key, StringComparer.Ordinal))
+            // here is a key that belongs to a step this one is not - a type's key on a group or on a
+            // step of another type, and a group's key on a typed step, which would otherwise be read
+            // by nothing and obeyed by nothing.
+            if (!allowed.Contains(key, StringComparer.Ordinal))
             {
                 var owner = typed is null ? "a group" : $"a {typed.Type} step";
                 var taken = WorkflowStepTypes.All.FirstOrDefault(other => other != typed && WorkflowStepTypes.KeysOf(other).Contains(key, StringComparer.Ordinal));
+                var takenBy = taken is not null
+                    ? $"; it is one of a {taken.Type} step"
+                    : typed is not null && KeyDescription.Names(WorkflowStepTypes.Group).Contains(key, StringComparer.Ordinal) ? "; it is one of a group, which names no type" : "";
 
-                problems.Add(At(value, $"'{key}' is not a key of {owner}{(taken is null ? "" : $"; it is one of a {taken.Type} step")}."));
+                problems.Add(At(value, $"'{key}' is not a key of {owner}{takenBy}."));
             }
         }
 
@@ -642,7 +713,7 @@ public static class WorkflowFileParser
             Description = ScalarIn(keys, $"{where}.description", problems),
             DependsOn = StringListIn(keys, $"{where}.dependsOn", problems) ?? [],
             When = ScalarIn(keys, $"{where}.when", problems),
-            OnFailure = EnumIn(keys, $"{where}.onFailure", problems, ["stop", "pause", "continue"]),
+            OnFailure = EnumIn(keys, $"{where}.onFailure", problems, WorkflowStep.FailurePolicies),
             Retries = IntIn(keys, $"{where}.retries", problems),
             Always = BooleanIn(keys, $"{where}.always", problems),
             Alone = BooleanIn(keys, $"{where}.alone", problems),
@@ -713,7 +784,7 @@ public static class WorkflowFileParser
             }
             else if (depth >= MaxDepth && stepsNode is not null)
             {
-                problems.Add(At(stepsNode, $"{where} holds steps {depth} levels deep; steps nest at most {MaxDepth}."));
+                problems.Add(At(stepsNode, $"{where} holds steps {depth + 1} levels deep; steps nest at most {MaxDepth}."));
             }
             else if (stepsNode is not null)
             {
@@ -783,6 +854,7 @@ public static class WorkflowFileParser
                     Writes = FlowListIn(keys, $"{where}.writes", problems),
                     Ask = BooleanIn(keys, $"{where}.ask", problems),
                     AskRounds = IntIn(keys, $"{where}.askRounds", problems),
+                    BackoffSeconds = IntIn(keys, $"{where}.backoffSeconds", problems),
                 };
                 break;
 
@@ -829,7 +901,6 @@ public static class WorkflowFileParser
                 step = step with
                 {
                     Of = ScalarIn(keys, $"{where}.of", problems),
-                    Others = BooleanIn(keys, $"{where}.others", problems),
                     Allow = ReadAllow(keys, where, problems),
                     Within = FlowListIn(keys, $"{where}.within", problems),
                 };
@@ -845,7 +916,7 @@ public static class WorkflowFileParser
                 step = step with
                 {
                     Of = ScalarIn(keys, $"{where}.of", problems),
-                    Others = BooleanIn(keys, $"{where}.others", problems),
+                    Others = ScalarIn(keys, $"{where}.others", problems),
                     Paths = FlowListIn(keys, $"{where}.paths", problems),
                     All = BooleanIn(keys, $"{where}.all", problems),
                     Except = FlowListIn(keys, $"{where}.except", problems),
@@ -858,7 +929,7 @@ public static class WorkflowFileParser
                 step = step with
                 {
                     Of = ScalarIn(keys, $"{where}.of", problems),
-                    Others = BooleanIn(keys, $"{where}.others", problems),
+                    Others = ScalarIn(keys, $"{where}.others", problems),
                     Settled = StringListIn(keys, $"{where}.settled", problems) ?? [],
                     Merge = FlowListIn(keys, $"{where}.merge", problems),
                 };
@@ -977,13 +1048,18 @@ public static class WorkflowFileParser
 
         var repeatKeys = CollectKeys(mapping, $"{where}.repeat", KeyDescription.Names(WorkflowStepTypes.RepeatKeys), problems);
 
+        // blockersLimitRounds is a number of rounds, or false for none but the workflow's budget.
+        var limitNode = NodeIn(repeatKeys, "blockersLimitRounds");
+        var unbounded = limitNode is YamlScalarNode { Value: "false" };
+
         return new FlowRepeat(
             RequireScalarIn(repeatKeys, $"{where}.repeat.until", problems) ?? string.Empty,
             IntIn(repeatKeys, $"{where}.repeat.maxIterations", problems),
             IntIn(repeatKeys, $"{where}.repeat.rounds", problems),
             ScalarIn(repeatKeys, $"{where}.repeat.blocking", problems),
-            IntIn(repeatKeys, $"{where}.repeat.blockersLimitRounds", problems),
-            ScalarIn(repeatKeys, $"{where}.repeat.leftover", problems));
+            unbounded ? null : IntIn(repeatKeys, $"{where}.repeat.blockersLimitRounds", problems),
+            ScalarIn(repeatKeys, $"{where}.repeat.leftover", problems),
+            unbounded);
     }
 
     private static FlowAllow? ReadAllow(List<(string Key, YamlNode Value)> keys, string where, List<string> problems)
@@ -1073,6 +1149,11 @@ public static class WorkflowFileParser
 
     private static YamlMappingNode? LoadRoot(string text, List<string> problems)
     {
+        if (!Bounded(text, problems))
+        {
+            return null;
+        }
+
         var stream = new YamlStream();
 
         try
@@ -1104,6 +1185,52 @@ public static class WorkflowFileParser
 
         problems.Add(At(stream.Documents[0].RootNode, "the file's top level is not a mapping of keys."));
         return null;
+    }
+
+    /// <summary>
+    /// Walks the file's YAML as a stream of events, before any of it is read into nodes, and refuses what no definition
+    /// holds and what could exhaust the reader: an alias - <c>*name</c>, a merge key's included - which repeats a part
+    /// of the file by reference, and so lets a few hundred bytes stand for millions of steps; and nesting past
+    /// <see cref="MaxYamlDepth"/>, which reading into nodes would recurse through.
+    /// </summary>
+    /// <returns>Whether the file may be read into nodes.</returns>
+    private static bool Bounded(string text, List<string> problems)
+    {
+        var parser = new Parser(new StringReader(text));
+        var depth = 0;
+
+        try
+        {
+            while (parser.MoveNext())
+            {
+                switch (parser.Current)
+                {
+                    case YamlDotNet.Core.Events.AnchorAlias alias:
+                        problems.Add($"line {alias.Start.Line}, column {alias.Start.Column}: the alias '*{alias.Value}' repeats a part of the file by reference; a definition writes each of its steps out, so that what it says is what it reads.");
+                        return false;
+
+                    case YamlDotNet.Core.Events.MappingStart or YamlDotNet.Core.Events.SequenceStart:
+                        if (++depth > MaxYamlDepth)
+                        {
+                            problems.Add($"line {parser.Current.Start.Line}, column {parser.Current.Start.Column}: the file nests more than {MaxYamlDepth} levels deep; no definition does, and steps themselves nest at most {MaxDepth}.");
+                            return false;
+                        }
+
+                        break;
+
+                    case YamlDotNet.Core.Events.MappingEnd or YamlDotNet.Core.Events.SequenceEnd:
+                        depth--;
+                        break;
+                }
+            }
+        }
+        catch (YamlException)
+        {
+            // What is not YAML at all is said where the file is read into nodes, with the reader's own words.
+            return true;
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -1247,7 +1374,7 @@ public static class WorkflowFileParser
             return null;
         }
 
-        if (double.TryParse(text, System.Globalization.CultureInfo.InvariantCulture, out var value))
+        if (double.TryParse(text, System.Globalization.CultureInfo.InvariantCulture, out var value) && double.IsFinite(value))
         {
             return value;
         }
@@ -1358,8 +1485,10 @@ public static class WorkflowFileParser
 
     /// <summary>
     /// Reads one list-or-expression key: a scalar is an expression that yields the list, a sequence
-    /// is the list written out. Which keys take this shape is <see cref="WorkflowStepTypes"/>' to say.
+    /// is the list written out. Which keys take this shape is said where each type's keys are read,
+    /// by reading them through this.
     /// </summary>
+
     private static FlowList? FlowListIn(IReadOnlyList<(string Key, YamlNode Value)> keys, string what, List<string> problems)
     {
         var node = NodeIn(keys, KeyNameOf(what));

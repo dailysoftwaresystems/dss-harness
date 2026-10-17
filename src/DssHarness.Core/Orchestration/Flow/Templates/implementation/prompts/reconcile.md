@@ -19,11 +19,12 @@ your worktree as your change; one whose changes conflict was left as you had it.
 1. For each path outside the ones this item owns: undo your change to it. A command you ran may have written it: a
    generated file, a lock file, a cache. If the item cannot be done without that path, undo the change all the same,
    and list it as what you cannot do: the path, why the item needs it, and what would let it be done. The path
-   belongs to other work, and a person is asked about it.
+   belongs to other work, and a person is asked about it. While you work through a review's findings, decline the
+   finding that needs the path instead, with that as the reason.
 2. For each file whose changes conflict: make your copy carry the main tree's change as well as your own, as the
    fold showed it, so that the next fold's merge of the two is clean. Keep what both changes are for; where they
    cannot both hold, keep the main tree's, and list what of yours cannot stay as what you cannot do, with why: a
-   person is asked about it.
+   person is asked about it. While you work through a review's findings, decline the finding it concerns instead.
 3. Build and run your tests again, where the repository's tools let you.
 
 ## What to return

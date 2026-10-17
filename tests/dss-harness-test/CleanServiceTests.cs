@@ -157,6 +157,9 @@ public sealed class CleanServiceTests
         Assert.Equal("refused-locked", leg.GetProperty("verdict").GetString());
         Assert.Contains(held.Entry.Holder.RunId, leg.GetProperty("detail").GetString(), StringComparison.Ordinal);
         Assert.True(File.Exists(file));
+
+        // A build in the way is waited out, not put right: the one thing the code cannot say, said beside it.
+        Assert.Equal(OutcomeCause.LockHeld, outcome.Cause);
     }
 
     /// <summary>

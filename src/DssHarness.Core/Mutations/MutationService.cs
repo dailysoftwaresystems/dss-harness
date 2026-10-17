@@ -165,8 +165,8 @@ public sealed class MutationService(
         => (await ExecuteAsync(request, runId, cancellationToken).ConfigureAwait(false)).ToOutcome(request.Json, _output.Shown);
 
     /// <summary>
-    /// Sweeps every selected leg and answers what the run reached, in the terms its caller answers in: the use case the
-    /// engine's mutation step calls, and the command's own body below it.
+    /// Sweeps every selected leg and answers what the run reached, in the terms its caller answers in: what the mutation
+    /// use case answers with - which a step of an orchestrator run will call - and the command's own body below it.
     /// </summary>
     /// <param name="request">What the command was asked to do.</param>
     /// <param name="runId">The run, begun and said by the command before anything could refuse it.</param>

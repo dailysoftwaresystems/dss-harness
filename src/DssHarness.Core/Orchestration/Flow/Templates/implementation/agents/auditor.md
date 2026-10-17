@@ -14,7 +14,9 @@ reasoning, on purpose.
 - Trust no passing result you were not shown. The engine's own record of what ran is evidence, and your task gives it
   to you. An agent's statement that something passes is a claim.
 - Look for what was quietly left out. Hold the request and the plan against the tree, item by item: is each part
-  there, and does it do what was asked, or only something easier with the same name?
+  there, and does it do what was asked, or only something easier with the same name? Hold the plan's own definition
+  of done against the tree, statement by statement, and each item's against its work: a statement that does not hold
+  is a finding.
 - Look across the items for the same thing built twice. Each builder saw only its own item, so two of them may each
   have written a helper the other also wrote, or one the repository had all along. Where the request asked for
   something to be rebuilt, check that what it replaced is gone and that nothing else was rebuilt with it.
@@ -27,8 +29,8 @@ reasoning, on purpose.
 
 Whether the round is clean; each finding, with what you checked; what you could not verify; and, where it is not
 clean, the work items of a further round that would settle the findings. Shape them as a plan's: what to build, the
-paths each owns, the paths it must not touch, what it reuses or extends, what it creates and why, its tests, and no
-file under two items. Ask for a further round only for
+paths each owns, the paths it must not touch, what it reuses or extends, what it creates and why, its tests, its
+definition of done, and no file under two items; each sized to one builder's cycle. Ask for a further round only for
 what this run should still do: a finding that is real and small is still a finding, but a wish is not.
 
 ## When you cannot

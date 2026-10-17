@@ -69,8 +69,9 @@ internal interface IWorkerCopies
     /// </summary>
     /// <param name="source">The sweep's one reading of the tree.</param>
     /// <param name="worker">The worker's copy.</param>
+    /// <param name="variant">The variant the sweep builds, whose build directory in the worker is the sweep's own.</param>
     /// <param name="cancellationToken">Stops the sync.</param>
-    Task SyncAsync(SyncSource source, string worker, CancellationToken cancellationToken);
+    Task SyncAsync(SyncSource source, string worker, VariantKey variant, CancellationToken cancellationToken);
 
     /// <summary>
     /// How many bytes of the tree's git history a worker made new from <paramref name="source"/> keeps: the commit the
@@ -262,18 +263,25 @@ internal sealed class WorkerCopies(
 
     /// <inheritdoc/>
     /// <remarks>
-    /// The worker's own build directory is withheld by the sync itself, whatever the configuration says: a sweep
-    /// made it, keeps it warm from one sweep to the next, and re-syncs over it - so no spelling of
-    /// <c>sync.neverTransfer</c> decides whether a sweep may run, and the delete bound judges only what mirrors
-    /// the tree the sweep read. The worker's <c>.git</c> the floor already withholds.
+    /// The worker's own build directory - the one its variant builds in, under the build root - is withheld by the
+    /// sync itself, whatever the configuration says: a sweep made it, keeps it warm from one sweep to the next, and
+    /// re-syncs over it - so no spelling of <c>sync.neverTransfer</c> decides whether a sweep may run, and the delete
+    /// bound judges only what mirrors the tree the sweep read. That directory and no more: withholding the whole build
+    /// root left a file the tree tracks beside it - a toolchain file under <c>build/</c>, where a configuration that does
+    /// not withhold <c>build</c> carries it - written into the worker and then never seen by the sync's verification,
+    /// which failed every sweep. The worker's <c>.git</c> the floor already withholds.
     /// </remarks>
-    public Task SyncAsync(SyncSource source, string worker, CancellationToken cancellationToken)
-        => _syncService.SyncAsync(
+    public Task SyncAsync(SyncSource source, string worker, VariantKey variant, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(variant);
+
+        return _syncService.SyncAsync(
             source,
             _transport,
             worker,
-            new SyncOptions(Withheld: [VariantKey.BuildRootName], Reader: SyncBoundReader.Sweep),
+            new SyncOptions(Withheld: [Path.GetRelativePath(worker, variant.DirectoryUnder(worker))], Reader: SyncBoundReader.Sweep),
             cancellationToken);
+    }
 
     /// <inheritdoc/>
     public Task<long> HistoryBytesAsync(SyncSource source, CancellationToken cancellationToken)

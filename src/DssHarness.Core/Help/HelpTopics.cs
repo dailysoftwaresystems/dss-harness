@@ -2681,11 +2681,22 @@ public static class HelpTopics
             + "where its leg stands - null for a leg of this machine where this machine's record of heavy legs cannot be read - "
             + "and each holding a copy kept in the "
             + "worktree, said as its own line says it, a leg copy's holder with where its leg stands, a mutation worker's with "
-            + "the process, the run and since when its sweep's claim records. An --apply refused at its hold answers the same "
+            + "the process, the run and since when its sweep's claim records. Beside them, needs names each consent the "
+            + $"request lacks - '{OrchestrationReports.Named(ConsentKind.FoldNewRows)}' ({AnchorBatchRequest.NewOption}), "
+            + $"'{OrchestrationReports.Named(ConsentKind.FoldLostRows)}' ({AnchorBatchRequest.AcceptLostOption}), "
+            + $"'{OrchestrationReports.Named(ConsentKind.FoldOverCells)}' ({AnchorBatchRequest.AcceptOverOption}) "
+            + $"or '{OrchestrationReports.Named(ConsentKind.FoldTwoChanges)}' ({FoldAllowances.MergeOption}) - and refusals each "
+            + $"reason it is refused for, '{OrchestrationReports.Named(RefusalKind.Conflict)}' where a path both trees changed has "
+            + $"a merge that conflicts and '{OrchestrationReports.Named(RefusalKind.Other)}' for anything else, so a request "
+            + $"refused for conflicting merges alone says '{OrchestrationReports.Named(RefusalKind.Conflict)}' and nothing else; "
+            + "folded, null but for the --apply of a fold and of a deletion, "
+            + "says what it wrote, deleted, merged and handed, the registries and rows it applied, and the cells --accept-over "
+            + "took. An --apply refused at its hold answers the same "
             + "document, applied true: request 'sound', and the run it met in heldNow. Stopped before "
             + "anything is weighed - a command line the parser refuses, a --directory that is not there, a repository not "
             + "initialised, another usage error, or a refusal met before then, an agent that is not there among them - it "
-            + "answers with the same document, empty: applied false, request and heldNow null, no lines.");
+            + "answers with the same document, empty: applied false, request and heldNow null, no lines, no needs, no "
+            + "refusals and folded null.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -2845,11 +2856,21 @@ public static class HelpTopics
         builder.AppendLine("the yml names is relative to that directory and stays inside it, as an action's files");
         builder.AppendLine("are relative to its own directory (see 'help runners'). So two workflows never read");
         builder.AppendLine("each other's files, and a repository can hold as many as it has ways of working. init");
-        builder.AppendLine("writes one - the default workflow, from a request to a pull request whose checks are");
-        builder.AppendLine("green - into a repository that has no workflows directory at all, and declares it in the");
-        builder.AppendLine("config it creates; nothing that exists is ever overwritten. The name is the folder's,");
-        builder.AppendLine("the file's and the name: key's alike, one word, and a disagreement among the three is");
-        builder.AppendLine("refused when the file is read.");
+        builder.AppendLine("writes one - the implementation workflow, from a request to a pull request whose checks are");
+        builder.AppendLine($"green - and declares it in the config it creates. Where config.json declares {WorkflowTemplates.ShippedWorkflowName},");
+        builder.AppendLine("init writes each of its files that is missing - the whole set where the repository has no");
+        builder.AppendLine("definition of it yet, and where it has one only the shipped files that definition names,");
+        builder.AppendLine("so a file taken out with its step stays out - and keeps each one that is there,");
+        builder.AppendLine("whatever it holds, so an init that stopped part way is finished by the next; nothing");
+        builder.AppendLine("that exists is ever overwritten, and a config that does not declare it gets none of it.");
+        builder.AppendLine("The name is the folder's, the file's and the name: key's alike, one word, and a");
+        builder.AppendLine("disagreement among the three is refused when the file is read.");
+        builder.AppendLine();
+        builder.AppendLine($"'{ToolPackage.Command} {WorkflowExportService.CommandName} <name> --to <dir>' copies a workflow - its yml and every");
+        builder.AppendLine("file it names, and no other - into <dir>/<name>/, a folder of its own that must not be");
+        builder.AppendLine("there (13 where it is): a declared one once it holds (12 where it does not), byte for");
+        builder.AppendLine($"byte, or, with --shipped, the {WorkflowTemplates.ShippedWorkflowName} workflow as this tool ships it, to make a");
+        builder.AppendLine("version of your own. A file that cannot be written takes back what was written before it.");
         builder.AppendLine();
         builder.AppendLine("A workflow declares inputs - the values a run is started with, each with a kind, a");
         builder.AppendLine("default and the options it takes; params - its own knobs, defaulted in the file and read");
@@ -2860,7 +2881,20 @@ public static class HelpTopics
         builder.AppendLine("step's name is a lower-case word with dashes within, unique among its siblings; steps");
         builder.AppendLine($"nest at most {WorkflowFileParser.MaxDepth} deep. A step raised by another step's ending says on - by the outcome");
         builder.AppendLine("(failure, success or end, a failure by exit code) - and sends the run back with then;");
-        builder.AppendLine("the schedule never starts it. The keys of the file and of every step are listed below,");
+        builder.AppendLine("the schedule never starts it. A step gives a failure nothing handles to the workflow's");
+        builder.AppendLine("recover by saying onFailure: recover, itself or through a group around it - never a");
+        builder.AppendLine("reasoning step, whose agent is tried again (retries, waiting backoffSeconds, twice as long");
+        builder.AppendLine("each time) and on its fallback, and which asks where it still fails. The recovery's steps,");
+        builder.AppendLine("written once, read the step that failed as source and see every step of the flow, find");
+        builder.AppendLine("what went wrong and put it right; then the run goes where its onSuccess says - failed-step,");
+        builder.AppendLine("the step that gave it its failure, which runs again from where it stopped - and a failure");
+        builder.AppendLine("of its own work, past its steps' retries, does what its onFailure says: pause or stop; the");
+        builder.AppendLine("recovery never calls itself. A step that fails again goes to the recovery again by its own");
+        builder.AppendLine("onFailure, until it");
+        builder.AppendLine($"passes, a person is asked, or maxVisits is met (absent, the engine's bound of {FlowRecover.MostVisits}");
+        builder.AppendLine("visits); past it the run asks (recoveryBound), with the advisor's recommendation of a fix:");
+        builder.AppendLine("more, one more recovery; direct, with the fix in words, for the next one; skip, where the");
+        builder.AppendLine("step is skippable; or abort. The keys of the file and of every step are listed below,");
         builder.AppendLine("generated from the tables the reader itself reads, so what is listed is what is read.");
         builder.AppendLine();
         builder.AppendLine("The file's own keys:");
@@ -2905,7 +2939,9 @@ public static class HelpTopics
             + "and 'any(list, test)' for whether any member meets a test written with 'it' for the member: every step, input and param it "
             + "names must be declared before it, and a placeholder in braces - '{step.member}' - in a prompt or a template key reads the same "
             + $"names. '{ToolPackage.Command} validate-workflow' checks all of it - the shape of every key, every name an expression reads, every file "
-            + "the definition names - and refuses (13) naming each problem, without running anything.");
+            + $"the definition names - and refuses ({HarnessExit.ConfigInvalid}) naming each problem, without running anything, as a "
+            + "config.json that does not hold is refused. Where config.json declares no workflow there is nothing to check, and it is "
+            + $"refused ({HarnessExit.Refused}), saying that \"workflows\": [\"{WorkflowTemplates.ShippedWorkflowName}\"] declares the one init writes.");
 
         return builder.ToString();
     }
@@ -2921,7 +2957,8 @@ public static class HelpTopics
         builder.AppendLine("                                     tracked; one directory per workflow, holding its");
         builder.AppendLine("                                     definition and every file that definition names -");
         builder.AppendLine($"                                     its agents, prompts and schemas ('{ToolPackage.Command} help workflows');");
-        builder.AppendLine("                                     written by init where it is the default one");
+        builder.AppendLine("                                     each missing file written by init where");
+        builder.AppendLine("                                     config.json declares the implementation one");
         builder.AppendLine($"  {HarnessLayout.RunnerActionsDirectoryRelative}/<name>/<name>.yml");
         builder.AppendLine("                                     tracked; one directory per action, holding its");
         builder.AppendLine("                                     steps and whatever those steps run");
@@ -3073,8 +3110,10 @@ public static class HelpTopics
         builder.AppendLine("emulator's phases; ci.workflows; test.inputs; a project's targets and");
         builder.AppendLine("rebuildableFormats; a platform's toolSearchDirectories. Leave the key out instead. A");
         builder.AppendLine("list whose empty form means none - such as sync.neverTransfer, sync.exclude or");
-        builder.AppendLine("contention.buildTools - takes [] as that. A runner's list under mutations.runReads,");
-        builder.AppendLine("which would say nothing given empty, is refused so: leave the runner out instead.");
+        builder.AppendLine("contention.buildTools - takes [] as that. workflows, which declares no workflow left");
+        builder.AppendLine("out, is refused given empty too, so none is spelt one way: leave the key out for no");
+        builder.AppendLine("workflow. A runner's list under mutations.runReads, which would say nothing given");
+        builder.AppendLine("empty, is refused so: leave the runner out instead.");
         builder.AppendLine();
         builder.AppendLine("A toolchain, a build config and a sanitizer overlay compose: each contributes");
         builder.AppendLine("environment and cache variables, so clang x debug x asan needs no entry of its");

@@ -11,13 +11,18 @@ namespace DssHarness.Core.Application;
 /// One per process, holding nothing of any operation: machine-wide state - the run lock, admission - is shared on
 /// purpose and already excludes by host, tree and variant. The ends that operations begun as steps of a run leave to
 /// their run are routed here, by the run's id, so a session need know nothing of the one it is a step of beyond its
-/// id.
+/// id; an operation takes them once, as its own end, and none is handed to it after that.
 /// </remarks>
 public sealed class DssHarnessHost
 {
     private readonly Func<SessionOptions, IServiceProvider> _services;
     private readonly Lock _gate = new();
-    private readonly Dictionary<OperationId, List<Func<Task>>> _deferred = [];
+
+    /// <summary>
+    /// The operations begun and not yet ended, each with the ends handed to it so far: an operation not here takes no
+    /// end, since nothing would ever run it.
+    /// </summary>
+    private readonly Dictionary<OperationId, List<Func<Task>>> _open = [];
 
     /// <summary>Begins the host.</summary>
     /// <param name="services">
@@ -33,39 +38,70 @@ public sealed class DssHarnessHost
     /// <param name="options">What the operation is asked and how it runs.</param>
     /// <param name="frontEnd">What the front end supplies: where the operation writes, who it may ask, and its document's stopped form.</param>
     /// <returns>The operation's session.</returns>
+    /// <exception cref="InvalidOperationException">The options contradict themselves or the front end, refused before any service is built.</exception>
+    /// <exception cref="NotSupportedException">An option or a part of the front end this build does not honour yet, refused before any service is built.</exception>
     public CommandSession Begin(SessionOptions options, SessionFrontEnd? frontEnd = null)
-        => new(this, options, frontEnd, _services(options));
+    {
+        CommandSession.RequireHonoured(options, frontEnd);
+
+        var services = _services(options);
+
+        try
+        {
+            return new(this, options, frontEnd, services);
+        }
+        catch
+        {
+            // A session that could not begin owns nothing it was built: what was built for it goes now.
+            (services as IDisposable)?.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>Opens an operation to the ends its own steps hand it, from its beginning until its own end takes them.</summary>
+    /// <param name="operation">The operation beginning.</param>
+    internal void Open(OperationId operation)
+    {
+        lock (_gate)
+        {
+            _open.Add(operation, []);
+        }
+    }
 
     /// <summary>
     /// Hands an operation's end to the operation it is a step of, to be awaited however that operation ended - never
-    /// cut short by this one finishing.
+    /// cut short by this one finishing - where that operation is still open to it.
     /// </summary>
     /// <param name="outer">The operation the end belongs to.</param>
     /// <param name="end">The end.</param>
-    internal void Defer(OperationId outer, Func<Task> end)
+    /// <returns>
+    /// Whether <paramref name="outer"/> took the end; false where it has already taken its ends, or is no operation of
+    /// this host's, and the end is its own operation's to run at once.
+    /// </returns>
+    internal bool Defer(OperationId outer, Func<Task> end)
     {
         ArgumentNullException.ThrowIfNull(end);
 
         lock (_gate)
         {
-            if (!_deferred.TryGetValue(outer, out var ends))
+            if (!_open.TryGetValue(outer, out var ends))
             {
-                ends = [];
-                _deferred.Add(outer, ends);
+                return false;
             }
 
             ends.Add(end);
+            return true;
         }
     }
 
-    /// <summary>Takes every end handed to an operation, for its own end to await.</summary>
+    /// <summary>Takes every end handed to an operation, for its own end to await, and closes it to any more.</summary>
     /// <param name="outer">The operation the ends were handed to.</param>
     /// <returns>The ends, in the order they were handed.</returns>
     internal IReadOnlyList<Func<Task>> TakeDeferred(OperationId outer)
     {
         lock (_gate)
         {
-            return _deferred.Remove(outer, out var ends) ? ends : [];
+            return _open.Remove(outer, out var ends) ? ends : [];
         }
     }
 }

@@ -56,7 +56,9 @@ public static class DryRuns
     /// <see cref="TreeHeld.KeptCopies"/> that <see cref="KeptCopyLine.Stops"/> - leaves it unfinished, its request refused
     /// until that is put right, which no waiting does; and a run or a sweep holding only a copy a deletion removes - a
     /// holder, never a line that only says what is kept in the worktree - leaves it unfinished, saying that. Otherwise
-    /// <paramref name="planned"/> itself, as the verb weighed it.
+    /// <paramref name="planned"/> itself, as the verb weighed it. A refusal over a run holding a tree carries
+    /// <see cref="OutcomeCause.LockHeld"/> only where that run is the one thing in the way - the request otherwise sound,
+    /// and nothing kept in the worktree stopping its removal - since only there does waiting for it answer the request.
     /// </summary>
     /// <param name="planned">What the verb composed: its summary and its lines, or the failure or refusal it met.</param>
     /// <param name="standing">How the request stands; null where what it weighs could not be read.</param>
@@ -89,14 +91,18 @@ public static class DryRuns
                 return new(planned, standing);
             }
 
+            // A run in the way is waited out, not put right: the caller that can try again knows to - but only where it is
+            // the one thing in the way. A request that also needs a consent, is refused for itself, or holds copies its
+            // removal cannot take meets that again once the run has ended, so waiting for it is no answer.
+            var onlyTheRun = standing == RequestStanding.Sound && !holders.KeptCopies.Any(line => line.Stops);
+
             return new(
                 CommandOutcome.Refused(
                     standing == RequestStanding.Sound ? $"{planned.Message}, {TreeHolders.Blocked}" : $"{planned.Message}{TreeHolders.AlsoHeld}",
                     planned.Details)
                 with
                 {
-                    // A run in the way is waited out, not put right: the caller that can try again knows to.
-                    Cause = OutcomeCause.LockHeld,
+                    Cause = onlyTheRun ? OutcomeCause.LockHeld : OutcomeCause.None,
                 },
                 standing);
         }

@@ -23,15 +23,50 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// </remarks>
 public static class WorkflowValidator
 {
-    /// <summary>The question kinds a configuration can answer beforehand, and how each is spelled.</summary>
+    /// <summary>The question kinds there are, and how each is spelled.</summary>
     public static readonly IReadOnlyList<string> QuestionKinds =
     [
-        "loopBound", "visitBound", "openAgents",
+        "loopBound", "visitBound", "recoveryBound", "openAgents",
         "foldNewRows", "foldLostRows", "foldOverCells", "foldTwoChanges", "foldConflicts", "foldOutside",
         "turnLimit", "truncated", "stepBudget", "contextLimit", "runBudget",
         "noChecks", "checksUnsettled", "checksPending",
         "failure", "pause", "ask",
     ];
+
+    /// <summary>
+    /// The answers each kind offers, which a configuration may give it beforehand; a kind absent here takes no
+    /// configured answer at all - a person's (<c>foldLostRows</c>, <c>foldOverCells</c>), or one its own key
+    /// answers (<c>failure</c> by <c>onFailure</c>, <c>ask</c> by <c>ask</c>) - and <c>pause</c> offers the step's
+    /// own options.
+    /// </summary>
+    public static readonly IReadOnlyDictionary<string, IReadOnlyList<string>> AnswersOf = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+    {
+        ["loopBound"] = ["more", "accept", "abort"],
+        ["visitBound"] = ["more", "accept", "fail", "abort"],
+        ["recoveryBound"] = ["more", "skip", "abort"],
+        ["openAgents"] = ["retry", "stay", "abort"],
+        ["foldNewRows"] = ["allow", "retry", "fail", "abort"],
+        ["foldTwoChanges"] = ["merge", "retry", "fail", "abort"],
+        ["foldConflicts"] = ["retry", "fail", "abort"],
+        ["foldOutside"] = ["allow", "retry", "fail", "abort"],
+        ["turnLimit"] = ["retry", "more", "skip", "fail", "abort"],
+        ["stepBudget"] = ["retry", "more", "skip", "fail", "abort"],
+        ["truncated"] = ["retry", "more", "skip", "fail", "abort"],
+        ["contextLimit"] = ["retry", "compact", "skip", "fail", "abort"],
+        ["runBudget"] = ["more", "abort"],
+        ["noChecks"] = ["retry", "accept", "fail", "abort"],
+        ["checksUnsettled"] = ["retry", "accept", "fail", "abort"],
+        ["checksPending"] = ["more", "accept", "fail", "abort"],
+    };
+
+    /// <summary>The answers after which the same question can come again, and so are given a counted number of times.</summary>
+    private static readonly IReadOnlyList<string> GoesOn = ["more", "retry", "compact"];
+
+    /// <summary>The answers that end the matter, which alone may follow a counted one as its <c>then</c>.</summary>
+    private static readonly IReadOnlyList<string> Ends = ["accept", "allow", "merge", "stay", "skip", "fail", "abort"];
+
+    /// <summary>The path the recovery's own steps are placed under, as every refusal about one of them names it.</summary>
+    private const string RecoverPath = "recover";
 
     /// <summary>How a step's name is spelled: a lower-case word, with dashes within.</summary>
     /// <remarks>
@@ -67,6 +102,12 @@ public static class WorkflowValidator
         /// <summary>Every step's full path, from the flow's root, to its entry.</summary>
         private readonly Dictionary<string, Entry> _byPath = new(StringComparer.Ordinal);
 
+        /// <summary>
+        /// The place the recovery's steps hang from, where the workflow declares one: placed after every step of the
+        /// flow, so that its steps see them all, and found by no name a step of the flow could read.
+        /// </summary>
+        private Entry? _recover;
+
         internal Check(WorkflowDefinition definition, bool hasCommitTemplate)
         {
             _definition = definition;
@@ -74,6 +115,7 @@ public static class WorkflowValidator
 
             DefinitionRules();
             Index(definition.Steps, parentPath: null);
+            IndexRecover();
             WorkflowAnswers();
             Steps();
             Amend();
@@ -91,12 +133,13 @@ public static class WorkflowValidator
 
         private void DefinitionRules()
         {
-            Positive(_definition.MaxReasoningAgents, "maxReasoningAgents");
+            Within(_definition.MaxReasoningAgents, 1, 32, "maxReasoningAgents");
             Positive(_definition.MaxParallelProcesses, "maxParallelProcesses");
             Positive(_definition.MaxOpenAgents, "maxOpenAgents");
-            Positive(_definition.MaxRetries, "maxRetries");
-            Positive(_definition.MaxInstances, "maxInstances");
-            Positive(_definition.HandoffSeconds, "handoffSeconds");
+            Within(_definition.MaxRetries, 1, 20, "maxRetries");
+            Within(_definition.BackoffSeconds, 1, WorkflowStep.MostBackoffSeconds, "backoffSeconds");
+            Within(_definition.MaxInstances, 100, 100_000, "maxInstances");
+            Within(_definition.HandoffSeconds, 30, 900, "handoffSeconds");
 
             if (_definition.Budget is { } budget)
             {
@@ -120,11 +163,29 @@ public static class WorkflowValidator
                     _problems.Add($"budget.minutes cannot be below zero, found {budget.Minutes.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
                 }
 
-                if (budget.ReservePercent is < 0 or > 100)
+                Within(budget.ReservePercent, 1, 50, "budget.reservePercent");
+            }
+
+            if (_definition.Recover is { } recover)
+            {
+                Within(recover.MaxVisits, 1, FlowRecover.MostVisits, "recover.maxVisits");
+
+                if (recover.OnFailure == WorkflowStep.Recover)
                 {
-                    _problems.Add($"budget.reservePercent is {budget.ReservePercent}, and so not a share between 0 and 100");
+                    _problems.Add(CallsItself("recover", "gives a failure of its own work to the recovery (onFailure: recover)"));
+                }
+                else if (recover.OnFailure == "continue")
+                {
+                    _problems.Add("recover passes a failure of its own work over (onFailure: continue); the step that gave it its failure would be neither put right nor failed - say pause or stop");
                 }
             }
+
+            ModelRules(_definition.Advisor?.Tier, _definition.Advisor?.Model, "advisor");
+            ModelRules(_definition.Reporter?.Tier, _definition.Reporter?.Model, "reporter");
+            Within(_definition.Advisor?.Retries, 1, 20, "advisor.retries");
+            Within(_definition.Advisor?.BackoffSeconds, 1, WorkflowStep.MostBackoffSeconds, "advisor.backoffSeconds");
+            Within(_definition.Reporter?.Retries, 1, 20, "reporter.retries");
+            Within(_definition.Reporter?.BackoffSeconds, 1, WorkflowStep.MostBackoffSeconds, "reporter.backoffSeconds");
 
             foreach (var input in _definition.Inputs)
             {
@@ -196,11 +257,33 @@ public static class WorkflowValidator
             }
         }
 
+        /// <summary>
+        /// Places the recovery's steps, where the workflow declares them, under a place of their own after every step
+        /// of the flow: they read every step of it, and nothing of the flow reads them.
+        /// </summary>
+        private void IndexRecover()
+        {
+            if (_definition.Recover is not { } recover)
+            {
+                return;
+            }
+
+            if (!_entries.Any(entry => entry.Step.OnFailure == WorkflowStep.Recover))
+            {
+                _problems.Add("the workflow declares recover, and no step gives it a failure; a step says onFailure: recover, itself or through a group around it, for its failures to reach it");
+            }
+
+            _recover = new Entry(new WorkflowStep { Name = RecoverPath, Steps = recover.Steps }, RecoverPath, _entries.Count, null);
+            _entries.Add(_recover);
+            _byPath[RecoverPath] = _recover;
+            Index(recover.Steps, RecoverPath);
+        }
+
         private void WorkflowAnswers()
         {
             foreach (var (kind, answer) in _definition.Answers)
             {
-                AnswerRules(kind, answer, "the workflow's answers", Siblings(null));
+                AnswerRules(kind, answer, "the workflow", owner: null);
             }
         }
 
@@ -209,6 +292,12 @@ public static class WorkflowValidator
         {
             foreach (var entry in _entries)
             {
+                if (ReferenceEquals(entry, _recover))
+                {
+                    // The recovery's own place takes no keys: its steps are checked as every step is.
+                    continue;
+                }
+
                 CommonStepRules(entry);
 
                 if (entry.Step.IsGroup)
@@ -226,27 +315,46 @@ public static class WorkflowValidator
                     continue;
                 }
 
-                Positive(entry.Step.Retries, $"{where}: retries");
-                Positive(entry.Step.MaxVisits, $"{where}: maxVisits");
-
-                if (entry.Step.On is { } raisedBy && raisedBy.Codes.Any(code => code < 1))
-                {
-                    _problems.Add($"{where} is raised by the codes {string.Join(", ", raisedBy.Codes)}, and a code below 1 is no code");
-                }
-
                 switch (type.Type)
                 {
                     case "reason":
                         ReasonRules(entry);
                         break;
 
+                    case "build":
+                    case "test":
+                    case "run":
+                    case "check-mutations":
+                        if (entry.Step.In is not null)
+                        {
+                            WorksIn(entry, entry.Step.In);
+                        }
+
+                        break;
+
+                    case "anchor-balance":
+                        if (entry.Step.Rows?.Expression is { } rows)
+                        {
+                            Expression(entry, rows, "rows");
+                        }
+
+                        break;
+
+                    case "anchor-citations":
+                        if (entry.Step.AnchorPaths?.Expression is { } paths)
+                        {
+                            Expression(entry, paths, "paths");
+                        }
+
+                        break;
+
                     case "ci-read":
                     case "ci-wait":
                         Positive(entry.Step.Limit, $"{where}: limit");
-                        Positive(entry.Step.AppearSeconds, $"{where}: appearSeconds");
-                        Positive(entry.Step.WaitMinutes, $"{where}: waitMinutes");
-                        Positive(entry.Step.PollSeconds, $"{where}: pollSeconds");
-                        Positive(entry.Step.TimeoutMinutes, $"{where}: timeoutMinutes");
+                        Within(entry.Step.AppearSeconds, 30, 3_600, $"{where}: appearSeconds");
+                        Within(entry.Step.WaitMinutes, 1, 720, $"{where}: waitMinutes");
+                        Within(entry.Step.PollSeconds, 10, 600, $"{where}: pollSeconds");
+                        Within(entry.Step.TimeoutMinutes, 1, 240, $"{where}: timeoutMinutes");
                         break;
 
                     case "fold":
@@ -257,7 +365,10 @@ public static class WorkflowValidator
                         break;
 
                     case "validate-plan":
-                        Expression(entry, entry.Step.Items ?? string.Empty, "items");
+                        if (entry.Step.Items is { } items)
+                        {
+                            Expression(entry, items, "items");
+                        }
 
                         if (entry.Step.Scope is not null)
                         {
@@ -277,12 +388,12 @@ public static class WorkflowValidator
                             _problems.Add($"{where} writes a message while the configuration declares a commit.template; the template writes the message, and the step says only the values it reads");
                         }
 
-                        Positive(entry.Step.TimeoutMinutes, $"{where}: timeoutMinutes");
+                        Within(entry.Step.TimeoutMinutes, 1, 240, $"{where}: timeoutMinutes");
                         break;
 
                     case "push":
                     case "pull-request":
-                        Positive(entry.Step.TimeoutMinutes, $"{where}: timeoutMinutes");
+                        Within(entry.Step.TimeoutMinutes, 1, 240, $"{where}: timeoutMinutes");
                         break;
 
                     case "pause":
@@ -302,6 +413,30 @@ public static class WorkflowValidator
         {
             var step = entry.Step;
             var where = step.IsGroup ? $"group '{entry.Path}'" : $"step '{entry.Path}'";
+
+            Within(step.Retries, 1, 20, $"{where}: retries");
+            HandlerRules(entry, where);
+
+            if (step.OnFailure == WorkflowStep.Recover)
+            {
+                if (_definition.Recover is null)
+                {
+                    _problems.Add($"{where} gives its failure to the recovery (onFailure: recover), and the workflow declares no recover; declare one, or say what the failure does");
+                }
+                else if (InRecovery(entry))
+                {
+                    _problems.Add(CallsItself(where, "is a step of the recovery and gives its failure to the recovery"));
+                }
+            }
+
+            // A reasoning step is never recovered, by its own word or a group's: its agent is tried again and on its
+            // fallback, an account at its limit or a provider that fails pauses the run, and what still fails is asked.
+            if (step.Type == "reason" && EffectiveOnFailure(entry) is { Policy: WorkflowStep.Recover } recovered)
+            {
+                _problems.Add(ReferenceEquals(recovered.Owner, entry)
+                    ? $"{where} is a reasoning step and gives its failure to the recovery; a reasoning step is never recovered - its agent is tried again and on its fallback, and what still fails is asked: say pause"
+                    : $"{where} is a reasoning step, and its failure would go to the recovery by the onFailure of '{recovered.Owner.Path}'; a reasoning step is never recovered - say pause on it");
+            }
 
             if (step.DependsOn.Any(name => string.Equals(name, step.Name, StringComparison.Ordinal)))
             {
@@ -332,24 +467,90 @@ public static class WorkflowValidator
                 Expression(entry, step.When, "when");
             }
 
-            if (step.Then is not null && step.On is null)
+            foreach (var (kind, answer) in step.Answers)
             {
-                _problems.Add($"{where} says then without on; then is where a handler sends the run when it is done, and a step the schedule starts has nothing to send back");
+                AnswerRules(kind, answer, where, entry);
+            }
+        }
+
+        /// <summary>What a handler's keys say: that its source is beside it, its codes are codes, and where it sends the run.</summary>
+        private void HandlerRules(Entry entry, string where)
+        {
+            var step = entry.Step;
+
+            if (step.On is null)
+            {
+                if (step.Then is not null)
+                {
+                    _problems.Add($"{where} says then without on; then is where a handler sends the run when it is done, and a step the schedule starts has nothing to send back");
+                }
+
+                if (step.MaxVisits is not null)
+                {
+                    _problems.Add($"{where} says maxVisits without on; it bounds how often a handler is raised, and the schedule starts a step once");
+                }
+
+                return;
             }
 
-            if (step.On is { } raisedBy && Sibling(entry, raisedBy.Step) is null)
+            var raisedBy = step.On;
+
+            if (string.Equals(raisedBy.Step, step.Name, StringComparison.Ordinal))
+            {
+                _problems.Add(CallsItself(where, "is raised by its own ending"));
+            }
+            else if (Sibling(entry, raisedBy.Step) is null)
             {
                 _problems.Add($"{where} is raised by '{raisedBy.Step}', which is no step declared beside it; a handler is raised by its own siblings");
             }
 
-            if (step.Then is not null && Sibling(entry, step.Then) is null)
+            if (raisedBy.Codes.Any(code => code is < 1 or > 255))
             {
-                _problems.Add($"{where} sends the run to '{step.Then}', which is no step declared beside it");
+                _problems.Add($"{where} is raised by the codes {string.Join(", ", raisedBy.Codes)}, and an exit code is from 1 to 255");
             }
 
-            foreach (var (kind, answer) in step.Answers)
+            foreach (var duplicated in raisedBy.Codes.GroupBy(code => code).Where(group => group.Count() > 1).Select(group => group.Key))
             {
-                AnswerRules(kind, answer, $"{where}: answers", Siblings(entry));
+                _problems.Add($"{where} is raised by the code {duplicated} more than once");
+            }
+
+            if (raisedBy.Codes.Count > 0 && raisedBy.Outcome == "success")
+            {
+                _problems.Add($"{where} is raised by a success with codes; a step that ended done ended with 0, and codes are a failure's");
+            }
+
+            if (step.DependsOn.Count > 0)
+            {
+                _problems.Add($"{where} is raised by '{raisedBy.Step}' and also depends on {string.Join(", ", step.DependsOn.Select(name => $"'{name}'"))}: a handler waits for its source's ending and for nothing else");
+            }
+
+            if (step.Always is true)
+            {
+                _problems.Add($"{where} is raised by '{raisedBy.Step}' and is always; an always step is started by the end of the session, never by a step");
+            }
+
+            Within(step.MaxVisits, 1, 20, $"{where}: maxVisits");
+
+            if (step.Then is not { } then)
+            {
+                return;
+            }
+
+            if (string.Equals(then, step.Name, StringComparison.Ordinal))
+            {
+                _problems.Add(CallsItself(where, "sends the run back to itself"));
+            }
+            else if (Scope(entry, then) is not { } target)
+            {
+                _problems.Add($"{where} sends the run to '{then}', which is no step it sees; a redirect goes to a step beside it or beside a group around it, never into a group from outside");
+            }
+            else if (target.Step.Always is true)
+            {
+                _problems.Add($"{where} sends the run to '{then}', an always step, which runs once at the session's end and is never gone back to");
+            }
+            else if (AncestorBeside(entry, target) is { } holder && target.Step.DependsOn.Contains(holder.Step.Name, StringComparer.Ordinal))
+            {
+                _problems.Add($"{where} sends the run to '{then}', which depends on '{holder.Step.Name}', the group the handler is in: it waits for that group, and would start no sooner");
             }
         }
 
@@ -389,7 +590,7 @@ public static class WorkflowValidator
                     _problems.Add($"{where} repeats in rounds and says no blocking; blocking is what says, past the rounds, whether what is left must still be dealt with, and a loop without it would end with the rounds whatever was left");
                 }
 
-                if (!hasRounds && (repeat.Blocking is not null || repeat.BlockersLimitRounds is not null))
+                if (!hasRounds && (repeat.Blocking is not null || repeat.BlockersLimitRounds is not null || repeat.BlockersUnbounded))
                 {
                     _problems.Add($"{where} says {(repeat.Blocking is not null ? "blocking" : "blockersLimitRounds")} without rounds; past the rounds is the only place either is read");
                 }
@@ -406,9 +607,14 @@ public static class WorkflowValidator
                     Expression(entry, repeat.Leftover, "repeat.leftover");
                 }
 
-                Positive(repeat.MaxIterations, $"{where}: repeat.maxIterations");
-                Positive(repeat.Rounds, $"{where}: repeat.rounds");
-                Positive(repeat.BlockersLimitRounds, $"{where}: repeat.blockersLimitRounds");
+                Within(repeat.MaxIterations, 1, 20, $"{where}: repeat.maxIterations");
+                Within(repeat.Rounds, 1, 20, $"{where}: repeat.rounds");
+                Within(repeat.BlockersLimitRounds, 1, 20, $"{where}: repeat.blockersLimitRounds");
+
+                if (repeat.BlockersUnbounded && _definition.Budget is null)
+                {
+                    _problems.Add($"{where}: repeat.blockersLimitRounds is false and the workflow has no budget: nothing would bound the loop");
+                }
             }
 
             if (step.ForEach is not null)
@@ -462,22 +668,22 @@ public static class WorkflowValidator
                 {
                     _problems.Add($"{where} writes and names no 'in'; a writing step works in an agent's worktree, and the create-agent step that made it is the one to name");
                 }
-                else if (Scope(entry, step.In) is not { } worksIn)
+                else
                 {
-                    _problems.Add($"{where} works in '{step.In}', which is no step an enclosing group declares");
-                }
-                else if (worksIn.Step.Type != "create-agent")
-                {
-                    _problems.Add($"{where} works in '{step.In}', which is a {worksIn.Step.Type} step; a worktree is made by a create-agent step");
-                }
-                else if (worksIn.Order > entry.Order)
-                {
-                    _problems.Add($"{where} works in '{step.In}', which is declared after it; a worktree cannot be worked in before it is made");
+                    WorksIn(entry, step.In);
                 }
             }
-            else if (step.In is not null)
+            else
             {
-                _problems.Add($"{where} reads and names 'in'; a reading step has no worktree to work in, and reads the main tree");
+                if (step.In is not null)
+                {
+                    _problems.Add($"{where} reads and names 'in'; a reading step has no worktree to work in, and reads the main tree");
+                }
+
+                if (step.Writes is not null)
+                {
+                    _problems.Add($"{where} names writes and only reads; a step that writes says access: write and names the create-agent step it works in");
+                }
             }
 
             if (step.Writes?.Expression is { } writes)
@@ -490,7 +696,37 @@ public static class WorkflowValidator
                 _problems.Add($"{where} says askRounds without ask; how often a step may ask is a step that asks's own bound");
             }
 
-            Positive(step.AskRounds, $"{where}: askRounds");
+            Within(step.AskRounds, 1, 5, $"{where}: askRounds");
+            Within(step.BackoffSeconds, 1, WorkflowStep.MostBackoffSeconds, $"{where}: backoffSeconds");
+            ModelRules(step.Tier, step.Model, where);
+        }
+
+        /// <summary>Checks the create-agent step a step names with <c>in</c>: one it sees, that makes an agent, declared before it.</summary>
+        private void WorksIn(Entry entry, string name)
+        {
+            var where = $"step '{entry.Path}'";
+
+            if (Scope(entry, name) is not { } worksIn)
+            {
+                _problems.Add($"{where} works in '{name}', which is no step an enclosing group declares");
+            }
+            else if (worksIn.Step.Type != "create-agent")
+            {
+                _problems.Add($"{where} works in '{name}', which is a {worksIn.Step.Type ?? "group"} step; a worktree is made by a create-agent step");
+            }
+            else if (worksIn.Order > entry.Order)
+            {
+                _problems.Add($"{where} works in '{name}', which is declared after it; a worktree cannot be worked in before it is made");
+            }
+        }
+
+        /// <summary>A tier and a model at one level: the model would be used, and the tier never read.</summary>
+        private void ModelRules(string? tier, string? model, string where)
+        {
+            if (tier is not null && model is not null)
+            {
+                _problems.Add($"{where} names a model and a tier: the model would be used and the tier never read");
+            }
         }
 
         private void FoldRules(Entry entry)
@@ -498,21 +734,36 @@ public static class WorkflowValidator
             var step = entry.Step;
             var where = $"step '{entry.Path}'";
 
-            if (step.Of is not null && step.Others is true)
+            if (step.Of is not null && step.Others is not null)
             {
-                _problems.Add($"{where} names 'of' and says 'others'; it works on one agent, or on every other one, and never both");
+                _problems.Add($"{where} names 'of' and 'others'; it works on one agent, or on every other one, and never both");
             }
 
-            if (step.Of is not null)
+            if (step.Of is null && step.Others is null && step.Type is "refresh" or "rebase")
             {
-                if (Scope(entry, step.Of) is not { } named)
+                _problems.Add($"{where} names neither 'of' nor 'others'; it works on one agent, or on every live one but the agent 'others' names");
+            }
+
+            foreach (var (key, named) in new[] { ("of", step.Of), ("others", step.Others) })
+            {
+                if (named is null)
                 {
-                    _problems.Add($"{where} names '{step.Of}', which is no step an enclosing group declares");
+                    continue;
                 }
-                else if (named.Step.Type != "create-agent")
+
+                if (Scope(entry, named) is not { } agent)
                 {
-                    _problems.Add($"{where} names '{step.Of}', which is a {named.Step.Type} step; an agent is made by a create-agent step");
+                    _problems.Add($"{where} names '{named}' as its {key}, which is no step an enclosing group declares");
                 }
+                else if (agent.Step.Type != "create-agent")
+                {
+                    _problems.Add($"{where} names '{named}' as its {key}, which is a {agent.Step.Type ?? "group"} step; an agent is made by a create-agent step");
+                }
+            }
+
+            if (step.DiscardUncommitted is true && (step.Allow is not null || step.Within is not null))
+            {
+                _problems.Add($"{where} discards what is not committed and says what its fold may carry; a deletion that discards folds nothing, so allow and within would be read by nothing");
             }
 
             if (step.Paths is not null && step.All is true)
@@ -561,10 +812,7 @@ public static class WorkflowValidator
                 _problems.Add($"{where} says the option '{text}' takes a text, and offers no such option");
             }
 
-            if (step.Person is true && step.Answers.Count > 0)
-            {
-                _problems.Add($"{where} is a person's and answers its own question beforehand; what only a person may answer, no line of a configuration answers");
-            }
+
 
             if (step.Questions is not null)
             {
@@ -647,8 +895,16 @@ public static class WorkflowValidator
                 }
             }
 
-            Positive(amend.ChangedAnswerMinutes, "amend.changedAnswerMinutes");
-            Positive(amend.MaxAddedIterations, "amend.maxAddedIterations");
+            foreach (var (key, named) in new[] { ("step", amend.Step), ("before", amend.Before), ("whenAddScope", amend.WhenAddScope), ("whenChangeScope", amend.WhenChangeScope), ("whenRemoveScope", amend.WhenRemoveScope) })
+            {
+                if (named is not null && (named == RecoverPath || named.StartsWith(RecoverPath + ".", StringComparison.Ordinal)))
+                {
+                    _problems.Add($"amend.{key} names '{named}', a step of the recovery; a plan update is planned and placed by the flow's own steps");
+                }
+            }
+
+            Within(amend.ChangedAnswerMinutes, 1, 60, "amend.changedAnswerMinutes");
+            Within(amend.MaxAddedIterations, 0, 10, "amend.maxAddedIterations");
         }
 
         private void Outputs()
@@ -669,24 +925,93 @@ public static class WorkflowValidator
             }
         }
 
-        /// <summary>Checks one answer a configuration gives a question kind beforehand.</summary>
-        private void AnswerRules(string kind, FlowAnswer answer, string where, IReadOnlyList<Entry> siblings)
+        /// <summary>
+        /// Checks one answer a configuration gives a question kind beforehand, given where it is written: the
+        /// workflow's own <c>answers</c> (<paramref name="owner"/> <see langword="null"/>), a group's or a step's.
+        /// </summary>
+        private void AnswerRules(string kind, FlowAnswer answer, string where, Entry? owner)
         {
             if (!QuestionKinds.Contains(kind, StringComparer.Ordinal))
             {
                 _problems.Add($"{where} answers the kind '{kind}', which is no question kind. Known: {string.Join(", ", QuestionKinds.Select(known => $"'{known}'"))}.");
+                return;
             }
 
             if (string.IsNullOrWhiteSpace(answer.Answer))
             {
                 _problems.Add($"{where} answers the kind '{kind}' with nothing; an answer is spelled as the question's options spell it");
+                return;
             }
 
-            Positive(answer.Times, $"{where}: the times of the answer to '{kind}'");
-
-            if (answer.Then is not null && siblings.All(sibling => !string.Equals(sibling.Step.Name, answer.Then, StringComparison.Ordinal)))
+            switch (kind)
             {
-                _problems.Add($"{where} sends the run to '{answer.Then}' on '{kind}', which is no step declared beside the step that asks");
+                case "foldLostRows" or "foldOverCells":
+                    _problems.Add($"{where} answers '{kind}': a lost or an over cell at a fold is a person's to accept, and no line of a configuration accepts it");
+                    return;
+
+                case "failure":
+                    _problems.Add($"{where} answers 'failure': what a step's failure does is its onFailure, which answers that question beforehand");
+                    return;
+
+                case "ask":
+                    _problems.Add($"{where} answers 'ask': whether a step may put its questions to a person is the step's own ask");
+                    return;
+
+                case "runBudget" when owner is not null:
+                    _problems.Add($"{where} answers 'runBudget': the run's budget is the workflow's, and only the workflow's own answers answer for it");
+                    return;
+
+                case "pause":
+                    if (owner?.Step.Type != "pause")
+                    {
+                        _problems.Add($"{where} answers 'pause': a pause step's question is answered on that step alone");
+                    }
+                    else if (owner.Step.Person is true)
+                    {
+                        _problems.Add($"{where} answers 'pause' and says person: the step is one only a person answers");
+                    }
+                    else if (!owner.Step.Options.Contains(answer.Answer, StringComparer.Ordinal))
+                    {
+                        _problems.Add($"{where} answers 'pause' with '{answer.Answer}', which is not one of the options the step offers");
+                    }
+
+                    return;
+            }
+
+            var offered = AnswersOf[kind];
+
+            if (!offered.Contains(answer.Answer, StringComparer.Ordinal))
+            {
+                _problems.Add($"{where} answers '{kind}' with '{answer.Answer}', which it does not offer. Its answers: {string.Join(", ", offered.Select(known => $"'{known}'"))}.");
+                return;
+            }
+
+            if (answer.Answer == "skip" && owner?.Step.Skippable is not true)
+            {
+                _problems.Add($"{where} answers '{kind}' with skip, and {(owner is null ? "the workflow is" : $"'{owner.Path}' is")} no skippable step; skip ends a step skipped only where it says skippable");
+            }
+
+            if (answer.Times is not null)
+            {
+                Within(answer.Times, 1, 20, $"{where}: the times of the answer to '{kind}'");
+
+                if (!GoesOn.Contains(answer.Answer, StringComparer.Ordinal))
+                {
+                    _problems.Add($"{where} answers '{kind}' with {answer.Answer} {answer.Times} times; times count an answer after which the same question can come again - more, retry or compact - and {answer.Answer} ends the matter");
+                }
+            }
+
+            if (answer.Then is { } then)
+            {
+                if (answer.Times is null)
+                {
+                    _problems.Add($"{where} answers '{kind}' then {then} with no times; then is what is answered once the counted answers are spent");
+                }
+
+                if (!offered.Contains(then, StringComparer.Ordinal) || !Ends.Contains(then, StringComparer.Ordinal))
+                {
+                    _problems.Add($"{where} answers '{kind}' then '{then}', which is not one of its answers that end the matter: {string.Join(", ", offered.Where(known => Ends.Contains(known, StringComparer.Ordinal)).Select(known => $"'{known}'"))}");
+                }
             }
         }
 
@@ -715,6 +1040,18 @@ public static class WorkflowValidator
 
                 foreach (var text in texts)
                 {
+                    if (string.IsNullOrWhiteSpace(text))
+                    {
+                        _problems.Add($"'{entry.Path}.{key}' is empty; a template is the text a step hands on, and an empty one hands on nothing");
+                        continue;
+                    }
+
+                    if (WorkflowExpressions.TemplateSyntaxProblem(text) is { } broken)
+                    {
+                        _problems.Add($"'{entry.Path}.{key}' is not written whole: {broken}, and nothing it reads past there would be checked");
+                        continue;
+                    }
+
                     foreach (var read in WorkflowExpressions.TemplateReads(text))
                     {
                         CheckRead(entry, read, $"{entry.Path}.{key}");
@@ -723,9 +1060,21 @@ public static class WorkflowValidator
             }
         }
 
-        /// <summary>Checks one expression's reads against the flow's own names.</summary>
+        /// <summary>Checks one expression: that it says something, is written whole, and reads only the flow's own names.</summary>
         private void Expression(Entry entry, string expression, string key)
         {
+            if (string.IsNullOrWhiteSpace(expression))
+            {
+                _problems.Add($"'{entry.Path}.{key}' is empty; an expression is read for what it says, and an empty one says nothing");
+                return;
+            }
+
+            if (WorkflowExpressions.SyntaxProblem(expression) is { } broken)
+            {
+                _problems.Add($"'{entry.Path}.{key}' is not written whole: {broken}, and nothing it reads past there would be checked");
+                return;
+            }
+
             foreach (var read in WorkflowExpressions.ReadsOf(expression))
             {
                 CheckRead(entry, read, $"{entry.Path}.{key}");
@@ -776,7 +1125,9 @@ public static class WorkflowValidator
                         _problems.Add($"'{what}' reads '{read.Whole}', whose 'item' names the work item of a forEach group, and no group holding '{entry.Path}' runs one");
                     }
 
-                    return;                case "previous":
+                    return;
+
+                case "previous":
                     {
                         // The iteration before this one: readable inside a repeat group, whose own
                         // until is read once an iteration has ended, and whose members name one
@@ -820,15 +1171,33 @@ public static class WorkflowValidator
                     _problems.Add($"'{what}' names a skill, and a skill's text is a prompt's alone; the step's own keys read the run's names, never a skill");
                     return;
 
+                case "source":
+                    if (!Inside(entry, scope => scope.On is not null) && !InRecovery(entry))
+                    {
+                        _problems.Add($"'{what}' reads '{read.Whole}', whose 'source' names the step whose ending raised a handler, and '{entry.Path}' is neither a handler, nor in one, nor a step of the recovery");
+                    }
+
+                    return;
+
+                case RecoverPath:
+                    _problems.Add($"'{what}' reads '{read.Whole}': the recovery's steps are read by their own names inside it, and nothing outside it reads them");
+                    return;
+
                 default:
                     if (WorkflowExpressions.IsReserved(read.Root))
                     {
                         return;
                     }
 
-                    if (!Readable(entry, read.Whole))
+                    if (Resolve(entry, read.Whole) is not { } resolved)
                     {
                         _problems.Add($"'{what}' reads '{read.Whole}', which no step before '{entry.Path}', no input and no param provides");
+                        return;
+                    }
+
+                    if (resolved.After is [var fact, ..] && fact is "latest" or "assumptions" && resolved.Step.Step.Type != "reason")
+                    {
+                        _problems.Add($"'{what}' reads '{read.Whole}', and '{resolved.Step.Path}' is {(resolved.Step.Step.IsGroup ? "a group" : $"a {resolved.Step.Step.Type} step")}: only a reason step's work has {(fact == "latest" ? "a latest output" : "assumptions")}");
                     }
 
                     return;
@@ -836,52 +1205,107 @@ public static class WorkflowValidator
         }
 
         /// <summary>
-        /// Whether <paramref name="name"/> is readable where <paramref name="entry"/> sits: a step
-        /// declared before it in a scope the step can see - its own siblings, or the siblings of a
-        /// group holding it - or a step inside the step's own subtree, which its own loops read.
+        /// The step <paramref name="name"/> reads where <paramref name="entry"/> sits, with the segments after it - the
+        /// members of its output, or the engine's facts of it - or <see langword="null"/> where no step it can read is
+        /// named. A first segment is the name of a step the reader sees - declared before it in its own scope or one
+        /// around it, or inside its own subtree, which its loops read - and the segments after it go down into that
+        /// step's own steps while they name one; failing that, it is a step's path from the flow's root, the longest
+        /// that is one, declared before the reader.
         /// </summary>
-        private bool Readable(Entry entry, string name)
+        private (Entry Step, string[] After)? Resolve(Entry entry, string name)
         {
             var segments = name.Split('.');
 
-            // A read of several segments names a step by its path from the flow's root, or names a
-            // visible step and reads a member of it. The longest path that is a step decides, so
-            // that 'a.b' is the step 'a.b' where one is there, and a member 'b' of a step 'a' only
-            // where none is.
+            if (Visible(entry, segments[0]) is { } seen)
+            {
+                return Down(seen, segments, 1);
+            }
+
             for (var length = segments.Length; length >= 1; length--)
             {
-                var candidate = string.Join('.', segments[..length]);
-
-                if (_byPath.TryGetValue(candidate, out var found))
+                if (_byPath.TryGetValue(string.Join('.', segments[..length]), out var found)
+                    && !ReferenceEquals(found, _recover)
+                    && (found.Order < entry.Order || entry.Owns(found)))
                 {
-                    // Pre-order places every ancestor and every earlier step before the reader; a
-                    // step's own subtree is its loops' to read, however late it is declared.
-                    return found.Order < entry.Order || entry.Owns(found);
+                    return (found, segments[length..]);
                 }
             }
 
-            return Visible(entry, segments[0]);
+            return null;
+
+            (Entry Step, string[] After) Down(Entry step, string[] read, int next)
+            {
+                while (next < read.Length
+                    && _entries.FirstOrDefault(other => other.ParentPath == step.Path && string.Equals(other.Step.Name, read[next], StringComparison.Ordinal)) is { } member)
+                {
+                    step = member;
+                    next++;
+                }
+
+                return (step, read[next..]);
+            }
         }
 
-        /// <summary>Whether a single name is visible where <paramref name="entry"/> sits, and declared before it.</summary>
-        private bool Visible(Entry entry, string name)
+        /// <summary>The step named <paramref name="name"/> that is visible where <paramref name="entry"/> sits, and declared before it, or <see langword="null"/>.</summary>
+        private Entry? Visible(Entry entry, string name)
         {
             for (var scope = entry; scope is not null; scope = scope.ParentPath is null ? null : _byPath.GetValueOrDefault(scope.ParentPath))
             {
-                if (_entries.Any(other => other.ParentPath == scope.ParentPath && other.Order < entry.Order && string.Equals(other.Step.Name, name, StringComparison.Ordinal)))
+                if (_entries.FirstOrDefault(other => other.ParentPath == scope.ParentPath
+                        && !ReferenceEquals(other, _recover)
+                        && other.Order < entry.Order
+                        && string.Equals(other.Step.Name, name, StringComparison.Ordinal)) is { } found)
                 {
-                    return true;
+                    return found;
                 }
             }
 
             // A step's own subtree is readable by the step itself: a group's loop reads its members.
-            return _entries.Any(other => entry.Owns(other) && string.Equals(other.Step.Name, name, StringComparison.Ordinal));
+            return _entries.FirstOrDefault(other => entry.Owns(other) && string.Equals(other.Step.Name, name, StringComparison.Ordinal));
         }
 
         /// <summary>The sibling of <paramref name="entry"/> named <paramref name="name"/>, or <see langword="null"/>.</summary>
         private Entry? Sibling(Entry entry, string name)
             => _entries.FirstOrDefault(other => other.ParentPath == entry.ParentPath
+                && !ReferenceEquals(other, _recover)
                 && string.Equals(other.Step.Name, name, StringComparison.Ordinal));
+
+        /// <summary>
+        /// The <c>onFailure</c> that decides for <paramref name="entry"/>: its own, or the nearest group's around it that
+        /// writes one, with the step that writes it; <see langword="null"/> where none does.
+        /// </summary>
+        private (string Policy, Entry Owner)? EffectiveOnFailure(Entry entry)
+        {
+            for (var scope = entry; scope is not null; scope = scope.ParentPath is null ? null : _byPath.GetValueOrDefault(scope.ParentPath))
+            {
+                if (scope.Step.OnFailure is { } policy)
+                {
+                    return (policy, scope);
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>Whether <paramref name="entry"/> is one of the recovery's steps, or inside one.</summary>
+        private bool InRecovery(Entry entry) => _recover is not null && _recover.Owns(entry);
+
+        /// <summary>
+        /// The group holding <paramref name="entry"/> - or <paramref name="entry"/> itself - that is declared beside
+        /// <paramref name="target"/>: what a redirect to <paramref name="target"/> leaves, or <see langword="null"/>.
+        /// </summary>
+        private Entry? AncestorBeside(Entry entry, Entry target)
+        {
+            for (var scope = entry; scope is not null; scope = scope.ParentPath is null ? null : _byPath.GetValueOrDefault(scope.ParentPath))
+            {
+                if (scope.ParentPath == target.ParentPath && !ReferenceEquals(scope, target))
+                {
+                    return scope;
+                }
+            }
+
+            return null;
+        }
 
         /// <summary>
         /// The step a name resolves to where <paramref name="entry"/> sits: itself, or a step of a
@@ -893,6 +1317,7 @@ public static class WorkflowValidator
             for (var scope = entry; scope is not null; scope = scope.ParentPath is null ? null : _byPath.GetValueOrDefault(scope.ParentPath))
             {
                 if (_entries.FirstOrDefault(other => other.ParentPath == scope.ParentPath
+                        && !ReferenceEquals(other, _recover)
                         && string.Equals(other.Step.Name, name, StringComparison.Ordinal))
                     is { } found)
                 {
@@ -902,10 +1327,6 @@ public static class WorkflowValidator
 
             return null;
         }
-
-        /// <summary>Every step declared beside <paramref name="entry"/> - at the flow's root, where it is the root.</summary>
-        private IReadOnlyList<Entry> Siblings(Entry? entry)
-            => [.. _entries.Where(other => other.ParentPath == (entry?.ParentPath ?? null))];
 
         /// <summary>
         /// Whether any group <paramref name="entry"/> is part of - itself, or one holding it - holds what
@@ -963,6 +1384,22 @@ public static class WorkflowValidator
             if (value is < 1)
             {
                 _problems.Add($"{what} is {value}, and so not one or more");
+            }
+        }
+
+        /// <summary>
+        /// The one rule every self-call breaks (user, 2026-10-17): no step sends its own failure - or its own ending -
+        /// back to itself, since a step that is to run again after it failed says <c>retries</c>, and the recovery's own
+        /// steps have theirs.
+        /// </summary>
+        private static string CallsItself(string where, string how)
+            => $"{where} {how}, and so calls itself; a step never does - one that is to run again after it failed says retries";
+
+        private void Within(int? value, int least, int most, string what)
+        {
+            if (value < least || value > most)
+            {
+                _problems.Add($"{what} must be from {least.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} to {most.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)}, found {value}");
             }
         }
 

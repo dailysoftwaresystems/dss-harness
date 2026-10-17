@@ -1,8 +1,10 @@
 namespace DssHarness.Core.Output;
 
 /// <summary>
-/// A line the harness itself wrote, through one of the eight members of <see cref="IHarnessOutput"/> that write text:
-/// the adaptation of a legacy call into an event, and the one definition of the line.
+/// A line the harness itself wrote, through one of the five members of <see cref="IHarnessOutput"/> that write a line
+/// of its own - <see cref="IHarnessOutput.Ok"/>, <see cref="IHarnessOutput.Fail"/>, <see cref="IHarnessOutput.Warn"/>,
+/// <see cref="IHarnessOutput.Info"/> and <see cref="IHarnessOutput.Detail"/>: the adaptation of a legacy call into an
+/// event, and the one definition of the line.
 /// </summary>
 /// <param name="Kind">Which member's line this is.</param>
 /// <param name="Command">The command the line names; <see langword="null"/> only where the member takes none, which none does.</param>
@@ -45,9 +47,10 @@ public sealed record DataWritten(string Text) : RunEvent
 public sealed record RecordWritten(string Kind, string Path) : RunEvent;
 
 /// <summary>
-/// Events a queued sink was not given, said to it before the next one it is: where its queue was full an event was
-/// dropped and counted, so a front end knows it missed some and reads what it needs from the run's files, which hold
-/// it whole.
+/// Events a queued sink was not given, said to it where they fell: after the last event it was given before them and
+/// before the first after them - or last, where none came after - stamped with the operation and with the sequence and
+/// time of the last of them. Where its queue was full an event was dropped and counted, so a front end knows it missed
+/// some and reads what it needs from the run's files, which hold it whole.
 /// </summary>
 /// <param name="Count">How many events were dropped.</param>
 public sealed record EventsDropped(int Count) : RunEvent;

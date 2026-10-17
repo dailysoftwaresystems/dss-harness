@@ -1,5 +1,6 @@
 using System.CommandLine;
 using DssHarness.Core.Application.Legs;
+using DssHarness.Core.Output;
 using DssHarness.Core.Runners;
 
 namespace DssHarness.Cli.Commands;
@@ -106,7 +107,7 @@ internal static class RunCommand
                     run!,
                     cancellationToken)
                 .ConfigureAwait(false))
-                .ToOutcome(context.Json);
+                .ToOutcome(context.Json, context.Get<IHarnessOutput>().Shown);
         }, JsonAnswer.Ledger(JsonOption));
 
         return command;

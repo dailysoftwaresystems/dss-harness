@@ -1,14 +1,14 @@
 namespace DssHarness.Core.Application;
 
 /// <summary>
-/// Whether a command answers with a document on standard output, and whose.
+/// Whether a command answers with a document on standard output.
 /// </summary>
 /// <remarks>
 /// A command asked for <c>--json</c> answers with one document on every exit, and standard output holds only that
 /// document from the first line: the scope that keeps it whole is opened where this is not <see cref="None"/>. The
 /// stopped form - what the document says where the command stops before its body has an answer - is the command's
-/// own, whose members no kind could list: the front end that begins the session supplies it. A command of the
-/// engine's whose stopped form is a kind's own - a run's ledger, a listing - says that kind here.
+/// own, whose members no kind could list: a leg ledger, the agent verbs' document, a listing, a report each stop in a
+/// shape of their own, which the front end that begins the session supplies (<see cref="SessionFrontEnd.Stopped"/>).
 /// </remarks>
 public enum DocumentKind
 {

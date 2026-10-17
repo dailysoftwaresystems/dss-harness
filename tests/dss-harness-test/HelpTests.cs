@@ -2506,11 +2506,18 @@ public sealed partial class HelpTests
             + "where its leg stands - null for a leg of this machine where this machine's record of heavy legs cannot be read - "
             + "and each holding a copy kept in the "
             + "worktree, said as its own line says it, a leg copy's holder with where its leg stands, a mutation worker's with "
-            + "the process, the run and since when its sweep's claim records. An --apply refused at its hold answers the same "
+            + "the process, the run and since when its sweep's claim records. Beside them, needs names each consent the "
+            + "request lacks - 'fold-new-rows' (--new), 'fold-lost-rows' (--accept-lost), 'fold-over-cells' (--accept-over) "
+            + "or 'fold-two-changes' (--merge) - and refusals each reason it is refused for, 'conflict' where a path both "
+            + "trees changed has a merge that conflicts and 'other' for anything else, so a request refused for conflicting "
+            + "merges alone says 'conflict' and nothing else; folded, null but for the --apply of a fold and of a deletion, "
+            + "says what it wrote, deleted, merged and handed, the registries and rows it applied, and the cells --accept-over "
+            + "took. An --apply refused at its hold answers the same "
             + "document, applied true: request 'sound', and the run it met in heldNow. Stopped before "
             + "anything is weighed - a command line the parser refuses, a --directory that is not there, a repository not "
             + "initialised, another usage error, or a refusal met before then, an agent that is not there among them - it "
-            + "answers with the same document, empty: applied false, request and heldNow null, no lines.",
+            + "answers with the same document, empty: applied false, request and heldNow null, no lines, no needs, no "
+            + "refusals and folded null.",
             text,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -2626,11 +2633,44 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains("params - its own knobs, defaulted in the file and read as param.<name>", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            "A step gives a failure nothing handles to the workflow's recover by saying onFailure: recover, itself or through a group around it - never "
+                + "a reasoning step, whose agent is tried again (retries, waiting backoffSeconds, twice as long each time) and on its fallback, and which asks "
+                + "where it still fails. The recovery's steps, written once, read the step that failed as source and see every step of the flow, find what "
+                + "went wrong and put it right; then the run goes where its onSuccess says - failed-step, the step that gave it its failure, which runs again "
+                + "from where it stopped - and a failure of its own work, past its steps' retries, does what its onFailure says: pause or stop; the recovery "
+                + "never calls itself. A step that fails again goes to the recovery again by its own onFailure, until it passes, a person is asked, or maxVisits is met (absent, "
+                + $"the engine's bound of {FlowRecover.MostVisits} visits); past it the run asks (recoveryBound), with the advisor's recommendation of a fix: "
+                + "more, one more recovery; direct, with the fix in words, for the next one; skip, where the step is skippable; or abort.",
+            prose,
+            StringComparison.Ordinal);
 
-        // The refusal's code is the one the command answers with, held here so the sentence cannot drift from it.
+        // A type's required key is said to be required, from the one table the parser refuses its absence by.
+        Assert.Contains("the prompt file the step is asked with; required", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("the predefined runner the step runs; required", result.StandardOutput, StringComparison.Ordinal);
+        Assert.All(
+            WorkflowStepTypes.All.SelectMany(type => type.Keys.Where(key => key.Required)),
+            key => Assert.Contains($"{key.Meaning}; required", result.StandardOutput, StringComparison.Ordinal));
+
+        // What init writes of the implementation workflow, and where: the one owner of that rule is InitService, held to it by
+        // InitServiceTests, and this sentence says what those hold.
+        Assert.Contains(
+            "init writes one - the implementation workflow, from a request to a pull request whose checks are green - and declares it in "
+                + $"the config it creates. Where config.json declares {WorkflowTemplates.ShippedWorkflowName}, init writes each of its "
+                + "files that is missing - the whole set where the repository has no definition of it yet, and where it has one only "
+                + "the shipped files that definition names, so a file taken out with its step stays out - and keeps each one that is "
+                + "there, whatever it holds, so an init that stopped part way is "
+                + "finished by the next; nothing that exists is ever overwritten, and a config that does not declare it gets none of it.",
+            prose,
+            StringComparison.Ordinal);
+
+        // The refusals' codes are the ones the command answers with, held here so the sentence cannot drift from them.
         Assert.Contains(
             "'dssharness validate-workflow' checks all of it - the shape of every key, every name an expression reads, every file the "
-                + "definition names - and refuses (13) naming each problem, without running anything.",
+                + $"definition names - and refuses ({HarnessExit.ConfigInvalid}) naming each problem, without running anything, as a "
+                + "config.json that does not hold is refused. Where config.json declares no workflow there is nothing to check, and it "
+                + $"is refused ({HarnessExit.Refused}), saying that \"workflows\": [\"{WorkflowTemplates.ShippedWorkflowName}\"] "
+                + "declares the one init writes.",
             prose,
             StringComparison.Ordinal);
 
@@ -2659,6 +2699,18 @@ public sealed partial class HelpTests
         Assert.Contains(
             "  .harness-config/workflows/<name>/<name>.yml",
             layout.StandardOutput,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "each missing file written by init where config.json declares the implementation one",
+            Prose.Words(layout.StandardOutput),
+            StringComparison.Ordinal);
+
+        // workflows is refused given empty though leaving it out means none, which neither of the other two kinds of list
+        // the topic names is: said apart from both, with the spelling the refusal itself asks for.
+        Assert.Contains(
+            "workflows, which declares no workflow left out, is refused given empty too, so none is spelt one way: leave the key "
+                + "out for no workflow.",
+            Prose.Words(config.StandardOutput),
             StringComparison.Ordinal);
     }
 

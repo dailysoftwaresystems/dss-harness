@@ -77,6 +77,7 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `delete-agent <o> <a> [--apply] [--json] [--merge <path>] [--settled <path>] [--new <ID>] [--accept-lost <ID>:<cell>] [--accept-over <ID>:<cell>] [--discard-uncommitted]` | Fold what is left and apply its rows, keep its evidence and transcripts, then remove its worktree and its copies on hosts |
 | `list-orchestrator [<o>] [--json]` | List orchestrators, their agents and where each stands |
 | `validate-workflow [<workflow>]` | Check the workflows `workflows` in config.json declares: that each yml definition reads, holds and names files that are there (`help workflows`). Nothing is run |
+| `export-workflow <workflow> --to <dir> [--shipped] [--json]` | Copy a workflow - its yml and every file it names - into `<dir>/<workflow>/`: a declared one once it holds (12 where it does not), byte for byte, or with `--shipped` the one this tool ships, to make a version of your own. Refused (13) where that folder is there; a file that cannot be written takes back what was written |
 | `delete-orchestrator <o> [--delete-evidence]` | Delete an orchestrator once every agent of it is deleted and nothing is left below its directory under the worktrees root - no worktree, and no directory with a `.git` of its own, each named and refused (13) until then; its agents' evidence and transcripts go only with `--delete-evidence` |
 | `check-root-litter` | Report files left loose at the root of the checkout, ignored ones included |
 | `write-anchor <id> --priority P --trigger TEXT` | Add an anchor: to the pending registry, or to done when closed |
@@ -119,8 +120,12 @@ holds or copies kept in the worktree it cannot remove as they stand. A run holdi
 a leg copy or a mutation worker kept in the worktree in that copy's own words; `--json` answers
 with one document whose `request` member says what is wanted of you - `sound` (nothing; wait
 where `heldNow` names a holder), `needs-consent` or `refused` - and whose `heldNow` holds each
-holder, those copies' among them. An `--apply` refused at its hold answers the same document,
-`sound`, with the run it met in `heldNow`. Either way a dry run still prints all it weighed.
+holder, those copies' among them. Beside them `needs` names each consent the request lacks
+(`fold-new-rows`, `fold-lost-rows`, `fold-over-cells`, `fold-two-changes`), `refusals` each reason
+it is refused for (`conflict` where a path both trees changed has a merge that conflicts, `other`
+for anything else), and `folded` what a fold's `--apply` wrote, merged, handed and applied. An
+`--apply` refused at its hold answers the same document, `sound`, with the run it met in
+`heldNow`. Either way a dry run still prints all it weighed.
 `dssharness help orchestrators` explains seeding, rebasing, folding and deleting agents.
 
 `--time` pulls each phase's own timing marks out of its output, using `buildTimingRegex`,
@@ -395,22 +400,48 @@ trust building the repository already asks for. Run `dssharness help legs` for t
 ## Workflows
 
 A workflow is a flow of typed steps that depend on one another by name - triage, a plan, builds,
-tests, reviews, a pull request - declared by name under `workflows` in `config.json` and defined
-by a yml file of its own, `.harness-config/workflows/<name>/<name>.yml`, whose directory holds
-every file the definition names: its agent files, its prompts, its schemas. `init` writes one,
-the default workflow, into a repository that has no workflows directory at all and declares it in
-the config it creates; nothing that exists is ever overwritten.
+tests, reviews, a pull request - declared by name under `workflows` in `config.json` and defined by
+a yml file of its own, `.harness-config/workflows/<name>/<name>.yml`, whose directory holds every
+file the definition names: its agent files, its prompts, its schemas. `init` writes one, the
+implementation workflow, and declares it in the config it creates. Where `config.json` declares
+`implementation`, `init` writes each of its files that is missing - the whole set where the
+repository has no definition of it yet, and where it has one only the shipped files that definition
+names, so a file taken out with its step stays out - and keeps each one that is there, whatever it
+holds, so an `init` that stopped part way is finished by the next; nothing that exists is ever
+overwritten, and a config that does not declare it gets none of it. A config written before
+workflows declares none: add `"workflows": ["implementation"]` and run `init` to have it.
+
+A step gives a failure nothing handles to the workflow's `recover` by saying `onFailure: recover`,
+itself or through a group around it: steps written once that find what went wrong and put it right.
+When they are done the run goes where the recovery's `onSuccess` says - `failed-step`, the step that
+gave it its failure, which runs again from where it stopped - and a failure of the recovery's own
+work does what its `onFailure` says once its steps' retries are spent: `pause` or `stop` - never the recovery again, which would be it calling itself. A step
+that fails again comes back by its own `onFailure`, until it passes or a person is asked; past
+`maxVisits` the run asks, with the advisor's recommended fix. A reasoning step is never recovered: a
+failed agent is tried again (`retries`, waiting `backoffSeconds`, twice as long each time) and on
+each model of its fallback, quota or a provider that fails pauses the run where it can resume, and
+what still fails is asked (`onFailure: pause`). The implementation workflow says all of it on its
+steps, so a run of it ends done or asks only what it must.
 
 ```bash
-dssharness validate-workflow          # check every declared workflow
-dssharness validate-workflow default  # check one
-dssharness help workflows             # the file, every step type and every key
+dssharness validate-workflow                 # check every declared workflow
+dssharness validate-workflow implementation  # check one
+dssharness export-workflow implementation --shipped --to ../mine  # the shipped one, to make your own
+dssharness help workflows                    # the file, every step type and every key
 ```
+
+`export-workflow <workflow> --to <dir>` copies a workflow - its yml and every file it names, and
+no other - into `<dir>/<workflow>/`, a folder of its own that must not be there (13 where it is):
+a declared one once it holds (12 where it does not, naming each problem), byte for byte, or, with
+`--shipped`, the implementation workflow as this tool ships it, which is how a version of your own
+starts. A file that cannot be written takes back what was written before it, so no folder is left
+with part of a workflow in it.
 
 This build checks workflow definitions - the shape of every key, every step, input, param and
 output an expression names, every file the definition points at - and refuses (12) naming each
-problem, without running anything. The engine that runs workflows is the next thing the tool
-grows. Run `dssharness help workflows` for the whole of it.
+problem, without running anything, as a `config.json` that does not hold is refused. A
+`config.json` that declares no workflow has nothing to check and is refused (13), saying how to
+declare the implementation one. The engine that runs workflows is the next thing the tool grows. Run `dssharness help workflows` for the whole of it.
 
 ## Anchors
 

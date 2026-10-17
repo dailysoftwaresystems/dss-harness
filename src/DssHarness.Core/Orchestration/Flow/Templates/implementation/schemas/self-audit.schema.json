@@ -28,7 +28,7 @@
     },
     "items": {
       "type": "array",
-      "description": "The work items of a further round that would settle the findings; empty where clean is true. At most 8, shaped as a plan's.",
+      "description": "The work items of a further round that would settle the findings; empty where clean is true. At most 8, shaped as a plan's: each sized to one builder's cycle, with its own definition of done.",
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -36,6 +36,7 @@
           "name",
           "title",
           "instructions",
+          "done",
           "ownedPaths",
           "forbiddenPaths",
           "reuses",
@@ -55,6 +56,10 @@
           "instructions": {
             "type": "string",
             "description": "Everything the agent that builds the item needs: what to build, where, what must hold when it is done, and what is out of its scope."
+          },
+          "done": {
+            "type": "string",
+            "description": "The item's definition of done: what must hold for the item to be finished, as statements a person or a check can answer one by one - the behaviours built, the test that pins each, and what is true of the tree when the builder reports. The builder works to it, the review weighs it and the run's final audit checks it."
           },
           "ownedPaths": {
             "type": "array",

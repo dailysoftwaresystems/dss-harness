@@ -37,7 +37,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- The default workflow init writes: its definition and every file the definition names -
+    <!-- The implementation workflow init writes: its definition and every file the definition names -
          agent files, prompts, schemas, the bar for recommendations - kept beside the engine that
          reads them, embedded whole under the workflow's own layout, so every build of the tool
          carries the very workflow its own tests validate. -->

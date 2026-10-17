@@ -32,6 +32,7 @@ public sealed class CompositionRootTests
         Assert.NotNull(provider.GetRequiredService<HoldAwakeService>());
         Assert.NotNull(provider.GetRequiredService<IHarnessContextLoader>());
         Assert.NotNull(provider.GetRequiredService<IWorkflowValidationService>());
+        Assert.NotNull(provider.GetRequiredService<IWorkflowExportService>());
     }
 
     /// <summary>

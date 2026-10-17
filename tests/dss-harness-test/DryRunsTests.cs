@@ -287,13 +287,14 @@ public sealed class DryRunsTests
         var planned = CommandOutcome.Ok("dry run: ...");
 
         string? Said(HolderStanding? standing)
-            => System.Text.Json.Nodes.JsonNode.Parse(OrchestrationReports.Document(new AgentVerbFacts(
+            => System.Text.Json.Nodes.JsonNode.Parse(OrchestrationReports.Document(planned, new AgentVerbFacts(
                 planned.ExitCode,
                 planned.Message,
                 Applied: false,
                 RequestStanding.Sound,
                 new TreeHeld([TreeHolder.Named(copy: false, entry, standing, ahead: null, said: "said")], null, null, []),
                 planned.Details ?? [],
+                [],
                 [])).Data[0])!["heldNow"]![0]!["standing"]?.GetValue<string>();
 
         Assert.Equal(["no-slot", "waiting", "holds-slot", "on-host"], Enum.GetValues<HolderStanding>().Select(standing => Said(standing)));

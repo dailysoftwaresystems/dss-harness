@@ -52,9 +52,10 @@ public static class ServiceRegistration
     /// a front end of its own supplies its own.
     /// </param>
     /// <param name="prompt">
-    /// How a superuser password is asked of whoever is there; <see langword="null"/> to register none, for an
-    /// operation that asks for nothing a superuser must grant. Reading a terminal without echoing what is typed is
-    /// the one thing the core cannot do for itself, so the front end supplies it.
+    /// How a superuser password is asked of whoever is there; <see langword="null"/> for nobody to ask
+    /// (<see cref="NobodyToAsk"/>), which refuses whatever a superuser must grant as a run with no credential always
+    /// was. Reading a terminal without echoing what is typed is the one thing the core cannot do for itself, so the
+    /// front end supplies it.
     /// </param>
     /// <returns>The collection, registered.</returns>
     public static IServiceCollection AddDssHarness(
@@ -83,9 +84,11 @@ public static class ServiceRegistration
         services.AddSingleton<IProcessIdentity, ProcessIdentity>();
 
         // A host answering another machine writes its home as ~ in what it tells that machine; a command
-        // typed here writes its own paths as they are.
+        // typed here writes its own paths as they are. The machine is asked through the overload that survives one
+        // this build does not support: the output is what says so, in the failure line the machine that asked reads,
+        // and an output that could not be built would take the reason with it.
         services.AddSingleton(provider => origin.ServesAnotherMachine
-            ? HomeShorthand.Of(provider.GetRequiredService<IHostPlatform>(), provider.GetRequiredService<IFileSystem>())
+            ? HomeShorthand.Of(provider.GetRequiredService<IHostPlatform>, provider.GetRequiredService<IFileSystem>())
             : HomeShorthand.None);
         services.AddSingleton<IHarnessOutput>(output ?? (provider => new ConsoleHarnessOutput(verbose, provider.GetRequiredService<HomeShorthand>())));
         services.AddSingleton<IFileSystem, PhysicalFileSystem>();
@@ -123,6 +126,7 @@ public static class ServiceRegistration
         services.AddSingleton<IOrchestratorService, OrchestratorService>();
         services.AddSingleton<IAgentService, AgentService>();
         services.AddSingleton<IWorkflowValidationService, WorkflowValidationService>();
+        services.AddSingleton<IWorkflowExportService, WorkflowExportService>();
 
         services.AddSingleton<IToolIdentityProvider, EntryAssemblyToolIdentityProvider>();
         services.AddSingleton<IHostCommandRunner, HostCommandRunner>();

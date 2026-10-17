@@ -1,6 +1,5 @@
 using System.CommandLine;
 using DssHarness.Core.Hosts;
-using DssHarness.Core.Legs;
 using DssHarness.Core.Results;
 using DssHarness.Core.Runs;
 using DssHarness.Core.SetUps;
@@ -75,12 +74,4 @@ internal static class DispatchOptions
     {
         Description = "Bring up the set-ups each leg's work names under setUp before that work starts, on the machine that runs it, and down after it. Without it, none is.",
     };
-
-    /// <summary>
-    /// Where this run's own legs work, as the two options say it - the rule itself, and its refusal, are
-    /// <see cref="LegTrees.Asked"/>, in the core, which placing a leg asks beside.
-    /// </summary>
-    /// <param name="arguments">The command line.</param>
-    internal static LocalTrees WhereWorkRuns(System.CommandLine.ParseResult arguments)
-        => LegTrees.Asked(arguments.GetValue(LocalCopy), arguments.GetValue(InPlace));
 }

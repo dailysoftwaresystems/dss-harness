@@ -183,9 +183,13 @@ public sealed class CleanService(
         var exitCode = built.ExitCodeGiven(execution.Cancelled, execution.Unfinished);
         var message = built.Summarize(execution.Cancelled, execution.Unfinished);
 
+        // A leg a run is building is waited out, not put right: where that is what the code says, a caller that can
+        // try again knows to.
+        var cause = built.CauseGiven(execution.Cancelled, execution.Unfinished);
+
         return request.Json
-            ? new CommandOutcome(exitCode, message) { Data = [built.ToJson(execution.Cancelled, execution.Unfinished, shown: _output.Shown)], Quiet = true }
-            : new CommandOutcome(exitCode, message, built.Render());
+            ? new CommandOutcome(exitCode, message) { Data = [built.ToJson(execution.Cancelled, execution.Unfinished, shown: _output.Shown)], Quiet = true, Cause = cause }
+            : new CommandOutcome(exitCode, message, built.Render()) { Cause = cause };
     }
 
     /// <summary>Removes, or measures, one leg's build directory where the leg runs.</summary>

@@ -84,4 +84,6 @@ every test runs.
 ## What to return
 
 Whether the round is clean; the findings; what you could not verify; and, where it is not clean, the work items of a
-further round, shaped as the plan's items are and at most 8.
+further round, shaped as the plan's items are and at most 8: each sized to one builder's cycle, never more and never
+a sliver of one, and each with its own definition of done - statements a check can answer one by one, the first of
+them the finding it settles.

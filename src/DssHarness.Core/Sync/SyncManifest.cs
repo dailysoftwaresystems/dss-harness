@@ -48,6 +48,23 @@ public sealed record SyncManifest(string Root, IReadOnlyDictionary<string, SyncE
 
     /// <summary>The paths in this manifest, in a stable order.</summary>
     public IEnumerable<string> Paths => Entries.Keys.OrderBy(path => path, StringComparer.Ordinal);
+
+    /// <summary>
+    /// This manifest less every file and link <paramref name="isWithheld"/> withholds: the reading as a sync that withholds
+    /// more than the reading did carries it.
+    /// </summary>
+    /// <param name="isWithheld">Decides whether a relative path is withheld, as for <see cref="IManifestBuilder.BuildAsync"/>.</param>
+    public SyncManifest Without(Func<string, bool> isWithheld)
+    {
+        ArgumentNullException.ThrowIfNull(isWithheld);
+
+        return new SyncManifest(
+            Root,
+            Entries.Where(entry => !isWithheld(entry.Key)).ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal))
+        {
+            Links = [.. Links.Where(link => !isWithheld(link))],
+        };
+    }
 }
 
 /// <summary>Builds a manifest of a tree.</summary>

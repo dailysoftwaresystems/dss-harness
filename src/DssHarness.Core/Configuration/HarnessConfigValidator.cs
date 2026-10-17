@@ -498,7 +498,8 @@ public static partial class HarnessConfigValidator
     /// </summary>
     private static void ValidateWorkflows(HarnessConfig config, List<string> problems)
     {
-        RefuseGivenEmpty(config.Workflows, "workflows", "name a workflow", "its file, as workflows/<name>/<name>.yml", problems);
+        // Left out, the key declares no workflow - the same as [] would, so one spelling of none is kept.
+        RefuseGivenEmpty(config.Workflows, "workflows", "name a workflow", "no workflow", problems);
 
         var declared = new List<string>();
 
@@ -513,14 +514,18 @@ public static partial class HarnessConfigValidator
             // Ignoring case, because two names that differ only by case are two workflow directories
             // on a file system that does not distinguish them: one of the two files could never be
             // read, and which one depended on the machine.
-            if (declared.FirstOrDefault(earlier => string.Equals(earlier, name, StringComparison.OrdinalIgnoreCase)) is { } other)
+            if (declared.FirstOrDefault(earlier => string.Equals(earlier, name, StringComparison.OrdinalIgnoreCase)) is not { } other)
             {
-                problems.Add($"workflows names '{name}' and '{other}', which differ only by case; a "
-                    + "workflow directory is the file system's to tell apart, and not every file system does");
+                declared.Add(name);
+            }
+            else if (string.Equals(other, name, StringComparison.Ordinal))
+            {
+                problems.Add($"workflows names '{name}' twice; declare each workflow once");
             }
             else
             {
-                declared.Add(name);
+                problems.Add($"workflows names '{name}' and '{other}', which differ only by case; a "
+                    + "workflow directory is the file system's to tell apart, and not every file system does");
             }
         }
     }

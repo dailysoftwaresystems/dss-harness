@@ -20,8 +20,10 @@ namespace DssHarness.Core.Sync;
 /// <param name="Withheld">
 /// Paths this one sync withholds - never transfers, never deletes - in addition to the
 /// configuration's: what the sync's own caller keeps in the copy it is syncing, as a sweep keeps the
-/// build directory it made in its own worker. The configuration's own statements are untouched, and
-/// the delete bound still judges everything that mirrors the source.
+/// directory its build writes in its own worker. Withheld from the reading too: a file the tree holds
+/// under one is not carried, so the copy is planned, staged and verified on one set of files. The
+/// configuration's own statements are untouched, and the delete bound still judges everything that
+/// mirrors the source.
 /// </param>
 /// <param name="Reader">
 /// Whose refusal a sync over the delete bound is, which says what its reader can be told to do; the
@@ -829,11 +831,17 @@ public sealed class SyncService(
         var context = source.Context;
 
         // What this one sync's own caller keeps in the copy, over the configuration's statements: a sweep keeps the
-        // build directory it made in its own worker, which no spelling of a configuration should have to name for a
+        // directory its build writes in its own worker, which no spelling of a configuration should have to name for a
         // sweep to work - and which the delete bound has no business judging, since the source never carried it.
+        // And what the reading holds there is not carried either: read with the configuration's statements alone, a file
+        // the tree tracks there was written into the copy, then never seen by the verification, which reads the copy
+        // without walking what is withheld - and every such sync failed, the copy matching the tree.
         var exclusions = options.Withheld is { Count: > 0 }
             ? source.Exclusions.With(options.Withheld)
             : source.Exclusions;
+        var files = ReferenceEquals(exclusions, source.Exclusions)
+            ? source.Files
+            : source.Files.Without(exclusions.IsWithheldFromTransfer);
 
         // A worktree's copy is claimed for it before anything is written to it: recorded, so that deleting the
         // worktree asks this host to remove it and asks no host that holds none; and refused while another worktree
@@ -876,7 +884,7 @@ public sealed class SyncService(
                 .ReadManifestAsync(destinationRoot, Withheld(exclusions), cancellationToken)
                 .ConfigureAwait(false);
 
-        var plan = SyncPlan.Between(source.Files, destination, exclusions);
+        var plan = SyncPlan.Between(files, destination, exclusions);
 
         // Whose directory this is comes first. Told that a sync would remove all of a directory, the
         // reader goes looking for a mistake in the source, when what is actually true is that this is
@@ -1036,7 +1044,7 @@ public sealed class SyncService(
         // A tree that moved raises from in here, at the first file found to have moved, before anything is deleted: no index,
         // no verification, no adoption marked finished. What was carried by then stays, and the next sync, planning
         // from what the copy holds, puts it right - an adoption still asking for --adopt.
-        await ApplyAsync(source.Files.Root, transport, destinationRoot, plan, Carrying.Tree, cancellationToken).ConfigureAwait(false);
+        await ApplyAsync(files.Root, transport, destinationRoot, plan, Carrying.Tree, cancellationToken).ConfigureAwait(false);
 
         // The copy is a git repository because the harness there finds everything through git, and its HEAD names the
         // commit this tree's did, so git answers there as it does here. Done after the transfer, so a copy that failed
@@ -1061,14 +1069,14 @@ public sealed class SyncService(
             .IndexAsync(
                 destinationRoot,
                 [
-                    .. source.Files.Paths.Where(path => !BeyondALink(path, destination.Links)),
+                    .. files.Paths.Where(path => !BeyondALink(path, destination.Links)),
                     HarnessLayout.ConfigFileRelative,
                 ],
                 cancellationToken)
             .ConfigureAwait(false);
 
         // Throws when the copy does not match, so reaching the next line is what verified means.
-        await VerifyAsync(transport, destinationRoot, source.Files, exclusions, Carrying.Tree, cancellationToken)
+        await VerifyAsync(transport, destinationRoot, files, exclusions, Carrying.Tree, cancellationToken)
             .ConfigureAwait(false);
 
         // Marked finished only once the copy has been shown to be one, which is why this sits after

@@ -7,7 +7,7 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// deterministic flow of typed steps that depend on one another by name.
 /// </summary>
 /// <param name="Name">The workflow's name, as <c>workflows</c> in <c>config.json</c> declares it.</param>
-/// <param name="Description">What the workflow is for, shown by <c>validate-workflow</c>.</param>
+/// <param name="Description">What the workflow is for, in the definition's own words.</param>
 /// <param name="MaxReasoningAgents">Reasoning agents the run may have at once, where the file says.</param>
 /// <param name="MaxParallelProcesses">Steps that run legs the run may have at once, where the file says.</param>
 /// <param name="MaxOpenAgents">Agents with a worktree the run may have open at once, where the file says.</param>
@@ -52,9 +52,64 @@ public sealed record WorkflowDefinition(
     public IReadOnlyDictionary<string, FlowInput> InputsByName
         => new Dictionary<string, FlowInput>(Inputs.Select(input => new KeyValuePair<string, FlowInput>(input.Name, input)), StringComparer.Ordinal);
 
+    /// <summary>
+    /// The seconds a reasoning step waits before it is tried again after its agent failed, where the file says: twice
+    /// as long before each later try, at most <see cref="WorkflowStep.MostBackoffSeconds"/>; a step's own wins.
+    /// </summary>
+    public int? BackoffSeconds { get; init; }
+
     /// <summary>The params, by name, as a prompt or a template reads them.</summary>
     public IReadOnlyDictionary<string, FlowParam> ParamsByName
         => new Dictionary<string, FlowParam>(Params.Select(param => new KeyValuePair<string, FlowParam>(param.Name, param)), StringComparer.Ordinal);
+
+    /// <summary>
+    /// The steps a step gives its failure to where it says <c>onFailure: recover</c>: they find what went wrong and put
+    /// it right, and the run goes where their <c>onSuccess</c> says. <see langword="null"/> where the workflow declares
+    /// none, and then no step may say <c>recover</c>.
+    /// </summary>
+    public FlowRecover? Recover { get; init; }
+}
+
+/// <summary>
+/// The workflow's recovery: the steps a step gives its failure to where it says <c>onFailure: recover</c> (itself, or a
+/// group around it) and no handler took the failure first. They read the step that failed as <c>source</c> and see
+/// every step of the flow. Where the run goes once they are done is <paramref name="OnSuccess"/>'s to say, and what a
+/// failure of their own does <paramref name="OnFailure"/>'s - both written in the file, as a step's own wiring is.
+/// </summary>
+/// <param name="MaxVisits">
+/// How often the recovery may take the failures of one step in one scope, where the file says; past it the run asks
+/// (<c>recoveryBound</c>), with the advisor's recommendation of a fix and the choices. Within it - and where it says
+/// nothing, within the engine's bound of <see cref="MostVisits"/> visits of one step in one scope - a step that fails
+/// again after the recovery goes to it again, by its own <c>onFailure: recover</c>; the recovery never sends itself
+/// anything.
+/// </param>
+/// <param name="Steps">The recovery's own steps, which take every key the flow's steps take.</param>
+/// <param name="OnSuccess">Where the run goes once the recovery's steps are done: <see cref="FailedStep"/>.</param>
+/// <param name="OnFailure">
+/// What a failure inside the recovery that nothing in it takes does, once its own steps' retries are spent:
+/// <see cref="PauseOnFailure"/> or <see cref="StopOnFailure"/> - never the recovery again, which would be the recovery
+/// calling itself.
+/// </param>
+public sealed record FlowRecover(int? MaxVisits, IReadOnlyList<WorkflowStep> Steps, string OnSuccess, string OnFailure)
+{
+    /// <summary>The most a recovery may be given: the engine's bound on the visits of one step in one scope.</summary>
+    public const int MostVisits = 99;
+
+    /// <summary>
+    /// The <c>onSuccess</c> that sends the run back to the step that gave the recovery its failure, to run again from
+    /// where it stopped - a build, a test, a commit, whatever failed - once what stood in its way was put right: a machine
+    /// step runs again whole, a reasoning step goes on from its handoff.
+    /// </summary>
+    public const string FailedStep = "failed-step";
+
+    /// <summary>Every <c>onSuccess</c> a recovery may say, in the order a refusal lists them.</summary>
+    public static IReadOnlyList<string> Successes { get; } = [FailedStep];
+
+    /// <summary>The <c>onFailure</c> that asks a person about a failure inside the recovery (the question <c>failure</c>).</summary>
+    public const string PauseOnFailure = "pause";
+
+    /// <summary>The <c>onFailure</c> that ends the run failed on a failure inside the recovery.</summary>
+    public const string StopOnFailure = "stop";
 }
 
 /// <summary>What a whole run's reasoning may cost, and the reserve that pauses the run before it is spent.</summary>
@@ -83,7 +138,14 @@ public sealed record FlowAdvisor(
     IReadOnlyList<string> Fallback,
     string? Provider,
     string? Client,
-    IReadOnlyList<string> Kinds);
+    IReadOnlyList<string> Kinds)
+{
+    /// <summary>How often its agent is tried again where it failed, on each model it may use, where the file says.</summary>
+    public int? Retries { get; init; }
+
+    /// <summary>The seconds it waits before it is tried again, doubling, where the file says.</summary>
+    public int? BackoffSeconds { get; init; }
+}
 
 /// <summary>The agent that words what a run is doing for a person who asks.</summary>
 /// <param name="Agent">The agent definition, as a file under the workflow's <c>agents</c> directory.</param>
@@ -104,7 +166,14 @@ public sealed record FlowReporter(
     string? Effort,
     IReadOnlyList<string> Fallback,
     string? Provider,
-    string? Client);
+    string? Client)
+{
+    /// <summary>How often its agent is tried again where it failed, on each model it may use, where the file says.</summary>
+    public int? Retries { get; init; }
+
+    /// <summary>The seconds it waits before it is tried again, doubling, where the file says.</summary>
+    public int? BackoffSeconds { get; init; }
+}
 
 /// <summary>Everything a workflow says about a request amended, or an answer changed, while a run works.</summary>
 /// <param name="Input">The input that holds the request, kept as it was given and read with its amendments.</param>
@@ -131,8 +200,14 @@ public sealed record FlowAmend(
 
 /// <summary>One answer a configuration gives a question kind beforehand, and how often it holds.</summary>
 /// <param name="Answer">The answer, spelled as the question's options spell it.</param>
-/// <param name="Times">How often the same answer is given where the question lets the same thing go on.</param>
-/// <param name="Then">The step the run is sent to once the answer is given, where the question allows one.</param>
+/// <param name="Times">
+/// How often an answer that lets the same thing go on - <c>more</c>, <c>retry</c> or <c>compact</c> - is given before the
+/// question is asked of a person, or answered with <paramref name="Then"/>.
+/// </param>
+/// <param name="Then">
+/// The answer given once <paramref name="Times"/> is spent: one of the kind's answers that ends the matter
+/// (<c>accept</c>, <c>allow</c>, <c>merge</c>, <c>stay</c>, <c>skip</c>, <c>fail</c> or <c>abort</c>).
+/// </param>
 public sealed record FlowAnswer(string Answer, int? Times, string? Then);
 
 /// <summary>One value a run of the workflow is started with.</summary>
@@ -196,7 +271,7 @@ public sealed record WorkflowStep
     /// <summary>The step's name, unique among its siblings and never a reserved word.</summary>
     public required string Name { get; init; }
 
-    /// <summary>What the step is for, shown by <c>validate-workflow</c>.</summary>
+    /// <summary>What the step is for, in the definition's own words.</summary>
     public string? Description { get; init; }
 
     /// <summary>The step's type, checked against <see cref="WorkflowStepTypes"/>; absent on a group.</summary>
@@ -211,8 +286,17 @@ public sealed record WorkflowStep
     /// <summary>An expression that says whether the step runs at all.</summary>
     public string? When { get; init; }
 
-    /// <summary>What a failure of the step does: <c>stop</c> (the default), <c>pause</c> or <c>continue</c>.</summary>
+    /// <summary>
+    /// What a failure of the step that no handler took does: <c>stop</c> (the default), <c>pause</c>, <c>continue</c>,
+    /// or <c>recover</c>, given to the workflow's recovery; absent, the nearest group's around it.
+    /// </summary>
     public string? OnFailure { get; init; }
+
+    /// <summary>The <c>onFailure</c> that gives a step's failure to the workflow's recovery.</summary>
+    public const string Recover = "recover";
+
+    /// <summary>Every <c>onFailure</c> a step may say, in the order a refusal lists them.</summary>
+    public static IReadOnlyList<string> FailurePolicies { get; } = ["stop", "pause", "continue", Recover];
 
     /// <summary>Retries the step is given where it ends incomplete, where the file says.</summary>
     public int? Retries { get; init; }
@@ -301,6 +385,18 @@ public sealed record WorkflowStep
     /// <summary>How often a step that asks may ask before it goes on with what it has.</summary>
     public int? AskRounds { get; init; }
 
+    /// <summary>
+    /// The seconds a reasoning step waits before it is tried again after its agent failed, where the file says: twice as
+    /// long before each later try, at most <see cref="MostBackoffSeconds"/>; absent, the workflow's.
+    /// </summary>
+    public int? BackoffSeconds { get; init; }
+
+    /// <summary>The seconds a reasoning step waits, where neither it nor the workflow says.</summary>
+    public const int DefaultBackoffSeconds = 30;
+
+    /// <summary>The longest a reasoning step ever waits before it is tried again, however the waits have doubled.</summary>
+    public const int MostBackoffSeconds = 900;
+
     /// <summary>The legs a leg step runs, by name; every declared leg where the file says nothing.</summary>
     public IReadOnlyList<string> Legs { get; init; } = [];
 
@@ -337,8 +433,11 @@ public sealed record WorkflowStep
     /// <summary>The <c>create-agent</c> step whose agent the fold family step works on.</summary>
     public string? Of { get; init; }
 
-    /// <summary>Whether the step works on every live agent of the run but its own.</summary>
-    public bool? Others { get; init; }
+    /// <summary>
+    /// The <c>create-agent</c> step whose agent a refresh or a rebase leaves out: it works on every other live agent of
+    /// the run that has a worktree, each on its own.
+    /// </summary>
+    public string? Others { get; init; }
 
     /// <summary>What a fold or a deletion is allowed to carry, member for member the fold command's options.</summary>
     public FlowAllow? Allow { get; init; }
@@ -478,13 +577,17 @@ public sealed record FlowOn(string Step, string Outcome, IReadOnlyList<int> Code
 /// <param name="Blocking">The expression that says, past the rounds, whether what is left must still be dealt with.</param>
 /// <param name="BlockersLimitRounds">Further rounds past <paramref name="Rounds"/> while <paramref name="Blocking"/> holds.</param>
 /// <param name="Leftover">Where what the loop left is written, read as the run's leftover.</param>
+/// <param name="BlockersUnbounded">
+/// Whether <c>blockersLimitRounds</c> says <c>false</c>: no bound past the rounds but the workflow's budget.
+/// </param>
 public sealed record FlowRepeat(
     string Until,
     int? MaxIterations,
     int? Rounds,
     string? Blocking,
     int? BlockersLimitRounds,
-    string? Leftover);
+    string? Leftover,
+    bool BlockersUnbounded = false);
 
 /// <summary>What a fold or a deletion is allowed to carry, member for member the fold command's options.</summary>
 /// <param name="Settled">Paths reconciled by hand. A person's answer, written out only.</param>
@@ -519,10 +622,4 @@ public sealed record FlowQuote(string Text, string Input);
 /// </summary>
 /// <param name="Written">The list as written out, or empty where the value is an expression.</param>
 /// <param name="Expression">The expression, where the value is one; otherwise <see langword="null"/>.</param>
-public sealed record FlowList(IReadOnlyList<string> Written, string? Expression)
-{
-    /// <summary>Reads a scalar as an expression and a sequence as a written-out list.</summary>
-    /// <param name="written">The list as written out.</param>
-    /// <param name="expression">The expression, where the value is one.</param>
-    public static FlowList Of(IReadOnlyList<string> written, string? expression) => new(written, expression);
-}
+public sealed record FlowList(IReadOnlyList<string> Written, string? Expression);

@@ -225,38 +225,4 @@ internal static class CommandRunner
             }
         });
     }
-
-    /// <summary>
-    /// Reports the exception that ended a command the command line runs outside a session - the host agent's own
-    /// serving - and returns the exit code that says what it means. What it means is read from the one table that owns
-    /// it (<see cref="KnownCauses.Meaning"/>), so a command a host serves for another machine fails exactly as a
-    /// command typed here does.
-    /// </summary>
-    /// <param name="output">Where the command writes.</param>
-    /// <param name="commandName">The command, which prefixes its failure line.</param>
-    /// <param name="exception">What ended it.</param>
-    /// <param name="stopped">
-    /// The document the command answers with, given the code it exits with and the line it ends on, where it was asked
-    /// for one (<see cref="JsonAnswer"/>); <see langword="null"/> where it was not.
-    /// </param>
-    internal static int Fail(IHarnessOutput output, string commandName, Exception exception, Func<int, string, string>? stopped = null)
-    {
-        var meaning = KnownCauses.Meaning(exception);
-
-        if (stopped is not null)
-        {
-            output.Data(stopped(meaning.ExitCode, meaning.Message));
-        }
-
-        output.Fail(commandName, meaning.Message);
-
-        // A defect's stack trace is there under --verbose, where someone is actually diagnosing it. It is the
-        // harness's own report, which repeats the message its failure line said, so it is told as that line is.
-        if (meaning.Defect && output.IsVerbose)
-        {
-            output.RawError(output.Shown(exception.ToString()));
-        }
-
-        return meaning.ExitCode;
-    }
 }

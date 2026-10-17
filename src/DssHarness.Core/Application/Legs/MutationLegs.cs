@@ -7,9 +7,9 @@ using DssHarness.Core.Runs;
 namespace DssHarness.Core.Application.Legs;
 
 /// <summary>
-/// Proves each selected leg's tests can fail: the use case the <c>check-mutations</c> command runs and the engine's
-/// mutation step calls - the option rules of a sweep and a listing, and what a dispatched leg's host was given, decided
-/// once, here.
+/// Proves each selected leg's tests can fail: the use case the <c>check-mutations</c> command runs, and a step of an
+/// orchestrator run will call - the option rules of a sweep and a listing, and what a dispatched leg's host was given,
+/// decided once, here, before any configuration is read.
 /// </summary>
 public interface IMutationLegs : IUseCase
 {

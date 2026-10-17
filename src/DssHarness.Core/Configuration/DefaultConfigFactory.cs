@@ -34,9 +34,9 @@ public static class DefaultConfigFactory
                 ["release"] = new BuildConfiguration { CmakeBuildType = "Release", DotnetConfiguration = "Release", DartMode = "release" },
             },
 
-            // The default workflow, declared by name: its definition is the file init writes under
-            // workflows/default/, never an entry in this file.
-            Workflows = [WorkflowTemplates.DefaultWorkflowName],
+            // The implementation workflow, declared by name: its definition is the file init writes under
+            // workflows/implementation/, never an entry in this file.
+            Workflows = [WorkflowTemplates.ShippedWorkflowName],
         };
 
         AddToolchains(config, detected);

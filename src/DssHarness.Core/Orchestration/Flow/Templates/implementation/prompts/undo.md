@@ -18,6 +18,7 @@ What the change means for this item: {piece.changed}
 
 - The paths you may write, and the only ones: {item.ownedPaths}
 - The paths you must not touch: {item.forbiddenPaths}
+- What must hold once it is taken back, checked statement by statement before you report: {item.done}
 - The filter that selects the tests the engine runs when you report: `{item.testFilter}`; empty, every test runs
 
 ## What the item built

@@ -10,8 +10,15 @@ public enum OutcomeCause
     None,
 
     /// <summary>
-    /// A lock another run holds refused it. Nothing is wrong with the request: the same one, asked again once that run
-    /// has ended, goes through - so a caller that can wait, waits, and one that cannot says who holds it.
+    /// A lock another run holds refused it, and nothing else did. Nothing is wrong with the request: the same one, asked
+    /// again once that run has ended, goes through - so a caller that can wait, waits, and one that cannot says who holds
+    /// it. Set where exactly that is the answer: the <c>--apply</c> of refresh-, rebase-, fold- or delete-agent refused at
+    /// its hold (13); their dry run refused for a run holding a tree that <c>--apply</c> takes, where the request is
+    /// otherwise sound and nothing kept in the worktree stops its removal (13); a run of legs - build, test, run, a sweep,
+    /// clean - whose 13 its worst verdict, refused-locked, decides (<c>LedgerReport.CauseGiven</c>); and delete-worktree
+    /// refused over a copy kept in the worktree that a run or a sweep holds (13). Never for a run whose logs another run
+    /// owns (6), which is pointed elsewhere, a lock file that cannot be read, or a run holding only copies a deletion
+    /// removes (21).
     /// </summary>
     LockHeld,
 }

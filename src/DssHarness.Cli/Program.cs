@@ -27,6 +27,7 @@ root.Subcommands.Add(RebaseAgentCommand.Create());
 root.Subcommands.Add(FoldAgentCommand.Create());
 root.Subcommands.Add(DeleteAgentCommand.Create());
 root.Subcommands.Add(ValidateWorkflowCommand.Create());
+root.Subcommands.Add(ExportWorkflowCommand.Create());
 root.Subcommands.Add(WriteAnchorCommand.Create());
 root.Subcommands.Add(SetAnchorCommand.Create());
 root.Subcommands.Add(ReadAnchorCommand.Create());

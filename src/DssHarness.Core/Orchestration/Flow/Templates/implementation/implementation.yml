@@ -1,14 +1,29 @@
-# The default workflow: from a request to a pull request whose checks are green -
+# The implementation workflow: from a request to a pull request whose checks are green -
 # triage, a plan that is audited and approved, each work item built in an agent of
 # its own and reviewed, the gate, a self-audit, the handoff, the pull request, and
 # its checks. Written by 'dssharness init'; every path this file names is relative
 # to this workflow's own directory.
-name: default
+#
+# A run of it ends done, or asks a person only what a person must settle. Every step
+# says what its failure does: 'onFailure: recover' gives a failure no handler takes to
+# 'recover', at the end of this file, where an agent finds what went wrong and, where the
+# run can put it right, builds, reviews and folds the fix as a work item is; then the
+# step that failed runs again ('onSuccess: failed-step'). A person is asked where the
+# diagnosis says only a person can lift what stands in the way, with the advisor's
+# recommendation and the choices; where a step still fails after five recoveries; and
+# at the end, for what the run left.
+name: implementation
 description: From a request to a pull request whose checks are green - triage, a plan that is audited and approved, each work item built in an agent of its own and reviewed, the gate, a self-audit, the handoff, the pull request, and its checks.
 maxReasoningAgents: 4
 maxParallelProcesses: 2
 maxOpenAgents: 4
 maxRetries: 3
+# Every agent this file runs - each reasoning step, the advisor, the reporter - says how it is
+# tried again where it failed: three times on each model it may use, waiting 30 seconds before
+# the first try and twice as long before each later one, before its fallback's next model, and
+# only then asks (onFailure: pause). These two are what a step a repository adds gets where it
+# says neither.
+backoffSeconds: 30
 maxInstances: 12000
 pushCheckpoints: false
 recommendations: recommendations.md
@@ -17,12 +32,16 @@ advisor:
   tier: best
   effort: high
   prompt: prompts/recommend.md
+  retries: 3
+  backoffSeconds: 30
 reporter:
   agent: reporter
   tier: fast
   effort: low
   statusPrompt: prompts/status.md
   askPrompt: prompts/ask.md
+  retries: 3
+  backoffSeconds: 30
 amend:
   input: request
   changedAnswerMinutes: 1
@@ -35,6 +54,11 @@ amend:
   whenRemoveScope: rounds.items.undo
   maxAddedIterations: 1
 answers:
+  # A reasoning step at a limit of its own is given a new conversation, or a compacted
+  # one; past these the limit is asked, with the advisor's recommendation. A reasoning
+  # step is never recovered: a failed agent is tried again on its model and then on each
+  # model of its fallback; an account at its limit for every model, or a provider that
+  # fails, is a pause that resumes it; and where it still fails, it asks (onFailure: pause).
   turnLimit:
     answer: retry
     times: 2
@@ -65,6 +89,7 @@ inputs:
 steps:
   - name: orient
     type: orient
+    onFailure: recover
   - name: baseline
     type: test
     dependsOn: [orient]
@@ -72,7 +97,7 @@ steps:
     alone: true
     failOn: never
     skippable: true
-    onFailure: pause
+    onFailure: recover
   - name: ci
     type: ci-read
     dependsOn: [orient]
@@ -84,6 +109,7 @@ steps:
   - name: intake
     dependsOn: [baseline, ci]
     gather: [blockers, stops]
+    onFailure: recover
     steps:
       - name: priority
         type: reason
@@ -91,6 +117,9 @@ steps:
         tier: best
         effort: high
         when: 'empty(input.request)'
+        retries: 3
+        backoffSeconds: 30
+        onFailure: pause
         prompt: prompts/priority.md
         outputs: schemas/priority.schema.json
       - name: triage
@@ -100,6 +129,9 @@ steps:
         effort: high
         ask: true
         dependsOn: [priority]
+        retries: 3
+        backoffSeconds: 30
+        onFailure: pause
         prompt: prompts/triage.md
         outputs: schemas/triage.schema.json
   - name: blocked
@@ -107,6 +139,7 @@ steps:
     person: true
     dependsOn: [intake]
     when: '!empty(intake.stops)'
+    onFailure: recover
     question: |-
       '{intake.triage.title}' waits on what this run cannot settle by itself. Answer continue, with what you decide for each.
     questions: 'intake.stops'
@@ -117,6 +150,7 @@ steps:
     repeat:
       until: "check.ok && plan-audit.go && approval.answer == 'approve'"
       maxIterations: 3
+    onFailure: recover
     steps:
       - name: plan
         type: reason
@@ -125,6 +159,9 @@ steps:
         effort: max
         ask: true
         resume: plan
+        retries: 3
+        backoffSeconds: 30
+        onFailure: pause
         prompt: prompts/plan.md
         resumePrompt: prompts/replan.md
         outputs: schemas/plan.schema.json
@@ -133,6 +170,7 @@ steps:
         dependsOn: [plan]
         items: 'plan.latest.items'
         scope: 'plan.latest.scope'
+        onFailure: recover
       - name: plan-audit
         type: reason
         agent: plan-auditor
@@ -140,6 +178,9 @@ steps:
         effort: max
         independent: true
         dependsOn: [check]
+        retries: 3
+        backoffSeconds: 30
+        onFailure: pause
         prompt: prompts/plan-audit.md
         outputs: schemas/plan-audit.schema.json
       - name: approval
@@ -155,9 +196,11 @@ steps:
             quote:
               text: 'intake.triage.preapproval.sentence'
               input: request
+        onFailure: recover
         question: |-
           The plan for '{intake.triage.title}' passed its check and its audit.
           {plan.latest.summary}
+          It is done when: {plan.latest.done}
           Answer approve to have it built, or revise with what to change.
         options: [approve, revise]
         text: [revise]
@@ -165,6 +208,8 @@ steps:
         type: reason
         resume: plan
         ask: true
+        retries: 3
+        backoffSeconds: 30
         onFailure: pause
         prompt: prompts/plan-update.md
         outputs: schemas/plan.schema.json
@@ -176,14 +221,21 @@ steps:
       leftover: 'self-audit.findings'
     answers:
       loopBound: accept
+    onFailure: recover
     steps:
       - name: item-check
         type: validate-plan
         items: 'previous.self-audit.items ?? planning.plan.latest.items'
+        onFailure: recover
       - name: item-problems
         type: pause
         dependsOn: [item-check]
         when: '!item-check.ok'
+        # The planner was given the problems once; what is still wrong is built as it
+        # is, and a fold or a test that it breaks goes to the agents that put it right.
+        answers:
+          pause: continue
+        onFailure: recover
         question: |-
           This round's work items still do not pass the plan check, after the planner was given the problems to settle and its plan was audited and approved: {item-check.problems}
           Answer continue to build them as they are, or abort.
@@ -191,10 +243,12 @@ steps:
       - name: items
         dependsOn: [item-problems]
         forEach: 'item-check.items'
+        onFailure: recover
         steps:
           - name: item-agent
             type: create-agent
             agent: implementer
+            onFailure: recover
           - name: implement
             type: reason
             agent: implementer
@@ -204,6 +258,9 @@ steps:
             in: item-agent
             writes: 'item.ownedPaths'
             dependsOn: [item-agent]
+            retries: 3
+            backoffSeconds: 30
+            onFailure: pause
             prompt: prompts/implement.md
             outputs: schemas/implement.schema.json
           - name: redo
@@ -214,6 +271,9 @@ steps:
             access: write
             in: item-agent
             writes: 'item.ownedPaths'
+            retries: 3
+            backoffSeconds: 30
+            onFailure: pause
             prompt: prompts/redo.md
             outputs: schemas/implement.schema.json
           - name: undo
@@ -224,12 +284,16 @@ steps:
             access: write
             in: item-agent
             writes: 'item.ownedPaths'
+            retries: 3
+            backoffSeconds: 30
+            onFailure: pause
             prompt: prompts/undo.md
             outputs: schemas/implement.schema.json
           - name: item-blocked
             type: pause
             dependsOn: [implement]
             when: '!empty(implement.latest.blocked)'
+            onFailure: recover
             question: |-
               The work on '{item.title}' cannot go on as planned: its builder says it cannot do part of it.
               {implement.latest.blocked}
@@ -244,6 +308,9 @@ steps:
               outcome: success
             when: "item-blocked.answer == 'continue'"
             then: item-blocked
+            retries: 3
+            backoffSeconds: 30
+            onFailure: pause
             prompt: prompts/unblock.md
             outputs: schemas/implement.schema.json
           - name: verify
@@ -252,7 +319,7 @@ steps:
             filter: '{item.testFilter}'
             dependsOn: [item-blocked]
             when: "orient.hasLegs && (item-blocked.answer ?? 'continue') != 'skip'"
-            onFailure: pause
+            onFailure: recover
           - name: mend
             type: reason
             resume: implement
@@ -262,6 +329,9 @@ steps:
               codes: [20]
             then: item-blocked
             maxVisits: 3
+            retries: 3
+            backoffSeconds: 30
+            onFailure: pause
             prompt: prompts/mend.md
             outputs: schemas/implement.schema.json
           - name: fold
@@ -277,7 +347,7 @@ steps:
               foldOutside: fail
             dependsOn: [verify, mend]
             when: "(item-blocked.answer ?? 'continue') != 'skip'"
-            onFailure: pause
+            onFailure: recover
           - name: reconcile
             on:
               step: fold
@@ -286,7 +356,7 @@ steps:
             when: "fold.question == 'foldOutside' || fold.question == 'foldConflicts'"
             then: item-blocked
             maxVisits: 2
-            onFailure: pause
+            onFailure: recover
             steps:
               - name: catch-up
                 type: refresh
@@ -300,13 +370,16 @@ steps:
                 type: reason
                 resume: implement
                 dependsOn: [catch-up]
+                retries: 3
+                backoffSeconds: 30
+                onFailure: pause
                 prompt: prompts/reconcile.md
                 outputs: schemas/implement.schema.json
           - name: fold-checks
             dependsOn: [fold]
             when: "orient.anchors && (item-blocked.answer ?? 'continue') != 'skip'"
             gather: [findings]
-            onFailure: pause
+            onFailure: recover
             steps:
               - name: balance
                 type: anchor-balance
@@ -324,11 +397,15 @@ steps:
               codes: [1]
             then: item-blocked
             maxVisits: 2
+            retries: 3
+            backoffSeconds: 30
+            onFailure: pause
             prompt: prompts/anchors.md
             outputs: schemas/implement.schema.json
           - name: checkpoint
             type: commit
             dependsOn: [fold-checks]
+            onFailure: recover
             message: |-
               {item.title}
 
@@ -344,30 +421,38 @@ steps:
             checkpoint: true
             dependsOn: [checkpoint]
             when: 'orient.hasRemote'
+            onFailure: recover
           - name: fix
             dependsOn: [checkpoint-push]
             when: "(item-blocked.answer ?? 'continue') != 'skip'"
             repeat:
               until: 'empty(review.findings)'
               rounds: 3
-              # Three passes at most; while a critical, high or medium finding stands the loop goes on -
-              # only a low or a nit may outlive the count, and each that does is written to the backlog.
+              # Three rounds; past them the loop goes on only while a critical, high or medium finding
+              # stands, three rounds more at most. What is left then - a low or a nit after the three,
+              # anything after the six - is written to the backlog and named in the pull request and
+              # the handoff, for the person who reads them at the end; the run goes on.
               blocking: "any(review.findings, it.severity != 'low' && it.severity != 'nit')"
               blockersLimitRounds: 3
               leftover: 'review.findings'
             answers:
               loopBound: accept
+            onFailure: recover
             steps:
               - name: review-scope
                 type: reason
                 agent: review-scope
                 tier: fast
                 effort: low
+                retries: 3
+                backoffSeconds: 30
+                onFailure: pause
                 prompt: prompts/review-scope.md
                 outputs: schemas/review-scope.schema.json
               - name: review
                 dependsOn: [review-scope]
                 gather: [findings]
+                onFailure: recover
                 steps:
                   - name: correctness
                     type: reason
@@ -375,6 +460,9 @@ steps:
                     tier: best
                     effort: max
                     independent: true
+                    retries: 3
+                    backoffSeconds: 30
+                    onFailure: pause
                     prompt: prompts/review.md
                     outputs: schemas/review.schema.json
                   - name: errors
@@ -384,6 +472,9 @@ steps:
                     effort: max
                     independent: true
                     when: 'review-scope.errors'
+                    retries: 3
+                    backoffSeconds: 30
+                    onFailure: pause
                     prompt: prompts/review.md
                     outputs: schemas/review.schema.json
                   - name: tests
@@ -393,6 +484,9 @@ steps:
                     effort: max
                     independent: true
                     when: 'review-scope.tests'
+                    retries: 3
+                    backoffSeconds: 30
+                    onFailure: pause
                     prompt: prompts/review.md
                     outputs: schemas/review.schema.json
                   - name: types
@@ -402,6 +496,9 @@ steps:
                     effort: high
                     independent: true
                     when: 'review-scope.types'
+                    retries: 3
+                    backoffSeconds: 30
+                    onFailure: pause
                     prompt: prompts/review.md
                     outputs: schemas/review.schema.json
                   - name: comments
@@ -411,6 +508,9 @@ steps:
                     effort: high
                     independent: true
                     when: 'review-scope.comments'
+                    retries: 3
+                    backoffSeconds: 30
+                    onFailure: pause
                     prompt: prompts/review.md
                     outputs: schemas/review.schema.json
                   - name: simplicity
@@ -420,15 +520,22 @@ steps:
                     effort: high
                     independent: true
                     when: 'review-scope.simplicity'
+                    retries: 3
+                    backoffSeconds: 30
+                    onFailure: pause
                     prompt: prompts/review.md
                     outputs: schemas/review.schema.json
               - name: revise
                 dependsOn: [review]
                 when: '!empty(review.findings)'
+                onFailure: recover
                 steps:
                   - name: rework
                     type: reason
                     resume: implement
+                    retries: 3
+                    backoffSeconds: 30
+                    onFailure: pause
                     prompt: prompts/rework.md
                     outputs: schemas/implement.schema.json
                   - name: reverify
@@ -437,7 +544,7 @@ steps:
                     filter: '{item.testFilter}'
                     dependsOn: [rework]
                     when: 'orient.hasLegs'
-                    onFailure: pause
+                    onFailure: recover
                   - name: remend
                     type: reason
                     resume: implement
@@ -447,6 +554,9 @@ steps:
                       codes: [20]
                     then: reverify
                     maxVisits: 3
+                    retries: 3
+                    backoffSeconds: 30
+                    onFailure: pause
                     prompt: prompts/mend.md
                     outputs: schemas/implement.schema.json
                   - name: refold
@@ -461,7 +571,7 @@ steps:
                       foldConflicts: fail
                       foldOutside: fail
                     dependsOn: [reverify, remend]
-                    onFailure: pause
+                    onFailure: recover
                   - name: rereconcile
                     on:
                       step: refold
@@ -470,7 +580,7 @@ steps:
                     when: "refold.question == 'foldOutside' || refold.question == 'foldConflicts'"
                     then: reverify
                     maxVisits: 2
-                    onFailure: pause
+                    onFailure: recover
                     steps:
                       - name: recatch-up
                         type: refresh
@@ -484,13 +594,16 @@ steps:
                         type: reason
                         resume: implement
                         dependsOn: [recatch-up]
+                        retries: 3
+                        backoffSeconds: 30
+                        onFailure: pause
                         prompt: prompts/reconcile.md
                         outputs: schemas/implement.schema.json
                   - name: recheck
                     dependsOn: [refold]
                     when: 'orient.anchors'
                     gather: [findings]
-                    onFailure: pause
+                    onFailure: recover
                     steps:
                       - name: balance
                         type: anchor-balance
@@ -508,11 +621,15 @@ steps:
                       codes: [1]
                     then: reverify
                     maxVisits: 2
+                    retries: 3
+                    backoffSeconds: 30
+                    onFailure: pause
                     prompt: prompts/anchors.md
                     outputs: schemas/implement.schema.json
                   - name: recheckpoint
                     type: commit
                     dependsOn: [recheck]
+                    onFailure: recover
                     message: |-
                       {item.title}: review fixes
 
@@ -528,6 +645,7 @@ steps:
                     checkpoint: true
                     dependsOn: [recheckpoint]
                     when: 'orient.hasRemote'
+                    onFailure: recover
           - name: release
             type: delete-agent
             of: item-agent
@@ -539,18 +657,19 @@ steps:
               foldTwoChanges: merge
             dependsOn: [fix]
             when: "(item-blocked.answer ?? 'continue') != 'skip'"
-            onFailure: pause
+            onFailure: recover
           - name: drop
             type: delete-agent
             of: item-agent
             discardUncommitted: true
             dependsOn: [item-blocked]
             when: "(item-blocked.answer ?? 'continue') == 'skip'"
+            onFailure: recover
       - name: round-checks
         dependsOn: [items]
         when: 'orient.anchors'
         gather: [findings]
-        onFailure: pause
+        onFailure: recover
         steps:
           - name: balance
             type: anchor-balance
@@ -565,7 +684,7 @@ steps:
         when: 'orient.hasLegs'
         alone: true
         failOn: never
-        onFailure: pause
+        onFailure: recover
       - name: mutations
         type: check-mutations
         dependsOn: [gate]
@@ -573,7 +692,7 @@ steps:
         pending: true
         alone: true
         failOn: never
-        onFailure: pause
+        onFailure: recover
       - name: self-audit
         type: reason
         agent: auditor
@@ -581,12 +700,16 @@ steps:
         effort: max
         independent: true
         dependsOn: [gate, mutations]
+        retries: 3
+        backoffSeconds: 30
+        onFailure: pause
         prompt: prompts/self-audit.md
         outputs: schemas/self-audit.schema.json
   - name: notes
     type: create-agent
     agent: scribe
     dependsOn: [rounds]
+    onFailure: recover
   - name: deferrals
     type: reason
     agent: scribe
@@ -596,6 +719,9 @@ steps:
     in: notes
     dependsOn: [notes]
     when: 'orient.anchors'
+    retries: 3
+    backoffSeconds: 30
+    onFailure: pause
     prompt: prompts/deferrals.md
     outputs: schemas/summary.schema.json
   - name: handoff
@@ -606,6 +732,9 @@ steps:
     access: write
     in: notes
     dependsOn: [deferrals]
+    retries: 3
+    backoffSeconds: 30
+    onFailure: pause
     prompt: prompts/handoff.md
     outputs: schemas/summary.schema.json
   - name: notes-fold
@@ -615,13 +744,14 @@ steps:
       new: 'deferrals.latest.newRows'
     answers:
       foldNewRows: allow
+      foldTwoChanges: merge
     dependsOn: [handoff]
-    onFailure: pause
+    onFailure: recover
   - name: notes-checks
     dependsOn: [notes-fold]
     when: 'orient.anchors'
     gather: [findings]
-    onFailure: pause
+    onFailure: recover
     steps:
       - name: balance
         type: anchor-balance
@@ -639,6 +769,9 @@ steps:
       codes: [1]
     then: notes-fold
     maxVisits: 2
+    retries: 3
+    backoffSeconds: 30
+    onFailure: pause
     prompt: prompts/anchors.md
     outputs: schemas/summary.schema.json
   - name: notes-release
@@ -646,9 +779,11 @@ steps:
     of: notes
     discardUncommitted: true
     dependsOn: [notes-checks]
+    onFailure: recover
   - name: final-commit
     type: commit
     dependsOn: [notes-release]
+    onFailure: recover
     message: |-
       {intake.triage.title}: handoff and deferrals
 
@@ -662,10 +797,12 @@ steps:
     type: push
     dependsOn: [final-commit]
     when: 'orient.hasRemote'
+    onFailure: recover
   - name: pr
     type: pull-request
     dependsOn: [final-push]
     when: 'orient.hasRemote'
+    onFailure: recover
     title: '{intake.triage.title}'
     body: prompts/pr-body.md
   - name: checks
@@ -677,122 +814,437 @@ steps:
       checksPending:
         answer: more
         times: 2
-    onFailure: pause
-  - name: repair
-    on:
-      step: checks
-      outcome: failure
-      codes: [1]
-    then: checks
-    maxVisits: 3
-    onFailure: pause
-    steps:
-      - name: repair-agent
-        type: create-agent
-        agent: fixer
-      - name: repair-fix
-        type: reason
-        agent: fixer
-        tier: balanced
-        effort: max
-        access: write
-        in: repair-agent
-        dependsOn: [repair-agent]
-        prompt: prompts/fix-checks.md
-        outputs: schemas/fix.schema.json
-      - name: stuck
-        type: pause
-        dependsOn: [repair-fix]
-        when: '!repair-fix.latest.changed || !empty(repair-fix.latest.blocked)'
-        question: |-
-          The checks of {pr.url} are red, and the repair cannot go on: its fixer changed nothing, or says it cannot do part of the repair. {repair-fix.latest.reason}
-          What it cannot do: {repair-fix.latest.blocked}
-          Answer retry once what stands in the way was dealt with, to read the checks again with nothing of this repair folded; or continue, with what the fixer is to do.
-        options: [retry, continue]
-        text: [continue]
-      - name: repair-unblock
-        type: reason
-        resume: repair-fix
-        on:
-          step: stuck
-          outcome: success
-        when: "stuck.answer == 'continue'"
-        then: stuck
-        prompt: prompts/unblock.md
-        outputs: schemas/fix.schema.json
-      - name: repair-verify
-        type: test
-        in: repair-agent
-        filter: '{repair-fix.latest.testFilter}'
-        dependsOn: [stuck]
-        when: "orient.hasLegs && repair-fix.latest.changed && (stuck.answer ?? 'continue') != 'retry'"
-        onFailure: pause
-      - name: repair-mend
-        type: reason
-        resume: repair-fix
-        on:
-          step: repair-verify
-          outcome: failure
-          codes: [20]
-        then: repair-verify
-        maxVisits: 3
-        prompt: prompts/mend.md
-        outputs: schemas/fix.schema.json
-      - name: repair-fold
-        type: fold
-        of: repair-agent
-        allow:
-          new: 'repair-fix.latest.newRows'
-        answers:
-          foldNewRows: allow
-        dependsOn: [repair-verify, repair-mend]
-        when: "repair-fix.latest.changed && (stuck.answer ?? 'continue') != 'retry'"
-        onFailure: pause
-      - name: repair-checks
-        dependsOn: [repair-fold]
-        when: "orient.anchors && repair-fix.latest.changed && (stuck.answer ?? 'continue') != 'retry'"
-        gather: [findings]
-        onFailure: pause
-        steps:
-          - name: balance
-            type: anchor-balance
-            base: '{orient.startCommit}'
-            rows: 'repair-fold.rows'
-          - name: citations
-            type: anchor-citations
-            paths: 'repair-fold.written'
-      - name: repair-cite
-        type: reason
-        resume: repair-fix
-        on:
-          step: repair-checks
-          outcome: failure
-          codes: [1]
-        then: repair-verify
-        maxVisits: 2
-        prompt: prompts/anchors.md
-        outputs: schemas/fix.schema.json
-      - name: repair-commit
-        type: commit
-        dependsOn: [repair-checks]
-        when: "repair-fix.latest.changed && (stuck.answer ?? 'continue') != 'retry'"
-        message: |-
-          {intake.triage.title}: repair of red checks
+    onFailure: recover
+recover:
+  # Reached by every step that says onFailure: recover - a build, a test, a fold, a commit,
+  # a push, the wait for the checks; never a reasoning step, whose failure is tried again,
+  # on its fallback, and then asked. Once its steps are done, the step that gave it its
+  # failure runs again from where it stopped (onSuccess: failed-step), now that what stood
+  # in its way was put right. Should that step fail again, its own onFailure: recover brings
+  # it back here, to the diagnostician who saw the last attempt - until the step passes or
+  # the diagnosis says only a person can lift what stands in the way. The recovery never
+  # calls itself: its steps have their own retries, and where its own work still fails, a
+  # person is asked (onFailure: pause). Past five recoveries of one step the run asks
+  # (recoveryBound), with the advisor's recommendation of a fix and the choices.
+  onSuccess: failed-step
+  onFailure: pause
+  maxVisits: 5
+  steps:
+    - name: diagnose
+      type: reason
+      agent: diagnostician
+      tier: best
+      effort: high
+      resume: diagnose
+      retries: 3
+      backoffSeconds: 30
+      onFailure: pause
+      prompt: prompts/diagnose.md
+      resumePrompt: prompts/rediagnose.md
+      outputs: schemas/diagnosis.schema.json
+    - name: direction
+      type: pause
+      person: true
+      dependsOn: [diagnose]
+      when: "diagnose.course == 'person'"
+      question: |-
+        '{source.step}' failed, and what stands in its way is a person's to settle.
+        {diagnose.summary}
+        The choices: {diagnose.choices}
+        Answer retry once it was dealt with, to run the step again as it is; or continue, with what the run is to do.
+      options: [retry, continue]
+      text: [continue]
+    - name: redirect
+      type: reason
+      resume: diagnose
+      dependsOn: [direction]
+      when: "(direction.answer ?? '') == 'continue'"
+      retries: 3
+      backoffSeconds: 30
+      onFailure: pause
+      prompt: prompts/redirect.md
+      outputs: schemas/diagnosis.schema.json
+    - name: remedies
+      dependsOn: [redirect]
+      when: "diagnose.latest.course == 'fix'"
+      forEach: 'diagnose.latest.items'
+      steps:
+        - name: item-agent
+          type: create-agent
+          agent: implementer
+        - name: implement
+          type: reason
+          agent: implementer
+          tier: balanced
+          effort: max
+          access: write
+          in: item-agent
+          writes: 'item.ownedPaths'
+          dependsOn: [item-agent]
+          retries: 3
+          backoffSeconds: 30
+          onFailure: pause
+          prompt: prompts/remedy.md
+          outputs: schemas/implement.schema.json
+        - name: item-blocked
+          type: pause
+          dependsOn: [implement]
+          when: '!empty(implement.latest.blocked)'
+          question: |-
+            The work on '{item.title}' cannot go on as planned: its builder says it cannot do part of it.
+            {implement.latest.blocked}
+            Answer continue, with what it is to do instead or what was done to lift what stands in its way; skip, to leave this item out of the run, listed as not done; or abort.
+          options: [continue, skip]
+          text: [continue]
+        - name: unblock
+          type: reason
+          resume: implement
+          on:
+            step: item-blocked
+            outcome: success
+          when: "item-blocked.answer == 'continue'"
+          then: item-blocked
+          retries: 3
+          backoffSeconds: 30
+          onFailure: pause
+          prompt: prompts/unblock.md
+          outputs: schemas/implement.schema.json
+        - name: verify
+          type: test
+          in: item-agent
+          filter: '{item.testFilter}'
+          dependsOn: [item-blocked]
+          when: "orient.hasLegs && (item-blocked.answer ?? 'continue') != 'skip'"
+        - name: mend
+          type: reason
+          resume: implement
+          on:
+            step: verify
+            outcome: failure
+            codes: [20]
+          then: item-blocked
+          maxVisits: 3
+          retries: 3
+          backoffSeconds: 30
+          onFailure: pause
+          prompt: prompts/mend.md
+          outputs: schemas/implement.schema.json
+        - name: fold
+          type: fold
+          of: item-agent
+          within: 'item.ownedPaths'
+          allow:
+            new: 'implement.latest.newRows'
+          answers:
+            foldNewRows: allow
+            foldTwoChanges: merge
+            foldConflicts: fail
+            foldOutside: fail
+          dependsOn: [verify, mend]
+          when: "(item-blocked.answer ?? 'continue') != 'skip'"
+        - name: reconcile
+          on:
+            step: fold
+            outcome: failure
+            codes: [13]
+          when: "fold.question == 'foldOutside' || fold.question == 'foldConflicts'"
+          then: item-blocked
+          maxVisits: 2
+          steps:
+            - name: catch-up
+              type: refresh
+              of: item-agent
+              all: true
+              answers:
+                foldTwoChanges: merge
+                foldConflicts: fail
+              onFailure: continue
+            - name: settle
+              type: reason
+              resume: implement
+              dependsOn: [catch-up]
+              retries: 3
+              backoffSeconds: 30
+              onFailure: pause
+              prompt: prompts/reconcile.md
+              outputs: schemas/implement.schema.json
+        - name: fold-checks
+          dependsOn: [fold]
+          when: "orient.anchors && (item-blocked.answer ?? 'continue') != 'skip'"
+          gather: [findings]
+          steps:
+            - name: balance
+              type: anchor-balance
+              base: '{orient.startCommit}'
+              rows: 'fold.rows'
+            - name: citations
+              type: anchor-citations
+              paths: 'fold.written'
+        - name: cite
+          type: reason
+          resume: implement
+          on:
+            step: fold-checks
+            outcome: failure
+            codes: [1]
+          then: item-blocked
+          maxVisits: 2
+          retries: 3
+          backoffSeconds: 30
+          onFailure: pause
+          prompt: prompts/anchors.md
+          outputs: schemas/implement.schema.json
+        - name: checkpoint
+          type: commit
+          dependsOn: [fold-checks]
+          message: |-
+            {item.title}
 
-          {repair-fix.latest.summary}
+            Committed when the item was folded, before its review and the round's gate.
+            Checked:
+            {carried.ran}
+            Not checked:
+            {carried.notRun}
+            Known red:
+            {carried.red}
+        - name: checkpoint-push
+          type: push
+          checkpoint: true
+          dependsOn: [checkpoint]
+          when: 'orient.hasRemote'
+        - name: fix
+          dependsOn: [checkpoint-push]
+          when: "(item-blocked.answer ?? 'continue') != 'skip'"
+          repeat:
+            until: 'empty(review.findings)'
+            rounds: 3
+            # Three rounds; past them the loop goes on only while a critical, high or medium finding
+            # stands, three rounds more at most. What is left then - a low or a nit after the three,
+            # anything after the six - is written to the backlog and named in the pull request and
+            # the handoff, for the person who reads them at the end; the run goes on.
+            blocking: "any(review.findings, it.severity != 'low' && it.severity != 'nit')"
+            blockersLimitRounds: 3
+            leftover: 'review.findings'
+          answers:
+            loopBound: accept
+          steps:
+            - name: review-scope
+              type: reason
+              agent: review-scope
+              tier: fast
+              effort: low
+              retries: 3
+              backoffSeconds: 30
+              onFailure: pause
+              prompt: prompts/review-scope.md
+              outputs: schemas/review-scope.schema.json
+            - name: review
+              dependsOn: [review-scope]
+              gather: [findings]
+              steps:
+                - name: correctness
+                  type: reason
+                  agent: reviewer-correctness
+                  tier: best
+                  effort: max
+                  independent: true
+                  retries: 3
+                  backoffSeconds: 30
+                  onFailure: pause
+                  prompt: prompts/review.md
+                  outputs: schemas/review.schema.json
+                - name: errors
+                  type: reason
+                  agent: reviewer-errors
+                  tier: best
+                  effort: max
+                  independent: true
+                  when: 'review-scope.errors'
+                  retries: 3
+                  backoffSeconds: 30
+                  onFailure: pause
+                  prompt: prompts/review.md
+                  outputs: schemas/review.schema.json
+                - name: tests
+                  type: reason
+                  agent: reviewer-tests
+                  tier: best
+                  effort: max
+                  independent: true
+                  when: 'review-scope.tests'
+                  retries: 3
+                  backoffSeconds: 30
+                  onFailure: pause
+                  prompt: prompts/review.md
+                  outputs: schemas/review.schema.json
+                - name: types
+                  type: reason
+                  agent: reviewer-types
+                  tier: balanced
+                  effort: high
+                  independent: true
+                  when: 'review-scope.types'
+                  retries: 3
+                  backoffSeconds: 30
+                  onFailure: pause
+                  prompt: prompts/review.md
+                  outputs: schemas/review.schema.json
+                - name: comments
+                  type: reason
+                  agent: reviewer-comments
+                  tier: balanced
+                  effort: high
+                  independent: true
+                  when: 'review-scope.comments'
+                  retries: 3
+                  backoffSeconds: 30
+                  onFailure: pause
+                  prompt: prompts/review.md
+                  outputs: schemas/review.schema.json
+                - name: simplicity
+                  type: reason
+                  agent: reviewer-simplicity
+                  tier: balanced
+                  effort: high
+                  independent: true
+                  when: 'review-scope.simplicity'
+                  retries: 3
+                  backoffSeconds: 30
+                  onFailure: pause
+                  prompt: prompts/review.md
+                  outputs: schemas/review.schema.json
+            - name: revise
+              dependsOn: [review]
+              when: '!empty(review.findings)'
+              steps:
+                - name: rework
+                  type: reason
+                  resume: implement
+                  retries: 3
+                  backoffSeconds: 30
+                  onFailure: pause
+                  prompt: prompts/rework.md
+                  outputs: schemas/implement.schema.json
+                - name: reverify
+                  type: test
+                  in: item-agent
+                  filter: '{item.testFilter}'
+                  dependsOn: [rework]
+                  when: 'orient.hasLegs'
+                - name: remend
+                  type: reason
+                  resume: implement
+                  on:
+                    step: reverify
+                    outcome: failure
+                    codes: [20]
+                  then: reverify
+                  maxVisits: 3
+                  retries: 3
+                  backoffSeconds: 30
+                  onFailure: pause
+                  prompt: prompts/mend.md
+                  outputs: schemas/implement.schema.json
+                - name: refold
+                  type: fold
+                  of: item-agent
+                  within: 'item.ownedPaths'
+                  allow:
+                    new: 'implement.latest.newRows'
+                  answers:
+                    foldNewRows: allow
+                    foldTwoChanges: merge
+                    foldConflicts: fail
+                    foldOutside: fail
+                  dependsOn: [reverify, remend]
+                - name: rereconcile
+                  on:
+                    step: refold
+                    outcome: failure
+                    codes: [13]
+                  when: "refold.question == 'foldOutside' || refold.question == 'foldConflicts'"
+                  then: reverify
+                  maxVisits: 2
+                  steps:
+                    - name: recatch-up
+                      type: refresh
+                      of: item-agent
+                      all: true
+                      answers:
+                        foldTwoChanges: merge
+                        foldConflicts: fail
+                      onFailure: continue
+                    - name: resettle
+                      type: reason
+                      resume: implement
+                      dependsOn: [recatch-up]
+                      retries: 3
+                      backoffSeconds: 30
+                      onFailure: pause
+                      prompt: prompts/reconcile.md
+                      outputs: schemas/implement.schema.json
+                - name: recheck
+                  dependsOn: [refold]
+                  when: 'orient.anchors'
+                  gather: [findings]
+                  steps:
+                    - name: balance
+                      type: anchor-balance
+                      base: '{orient.startCommit}'
+                      rows: 'refold.rows'
+                    - name: citations
+                      type: anchor-citations
+                      paths: 'refold.written'
+                - name: recite
+                  type: reason
+                  resume: implement
+                  on:
+                    step: recheck
+                    outcome: failure
+                    codes: [1]
+                  then: reverify
+                  maxVisits: 2
+                  retries: 3
+                  backoffSeconds: 30
+                  onFailure: pause
+                  prompt: prompts/anchors.md
+                  outputs: schemas/implement.schema.json
+                - name: recheckpoint
+                  type: commit
+                  dependsOn: [recheck]
+                  message: |-
+                    {item.title}: review fixes
 
-          Checked:
-          {carried.ran}
-          Not checked:
-          {carried.notRun}
-          Known red:
-          {carried.red}
-      - name: repair-push
-        type: push
-        dependsOn: [repair-commit]
-        when: "repair-fix.latest.changed && (stuck.answer ?? 'continue') != 'retry'"
-      - name: repair-release
-        type: delete-agent
-        of: repair-agent
-        discardUncommitted: true
-        dependsOn: [repair-push]
+                    Committed when the fixes were folded, before the next review and the round's gate.
+                    Checked:
+                    {carried.ran}
+                    Not checked:
+                    {carried.notRun}
+                    Known red:
+                    {carried.red}
+                - name: repush
+                  type: push
+                  checkpoint: true
+                  dependsOn: [recheckpoint]
+                  when: 'orient.hasRemote'
+        - name: release
+          type: delete-agent
+          of: item-agent
+          within: 'item.ownedPaths'
+          allow:
+            new: 'implement.latest.newRows'
+          answers:
+            foldNewRows: allow
+            foldTwoChanges: merge
+          dependsOn: [fix]
+          when: "(item-blocked.answer ?? 'continue') != 'skip'"
+        - name: drop
+          type: delete-agent
+          of: item-agent
+          discardUncommitted: true
+          dependsOn: [item-blocked]
+          when: "(item-blocked.answer ?? 'continue') == 'skip'"
+    - name: publish
+      type: push
+      dependsOn: [remedies]
+      when: "orient.hasRemote && !empty(pr.url) && diagnose.latest.course == 'fix'"

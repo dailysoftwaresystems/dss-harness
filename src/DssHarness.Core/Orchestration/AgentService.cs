@@ -659,14 +659,14 @@ public sealed class AgentService(
 
         if ((Shape(orchestrator, agent) ?? request.Problem()) is { } shape)
         {
-            return CommandOutcome.Usage(shape);
+            return Answered(CommandOutcome.Usage(shape), json);
         }
 
         var at = await LiveAgentAsync(startDirectory, orchestrator, agent, cancellationToken).ConfigureAwait(false);
 
         if (at.Refusal is { } refusal)
         {
-            return refusal;
+            return Answered(refusal, json);
         }
 
         var met = new HoldersMet();
@@ -676,8 +676,8 @@ public sealed class AgentService(
         // Asked for one document, what the live agent answered brings one: the dry run's own exits bring theirs, and the
         // rest - an --apply's, and a refusal met there before anything was weighed - say what the code alone says, save an
         // --apply refused at its hold, which names the run it met. A usage error or a refusal returned above, before the
-        // agent was found, brings none: the command's plumbing answers it with the same document, empty, as it answers
-        // every exit that brings none.
+        // agent was found, brings the same document, empty, as the command's plumbing answers every exit that brings
+        // none - and its facts, which say as much.
         return Answered(answered, apply, json, met);
     }
 
@@ -994,22 +994,22 @@ public sealed class AgentService(
 
         if ((Shape(orchestrator, agent) ?? request.Problem()) is { } shape)
         {
-            return CommandOutcome.Usage(shape);
+            return Answered(CommandOutcome.Usage(shape), json);
         }
 
         var at = await LiveAgentAsync(startDirectory, orchestrator, agent, cancellationToken).ConfigureAwait(false);
 
         if (at.Refusal is { } refusal)
         {
-            return refusal;
+            return Answered(refusal, json);
         }
 
         var met = new HoldersMet();
         var outcome = await RebaseLiveAsync(at, request, apply, json, met, cancellationToken).ConfigureAwait(false);
         var answered = apply ? _log.Record(at.Layout!, agent, RebaseCommand, outcome) : outcome;
 
-        // Asked for one document, what the live agent answered brings one, and what was returned above is the plumbing's
-        // to answer, as refresh-agent says.
+        // Asked for one document, what the live agent answered brings one, and what was returned above brings the same
+        // document, empty, with its facts, as refresh-agent says.
         return Answered(answered, apply, json, met);
     }
 
@@ -1069,7 +1069,13 @@ public sealed class AgentService(
 
         if (stop is not null)
         {
-            return !apply ? Dry(json, context.Layout, RebaseCommand, stop, DryRuns.StandingOf(stop), path) : stop;
+            if (!apply)
+            {
+                return Dry(json, context.Layout, RebaseCommand, stop, DryRuns.StandingOf(stop), new Typed([], RebaseReasons(plan)), path);
+            }
+
+            met.Reasons = RebaseReasons(plan);
+            return stop;
         }
 
         if (!apply)
@@ -1098,6 +1104,7 @@ public sealed class AgentService(
 
             if (stop is not null)
             {
+                met.Reasons = RebaseReasons(plan);
                 return stop;
             }
 
@@ -1392,22 +1399,22 @@ public sealed class AgentService(
 
         if ((Shape(orchestrator, agent) ?? allowances.Problem()) is { } shape)
         {
-            return CommandOutcome.Usage(shape);
+            return Answered(CommandOutcome.Usage(shape), json);
         }
 
         var at = await LiveAgentAsync(startDirectory, orchestrator, agent, cancellationToken).ConfigureAwait(false);
 
         if (at.Refusal is { } refusal)
         {
-            return refusal;
+            return Answered(refusal, json);
         }
 
         var met = new HoldersMet();
         var outcome = await FoldLiveAsync(at, allowances, apply, json, met, cancellationToken).ConfigureAwait(false);
         var answered = apply ? _log.Record(at.Layout!, agent, FoldCommand, outcome) : outcome;
 
-        // Asked for one document, what the live agent answered brings one, and what was returned above is the plumbing's
-        // to answer, as refresh-agent says.
+        // Asked for one document, what the live agent answered brings one, and what was returned above brings the same
+        // document, empty, with its facts, as refresh-agent says.
         return Answered(answered, apply, json, met);
     }
 
@@ -1429,11 +1436,11 @@ public sealed class AgentService(
         {
             var measured = await MeasureAsync(context, layout, record, path, seed!, allowances, deleting: false, AnchorBatchMode.Plan, cancellationToken).ConfigureAwait(false);
 
-            var (standing, needs) = Consents(measured);
+            var (standing, typed) = Consents(measured);
 
             if (measured.Refusal is { } refused)
             {
-                return Dry(json, context.Layout, FoldCommand, refused, standing, needs, heldTrees);
+                return Dry(json, context.Layout, FoldCommand, refused, standing, typed, heldTrees);
             }
 
             var (tail, line) = Ending(FoldCommand, record, allowances, measured.Rows.Batch, "write them");
@@ -1447,7 +1454,7 @@ public sealed class AgentService(
                     + $"{Merging(measured.Plan, "merges")}{Handing(measured.Plan, "hands")}removes {measured.Plan.Deleted.Count} and applies {ReportText.Counted(measured.Rows.Planned, "row")}; {tail}",
                     [.. OrchestrationReports.FoldAndRowLines(measured.Plan, measured.Rows, layout.RowsDirectory(record.Name), applied: false), .. line]),
                 standing,
-                needs,
+                typed,
                 heldTrees);
         }
 
@@ -1465,6 +1472,8 @@ public sealed class AgentService(
 
             if (measured.Refusal is { } refused)
             {
+                // Typed as its dry run's would be: a conflict told from every other refusal without reading a line.
+                met.Reasons = Consents(measured).Typed.Reasons;
                 return refused;
             }
 
@@ -1495,28 +1504,29 @@ public sealed class AgentService(
 
         if ((Shape(orchestrator, agent) ?? allowances.Problem()) is { } shape)
         {
-            return CommandOutcome.Usage(shape);
+            return Answered(CommandOutcome.Usage(shape), json);
         }
 
         if (discardUncommitted && allowances.Given.Count > 0)
         {
-            return CommandOutcome.Usage(
-                $"{Letting(allowances)}, and --discard-uncommitted folds nothing: give one or the other.");
+            return Answered(
+                CommandOutcome.Usage($"{Letting(allowances)}, and --discard-uncommitted folds nothing: give one or the other."),
+                json);
         }
 
         var found = await FindAsync(startDirectory, orchestrator, agent, cancellationToken).ConfigureAwait(false);
 
         if (found.Refusal is { } refusal)
         {
-            return refusal;
+            return Answered(refusal, json);
         }
 
         var met = new HoldersMet();
         var outcome = await DeleteFoundAsync(found.Context!, found.Layout!, found.Record!, allowances, apply, discardUncommitted, json, met, cancellationToken).ConfigureAwait(false);
         var answered = apply ? _log.Record(found.Layout!, agent, DeleteCommand, outcome) : outcome;
 
-        // Asked for one document, what the agent found answered brings one, and what was returned above is the plumbing's
-        // to answer, as refresh-agent says.
+        // Asked for one document, what the agent found answered brings one, and what was returned above brings the same
+        // document, empty, with its facts, as refresh-agent says.
         return Answered(answered, apply, json, met);
     }
 
@@ -1608,9 +1618,13 @@ public sealed class AgentService(
 
             if (dry.Refusal is { } refusal)
             {
-                var (refusedStanding, refusedNeeds) = dry.Fold is { } measuredFold ? Consents(measuredFold) : (DryRuns.StandingOf(refusal), []);
+                // Weighed as the fold's own only where the refusal is the fold's: a closing whose fold measured clean and
+                // then could not read its evidence failed for that, and stands as its failure does.
+                var (refusedStanding, refusedTyped) = dry.Fold is { } measuredFold && ReferenceEquals(refusal, measuredFold.Refusal)
+                    ? Consents(measuredFold)
+                    : (DryRuns.StandingOf(refusal), Typed.None);
 
-                return Dry(json, context.Layout, DeleteCommand, refusal, refusedStanding, refusedNeeds, context.Layout.MainCheckoutRoot, path);
+                return Dry(json, context.Layout, DeleteCommand, refusal, refusedStanding, refusedTyped, context.Layout.MainCheckoutRoot, path);
             }
 
             // Which git worktree this is, as its --apply reads it before it writes: one that cannot be read fails both alike.
@@ -1640,14 +1654,14 @@ public sealed class AgentService(
                     .. line,
                 ]);
 
-            var (closingStanding, closingNeeds) = dry.Fold is { } fold ? Consents(fold) : (RequestStanding.Sound, (IReadOnlyList<ConsentKind>)[]);
+            var (closingStanding, closingTyped) = dry.Fold is { } fold ? Consents(fold) : (RequestStanding.Sound, Typed.None);
 
             return await DryRemovalAsync(
                 json,
                 target,
                 planned,
                 closingStanding,
-                closingNeeds,
+                closingTyped,
                 cancellationToken,
                 context.Layout.MainCheckoutRoot,
                 path).ConfigureAwait(false);
@@ -1666,6 +1680,8 @@ public sealed class AgentService(
 
             if (measured.Refusal is { } refused)
             {
+                // Typed as its dry run's would be, where the refusal is the fold's own.
+                met.Reasons = measured.Fold is { } refusedFold && ReferenceEquals(refused, refusedFold.Refusal) ? Consents(refusedFold).Typed.Reasons : [];
                 return refused;
             }
 
@@ -1929,7 +1945,7 @@ public sealed class AgentService(
                 target,
                 CommandOutcome.Ok($"dry run: {Lower(was)}; pass --apply to {(target.Standing.Kind == Standing.Gone ? "finish the removal" : "keep its evidence again and finish the removal")}"),
                 RequestStanding.Sound,
-                [],
+                Typed.None,
                 cancellationToken,
                 path).ConfigureAwait(false);
         }
@@ -2015,7 +2031,7 @@ public sealed class AgentService(
                     + "transcripts, once git's record of its worktree and every copy of it on a host are gone",
                     [TranscriptsPlan(record)]),
                 RequestStanding.Sound,
-                [],
+                Typed.None,
                 cancellationToken,
                 target.Path).ConfigureAwait(false);
         }
@@ -2451,14 +2467,17 @@ public sealed class AgentService(
         => rows.Unaccepted.Count + rows.UnacceptedOver.Count > 0 ? RequestStanding.NeedsConsent : RequestStanding.Sound;
 
     /// <summary>
-    /// The consents a measured fold or closing lacks, and how its request stands with them. The cells a plan shows are the
-    /// consents they always were; and where the measurement refused the request, rows no registry holds that nobody named
-    /// new and clean merges nobody asked for are consents it lacks too - the whole refusal, where each of its problems is
-    /// one of those, is the consent it sounds like rather than a fault to put right, and stands as needing one. Any other
-    /// refusal - a path that conflicts, a misspelled option, a row that does not read - is put right, and stands as it did.
+    /// The consents a measured fold or closing lacks, the reasons it is refused for, and how its request stands with them.
+    /// The cells a plan shows are the consents they always were; and where the measurement refused the request, rows no
+    /// registry holds that nobody named new and clean merges nobody asked for are consents it lacks too - the whole
+    /// refusal, where each of its problems is one of those, is the consent it sounds like rather than a fault to put right,
+    /// and stands as needing one. Any other refusal - a path that conflicts, a misspelled option, a row that does not read -
+    /// is put right, and stands as it did, its reasons typed: a conflict apart from everything else. A measurement that
+    /// failed - what it changed, its rows or the registries they go in unread - is no refusal at all, and stands as its
+    /// failure does, whatever it counted: nothing it would have counted was read.
     /// </summary>
     /// <param name="measured">What the fold measured, or a closing's fold.</param>
-    private static (RequestStanding? Standing, IReadOnlyList<ConsentKind> Needs) Consents(Measured measured)
+    private static (RequestStanding? Standing, Typed Typed) Consents(Measured measured)
     {
         List<ConsentKind> needs = [];
 
@@ -2484,15 +2503,72 @@ public sealed class AgentService(
 
         if (measured.Refusal is { } refused)
         {
+            var standing = DryRuns.StandingOf(refused);
+
+            if (standing != RequestStanding.Refused)
+            {
+                return (standing, new Typed(needs, []));
+            }
+
             var onlyConsents = measured.Plan is { } plan
                 && plan.Refusals.Count == plan.Mergeable.Count
                 && measured.Rows.Batch.Problems.Count == measured.Rows.Batch.UnnamedNew.Count;
 
-            return (onlyConsents ? RequestStanding.NeedsConsent : DryRuns.StandingOf(refused), needs);
+            return onlyConsents
+                ? (RequestStanding.NeedsConsent, new Typed(needs, []))
+                : (standing, new Typed(needs, FoldReasons(measured)));
         }
 
-        return (Consenting(measured.Rows.Batch), needs);
+        return (Consenting(measured.Rows.Batch), new Typed(needs, []));
     }
+
+    /// <summary>
+    /// The reasons a refused fold or closing is refused for, by kind: a conflict where a path both trees changed has a
+    /// merge that conflicts, and something else where any refusal is neither that nor a consent the request lacks - a
+    /// clean merge nobody asked for and a row nobody named new are consents, and type no reason.
+    /// </summary>
+    /// <param name="measured">What the fold measured, refused.</param>
+    private static IReadOnlyList<RefusalKind> FoldReasons(Measured measured)
+    {
+        if (measured.Plan is not { } plan)
+        {
+            return [RefusalKind.Other];
+        }
+
+        var otherwise = plan.Refusals.Count > plan.Conflicting.Count + plan.Mergeable.Count
+            || measured.Rows.Batch.Problems.Count > measured.Rows.Batch.UnnamedNew.Count;
+
+        return
+        [
+            .. plan.Conflicting.Count > 0 ? [RefusalKind.Conflict] : Array.Empty<RefusalKind>(),
+            .. otherwise ? [RefusalKind.Other] : Array.Empty<RefusalKind>(),
+        ];
+    }
+
+    /// <summary>
+    /// The reasons a move of an agent's base is refused for, by kind: a conflict where a path both changed has a merge that
+    /// conflicts, and something else where any other path refuses it - a clean merge nobody asked for among them, which a
+    /// move, asking no consent, refuses as it refuses the rest. Something else too where it could not be measured.
+    /// </summary>
+    /// <param name="plan">What the move measured; null where it could not be measured.</param>
+    private static IReadOnlyList<RefusalKind> RebaseReasons(RebasePlan? plan)
+        => plan is null
+            ? [RefusalKind.Other]
+            :
+            [
+                .. plan.Conflicting.Count > 0 ? [RefusalKind.Conflict] : Array.Empty<RefusalKind>(),
+                .. plan.Refusals.Count > plan.Conflicting.Count ? [RefusalKind.Other] : Array.Empty<RefusalKind>(),
+            ];
+
+    /// <summary>
+    /// The reasons a request's facts carry for its standing: those typed where it stands refused, something else where it
+    /// stands refused and nothing typed one - a refusal of its state, its arguments, or kept copies its removal cannot
+    /// take - and none where it does not stand refused.
+    /// </summary>
+    /// <param name="standing">How the request stands, as its answer says it.</param>
+    /// <param name="typed">The reasons its measure typed, where it typed any.</param>
+    private static IReadOnlyList<RefusalKind> Reasons(RequestStanding? standing, IReadOnlyList<RefusalKind> typed)
+        => standing != RequestStanding.Refused ? [] : typed.Count > 0 ? typed : [RefusalKind.Other];
 
     /// <summary>What a fold wrote, merged, handed and applied, as its answer's facts carry it.</summary>
     /// <param name="written">What writing the measured fold answered.</param>
@@ -2863,50 +2939,52 @@ public sealed class AgentService(
     /// <param name="standing">How the request stands; null where what it weighs could not be read.</param>
     /// <param name="trees">The trees its --apply takes, by their own paths.</param>
     private CommandOutcome Dry(bool json, HarnessLayout layout, string command, CommandOutcome planned, RequestStanding? standing, params string[] trees)
-        => Dry(json, layout, command, planned, standing, [], trees);
+        => Dry(json, layout, command, planned, standing, Typed.None, trees);
 
-    /// <summary>The answer a dry run gives, wanting no consent.</summary>
+    /// <summary>The answer a dry run gives, with the consents its request lacks and the reasons it is refused for, typed.</summary>
     /// <param name="json">Whether to answer with one JSON document.</param>
     /// <param name="layout">The repository, whose main checkout holds the lock file.</param>
     /// <param name="command">The command whose --apply takes the trees.</param>
     /// <param name="planned">What the verb composed: its summary and its lines, or the failure or refusal it met.</param>
     /// <param name="standing">How the request stands; null where what it weighs could not be read.</param>
-    /// <param name="needs">Each consent the request lacks, by kind, and nothing else.</param>
+    /// <param name="typed">Each consent the request lacks and each reason it is refused for, by kind, as its measure typed them.</param>
     /// <param name="trees">The trees its --apply takes, by their own paths.</param>
-    private CommandOutcome Dry(bool json, HarnessLayout layout, string command, CommandOutcome planned, RequestStanding? standing, IReadOnlyList<ConsentKind> needs, params string[] trees)
+    private CommandOutcome Dry(bool json, HarnessLayout layout, string command, CommandOutcome planned, RequestStanding? standing, Typed typed, params string[] trees)
     {
         ArgumentNullException.ThrowIfNull(planned);
 
         var holders = _treeHolders.Read(layout, Holds(command, RunId.New(), trees), [], []);
 
-        return Dry(json, planned, standing, needs, holders);
+        return Dry(json, planned, standing, typed, holders);
     }
-
-    /// <summary>The answer a dry run gives, its holders already read, wanting no consent.</summary>
-    /// <param name="json">Whether to answer with one JSON document.</param>
-    /// <param name="planned">What the verb composed.</param>
-    /// <param name="standing">How the request stands; null where what it weighs could not be read.</param>
-    /// <param name="holders">Who holds what its --apply takes.</param>
-    private static CommandOutcome Dry(bool json, CommandOutcome planned, RequestStanding? standing, TreeHeld holders)
-        => Dry(json, planned, standing, [], holders);
 
     /// <summary>The answer a dry run gives, its holders already read.</summary>
     /// <param name="json">Whether to answer with one JSON document.</param>
     /// <param name="planned">What the verb composed.</param>
     /// <param name="standing">How the request stands; null where what it weighs could not be read.</param>
-    /// <param name="needs">Each consent the request lacks, by kind, and nothing else.</param>
+    /// <param name="typed">Each consent the request lacks and each reason it is refused for, by kind, as its measure typed them.</param>
     /// <param name="holders">Who holds what its --apply takes.</param>
-    private static CommandOutcome Dry(bool json, CommandOutcome planned, RequestStanding? standing, IReadOnlyList<ConsentKind> needs, TreeHeld holders)
+    private static CommandOutcome Dry(bool json, CommandOutcome planned, RequestStanding? standing, Typed typed, TreeHeld holders)
     {
         var answer = DryRuns.Answer(
             planned with { Details = [.. planned.Details ?? [], .. HolderLines(holders)] },
             standing,
             holders);
 
-        // The facts ride the answer whatever form it is asked in: the engine reads them typed, the document says them its way.
-        var facts = new AgentVerbFacts(answer.Outcome.ExitCode, answer.Outcome.Message, Applied: false, answer.Standing, holders, answer.Outcome.Details ?? [], needs);
+        // The facts ride the answer whatever form it is asked in: a step of a run will read them typed, and the document
+        // is them serialised. The reasons follow the answer's standing, not the measure's: one the one rule made refused -
+        // copies its removal cannot take - is refused for something no measure typed.
+        var facts = new AgentVerbFacts(
+            answer.Outcome.ExitCode,
+            answer.Outcome.Message,
+            Applied: false,
+            answer.Standing,
+            holders,
+            answer.Outcome.Details ?? [],
+            typed.Needs,
+            Reasons(answer.Standing, typed.Reasons));
 
-        return json ? OrchestrationReports.Document(facts) : answer.Outcome with { Facts = facts };
+        return json ? OrchestrationReports.Document(answer.Outcome, facts) : answer.Outcome with { Facts = facts };
     }
 
     /// <summary>
@@ -2924,10 +3002,10 @@ public sealed class AgentService(
     /// <param name="target">The agent whose deletion is asked about.</param>
     /// <param name="planned">What the dry run composed: its summary and its lines.</param>
     /// <param name="standing">How the request stands.</param>
-    /// <param name="needs">Each consent the request lacks, by kind, and nothing else.</param>
+    /// <param name="typed">Each consent the request lacks and each reason it is refused for, by kind, as its measure typed them.</param>
     /// <param name="cancellationToken">Stops the asking.</param>
     /// <param name="trees">The trees its --apply takes, by their own paths.</param>
-    private async Task<CommandOutcome> DryRemovalAsync(bool json, Target target, CommandOutcome planned, RequestStanding? standing, IReadOnlyList<ConsentKind> needs, CancellationToken cancellationToken, params string[] trees)
+    private async Task<CommandOutcome> DryRemovalAsync(bool json, Target target, CommandOutcome planned, RequestStanding? standing, Typed typed, CancellationToken cancellationToken, params string[] trees)
     {
         ArgumentNullException.ThrowIfNull(planned);
 
@@ -2936,7 +3014,7 @@ public sealed class AgentService(
 
         if (unread is not null)
         {
-            return Dry(json, unread with { Details = planned.Details }, RequestStanding.Refused, needs, _treeHolders.Read(layout, Holds(DeleteCommand, RunId.New(), trees), [], []));
+            return Dry(json, unread with { Details = planned.Details }, RequestStanding.Refused, typed with { Reasons = [] }, _treeHolders.Read(layout, Holds(DeleteCommand, RunId.New(), trees), [], []));
         }
 
         var leftInIt = await _worktrees.CopiesHeldAsync(target.Address.Name, layout, target.Path, cancellationToken).ConfigureAwait(false);
@@ -2945,7 +3023,7 @@ public sealed class AgentService(
         // rule's row for it; and what is kept in the worktree that the removal cannot take as it stands is weighed by that
         // rule, in its order, with every holder: below a lock that cannot be read and a tree a run holds, either of which
         // refuses the --apply before it goes anywhere near the removal.
-        return Dry(json, planned, standing, needs, _treeHolders.Read(layout, Holds(DeleteCommand, RunId.New(), trees), copies, leftInIt));
+        return Dry(json, planned, standing, typed, _treeHolders.Read(layout, Holds(DeleteCommand, RunId.New(), trees), copies, leftInIt));
     }
 
     /// <summary>
@@ -3012,19 +3090,39 @@ public sealed class AgentService(
     private static CommandOutcome Answered(CommandOutcome answered, bool apply, bool json, HoldersMet met)
     {
         var had = answered.Facts as AgentVerbFacts;
+        var standing = had?.Standing ?? (met.Held is null ? StandingOfApply(answered) : RequestStanding.Sound);
         var facts = new AgentVerbFacts(
             answered.ExitCode,
             answered.Message,
             apply,
-            had?.Standing ?? (met.Held is null ? StandingOfApply(answered) : RequestStanding.Sound),
+            standing,
             had?.Holders ?? met.Held,
             answered.Details ?? [],
             had?.Needs ?? [],
+            had?.Refusals ?? Reasons(standing, met.Reasons),
             met.Folded ?? had?.Folded);
 
         return json && answered.Data.Count == 0
-            ? OrchestrationReports.Document(facts)
+            ? OrchestrationReports.Document(answered, facts)
             : answered with { Facts = facts };
+    }
+
+    /// <summary>
+    /// What fold-agent, refresh-agent, rebase-agent or delete-agent answers where it stopped before anything was weighed -
+    /// its arguments a usage error, its agent not found or not one the verb works on: facts that say exactly that -
+    /// nothing applied, no standing, nobody asked, no lines, nothing needed and no reason typed - and, where
+    /// <paramref name="json"/> asks, the document's stopped form, which says the same as the command's plumbing says it
+    /// for every exit that brings no document.
+    /// </summary>
+    /// <param name="stopped">The usage error or the refusal it stopped with.</param>
+    /// <param name="json">Whether to answer with one JSON document.</param>
+    private static CommandOutcome Answered(CommandOutcome stopped, bool json)
+    {
+        var facts = new AgentVerbFacts(stopped.ExitCode, stopped.Message, Applied: false, Standing: null, Holders: null, Lines: [], Needs: [], Refusals: []);
+
+        return json && stopped.Data.Count == 0
+            ? stopped with { Data = [OrchestrationReports.Stopped(stopped.ExitCode, stopped.Message)], Quiet = true, Facts = facts }
+            : stopped with { Facts = facts };
     }
 
     /// <summary>
@@ -3370,6 +3468,18 @@ public sealed class AgentService(
 
         /// <summary>What a fold applied, where this --apply wrote one; <see langword="null"/> where it folded nothing.</summary>
         public AgentFolded? Folded { get; set; }
+
+        /// <summary>The reasons the --apply's own measure was refused for, by kind, where it typed any; empty otherwise.</summary>
+        public IReadOnlyList<RefusalKind> Reasons { get; set; } = [];
+    }
+
+    /// <summary>What a request's standing is typed by: each consent it lacks, and each reason it is refused for, by kind.</summary>
+    /// <param name="Needs">Each consent the request lacks, by kind, and nothing else.</param>
+    /// <param name="Reasons">Each reason its measure refused it for, by kind; empty where it typed none.</param>
+    private sealed record Typed(IReadOnlyList<ConsentKind> Needs, IReadOnlyList<RefusalKind> Reasons)
+    {
+        /// <summary>Nothing lacked and nothing typed.</summary>
+        public static Typed None { get; } = new([], []);
     }
 
     /// <summary>Locks let go together, in the reverse of the order they were taken.</summary>

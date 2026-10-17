@@ -29,16 +29,16 @@ public sealed class DefaultConfigFactoryTests
     }
 
     /// <summary>
-    /// The seeded configuration declares the default workflow by name and nothing else: its definition is the file init
-    /// writes under workflows/default/, never an entry in config.json, and the seed validates and round-trips with the
+    /// The seeded configuration declares the implementation workflow by name and nothing else: its definition is the file init
+    /// writes under workflows/implementation/, never an entry in config.json, and the seed validates and round-trips with the
     /// declaration in it.
     /// </summary>
     [Fact]
-    public void TheSeededConfiguration_DeclaresTheDefaultWorkflow_ByNameAlone()
+    public void TheSeededConfiguration_DeclaresTheImplementationWorkflow_ByNameAlone()
     {
         var config = Create(new DetectedProject("cmake", ".", "CMakeLists.txt"));
 
-        Assert.Equal([WorkflowTemplates.DefaultWorkflowName], config.Workflows);
+        Assert.Equal([WorkflowTemplates.ShippedWorkflowName], config.Workflows);
 
         using var written = new TempDirectory();
         var file = written.Combine("config.json");

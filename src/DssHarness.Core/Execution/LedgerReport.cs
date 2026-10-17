@@ -189,6 +189,23 @@ public sealed class LedgerReport
     }
 
     /// <summary>
+    /// Why this run ended as its code says, where the code alone cannot: <see cref="OutcomeCause.LockHeld"/> where that
+    /// code is <see cref="HarnessExit.Refused"/> because the worst verdict any leg reached is refused-locked - a lock
+    /// another run holds turned it away, which a caller that can wait waits out - and <see cref="OutcomeCause.None"/>
+    /// otherwise.
+    /// </summary>
+    /// <param name="cancelled">Whether the run was interrupted before it finished.</param>
+    /// <param name="unfinished">The legs still running when it stopped.</param>
+    /// <remarks>
+    /// Derived beside <see cref="ExitCodeGiven"/> and from it, so a run interrupted, or one a worse verdict decides,
+    /// never reads as waiting on a lock its code does not say.
+    /// </remarks>
+    public OutcomeCause CauseGiven(bool cancelled, IReadOnlyList<string> unfinished)
+        => ExitCodeGiven(cancelled, unfinished) == HarnessExit.Refused && Verdict == LegVerdict.RefusedLocked
+            ? OutcomeCause.LockHeld
+            : OutcomeCause.None;
+
+    /// <summary>
     /// The one line that says how this run ended: interrupted, a failing verdict, legs that did no
     /// work or were stopped before finishing, or a plain pass.
     /// </summary>

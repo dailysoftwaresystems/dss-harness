@@ -11,11 +11,13 @@ namespace DssHarness.Core.Runs;
 /// <param name="Run">The run, begun before anything could refuse it.</param>
 /// <param name="RunDirectory">Where the run keeps its records, once it has a directory; <see langword="null"/> before.</param>
 /// <param name="Report">The ledger, every leg's line in it.</param>
-/// <param name="Entries">The ledger's lines, one per leg.</param>
 /// <param name="ExitCode">The code its caller exits with.</param>
 /// <param name="Message">The line its caller ends on.</param>
 /// <param name="Cancelled">Whether the run was interrupted before it finished.</param>
-/// <param name="Unfinished">The legs that reached no verdict, by name.</param>
+/// <param name="Unfinished">
+/// The legs still running when the run stopped, by name; always empty where something other than the run's legs ended
+/// it (<paramref name="Stopped"/>), which ends it before any leg is left running.
+/// </param>
 /// <param name="Details">What the table form says beneath the line.</param>
 /// <param name="Stopped">Whether something other than the run's legs ended it, which its document says.</param>
 /// <param name="MutationRecord">
@@ -27,7 +29,6 @@ public sealed record LegRunResult(
     RunId Run,
     string? RunDirectory,
     LedgerReport Report,
-    IReadOnlyList<LedgerLine> Entries,
     int ExitCode,
     string Message,
     bool Cancelled,
@@ -38,7 +39,10 @@ public sealed record LegRunResult(
 {
     /// <summary>
     /// Why the run ended as it did, where its exit code and its lines cannot say: <see cref="OutcomeCause.LockHeld"/>
-    /// marks the run whose logs another run owns, which a caller that can try again waits out.
+    /// where its code is <see cref="HarnessExit.Refused"/> because a lock another run holds refused its legs - the
+    /// worst verdict of its ledger <see cref="LegVerdict.RefusedLocked"/>, as <see cref="LedgerReport.CauseGiven"/>
+    /// reads it - which a caller that can try again waits out; <see cref="OutcomeCause.None"/> otherwise, a run whose
+    /// logs another run owns (<see cref="LegExit.LogHeld"/>) among them, which is pointed elsewhere and never retried.
     /// </summary>
     public OutcomeCause Cause { get; init; }
 
@@ -47,10 +51,17 @@ public sealed record LegRunResult(
     /// ended the run; as text, a table of what reached a verdict and the line it ends on.
     /// </summary>
     /// <param name="json">Whether the ledger was asked for as data.</param>
-    /// <param name="shown">How the document's reader is told a path or a line of the harness's own.</param>
+    /// <param name="shown">
+    /// How the document's reader is told a path or a line of the harness's own: the session's own output's
+    /// <see cref="Output.IHarnessOutput.Shown"/>, so a host answering another machine writes its home as <c>~</c> in the
+    /// ledger that machine reads, as in every line it writes.
+    /// </param>
     /// <returns>The command's outcome.</returns>
-    public CommandOutcome ToOutcome(bool json, Func<string, string>? shown = null)
-        => json
+    public CommandOutcome ToOutcome(bool json, Func<string, string> shown)
+    {
+        ArgumentNullException.ThrowIfNull(shown);
+
+        return json
             ? new CommandOutcome(ExitCode, Message)
             {
                 Data = [Stopped
@@ -62,4 +73,5 @@ public sealed record LegRunResult(
                 Cause = Cause,
             }
             : new CommandOutcome(ExitCode, Message, Details) { Cause = Cause };
+    }
 }

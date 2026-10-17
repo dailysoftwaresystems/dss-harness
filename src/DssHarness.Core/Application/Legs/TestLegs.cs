@@ -8,7 +8,8 @@ using DssHarness.Core.Testing;
 namespace DssHarness.Core.Application.Legs;
 
 /// <summary>
-/// Builds and tests every selected leg: the use case the <c>test</c> command runs and the engine's test step calls.
+/// Builds and tests every selected leg: the use case the <c>test</c> command runs, and a step of an orchestrator run will
+/// call.
 /// </summary>
 public interface ITestLegs : IUseCase
 {

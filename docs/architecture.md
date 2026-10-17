@@ -15,7 +15,7 @@ If a behaviour cannot be expressed in `config.json`, that is a defect.
 Implemented today: `init`, `verify-git`, `create-worktree`, `delete-worktree`,
 `list-worktree`, the orchestrator commands (`create-orchestrator`, `delete-orchestrator`,
 `list-orchestrator`, `create-agent`, `seed-agent`, `refresh-agent`, `rebase-agent`,
-`fold-agent`, `delete-agent`), `validate-workflow`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
+`fold-agent`, `delete-agent`), `validate-workflow`, `export-workflow`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
 `read-anchor`, `read-anchors`, `check-anchor-balance`, `check-anchor-citations`),
 `fix-line-endings`, `check-ci-legs`, `legs`, `host-exec`, `install-missing-tools`,
 `update-tool`, `sync`, `build`, `test`, `run`, `check-mutations`, `clean`, `up`, `down` and
@@ -28,8 +28,9 @@ than a section still waiting to be written.
 ## Layering
 
 ```
-DssHarness.Cli        Program.cs: argument parsing and dependency wiring only
-DssHarness.Core       domain, services, abstractions
+DssHarness.Cli        Program.cs and Commands/: argument parsing, the console and the exit code only
+DssHarness.Core       domain, services, abstractions; the lifecycle every command shares
+                      (Application), the registrations (Composition) and the help's text (Help)
 dss-harness-test      tests
 
 (DssHarness.Adapters was planned for the build adapters; they arrived in
@@ -38,7 +39,10 @@ project was not created.)
 ```
 
 `Core` is a library, so "no logic in Program.cs" is enforced by the assembly
-boundary rather than by discipline.
+boundary rather than by discipline. The registrations are the core's own
+(`ServiceRegistration.AddDssHarness`), so a front end other than the command line builds the
+same services; the command line supplies only where an operation writes and how a password is
+asked at its terminal (`ConsoleHost`).
 
 ### The platform layer
 
@@ -649,14 +653,22 @@ worktree, its `said` the line its family says of it - its `processId`, `run` and
 them or, where a claim of the copy's family rather than the lock names its holder, as that claim records them
 (`CopyHolder`), and what only a lock entry says, `command`, `variant` and `standing`, null for such a holder;
 `standing` is null too for a leg of this machine where this machine's record of heavy legs cannot be read - and
-`heldUnread`, why the lock file could not be read. An `--apply` refused at its hold answers the same document,
+`heldUnread`, why the lock file could not be read. The document is the answer's facts serialised (`AgentVerbFacts`),
+which a step of an orchestrator run will read typed, so beside those it says `needs`, each consent the request lacks
+by kind - `fold-new-rows` (`--new`), `fold-lost-rows` (`--accept-lost`), `fold-over-cells` (`--accept-over`),
+`fold-two-changes` (`--merge`); `refusals`, each reason it stands refused for, `conflict` where a path both trees
+changed has a three-way merge that conflicts and `other` for anything else, so a request refused for conflicting
+merges alone says `conflict` and nothing else; and `folded`, null but for the `--apply` of a fold and of a deletion,
+which folds back what is left of the agent: the paths written, deleted, merged and handed, each handed with its
+digest, the registries its rows changed, the ids of the rows applied and the cells `--accept-over` took. An `--apply`
+refused at its hold answers the same document,
 `applied` true, its `request` `sound` and the run it met in `heldNow`, said as a dry run at that moment says it
 (`TreeHolders.Refused`, the one sentence and holder both take, handed up by the hold to the verb's answer), so a
 script waits on it as on its dry run. A command stopped before
 anything is weighed - a command line the parser refuses, a `--directory` that is not there, a repository not
 initialised, another usage error, or a refusal met before then, an agent that is not there among them - answers with
-the same document, empty (`OrchestrationReports.Stopped`): `applied` false, `request`, `heldNow` and `heldUnread` null, no `lines`, its
-`exitCode` and `summary` the code it exits with and the line it ends on.
+the same document, empty (`OrchestrationReports.Stopped`): `applied` false, `request`, `heldNow` and `heldUnread` null, no `lines`, no
+`needs`, no `refusals` and `folded` null, its `exitCode` and `summary` the code it exits with and the line it ends on.
 
 An agent's worktree is `<worktrees.root>/<orchestrator>/<agent>`, addressed `orchestrator/agent` by list-worktree
 and delete-worktree, its host copies named `orchestrator--agent` (`WorktreeAddress`). The directory named for an
@@ -1104,17 +1116,23 @@ worktree made at the path since is another, and not the agent's to remove.
 
 A workflow is a flow of typed steps that depend on one another by name, declared by name under
 `workflows` in `config.json` and defined by a yml file of its own,
-`.harness-config/workflows/<name>/<name>.yml` - never an entry in the configuration, which holds
-the names and nothing else. The workflow's directory is the workflow's own - its agent files
+`.harness-config/workflows/<name>/<name>.yml` - never an entry in the configuration, which holds the
+names and nothing else. The workflow's directory is the workflow's own - its agent files
 (`agents/<name>.md`), its prompts, its schemas, the bar it recommends by (`recommendations.md`) -
 and every path the definition names is relative to that directory and stays inside it, as an
 action's files are relative to its own directory; two workflows never read each other's files. The
-name is the folder's, the file's and the `name:` key's alike, one word, and a disagreement among
-the three is refused when the file is read, so a copied directory cannot pass as the workflow it
-was copied from. `init` writes one - the default workflow, from a request to a pull request whose
-checks are green, with its agent files, prompts and schemas - into a repository that has no
-workflows directory at all, declares it in the config it creates, and overwrites nothing that
-exists; the set checks itself, so a build whose own workflow does not hold says so.
+name is the folder's, the file's and the `name:` key's alike, one word, and a disagreement among the
+three is refused when the file is read, so a copied directory cannot pass as the workflow it was
+copied from. `init` writes one - the implementation workflow, from a request to a pull request whose
+checks are green, with its agent files, prompts and schemas - and declares it in the config it
+creates. Where the configuration declares `implementation`, init writes each of its files that is
+missing - the whole set where the repository has no definition of it yet, and where it has one only
+the shipped files that definition names, so a file taken out with its step stays out - and keeps
+each one that is there, whatever it holds, saying how many it kept: an init that stopped part way is
+finished by the next, and a file a repository edited is never written over. A configuration that
+does not declare it gets none of it. A file the disk will not write refuses init (13), naming the
+files written before it, which stay. The shipped set is held to every rule a repository's workflow
+is by this build's own tests, so a build whose own workflow does not hold fails before it ships.
 
 A definition declares `inputs` - the values a run is started with, each with a kind, a default and
 the options it takes - `params`, its own knobs defaulted in the file and read as `param.<name>`,
@@ -1127,16 +1145,52 @@ says `on` - by the outcome, a failure by exit code - and sends the run back with
 schedule never starts it. Steps nest at most ten deep; every step's name is a lower-case word,
 unique among its siblings and never a word a definition reads for its own.
 
+A definition may declare `recover`: steps written once, which a step gives a failure nothing handles
+to by saying `onFailure: recover`, itself or through a group around it. A member that writes none
+still hands its failure to its block first, so a block's own handler takes what its members found,
+and the hand-over stops at a loop's member and at a top-level step, so a failure never ends a loop's
+other items. The recovery's steps read the step that failed as `source` and see every step of the
+flow; nothing of the flow reads them, and none of them gives a failure to the recovery. Once they
+are done the run goes where `onSuccess` says - `failed-step`, the step that gave the recovery its
+failure, which runs again from where it stopped - and a failure of the recovery's own work does what
+`onFailure` says once its steps' retries are spent: `pause` or `stop` - never the recovery again, which would be it calling itself. A step that fails again
+comes back by its own `onFailure`, until it passes or a person is asked; past `maxVisits` (from 1 to
+99; absent, the engine's bound of 99) the run asks `recoveryBound`, with the advisor's recommended
+fix. A reasoning step is never recovered, by its own word or a group's: its agent is tried again
+(`retries`, waiting `backoffSeconds`, twice as long each time, at most 900) and on each model of its
+fallback, an account at its limit or a provider that fails is a pause that resumes it, and what
+still fails is asked. The implementation workflow writes `onFailure: recover` on every step that
+builds, tests, folds, checks, commits, pushes or waits, and `onFailure: pause` on every reasoning
+step; its recovery diagnoses the failure (`diagnose`, which goes on with its own conversation across
+the visits), asks a person only for what only a person can give (`direction`), and builds, tests,
+folds and reviews its fix as a round's work items are.
+
 `validate-workflow` checks a declared workflow, or every one declared: the file's shape, every key
 against the table that owns it (`WorkflowStepTypes`, which the parser reads exactly and `help
 workflows` lists from, so what is listed is what is read), every step, input, param and output an
 expression or a template names, every question kind an answer names, and every file the
 definition points at, beside the definition that names it - a runner or a leg no configuration
-declares is said the same way. Every problem is collected and reported together (13), without
-running anything; the structural rules live in Core (`WorkflowValidator`), pure, so the engine can
-run them at the start of a run without reading a file. This build checks workflow definitions and
+declares is said the same way, as is a definition that cannot be read, and a workflow whose
+directory leads out of the workflows directory, or whose definition out of its own directory, once
+their links are followed. Every problem is collected and reported together (12), without running
+anything: a definition that does not hold is configuration that does not, refused with the code
+`config.json`, an action file or the parser itself is. A `config.json` that declares no workflow
+has nothing to check, and is refused (13), saying that `"workflows": ["implementation"]` declares the one
+`init` writes; an empty answer is never read as a pass. The structural rules live in Core
+(`WorkflowValidator`), pure, so the engine can run them at the start of a run without reading a
+file. This build checks workflow definitions and
 does not run them: the engine that runs them - the coordinator, the agents, the steps over the
 services the tool already has - is the next thing the tool grows.
+
+`export-workflow <workflow> --to <dir>` is a use case of Core (`WorkflowExportService`): it copies
+a workflow - its yml and every file it names, the one list `validate-workflow` and `init` read
+(`WorkflowFiles`), and no other - into `<dir>/<workflow>/`, a folder of its own that must not be
+there (13 where it is). A declared workflow is exported once its check holds (12 where it does
+not), from the definition and the directory that check found, so what is copied is what was
+checked, each file byte for byte and proved where it lands (`VerifiedFileCopy`); with `--shipped`
+it is the implementation workflow as this build ships it, held to the same rules, written as
+`init` writes it. The yml is written last, and a file that cannot be written takes back what was
+written before it, so a folder with part of a workflow in it is never left behind.
 
 ## Anchor registries
 
@@ -3929,7 +3983,10 @@ whole as the leg builds before it drives an arm. That sync withholds the worker'
 directory itself, whatever `sync.neverTransfer` says: the sweep made what is in it, no spelling of
 a configuration should decide whether a sweep may run, and `sync.maxDeleteFraction` judges only
 what mirrors the tree the sweep read - a genuinely wrong source tree is still refused by it, with a
-remedy a reader who typed `check-mutations` can take. A worker is claimed while
+remedy a reader who typed `check-mutations` can take. It withholds that directory, the one the
+leg's variant builds in under `build/`, and no more: a file the tree carries elsewhere under
+`build/` - a toolchain file it tracks - is carried and verified in the worker as any other, and
+one the tree keeps inside that directory is not carried at all. A worker is claimed while
 a sweep uses it, in `<worker>.claim.json` beside it in `.mutations`, by the claim a run takes on its log directory,
 which never makes the copy it claims: the sync that makes a copy refuses a directory it did not
 make. A claim whose sweep died is released and said; the copy it held is synced again, as every

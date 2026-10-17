@@ -18,6 +18,8 @@ What the change means for this item: {piece.changed}
 
 - The paths you own, and the only ones you write: {item.ownedPaths}
 - The paths near your work that you must not touch: {item.forbiddenPaths}
+- What must hold when your work is finished, the item's definition of done as it now is, checked statement by
+  statement before you report: {item.done}
 - The filter that selects your tests when the engine runs them: `{item.testFilter}`; empty, every test runs
 - The existing code this item reuses or extends, and for what: {item.reuses}
 - What this item creates from nothing, with why nothing that exists serves: {item.creates}

@@ -33,6 +33,8 @@ Where a line says that a step left no output, that thing was not read or did not
 
 Summary: {plan.latest.summary}
 
+The plan's own definition of done: {plan.latest.done}
+
 Built on a plan a person gave (`given`) or made here (`made`): {plan.latest.source}
 
 Departures from the given plan: {plan.latest.departures}
@@ -71,9 +73,10 @@ The work of this run: {update.work}
 4. Check what each item replaces against what the request asked to have rebuilt, above: exactly that may be rebuilt,
    nothing beyond it, and the plan removes what it replaces.
 5. Check that every part of what was asked is in an item, or is named as left out with a reason that holds.
-6. Check each item's definition of done: every statement concrete and checkable - a behaviour and what pins it, never
-   prose a check cannot answer - and the whole of the item's instructions covered by it. And check the sizing: no
-   item carrying more than one builder's cycle of work, and none a sliver of one that belongs to the work beside it.
+6. Check each item's definition of done, and the plan's own: every statement concrete and checkable - a behaviour and
+   what pins it, never prose a check cannot answer - each item's covering the whole of its instructions, and the
+   plan's covering the whole of what was asked. And check the sizing: no item carrying more than one builder's cycle
+   of work, and none a sliver of one that belongs to the work beside it.
 7. Read each item as its builder will, and each test as someone who wants it to fail.
 8. Where a person gave a plan, check their plan against the items and the departures, as your instructions say.
 9. Weigh each assumption: is it one a careful colleague would make, or one that should have been a question?

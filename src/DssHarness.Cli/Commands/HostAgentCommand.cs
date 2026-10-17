@@ -5,6 +5,7 @@ using DssHarness.Core.Hosts;
 using DssHarness.Core.Output;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace DssHarness.Cli.Commands;
 
@@ -68,7 +69,7 @@ internal static class HostAgentCommand
                 var completion = await session.RunAsync(
                     async (scope, token) =>
                     {
-                        var agent = (HostAgentService)scope.Services.GetService(typeof(HostAgentService))!;
+                        var agent = scope.Services.GetRequiredService<HostAgentService>();
                         served = await agent.ServeAsync(input, Console.Out, Console.Error, run, token).ConfigureAwait(false);
 
                         return new CommandOutcome(HarnessExit.Success, "served") with { Quiet = true };

@@ -60,7 +60,8 @@ public sealed record CommandReported(string Command, CommandOutcome Outcome, str
 }
 
 /// <summary>
-/// An exception ended a command: the stopped form of its document where it answers with one, the failure line
+/// A command ended before its body answered - an exception ended it, or the directory it was asked to act on is not
+/// one it can: the stopped form of its document where it answers with one, the failure line
 /// <see cref="FailureLine.TryRead"/> reads back, and a defect's trace only under verbose.
 /// </summary>
 /// <param name="Command">The command the operation runs as.</param>

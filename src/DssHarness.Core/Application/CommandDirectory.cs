@@ -36,12 +36,17 @@ public static class CommandDirectory
         ArgumentNullException.ThrowIfNull(current);
         ArgumentNullException.ThrowIfNull(fileSystem);
 
+        // A directory asked for blank names none. Made whole against the current directory it would name that one, and
+        // the command would act on a tree nobody asked for, where it has always been refused.
+        if (requested is not null && string.IsNullOrWhiteSpace(requested))
+        {
+            return new(null, $"'{requested}' is not a usable directory path: it names no directory.");
+        }
+
         var given = requested ?? current;
 
         try
         {
-            // Relative against the current directory it was handed, not the process's own: the reader of that
-            // directory is the seam, and what it answers is what "here" means here.
             // Relative against the current directory it was handed, not the process's own: the reader of that
             // directory is the seam, and what it answers is what "here" means here.
             var directory = Path.GetFullPath(given, current);

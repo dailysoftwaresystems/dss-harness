@@ -1,6 +1,7 @@
 using System.CommandLine;
 using DssHarness.Core.Application.Legs;
 using DssHarness.Core.Build;
+using DssHarness.Core.Output;
 
 namespace DssHarness.Cli.Commands;
 
@@ -75,7 +76,7 @@ internal static class BuildCommand
                     run!,
                     cancellationToken)
                 .ConfigureAwait(false))
-                .ToOutcome(context.Json);
+                .ToOutcome(context.Json, context.Get<IHarnessOutput>().Shown);
         }, JsonAnswer.Ledger(JsonOption));
 
         return command;

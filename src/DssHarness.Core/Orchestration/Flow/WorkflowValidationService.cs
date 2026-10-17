@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Hosts;
 using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Repository;
@@ -17,8 +18,9 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <remarks>
 /// The pure rules live in <see cref="WorkflowValidator"/>, the file's shape in
 /// <see cref="WorkflowFileParser"/>; this adds what only the repository can answer: that the file
-/// is where the configuration says it is, that the files the definition names are in the workflow's
-/// directory, and that the legs and runners it names are declared.
+/// is where the configuration says it is, that the workflow's directory, its definition and the
+/// files the definition names are the repository's own, inside the workflow's directory, and that
+/// the legs and runners it names are declared.
 /// </remarks>
 public interface IWorkflowValidationService
 {
@@ -30,19 +32,45 @@ public interface IWorkflowValidationService
     /// <param name="named">A workflow's name, as <c>workflows</c> declares it; <see langword="null"/> for every one.</param>
     /// <param name="cancellationToken">Stops the check.</param>
     /// <exception cref="HarnessException">
-    /// The configuration does not load, or the tree cannot be resolved. A workflow with problems is
-    /// reported, not thrown.
+    /// <paramref name="named"/> is a workflow the configuration does not declare
+    /// (<see cref="HarnessExit.UsageError"/>); or the configuration does not load, or the tree cannot
+    /// be resolved. A workflow with problems is reported, not thrown, and so is a configuration that
+    /// declares none.
     /// </exception>
     Task<WorkflowValidationReport> CheckAsync(string startDirectory, string? named, CancellationToken cancellationToken = default);
 }
 
-/// <summary>What checking a repository's workflows found, one line per workflow.</summary>
-/// <param name="Root">The tree whose workflows were checked.</param>
-/// <param name="Lines">One line per workflow checked: what it is, or its problems.</param>
-public sealed record WorkflowValidationReport(string Root, IReadOnlyList<string> Lines)
+/// <summary>What checking one declared workflow found.</summary>
+/// <param name="Name">The workflow, as <c>workflows</c> declares it.</param>
+/// <param name="Lines">One line saying what it is, where it holds; one line for each problem, where it does not.</param>
+public sealed record WorkflowCheck(string Name, IReadOnlyList<string> Lines)
 {
-    /// <summary>Whether every workflow checked holds.</summary>
-    public bool Passed => Lines.Count > 0 && Lines.All(Holds);
+    /// <summary>Whether it holds: its one line says so.</summary>
+    public bool Holds => Lines is [var line] && WorkflowValidationReport.Holds(line);
+
+    /// <summary>
+    /// The definition that held, as it was read and checked; <see langword="null"/> where it does not hold. What a command
+    /// that goes on from a check reads, so that what it acts on is what was checked, never the file read a second time.
+    /// </summary>
+    public WorkflowDefinition? Definition { get; init; }
+
+    /// <summary>
+    /// The workflow's directory, every link along it followed, which every file the definition names was found inside;
+    /// <see langword="null"/> where it does not hold.
+    /// </summary>
+    public string? Directory { get; init; }
+}
+
+/// <summary>What checking a repository's workflows found, workflow by workflow.</summary>
+/// <param name="Root">The tree whose workflows were checked.</param>
+/// <param name="Workflows">Each workflow checked, in the order it was asked for; none where the configuration declares none.</param>
+public sealed record WorkflowValidationReport(string Root, IReadOnlyList<WorkflowCheck> Workflows)
+{
+    /// <summary>Every line of every workflow checked, in order: one for a workflow that holds, one per problem of one that does not.</summary>
+    public IReadOnlyList<string> Lines => [.. Workflows.SelectMany(workflow => workflow.Lines)];
+
+    /// <summary>Whether a workflow was checked and every one holds: none checked is no pass.</summary>
+    public bool Passed => Workflows.Count > 0 && Workflows.All(workflow => workflow.Holds);
 
     /// <summary>Whether one line says its workflow held.</summary>
     public static bool Holds(string line) => line.StartsWith("ok ", StringComparison.Ordinal);
@@ -80,67 +108,126 @@ public sealed class WorkflowValidationService(
                     + $" A workflow is defined by '{WorkflowName.Expected(named)}'.");
         }
 
-        var lines = (named is null ? config.Workflows ?? [] : [named])
-            .SelectMany(name => Check(context, name))
+        var workflows = (named is null ? config.Workflows ?? [] : [named])
+            .Select(name => Check(context, name))
             .ToList();
 
-        return new WorkflowValidationReport(context.Layout.RepositoryRoot, lines);
+        return new WorkflowValidationReport(context.Layout.RepositoryRoot, workflows);
     }
 
-    private IEnumerable<string> Check(HarnessContext context, string name)
+    private WorkflowCheck Check(HarnessContext context, string name)
     {
         var file = context.Layout.WorkflowFile(name);
 
         if (!_fileSystem.FileExists(file))
         {
-            yield return $"{Shown(name)} is not there; a workflow is defined by that file, written by 'dssharness init' where it is the default one";
-            yield break;
+            return new WorkflowCheck(name, [$"{Shown(name)} is not there; a workflow is defined by that file, written by 'dssharness init' where it is the implementation one"]);
+        }
+
+        // Where the workflow's directory and its definition lead, every link along them followed, before a word of it is
+        // read: the files a definition names are held to that directory, so it must itself be the repository's own.
+        if (Contained(context.Layout, name, out var directory) is { } outside)
+        {
+            return new WorkflowCheck(name, [outside]);
         }
 
         // The parser's refusal already names the file and every problem it found in it.
-        var refusal = TryParse(file, out var definition);
+        var refusal = TryParse(name, file, out var definition);
 
         if (refusal is not null)
         {
-            yield return refusal;
-            yield break;
+            return new WorkflowCheck(name, [refusal]);
         }
 
         if (!string.Equals(definition!.Name, name, StringComparison.Ordinal))
         {
-            yield return $"{Shown(name)} names itself '{definition.Name}'; a workflow's name is its directory's and its file's, said again in the file so a copied directory cannot pass as the workflow it was copied from";
-            yield break;
+            return new WorkflowCheck(name, [$"{Shown(name)} names itself '{definition.Name}'; a workflow's name is its directory's and its file's, said again in the file so a copied directory cannot pass as the workflow it was copied from"]);
         }
 
         var problems = new List<string>(WorkflowValidator.Validate(definition, context.Config.Commit.Template is not null));
-        problems.AddRange(Files(definition, context.Layout.WorkflowDirectory(name), name, context.Config));
+        problems.AddRange(Files(definition, directory, name, context.Config));
 
         if (problems.Count > 0)
         {
-            foreach (var problem in problems)
-            {
-                yield return $"{Shown(name)}: {problem}";
-            }
-
-            yield break;
+            return new WorkflowCheck(name, [.. problems.Select(problem => $"{Shown(name)}: {problem}")]);
         }
 
+        // The recovery is counted apart: its steps run only where something failed.
         var steps = Count(definition.Steps);
-        var reasons = Count(definition.Steps, "reason");
-        yield return $"ok {Shown(name)} ({steps} step{(steps == 1 ? string.Empty : "s")}, {reasons} reasoning)";
+        var recovering = definition.Recover is { } recover ? Count(recover.Steps) : 0;
+        var reasons = Count([.. definition.Steps, .. definition.Recover?.Steps ?? []], "reason");
+        var recovery = definition.Recover is null ? string.Empty : $", {recovering} recovering";
+        return new WorkflowCheck(name, [$"ok {Shown(name)} ({steps} step{(steps == 1 ? string.Empty : "s")}{recovery}, {reasons} reasoning)"])
+        {
+            Definition = definition,
+            Directory = directory,
+        };
     }
 
-    /// <summary>Reads and parses the definition at <paramref name="file"/>, answering its refusal instead of throwing it.</summary>
-    private string? TryParse(string file, out WorkflowDefinition? definition)
+    /// <summary>
+    /// Why the workflow <paramref name="name"/> is not the repository's own, or <see langword="null"/> where it is: its
+    /// directory strictly inside the workflows directory, and its definition strictly inside its directory, each once every
+    /// link along it is followed - so that what a reviewer reads there is what the workflow runs, as an action's file is
+    /// held to the actions directory (<see cref="Runners.ActionPath.Resolve"/>).
+    /// </summary>
+    /// <param name="layout">The tree's layout.</param>
+    /// <param name="name">The workflow.</param>
+    /// <param name="directory">The workflow's directory with every link along it followed, which the files it names are held to.</param>
+    private string? Contained(HarnessLayout layout, string name, out string directory)
     {
+        string workflows;
+        string file;
+
         try
         {
-            definition = WorkflowFileParser.Parse(file, _fileSystem.ReadAllText(file));
+            // The workflows directory is resolved the same way as the rest, so a repository reached through a link of its
+            // own compares against the same real path, as the actions directory is.
+            workflows = Path.TrimEndingDirectorySeparator(_fileSystem.ResolveLinks(Path.GetFullPath(layout.WorkflowsDirectory)));
+            directory = Path.TrimEndingDirectorySeparator(_fileSystem.ResolveLinks(Path.GetFullPath(layout.WorkflowDirectory(name))));
+            file = _fileSystem.ResolveLinks(Path.GetFullPath(layout.WorkflowFile(name)));
+        }
+        catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException)
+        {
+            directory = string.Empty;
+            return $"{Shown(name)} could not be resolved inside '{layout.WorkflowsDirectory}': {exception.Message}";
+        }
+
+        if (!PathContainment.IsStrictlyInside(workflows, directory, _platform.PathComparison))
+        {
+            return $"{Shown(name)}: its directory leads to '{directory}', which is outside '{workflows}'; a workflow's directory is the repository's own, so that what a reviewer reads there is what the workflow runs";
+        }
+
+        return PathContainment.IsStrictlyInside(directory, file, _platform.PathComparison)
+            ? null
+            : $"{Shown(name)} leads to '{file}', which is outside '{directory}'; a workflow's definition is a file of its own directory, so that what a reviewer reads there is what the workflow runs";
+    }
+
+    /// <summary>
+    /// Reads and parses the definition at <paramref name="file"/>, answering why it could not be instead of throwing: the
+    /// parser's refusal, which names the file and every problem in it, or the disk's, naming the file - one workflow that
+    /// cannot be read is that workflow's problem, never the end of every other's check.
+    /// </summary>
+    private string? TryParse(string name, string file, out WorkflowDefinition? definition)
+    {
+        definition = null;
+        string text;
+
+        try
+        {
+            text = _fileSystem.ReadAllText(file);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return $"{Shown(name)} could not be read: {exception.Message}";
+        }
+
+        try
+        {
+            definition = WorkflowFileParser.Parse(file, text);
             return null;
         }
         catch (HarnessException exception)
         {
-            definition = null;
             return exception.Message;
         }
     }
@@ -153,49 +240,19 @@ public sealed class WorkflowValidationService(
     {
         var problems = new List<string>();
 
-        if (definition.Recommendations is not null)
+        foreach (var named in WorkflowFiles.OfDefinition(definition))
         {
-            Add(problems, NamedFile(definition.Recommendations, directory, name, "the bar for recommendations"));
+            problems.AddRange(Check(named, directory, name));
         }
 
-        if (definition.Advisor is { } advisor)
-        {
-            problems.AddRange(AgentAndPrompt(advisor.Agent, advisor.Prompt, directory, name, "the advisor"));
-        }
-
-        if (definition.Reporter is { } reporter)
-        {
-            problems.AddRange(AgentAndPrompt(reporter.Agent, reporter.StatusPrompt, directory, name, "the reporter's status prompt"));
-            problems.AddRange(AgentAndPrompt(reporter.Agent, reporter.AskPrompt, directory, name, "the reporter's ask prompt"));
-        }
-
-        foreach (var (path, step) in Walk(definition.Steps))
+        // The recovery's steps name files as the flow's do, and are checked the same way, under its own path.
+        foreach (var (path, step) in WorkflowFiles.Steps(definition))
         {
             var where = $"step '{path}'";
 
-            if (step.Agent is not null)
+            foreach (var named in WorkflowFiles.OfStep(step, where))
             {
-                Add(problems, NamedFile($"{HarnessLayout.WorkflowAgentsDirectoryName}/{step.Agent}.md", directory, name, $"{where}'s agent"));
-            }
-
-            if (step.Prompt is not null)
-            {
-                Add(problems, NamedFile(step.Prompt, directory, name, $"{where}'s prompt"));
-            }
-
-            if (step.ResumePrompt is not null)
-            {
-                Add(problems, NamedFile(step.ResumePrompt, directory, name, $"{where}'s resume prompt"));
-            }
-
-            if (step.Outputs is not null)
-            {
-                problems.AddRange(Schema(step.Outputs, directory, name, $"{where}'s outputs"));
-            }
-
-            if (step.Body is not null)
-            {
-                Add(problems, NamedFile(step.Body, directory, name, $"{where}'s body"));
+                problems.AddRange(Check(named, directory, name));
             }
 
             if (step.Runner is not null && !config.PredefinedRunners.ContainsKey(step.Runner))
@@ -228,34 +285,49 @@ public sealed class WorkflowValidationService(
         }
     }
 
-    private IReadOnlyList<string> AgentAndPrompt(string agent, string prompt, string directory, string name, string what)
+    /// <summary>The problems of one file the definition names: a schema read as a JSON object, any other found.</summary>
+    private IReadOnlyList<string> Check(WorkflowFiles.Named named, string directory, string name)
     {
+        if (named.IsSchema)
+        {
+            return Schema(named.File, directory, name, named.What);
+        }
+
         var problems = new List<string>();
-        Add(problems, NamedFile($"{HarnessLayout.WorkflowAgentsDirectoryName}/{agent}.md", directory, name, $"the agent {what} runs"));
-        Add(problems, NamedFile(prompt, directory, name, $"{what}'s prompt"));
+        Add(problems, NamedFile(named.File, directory, name, named.What, out _));
         return problems;
     }
 
     /// <summary>
-    /// The one problem with one file the definition names: that it stays inside the workflow's own
-    /// directory, and that it is there. What a reviewer reads there is what the workflow runs, as
-    /// an action's files are to its own directory.
+    /// The one problem with one file the definition names: that it is spelt as a path inside the
+    /// workflow's own directory, that it stays there once every link along it is followed, and that
+    /// it is there. What a reviewer reads there is what the workflow runs, as an action's files are
+    /// to its own directory.
     /// </summary>
-    private string? NamedFile(string named, string directory, string name, string what)
+    /// <param name="named">The file, as the definition names it.</param>
+    /// <param name="directory">The workflow's directory, every link along it followed.</param>
+    /// <param name="name">The workflow.</param>
+    /// <param name="what">What names the file, as a problem says it.</param>
+    /// <param name="path">The file with every link along it followed, where it could be resolved.</param>
+    private string? NamedFile(string named, string directory, string name, string what, out string path)
     {
-        if (Path.IsPathRooted(named) || named.Split('/', '\\').Any(segment => segment is ".." or "."))
+        path = string.Empty;
+        var relative = $"{HarnessLayout.WorkflowDirectoryRelative(name)}/";
+
+        // Rooted by every platform's rules, as an action's path is: a drive written on Linux would otherwise read as a
+        // directory's name, and a definition would mean two things on two machines.
+        if (PlatformPaths.IsRootedOnAnyPlatform(named))
         {
-            return $"'{named}', {what}, leaves the workflow's directory; every file a workflow names is relative to '{HarnessLayout.WorkflowsDirectoryRelative}/{name}/', as an action's are to its own directory";
+            return $"'{named}', {what}, is an absolute path; every file a workflow names is relative to '{relative}', as an action's are to its own directory";
         }
 
-        string root;
-        string path;
+        if (named.Split('/', '\\').Any(segment => segment is ".." or "." or ""))
+        {
+            return $"'{named}', {what}, does not name a file inside the workflow's directory; every file a workflow names is relative to '{relative}', without '.', '..' or an empty part, as an action's are to its own directory";
+        }
 
         try
         {
-            // The directory is resolved the same way as the file, so a repository reached through a
-            // link of its own compares against the same real path, as an action's directory is.
-            root = Path.TrimEndingDirectorySeparator(_fileSystem.ResolveLinks(Path.GetFullPath(directory)));
             path = _fileSystem.ResolveLinks(Path.GetFullPath(Path.Combine(directory, named)));
         }
         catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException)
@@ -263,27 +335,27 @@ public sealed class WorkflowValidationService(
             return $"'{named}', {what}, could not be resolved inside '{directory}': {exception.Message}";
         }
 
-        if (!PathContainment.IsStrictlyInside(root, path, _platform.PathComparison))
+        if (!PathContainment.IsStrictlyInside(directory, path, _platform.PathComparison))
         {
-            return $"'{named}', {what}, leads to '{path}', which is outside '{root}'; every file a workflow names is relative to '{HarnessLayout.WorkflowsDirectoryRelative}/{name}/', as an action's are to its own directory";
+            return $"'{named}', {what}, leads to '{path}', which is outside '{directory}'; every file a workflow names is relative to '{relative}', as an action's are to its own directory";
         }
 
         return _fileSystem.FileExists(path)
             ? null
-            : $"'{named}', {what}, is not at '{HarnessLayout.WorkflowsDirectoryRelative}/{name}/{named.Replace('\\', '/')}'; write it there, beside the definition that names it";
+            : $"'{named}', {what}, is not at '{relative}{named.Replace('\\', '/')}'; write it there, beside the definition that names it";
     }
 
-    /// <summary>That a schema file is there, and holds a JSON object.</summary>
+    /// <summary>That a schema file is there, can be read, and holds a JSON object.</summary>
     private IReadOnlyList<string> Schema(string named, string directory, string name, string what)
     {
-        if (NamedFile(named, directory, name, what) is { } problem)
+        if (NamedFile(named, directory, name, what, out var path) is { } problem)
         {
             return [problem];
         }
 
         try
         {
-            using var document = JsonDocument.Parse(_fileSystem.ReadAllText(Path.Combine(directory, named)));
+            using var document = JsonDocument.Parse(_fileSystem.ReadAllText(path));
 
             return document.RootElement.ValueKind == JsonValueKind.Object
                 ? []
@@ -293,25 +365,14 @@ public sealed class WorkflowValidationService(
         {
             return [$"'{named}', {what}, is not valid JSON ({exception.Message})"];
         }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return [$"'{named}', {what}, could not be read: {exception.Message}"];
+        }
     }
 
     private static string Shown(string name)
         => $"{HarnessLayout.WorkflowsDirectoryRelative}/{name}/{name}{HarnessLayout.WorkflowFileExtension}";
-
-    private static IEnumerable<(string Path, WorkflowStep Step)> Walk(IReadOnlyList<WorkflowStep> steps, string? parent = null)
-    {
-        foreach (var step in steps)
-        {
-            var path = parent is null ? step.Name : $"{parent}.{step.Name}";
-
-            yield return (path, step);
-
-            foreach (var nested in Walk(step.Steps, path))
-            {
-                yield return nested;
-            }
-        }
-    }
 
     private static int Count(IReadOnlyList<WorkflowStep> steps, string? type = null)
         => steps.Count(step => type is null || step.Type == type)
@@ -321,18 +382,38 @@ public sealed class WorkflowValidationService(
 /// <summary>Turns a workflow validation report into what validate-workflow prints.</summary>
 public static class WorkflowValidationReports
 {
+    /// <summary>
+    /// What validate-workflow says where the configuration declares no workflow: there is nothing
+    /// to check, and what declares the one init writes.
+    /// </summary>
+    public static string NoneDeclared { get; } =
+        $"config.json declares no workflow, so there is none to check; \"workflows\": [\"{WorkflowTemplates.ShippedWorkflowName}\"] "
+        + $"declares the one '{ToolPackage.Command} init' writes, and init then writes its files. Nothing was run.";
+
     /// <summary>What validate-workflow reports.</summary>
     /// <param name="report">What was checked.</param>
     /// <param name="json">Whether to write the result as JSON instead of as lines.</param>
+    /// <remarks>
+    /// A workflow that does not hold is configuration that does not, as config.json, an action file
+    /// or the mutation registry is - the parser itself refuses a malformed definition as that - so it
+    /// is refused <see cref="HarnessExit.ConfigInvalid"/>, the code a run of that workflow would meet.
+    /// A configuration that declares none has nothing to fix in a definition and nothing that passed:
+    /// the request has no subject, a precondition not met, refused <see cref="HarnessExit.Refused"/>.
+    /// </remarks>
     public static CommandOutcome Render(WorkflowValidationReport report, bool json)
     {
         ArgumentNullException.ThrowIfNull(report);
 
         var data = json ? [Document(report).ToJsonString(ReportJson.Options)] : Array.Empty<string>();
 
+        if (report.Workflows.Count == 0)
+        {
+            return CommandOutcome.Refused(NoneDeclared) with { Data = data };
+        }
+
         if (report.Passed)
         {
-            return CommandOutcome.Ok($"{ReportText.Counted(report.Lines.Count, "workflow")} checked, all valid") with
+            return CommandOutcome.Ok($"{ReportText.Counted(report.Workflows.Count, "workflow")} checked, all valid") with
             {
                 Data = data,
                 Quiet = json,
@@ -340,10 +421,11 @@ public static class WorkflowValidationReports
             };
         }
 
-        return CommandOutcome.Refused(
-            $"{ReportText.Counted(report.Lines.Count(WorkflowValidationReport.Holds), "workflow")} valid, "
-            + $"{report.Lines.Count(line => !WorkflowValidationReport.Holds(line))} with problems. "
-            + "Nothing was run.") with
+        var valid = report.Workflows.Count(workflow => workflow.Holds);
+
+        return CommandOutcome.Failed(
+            HarnessExit.ConfigInvalid,
+            $"{ReportText.Counted(valid, "workflow")} valid, {report.Workflows.Count - valid} with problems. Nothing was run.") with
         {
             Data = data,
             Details = json ? null : report.Lines,

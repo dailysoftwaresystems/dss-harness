@@ -14,7 +14,7 @@ public sealed class WorkflowFileParserTests
     {
         try
         {
-            return WorkflowFileParser.Parse("workflows/default/default.yml", text);
+            return WorkflowFileParser.Parse("workflows/implementation/default.yml", text);
         }
         catch (HarnessException)
         {
@@ -24,7 +24,7 @@ public sealed class WorkflowFileParserTests
 
     private static IReadOnlyList<string> Problems(string text)
     {
-        var refusal = Assert.Throws<HarnessException>(() => WorkflowFileParser.Parse("workflows/default/default.yml", text));
+        var refusal = Assert.Throws<HarnessException>(() => WorkflowFileParser.Parse("workflows/implementation/default.yml", text));
 
         Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
 
@@ -74,7 +74,7 @@ public sealed class WorkflowFileParserTests
                 type: orient
             """);
 
-        Has("line 2, column 1: 'maximReasoningAgents' is not a key of the file's top level. Known: 'name', 'description', 'maxReasoningAgents', 'maxParallelProcesses', 'maxOpenAgents', 'maxRetries', 'maxInstances', 'pushCheckpoints', 'handoffSeconds', 'budget', 'recommendations', 'advisor', 'reporter', 'amend', 'answers', 'inputs', 'params', 'outputs', 'steps'.", problems);
+        Has("line 2, column 1: 'maximReasoningAgents' is not a key of the file's top level. Known: 'name', 'description', 'maxReasoningAgents', 'maxParallelProcesses', 'maxOpenAgents', 'maxRetries', 'backoffSeconds', 'maxInstances', 'pushCheckpoints', 'handoffSeconds', 'budget', 'recommendations', 'advisor', 'reporter', 'amend', 'answers', 'inputs', 'params', 'outputs', 'steps', 'recover'.", problems);
     }
 
     /// <summary>
@@ -270,6 +270,163 @@ public sealed class WorkflowFileParserTests
         }
         var problems = Problems(text.ToString());
 
-        Has($"holds steps {WorkflowFileParser.MaxDepth} levels deep; steps nest at most {WorkflowFileParser.MaxDepth}.", problems);
+        Has($"holds steps {WorkflowFileParser.MaxDepth + 1} levels deep; steps nest at most {WorkflowFileParser.MaxDepth}.", problems);
+    }
+
+    /// <summary>
+    /// A typed step names no group key - forEach, repeat, gather - and a fold names no others, which only a refresh and
+    /// a rebase take: each is refused with what takes it, where it would otherwise be read by nothing and obeyed by
+    /// nothing.
+    /// </summary>
+    [Fact]
+    public void AKeyOfAGroupOnATypedStep_IsRefusedWithWhatTakesIt()
+    {
+        var problems = Problems(
+            """
+            name: default
+            steps:
+              - name: orient
+                type: orient
+                forEach: 'input.items'
+                repeat:
+                  until: 'orient.ok'
+                  maxIterations: 2
+                gather: [findings]
+              - name: fold
+                type: fold
+                of: orient
+                others: orient
+            """);
+
+        Assert.Equal(
+            [
+                "line 5, column 14: 'forEach' is not a key of a orient step; it is one of a group, which names no type.",
+                "line 7, column 7: 'repeat' is not a key of a orient step; it is one of a group, which names no type.",
+                "line 9, column 13: 'gather' is not a key of a orient step; it is one of a group, which names no type.",
+                "line 13, column 13: 'others' is not a key of a fold step; it is one of a refresh step.",
+            ],
+            problems);
+    }
+
+    /// <summary>
+    /// An alias repeats a part of the file by reference, so a few hundred bytes could stand for millions of steps; and
+    /// YAML nested past any definition's depth would be recursed through to be read at all. Both are refused before the
+    /// file is read into nodes, with the line where each is met.
+    /// </summary>
+    [Fact]
+    public void AnAliasOrNestingNoDefinitionHolds_IsRefusedBeforeTheFileIsRead()
+    {
+        var aliased = Problems(
+            """
+            name: default
+            steps:
+              - &step
+                name: orient
+                type: orient
+              - *step
+            """);
+
+        Assert.Equal(["line 6, column 5: the alias '*step' repeats a part of the file by reference; a definition writes each of its steps out, so that what it says is what it reads."], aliased);
+
+        var nested = Problems($"name: default\ndescription: {new string('[', 20_000)}\nsteps: []\n");
+
+        Assert.Equal([$"line 2, column {WorkflowFileParser.MaxYamlDepth + 13}: the file nests more than {WorkflowFileParser.MaxYamlDepth} levels deep; no definition does, and steps themselves nest at most {WorkflowFileParser.MaxDepth}."], nested);
+    }
+
+    /// <summary>
+    /// A budget is a number a run can count down - never NaN or infinity; a loop past its rounds may be bounded by
+    /// nothing but the budget, read as false; the advisor and the reporter each name the agent they run, which is
+    /// required; and the recovery holds steps and says where the run goes once they are done, back to the step that failed.
+    /// </summary>
+    [Fact]
+    public void ABudgetIsANumber_AnUnboundedLoopIsFalse_AndTheAgentsAndTheRecoveryAreWhole()
+    {
+        var problems = Problems(
+            """
+            name: default
+            budget:
+              usd: NaN
+              minutes: .inf
+            advisor:
+              prompt: prompts/recommend.md
+            reporter:
+              statusPrompt: prompts/status.md
+              askPrompt: prompts/ask.md
+            recover:
+              maxVisits: 2
+              onSuccess: elsewhere
+              onFailure: retry
+            steps:
+              - name: orient
+                type: orient
+            """);
+
+        Assert.Equal(
+            [
+                "line 3, column 8: 'budget.usd' is 'NaN', which is not a number.",
+                "line 4, column 12: 'budget.minutes' is '.inf', which is not a number.",
+                "'advisor.agent' is named nowhere; it is required.",
+                "'reporter.agent' is named nowhere; it is required.",
+                "line 12, column 14: 'recover.onSuccess' is 'elsewhere', which is none of 'failed-step'; a recovery sends the run back to the step that gave it its failure, to run again once it was put right.",
+                "line 13, column 14: 'recover.onFailure' is 'retry', which is none of 'stop', 'pause', 'continue', 'recover'.",
+                "line 11, column 3: 'recover' holds no 'steps'; a recovery that runs nothing would put nothing right, and the step that failed would run again unchanged.",
+            ],
+            problems);
+
+        var parsed = Parse(
+            """
+            name: default
+            steps:
+              - name: loop
+                repeat:
+                  until: 'review.clean'
+                  rounds: 3
+                  blocking: 'review.blocking'
+                  blockersLimitRounds: false
+                steps:
+                  - name: review
+                    type: orient
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: diagnose
+                  type: orient
+            """);
+
+        Assert.NotNull(parsed);
+        Assert.Equal(new FlowRepeat("review.clean", null, 3, "review.blocking", null, null, BlockersUnbounded: true), parsed.Steps[0].Repeat);
+        Assert.Equal("diagnose", Assert.Single(parsed.Recover!.Steps).Name);
+        Assert.Null(parsed.Recover.MaxVisits);
+        Assert.Null(parsed.BackoffSeconds);
+
+        // A reasoning step's retries wait: the workflow's backoff, and a step's own beside it.
+        var waiting = Parse(
+            """
+            name: default
+            backoffSeconds: 45
+            advisor:
+              agent: advisor
+              prompt: prompts/recommend.md
+              retries: 2
+              backoffSeconds: 15
+            steps:
+              - name: think
+                type: reason
+                agent: thinker
+                prompt: prompts/think.md
+                outputs: schemas/think.json
+                retries: 4
+                backoffSeconds: 10
+            """);
+
+        Assert.NotNull(waiting);
+        Assert.Equal(45, waiting.BackoffSeconds);
+        Assert.Equal(4, waiting.Steps[0].Retries);
+        Assert.Equal(10, waiting.Steps[0].BackoffSeconds);
+        Assert.Equal(2, waiting.Advisor!.Retries);
+        Assert.Equal(15, waiting.Advisor.BackoffSeconds);
+        Assert.Equal(FlowRecover.FailedStep, parsed.Recover.OnSuccess);
+        Assert.Equal(FlowRecover.PauseOnFailure, parsed.Recover.OnFailure);
     }
 }

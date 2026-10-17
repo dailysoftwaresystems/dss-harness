@@ -15,9 +15,9 @@ using DssHarness.Core.FileSystem;
 namespace DssHarness.Core.Application.Legs;
 
 /// <summary>
-/// Runs a predefined runner across the legs it declares: the use case the <c>run</c> command runs and the engine's run
-/// step calls - the runner's steps read and chosen, its workload decided, and the placement of a runner that would
-/// write the tree refused, all before any leg is placed or any host is measured.
+/// Runs a predefined runner across the legs it declares: the use case the <c>run</c> command runs, and a step of an
+/// orchestrator run will call - the runner's steps read and chosen, its workload decided, and the placement of a runner
+/// that would write the tree refused, all before any leg is placed or any host is measured.
 /// </summary>
 public interface IRunnerLegs : IUseCase
 {
@@ -55,12 +55,12 @@ public static class RunnerSelection
     /// The runner <paramref name="runnerName"/> names, as the configuration declares it.
     /// </summary>
     /// <param name="config">The configuration.</param>
-    /// <param name="runnerName">The name as it was given.</param>
+    /// <param name="runnerName">The name as it was given, blank included: a runner nobody declared, refused as one.</param>
     /// <exception cref="HarnessException">No runner of that name is declared (<see cref="HarnessExit.UsageError"/>).</exception>
     public static RunnerConfig Resolve(HarnessConfig config, string runnerName)
     {
         ArgumentNullException.ThrowIfNull(config);
-        ArgumentException.ThrowIfNullOrWhiteSpace(runnerName);
+        ArgumentNullException.ThrowIfNull(runnerName);
 
         var declared = DeclaredName.In(config.PredefinedRunners.Keys, runnerName);
 

@@ -25,8 +25,9 @@ namespace DssHarness.Core.Orchestration.Flow;
 public static class WorkflowName
 {
     /// <summary>
-    /// The directory under the workflows directory every workflow's own files are kept in, named as
-    /// the slot the workflow values will read from is planned to be.
+    /// The name the workflows directory keeps for the slot a run's keys are to be read from,
+    /// <c>workflows/.env/</c>, beside the workflows' own directories: a name, never a workflow's
+    /// files, and no workflow may take it.
     /// </summary>
     public const string ReservedSlotName = ".env";
 

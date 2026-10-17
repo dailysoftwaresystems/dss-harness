@@ -3,6 +3,7 @@
   "additionalProperties": false,
   "required": [
     "summary",
+    "done",
     "claims",
     "reuse",
     "newRows",
@@ -13,6 +14,33 @@
     "summary": {
       "type": "string",
       "description": "What this step did, in a few sentences."
+    },
+    "done": {
+      "type": "array",
+      "description": "Your item's definition of done, statement by statement: each statement as the item gives it, whether it holds now, and what shows it - the test that pins it, or what you ran. Every statement of the item's is here.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "statement",
+          "holds",
+          "shows"
+        ],
+        "properties": {
+          "statement": {
+            "type": "string",
+            "description": "One statement of the item's definition of done, as the item gives it."
+          },
+          "holds": {
+            "type": "boolean",
+            "description": "Whether it holds now, as you checked it."
+          },
+          "shows": {
+            "type": "string",
+            "description": "What shows it: the test that pins it and what it showed, or what you ran; where it does not hold, why."
+          }
+        }
+      }
     },
     "claims": {
       "type": "object",
@@ -46,7 +74,7 @@
     },
     "blocked": {
       "type": "array",
-      "description": "What the item asks for that you cannot do in this work, each with what stands in the way and what would let it be done. Empty where you can do all of it. Where it is not empty, a person is asked before anything of the item is tested or folded.",
+      "description": "What the item asks for that only a person can give - a decision, an access, a change outside your paths that only someone else may make - each with what stands in the way and what would let it be done. Empty where you can do all of it, and always empty while you work through a review's findings, where what you cannot do is a declined finding. Where it is not empty, a person is asked, with a recommendation, before anything of the item is tested or folded.",
       "items": {
         "type": "object",
         "additionalProperties": false,

@@ -4152,7 +4152,7 @@ public sealed class MutationLegRunnerTests
             return Task.FromResult(History);
         }
 
-        public Task SyncAsync(SyncSource source, string worker, CancellationToken cancellationToken)
+        public Task SyncAsync(SyncSource source, string worker, VariantKey variant, CancellationToken cancellationToken)
         {
             if (SyncFails(worker) is { } failure)
             {
