@@ -41,8 +41,8 @@ project was not created.)
 `Core` is a library, so "no logic in Program.cs" is enforced by the assembly
 boundary rather than by discipline. The registrations are the core's own
 (`ServiceRegistration.AddDssHarness`), so a front end other than the command line builds the
-same services; the command line supplies only where an operation writes and how a password is
-asked at its terminal (`ConsoleHost`).
+same services; the core builds each operation's provider (`ServiceRegistration.Host`), and the command line supplies only how a
+password is asked at its terminal (`ConsoleHost`).
 
 ### The platform layer
 
@@ -659,9 +659,7 @@ which a step of an orchestrator run will read typed, so beside those it says `ne
 by kind - `fold-new-rows` (`--new`), `fold-lost-rows` (`--accept-lost`), `fold-over-cells` (`--accept-over`),
 `fold-two-changes` (`--merge`); `refusals`, each reason it stands refused for, `conflict` where a path both trees
 changed has a three-way merge that conflicts and `other` for anything else, so a request refused for conflicting
-merges alone says `conflict` and nothing else; and `folded`, null but for the `--apply` of a fold and of a deletion,
-which folds back what is left of the agent: the paths written, deleted, merged and handed, each handed with its
-digest, the registries its rows changed, the ids of the rows applied and the cells `--accept-over` took. An `--apply`
+merges alone says `conflict` and nothing else; and `folded`, what the `--apply` of a fold and of a deletion, which folds back what is left of the agent, did - gone through or stopped part way after writing some of it (21): the paths written, deleted, merged and handed, each handed with its digest, the arm registry where it was merged by arm, the registries its rows changed, the ids of the rows applied and the cells `--accept-over` took; null for every other answer and where it did nothing at all; and `planned`, what the plan of a refresh or of a move of the base names, its dry run's and its `--apply`'s alike: the paths taken, kept, handed and merged, and the arm registry merged by arm; null for a fold and a deletion. An `--apply`
 refused at its hold answers the same document,
 `applied` true, its `request` `sound` and the run it met in `heldNow`, said as a dry run at that moment says it
 (`TreeHolders.Refused`, the one sentence and holder both take, handed up by the hold to the verb's answer), so a
@@ -669,7 +667,7 @@ script waits on it as on its dry run. A command stopped before
 anything is weighed - a command line the parser refuses, a `--directory` that is not there, a repository not
 initialised, another usage error, or a refusal met before then, an agent that is not there among them - answers with
 the same document, empty (`OrchestrationReports.Stopped`): `applied` false, `request`, `heldNow` and `heldUnread` null, no `lines`, no
-`needs`, no `refusals` and `folded` null, its `exitCode` and `summary` the code it exits with and the line it ends on.
+`needs`, no `refusals`, and `folded` and `planned` null, its `exitCode` and `summary` the code it exits with and the line it ends on.
 
 An agent's worktree is `<worktrees.root>/<orchestrator>/<agent>`, addressed `orchestrator/agent` by list-worktree
 and delete-worktree, its host copies named `orchestrator--agent` (`WorktreeAddress`). The directory named for an
@@ -2424,8 +2422,8 @@ tool replaces, where a green result had quietly stopped meaning anything.
 - Every other command asked for `--json` that stops before it has anything of its own to say
   answers in its own document's shape, never the ledger's: the agent verbs with the agent
   document, empty; `list-orchestrator`, `list-worktree`, `legs`, `install-missing-tools`,
-  `check-ci-legs`, `check-anchor-citations`, `check-anchor-balance`, `fix-line-endings`, `up` and
-  `down` with their own document holding nothing, after `exitCode` and `summary` (`ReportJson.Stopped`);
+  `check-ci-legs`, `check-anchor-citations`, `check-anchor-balance`, `fix-line-endings`, `validate-workflow`, `export-workflow`, `up` and `down` with their own document
+holding nothing, after `exitCode` and `summary` (`ReportJson.Stopped`);
   `check-mutations --list` with its listing, no legs; and `read-anchor` and `read-anchors`,
   whose document is an array, with that array empty - the process's exit code and the line it
   ends on say the rest. Each command registers which where it is wired (`CommandRunner.Wire`,

@@ -2509,14 +2509,16 @@ public sealed partial class HelpTests
             + "request lacks - 'fold-new-rows' (--new), 'fold-lost-rows' (--accept-lost), 'fold-over-cells' (--accept-over) "
             + "or 'fold-two-changes' (--merge) - and refusals each reason it is refused for, 'conflict' where a path both "
             + "trees changed has a merge that conflicts and 'other' for anything else, so a request refused for conflicting "
-            + "merges alone says 'conflict' and nothing else; folded, null but for the --apply of a fold and of a deletion, "
-            + "says what it wrote, deleted, merged and handed, the registries and rows it applied, and the cells --accept-over "
-            + "took. An --apply refused at its hold answers the same "
+            + "merges alone says 'conflict' and nothing else; folded says what the --apply of a fold and of a deletion did, gone "
+            + "through or stopped part way after writing some of it - what it wrote, deleted, merged and handed, the arm registry "
+            + "merged by arm, the registries and rows it applied, and the cells --accept-over took - and is null for every other "
+            + "answer and where it did nothing at all; planned says what the plan of a refresh or a rebase takes, keeps, hands and "
+            + "merges, and is null for a fold and a deletion. An --apply refused at its hold answers the same "
             + "document, applied true: request 'sound', and the run it met in heldNow. Stopped before "
             + "anything is weighed - a command line the parser refuses, a --directory that is not there, a repository not "
             + "initialised, another usage error, or a refusal met before then, an agent that is not there among them - it "
             + "answers with the same document, empty: applied false, request and heldNow null, no lines, no needs, no "
-            + "refusals and folded null.",
+            + "refusals, and folded and planned null.",
             text,
             StringComparison.Ordinal);
         Assert.Contains(

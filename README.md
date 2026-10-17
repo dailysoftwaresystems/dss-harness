@@ -123,7 +123,8 @@ where `heldNow` names a holder), `needs-consent` or `refused` - and whose `heldN
 holder, those copies' among them. Beside them `needs` names each consent the request lacks
 (`fold-new-rows`, `fold-lost-rows`, `fold-over-cells`, `fold-two-changes`), `refusals` each reason
 it is refused for (`conflict` where a path both trees changed has a merge that conflicts, `other`
-for anything else), and `folded` what a fold's `--apply` wrote, merged, handed and applied. An
+for anything else), `folded` what a fold's `--apply` wrote, merged, handed and applied, and `planned` what a
+refresh's or a rebase's plan takes, keeps, hands and merges. An
 `--apply` refused at its hold answers the same document, `sound`, with the run it met in
 `heldNow`. Either way a dry run still prints all it weighed.
 `dssharness help orchestrators` explains seeding, rebasing, folding and deleting agents.

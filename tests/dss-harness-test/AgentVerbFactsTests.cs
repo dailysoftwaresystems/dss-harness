@@ -429,8 +429,9 @@ public sealed class AgentVerbFactsTests
                 + $"(`{OrchestrationReports.Named(ConsentKind.FoldNewRows)}`, `{OrchestrationReports.Named(ConsentKind.FoldLostRows)}`, "
                 + $"`{OrchestrationReports.Named(ConsentKind.FoldOverCells)}`, `{OrchestrationReports.Named(ConsentKind.FoldTwoChanges)}`), "
                 + $"`refusals` each reason it is refused for (`{OrchestrationReports.Named(RefusalKind.Conflict)}` where a path both trees "
-                + $"changed has a merge that conflicts, `{OrchestrationReports.Named(RefusalKind.Other)}` for anything else), and `folded` "
-                + "what a fold's `--apply` wrote, merged, handed and applied.",
+                + $"changed has a merge that conflicts, `{OrchestrationReports.Named(RefusalKind.Other)}` for anything else), `folded` "
+                + "what a fold's `--apply` wrote, merged, handed and applied, and `planned` what a refresh's or a rebase's plan takes, "
+                + "keeps, hands and merges.",
             readme,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -441,10 +442,13 @@ public sealed class AgentVerbFactsTests
                 + $"`{OrchestrationReports.Named(ConsentKind.FoldTwoChanges)}` (`--merge`); `refusals`, each reason it stands refused "
                 + $"for, `{OrchestrationReports.Named(RefusalKind.Conflict)}` where a path both trees changed has a three-way merge that "
                 + $"conflicts and `{OrchestrationReports.Named(RefusalKind.Other)}` for anything else, so a request refused for "
-                + "conflicting merges alone says `conflict` and nothing else; and `folded`, null but for the `--apply` of a fold and "
-                + "of a deletion, which folds back what is left of the agent: the paths written, deleted, merged and handed, each "
-                + "handed with its digest, the registries its rows changed, the ids of the rows applied and the cells `--accept-over` "
-                + "took.",
+                + "conflicting merges alone says `conflict` and nothing else; and `folded`, what the `--apply` of a fold and of a "
+                + "deletion, which folds back what is left of the agent, did - gone through or stopped part way after writing some of "
+                + "it (21): the paths written, deleted, merged and handed, each handed with its digest, the arm registry where it was "
+                + "merged by arm, the registries its rows changed, the ids of the rows applied and the cells `--accept-over` took; null "
+                + "for every other answer and where it did nothing at all; and `planned`, what the plan of a refresh or of a move of "
+                + "the base names, its dry run's and its `--apply`'s alike: the paths taken, kept, handed and merged, and the arm "
+                + "registry merged by arm; null for a fold and a deletion.",
             architecture,
             StringComparison.Ordinal);
     }

@@ -423,15 +423,15 @@ public sealed class StoppedDocumentTests
         Assert.Contains(
             "Every other command asked for `--json` that stops before it has anything of its own to say answers in its own document's "
                 + "shape, never the ledger's: the agent verbs with the agent document, empty; `list-orchestrator`, `list-worktree`, `legs`, "
-                + "`install-missing-tools`, `check-ci-legs`, `check-anchor-citations`, `check-anchor-balance`, `fix-line-endings`, `up` "
-                + "and `down` with their own document holding nothing, after `exitCode` and `summary` (`ReportJson.Stopped`); `check-mutations --list` with "
+                + "`install-missing-tools`, `check-ci-legs`, `check-anchor-citations`, `check-anchor-balance`, `fix-line-endings`, `validate-workflow`, "
+                + "`export-workflow`, `up` and `down` with their own document holding nothing, after `exitCode` and `summary` (`ReportJson.Stopped`); `check-mutations --list` with "
                 + "its listing, no legs; and `read-anchor` and `read-anchors`, whose document is an array, with that array empty - the "
                 + "process's exit code and the line it ends on say the rest. Each command registers which where it is wired "
                 + "(`CommandRunner.Wire`, `JsonAnswer`), so the plumbing answers for it without choosing by its name: where the parser "
                 + "refuses its command line, the first error the line it ends on, wherever the parser itself read `--json` as that "
                 + "command's own and set - never as another option's value, after `--`, before the command's name or given twice with "
                 + "a value each (`CommandRunner.UnparsedAsync`); where it stops the command itself; and where the body answers with no "
-                + "document - a usage error or a refusal returned before anything is weighed (`CommandRunner.Report`): a command asked "
+                + "document - a usage error or a refusal returned before anything is weighed (the session's own report, `CommandSession.RunAsync`): a command asked "
                 + "for `--json` answers with one document on every exit save its usage and a `--json` given twice with a value each.",
             architecture,
             StringComparison.Ordinal);
@@ -458,7 +458,7 @@ public sealed class StoppedDocumentTests
             "A command stopped before anything is weighed - a command line the parser refuses, a `--directory` that is not there, a "
                 + "repository not initialised, another usage error, or a refusal met before then, an agent that is not there among them - answers with the same document, empty "
                 + "(`OrchestrationReports.Stopped`): `applied` false, `request`, `heldNow` and `heldUnread` null, no `lines`, no "
-                + "`needs`, no `refusals` and `folded` null, its `exitCode` and `summary` the code it exits with and the line it ends on.",
+                + "`needs`, no `refusals`, and `folded` and `planned` null, its `exitCode` and `summary` the code it exits with and the line it ends on.",
             architecture,
             StringComparison.Ordinal);
 
