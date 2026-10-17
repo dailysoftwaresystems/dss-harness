@@ -92,7 +92,7 @@ public static class WorkflowStepTypes
                 new("provider", "the provider, where the model alone does not say it"),
                 new("client", "the client, where the provider is reached two ways"),
                 new("prompt", "the prompt file the step is asked with") { Required = true },
-                new("resumePrompt", "the prompt file a step that goes on with another's work is asked with, in place of prompt"),
+                new("resumePrompt", "the prompt file a step that goes on with its own work (resume names itself) is asked with when it runs again, in place of prompt"),
                 new("outputs", "the JSON schema file the step's answer is held to") { Required = true },
                 new("access", "read (the default), or write: in an agent's worktree, with 'in' naming it"),
                 new("in", "the create-agent step whose agent's worktree the step works in; required where access is write"),
@@ -102,7 +102,7 @@ public static class WorkflowStepTypes
                 new("writes", "the paths a writing step may write"),
                 new("ask", "the step may put its questions to a person; one that may not writes its assumptions down"),
                 new("askRounds", "how often a step that asks may ask before it goes on with what it has, from 1 to 5; absent, 2"),
-                new("backoffSeconds", "seconds the step waits before it is tried again after its agent failed, twice as long before each later try, at most 900; absent, the workflow's backoffSeconds"),
+                new("backoffSeconds", $"seconds the step waits before it is tried again after its agent failed, twice as long before each later try, at most {WorkflowStep.MostBackoffSeconds}; absent, the workflow's backoffSeconds"),
             ],
             [],
             null),
@@ -183,7 +183,7 @@ public static class WorkflowStepTypes
             "red"),
         new(
             "commit",
-            [new("message", "the commit message it writes; required where the config declares no commit.template"), new("variables", "the values the message template reads"), new("timeoutMinutes", "minutes git is given")],
+            [new("message", "the commit message it writes; required where the config declares no commit.template, and not used where it declares one"), new("variables", "the values the message template reads"), new("timeoutMinutes", "minutes git is given")],
             ["message", "variables"],
             null),
         new(

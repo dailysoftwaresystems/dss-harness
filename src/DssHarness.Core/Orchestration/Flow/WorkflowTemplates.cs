@@ -133,7 +133,7 @@ public static class WorkflowTemplates
                 $"this build's implementation workflow names itself '{parsed.Name}'; it is '{ShippedWorkflowName}'");
         }
 
-        if (WorkflowValidator.Validate(parsed) is [_, ..] problems)
+        if (WorkflowValidator.Validate(parsed, hasCommitTemplate: false) is [_, ..] problems) // As for a config with no commit.template: each commit step writes its message.
         {
             var detail = string.Join(Environment.NewLine, problems.Select(problem => "  - " + problem));
 

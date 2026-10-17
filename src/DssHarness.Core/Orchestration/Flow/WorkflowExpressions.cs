@@ -23,20 +23,34 @@ namespace DssHarness.Core.Orchestration.Flow;
 public static class WorkflowExpressions
 {
     /// <summary>
-    /// The words a read can start with that name no step: the run's own names. A step may be named
-    /// none of them either, so that no read is ever between two answers.
+    /// The words a read can start with that name no step: the run's own names - what it was given, where in its loops
+    /// and handlers it is, what it knows of itself - the functions an expression calls, and the run facts a template
+    /// reads. A step may be named none of them (<see cref="ReservedNames"/>), so that no read is ever between two answers.
     /// </summary>
     public static readonly IReadOnlyList<string> ReservedRoots =
     [
-        "input", "param", "item", "previous", "run", "carried",
-        "it", "empty", "any", "skill", "source", "recommendations",
-        "question", "latest", "visit", "piece", "update", "status",
-        "outcome", "code", "error", "answer", "assumptions", "leftover", "ran", "notRun", "red",
-        "worktree", "iteration", "index", "recover",
+        "input", "param", "run", "carried", "previous", "source", "item", "it", "index", "iteration", "visit",
+        "recover", "skill", "recommendations", "update", "piece", "status", "question", "empty", "any",
+        "worktree", "work", "plans", "rows", "orchestrator", "agent", "step", "os",
     ];
+
+    /// <summary>
+    /// The engine's own facts of a step, read after its name - <c>review.code</c>, <c>plan.latest.items</c> - beside the
+    /// members of its output: how it ended, its exit code, its message, the question its failure was answered with, and
+    /// of a reasoning step its newest output and what its agent assumed.
+    /// </summary>
+    public static readonly IReadOnlyList<string> StepFacts = ["outcome", "code", "error", "question", "latest", "assumptions"];
 
     /// <summary>The literals an identifier can be without naming anything.</summary>
     private static readonly IReadOnlyList<string> Literals = ["true", "false", "null"];
+
+    /// <summary>
+    /// The names no step may have: every word a read starts with that names no step, every fact of the engine's that
+    /// follows a step's name, and the literals. A step named for a root would never be read, its reads taken for the
+    /// run's own; one named for a fact would make one path say two things - inside a block <c>review</c>, a member named
+    /// <c>code</c> would make <c>review.code</c> the block's exit code and that member's output at once.
+    /// </summary>
+    public static IReadOnlyList<string> ReservedNames { get; } = [.. ReservedRoots.Concat(StepFacts).Concat(Literals).Distinct(StringComparer.Ordinal)];
 
     /// <summary>One name an expression reads: its first segment, whole, and how it was read.</summary>
     /// <param name="Root">The read's first segment: where the rest of the name lives.</param>
@@ -263,10 +277,15 @@ public static class WorkflowExpressions
         return null;
     }
 
-    /// <summary>Whether <paramref name="name"/> is one of the words that name no step.</summary>
-    /// <param name="name">A step's name, or a read's first segment.</param>
+    /// <summary>Whether <paramref name="name"/> is one a step may not have (<see cref="ReservedNames"/>).</summary>
+    /// <param name="name">A step's name, or a declared input's, param's or output's.</param>
     public static bool IsReserved(string name)
-        => ReservedRoots.Contains(name, StringComparer.Ordinal);
+        => ReservedNames.Contains(name, StringComparer.Ordinal);
+
+    /// <summary>Whether a read starting with <paramref name="root"/> reads the run's own names, and no step (<see cref="ReservedRoots"/>).</summary>
+    /// <param name="root">A read's first segment.</param>
+    public static bool IsRoot(string root)
+        => ReservedRoots.Contains(root, StringComparer.Ordinal);
 
     /// <summary>The line, counted from 1, that <paramref name="index"/> sits on in <paramref name="text"/>.</summary>
     private static int LineOf(string text, int index) => text[..index].Count(character => character == '\n') + 1;

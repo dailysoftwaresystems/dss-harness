@@ -9,12 +9,15 @@ namespace DssHarness.Tests;
 /// </summary>
 public sealed class WorkflowFileParserTests
 {
+    /// <summary>Where every file of these tests is said to have been read from.</summary>
+    private const string FilePath = "workflows/implementation/default.yml";
+
     /// <summary>Parses <paramref name="text"/>, answering its refusal rather than throwing it.</summary>
     private static WorkflowDefinition? Parse(string text)
     {
         try
         {
-            return WorkflowFileParser.Parse("workflows/implementation/default.yml", text);
+            return WorkflowFileParser.Parse(FilePath, text);
         }
         catch (HarnessException)
         {
@@ -22,18 +25,18 @@ public sealed class WorkflowFileParserTests
         }
     }
 
+    /// <summary>
+    /// Every problem the refusal of <paramref name="text"/> lists, one to a line under its header, as the refusal's own
+    /// layout lays them out: the header and the layout are held once, by the test that pins them.
+    /// </summary>
     private static IReadOnlyList<string> Problems(string text)
     {
-        var refusal = Assert.Throws<HarnessException>(() => WorkflowFileParser.Parse("workflows/implementation/default.yml", text));
+        var refusal = Assert.Throws<HarnessException>(() => WorkflowFileParser.Parse(FilePath, text));
 
         Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
 
         return refusal.Message.Split(Environment.NewLine).Skip(1).Select(line => line.TrimStart(' ', '-', ' ')).ToList();
     }
-
-    /// <summary>Asserts one problem says <paramref name="expected"/> somewhere in it, as a refusal is read for the part that concerns it.</summary>
-    private static void Has(string expected, IReadOnlyList<string> problems)
-        => Assert.Contains(problems, problem => problem.Contains(expected, StringComparison.Ordinal));
 
     /// <summary>The least a file can be: a name and one step, which the whole of the model reads back.</summary>
     [Fact]
@@ -53,13 +56,27 @@ public sealed class WorkflowFileParserTests
         Assert.Equal("orient", parsed.Steps[0].Type);
     }
 
+    /// <summary>
+    /// A refusal names the file and counts its problems, then lists each on a line of its own, so that a person reads
+    /// every problem of the file at once and knows how many there are before reading them.
+    /// </summary>
     [Fact]
-    public void AFileThatNamesNoNameOrNoSteps_IsRefusedNamingBoth()
+    public void ARefusal_NamesTheFile_CountsItsProblems_AndListsEachOnALineOfItsOwn()
     {
-        var problems = Problems("description: nothing\n");
+        var refusal = Assert.Throws<HarnessException>(() => WorkflowFileParser.Parse(FilePath, "description: nothing\n"));
 
-        Has("the file names no 'name'", problems);
-        Has("the file declares no 'steps'", problems);
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.Equal(
+            $"'{FilePath}' has 2 problem(s):{Environment.NewLine}"
+                + $"  - the file names no 'name'; a workflow's name is its directory's and its file's, said again in the file so a copied directory cannot pass as the workflow it was copied from{Environment.NewLine}"
+                + "  - the file declares no 'steps'; a workflow that runs nothing is a file whose run reports success having done no work.",
+            refusal.Message);
+
+        var single = Assert.Throws<HarnessException>(() => WorkflowFileParser.Parse(FilePath, "name: default\n"));
+
+        Assert.Equal(
+            $"'{FilePath}' has 1 problem(s):{Environment.NewLine}  - the file declares no 'steps'; a workflow that runs nothing is a file whose run reports success having done no work.",
+            single.Message);
     }
 
     [Fact]
@@ -74,12 +91,15 @@ public sealed class WorkflowFileParserTests
                 type: orient
             """);
 
-        Has("line 2, column 1: 'maximReasoningAgents' is not a key of the file's top level. Known: 'name', 'description', 'maxReasoningAgents', 'maxParallelProcesses', 'maxOpenAgents', 'maxRetries', 'backoffSeconds', 'maxInstances', 'pushCheckpoints', 'handoffSeconds', 'budget', 'recommendations', 'advisor', 'reporter', 'amend', 'answers', 'inputs', 'params', 'outputs', 'steps', 'recover'.", problems);
+        Assert.Equal(
+            ["line 2, column 1: 'maximReasoningAgents' is not a key of the file's top level. Known: 'name', 'description', 'maxReasoningAgents', 'maxParallelProcesses', 'maxOpenAgents', 'maxRetries', 'backoffSeconds', 'maxInstances', 'pushCheckpoints', 'handoffSeconds', 'budget', 'recommendations', 'advisor', 'reporter', 'amend', 'answers', 'inputs', 'params', 'outputs', 'steps', 'recover'."],
+            problems);
     }
 
     /// <summary>
     /// A key written twice is refused by YAML itself, as a file that does not read: the second would quietly take the
-    /// first's place, and which value ran would depend on where each sat in the file.
+    /// first's place, and which value ran would depend on where each sat in the file. An answer's kind is such a key, so
+    /// a kind answered twice is refused the same way.
     /// </summary>
     [Fact]
     public void AKeyWrittenTwice_IsRefusedRatherThanSilentlyTakingTheLast()
@@ -93,8 +113,150 @@ public sealed class WorkflowFileParserTests
                 type: orient
             """);
 
-        Has("line 2, column 1: the file is not valid YAML", problems);
-        Has("name", problems);
+        Assert.Equal(["line 2, column 1: the file is not valid YAML (Duplicate key name)."], problems);
+
+        var answered = Problems(
+            """
+            name: default
+            steps:
+              - name: orient
+                type: orient
+                answers:
+                  pause: go
+                  pause: stop
+            """);
+
+        Assert.Equal(["line 7, column 7: the file is not valid YAML (Duplicate key pause)."], answered);
+    }
+
+    /// <summary>
+    /// The file is one YAML document whose top level is a mapping of keys: an empty file, several documents and a top
+    /// level of any other shape are each refused, before any key is read.
+    /// </summary>
+    [Fact]
+    public void TheFile_IsOneDocument_WhoseTopLevelIsAMapping()
+    {
+        Assert.Equal(["the file is empty."], Problems(string.Empty));
+        Assert.Equal(
+            ["the file holds 2 YAML documents; a workflow's definition holds one, so that nothing has to decide which of them a run ran."],
+            Problems("name: default\n---\nname: other\n"));
+        Assert.Equal(["line 1, column 1: the file's top level is not a mapping of keys."], Problems("- name: default\n"));
+    }
+
+    /// <summary>
+    /// Each name a list of inputs, params or outputs declares is one value: a name declared twice is refused where the
+    /// second sits, since what everything reads it as would otherwise depend on where it sat in the file.
+    /// </summary>
+    [Fact]
+    public void ADeclaredName_IsDeclaredOnce()
+    {
+        var problems = Problems(
+            """
+            name: default
+            inputs:
+              - name: request
+              - name: request
+            params:
+              - name: rounds
+              - name: rounds
+            outputs:
+              - name: title
+                from: 'orient.title'
+              - name: title
+                from: 'orient.title'
+            steps:
+              - name: orient
+                type: orient
+            """);
+
+        Assert.Equal(
+            [
+                "line 4, column 5: 'inputs' names 'request' more than once; a name is one value, and a second would leave what everything reads it as depending on where it sat in the file.",
+                "line 7, column 5: 'params' names 'rounds' more than once; a name is one value, and a second would leave what everything reads it as depending on where it sat in the file.",
+                "line 11, column 5: 'outputs' names 'title' more than once; a name is one value, and a second would leave what everything reads it as depending on where it sat in the file.",
+            ],
+            problems);
+    }
+
+    /// <summary>
+    /// Every section that is a mapping of keys, a list or a map of kinds is refused where it is written as another
+    /// shape, naming the section and the shape it takes, with the line it was read at.
+    /// </summary>
+    [Fact]
+    public void ASectionOfTheWrongShape_IsRefusedNamingTheShapeItTakes()
+    {
+        var problems = Problems(
+            """
+            name: default
+            budget: 5
+            advisor: counsel
+            reporter: [teller]
+            amend: later
+            answers: [loopBound]
+            inputs: request
+            params:
+              - rounds
+            outputs: {}
+            steps:
+              - name: orient
+                type: orient
+                answers:
+                  loopBound: [more]
+            recover: none
+            """);
+
+        Assert.Equal(
+            [
+                "line 2, column 9: 'budget' is not a mapping of keys.",
+                "line 3, column 10: 'advisor' is not a mapping of keys.",
+                "line 4, column 11: 'reporter' is not a mapping of keys.",
+                "line 5, column 8: 'amend' is not a mapping of keys.",
+                "line 6, column 10: 'answers' is not a mapping of question kind to answer.",
+                "line 7, column 9: 'inputs' is not a sequence.",
+                "line 9, column 5: an entry of 'params' is not a mapping of 'name', 'description', 'default', 'required'",
+                "line 10, column 10: 'outputs' is not a sequence.",
+                "line 15, column 18: orient.answers.loopBound is neither the answer alone nor a mapping of 'answer', 'times', 'then'",
+                "line 16, column 10: 'recover' is not a mapping of keys.",
+            ],
+            problems);
+    }
+
+    /// <summary>
+    /// A step is a mapping that names itself with a single value, and a group's steps are a list that holds one at the
+    /// least: each other shape is refused naming what is wrong, and a name or a type written as a list is never read as
+    /// one left out.
+    /// </summary>
+    [Fact]
+    public void AStep_IsAMappingNamedWithOneValue_AndAGroupHoldsSteps()
+    {
+        var problems = Problems(
+            """
+            name: default
+            steps:
+              - orient
+              - type: orient
+              - name: [listed]
+                type: orient
+              - name: typed
+                type: [orient]
+              - name: group
+                steps: []
+              - name: nested
+                steps: orient
+            """);
+
+        Assert.Equal(
+            [
+                "line 3, column 5: a step is not a mapping of keys.",
+                "line 4, column 5: a step names no 'name'; what dependsOn, on, resume and expressions read would have nothing to read.",
+                "line 5, column 11: a step's 'name' is not a single value.",
+                "line 8, column 11: 'typed.type' is not a single value.",
+                "line 10, column 12: 'steps' is empty; a group that runs nothing would end at once, and its run with it.",
+                "line 12, column 12: 'steps' is not a sequence.",
+            ],
+            problems);
+
+        Assert.Equal(["line 2, column 8: 'steps' is empty; a group that runs nothing would end at once, and its run with it."], Problems("name: default\nsteps: []\n"));
     }
 
     [Fact]
@@ -112,8 +274,13 @@ public sealed class WorkflowFileParserTests
                     type: orient
             """);
 
-        Has("line 3, column 5: loose names no type and holds no steps", problems);
-        Has("line 4, column 5: both names the type 'orient' and holds steps", problems);
+        Assert.Equal(
+            [
+                "line 3, column 5: loose names no type and holds no steps; a step does one thing, and a group holds steps of their own.",
+                "line 4, column 5: both names the type 'orient' and holds steps; a group holds steps and names no type, and a typed step runs one thing.",
+                "line 7, column 7: 'steps' is not a key of a orient step; it is one of a group, which names no type.",
+            ],
+            problems);
     }
 
     /// <summary>
@@ -132,7 +299,7 @@ public sealed class WorkflowFileParserTests
                 runner: corpus
             """);
 
-        Has("line 5, column 13: 'runner' is not a key of a test step; it is one of a run step.", problems);
+        Assert.Equal(["line 5, column 13: 'runner' is not a key of a test step; it is one of a run step."], problems);
     }
 
     [Fact]
@@ -146,7 +313,9 @@ public sealed class WorkflowFileParserTests
                 type: tests
             """);
 
-        Has("'tests' is not a step type. Known: 'orient', 'reason', 'build', 'test', 'run', 'check-mutations', 'create-agent', 'fold', 'delete-agent', 'refresh', 'rebase', 'validate-plan', 'anchor-balance', 'anchor-citations', 'ci-read', 'ci-wait', 'commit', 'push', 'pull-request', 'pause'.", problems);
+        Assert.Equal(
+            ["line 4, column 11: 'tests' is not a step type. Known: 'orient', 'reason', 'build', 'test', 'run', 'check-mutations', 'create-agent', 'fold', 'delete-agent', 'refresh', 'rebase', 'validate-plan', 'anchor-balance', 'anchor-citations', 'ci-read', 'ci-wait', 'commit', 'push', 'pull-request', 'pause'."],
+            problems);
     }
 
     /// <summary>
@@ -167,9 +336,13 @@ public sealed class WorkflowFileParserTests
                 failOn: sometimes
             """);
 
-        Has("line 3, column 5: plan names no 'prompt'; a reason step is refused without it.", problems);
-        Has("line 3, column 5: plan names no 'outputs'; a reason step is refused without it.", problems);
-        Has("'gate.failOn' is 'sometimes', which is none of 'red', 'never'.", problems);
+        Assert.Equal(
+            [
+                "line 3, column 5: plan names no 'prompt'; a reason step is refused without it.",
+                "line 3, column 5: plan names no 'outputs'; a reason step is refused without it.",
+                "'gate.failOn' is 'sometimes', which is none of 'red', 'never'.",
+            ],
+            problems);
     }
 
     [Fact]
@@ -185,8 +358,169 @@ public sealed class WorkflowFileParserTests
                 dependsOn: orient
             """);
 
-        Has("'maxReasoningAgents' is 'four', which is not a whole number.", problems);
-        Has("line 6, column 16: 'orient.dependsOn' is not a list.", problems);
+        Assert.Equal(
+            [
+                "line 2, column 21: 'maxReasoningAgents' is 'four', which is not a whole number.",
+                "line 6, column 16: 'orient.dependsOn' is not a list.",
+            ],
+            problems);
+    }
+
+    /// <summary>
+    /// A key is a plain name, a single value is not a list, a flag is true or false, and a map of values is a mapping:
+    /// each other shape is refused naming the key it was read for, with the line it was read at.
+    /// </summary>
+    [Fact]
+    public void AKeyAFlagAValueAndAMap_AreEachOfTheirOwnShape()
+    {
+        var problems = Problems(
+            """
+            name: default
+            description: [a, b]
+            pushCheckpoints: sometimes
+            ? [complex]
+            : value
+            steps:
+              - name: corpus
+                type: run
+                runner: corpus
+                inputs: [a]
+            """);
+
+        Assert.Equal(
+            [
+                "line 4, column 3: a key is not a plain name.",
+                "line 2, column 14: 'description' is not a single value.",
+                "line 3, column 18: 'pushCheckpoints' is 'sometimes', which is not true or false.",
+                "line 10, column 13: 'corpus.inputs' is not a mapping of name to value.",
+            ],
+            problems);
+    }
+
+    /// <summary>
+    /// A handler's on, a group's repeat, a fold's allow, a pause's pre-answers and a pre-answer's quote are each of the
+    /// shape their keys say, and an on is raised by an ending there is, with its codes written as a list: every other
+    /// shape is refused naming the keys it takes.
+    /// </summary>
+    [Fact]
+    public void TheBlocksOfAStep_AreOfTheShapeTheirKeysSay()
+    {
+        var problems = Problems(
+            """
+            name: default
+            steps:
+              - name: gate
+                type: test
+              - name: mend
+                type: orient
+                on: gate
+              - name: fix
+                type: orient
+                on:
+                  step: gate
+                  outcome: broke
+                  codes: 20
+              - name: loop
+                repeat: forever
+                steps:
+                  - name: inner
+                    type: orient
+              - name: make
+                type: create-agent
+                agent: implementer
+              - name: fold
+                type: fold
+                of: make
+                allow: [new]
+              - name: ask
+                type: pause
+                question: now?
+                options: [go]
+                preAnswer: go
+              - name: asked
+                type: pause
+                question: now?
+                options: [go]
+                preAnswer:
+                  - go
+                  - when: 'input.x'
+                    answer: go
+                    quote: words
+            """);
+
+        Assert.Equal(
+            [
+                "line 7, column 9: 'mend.on' is not a mapping of 'step', 'outcome', 'codes'",
+                "line 13, column 14: 'fix.on.codes' is not a list.",
+                "line 11, column 7: fix.on.outcome is 'broke', which is none of 'failure', 'success', 'end'.",
+                "line 15, column 13: 'loop.repeat' is not a mapping of 'until', 'maxIterations', 'rounds', 'blocking', 'blockersLimitRounds', 'leftover'",
+                "line 25, column 12: 'fold.allow' is not a mapping of 'settled', 'new', 'acceptLost', 'merge', 'acceptOver'",
+                "line 30, column 16: 'ask.preAnswer' is not a sequence.",
+                "line 36, column 9: an entry of 'asked.preAnswer' is not a mapping of 'when', 'answer', 'text', 'quote'",
+                "line 39, column 16: 'asked.preAnswer.quote' is not a mapping of 'text', 'input'",
+            ],
+            problems);
+    }
+
+    /// <summary>
+    /// An input's kind is text or file, a file input takes no options - it is a path, checked when the run starts - and
+    /// options given empty are refused rather than read as any value, which is what leaving the key out says.
+    /// </summary>
+    [Fact]
+    public void AnInputsKindAndOptions_AreOnesItCanTake()
+    {
+        var problems = Problems(
+            """
+            name: default
+            inputs:
+              - name: plan
+                kind: folder
+              - name: spec
+                kind: file
+                options: [a]
+              - name: tone
+                options: []
+            steps:
+              - name: orient
+                type: orient
+            """);
+
+        Assert.Equal(
+            [
+                "line 3, column 5: inputs.plan.kind is 'folder', which is neither of text nor file.",
+                "line 5, column 5: inputs.spec declares options and the kind 'file': options list what a 'text' input takes, and a file input is a path, checked when the run starts.",
+                "line 9, column 14: 'inputs.tone.options' is given empty, which is never read as any value: list the values it takes, or leave the key out for any value.",
+            ],
+            problems);
+    }
+
+    /// <summary>
+    /// A list given empty is never read as the key left out, which says something else: a pause's pre-answers given empty
+    /// are not "no answer given beforehand", and the checks a wait ignores given empty are not "every check counted".
+    /// </summary>
+    [Fact]
+    public void AListGivenEmpty_IsRefusedRatherThanReadAsTheKeyLeftOut()
+    {
+        var problems = Problems(
+            """
+            name: default
+            steps:
+              - name: approval
+                type: pause
+                question: approve?
+                options: [approve]
+                preAnswer: []
+              - name: checks
+                type: ci-wait
+                ignore: []
+            """);
+
+        Assert.Equal(
+            [
+                "line 7, column 16: 'approval.preAnswer' is given empty, which is never read as no answer given beforehand: list the answers a person may give with the run, or leave the key out for no answer given beforehand.",
+                "line 10, column 13: 'checks.ignore' is given empty, which is never read as every check counted: name the checks it does not count, or leave the key out for every check counted.",
+            ],
+            problems);
     }
 
     /// <summary>
@@ -270,7 +604,13 @@ public sealed class WorkflowFileParserTests
         }
         var problems = Problems(text.ToString());
 
-        Has($"holds steps {WorkflowFileParser.MaxDepth + 1} levels deep; steps nest at most {WorkflowFileParser.MaxDepth}.", problems);
+        // The tenth level's own steps are where the bound is passed: one line past each level's name, two below it.
+        var line = (WorkflowFileParser.MaxDepth * 2) + 3;
+        var column = (WorkflowFileParser.MaxDepth * 2) + 3;
+
+        Assert.Equal(
+            [$"line {line}, column {column}: step-{WorkflowFileParser.MaxDepth} holds steps {WorkflowFileParser.MaxDepth + 1} levels deep; steps nest at most {WorkflowFileParser.MaxDepth}."],
+            problems);
     }
 
     /// <summary>
@@ -334,9 +674,11 @@ public sealed class WorkflowFileParserTests
     }
 
     /// <summary>
-    /// A budget is a number a run can count down - never NaN or infinity; a loop past its rounds may be bounded by
+    /// A budget is a number a run can count down - never NaN or infinity, and its tokens a whole number; a loop past its rounds may be bounded by
     /// nothing but the budget, read as false; the advisor and the reporter each name the agent they run, which is
-    /// required; and the recovery holds steps and says where the run goes once they are done, back to the step that failed.
+    /// required; and the recovery holds steps and says where the run goes once they are done, back to the step that
+    /// failed, and what a failure of its own work does - a value that is no policy at all is refused naming the two a
+    /// recovery may say.
     /// </summary>
     [Fact]
     public void ABudgetIsANumber_AnUnboundedLoopIsFalse_AndTheAgentsAndTheRecoveryAreWhole()
@@ -347,6 +689,7 @@ public sealed class WorkflowFileParserTests
             budget:
               usd: NaN
               minutes: .inf
+              tokens: lots
             advisor:
               prompt: prompts/recommend.md
             reporter:
@@ -365,11 +708,12 @@ public sealed class WorkflowFileParserTests
             [
                 "line 3, column 8: 'budget.usd' is 'NaN', which is not a number.",
                 "line 4, column 12: 'budget.minutes' is '.inf', which is not a number.",
+                "line 5, column 11: 'budget.tokens' is 'lots', which is not a whole number.",
                 "'advisor.agent' is named nowhere; it is required.",
                 "'reporter.agent' is named nowhere; it is required.",
-                "line 12, column 14: 'recover.onSuccess' is 'elsewhere', which is none of 'failed-step'; a recovery sends the run back to the step that gave it its failure, to run again once it was put right.",
-                "line 13, column 14: 'recover.onFailure' is 'retry', which is none of 'stop', 'pause', 'continue', 'recover'.",
-                "line 11, column 3: 'recover' holds no 'steps'; a recovery that runs nothing would put nothing right, and the step that failed would run again unchanged.",
+                "line 13, column 14: 'recover.onSuccess' is 'elsewhere', which is none of 'failed-step'; a recovery sends the run back to the step that gave it its failure, to run again once it was put right.",
+                "line 14, column 14: 'recover.onFailure' is 'retry', which is none of 'pause', 'stop'; a failure the recovery's own work meets asks a person, or ends the run.",
+                "line 12, column 3: 'recover' holds no 'steps'; a recovery that runs nothing would put nothing right, and the step that failed would run again unchanged.",
             ],
             problems);
 
@@ -428,5 +772,25 @@ public sealed class WorkflowFileParserTests
         Assert.Equal(15, waiting.Advisor.BackoffSeconds);
         Assert.Equal(FlowRecover.FailedStep, parsed.Recover.OnSuccess);
         Assert.Equal(FlowRecover.PauseOnFailure, parsed.Recover.OnFailure);
+
+        // A step's other policies are read here, for the validator to refuse in words of their own.
+        foreach (var policy in new[] { "continue", "recover" })
+        {
+            var read = Parse(
+                $"""
+                name: default
+                steps:
+                  - name: orient
+                    type: orient
+                recover:
+                  onSuccess: failed-step
+                  onFailure: {policy}
+                  steps:
+                    - name: diagnose
+                      type: orient
+                """);
+
+            Assert.Equal(policy, read!.Recover!.OnFailure);
+        }
     }
 }

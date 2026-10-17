@@ -12,8 +12,9 @@ public sealed class WorkflowValidatorTests
     private static WorkflowDefinition Parse(string text)
         => WorkflowFileParser.Parse("workflows/implementation/default.yml", text);
 
+    /// <summary>Every problem of a definition read under a configuration that declares no commit template, as most are.</summary>
     private static IReadOnlyList<string> Problems(string text)
-        => [.. WorkflowValidator.Validate(Parse(text))];
+        => [.. WorkflowValidator.Validate(Parse(text), hasCommitTemplate: false)];
 
     /// <summary>
     /// An expression reads its own siblings, the siblings of the groups holding it, and steps by their path from the
@@ -110,9 +111,10 @@ public sealed class WorkflowValidatorTests
     }
 
     /// <summary>
-    /// A dependency is a sibling declared before the step; one declared after it, one of another group, and the step
-    /// itself are each refused, each in their own words. Depending on a handler is not: a handler the ending it answers
-    /// to never raised satisfies it, as the shipped flow's folds depend on their menders.
+    /// A dependency is a sibling declared before the step that is no always step; one declared after it, one of another
+    /// group, the step itself and an always step - started by the end of the session, which nothing waits for - are each
+    /// refused, each in their own words. Depending on a handler is not: a handler the ending it answers to never raised
+    /// satisfies it, as the shipped flow's folds depend on their menders.
     /// </summary>
     [Fact]
     public void ADependency_IsAnEarlierSibling()
@@ -123,6 +125,12 @@ public sealed class WorkflowValidatorTests
             steps:
               - name: orient
                 type: orient
+              - name: report
+                type: orient
+                always: true
+              - name: after-report
+                type: orient
+                dependsOn: [report]
               - name: gate
                 type: test
                 dependsOn: [release]
@@ -144,20 +152,26 @@ public sealed class WorkflowValidatorTests
               - name: stranger
                 type: orient
                 dependsOn: [elsewhere.orient]
+              - name: twice
+                type: orient
+                dependsOn: [orient, orient]
             """);
 
         Assert.Equal(
             [
+                "step 'after-report' depends on 'report', an always step; an always step is started by the end of the session, and no step waits for it",
                 "step 'gate' depends on 'release', which is declared after it; steps are declared in the order they run, and a dependency declared after the step that waits for it is met never or too late",
                 "step 'release' depends on itself; a step waits for what runs before it, and this one would wait for itself",
                 "step 'stranger' depends on 'elsewhere.orient', which is no step declared beside it; a step waits for its own siblings, and a step of another group is waited for by the group that holds it",
+                "step 'twice' depends on 'orient' more than once",
             ],
             problems);
     }
 
     /// <summary>
-    /// A reason step writes in a worktree a create-agent step made, goes on with the work of a reason step or its own,
-    /// and cannot be independent of the very work it resumes.
+    /// A reason step writes in a worktree a create-agent step made before it, goes on with the work of a reason step
+    /// declared before it or with its own, and cannot be independent of the very work it resumes; a step that only reads
+    /// names no worktree, and only a step that asks says how often.
     /// </summary>
     [Fact]
     public void AReasonStep_WritesWhereAnAgentWasMade_AndGoesOnWithItsOwnOrAnotherReasonStepsWork()
@@ -199,18 +213,180 @@ public sealed class WorkflowValidatorTests
               - name: folding-wrong
                 type: fold
                 of: reads-but-names-in
+              - name: writes-nowhere
+                type: reason
+                agent: implementer
+                prompt: prompts/implement.md
+                outputs: schemas/implement.json
+                access: write
+              - name: writes-early
+                type: reason
+                agent: implementer
+                prompt: prompts/implement.md
+                outputs: schemas/implement.json
+                access: write
+                in: made-later
+              - name: lost
+                type: reason
+                prompt: prompts/mend.md
+                outputs: schemas/mend.json
+                resume: nowhere
+              - name: off-an-agent
+                type: reason
+                prompt: prompts/mend.md
+                outputs: schemas/mend.json
+                resume: make
+              - name: early
+                type: reason
+                prompt: prompts/mend.md
+                outputs: schemas/mend.json
+                resume: thought-later
+              - name: quiet
+                type: reason
+                agent: reader
+                prompt: prompts/read.md
+                outputs: schemas/read.json
+                askRounds: 2
+              - name: made-later
+                type: create-agent
+                agent: implementer
+              - name: thought-later
+                type: reason
+                agent: thinker
+                prompt: prompts/think.md
+                outputs: schemas/think.json
             """);
 
         Assert.Equal(
             [
                 "step 'reads-but-names-in' reads and names 'in'; a reading step has no worktree to work in, and reads the main tree",
-                "step 'resumes' names the agent 'mender' and resumes 'implement'; a step that goes on with another's work runs in that step's agent, and cannot both go on with another's work and name another agent",
+                "step 'resumes' resumes 'implement' and names agent; a step that goes on with another's work runs in that step's agent, on its model and in its worktree, and names none of agent, provider, client, tier, model, fallback, access, in or writes",
                 "step 'resumes' is independent and resumes 'implement'; independence is never being given the author's work, and resuming is going on with exactly that",
                 "step 'makes-no-agent' names no agent and resumes no step; a reason step runs an agent of its own, or goes on with the agent of the step it resumes",
                 "step 'folding' names 'implement' as its of, which is a reason step; an agent is made by a create-agent step",
                 "step 'folding-wrong' names 'reads-but-names-in' as its of, which is a reason step; an agent is made by a create-agent step",
+                "step 'writes-nowhere' writes and names no 'in'; a writing step works in an agent's worktree, and the create-agent step that made it is the one to name",
+                "step 'writes-early' works in 'made-later', which is declared after it; a worktree cannot be worked in before it is made",
+                "step 'lost' resumes 'nowhere', which is no step an enclosing group declares",
+                "step 'off-an-agent' resumes 'make', which is a create-agent step; only a reason step leaves a conversation to go on with",
+                "step 'early' resumes 'thought-later', which is declared after it; work cannot be gone on with before it is begun",
+                "step 'quiet' says askRounds without ask; how often a step may ask is a step that asks's own bound",
             ],
             problems);
+    }
+
+    /// <summary>
+    /// A step goes on with its own work only where it runs again - inside a repeat, where a handler's then sends the run
+    /// back to it, or in the recovery - and only such a step has a resume prompt to be asked with when it does. A step
+    /// that goes on with another's work runs in that step's agent, on its model and in its worktree, and so names none of
+    /// them, nor what it writes.
+    /// </summary>
+    [Fact]
+    public void AStepGoesOnWithItsOwnWork_OnlyWhereItRunsAgain_AndWithAnothersNamingNothingOfItsOwn()
+    {
+        var problems = Problems(
+            """
+            name: default
+            steps:
+              - name: make
+                type: create-agent
+                agent: implementer
+              - name: once
+                type: reason
+                agent: thinker
+                resume: once
+                prompt: prompts/think.md
+                resumePrompt: prompts/again.md
+                outputs: schemas/think.json
+              - name: looped
+                repeat:
+                  until: 'again.ok'
+                  maxIterations: 2
+                steps:
+                  - name: again
+                    type: reason
+                    agent: thinker
+                    resume: again
+                    prompt: prompts/think.md
+                    resumePrompt: prompts/again.md
+                    outputs: schemas/think.json
+              - name: sent-back
+                type: reason
+                agent: thinker
+                resume: sent-back
+                prompt: prompts/think.md
+                outputs: schemas/think.json
+              - name: gate
+                type: test
+                dependsOn: [sent-back]
+                onFailure: recover
+              - name: mend
+                type: orient
+                on:
+                  step: gate
+                  outcome: failure
+                then: sent-back
+              - name: builder
+                type: reason
+                agent: implementer
+                access: write
+                in: make
+                prompt: prompts/implement.md
+                outputs: schemas/implement.json
+              - name: borrows
+                type: reason
+                resume: builder
+                agent: other
+                provider: someone
+                client: cli
+                tier: best
+                fallback: [second]
+                access: write
+                in: make
+                writes: [src/**]
+                prompt: prompts/mend.md
+                resumePrompt: prompts/again.md
+                outputs: schemas/implement.json
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: diagnose
+                  type: reason
+                  agent: diagnostician
+                  resume: diagnose
+                  prompt: prompts/diagnose.md
+                  resumePrompt: prompts/rediagnose.md
+                  outputs: schemas/diagnosis.json
+            """);
+
+        Assert.Equal(
+            [
+                "step 'once' resumes itself and runs once; a step goes on with its own work only where it runs again - inside a repeat, where a handler's then sends the run back to it, or as a step of the recovery",
+                "step 'borrows' resumes 'builder' and names agent, provider, client, tier, fallback, access, in, writes; a step that goes on with another's work runs in that step's agent, on its model and in its worktree, and names none of agent, provider, client, tier, model, fallback, access, in or writes",
+                "step 'borrows' says resumePrompt and does not resume itself; resumePrompt is what a step that goes on with its own work is asked with when it runs again, and any other step is asked with its prompt",
+            ],
+            problems);
+
+        // The model is one of the keys too, named alone where the step names no tier beside it.
+        Assert.Equal(
+            ["step 'borrows' resumes 'builder' and names model; a step that goes on with another's work runs in that step's agent, on its model and in its worktree, and names none of agent, provider, client, tier, model, fallback, access, in or writes"],
+            Problems(
+                """
+                name: default
+                steps:
+                  - name: builder
+                    type: reason
+                    agent: implementer
+                    prompt: prompts/implement.md
+                    outputs: schemas/implement.json
+                  - name: borrows
+                    type: reason
+                    resume: builder
+                    model: some-model
+                    prompt: prompts/mend.md
+                    outputs: schemas/implement.json
+                """));
     }
 
     /// <summary>
@@ -235,7 +411,7 @@ public sealed class WorkflowValidatorTests
               - name: both
                 forEach: 'check.items'
                 repeat:
-                  until: 'check.ok'
+                  until: 'inner.ok'
                   maxIterations: 3
                 gather: [findings]
                 steps:
@@ -243,13 +419,13 @@ public sealed class WorkflowValidatorTests
                     type: orient
               - name: unbouned
                 repeat:
-                  until: 'check.ok'
+                  until: 'inner.ok'
                 steps:
                   - name: inner
                     type: orient
               - name: roundless
                 repeat:
-                  until: 'check.ok'
+                  until: 'inner.ok'
                   maxIterations: 3
                   blocking: 'any(check.findings, it.severity != ''low'')'
                 steps:
@@ -257,8 +433,17 @@ public sealed class WorkflowValidatorTests
                     type: orient
               - name: blockless
                 repeat:
-                  until: 'check.ok'
+                  until: 'inner.ok'
                   rounds: 3
+                steps:
+                  - name: inner
+                    type: orient
+              - name: doubly
+                repeat:
+                  until: 'inner.ok'
+                  maxIterations: 3
+                  rounds: 2
+                  blocking: 'inner.blocking'
                 steps:
                   - name: inner
                     type: orient
@@ -271,7 +456,61 @@ public sealed class WorkflowValidatorTests
                 "group 'unbouned' repeats with no bound; give maxIterations, or rounds with blocking, so the loop always has an end",
                 "group 'roundless' says blocking without rounds; past the rounds is the only place either is read",
                 "group 'blockless' repeats in rounds and says no blocking; blocking is what says, past the rounds, whether what is left must still be dealt with, and a loop without it would end with the rounds whatever was left",
+                "group 'doubly' repeats to maxIterations 3 and to rounds 2; one bound says the most iterations, the other says the rounds to follow and what keeps the loop going past them, and a loop with both would never tell which it was asked",
             ],
+            problems);
+    }
+
+    /// <summary>
+    /// A repeat's until is read once each iteration has ended, so it reads what the iterations produce: a member's
+    /// output, by its name or its path from the root, or the previous iteration's. One that reads none of it - only steps
+    /// before the loop, or the run's inputs - says the same after every iteration, and is refused.
+    /// </summary>
+    [Fact]
+    public void ARepeatsUntil_ReadsWhatItsOwnStepsProduce()
+    {
+        var problems = Problems(
+            """
+            name: default
+            inputs:
+              - name: done
+            steps:
+              - name: check
+                type: orient
+              - name: blind
+                repeat:
+                  until: 'check.ok || input.done'
+                  maxIterations: 3
+                steps:
+                  - name: inner
+                    type: orient
+              - name: seeing
+                repeat:
+                  until: 'check.ok && inner.ok'
+                  maxIterations: 3
+                steps:
+                  - name: inner
+                    type: orient
+              - name: by-path
+                repeat:
+                  until: 'by-path.deep.inner.ok'
+                  maxIterations: 3
+                steps:
+                  - name: deep
+                    steps:
+                      - name: inner
+                        type: orient
+              - name: remembering
+                repeat:
+                  until: 'previous.inner.ok'
+                  maxIterations: 3
+                steps:
+                  - name: inner
+                    type: orient
+            """);
+
+        Assert.Equal(
+            ["group 'blind' repeats until 'check.ok || input.done', which reads nothing its own steps produce; no iteration could change what it says, so the loop would stop after its first or run to its bound"],
             problems);
     }
 
@@ -394,16 +633,69 @@ public sealed class WorkflowValidatorTests
                 "amend.whenRemoveScope names 'missing-remove', which is no step of the flow",
             ],
             problems);
+
+        // Nothing is planned again past a step of the flow's own stages, and the updated plan goes on beside its planner.
+        Assert.Equal(
+            [
+                "amend.before names 'stage.inner', which is a step inside the group 'stage'; a change is planned again only while the flow's own stages still have a step to plan it",
+                "amend.then names 'inner', which is no step declared beside 'replan'",
+            ],
+            Problems(
+                """
+                name: default
+                steps:
+                  - name: replan
+                    type: reason
+                    agent: planner
+                    prompt: prompts/update.md
+                    outputs: schemas/update.json
+                  - name: stage
+                    steps:
+                      - name: inner
+                        type: orient
+                amend:
+                  before: stage.inner
+                  step: replan
+                  then: inner
+                  scope: 'replan.scope'
+                  whenAddScope: replan
+                  whenChangeScope: replan
+                  whenRemoveScope: replan
+                """));
+
+        Assert.Equal(
+            [
+                "amend.before names 'nowhere', which is no step of the flow",
+                "amend.step names 'planning.replan', which is no step of the flow",
+            ],
+            Problems(
+                """
+                name: default
+                steps:
+                  - name: replan
+                    type: reason
+                    agent: planner
+                    prompt: prompts/update.md
+                    outputs: schemas/update.json
+                amend:
+                  before: nowhere
+                  step: planning.replan
+                  scope: 'replan.scope'
+                  whenAddScope: replan
+                  whenChangeScope: replan
+                  whenRemoveScope: replan
+                """));
     }
 
     /// <summary>
-    /// Where the configuration declares a commit template, a commit step says the values it reads and its own message
-    /// is refused; where none is declared, the message is required.
+    /// Where the configuration declares no commit template, a commit step writes its message, which is required; where it
+    /// declares one, the template writes it and a step's own message is not used - never refused, so that one definition,
+    /// the shipped one among them, holds in a repository with a template and in one without.
     /// </summary>
     [Fact]
     public void ACommitStep_WritesTheMessageTheConfigurationLeavesIt()
     {
-        var text =
+        var bare =
             """
             name: default
             steps:
@@ -411,13 +703,13 @@ public sealed class WorkflowValidatorTests
                 type: commit
             """;
 
-        var withoutTemplate = Problems(text);
+        Assert.Equal(["step 'commit' names no message and the configuration declares no commit.template; one of the two writes the commit's message"], Problems(bare));
+        Assert.Empty(WorkflowValidator.Validate(Parse(bare), hasCommitTemplate: true));
 
-        Assert.Equal(["step 'commit' names no message and the configuration declares no commit.template; one of the two writes the commit's message"], withoutTemplate);
+        var written = bare + "\n    message: 'work done'";
 
-        var withTemplate = WorkflowValidator.Validate(Parse(text), hasCommitTemplate: true);
-
-        Assert.Empty(withTemplate);
+        Assert.Empty(Problems(written));
+        Assert.Empty(WorkflowValidator.Validate(Parse(written), hasCommitTemplate: true));
     }
 
     /// <summary>
@@ -587,7 +879,7 @@ public sealed class WorkflowValidatorTests
         Assert.Equal(
             [
                 "step 'think' is a reasoning step and gives its failure to the recovery; a reasoning step is never recovered - its agent is tried again and on its fallback, and what still fails is asked: say pause",
-                "step 'work.plan' is a reasoning step, and its failure would go to the recovery by the onFailure of 'work'; a reasoning step is never recovered - say pause on it",
+                "step 'stage.plan' is a reasoning step, and its failure would go to the recovery by the onFailure of 'stage'; a reasoning step is never recovered - say pause on it",
             ],
             Problems(
                 """
@@ -602,7 +894,7 @@ public sealed class WorkflowValidatorTests
                     prompt: prompts/think.md
                     outputs: schemas/think.json
                     onFailure: recover
-                  - name: work
+                  - name: stage
                     onFailure: recover
                     steps:
                       - name: plan
@@ -644,6 +936,31 @@ public sealed class WorkflowValidatorTests
                     """));
         }
 
+        // A step of the recovery that says no onFailure does what the recovery's own says, as a member does its group's: a
+        // reasoning step there would be recovered where the recovery gives its failures to itself.
+        Assert.Equal(
+            [
+                "recover gives a failure of its own work to the recovery (onFailure: recover), and so calls itself; a step never does - one that is to run again after it failed says retries",
+                "step 'recover.diagnose' is a reasoning step, and its failure would go to the recovery by the onFailure of 'recover'; a reasoning step is never recovered - say pause on it",
+            ],
+            Problems(
+                """
+                name: default
+                steps:
+                  - name: build
+                    type: build
+                    onFailure: recover
+                recover:
+                  onSuccess: failed-step
+                  onFailure: recover
+                  steps:
+                    - name: diagnose
+                      type: reason
+                      agent: diagnostician
+                      prompt: prompts/diagnose.md
+                      outputs: schemas/diagnosis.json
+                """));
+
         // A step gives its failure to a recovery only where the workflow declares one.
         Assert.Equal(
             ["step 'test' gives its failure to the recovery (onFailure: recover), and the workflow declares no recover; declare one, or say what the failure does"],
@@ -676,28 +993,57 @@ public sealed class WorkflowValidatorTests
                 times: 50
                 then: retry
             steps:
-              - name: orient
-                type: orient
-                answers:
-                  failure: retry
-                  ask: decide
-                  runBudget: more
-                  pause: go
-                  contextLimit: skip
-                  checksPending:
-                    answer: accept
-                    times: 2
-                  visitBound:
-                    answer: more
-                    then: accept
-              - name: baseline
-                type: test
+              - name: loop
+                repeat:
+                  until: 'think.ok'
+                  maxIterations: 2
+                steps:
+                  - name: think
+                    type: reason
+                    agent: thinker
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                    answers:
+                      failure: retry
+                      ask: decide
+                      runBudget: more
+                      pause: go
+                      contextLimit: skip
+              - name: draft
+                type: reason
+                agent: thinker
+                prompt: prompts/think.md
+                outputs: schemas/think.json
                 skippable: true
                 answers:
                   truncated:
                     answer: retry
                     times: 2
                     then: skip
+              - name: checks
+                type: ci-wait
+                dependsOn: [loop]
+                answers:
+                  checksPending:
+                    answer: accept
+                    times: 2
+                  noChecks: ''
+              - name: mender
+                type: orient
+                on:
+                  step: checks
+                  outcome: failure
+                answers:
+                  visitBound:
+                    answer: more
+                    then: accept
+              - name: asked
+                type: pause
+                dependsOn: [checks]
+                question: now?
+                options: [go]
+                answers:
+                  pause: stop
             """);
 
         Assert.Equal(
@@ -706,13 +1052,112 @@ public sealed class WorkflowValidatorTests
                 "the workflow answers 'loopBound' with 'bogus', which it does not offer. Its answers: 'more', 'accept', 'abort'.",
                 "the workflow: the times of the answer to 'turnLimit' must be from 1 to 20, found 50",
                 "the workflow answers 'turnLimit' then 'retry', which is not one of its answers that end the matter: 'skip', 'fail', 'abort'",
-                "step 'orient' answers 'failure': what a step's failure does is its onFailure, which answers that question beforehand",
-                "step 'orient' answers 'ask': whether a step may put its questions to a person is the step's own ask",
-                "step 'orient' answers 'runBudget': the run's budget is the workflow's, and only the workflow's own answers answer for it",
-                "step 'orient' answers 'pause': a pause step's question is answered on that step alone",
-                "step 'orient' answers 'contextLimit' with skip, and 'orient' is no skippable step; skip ends a step skipped only where it says skippable",
-                "step 'orient' answers 'checksPending' with accept 2 times; times count an answer after which the same question can come again - more, retry or compact - and accept ends the matter",
-                "step 'orient' answers 'visitBound' then accept with no times; then is what is answered once the counted answers are spent",
+                "step 'loop.think' answers 'failure': what a step's failure does is its onFailure, which answers that question beforehand",
+                "step 'loop.think' answers 'ask': whether a step may put its questions to a person is the step's own ask",
+                "step 'loop.think' answers 'runBudget': the run's budget is the workflow's, and only the workflow's own answers answer for it",
+                "step 'loop.think' answers 'pause': a pause step's question is answered on that step alone",
+                "step 'loop.think' answers 'contextLimit' with skip, and 'loop.think' is no skippable step; skip ends a step skipped only where it says skippable",
+                "step 'checks' answers 'checksPending' with accept 2 times; times count an answer after which the same question can come again - more, retry or compact - and accept ends the matter",
+                "step 'checks' answers the kind 'noChecks' with nothing; an answer is spelled as the question's options spell it",
+                "step 'mender' answers 'visitBound' with more and no times: say how many times, from 1 to 20",
+                "step 'mender' answers 'visitBound' then accept with no times; then is what is answered once the counted answers are spent",
+                "step 'asked' answers 'pause' with 'stop', which is not one of the options the step offers",
+            ],
+            problems);
+    }
+
+    /// <summary>
+    /// An answer given beforehand is to a question its step can raise - on a group, one some step in it raises, and on
+    /// the workflow one some step of it raises - since one to a question nothing raises would be read by nothing; and an
+    /// answer after which the same question can come again says how many times it is given.
+    /// </summary>
+    [Fact]
+    public void AnAnswer_IsToAKindItsStepRaises_AndOneThatGoesOnIsCounted()
+    {
+        var problems = Problems(
+            """
+            name: default
+            answers:
+              noChecks:
+                answer: retry
+                times: 2
+              turnLimit: retry
+            steps:
+              - name: make
+                type: create-agent
+                agent: implementer
+              - name: think
+                type: reason
+                agent: thinker
+                prompt: prompts/think.md
+                outputs: schemas/think.json
+                answers:
+                  loopBound: accept
+                  contextLimit: compact
+              - name: stage
+                onFailure: recover
+                answers:
+                  checksUnsettled: accept
+                  visitBound:
+                    answer: more
+                    times: 2
+                  recoveryBound: abort
+                steps:
+                  - name: build
+                    type: build
+                  - name: mend
+                    type: orient
+                    on:
+                      step: build
+                      outcome: failure
+                  - name: drop
+                    type: delete-agent
+                    of: make
+                    discardUncommitted: true
+                    answers:
+                      foldNewRows: allow
+                  - name: release
+                    type: delete-agent
+                    of: make
+                    answers:
+                      foldNewRows: allow
+                      foldConflicts:
+                        answer: retry
+                        times: 1
+                  - name: catch-up
+                    type: refresh
+                    of: make
+                    answers:
+                      foldTwoChanges: merge
+                      foldOutside: fail
+                  - name: redirect
+                    type: orient
+                    on:
+                      step: catch-up
+                      outcome: failure
+                    then: build
+                    answers:
+                      openAgents: stay
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: diagnose
+                  type: orient
+                  answers:
+                    recoveryBound: abort
+            """);
+
+        Assert.Equal(
+            [
+                "the workflow answers 'noChecks', which no step of it raises; the answer would be read by nothing",
+                "the workflow answers 'turnLimit' with retry and no times: say how many times, from 1 to 20",
+                "step 'think' answers 'loopBound', which it never raises; the answer would be read by nothing",
+                "step 'think' answers 'contextLimit' with compact and no times: say how many times, from 1 to 20",
+                "group 'stage' answers 'checksUnsettled', which no step in it raises; the answer would be read by nothing",
+                "step 'stage.drop' answers 'foldNewRows', which it never raises; the answer would be read by nothing",
+                "step 'stage.catch-up' answers 'foldOutside', which it never raises; the answer would be read by nothing",
+                "step 'recover.diagnose' answers 'recoveryBound', which it never raises; the answer would be read by nothing",
             ],
             problems);
     }
@@ -769,7 +1214,7 @@ public sealed class WorkflowValidatorTests
             steps:
               - name: gate
                 type: test
-              - name: work
+              - name: stage
                 retries: -1
                 maxVisits: 2
                 steps:
@@ -806,16 +1251,16 @@ public sealed class WorkflowValidatorTests
 
         Assert.Equal(
             [
-                "group 'work': retries must be from 1 to 20, found -1",
-                "group 'work' says maxVisits without on; it bounds how often a handler is raised, and the schedule starts a step once",
-                "step 'work.self' is raised by its own ending, and so calls itself; a step never does - one that is to run again after it failed says retries",
-                "step 'work.codes' is raised by the codes 300, 20, 20, and an exit code is from 1 to 255",
-                "step 'work.codes' is raised by the code 20 more than once",
-                "step 'work.codes': maxVisits must be from 1 to 20, found 21",
-                "step 'work.succeeded' is raised by a success with codes; a step that ended done ended with 0, and codes are a failure's",
-                "step 'work.succeeded' is raised by 'build' and also depends on 'build': a handler waits for its source's ending and for nothing else",
-                "step 'work.succeeded' is raised by 'build' and is always; an always step is started by the end of the session, never by a step",
-                "step 'work.succeeded' sends the run back to itself, and so calls itself; a step never does - one that is to run again after it failed says retries",
+                "group 'stage': retries must be from 1 to 20, found -1",
+                "group 'stage' says maxVisits without on; it bounds how often a handler is raised, and the schedule starts a step once",
+                "step 'stage.self' is raised by its own ending, and so calls itself; a step never does - one that is to run again after it failed says retries",
+                "step 'stage.codes' is raised by the codes 300, 20, 20, and an exit code is from 1 to 255",
+                "step 'stage.codes' is raised by the code 20 more than once",
+                "step 'stage.codes': maxVisits must be from 1 to 20, found 21",
+                "step 'stage.succeeded' is raised by a success with codes; a step that ended done ended with 0, and codes are a failure's",
+                "step 'stage.succeeded' is raised by 'build' and also depends on 'build': a handler waits for its source's ending and for nothing else",
+                "step 'stage.succeeded' is raised by 'build' and is always; an always step is started by the end of the session, never by a step",
+                "step 'stage.succeeded' sends the run back to itself, and so calls itself; a step never does - one that is to run again after it failed says retries",
             ],
             problems);
     }
@@ -891,6 +1336,84 @@ public sealed class WorkflowValidatorTests
             ],
             problems);
 
+        // The counts of what runs at once, the reporter's tries, every wait of git, the forge and the checks, a loop's
+        // rounds, and how long an answer can be changed for.
+        Assert.Equal(
+            [
+                "maxParallelProcesses is 0, and so not one or more",
+                "maxOpenAgents is 0, and so not one or more",
+                "reporter.retries must be from 1 to 20, found 21",
+                "reporter.backoffSeconds must be from 1 to 900, found 0",
+                "step 'ci': limit is 0, and so not one or more",
+                "step 'ci': timeoutMinutes must be from 1 to 240, found 241",
+                "step 'checks': appearSeconds must be from 30 to 3,600, found 29",
+                "step 'checks': waitMinutes must be from 1 to 720, found 721",
+                "step 'checks': pollSeconds must be from 10 to 600, found 601",
+                "step 'checks': timeoutMinutes must be from 1 to 240, found 0",
+                "step 'commit': timeoutMinutes must be from 1 to 240, found 0",
+                "step 'push': timeoutMinutes must be from 1 to 240, found 241",
+                "step 'pr': timeoutMinutes must be from 1 to 240, found 0",
+                "group 'rounds': repeat.rounds must be from 1 to 20, found 21",
+                "group 'rounds': repeat.blockersLimitRounds must be from 1 to 20, found 0",
+                "amend.changedAnswerMinutes must be from 1 to 60, found 61",
+            ],
+            Problems(
+                """
+                name: default
+                maxParallelProcesses: 0
+                maxOpenAgents: 0
+                reporter:
+                  agent: reporter
+                  statusPrompt: prompts/status.md
+                  askPrompt: prompts/ask.md
+                  retries: 21
+                  backoffSeconds: 0
+                steps:
+                  - name: replan
+                    type: reason
+                    agent: planner
+                    prompt: prompts/plan.md
+                    outputs: schemas/plan.json
+                  - name: ci
+                    type: ci-read
+                    limit: 0
+                    timeoutMinutes: 241
+                  - name: checks
+                    type: ci-wait
+                    appearSeconds: 29
+                    waitMinutes: 721
+                    pollSeconds: 601
+                    timeoutMinutes: 0
+                  - name: commit
+                    type: commit
+                    message: 'work'
+                    timeoutMinutes: 0
+                  - name: push
+                    type: push
+                    timeoutMinutes: 241
+                  - name: pr
+                    type: pull-request
+                    title: 'pr'
+                    body: prompts/body.md
+                    timeoutMinutes: 0
+                  - name: rounds
+                    repeat:
+                      until: 'inner.ok'
+                      rounds: 21
+                      blocking: 'inner.blocking'
+                      blockersLimitRounds: 0
+                    steps:
+                      - name: inner
+                        type: orient
+                amend:
+                  changedAnswerMinutes: 61
+                  step: replan
+                  scope: 'replan.scope'
+                  whenAddScope: replan
+                  whenChangeScope: replan
+                  whenRemoveScope: replan
+                """));
+
         var unbounded =
             """
             name: default
@@ -911,11 +1434,11 @@ public sealed class WorkflowValidatorTests
     }
 
     /// <summary>
-    /// A read names the nearest step it sees before the flow's root paths: a sibling declared before it wins over a
-    /// root step of the same name declared later. And only a reason step's work has a latest output, or assumptions.
+    /// Only a reason step's work has a latest output, or assumptions: of any other step, by its name or its path from
+    /// the root, either is refused.
     /// </summary>
     [Fact]
-    public void ARead_NamesTheNearestStepFirst_AndOnlyAReasonStepHasALatest()
+    public void OnlyAReasonStepsWork_HasALatestOutputOrAssumptions()
     {
         var problems = Problems(
             """
@@ -928,8 +1451,6 @@ public sealed class WorkflowValidatorTests
                   - name: b
                     type: orient
                     when: 'a.ok && !a.latest.blocked'
-              - name: a
-                type: orient
               - name: think
                 type: reason
                 agent: thinker
@@ -937,11 +1458,124 @@ public sealed class WorkflowValidatorTests
                 outputs: schemas/think.json
               - name: c
                 type: orient
-                when: '!empty(think.latest.blocked) && empty(think.assumptions)'
+                when: '!empty(think.latest.blocked) && empty(think.assumptions) && empty(group.a.assumptions)'
             """);
 
         Assert.Equal(
-            ["'group.b.when' reads 'a.latest.blocked', and 'group.a' is a orient step: only a reason step's work has a latest output"],
+            [
+                "'group.b.when' reads 'a.latest.blocked', and 'group.a' is a orient step: only a reason step's work has a latest output",
+                "'c.when' reads 'group.a.assumptions', and 'group.a' is a orient step: only a reason step's work has assumptions",
+            ],
+            problems);
+    }
+
+    /// <summary>
+    /// A name is looked up from the inside out, so an inner step never takes a name it can see from outside by bare name
+    /// - a step beside a group around it, declared before or after, or that group itself; and the recovery's steps,
+    /// which see the flow's top level by bare name, take none of its names. Steps of the same name in two groups neither
+    /// of which holds the other see nothing of each other, and are each read by their own group's path.
+    /// </summary>
+    [Fact]
+    public void AnInnerStep_NeverTakesANameItCanSeeFromOutside()
+    {
+        var problems = Problems(
+            """
+            name: default
+            steps:
+              - name: orient
+                type: orient
+                onFailure: recover
+              - name: outer
+                steps:
+                  - name: orient
+                    type: orient
+                  - name: outer
+                    type: orient
+                  - name: later
+                    type: orient
+              - name: later
+                type: orient
+              - name: kept
+                steps:
+                  - name: balance
+                    type: orient
+              - name: other
+                steps:
+                  - name: balance
+                    type: orient
+                  - name: checks
+                    steps:
+                      - name: kept
+                        type: orient
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: orient
+                  type: orient
+                - name: balance
+                  type: orient
+            """);
+
+        Assert.Equal(
+            [
+                "step 'outer.orient' has the name of step 'orient', which it can see from where it is: names are looked up from the inside out, so the inner one would be read in its place",
+                "step 'outer.outer' has the name of step 'outer', which it can see from where it is: names are looked up from the inside out, so the inner one would be read in its place",
+                "step 'outer.later' has the name of step 'later', which it can see from where it is: names are looked up from the inside out, so the inner one would be read in its place",
+                "step 'other.checks.kept' has the name of step 'kept', which it can see from where it is: names are looked up from the inside out, so the inner one would be read in its place",
+                "step 'recover.orient' has the name of step 'orient', which it can see from where it is: names are looked up from the inside out, so the inner one would be read in its place",
+            ],
+            problems);
+    }
+
+    /// <summary>
+    /// No step is named for a word a definition reads for its own - a root a read starts with, a fact of the engine's
+    /// read after a step's name, or a literal - and the list is the one the names and scopes of the plan give, with
+    /// param, which the code reads as a root. A read starting with a run fact reads the run; one starting with a fact of
+    /// the engine's names no step, and is refused.
+    /// </summary>
+    [Fact]
+    public void AStep_IsNamedNoWordADefinitionReadsForItsOwn()
+    {
+        string[] reserved =
+        [
+            "run", "carried", "previous", "source", "item", "it", "index", "iteration", "visit", "input", "recover", "skill",
+            "recommendations", "update", "piece", "status", "true", "false", "null", "empty", "any",
+            "outcome", "code", "error", "question", "latest", "assumptions",
+            "worktree", "work", "plans", "rows", "orchestrator", "agent", "step", "os",
+            "param",
+        ];
+
+        Assert.Equal(reserved.Order(StringComparer.Ordinal), WorkflowExpressions.ReservedNames.Order(StringComparer.Ordinal));
+        Assert.All(WorkflowExpressions.ReservedRoots, root => Assert.Contains(root, WorkflowExpressions.ReservedNames));
+
+        var problems = Problems(
+            """
+            name: default
+            steps:
+              - name: work
+                type: orient
+              - name: 'true'
+                type: orient
+              - name: param
+                type: orient
+              - name: stage
+                steps:
+                  - name: code
+                    type: orient
+              - name: commit
+                type: commit
+                message: '{os} {worktree} {latest.items}'
+            """);
+
+        Assert.Equal(
+            [
+                "step 'work' is named 'work', a word a definition reads for its own; a read could not tell the step from the word",
+                "step 'true' is named 'true', a word a definition reads for its own; a read could not tell the step from the word",
+                "step 'param' is named 'param', a word a definition reads for its own; a read could not tell the step from the word",
+                "step 'stage.code' is named 'code', a word a definition reads for its own; a read could not tell the step from the word",
+                "'commit.message' reads 'latest.items', which no step before 'commit', no input and no param provides",
+            ],
             problems);
     }
 
@@ -980,6 +1614,14 @@ public sealed class WorkflowValidatorTests
                 prompt: prompts/read.md
                 outputs: schemas/read.json
                 writes: [src/**]
+              - name: lost
+                type: fold
+                of: nowhere
+              - name: weighs-both
+                type: refresh
+                of: make
+                paths: [src/a.c]
+                all: true
             """);
 
         Assert.Equal(
@@ -989,7 +1631,304 @@ public sealed class WorkflowValidatorTests
                 "step 'wrong' names 'neither' as its others, which is a rebase step; an agent is made by a create-agent step",
                 "step 'dropped' discards what is not committed and says what its fold may carry; a deletion that discards folds nothing, so allow and within would be read by nothing",
                 "step 'reads' names writes and only reads; a step that writes says access: write and names the create-agent step it works in",
+                "step 'lost' names 'nowhere' as its of, which is no step an enclosing group declares",
+                "step 'weighs-both' says paths and all; all is every path the main tree moved, in place of paths, and a step that said both would never tell which it weighed",
             ],
             problems);
+    }
+
+    /// <summary>
+    /// An always step runs at the session's end: no handler is raised by its ending, and no redirect goes to it. A
+    /// handler is raised by its own sibling's ending, sends the run nowhere from inside an always group - which runs once
+    /// and is never gone back over - and never to a step that waits for the group the handler is in, which would start no
+    /// sooner.
+    /// </summary>
+    [Fact]
+    public void AnAlwaysStep_RaisesNoHandler_AndIsNeverRedirectedTo()
+    {
+        var problems = Problems(
+            """
+            name: default
+            steps:
+              - name: gate
+                type: test
+              - name: report
+                type: orient
+                always: true
+              - name: on-report
+                type: orient
+                on:
+                  step: report
+                  outcome: end
+              - name: stage
+                steps:
+                  - name: build
+                    type: build
+                  - name: stranger
+                    type: orient
+                    on:
+                      step: gate
+                      outcome: failure
+                  - name: to-report
+                    type: orient
+                    on:
+                      step: build
+                      outcome: failure
+                    then: report
+                  - name: to-waiter
+                    type: orient
+                    on:
+                      step: build
+                      outcome: failure
+                      codes: [2]
+                    then: waiter
+              - name: waiter
+                type: orient
+                dependsOn: [stage]
+              - name: closing
+                always: true
+                steps:
+                  - name: check
+                    type: test
+                  - name: mend
+                    type: orient
+                    on:
+                      step: check
+                      outcome: failure
+                    then: check
+            """);
+
+        Assert.Equal(
+            [
+                "step 'on-report' is raised by 'report', an always step; an always step runs at the session's end, when nothing is left to handle its ending",
+                "step 'stage.stranger' is raised by 'gate', which is no step declared beside it; a handler is raised by its own siblings",
+                "step 'stage.to-report' sends the run to 'report', an always step, which runs once at the session's end and is never gone back to",
+                "step 'stage.to-waiter' sends the run to 'waiter', which depends on 'stage', the group the handler is in: it waits for that group, and would start no sooner",
+                "step 'closing.mend' sends the run to 'check' from inside the always group 'closing'; an always group runs once, at the session's end, and is never gone back over",
+            ],
+            problems);
+    }
+
+    /// <summary>
+    /// A pause offers each answer once - and at least one, whether its options are left out or given empty; a pre-answer
+    /// gives one of them, with a text exactly where that option needs one, reads an input or quotes words from one, and a
+    /// quote is looked for in a declared text input, the words a person gave.
+    /// </summary>
+    [Fact]
+    public void APreAnswer_IsWhatThePersonGaveWithTheRun_WithATextExactlyWhereItsOptionNeedsOne()
+    {
+        var problems = Problems(
+            """
+            name: default
+            inputs:
+              - name: request
+              - name: plan
+                kind: file
+            steps:
+              - name: approval
+                type: pause
+                question: approve?
+                options: [approve, revise, approve]
+                text: [revise]
+                preAnswer:
+                  - when: "input.request == 'go'"
+                    answer: revise
+                  - when: "input.request == 'go'"
+                    answer: approve
+                    text: 'as it is'
+                  - when: 'true'
+                    answer: approve
+                  - when: "input.request != ''"
+                    answer: maybe
+                  - when: 'true'
+                    answer: approve
+                    quote:
+                      text: "'approved'"
+                      input: plan
+                  - when: 'true'
+                    answer: approve
+                    quote:
+                      text: "'approved'"
+                      input: missing
+                  - when: "input.request == 'change'"
+                    answer: revise
+                    text: 'smaller'
+              - name: empty-offer
+                type: pause
+                question: now?
+                options: []
+            """);
+
+        Assert.Equal(
+            [
+                "step 'approval' offers one option more than once",
+                "step 'approval' is answered beforehand with 'revise' and no text; 'revise' needs a text with it, and the answer would carry none",
+                "step 'approval' is answered beforehand with 'approve' and a text; 'approve' takes no text, and this one would be read by nothing",
+                "step 'approval' is answered beforehand by an entry that reads no input and quotes none: a pre-answer is what the person gave with the run, and an answer the configuration gives whatever was typed is written under answers",
+                "step 'approval' is answered beforehand with 'maybe', which is not one of the options it offers",
+                "step 'approval' quotes the input 'plan', a file input; a quote is looked for in the words a person gave, which a text input holds",
+                "step 'approval' quotes the input 'missing', which the workflow does not declare",
+                "step 'empty-offer' offers no options; a question with nothing to answer leaves a person typing into a run that reads nothing",
+            ],
+            problems);
+    }
+
+    /// <summary>
+    /// What the workflow declares is named as everything reads it, and each declaration holds: an input lists each of its
+    /// options once, a param a default supplies is never also required, an output is named as an input is, and the
+    /// advisor is asked only about kinds there are.
+    /// </summary>
+    [Fact]
+    public void TheWorkflowsDeclarations_AreNamedAsReadAndEachHolds()
+    {
+        var problems = Problems(
+            """
+            name: default
+            advisor:
+              agent: advisor
+              prompt: prompts/recommend.md
+              kinds: [loopBound, unboundLoop]
+            inputs:
+              - name: request
+                options: [yes, 'no', yes]
+              - name: step
+              - name: Upper
+            params:
+              - name: rounds
+                default: '3'
+                required: true
+              - name: os
+            outputs:
+              - name: Title
+                from: 'orient.title'
+            steps:
+              - name: orient
+                type: orient
+            """);
+
+        Assert.Equal(
+            [
+                "input 'request' lists 'yes' among its options more than once; an option is one value a run may be started with, and a second says nothing the first did not",
+                "the input 'step' is named with a word a definition reads for its own; name it another way",
+                "the input 'Upper' is not a lower-case word with dashes within",
+                "param 'rounds' is required and declares a default: a default always supplies the value, so required would never refuse. Give the default, or require the value.",
+                "the param 'os' is named with a word a definition reads for its own; name it another way",
+                "advisor.kinds names 'unboundLoop', which is no question kind. Known: 'loopBound', 'visitBound', 'recoveryBound', 'openAgents', 'foldNewRows', 'foldLostRows', 'foldOverCells', 'foldTwoChanges', 'foldConflicts', 'foldOutside', 'turnLimit', 'truncated', 'stepBudget', 'contextLimit', 'runBudget', 'noChecks', 'checksUnsettled', 'checksPending', 'failure', 'pause', 'ask'.",
+                "the output 'Title' is not a lower-case word with dashes within",
+            ],
+            problems);
+    }
+
+    /// <summary>
+    /// A budget counts at least one amount, and every amount it gives is above zero - a zero beside another amount would
+    /// pause the run before it began as surely as a zero alone.
+    /// </summary>
+    [Fact]
+    public void ABudget_CountsSomething_AndEveryAmountItGivesIsAboveZero()
+    {
+        Assert.Equal(
+            [
+                "budget.usd must be above zero, found 0",
+                "budget.minutes must be above zero, found -5",
+            ],
+            Problems(
+                """
+                name: default
+                budget:
+                  usd: 0
+                  tokens: 1000
+                  minutes: -5
+                steps:
+                  - name: orient
+                    type: orient
+                """));
+
+        Assert.Equal(
+            ["budget.tokens must be above zero, found -1"],
+            Problems(
+                """
+                name: default
+                budget:
+                  tokens: -1
+                steps:
+                  - name: orient
+                    type: orient
+                """));
+
+        Assert.Equal(
+            ["budget holds no usd, tokens or minutes; a budget with nothing to count is no budget. Give at least one, or take the section out to have none."],
+            Problems(
+                """
+                name: default
+                budget:
+                  reservePercent: 20
+                steps:
+                  - name: orient
+                    type: orient
+                """));
+    }
+
+    /// <summary>
+    /// A read of the run's own names says which one it reads - an input, a param, a member of the previous iteration
+    /// that its loop holds - 'it' is read only inside an any(...) test, a skill only in a prompt, and a template hands on
+    /// something. What a placeholder says after '|' is how its value is written, and is never read as a name.
+    /// </summary>
+    [Fact]
+    public void AReadOfTheRunsOwnNames_SaysWhichOneItReads()
+    {
+        var problems = Problems(
+            """
+            name: default
+            inputs:
+              - name: request
+            params:
+              - name: rounds
+            steps:
+              - name: loop
+                repeat:
+                  until: 'inner.ok'
+                  maxIterations: 2
+                steps:
+                  - name: inner
+                    type: orient
+                  - name: reads
+                    type: orient
+                    when: 'empty(input) || empty(param) || previous.ghost.ok || it.severity || skill.notes'
+              - name: said
+                type: pull-request
+                dependsOn: [loop]
+                title: ''
+                body: prompts/body.md
+              - name: commit
+                type: commit
+                dependsOn: [said]
+                message: '{plann.title | upper} {loop.inner.title|lower}'
+            """);
+
+        Assert.Equal(
+            [
+                "'loop.reads.when' reads 'input', which names no input; read 'input.<name>'",
+                "'loop.reads.when' reads 'param', which names no param; read 'param.<name>'",
+                "'loop.reads.when' reads 'previous.ghost.ok', and 'ghost' is no step of the group 'loop' repeats",
+                "'loop.reads.when' reads 'it.severity', whose 'it' names the member an any(...) test reads, and this read is in none",
+                "'loop.reads.when' names a skill, and a skill's text is a prompt's alone; the step's own keys read the run's names, never a skill",
+                "'said.title' is empty; a template is the text a step hands on, and an empty one hands on nothing",
+                "'commit.message' reads 'plann.title', which no step before 'commit', no input and no param provides",
+            ],
+            problems);
+
+        // Parentheses left open are counted, as one is.
+        Assert.Equal(
+            ["'opened.when' is not written whole: 2 parentheses are opened and never closed, and nothing it reads past there would be checked"],
+            Problems(
+                """
+                name: default
+                steps:
+                  - name: orient
+                    type: orient
+                  - name: opened
+                    type: orient
+                    when: '((orient.ok'
+                """));
     }
 }

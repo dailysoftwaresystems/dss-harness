@@ -152,12 +152,10 @@ public static class WorkflowFileParser
                     break;
 
                 case "answers":
+                    // A kind written twice is a key written twice, refused by YAML itself before anything is read.
                     foreach (var (kind, answer) in ReadAnswers(value, "answers", problems))
                     {
-                        if (!answers.TryAdd(kind, answer))
-                        {
-                            problems.Add(At(value, $"answers names the kind '{kind}' more than once"));
-                        }
+                        answers.Add(kind, answer);
                     }
 
                     break;
@@ -246,9 +244,11 @@ public static class WorkflowFileParser
             onSuccess = null;
         }
 
+        // A step's other policies - continue, recover - are read here and refused by the validator in words of their own; a
+        // value that is no policy at all is refused here, naming what a recovery may say.
         if (onFailure is not null && !WorkflowStep.FailurePolicies.Contains(onFailure, StringComparer.Ordinal))
         {
-            problems.Add(At(NodeIn(keys, "onFailure")!, $"'recover.onFailure' is '{onFailure}', which is none of {string.Join(", ", WorkflowStep.FailurePolicies.Select(known => $"'{known}'"))}."));
+            problems.Add(At(NodeIn(keys, "onFailure")!, $"'recover.onFailure' is '{onFailure}', which is none of {string.Join(", ", FlowRecover.Failures.Select(known => $"'{known}'"))}; a failure the recovery's own work meets asks a person, or ends the run."));
             onFailure = null;
         }
 
@@ -540,6 +540,8 @@ public static class WorkflowFileParser
         var required = BooleanIn(keys, $"{owner}.required", problems) ?? false;
         var options = StringListIn(keys, $"{owner}.options", problems) ?? [];
 
+        RefuseGivenEmpty(keys, $"{owner}.options", "list the values it takes", "any value", problems);
+
         if (kind is not null && !FlowInput.Kinds.Contains(kind, StringComparer.Ordinal))
         {
             problems.Add(At(declaration, $"{owner}.kind is '{kind}', which is neither of {string.Join(" nor ", FlowInput.Kinds)}."));
@@ -665,12 +667,19 @@ public static class WorkflowFileParser
         }
 
         var keys = CollectKeys(mapping, "a step", [.. KeyDescription.Names(WorkflowStepTypes.Common), .. KeyDescription.Names(WorkflowStepTypes.Group), .. WorkflowStepTypes.AllKeys], problems);
+        // A name or a type written as a list or a mapping is refused naming the key, never read as one left out.
         var nameNode = keys.FirstOrDefault(entry => entry.Key == "name").Value;
         var name = nameNode is null ? null : ScalarOf(nameNode);
-        var typeNode = keys.FirstOrDefault(entry => entry.Key == "type").Value;
-        var type = typeNode is null ? null : ScalarOf(typeNode);
+
+        if (nameNode is not null && name is null)
+        {
+            problems.Add(At(nameNode, "a step's 'name' is not a single value."));
+        }
+
         // The step's name, bare, as every key under it is named in a problem: 'orient.dependsOn'.
         var where = name is null ? "a step" : name;
+        var typeNode = keys.FirstOrDefault(entry => entry.Key == "type").Value;
+        var type = typeNode is null ? null : RequireScalar(typeNode, $"{where}.type", problems);
         var typed = type is null ? null : WorkflowStepTypes.Find(type);
 
         if (type is not null && typed is null)
@@ -724,15 +733,8 @@ public static class WorkflowFileParser
 
         if (answersNode is not null)
         {
-            var stepAnswers = new Dictionary<string, FlowAnswer>(StringComparer.Ordinal);
-
-            foreach (var (kind, answer) in ReadAnswers(answersNode, $"{where}.answers", problems))
-            {
-                if (!stepAnswers.TryAdd(kind, answer))
-                {
-                    problems.Add(At(answersNode, $"{where}.answers names the kind '{kind}' more than once"));
-                }
-            }
+            // A kind written twice is a key written twice, refused by YAML itself before anything is read.
+            var stepAnswers = ReadAnswers(answersNode, $"{where}.answers", problems).ToDictionary(read => read.Kind, read => read.Answer, StringComparer.Ordinal);
 
             step = step with { Answers = stepAnswers };
         }
@@ -776,9 +778,9 @@ public static class WorkflowFileParser
             // The group's own keys, checked only where the file holds them.
             var stepsNode = NodeIn(keys, "steps");
 
-            // A type the file names that no table knows is refused above; what is left to refuse
-            // here is a step that names no type at all.
-            if (stepsNode is null && type is null)
+            // A type the file names that no table knows, or that is no single value, is refused above;
+            // what is left to refuse here is a step that names no type at all.
+            if (stepsNode is null && typeNode is null)
             {
                 problems.Add(At(node, $"{where} names no type and holds no steps; a step does one thing, and a group holds steps of their own."));
             }
@@ -805,7 +807,11 @@ public static class WorkflowFileParser
 
         if (name is null)
         {
-            problems.Add(At(node, "a step names no 'name'; what dependsOn, on, resume and expressions read would have nothing to read."));
+            if (nameNode is null)
+            {
+                problems.Add(At(node, "a step names no 'name'; what dependsOn, on, resume and expressions read would have nothing to read."));
+            }
+
             yield break;
         }
 
@@ -978,6 +984,8 @@ public static class WorkflowFileParser
                     Ignore = StringListIn(keys, $"{where}.ignore", problems) ?? [],
                     TimeoutMinutes = IntIn(keys, $"{where}.timeoutMinutes", problems),
                 };
+
+                RefuseGivenEmpty(keys, $"{where}.ignore", "name the checks it does not count", "every check counted", problems);
                 break;
 
             case "commit":
@@ -1101,6 +1109,8 @@ public static class WorkflowFileParser
             problems.Add(At(node, $"'{where}.preAnswer' is not a sequence."));
             return [];
         }
+
+        RefuseGivenEmpty(keys, $"{where}.preAnswer", "list the answers a person may give with the run", "no answer given beforehand", problems);
 
         var answers = new List<FlowPreAnswer>();
 
@@ -1450,9 +1460,10 @@ public static class WorkflowFileParser
                 continue;
             }
 
-            if (RequireScalar(valueNode, $"{what}.{key}", problems) is { } value && !values.TryAdd(key, value))
+            // A name written twice is a key written twice, refused by YAML itself before anything is read.
+            if (RequireScalar(valueNode, $"{what}.{key}", problems) is { } value)
             {
-                problems.Add(At(keyNode, $"'{what}' names '{key}' more than once"));
+                values.Add(key, value);
             }
         }
 
@@ -1488,7 +1499,6 @@ public static class WorkflowFileParser
     /// is the list written out. Which keys take this shape is said where each type's keys are read,
     /// by reading them through this.
     /// </summary>
-
     private static FlowList? FlowListIn(IReadOnlyList<(string Key, YamlNode Value)> keys, string what, List<string> problems)
     {
         var node = NodeIn(keys, KeyNameOf(what));
@@ -1504,6 +1514,18 @@ public static class WorkflowFileParser
         }
 
         return new FlowList(RequireStringList(node, what, problems), null);
+    }
+
+    /// <summary>
+    /// Refuses a list written out with nothing in it, where leaving the key out says <paramref name="leftOut"/>: the
+    /// model reads a list given empty as the key left out, so an empty one would be taken for what the file never said.
+    /// </summary>
+    private static void RefuseGivenEmpty(IReadOnlyList<(string Key, YamlNode Value)> keys, string what, string name, string leftOut, List<string> problems)
+    {
+        if (NodeIn(keys, KeyNameOf(what)) is YamlSequenceNode { Children.Count: 0 } empty)
+        {
+            problems.Add(At(empty, $"'{what}' is given empty, which is never read as {leftOut}: {name}, or leave the key out for {leftOut}."));
+        }
     }
 
     /// <summary>The key a dotted <c>what</c> names, its last segment.</summary>

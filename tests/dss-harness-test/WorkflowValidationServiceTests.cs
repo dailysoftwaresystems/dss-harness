@@ -105,7 +105,7 @@ public sealed class WorkflowValidationServiceTests
               - name: make
                 type: create-agent
                 agent: implementer
-              - name: work
+              - name: draft
                 type: reason
                 agent: worker
                 prompt: prompts/work.md
@@ -120,9 +120,9 @@ public sealed class WorkflowValidationServiceTests
             [
                 $"ok {Shown(Default)} (79 steps, 46 recovering, 45 reasoning)",
                 $"{Shown("small")}: 'agents/implementer.md', step 'make''s agent, is not at '.harness-config/workflows/small/agents/implementer.md'; write it there, beside the definition that names it",
-                $"{Shown("small")}: 'agents/worker.md', step 'work''s agent, is not at '.harness-config/workflows/small/agents/worker.md'; write it there, beside the definition that names it",
-                $"{Shown("small")}: 'prompts/work.md', step 'work''s prompt, is not at '.harness-config/workflows/small/prompts/work.md'; write it there, beside the definition that names it",
-                $"{Shown("small")}: 'schemas/work.json', step 'work''s outputs, is not at '.harness-config/workflows/small/schemas/work.json'; write it there, beside the definition that names it",
+                $"{Shown("small")}: 'agents/worker.md', step 'draft''s agent, is not at '.harness-config/workflows/small/agents/worker.md'; write it there, beside the definition that names it",
+                $"{Shown("small")}: 'prompts/work.md', step 'draft''s prompt, is not at '.harness-config/workflows/small/prompts/work.md'; write it there, beside the definition that names it",
+                $"{Shown("small")}: 'schemas/work.json', step 'draft''s outputs, is not at '.harness-config/workflows/small/schemas/work.json'; write it there, beside the definition that names it",
             ],
             report.Lines);
         Assert.Equal([true, false], report.Workflows.Select(workflow => workflow.Holds));
@@ -193,7 +193,7 @@ public sealed class WorkflowValidationServiceTests
               - name: make
                 type: create-agent
                 agent: implementer
-              - name: work
+              - name: draft
                 type: reason
                 agent: worker
                 prompt: prompts/work.md
@@ -212,9 +212,9 @@ public sealed class WorkflowValidationServiceTests
             [
                 ".harness-config/workflows/small/small.yml: step 'build' names 'ghost', which is neither a leg nor a leg set: 'ghost' is not declared under legs or legSets. Nothing is declared there.",
                 ".harness-config/workflows/small/small.yml: 'agents/implementer.md', step 'make''s agent, is not at '.harness-config/workflows/small/agents/implementer.md'; write it there, beside the definition that names it",
-                ".harness-config/workflows/small/small.yml: 'agents/worker.md', step 'work''s agent, is not at '.harness-config/workflows/small/agents/worker.md'; write it there, beside the definition that names it",
-                ".harness-config/workflows/small/small.yml: 'prompts/work.md', step 'work''s prompt, is not at '.harness-config/workflows/small/prompts/work.md'; write it there, beside the definition that names it",
-                ".harness-config/workflows/small/small.yml: 'schemas/work.json', step 'work''s outputs, is not at '.harness-config/workflows/small/schemas/work.json'; write it there, beside the definition that names it",
+                ".harness-config/workflows/small/small.yml: 'agents/worker.md', step 'draft''s agent, is not at '.harness-config/workflows/small/agents/worker.md'; write it there, beside the definition that names it",
+                ".harness-config/workflows/small/small.yml: 'prompts/work.md', step 'draft''s prompt, is not at '.harness-config/workflows/small/prompts/work.md'; write it there, beside the definition that names it",
+                ".harness-config/workflows/small/small.yml: 'schemas/work.json', step 'draft''s outputs, is not at '.harness-config/workflows/small/schemas/work.json'; write it there, beside the definition that names it",
                 ".harness-config/workflows/small/small.yml: step 'corpus' runs 'missing-runner': 'missing-runner' is not declared under predefinedRunners. Nothing is declared there.",
             ],
             report.Lines);
@@ -288,16 +288,21 @@ public sealed class WorkflowValidationServiceTests
               statusPrompt: prompts/status.md
               askPrompt: prompts/ask.md
             steps:
-              - name: work
-                type: reason
-                agent: worker
-                resume: work
-                prompt: prompts/work.md
-                resumePrompt: prompts/again.md
-                outputs: schemas/work.json
+              - name: drafts
+                repeat:
+                  until: 'draft.done'
+                  maxIterations: 2
+                steps:
+                  - name: draft
+                    type: reason
+                    agent: worker
+                    resume: draft
+                    prompt: prompts/work.md
+                    resumePrompt: prompts/again.md
+                    outputs: schemas/work.json
               - name: pr
                 type: pull-request
-                dependsOn: [work]
+                dependsOn: [drafts]
                 title: 'work'
                 body: prompts/body.md
             """,
@@ -319,7 +324,7 @@ public sealed class WorkflowValidationServiceTests
                     "'prompts/status.md', the reporter's status prompt's prompt, is not at '.harness-config/workflows/small/prompts/status.md'",
                     "'agents/teller.md', the agent the reporter's ask prompt runs, is not at '.harness-config/workflows/small/agents/teller.md'",
                     "'prompts/ask.md', the reporter's ask prompt's prompt, is not at '.harness-config/workflows/small/prompts/ask.md'",
-                    "'prompts/again.md', step 'work''s resume prompt, is not at '.harness-config/workflows/small/prompts/again.md'",
+                    "'prompts/again.md', step 'drafts.draft''s resume prompt, is not at '.harness-config/workflows/small/prompts/again.md'",
                     "'prompts/body.md', step 'pr''s body, is not at '.harness-config/workflows/small/prompts/body.md'",
                 }.Select(problem => $"{Shown("small")}: {problem}; write it there, beside the definition that names it"),
             ],
@@ -472,7 +477,7 @@ public sealed class WorkflowValidationServiceTests
             """
             name: small
             steps:
-              - name: work
+              - name: draft
                 type: reason
                 agent: worker
                 prompt: prompts/work.md
@@ -487,7 +492,7 @@ public sealed class WorkflowValidationServiceTests
         var report = await Service(repository, held).CheckAsync(repository.Path, "small", cancellationToken);
 
         Assert.Equal(
-            [$"{Shown("small")}: 'schemas/work.json', step 'work''s outputs, could not be read: {Held.Why}"],
+            [$"{Shown("small")}: 'schemas/work.json', step 'draft''s outputs, could not be read: {Held.Why}"],
             report.Lines);
     }
 
@@ -647,7 +652,7 @@ public sealed class WorkflowValidationServiceTests
 
         Assert.Equal(
             [
-                $"{Shown("small")}: 'prompts/work.md', step 'work''s prompt, leads to '{fileSystem.ResolveLinks(target)}', which is outside "
+                $"{Shown("small")}: 'prompts/work.md', step 'draft''s prompt, leads to '{fileSystem.ResolveLinks(target)}', which is outside "
                     + $"'{Path.TrimEndingDirectorySeparator(fileSystem.ResolveLinks(directory))}'; "
                     + "every file a workflow names is relative to '.harness-config/workflows/small/', as an action's are to its own directory",
             ],
@@ -670,7 +675,7 @@ public sealed class WorkflowValidationServiceTests
         var definition = await Service(repository, new Unlooked(repository.Harness.FileSystem, "small.yml")).CheckAsync(repository.Path, "small", cancellationToken);
 
         Assert.Equal(
-            [$"{Shown("small")}: 'prompts/work.md', step 'work''s prompt, could not be looked at: the disk would not say"],
+            [$"{Shown("small")}: 'prompts/work.md', step 'draft''s prompt, could not be looked at: the disk would not say"],
             prompt.Lines);
         Assert.Equal([$"{Shown("small")} could not be looked at: the disk would not say"], definition.Lines);
     }
@@ -782,7 +787,7 @@ public sealed class WorkflowValidationServiceTests
     private const string Work = """
         name: small
         steps:
-          - name: work
+          - name: draft
             type: reason
             agent: worker
             prompt: prompts/work.md
