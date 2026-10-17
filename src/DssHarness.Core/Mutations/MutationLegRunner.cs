@@ -1150,7 +1150,7 @@ internal sealed class MutationLegRunner(
                 }
 
                 _work.Progress($"worker {number}: making '{worker}' the tree as it was read");
-                await _runner._copies.SyncAsync(_reading, worker, cancellationToken).ConfigureAwait(false);
+                await _runner._copies.SyncAsync(_reading, worker, _leg.Variant, cancellationToken).ConfigureAwait(false);
 
                 // What it keeps of dependency sources is made what this sweep read, as its copy of the tree was: each given
                 // again by content, and what an earlier sweep left of one no longer given removed.

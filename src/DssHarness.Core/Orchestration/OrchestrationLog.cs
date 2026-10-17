@@ -1,6 +1,7 @@
 using System.Text.Json;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Output;
 using DssHarness.Core.Results;
 
 namespace DssHarness.Core.Orchestration;
@@ -27,13 +28,18 @@ public sealed record OrchestrationEvent(
 /// </summary>
 /// <param name="fileSystem">Reads and writes the logs.</param>
 /// <param name="clock">When each line is written.</param>
-public sealed class OrchestrationLog(IFileSystem fileSystem, TimeProvider clock)
+/// <param name="output">Tells a front end each log written (<see cref="RecordWritten"/>), where its path is.</param>
+public sealed class OrchestrationLog(IFileSystem fileSystem, TimeProvider clock, IHarnessOutput output)
 {
+    /// <summary>What a log is, as <see cref="RecordWritten"/> names the kind of record it is.</summary>
+    public const string RecordKind = "an orchestrator's log";
+
     /// <summary>How long one append waits for another process's.</summary>
     private static readonly TimeSpan Window = TimeSpan.FromSeconds(30);
 
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly TimeProvider _clock = clock;
+    private readonly IHarnessOutput _output = output;
 
     /// <summary>Appends what <paramref name="command"/> did to <paramref name="subject"/>, and returns the log's path.</summary>
     /// <param name="orchestrator">The orchestrator.</param>
@@ -62,6 +68,7 @@ public sealed class OrchestrationLog(IFileSystem fileSystem, TimeProvider clock)
             return true;
         });
 
+        _output.Publish(new RecordWritten(RecordKind, path));
         return path;
     }
 

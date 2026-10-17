@@ -74,6 +74,26 @@ public sealed class DryRunsTests
         Assert.Null(DryRuns.StandingOf(CommandOutcome.Failed(HarnessExit.Incomplete, "no")));
     }
 
+    /// <summary>
+    /// The refusal a run in the way makes says why it ended as it did, where its code and its lines cannot say: a lock
+    /// held, the one kind a caller waits out rather than puts right. No other answer does - not a sound one, not one
+    /// that wants a consent, not a holder of copies only, which leaves a deletion unfinished rather than refusing it.
+    /// </summary>
+    [Fact]
+    public void TheRefusalARunMakes_CarriesALockHeld_NoOtherAnswerCarriesOne()
+    {
+        var planned = CommandOutcome.Ok("dry run: folding agent 'ag' of 'o1' writes 2 path(s) into the main tree", ["  a line"]);
+        var consent = CommandOutcome.Ok(
+            "dry run: folding agent 'ag' of 'o1' writes 1 path(s) into the main tree and applies 1 row(s); 1 cell(s) of its rows do not keep their stored text "
+            + "word for word: the line 'to write them:' above is the command that does it",
+            ["  a line", "to write them: 'dssharness fold-agent o1 ag --apply --accept-lost D-X-Y:closing'"]);
+
+        Assert.Equal(OutcomeCause.LockHeld, DryRuns.Answer(planned, RequestStanding.Sound, ATreeHeld()).Outcome.Cause);
+        Assert.Equal(OutcomeCause.None, DryRuns.Answer(planned, RequestStanding.Sound).Outcome.Cause);
+        Assert.Equal(OutcomeCause.None, DryRuns.Answer(consent, RequestStanding.NeedsConsent).Outcome.Cause);
+        Assert.Equal(OutcomeCause.None, DryRuns.Answer(planned, RequestStanding.Sound, ACopyHeld()).Outcome.Cause);
+    }
+
     /// <summary>A run holding a tree the --apply takes, as the lock names it, with where its leg stands said.</summary>
     private static TreeHeld ATreeHeld()
     {
@@ -267,7 +287,15 @@ public sealed class DryRunsTests
         var planned = CommandOutcome.Ok("dry run: ...");
 
         string? Said(HolderStanding? standing)
-            => System.Text.Json.Nodes.JsonNode.Parse(OrchestrationReports.Document(planned, applied: false, RequestStanding.Sound, new TreeHeld([TreeHolder.Named(copy: false, entry, standing, ahead: null, said: "said")], null, null, [])).Data[0])!["heldNow"]![0]!["standing"]?.GetValue<string>();
+            => System.Text.Json.Nodes.JsonNode.Parse(OrchestrationReports.Document(planned, new AgentVerbFacts(
+                planned.ExitCode,
+                planned.Message,
+                Applied: false,
+                RequestStanding.Sound,
+                new TreeHeld([TreeHolder.Named(copy: false, entry, standing, ahead: null, said: "said")], null, null, []),
+                planned.Details ?? [],
+                [],
+                [])).Data[0])!["heldNow"]![0]!["standing"]?.GetValue<string>();
 
         Assert.Equal(["no-slot", "waiting", "holds-slot", "on-host"], Enum.GetValues<HolderStanding>().Select(standing => Said(standing)));
         Assert.Null(Said(null));

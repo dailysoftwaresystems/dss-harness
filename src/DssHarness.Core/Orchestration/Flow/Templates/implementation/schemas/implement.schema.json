@@ -1,0 +1,166 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "summary",
+    "done",
+    "claims",
+    "reuse",
+    "newRows",
+    "blocked",
+    "declined",
+    "preExisting"
+  ],
+  "properties": {
+    "summary": {
+      "type": "string",
+      "description": "What this step did, in a few sentences."
+    },
+    "done": {
+      "type": "array",
+      "description": "Your item's definition of done, statement by statement: each statement as the item gives it, whether it holds now, and what shows it - the test that pins it, or what you ran. Every statement of the item's is here.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "statement",
+          "holds",
+          "shows"
+        ],
+        "properties": {
+          "statement": {
+            "type": "string",
+            "description": "One statement of the item's definition of done, as the item gives it."
+          },
+          "holds": {
+            "type": "boolean",
+            "description": "True only where what `shows` names was run or read in this step and showed it."
+          },
+          "shows": {
+            "type": "string",
+            "description": "What shows it: the test that pins it and what it showed, or what you ran; where it does not hold, why."
+          }
+        }
+      }
+    },
+    "claims": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "built",
+        "tested"
+      ],
+      "properties": {
+        "built": {
+          "type": "string",
+          "description": "What you built or changed, by file."
+        },
+        "tested": {
+          "type": "string",
+          "description": "Each command you ran in this step, word for word, with its exit code and what showed the result; and what you could not run, and why."
+        }
+      },
+      "description": "What you claim of your own work. The engine builds and tests it itself, so say what you saw, not what you expect."
+    },
+    "reuse": {
+      "type": "string",
+      "description": "Existing code you built on that the item did not name, and anything you created that the item did not list as new, with why. Empty where you held to the item's lists."
+    },
+    "newRows": {
+      "type": "array",
+      "description": "The id of every registry row filed in this work that the registry did not have before it, said again in full in each report; empty where none was filed or the repository keeps no registry.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "blocked": {
+      "type": "array",
+      "description": "What the item asks for that only a person can give - a decision, an access, a change outside your paths that only someone else may make - each with what stands in the way and what would let it be done. Empty where you can do all of it, and always empty while you work through a review's findings, where what you cannot do is a declined finding. Where it is not empty, a person is asked, with a recommendation, before anything of the item is tested or folded.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "what",
+          "why",
+          "needs"
+        ],
+        "properties": {
+          "what": {
+            "type": "string",
+            "description": "What of the item you cannot do."
+          },
+          "why": {
+            "type": "string",
+            "description": "What stands in the way, as you found it: a path outside the ones you may write, an access you lack, or a decision nobody made."
+          },
+          "needs": {
+            "type": "string",
+            "description": "What would let it be done: a decision, an access, a change elsewhere, and from whom."
+          }
+        }
+      }
+    },
+    "declined": {
+      "type": "array",
+      "description": "Each review finding you did not act on because you hold it wrong, with why; said again in full in each report, those of earlier rounds among them, until you act on it. Empty where you declined none.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "finding",
+          "why"
+        ],
+        "properties": {
+          "finding": {
+            "type": "string",
+            "description": "The finding as the review gave it: its aspect, its place and what it said."
+          },
+          "why": {
+            "type": "string",
+            "description": "Why it is wrong, in terms a reviewer can check in the code."
+          }
+        }
+      }
+    },
+    "preExisting": {
+      "type": "array",
+      "description": "Issues you met that were there before this run - outside what it changed - each reported and never fixed by you. Empty where you met none.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "title",
+          "description",
+          "where",
+          "evidence",
+          "blocks"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "One line: what is wrong, and where."
+          },
+          "description": {
+            "type": "string",
+            "description": "What is wrong and what it causes, as you saw it."
+          },
+          "where": {
+            "type": "array",
+            "description": "The paths, from the repository's root, or the command.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "evidence": {
+            "type": "string",
+            "description": "What you read or ran and saw, quoted: the file and its lines, or the command and what it printed."
+          },
+          "blocks": {
+            "type": "boolean",
+            "description": "True only where it stops your own work."
+          }
+        }
+      }
+    }
+  }
+}

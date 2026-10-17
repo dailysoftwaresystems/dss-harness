@@ -1,11 +1,12 @@
 using System.CommandLine;
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.DependencyInjection;
-using DssHarness.Core.Configuration;
+using DssHarness.Core.Application;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Output;
+using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
@@ -61,6 +62,12 @@ internal static class CommandRunner
     private static readonly ConditionalWeakTable<Command, JsonAnswer> Answers = new();
 
     /// <summary>
+    /// The host every command runs through: one session per invocation, over the services the tool's own registrations
+    /// build, the lifecycle in Core and the parsing and the console here.
+    /// </summary>
+    private static readonly DssHarnessHost Host = ConsoleHost.Host;
+
+    /// <summary>
     /// Marks what this flow runs from here on as run for <paramref name="origin"/>: by the host agent before it serves a
     /// request, so nothing that flow runs is taken for something typed here, and with what the machine that asked says of
     /// a command before that command runs.
@@ -74,7 +81,8 @@ internal static class CommandRunner
     /// <param name="json">
     /// The command's <c>--json</c>, with the document it answers with where it has none of its own - its own document's
     /// shape, empty (<see cref="JsonAnswer"/>): where the parser refuses its command line (<see cref="UnparsedAsync"/>),
-    /// where it stops before its body has an outcome, and where its body answers without one (<see cref="Report"/>).
+    /// where it stops before its body has an outcome, and where its body answers without one (rendered by the session's
+    /// own report).
     /// Asked for it, the command answers with one document on every exit save its usage, which <c>--help</c> asks for and
     /// the parser answers before any command's action, and a --json given twice with a value each, which asks for none:
     /// a script reading standard output has one document to read whatever happened.
@@ -139,10 +147,15 @@ internal static class CommandRunner
         if (Answers.TryGetValue(parseResult.CommandResult.Command, out var json) && json.Asked(flags))
         {
             // Told as every other line the command writes is told: a host answering another machine writes its home as ~.
-            await using var services = HarnessServices.Build(verbose: false, prompting: false, Origin.Value ?? CommandOrigin.Typed);
-            var output = services.GetRequiredService<IHarnessOutput>();
-
-            output.Data(json.Stopped(flags, HarnessExit.UsageError, parseResult.Errors[0].Message, output.Shown, run: null));
+            await Host.WriteUnbegunAsync(
+                new SessionOptions
+                {
+                    Command = parseResult.CommandResult.Command.Name,
+                    Verbose = false,
+                    Prompting = false,
+                    Origin = Origin.Value ?? CommandOrigin.Typed,
+                },
+                output => output.Data(json.Stopped(flags, HarnessExit.UsageError, parseResult.Errors[0].Message, output.Shown, run: null))).ConfigureAwait(false);
         }
 
         foreach (var error in parseResult.Errors)
@@ -176,202 +189,39 @@ internal static class CommandRunner
 
         command.SetAction(async (parseResult, cancellationToken) =>
         {
-            var verbose = parseResult.GetValue(GlobalOptions.Verbose);
-            var prompting = !parseResult.GetValue(GlobalOptions.NoPrompt);
-            await using var services = HarnessServices.Build(verbose, prompting, Origin.Value ?? CommandOrigin.Typed);
-            var output = services.GetRequiredService<IHarnessOutput>();
-            var run = beginsRun(parseResult) ? RunId.New() : null;
+            // Read by the one reader that never throws: reading a flag whose own value the parser refused for that value would.
             var flags = new CommandFlags(parseResult);
 
             // Asked for its document, a command that stops answers in its own document's shape, as it registered it.
-            Func<int, string, string>? stopped = json is not null && json.Asked(flags)
-                ? (exitCode, summary) => json.Stopped(flags, exitCode, summary, output.Shown, run)
-                : null;
+            var asked = json is not null && json.Asked(flags);
 
-            // The document is the whole of standard output from the first line, not from the moment
-            // the legs are surveyed: a line written before then would sit in front of it.
-            using var document = stopped is not null ? output.DataOnly() : null;
-
-            if (run is not null)
-            {
-                output.Info(commandName, RunLine.Message(run));
-            }
-
-            try
-            {
-                if (!TryResolveDirectory(parseResult, services, out var directory, out var problem))
+            var session = Host.Begin(
+                new SessionOptions
                 {
-                    return Stop(output, commandName, HarnessExit.UsageError, problem, stopped);
-                }
+                    Command = commandName,
+                    Verbose = parseResult.GetValue(GlobalOptions.Verbose),
+                    Prompting = !parseResult.GetValue(GlobalOptions.NoPrompt),
+                    Origin = Origin.Value ?? CommandOrigin.Typed,
+                    BeginsRun = beginsRun(parseResult),
+                    Document = asked ? DocumentKind.Own : DocumentKind.None,
+                    Directory = parseResult.GetValue(GlobalOptions.Directory),
+                },
+                new SessionFrontEnd(
+                    Stopped: asked && json is not null
+                        ? (context, exitCode, summary) => json.Stopped(flags, exitCode, summary, context.Output.Shown, context.Run)
+                        : null));
 
-                // Its body answers with its document exactly where a stop would: --json read once, here.
-                var context = new CommandContext(services, parseResult, directory, Json: stopped is not null);
-                var outcome = await body(context, run, cancellationToken).ConfigureAwait(false);
+            await using (session.ConfigureAwait(false))
+            {
+                var completion = await session.RunAsync(
+                    (scope, token) => body(
+                        new CommandContext(scope.Services, parseResult, scope.Directory, Json: asked),
+                        scope.Run,
+                        token),
+                    cancellationToken).ConfigureAwait(false);
 
-                Report(output, commandName, outcome, stopped);
-                return outcome.ExitCode;
-            }
-            catch (Exception ex)
-            {
-                return Fail(output, commandName, ex, stopped);
-            }
-            finally
-            {
-                // However the command ended: after each host's own refusal and the command's conclusion, and with
-                // each host it reached that asks to be held awake between commands held.
-                await services.GetRequiredService<CommandEnd>().EndAsync(commandName).ConfigureAwait(false);
+                return completion.ExitCode;
             }
         });
-    }
-
-    /// <summary>
-    /// Reports the exception that ended a command, and returns the exit code that says what it means.
-    /// The one place a failure becomes an exit code, so a command a host serves for another machine
-    /// fails exactly as a command typed here does.
-    /// </summary>
-    /// <param name="output">Where the command writes.</param>
-    /// <param name="commandName">The command, which prefixes its failure line.</param>
-    /// <param name="exception">What ended it.</param>
-    /// <param name="stopped">
-    /// The document the command answers with, given the code it exits with and the line it ends on, where it was asked
-    /// for one (<see cref="JsonAnswer"/>); <see langword="null"/> where it was not.
-    /// </param>
-    internal static int Fail(IHarnessOutput output, string commandName, Exception exception, Func<int, string, string>? stopped = null)
-    {
-        var (exitCode, message, defect) = Meaning(exception);
-
-        Stop(output, commandName, exitCode, message, stopped);
-
-        // A defect's stack trace is there under --verbose, where someone is actually diagnosing it. It is the
-        // harness's own report, which repeats the message its failure line said, so it is told as that line is.
-        if (defect && output.IsVerbose)
-        {
-            output.RawError(output.Shown(exception.ToString()));
-        }
-
-        return exitCode;
-    }
-
-    /// <summary>
-    /// What <paramref name="exception"/> means: the code the command exits with, the line it ends on,
-    /// and whether it is a defect in this tool.
-    /// </summary>
-    private static (int ExitCode, string Message, bool Defect) Meaning(Exception exception)
-    {
-        // A cause both this and the leg executor know, read from the one table they share, so the
-        // same missing program means the same thing whether it stopped a command or a leg.
-        if (KnownCauses.ExitCodeFor(exception) is { } known)
-        {
-            return (known, exception.Message, false);
-        }
-
-        return exception switch
-        {
-            // The service already decided what this failure means.
-            HarnessException harness => (harness.ExitCode, harness.Message, false),
-            ConfigException => (HarnessExit.ConfigInvalid, exception.Message, false),
-
-            // Not CommandFailed: nothing ran to completion, and a caller reading a failure code
-            // would report a red verdict for an interrupted run.
-            OperationCanceledException => (HarnessExit.Cancelled, "Interrupted before completion.", false),
-
-            // A defect in the harness, not a failure of the thing being asked about. Reported as a
-            // message with a defined exit code rather than an unhandled exception, whose exit code
-            // would collide with a command's own contract.
-            _ => (HarnessExit.InternalError, $"Unexpected {exception.GetType().Name}: {exception.Message}", true),
-        };
-    }
-
-    /// <summary>
-    /// Ends a command that did not succeed: with its document first, as the whole of standard output,
-    /// when it was asked for one, and then the line that says why.
-    /// </summary>
-    private static int Stop(IHarnessOutput output, string commandName, int exitCode, string message, Func<int, string, string>? stopped)
-    {
-        if (stopped is not null)
-        {
-            output.Data(stopped(exitCode, message));
-        }
-
-        output.Fail(commandName, message);
-        return exitCode;
-    }
-
-    /// <summary>
-    /// Resolves <c>--directory</c> to an absolute path and confirms it exists.
-    /// </summary>
-    /// <remarks>
-    /// Done once, here. Without the existence check, the first service to start a child
-    /// process in a missing directory fails with an error that names the wrong cause, and
-    /// a relative path would reach every message as a fragment rather than the directory
-    /// the user meant.
-    /// </remarks>
-    private static bool TryResolveDirectory(
-        ParseResult parseResult,
-        IServiceProvider services,
-        out string directory,
-        out string problem)
-    {
-        var requested = parseResult.GetValue(GlobalOptions.Directory) ?? System.Environment.CurrentDirectory;
-        directory = string.Empty;
-        problem = string.Empty;
-
-        try
-        {
-            directory = Path.GetFullPath(requested);
-        }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
-        {
-            problem = $"'{requested}' is not a usable directory path: {ex.Message}";
-            return false;
-        }
-
-        if (!services.GetRequiredService<IFileSystem>().DirectoryExists(directory))
-        {
-            problem = $"Directory '{directory}' does not exist.";
-            return false;
-        }
-
-        return true;
-    }
-
-    /// <summary>
-    /// Reports what a command's body answered: its document, its lines, and the line it ends on. Asked for its document,
-    /// a body that answered without one - a usage error or a refusal it returned before it weighed anything - answers with
-    /// the document it registered where it was wired (<see cref="JsonAnswer"/>), so a command asked for one answers with
-    /// one on every exit.
-    /// </summary>
-    /// <param name="output">Where the command writes.</param>
-    /// <param name="commandName">The command, which prefixes its lines.</param>
-    /// <param name="outcome">What its body answered.</param>
-    /// <param name="stopped">
-    /// The document the command answers with where it stops, given the code it exits with and the line it ends on, where
-    /// it was asked for one; <see langword="null"/> where it was not.
-    /// </param>
-    private static void Report(IHarnessOutput output, string commandName, CommandOutcome outcome, Func<int, string, string>? stopped)
-    {
-        if (stopped is not null && outcome.Data.Count == 0)
-        {
-            output.Data(stopped(outcome.ExitCode, outcome.Message));
-        }
-
-        foreach (var text in outcome.Data)
-        {
-            output.Data(text);
-        }
-
-        foreach (var detail in outcome.Details ?? [])
-        {
-            output.Info(commandName, detail);
-        }
-
-        if (!outcome.Succeeded)
-        {
-            output.Fail(commandName, outcome.Message);
-        }
-        else if (!outcome.Quiet)
-        {
-            output.Ok(commandName, outcome.Message);
-        }
     }
 }

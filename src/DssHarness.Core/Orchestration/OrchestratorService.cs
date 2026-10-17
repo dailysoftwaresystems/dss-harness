@@ -1,3 +1,4 @@
+using DssHarness.Core.Application;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
 using DssHarness.Core.Hosts;
@@ -10,7 +11,7 @@ using DssHarness.Core.Worktrees;
 namespace DssHarness.Core.Orchestration;
 
 /// <summary>Creating, deleting and listing orchestrators.</summary>
-public interface IOrchestratorService
+public interface IOrchestratorService : IUseCase
 {
     /// <summary>
     /// Creates an orchestrator: its directory under <c>.orchestrators</c>, its record, its logs, work and plans
@@ -42,6 +43,15 @@ public interface IOrchestratorService
     /// <param name="json">Whether to answer with one JSON document rather than lines.</param>
     /// <param name="cancellationToken">Stops it.</param>
     Task<CommandOutcome> ListAsync(string startDirectory, string? name, bool json, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Creates an orchestrator, as the request says: the answer carries <see cref="OrchestratorCreated"/> facts, and the
+    /// request may ask that a record of that name being taken refuses it, which a run's start of its own record does.
+    /// </summary>
+    Task<UseCaseResult<OrchestratorCreated>> CreateAsync(OrchestratorCreateRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>Deletes an orchestrator, as the request says: the answer carries <see cref="OrchestratorDeleted"/> facts.</summary>
+    Task<UseCaseResult<OrchestratorDeleted>> DeleteAsync(OrchestratorDeleteRequest request, CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc cref="IOrchestratorService"/>
@@ -84,13 +94,28 @@ public sealed class OrchestratorService(
     private readonly OrchestrationLog _log = log;
     private readonly TimeProvider _clock = clock;
 
-    public async Task<CommandOutcome> CreateAsync(
+    public Task<CommandOutcome> CreateAsync(
         string startDirectory,
         string name,
         string model,
         int? parallel,
         string? session,
         CancellationToken cancellationToken = default)
+        => CreateAsync(startDirectory, name, model, parallel, session, mustBeNew: false, cancellationToken);
+
+    /// <summary>
+    /// Creates an orchestrator, or - where one of that name is there and <paramref name="mustBeNew"/> is not asked -
+    /// changes its limit and its session; where it is asked, a name that is taken is refused, naming its record, and
+    /// nothing is changed.
+    /// </summary>
+    private async Task<CommandOutcome> CreateAsync(
+        string startDirectory,
+        string name,
+        string model,
+        int? parallel,
+        string? session,
+        bool mustBeNew,
+        CancellationToken cancellationToken)
     {
         if ((OrchestrationRules.NameProblem(name)
             ?? OrchestrationRules.ModelProblem(model)
@@ -124,7 +149,12 @@ public sealed class OrchestratorService(
         {
             if (_store.ReadOrchestrator(orchestrator) is { } existing)
             {
-                return Change(orchestrator, existing, model, parallel, session);
+                // Decided under the same hold as the creation, so no other command can take the name between the two.
+                return mustBeNew
+                    ? CommandOutcome.Refused(
+                        $"Orchestrator '{name}' exists already - '{orchestrator.RecordFile}' is its record - and a new one was asked for: name another. "
+                        + "Nothing was changed.")
+                    : Change(orchestrator, existing, model, parallel, session);
             }
 
             // Plain worktrees and orchestrators share the names under the root: the directory named for this one is
@@ -155,7 +185,8 @@ public sealed class OrchestratorService(
 
             var outcome = CommandOutcome.Ok(
                 $"created orchestrator '{name}'",
-                [$"record {orchestrator.RecordFile}", $"plans {orchestrator.PlansDirectory(name)}", $"at most {ReportText.Counted(record.Parallel, "agent")} with a worktree at once"]);
+                [$"record {orchestrator.RecordFile}", $"plans {orchestrator.PlansDirectory(name)}", $"at most {ReportText.Counted(record.Parallel, "agent")} with a worktree at once"])
+                with { Facts = new OrchestratorCreated(name, Existed: false, record.Parallel, session) };
 
             return _log.Record(orchestrator, name, CreateCommand, outcome);
         });
@@ -175,7 +206,8 @@ public sealed class OrchestratorService(
 
         if (changed == existing)
         {
-            return CommandOutcome.Ok($"orchestrator '{existing.Name}' is already as asked", [$"record {orchestrator.RecordFile}"]);
+            return CommandOutcome.Ok($"orchestrator '{existing.Name}' is already as asked", [$"record {orchestrator.RecordFile}"])
+                with { Facts = new OrchestratorCreated(existing.Name, Existed: true, changed.Parallel, changed.Session) };
         }
 
         _store.WriteOrchestrator(orchestrator, changed);
@@ -192,7 +224,8 @@ public sealed class OrchestratorService(
             said.Add($"records session {changed.Session}");
         }
 
-        return _log.Record(orchestrator, existing.Name, CreateCommand, CommandOutcome.Ok($"orchestrator '{existing.Name}' now {string.Join(", and ", said)}", [$"record {orchestrator.RecordFile}"]));
+        return _log.Record(orchestrator, existing.Name, CreateCommand, CommandOutcome.Ok($"orchestrator '{existing.Name}' now {string.Join(", and ", said)}", [$"record {orchestrator.RecordFile}"])
+            with { Facts = new OrchestratorCreated(existing.Name, Existed: true, changed.Parallel, changed.Session) });
     }
 
     public async Task<CommandOutcome> DeleteAsync(
@@ -289,8 +322,31 @@ public sealed class OrchestratorService(
         });
 
         return outcome.Succeeded
-            ? outcome with { Details = [.. outcome.Details ?? [], .. RemoveEmptyGroup(group)] }
+            ? outcome with { Details = [.. outcome.Details ?? [], .. RemoveEmptyGroup(group)], Facts = new OrchestratorDeleted(name, deleteEvidence) }
             : outcome;
+    }
+
+    /// <inheritdoc cref="IOrchestratorService.CreateAsync(OrchestratorCreateRequest, CancellationToken)"/>
+    /// <remarks>
+    /// Where the request's <see cref="OrchestratorCreateRequest.MustBeNew"/> is set, a name that is taken is refused
+    /// (<see cref="HarnessExit.Refused"/>), naming its record, and nothing is changed: a run's start creating its own
+    /// record never writes over one someone else made.
+    /// </remarks>
+    public async Task<UseCaseResult<OrchestratorCreated>> CreateAsync(OrchestratorCreateRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        return UseCaseResult<OrchestratorCreated>.From(
+            await CreateAsync(request.StartDirectory, request.Name, request.Model, request.Parallel, request.Session, request.MustBeNew, cancellationToken).ConfigureAwait(false));
+    }
+
+    /// <inheritdoc cref="IOrchestratorService.DeleteAsync(OrchestratorDeleteRequest, CancellationToken)"/>
+    public async Task<UseCaseResult<OrchestratorDeleted>> DeleteAsync(OrchestratorDeleteRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        return UseCaseResult<OrchestratorDeleted>.From(
+            await DeleteAsync(request.StartDirectory, request.Name, request.DeleteEvidence, cancellationToken).ConfigureAwait(false));
     }
 
     /// <summary>

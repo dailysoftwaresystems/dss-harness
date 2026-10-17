@@ -1,0 +1,112 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "course",
+    "title",
+    "description",
+    "where",
+    "proof",
+    "blocks",
+    "related",
+    "critical",
+    "why",
+    "duplicates"
+  ],
+  "properties": {
+    "course": {
+      "type": "string",
+      "enum": [
+        "fix",
+        "list",
+        "duplicate",
+        "unproven"
+      ],
+      "description": "fix: it blocks the reporting step, is related or is critical - the run's recovery fixes it at its root now. list: none of these holds - it is added to the run's list of pre-existing issues, shown at the end. duplicate: the list already holds it, and duplicates names its id. unproven: you could not reproduce it on the base commit - it is not listed."
+    },
+    "title": {
+      "type": "string",
+      "description": "One line a person who never saw the run understands: what is wrong, and where."
+    },
+    "description": {
+      "type": "string",
+      "description": "What is wrong, where, and what it causes, from what your proof shows and nothing else."
+    },
+    "where": {
+      "type": "array",
+      "description": "The paths, from the repository's root, or the command, where the issue is.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "proof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "at",
+        "file",
+        "lines",
+        "quote",
+        "command",
+        "output"
+      ],
+      "description": "What you read or ran on the base commit that shows the issue.",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "read",
+            "ran",
+            "none"
+          ],
+          "description": "read: you read a file at the base commit. ran: you ran a command there. none: you could not reproduce it, and the course is unproven."
+        },
+        "at": {
+          "type": "string",
+          "description": "The base commit you checked it at."
+        },
+        "file": {
+          "type": "string",
+          "description": "For read, the path from the repository's root; otherwise empty."
+        },
+        "lines": {
+          "type": "string",
+          "description": "For read, the lines, as 12-19; otherwise empty."
+        },
+        "quote": {
+          "type": "string",
+          "description": "For read, those lines word for word; otherwise empty."
+        },
+        "command": {
+          "type": "string",
+          "description": "For ran, the command word for word; otherwise empty."
+        },
+        "output": {
+          "type": "string",
+          "description": "For ran, what it printed that shows the issue, word for word; for none, what you tried; otherwise empty."
+        }
+      }
+    },
+    "blocks": {
+      "type": "boolean",
+      "description": "True only where the reporting step said it stops its own work and your check confirms it."
+    },
+    "related": {
+      "type": "boolean",
+      "description": "True where the issue is in a path the plan's items change or depend on, or in the behaviour the request asks for."
+    },
+    "critical": {
+      "type": "boolean",
+      "description": "True where, on the base commit, it loses data, opens a security hole, crashes, or keeps the build or the tests from passing."
+    },
+    "why": {
+      "type": "string",
+      "description": "Why the course: which test held and what shows it; for list, that none held."
+    },
+    "duplicates": {
+      "type": "string",
+      "description": "For duplicate, the id of the listed issue it repeats; otherwise empty."
+    }
+  }
+}

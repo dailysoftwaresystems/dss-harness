@@ -534,6 +534,12 @@ public sealed record AnchorBatch(IReadOnlyList<AnchorRowOutcome> Rows, IReadOnly
 
     /// <summary>The cells of its rows the registries and the agent both changed, each otherwise, that nobody named to be written over.</summary>
     public IReadOnlyList<AnchorRowCell> UnacceptedOver => [.. Rows.SelectMany(row => row.Over).Where(cell => !cell.Accepted).Select(cell => cell.Cell)];
+
+    /// <summary>
+    /// The ids of rows no registry holds that nobody named new: a consent the request lacks, each refused as a problem says.
+    /// Every one has its problem; a batch whose only problems are these is refused for want of them and for nothing else.
+    /// </summary>
+    public IReadOnlyList<string> UnnamedNew { get; init; } = [];
 }
 
 /// <summary>Which anchors to list.</summary>

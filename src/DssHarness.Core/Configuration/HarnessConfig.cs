@@ -1,3 +1,5 @@
+using System.ComponentModel;
+
 namespace DssHarness.Core.Configuration;
 
 /// <summary>
@@ -86,6 +88,18 @@ public sealed class HarnessConfig
         => PredefinedRunners
             .Where(entry => !string.IsNullOrWhiteSpace(entry.Value.Action))
             .Select(entry => new KeyValuePair<string, string>(entry.Key, entry.Value.Action!));
+
+    /// <summary>
+    /// The workflows this repository declares, by name and nothing else: each name is a definition
+    /// file of its own, <c>.harness-config/workflows/&lt;name&gt;/&lt;name&gt;.yml</c>, which holds
+    /// the whole flow and whose directory holds the files the flow names. Keyed by neither section nor
+    /// entry because a workflow's definition never lives in this file.
+    /// </summary>
+    /// <remarks>
+    /// Given empty in the file, it is refused when the file is read, rather than read as no workflow.
+    /// </remarks>
+    [Description("the workflows this repository runs, each defined by workflows/<name>/<name>.yml; validate-workflow checks them")]
+    public List<string>? Workflows { get; init; }
 
     /// <summary>
     /// Named set-ups, each the command line that brings up what the repository's work needs on this machine and the one

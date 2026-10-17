@@ -1,4 +1,5 @@
 using DssHarness.Core.Orchestration;
+using DssHarness.Core.Output;
 using DssHarness.Core.Results;
 
 namespace DssHarness.Tests;
@@ -9,6 +10,42 @@ namespace DssHarness.Tests;
 /// </summary>
 public sealed class OrchestrationStoreTests
 {
+    /// <summary>
+    /// Every record an orchestrator and its agents keep, and every line of their logs, is told to a front end as it is
+    /// written - what it is, and its own path - so one following a run reads the files it is handed and puts no path
+    /// together, and nothing else is told it.
+    /// </summary>
+    [Fact]
+    public async Task EveryRecordWritten_IsToldToAFrontEnd_WhatItIsAndWhere()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync("ag");
+        var sink = new RecordingSink();
+
+        using (var output = new EventHarnessOutput(sink, OperationId.New()))
+        {
+            var store = new OrchestrationStore(kit.Harness.FileSystem, output);
+            var log = new OrchestrationLog(kit.Harness.FileSystem, TimeProvider.System, output);
+
+            store.WriteOrchestrator(kit.Layout, kit.Harness.OrchestrationStore.ReadOrchestrator(kit.Layout)!);
+            store.WriteAgent(kit.Layout, kit.Record("ag"));
+            store.WriteSeed(kit.Layout, "ag", kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!);
+            store.WriteAppliedRows(kit.Layout, "ag", new AppliedRowsRecord { Rows = [] });
+            log.Append(kit.Layout, "ag", "test", CommandOutcome.Ok("done"));
+        }
+
+        Assert.Equal(
+            [
+                new RecordWritten("an orchestrator's record", kit.Layout.RecordFile),
+                new RecordWritten("an agent's record", kit.Layout.AgentRecordFile("ag")),
+                new RecordWritten("an agent's seed", kit.Layout.SeedFile("ag")),
+                new RecordWritten("the record of an agent's applied rows", kit.Layout.AppliedRowsFile("ag")),
+                new RecordWritten("an orchestrator's log", kit.Layout.LogFile("ag")),
+            ],
+            sink.Seen.Select(@event => @event with { Operation = null, Sequence = 0, At = default }));
+    }
+
     /// <summary>An agent's record that does not read as one - in any of the ways a hand or a crash leaves it - is refused, naming its file.</summary>
     [Theory]
     [InlineData("not JSON")]
@@ -144,5 +181,13 @@ public sealed class OrchestrationStoreTests
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Contains(file, refused.Message);
+    }
+
+    /// <summary>A front end's sink of events, keeping each as it is given.</summary>
+    private sealed class RecordingSink : IRunEvents
+    {
+        public List<RunEvent> Seen { get; } = [];
+
+        public void Emit(RunEvent @event) => Seen.Add(@event);
     }
 }

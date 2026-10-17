@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using DssHarness.Core.Application;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
@@ -16,7 +17,7 @@ using DssHarness.Core.Sync;
 namespace DssHarness.Core.Worktrees;
 
 /// <summary>Creating, listing and removing development worktrees.</summary>
-public interface IWorktreeService
+public interface IWorktreeService : IUseCase
 {
     /// <summary>Creates a worktree, generating its name when <paramref name="useRandomName"/> is set.</summary>
     /// <exception cref="HarnessException">
@@ -150,7 +151,8 @@ public sealed class WorktreeService(
     IHarnessOutput output,
     IHostCopyRemover hostCopies,
     LocalSyncTransport local,
-    RunLock runLock) : IWorktreeService
+    RunLock runLock,
+    IProcessContext processContext) : IWorktreeService
 {
     /// <summary>The command a deletion reports under, and the one spelling of its name.</summary>
     public const string DeleteCommand = "delete-worktree";
@@ -197,6 +199,9 @@ public sealed class WorktreeService(
     /// worktree being deleted.
     /// </summary>
     private readonly RunLock _runLock = runLock;
+
+    /// <summary>The process's current directory, read per call: what "this command's own directory" means here.</summary>
+    private readonly IProcessContext _processContext = processContext;
 
     /// <summary>
     /// How long a deletion may run after an interruption before git is stopped, just before the
@@ -719,7 +724,8 @@ public sealed class WorktreeService(
 
         // What keeps the worktree, of what became of the copies kept in it - one a sweep or a run holds, one that could
         // not be removed or told, or none that could be looked for - or null. Each is said as what it is, in the words a
-        // host's copy kept says it in (KeptCopyLine.Keeping): only one a run still holds ends by waiting.
+        // host's copy kept says it in (KeptCopyLine.Keeping): only one a run still holds ends by waiting, and that one
+        // alone says so to a caller that can wait (OutcomeCause.LockHeld).
         WorktreeOutcome? Kept(WorkersGone gone, string nothing)
             => gone.Kept is { } kept
                 ? WorktreeOutcome.Failed(CommandOutcome.Failed(
@@ -727,7 +733,10 @@ public sealed class WorktreeService(
                     $"Worktree '{worktreeName}' was not deleted: {KeptCopyLine.Keeping(kept, gone.KeptMember)}. "
                         + (kept.Verdict == LegVerdict.RefusedLocked ? "Wait for it to end" : "Put that right and try again")
                         + $", or pass --force to delete the worktree with that copy in it. {nothing}.",
-                    gone.Lines))
+                    gone.Lines) with
+                {
+                    Cause = kept.Verdict == LegVerdict.RefusedLocked ? OutcomeCause.LockHeld : OutcomeCause.None,
+                })
                 : gone.Failure is { } failure
                     ? WorktreeOutcome.Failed(CommandOutcome.Failed(
                         gone.ExitCode!.Value,
@@ -1664,7 +1673,7 @@ public sealed class WorktreeService(
     private string DescribeHeld(string name, IReadOnlyList<HeldEntry> held)
     {
         var again = $"'{ToolPackage.Command} {DeleteCommand} {name}'";
-        var own = held.Any(entry => PathsEqual(entry.Path, Environment.CurrentDirectory));
+        var own = held.Any(entry => PathsEqual(entry.Path, _processContext.CurrentDirectory));
         var remedy = !own ? $"Close what holds it, then run {again} again."
             : held.Count == 1 ? $"It is this command's own current directory: run {again} again from outside the worktree."
             : $"One is this command's own current directory: close what holds the rest, then run {again} again from outside the worktree.";

@@ -19,7 +19,8 @@ purpose: find a member by name. Sentences of `README.md` and `docs/architecture.
 
 1. **The service, in Core** — `src/DssHarness.Core/<Area>/XService.cs` with `public const string CommandName`. It
    returns a `CommandOutcome` (`Ok`, `Usage`, `Refused`, `Failed`; `Data` carries the standard-output document) or
-   throws `HarnessException(HarnessExit.*, message)`. Register it in `HarnessServices`.
+   throws `HarnessException(HarnessExit.*, message)`. Register it in `ServiceRegistration.AddDssHarness`
+   (`src/DssHarness.Core/Composition/ServiceRegistration.cs`).
 2. **The command, in Cli** — `src/DssHarness.Cli/Commands/XCommand.cs`: `internal const string Name =
    XService.CommandName`, `internal static Command Create()`, its options, `GlobalOptions.AddTo(command)` (and the
    `DispatchOptions` a leg-running command takes), then `CommandRunner.Wire(command, body, jsonAnswer)`. A command that
@@ -34,7 +35,8 @@ purpose: find a member by name. Sentences of `README.md` and `docs/architecture.
    `StoppedDocumentTests.OwnDocuments`, and to the architecture sentence listing the commands that answer `--json`,
    which that class pins.
 6. **Help** — the root `--help` lists it from its description (over ten characters). Explain it in the topic it belongs
-   to (`HelpCommand.Render*`); the overview's "Getting started" list is curated, not complete.
+   to (`HelpTopics.Render*`, in `src/DssHarness.Core/Help/HelpTopics.cs`); the overview's "Getting started" list is
+   curated, not complete.
 7. **Docs** — the `README.md` "Commands" table lists every command a user types (not the hidden ones);
    `docs/architecture.md` "Status" names every implemented command. No test checks either list: update both.
 8. **Tests** — the service on real collaborators, the command through `CliRunner`. `HelpTests` and
@@ -68,7 +70,7 @@ purpose: find a member by name. Sentences of `README.md` and `docs/architecture.
   `VerifyGitStatus`); add a new one to `PerCommandCodes_StayInsideTheirRange` and the names
   `ExitCodeTopic_DocumentsEveryPerCommandCode` lists. A command may also name a shared code for its own case —
   `MutationService.NothingRuns` is `HarnessExit.Incomplete` (21) — and such a name joins neither list.
-- **By hand:** `HelpCommand.RenderExitCodes`, the `docs/architecture.md` "Exit codes" tables, the README "Commands"
+- **By hand:** `HelpTopics.RenderExitCodes`, the `docs/architecture.md` "Exit codes" tables, the README "Commands"
   paragraph on exit codes. No test reads the architecture tables.
 
 ## 4. A verdict
@@ -78,13 +80,14 @@ The vocabulary is closed: a new verdict is a design decision.
 1. A member of `LegVerdict` and a row of `Verdicts.Table` (display name, failure or not, rank — the table stays
    ordered by precedence — exit code, how a sweep reads it); decide `Verdicts.IsSkip`; map a refusal in
    `Verdicts.ForRefusal` if it has its own code.
-2. A remedy in `HelpCommand.Remedies`; `RenderVerdicts` lists the table itself.
+2. A remedy in `HelpTopics.Remedies`; `RenderVerdicts` lists the table itself.
 3. `docs/architecture.md` "Verdict vocabulary (closed)" table and its precedence sentence; `RenderExitCodes`.
 4. `LegVerdictTests`, `ExitCodeContractTests` and the verdict-topic tests in `HelpTests`.
 
 ## 5. A help topic
 
-Add `new("name", ["alias"], "summary", RenderX)` to `HelpCommand.Topics` and write `RenderX`. That one list drives
+Add `new("name", ["alias"], "summary", RenderX)` to `HelpTopics.Topics` (`src/DssHarness.Core/Help/HelpTopics.cs`) and
+write `RenderX`. That one list drives
 the overview, the argument's description and the unknown-topic message. Names are `[a-z-]+`. `HelpTests` renders
 every advertised topic and checks every command a topic tells the user to type is spelt as installed (`dssharness`,
 lowercase); add sentence assertions of your own with `Prose.Words`. Update the README `help [topic]` row.
@@ -101,7 +104,7 @@ lowercase); add sentence assertions of your own with `Prose.Words`. Update the R
   under them is rewritten in place under the current ones. Never drop the retired handling.
 - Tests: `InitServiceTests`, `GitIgnoreManagerTests`, `GitIgnoreRecoveryTests`, `ManagedIgnoreCheckTests`,
   `DefaultConfigFactoryTests`, the `Init_*` tests of `CliEndToEndTests`, and the layout topic in `HelpTests`.
-- Docs: `HelpCommand.RenderLayout`, README "Layout", `docs/architecture.md` "Worktrees".
+- Docs: `HelpTopics.RenderLayout`, README "Layout", `docs/architecture.md` "Worktrees".
 - A change here reaches every consumer on their next `init`: say what moves in the pull request's description.
 
 ## 7. Records a command writes

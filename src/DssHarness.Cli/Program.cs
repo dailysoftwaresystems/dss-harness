@@ -4,7 +4,6 @@ using DssHarness.Cli.Commands;
 using DssHarness.Core.Execution;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Repository;
-using DssHarness.Core.Worktrees;
 
 // Command selection and dependency wiring only. Every behaviour lives in a service
 // in DssHarness.Core, which is a library precisely so that nothing can accumulate here.
@@ -27,6 +26,8 @@ root.Subcommands.Add(RefreshAgentCommand.Create());
 root.Subcommands.Add(RebaseAgentCommand.Create());
 root.Subcommands.Add(FoldAgentCommand.Create());
 root.Subcommands.Add(DeleteAgentCommand.Create());
+root.Subcommands.Add(ValidateWorkflowCommand.Create());
+root.Subcommands.Add(ExportWorkflowCommand.Create());
 root.Subcommands.Add(WriteAnchorCommand.Create());
 root.Subcommands.Add(SetAnchorCommand.Create());
 root.Subcommands.Add(ReadAnchorCommand.Create());
@@ -76,13 +77,13 @@ async Task<int> RunAsync(string[] arguments, CancellationToken cancellationToken
 
     // A command past its point of no return goes on after Ctrl+C - a deletion, a fold, a hand-over or a
     // move of an agent's base is never left half written, a host agent can be running one for another
-    // machine, and a run asked to set up brings down what it brought up - so each is waited for as long as a
-    // deletion expects. No other command is any slower to stop.
+    // machine, and a run asked to set up brings down what it brought up - so each is waited for as long
+    // as it asks. No other command is any slower to stop.
     var invocation = new InvocationConfiguration();
 
-    if (PointOfNoReturn.Holds([parseResult.CommandResult.Command.Name, .. parseResult.Tokens.Select(token => token.Value)]))
+    if (PointOfNoReturn.GraceFor([parseResult.CommandResult.Command.Name, .. parseResult.Tokens.Select(token => token.Value)]) is { } grace)
     {
-        invocation.ProcessTerminationTimeout = WorktreeService.DefaultInterruptionGrace;
+        invocation.ProcessTerminationTimeout = grace;
     }
 
     return await parseResult.InvokeAsync(invocation, cancellationToken).ConfigureAwait(false);

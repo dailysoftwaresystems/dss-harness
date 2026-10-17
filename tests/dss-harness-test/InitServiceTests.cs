@@ -3,7 +3,9 @@ using NSubstitute.ExceptionExtensions;
 using DssHarness.Core.Anchors;
 using DssHarness.Core.Commands;
 using DssHarness.Core.Configuration;
+using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
+using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 using DssHarness.Core.Tools;
@@ -94,6 +96,264 @@ public sealed class InitServiceTests
 
         // A first init declares no leg, so there is nothing to install for and nothing to say about it.
         Assert.DoesNotContain(outcome.Details!, line => line.StartsWith("tools", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// init writes the implementation workflow - its definition and every file that definition names - where the configuration
+    /// declares it, as the one init creates does, naming each file as it is created; a second init writes none of them
+    /// and says it kept them all.
+    /// </summary>
+    [Fact]
+    public async Task InitializeAsync_WritesTheImplementationWorkflow_WhereTheConfigurationDeclaresIt_AndKeepsItAfter()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var token = TestContext.Current.CancellationToken;
+        var name = WorkflowTemplates.ShippedWorkflowName;
+        await harness.InitializeGitRepositoryAsync(temp.Path, token);
+
+        var outcome = await harness.InitService.InitializeAsync(temp.Path, token);
+
+        Assert.True(outcome.Succeeded, outcome.Message);
+        Assert.Equal([name], harness.ConfigStore.Load(HarnessFactory.ConfigPath(temp.Path)).Workflows);
+        Assert.Equal([.. WorkflowTemplates.Files.Select(file => $"created .harness-config/workflows/{name}/{file}")], WorkflowLines(outcome.Details!));
+        Assert.All(WorkflowTemplates.Files, file => Assert.Equal(WorkflowTemplates.TextOf(file), File.ReadAllText(WorkflowFile(temp, file))));
+
+        var again = await harness.InitService.InitializeAsync(temp.Path, token);
+
+        Assert.True(again.Succeeded, again.Message);
+        Assert.Equal(
+            [$"kept    .harness-config/workflows/{name}/ ({WorkflowTemplates.Files.Count} file(s) already present)"],
+            WorkflowLines(again.Details!));
+    }
+
+    /// <summary>
+    /// An implementation workflow left half written - an init stopped part way, a file deleted - is finished by the next init,
+    /// file by file: each one missing is written and each one there is kept, an edited one as it was edited, so a
+    /// repository's own changes to the shipped files are never written over.
+    /// </summary>
+    [Fact]
+    public async Task InitializeAsync_FinishesAHalfWrittenImplementationWorkflow_KeepingEveryFileThere()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var token = TestContext.Current.CancellationToken;
+        var name = WorkflowTemplates.ShippedWorkflowName;
+        var definition = $"{name}.yml";
+        await harness.InitializeGitRepositoryAsync(temp.Path, token);
+        await harness.InitService.InitializeAsync(temp.Path, token);
+
+        File.Delete(WorkflowFile(temp, definition));
+        File.Delete(WorkflowFile(temp, "agents/planner.md"));
+        await File.WriteAllTextAsync(WorkflowFile(temp, "prompts/plan.md"), "the repository's own\n", token);
+
+        var outcome = await harness.InitService.InitializeAsync(temp.Path, token);
+
+        Assert.True(outcome.Succeeded, outcome.Message);
+        Assert.Equal(
+            [
+                $"created .harness-config/workflows/{name}/agents/planner.md",
+                $"created .harness-config/workflows/{name}/{definition}",
+                $"kept    .harness-config/workflows/{name}/ ({WorkflowTemplates.Files.Count - 2} file(s) already present)",
+            ],
+            WorkflowLines(outcome.Details!));
+        Assert.Equal(WorkflowTemplates.TextOf(definition), File.ReadAllText(WorkflowFile(temp, definition)));
+        Assert.Equal(WorkflowTemplates.TextOf("agents/planner.md"), File.ReadAllText(WorkflowFile(temp, "agents/planner.md")));
+        Assert.Equal("the repository's own\n", File.ReadAllText(WorkflowFile(temp, "prompts/plan.md")));
+    }
+
+    /// <summary>
+    /// A repository's own definition that does not read, where a shipped file is missing, refuses init as configuration
+    /// that does not hold (12), naming the definition and every problem in it: which files it names cannot be told, so
+    /// the missing file is not written in its place. With every shipped file there, nothing is asked of the definition.
+    /// </summary>
+    [Fact]
+    public async Task InitializeAsync_RefusesARepositorysOwnDefinitionThatDoesNotRead_WhereAFileIsMissing()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var token = TestContext.Current.CancellationToken;
+        var name = WorkflowTemplates.ShippedWorkflowName;
+        await harness.InitializeGitRepositoryAsync(temp.Path, token);
+        await harness.InitService.InitializeAsync(temp.Path, token);
+        await File.WriteAllTextAsync(WorkflowFile(temp, $"{name}.yml"), "name: [unclosed\n", token);
+
+        var everyFileThere = await harness.InitService.InitializeAsync(temp.Path, token);
+
+        File.Delete(WorkflowFile(temp, "agents/planner.md"));
+        var outcome = await harness.InitService.InitializeAsync(temp.Path, token);
+
+        Assert.True(everyFileThere.Succeeded, everyFileThere.Message);
+        Assert.Equal(HarnessExit.ConfigInvalid, outcome.ExitCode);
+        Assert.StartsWith(
+            $".harness-config/workflows/{name}/{name}.yml is the repository's own definition of the {name} workflow, and does not read, "
+                + "so which shipped files it names cannot be told, and none was written; run 'dssharness init' again once it reads "
+                + $"('dssharness validate-workflow {name}' says the same):{Environment.NewLine}'{WorkflowFile(temp, $"{name}.yml")}' has 1 problem(s):",
+            outcome.Message,
+            StringComparison.Ordinal);
+        Assert.False(File.Exists(WorkflowFile(temp, "agents/planner.md")));
+    }
+
+    /// <summary>
+    /// A configuration that does not declare the implementation workflow - a repository's own arrangement, or one written before
+    /// workflows were - gets none of it: init writes nothing under the workflows directory and says nothing of it.
+    /// </summary>
+    [Fact]
+    public async Task InitializeAsync_WritesNoImplementationWorkflow_WhereTheConfigurationDoesNotDeclareIt()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var token = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, token);
+        Directory.CreateDirectory(temp.Combine(".harness-config"));
+        harness.WriteConfig(temp.Path, new HarnessConfig { Workflows = ["release"] });
+        temp.WriteFile(Path.Combine(".harness-config", "workflows", "release", "release.yml"), "name: release\n");
+
+        var outcome = await harness.InitService.InitializeAsync(temp.Path, token);
+
+        Assert.True(outcome.Succeeded, outcome.Message);
+        Assert.Empty(WorkflowLines(outcome.Details!));
+        Assert.Equal(
+            [temp.Combine(".harness-config", "workflows", "release", "release.yml")],
+            Directory.GetFiles(temp.Combine(".harness-config", "workflows"), "*", SearchOption.AllDirectories));
+        Assert.Equal("name: release\n", File.ReadAllText(temp.Combine(".harness-config", "workflows", "release", "release.yml")));
+    }
+
+    /// <summary>
+    /// A file of the implementation workflow the disk will not write refuses init (13), never as the tool's own failure (70): the
+    /// refusal names the file and those written before it, which stay, with every line of what init had done by then;
+    /// and the next init, the disk willing, writes the rest and keeps those.
+    /// </summary>
+    [Fact]
+    public async Task InitializeAsync_RefusesAFileOfTheImplementationWorkflowTheDiskWillNotWrite_NamingWhatWasWritten()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var token = TestContext.Current.CancellationToken;
+        var name = WorkflowTemplates.ShippedWorkflowName;
+        await harness.InitializeGitRepositoryAsync(temp.Path, token);
+
+        var init = new InitService(
+            new WillNotWrite(harness.FileSystem, WorkflowFile(temp, "agents/planner.md")),
+            harness.RepositoryLocator,
+            harness.ConfigStore,
+            harness.GitIgnoreManager,
+            harness.ProjectDetector,
+            harness.VerifyGitService,
+            harness.AnchorRegistryLocator,
+            harness.ToolProvisionService,
+            harness.GitClient,
+            new ManagedIgnoreCheck(harness.GitClient, harness.FileSystem, harness.Platform, harness.Output),
+            harness.Platform);
+
+        var refused = await init.InitializeAsync(temp.Path, token);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal(
+            $"'.harness-config/workflows/{name}/agents/planner.md' could not be written: {WillNotWrite.Why.TrimEnd('.')}. 2 of the implementation "
+                + $"workflow's {WorkflowTemplates.Files.Count} missing file(s) were written before it, and stay: "
+                + $".harness-config/workflows/{name}/agents/prioritizer.md, .harness-config/workflows/{name}/agents/triage.md; run "
+                + "'dssharness init' again once it can be, which writes what is still missing and keeps every file there.",
+            refused.Message);
+        Assert.Contains("created .harness-config/config.json (no project detected; declare one under \"projects\")", refused.Details!);
+        Assert.Empty(WorkflowLines(refused.Details!));
+        Assert.Equal(
+            [WorkflowFile(temp, "agents/prioritizer.md"), WorkflowFile(temp, "agents/triage.md")],
+            Directory.GetFiles(temp.Combine(".harness-config", "workflows"), "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal));
+
+        var finished = await harness.InitService.InitializeAsync(temp.Path, token);
+
+        Assert.True(finished.Succeeded, finished.Message);
+        Assert.Equal(
+            [
+                .. WorkflowTemplates.Files.Skip(2).Select(file => $"created .harness-config/workflows/{name}/{file}"),
+                $"kept    .harness-config/workflows/{name}/ (2 file(s) already present)",
+            ],
+            WorkflowLines(finished.Details!));
+    }
+
+    /// <summary>
+    /// A disk that will not write the first missing file of the implementation workflow is refused naming that nothing of it was
+    /// written, and nothing is: the refusal says what stays, and here nothing does.
+    /// </summary>
+    [Fact]
+    public void AImplementationWorkflowWhoseFirstFileTheDiskWillNotWrite_IsRefused_SayingNoneWasWritten()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var name = WorkflowTemplates.ShippedWorkflowName;
+        var first = WorkflowTemplates.Files[0];
+        var workflows = temp.Combine(".harness-config", "workflows");
+
+        var refusal = Assert.Throws<HarnessException>(
+            () => WorkflowTemplates.EnsureShipped(workflows, new WillNotWrite(harness.FileSystem, WorkflowFile(temp, first))));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+        Assert.Equal(
+            $"'.harness-config/workflows/{name}/{first}' could not be written: {WillNotWrite.Why.TrimEnd('.')}. None of the implementation "
+                + $"workflow's {WorkflowTemplates.Files.Count} missing file(s) was written; run 'dssharness init' again once it can be, "
+                + "which writes what is still missing and keeps every file there.",
+            refusal.Message);
+        Assert.Empty(Directory.GetFiles(workflows, "*", SearchOption.AllDirectories));
+    }
+
+    /// <summary>
+    /// The README and the architecture say what init writes of the implementation workflow - each missing file where config.json
+    /// declares it, every file there kept, none where it is not declared - and the code the refusal of a file the disk will
+    /// not write answers with, as the tests above hold the code to.
+    /// </summary>
+    [Fact]
+    public void TheReadmeAndTheArchitecture_SayWhatInitWritesOfTheImplementationWorkflow()
+    {
+        var name = WorkflowTemplates.ShippedWorkflowName;
+
+        Assert.Contains(
+            $"Where `config.json` declares `{name}`, `init` writes each of its files that is missing - the whole set where the repository "
+                + "has no definition of it yet, and where it has one only the shipped files that definition names, so a file taken out with "
+                + "its step stays out - and keeps each one that is there, "
+                + "whatever it holds, so an `init` that stopped part way is finished by the next - where a file is missing and the definition "
+                + "there does not read, init refuses (12; 13 where it cannot be read), since which files it names cannot be told; nothing that "
+                + "exists is ever overwritten, "
+                + $"and a config that does not declare it gets none of it. A config written before workflows declares none: add `\"workflows\": [\"{name}\"]` "
+                + "and run `init` to have it.",
+            Prose.Document("README.md"),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"Where the configuration declares `{name}`, init writes each of its files that is missing - the whole set where the "
+                + "repository has no definition of it yet, and where it has one only the shipped files that definition names, so a file "
+                + "taken out with its step stays out - and keeps each one that is there, "
+                + "whatever it holds, saying how many it kept: an init that stopped part way is finished by the next, and a file a repository "
+                + "edited is never written over. A configuration that does not declare it gets none of it. A file the disk will not write "
+                + $"refuses init ({HarnessExit.Refused}), naming the files written before it, which stay; and where a file is missing and the "
+                + $"repository's own definition does not read, init refuses ({HarnessExit.ConfigInvalid}; {HarnessExit.Refused} where it cannot be "
+                + "read) and writes none, since which files it names cannot be told.",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>The lines of what init did that are about the workflows directory, in the order it said them.</summary>
+    private static IReadOnlyList<string> WorkflowLines(IReadOnlyList<string> details)
+        => [.. details.Where(line => line.Contains(".harness-config/workflows/", StringComparison.Ordinal))];
+
+    /// <summary>Where <paramref name="file"/> of the implementation workflow is, in the tree at <paramref name="temp"/>.</summary>
+    private static string WorkflowFile(TempDirectory temp, string file)
+        => temp.Combine([".harness-config", "workflows", WorkflowTemplates.ShippedWorkflowName, .. file.Split('/')]);
+
+    /// <summary>A disk that will not write one file, saying why as a disk would.</summary>
+    private sealed class WillNotWrite(IFileSystem inner, string refused) : PassThroughFileSystem(inner)
+    {
+        /// <summary>Why it will not.</summary>
+        public const string Why = "the device is not ready.";
+
+        public override void WriteAllTextAtomic(string path, string contents)
+        {
+            if (string.Equals(Path.GetFullPath(path), Path.GetFullPath(refused), StringComparison.OrdinalIgnoreCase))
+            {
+                throw new IOException(Why);
+            }
+
+            base.WriteAllTextAtomic(path, contents);
+        }
     }
 
     /// <summary>

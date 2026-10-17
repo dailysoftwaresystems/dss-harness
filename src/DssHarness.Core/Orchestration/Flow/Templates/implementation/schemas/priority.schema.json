@@ -1,0 +1,124 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "title",
+    "request",
+    "rationale",
+    "blockers",
+    "stops",
+    "preExisting"
+  ],
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "One line that names the work chosen; it becomes the title of the pull request."
+    },
+    "request": {
+      "type": "string",
+      "description": "The work chosen, written as a request a person could have typed: what is to be done and what done looks like."
+    },
+    "rationale": {
+      "type": "string",
+      "description": "Why this comes before everything else that is open, with what you checked."
+    },
+    "blockers": {
+      "type": "array",
+      "description": "Open work that stands in the way of the priority and that this run can do, the most pressing first: each names the work, where it is (a path, a CI leg or a test) and what you read that shows it.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "stops": {
+      "type": "array",
+      "description": "What stands in the way and only a person can lift, each written as a question to that person, with the choices and the one you recommend. Empty where there is none.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "question",
+          "problem",
+          "tried",
+          "means",
+          "options",
+          "recommended",
+          "why"
+        ],
+        "properties": {
+          "question": {
+            "type": "string",
+            "description": "What you ask the person to decide, in one sentence."
+          },
+          "problem": {
+            "type": "string",
+            "description": "What stands in the way: what happened or what is missing, in words a person who was not there can follow."
+          },
+          "tried": {
+            "type": "string",
+            "description": "What you looked at or tried before calling this a stop, and why no work of the run settles it."
+          },
+          "means": {
+            "type": "string",
+            "description": "What it means for the work: what cannot be done, or cannot be trusted, until it is lifted."
+          },
+          "options": {
+            "type": "array",
+            "minItems": 2,
+            "description": "The choices the person has, at least two, each a sentence that says what it leads to.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "recommended": {
+            "type": "string",
+            "description": "The choice you recommend, word for word as it stands among the options, chosen by the bar your task gives for recommendations."
+          },
+          "why": {
+            "type": "string",
+            "description": "Why that one: which point of the bar decides it, what it costs and what it risks."
+          }
+        }
+      }
+    },
+    "preExisting": {
+      "type": "array",
+      "description": "Issues you met that were there before this run - outside what it changed - each reported and never fixed by you. Empty where you met none.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "title",
+          "description",
+          "where",
+          "evidence",
+          "blocks"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "One line: what is wrong, and where."
+          },
+          "description": {
+            "type": "string",
+            "description": "What is wrong and what it causes, as you saw it."
+          },
+          "where": {
+            "type": "array",
+            "description": "The paths, from the repository's root, or the command.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "evidence": {
+            "type": "string",
+            "description": "What you read or ran and saw, quoted: the file and its lines, or the command and what it printed."
+          },
+          "blocks": {
+            "type": "boolean",
+            "description": "True only where it stops your own work."
+          }
+        }
+      }
+    }
+  }
+}

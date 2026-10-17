@@ -1066,7 +1066,12 @@ public sealed partial class GitClient(
     {
         var result = await RunAsync(
             gitDirectory,
-            [.. RepositoryOnly(gitDirectory), "rev-list", "--count", .. revisions],
+            // The '--' ends the revisions: this command runs in the git directory, whose work tree it
+            // also is, where a file named HEAD always sits - and a git that reads a name both ways
+            // refuses it rather than guessing (measured on git 2.45.1: "fatal: ambiguous argument
+            // 'HEAD': both revision and filename", where later releases take the revision). Every
+            // revision is a revision; no path follows.
+            [.. RepositoryOnly(gitDirectory), "rev-list", "--count", .. revisions, "--"],
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
         return ReadCount(result);

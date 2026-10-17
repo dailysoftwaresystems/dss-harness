@@ -1532,6 +1532,56 @@ public sealed partial class CliEndToEndTests
     }
 
     /// <summary>
+    /// The ledger the real binary answers another machine with, of a run that reached its legs, names where its records
+    /// are from the host's home, as <c>~</c> - the document the machine that asked reads and puts in its own output - and
+    /// the same run typed on the machine itself names them in full.
+    /// </summary>
+    [Fact]
+    public async Task ALedgerAHostAnswersAnotherMachineWith_NamesItsRecordsFromItsHome_AndTypedThereInFull()
+    {
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var (environment, _) = OwnUserData(temp);
+        var harness = new HarnessFactory();
+        var platform = harness.Platform;
+
+        var home = OperatingSystem.IsWindows() ? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) : environment["HOME"]!;
+        var work = OperatingSystem.IsWindows() ? temp.Combine("work") : Path.Combine(home, "work");
+        Directory.CreateDirectory(work);
+
+        Assert.SkipUnless(
+            PathContainment.IsStrictlyInside(home, work, StringComparison.OrdinalIgnoreCase),
+            $"this machine keeps temporary files outside its account's home, '{home}', which the CLI reads whatever its environment says");
+
+        await harness.InitializeHarnessAsync(work, token, new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Legs = { ["native"] = new LegConfig { Os = platform.PlatformKey, Processor = platform.Processor, Config = "debug" } },
+            PredefinedRunners = { ["probe"] = new RunnerConfig { Phases = [new RunnerPhase { Name = "look", Command = ["dotnet", "--version"] }] } },
+        });
+
+        const string Nonce = "0123456789abcdef0123456789abcdef";
+        var request = JsonSerializer.Serialize(
+            new HostAgentRequest { Kind = HostAgentRequestKind.Run, Directory = work, Arguments = ["run", "probe", "--legs", "native", "--json"], Nonce = Nonce },
+            HostAgentProtocol.JsonOptions);
+
+        var served = await CliRunner.RunAsync(["host-agent"], token, standardInput: request + "\n", environment: environment);
+        var typed = await CliRunner.RunAsync(["run", "probe", "--legs", "native", "--json"], token, workingDirectory: work, environment: environment);
+
+        using var answer = JsonDocument.Parse(HostAgentProtocol.SinceServing(served.StandardOutput, Nonce));
+        using var typedAnswer = JsonDocument.Parse(typed.StandardOutput);
+        var runs = Path.Combine(".harness-config", "runs") + Path.DirectorySeparatorChar;
+        var leg = Assert.Single(answer.RootElement.GetProperty("legs").EnumerateArray());
+
+        Assert.Equal(HarnessExit.Success, served.ExitCode);
+        Assert.StartsWith(Path.Combine("~" + work[home.Length..], runs), answer.RootElement.GetProperty("runDirectory").GetString(), StringComparison.Ordinal);
+        Assert.StartsWith(Path.Combine("~" + work[home.Length..], runs), leg.GetProperty("records").GetString(), StringComparison.Ordinal);
+
+        Assert.Equal(HarnessExit.Success, typed.ExitCode);
+        Assert.StartsWith(Path.Combine(work, runs), typedAnswer.RootElement.GetProperty("runDirectory").GetString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A defect on a host answering another machine is reported with the host's home as <c>~</c> - its failure
     /// line, and under <c>--verbose</c> its stack trace, which repeats the message and reaches the reason of
     /// every leg the machine that asked reports.

@@ -157,6 +157,44 @@ public sealed class CleanServiceTests
         Assert.Equal("refused-locked", leg.GetProperty("verdict").GetString());
         Assert.Contains(held.Entry.Holder.RunId, leg.GetProperty("detail").GetString(), StringComparison.Ordinal);
         Assert.True(File.Exists(file));
+
+        // A build in the way is waited out, not put right: the one thing the code cannot say, said beside it.
+        Assert.Equal(OutcomeCause.LockHeld, outcome.Cause);
+    }
+
+    /// <summary>
+    /// A clean answers what it reached as every command that runs legs answers it - the ledger, the code, the line and
+    /// the cause a caller that can wait reads - typed, for a step of a run to read, and naming no run, since it keeps
+    /// none; and one stopped before any leg could be cleaned says so in the same terms.
+    /// </summary>
+    [Fact]
+    public async Task AClean_AnswersWhatItReached_AsEveryCommandThatRunsLegsDoes_NamingNoRun()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var config = OneLocalLeg(harness);
+        var directory = BuildDirectory(temp, harness, config);
+        File.WriteAllText(Written(Path.Combine(directory, "a.o")), "object");
+        var runLock = new RunLock(harness.FileSystem, harness.Output, harness.Identity);
+        var token = TestContext.Current.CancellationToken;
+
+        await using var held = await runLock.AcquireAsync(
+            new HarnessLayout(temp.Path, temp.Path),
+            PlacedLeg.BuildLock(HostId.Local, temp.Path, VariantKey.For(config, config.Legs.Single().Value, harness.Platform.PlatformKey), RunId.New(), "build"),
+            token);
+
+        var locked = await Service(temp, harness, config, runLock: runLock).ExecuteAsync(new CleanRequest(temp.Path, null), token);
+        var unplaced = await Service(temp, harness, config, inspector: new RecordingInspector(host => new HostReport { Host = host, Reason = "it is off" }))
+            .ExecuteAsync(new CleanRequest(temp.Path, null), token);
+
+        Assert.Equal(
+            (CleanService.CommandName, (RunId?)null, (string?)null, HarnessExit.Refused, "refused-locked: 1 of 1 leg(s)", false, false, OutcomeCause.LockHeld),
+            (locked.Command, locked.Run, locked.RunDirectory, locked.ExitCode, locked.Message, locked.Cancelled, locked.Stopped, locked.Cause));
+        Assert.Equal(LegVerdict.RefusedLocked, Assert.Single(locked.Report.Lines).Verdict);
+        Assert.Equal(
+            (CleanService.CommandName, (RunId?)null, LegsExit.Unavailable, "no selected leg can run", true, OutcomeCause.None),
+            (unplaced.Command, unplaced.Run, unplaced.ExitCode, unplaced.Message, unplaced.Stopped, unplaced.Cause));
+        Assert.Equal(LegVerdict.SkippedUnavailable, Assert.Single(unplaced.Report.Lines).Verdict);
     }
 
     /// <summary>
@@ -1831,6 +1869,31 @@ public sealed class CleanServiceTests
         CancellationToken? cancellationToken = null,
         HostId? here = null)
     {
+        var service = Service(temp, harness, config, inspector, runLock, hosts, copyThere, transports, fileSystem, trees, mainCheckout);
+
+        var outcome = await service.RunAsync(
+            new CleanRequest(temp.Path, legs, dryRun, Json: true, here) { FormerWorkers = formerWorkers },
+            cancellationToken ?? TestContext.Current.CancellationToken);
+
+        using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
+
+        return (outcome, [.. document.RootElement.GetProperty("legs").EnumerateArray().Select(leg => leg.Clone())]);
+    }
+
+    /// <summary>The service as the command builds it, over <paramref name="config"/> in <paramref name="temp"/>.</summary>
+    private static CleanService Service(
+        TempDirectory temp,
+        HarnessFactory harness,
+        HarnessConfig config,
+        RecordingInspector? inspector = null,
+        RunLock? runLock = null,
+        ScriptedHostCommands? hosts = null,
+        bool copyThere = true,
+        ISyncTransportFactory? transports = null,
+        IFileSystem? fileSystem = null,
+        IRepositoryTrees? trees = null,
+        string? mainCheckout = null)
+    {
         var loader = HostDoubles.Loader(config, temp.Path, mainCheckout);
 
         if (transports is null)
@@ -1843,7 +1906,7 @@ public sealed class CleanServiceTests
             transports.For(Arg.Any<HostReport>()).Returns(transport);
         }
 
-        var service = new CleanService(
+        return new CleanService(
             loader,
             new LegsService(loader, inspector ?? new RecordingInspector(host => new HostReport
             {
@@ -1862,13 +1925,5 @@ public sealed class CleanServiceTests
             harness.Platform,
             harness.Output,
             trees ?? new KnownTrees());
-
-        var outcome = await service.RunAsync(
-            new CleanRequest(temp.Path, legs, dryRun, Json: true, here) { FormerWorkers = formerWorkers },
-            cancellationToken ?? TestContext.Current.CancellationToken);
-
-        using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
-
-        return (outcome, [.. document.RootElement.GetProperty("legs").EnumerateArray().Select(leg => leg.Clone())]);
     }
 }

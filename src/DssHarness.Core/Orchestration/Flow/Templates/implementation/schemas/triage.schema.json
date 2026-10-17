@@ -1,0 +1,228 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "title",
+    "kind",
+    "summary",
+    "touches",
+    "plan",
+    "rebuilds",
+    "preapproval",
+    "ambiguities",
+    "blockers",
+    "stops",
+    "preExisting"
+  ],
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "One line that names the work; it becomes the title of the pull request."
+    },
+    "kind": {
+      "type": "string",
+      "description": "What kind of work the request is: fix, existing behaviour is wrong; feature, new behaviour; refactor, new code with the same behaviour; test, docs or build, only tests, documentation, or the build and CI change; other, anything else.",
+      "enum": [
+        "feature",
+        "fix",
+        "refactor",
+        "test",
+        "docs",
+        "build",
+        "other"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "description": "The request as you understand it, in your own words: what is to change and what done looks like."
+    },
+    "touches": {
+      "type": "array",
+      "description": "The parts of the repository the work will touch, as paths or path patterns, as far as reading the code shows.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "found",
+        "where",
+        "file",
+        "text"
+      ],
+      "properties": {
+        "found": {
+          "type": "boolean",
+          "description": "Whether the request already holds an implementation plan: in its own text, in a file it names, or as the run's plan input."
+        },
+        "where": {
+          "type": "string",
+          "description": "Where the plan is.",
+          "enum": [
+            "none",
+            "request",
+            "file",
+            "input"
+          ]
+        },
+        "file": {
+          "type": "string",
+          "description": "The path of the file that holds the plan, inside the repository; empty where it is not in a file."
+        },
+        "text": {
+          "type": "string",
+          "description": "The plan as the request states it, word for word, where it is in the request's own text; empty otherwise."
+        }
+      },
+      "description": "The implementation plan the request brings, if it brings one."
+    },
+    "rebuilds": {
+      "type": "array",
+      "description": "Each thing that exists and that the request itself asks to have refactored, rewritten or created again. Empty where the request asks for none: the work then builds on what the repository has.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "what",
+          "path"
+        ],
+        "properties": {
+          "what": {
+            "type": "string",
+            "description": "What the request asks to have refactored, rewritten or created again."
+          },
+          "path": {
+            "type": "string",
+            "description": "Where it lives in the repository: a file or a directory."
+          }
+        }
+      }
+    },
+    "preapproval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "given",
+        "sentence"
+      ],
+      "properties": {
+        "given": {
+          "type": "boolean",
+          "description": "True only where the request, in its own text as it was typed for this run, says in plain words that can be read no other way that its plan is approved beforehand or is to be built without being shown for approval."
+        },
+        "sentence": {
+          "type": "string",
+          "description": "The sentence of the request that says so, copied word for word; empty where given is false."
+        }
+      },
+      "description": "Whether the request itself approves the plan beforehand. Anything less than an unmistakable statement is not approval."
+    },
+    "ambiguities": {
+      "type": "array",
+      "description": "What the request leaves open and no answer or assumption of yours settled. Empty where nothing is left open.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "blockers": {
+      "type": "array",
+      "description": "Open work that stands in the way of the request and that this run can do, the most pressing first: each names the work, where it is (a path, a CI leg or a test) and what you read that shows it.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "stops": {
+      "type": "array",
+      "description": "What stands in the way and only a person can lift, each written as a question to that person, with the choices and the one you recommend. Empty where there is none.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "question",
+          "problem",
+          "tried",
+          "means",
+          "options",
+          "recommended",
+          "why"
+        ],
+        "properties": {
+          "question": {
+            "type": "string",
+            "description": "What you ask the person to decide, in one sentence."
+          },
+          "problem": {
+            "type": "string",
+            "description": "What stands in the way: what happened or what is missing, in words a person who was not there can follow."
+          },
+          "tried": {
+            "type": "string",
+            "description": "What you looked at or tried before calling this a stop, and why no work of the run settles it."
+          },
+          "means": {
+            "type": "string",
+            "description": "What it means for the work: what cannot be done, or cannot be trusted, until it is lifted."
+          },
+          "options": {
+            "type": "array",
+            "minItems": 2,
+            "description": "The choices the person has, at least two, each a sentence that says what it leads to.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "recommended": {
+            "type": "string",
+            "description": "The choice you recommend, word for word as it stands among the options, chosen by the bar your task gives for recommendations."
+          },
+          "why": {
+            "type": "string",
+            "description": "Why that one: which point of the bar decides it, what it costs and what it risks."
+          }
+        }
+      }
+    },
+    "preExisting": {
+      "type": "array",
+      "description": "Issues you met that were there before this run - outside what it changed - each reported and never fixed by you. Empty where you met none.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "title",
+          "description",
+          "where",
+          "evidence",
+          "blocks"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "One line: what is wrong, and where."
+          },
+          "description": {
+            "type": "string",
+            "description": "What is wrong and what it causes, as you saw it."
+          },
+          "where": {
+            "type": "array",
+            "description": "The paths, from the repository's root, or the command.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "evidence": {
+            "type": "string",
+            "description": "What you read or ran and saw, quoted: the file and its lines, or the command and what it printed."
+          },
+          "blocks": {
+            "type": "boolean",
+            "description": "True only where it stops your own work."
+          }
+        }
+      }
+    }
+  }
+}

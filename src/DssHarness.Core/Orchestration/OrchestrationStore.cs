@@ -1,6 +1,7 @@
 using System.Text.Json;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Output;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 
@@ -18,12 +19,26 @@ public sealed record AgentEntry(string Name, AgentRecord? Record, string? Proble
 /// ends up subtracting the wrong set, and how a closed agent is folded again.
 /// </summary>
 /// <param name="fileSystem">Reads and writes the records.</param>
-public sealed class OrchestrationStore(IFileSystem fileSystem)
+/// <param name="output">Tells a front end each record written (<see cref="RecordWritten"/>), what it is and where.</param>
+public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput output)
 {
+    /// <summary>What an orchestrator's record is, as its refusals and <see cref="RecordWritten"/> name it.</summary>
+    public const string OrchestratorRecordKind = "an orchestrator's record";
+
+    /// <summary>What an agent's record is, as its refusals and <see cref="RecordWritten"/> name it.</summary>
+    public const string AgentRecordKind = "an agent's record";
+
+    /// <summary>What an agent's seed is, as its refusals and <see cref="RecordWritten"/> name it.</summary>
+    public const string SeedKind = "an agent's seed";
+
+    /// <summary>What the record of an agent's applied rows is, as its refusals and <see cref="RecordWritten"/> name it.</summary>
+    public const string AppliedRowsKind = "the record of an agent's applied rows";
+
     /// <summary>How long one read-decide-write waits for another process's.</summary>
     private static readonly TimeSpan Window = TimeSpan.FromSeconds(30);
 
     private readonly IFileSystem _fileSystem = fileSystem;
+    private readonly IHarnessOutput _output = output;
 
     /// <summary>The orchestrators the repository has: every directory under its orchestrators directory holding a record.</summary>
     /// <param name="layout">The repository.</param>
@@ -34,7 +49,7 @@ public sealed class OrchestrationStore(IFileSystem fileSystem)
         return _fileSystem.DirectoryExists(layout.OrchestratorsDirectory)
             ? [.. _fileSystem.EnumerateDirectories(layout.OrchestratorsDirectory)
                 .Select(directory => OrchestratorLayout.Of(layout, Path.GetFileName(Path.TrimEndingDirectorySeparator(directory))))
-                .Where(orchestrator => Kind(orchestrator.RecordFile, "an orchestrator's record") == PathKind.File)
+                .Where(orchestrator => Kind(orchestrator.RecordFile, OrchestratorRecordKind) == PathKind.File)
                 .OrderBy(orchestrator => orchestrator.Name, StringComparer.Ordinal)]
             : [];
     }
@@ -45,7 +60,7 @@ public sealed class OrchestrationStore(IFileSystem fileSystem)
     public OrchestratorRecord? ReadOrchestrator(OrchestratorLayout orchestrator)
     {
         ArgumentNullException.ThrowIfNull(orchestrator);
-        return Read<OrchestratorRecord>(orchestrator.RecordFile, "an orchestrator's record", record => record.Problem(orchestrator.Name));
+        return Read<OrchestratorRecord>(orchestrator.RecordFile, OrchestratorRecordKind, record => record.Problem(orchestrator.Name));
     }
 
     /// <summary>Writes the orchestrator's record.</summary>
@@ -55,7 +70,7 @@ public sealed class OrchestrationStore(IFileSystem fileSystem)
     {
         ArgumentNullException.ThrowIfNull(orchestrator);
         ArgumentNullException.ThrowIfNull(record);
-        Write(orchestrator.RecordFile, record, record.Problem(orchestrator.Name));
+        Write(orchestrator.RecordFile, OrchestratorRecordKind, record, record.Problem(orchestrator.Name));
     }
 
     /// <summary>The agent's record, or null where it has none.</summary>
@@ -66,7 +81,7 @@ public sealed class OrchestrationStore(IFileSystem fileSystem)
     {
         ArgumentNullException.ThrowIfNull(orchestrator);
         ArgumentException.ThrowIfNullOrWhiteSpace(agent);
-        return Read<AgentRecord>(orchestrator.AgentRecordFile(agent), "an agent's record", record => record.Problem(orchestrator.Name, agent));
+        return Read<AgentRecord>(orchestrator.AgentRecordFile(agent), AgentRecordKind, record => record.Problem(orchestrator.Name, agent));
     }
 
     /// <summary>Writes the agent's record.</summary>
@@ -76,7 +91,7 @@ public sealed class OrchestrationStore(IFileSystem fileSystem)
     {
         ArgumentNullException.ThrowIfNull(orchestrator);
         ArgumentNullException.ThrowIfNull(record);
-        Write(orchestrator.AgentRecordFile(record.Name), record, record.Problem(orchestrator.Name, record.Name));
+        Write(orchestrator.AgentRecordFile(record.Name), AgentRecordKind, record, record.Problem(orchestrator.Name, record.Name));
     }
 
     /// <summary>Every agent directory of the orchestrator, in name order, each with its record or why it has none that reads.</summary>
@@ -118,7 +133,7 @@ public sealed class OrchestrationStore(IFileSystem fileSystem)
     public SeedRecord? ReadSeed(OrchestratorLayout orchestrator, string agent)
     {
         ArgumentNullException.ThrowIfNull(orchestrator);
-        return Read<SeedRecord>(orchestrator.SeedFile(agent), "an agent's seed", seed => seed.Problem());
+        return Read<SeedRecord>(orchestrator.SeedFile(agent), SeedKind, seed => seed.Problem());
     }
 
     /// <summary>Writes the agent's seed.</summary>
@@ -129,7 +144,7 @@ public sealed class OrchestrationStore(IFileSystem fileSystem)
     {
         ArgumentNullException.ThrowIfNull(orchestrator);
         ArgumentNullException.ThrowIfNull(seed);
-        Write(orchestrator.SeedFile(agent), seed, seed.Problem());
+        Write(orchestrator.SeedFile(agent), SeedKind, seed, seed.Problem());
     }
 
     /// <summary>The rows the agent's folds applied, or null where none ever were.</summary>
@@ -139,7 +154,7 @@ public sealed class OrchestrationStore(IFileSystem fileSystem)
     public AppliedRowsRecord? ReadAppliedRows(OrchestratorLayout orchestrator, string agent)
     {
         ArgumentNullException.ThrowIfNull(orchestrator);
-        return Read<AppliedRowsRecord>(orchestrator.AppliedRowsFile(agent), "the record of an agent's applied rows", record => record.Problem());
+        return Read<AppliedRowsRecord>(orchestrator.AppliedRowsFile(agent), AppliedRowsKind, record => record.Problem());
     }
 
     /// <summary>Writes the rows the agent's folds applied.</summary>
@@ -150,7 +165,7 @@ public sealed class OrchestrationStore(IFileSystem fileSystem)
     {
         ArgumentNullException.ThrowIfNull(orchestrator);
         ArgumentNullException.ThrowIfNull(record);
-        Write(orchestrator.AppliedRowsFile(agent), record, record.Problem());
+        Write(orchestrator.AppliedRowsFile(agent), AppliedRowsKind, record, record.Problem());
     }
 
     /// <summary>
@@ -225,7 +240,8 @@ public sealed class OrchestrationStore(IFileSystem fileSystem)
             : record;
     }
 
-    private void Write<T>(string path, T record, string? problem)
+    /// <summary>Writes a record whole, and tells a front end what it wrote and where.</summary>
+    private void Write<T>(string path, string what, T record, string? problem)
     {
         if (problem is not null)
         {
@@ -233,6 +249,7 @@ public sealed class OrchestrationStore(IFileSystem fileSystem)
         }
 
         _fileSystem.WriteAllTextAtomic(path, JsonSerializer.Serialize(record, JsonStateFile.Options) + "\n");
+        _output.Publish(new RecordWritten(what, path));
     }
 
     /// <summary>What is at a record's path; refused as a failure where that cannot be told.</summary>

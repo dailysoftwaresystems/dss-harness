@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using DssHarness.Core.Application;
 using DssHarness.Core.Build;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
@@ -86,7 +87,7 @@ public sealed class CleanService(
     IFileSystem fileSystem,
     IHostPlatform platform,
     IHarnessOutput output,
-    IRepositoryTrees trees)
+    IRepositoryTrees trees) : IUseCase
 {
     /// <summary>The command, as it is typed and as it reports.</summary>
     public const string CommandName = "clean";
@@ -116,7 +117,18 @@ public sealed class CleanService(
     /// <summary>Removes, or measures, every selected leg's build directory, and reports the ledger.</summary>
     /// <param name="request">What the command was asked to do.</param>
     /// <param name="cancellationToken">Stops the command, here and on every host.</param>
+    /// <returns>The ledger, as a table or as the document <c>--json</c> asks for.</returns>
     public async Task<CommandOutcome> RunAsync(CleanRequest request, CancellationToken cancellationToken = default)
+        => (await ExecuteAsync(request, cancellationToken).ConfigureAwait(false)).ToOutcome(request.Json, _output.Shown);
+
+    /// <summary>
+    /// Removes, or measures, every selected leg's build directory, and answers what the clean reached, in the terms its
+    /// caller answers in: the answer of every command that runs legs, which a step of an orchestrator run reads typed.
+    /// </summary>
+    /// <param name="request">What the command was asked to do.</param>
+    /// <param name="cancellationToken">Stops the command, here and on every host.</param>
+    /// <returns>What the clean reached; it keeps no run, so it names none.</returns>
+    public async Task<LegRunResult> ExecuteAsync(CleanRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
 
@@ -134,7 +146,7 @@ public sealed class CleanService(
         if (placed.Count == 0)
         {
             var nothing = LegRunPlan.NothingRuns(skipped);
-            return Stopped(request, nothing.ExitCode, nothing.Message, skipped, factor, nothing.Details ?? []);
+            return Stopped(nothing.ExitCode, nothing.Message, skipped, factor, nothing.Details ?? []);
         }
 
         var ledger = new LegLedger(_output, CommandName, dispatched: request.Here is not null);
@@ -175,16 +187,26 @@ public sealed class CleanService(
         {
             // The legs already dealt with are said first, then the refusal, as a run that builds says them: a
             // directory already removed is gone whatever stopped the rest.
-            return Stopped(request, ex.ExitCode, ex.Message, ledger.Entries, factor, ledger.Build(factor).Render());
+            return Stopped(ex.ExitCode, ex.Message, ledger.Entries, factor, ledger.Build(factor).Render());
         }
 
         var built = ledger.Build(factor);
-        var exitCode = built.ExitCodeGiven(execution.Cancelled, execution.Unfinished);
-        var message = built.Summarize(execution.Cancelled, execution.Unfinished);
 
-        return request.Json
-            ? new CommandOutcome(exitCode, message) { Data = [built.ToJson(execution.Cancelled, execution.Unfinished, shown: _output.Shown)], Quiet = true }
-            : new CommandOutcome(exitCode, message, built.Render());
+        return new LegRunResult(
+            CommandName,
+            Run: null,
+            RunDirectory: null,
+            built,
+            built.ExitCodeGiven(execution.Cancelled, execution.Unfinished),
+            built.Summarize(execution.Cancelled, execution.Unfinished),
+            execution.Cancelled,
+            execution.Unfinished,
+            built.Render())
+        {
+            // A leg a run is building is waited out, not put right: where that is what the code says, a caller that can
+            // try again knows to.
+            Cause = built.CauseGiven(execution.Cancelled, execution.Unfinished),
+        };
     }
 
     /// <summary>Removes, or measures, one leg's build directory where the leg runs.</summary>
@@ -898,16 +920,23 @@ public sealed class CleanService(
 
     /// <summary>
     /// What the command ends with when something other than its legs ended it, with the legs that had a line
-    /// by then; asked for data, the ledger is still the whole of standard output.
+    /// by then; asked for data, the ledger is still the whole of standard output (<see cref="LegRunResult.ToOutcome"/>).
     /// </summary>
-    private CommandOutcome Stopped(
-        CleanRequest request,
+    private static LegRunResult Stopped(
         int exitCode,
         string message,
         IReadOnlyList<LegEntry> entries,
         double factor,
         IReadOnlyList<string> details)
-        => request.Json
-            ? new CommandOutcome(exitCode, message) { Data = [LedgerReport.From(entries, factor).ToJson(exitCode, message, shown: _output.Shown)] }
-            : CommandOutcome.Failed(exitCode, message, details);
+        => new(
+            CommandName,
+            Run: null,
+            RunDirectory: null,
+            LedgerReport.From(entries, factor),
+            exitCode,
+            message,
+            Cancelled: exitCode == HarnessExit.Cancelled,
+            Unfinished: [],
+            details,
+            Stopped: true);
 }

@@ -206,6 +206,28 @@ public sealed class LegRunService(
         LegRunRequest request,
         Func<LegWork, CancellationToken, Task<LegEntry>> work,
         CancellationToken cancellationToken = default)
+        => (await ExecuteAsync(commandName, runId, request, work, cancellationToken).ConfigureAwait(false))
+            .ToOutcome(request.Json, _output.Shown);
+
+    /// <summary>
+    /// Runs <paramref name="work"/> on every selected leg and answers what it reached, in the terms its caller answers
+    /// in: what the build, test and run use cases answer with - which a step of an orchestrator run will call - and the
+    /// commands' own bodies below them.
+    /// </summary>
+    /// <param name="commandName">The command reporting, which prefixes every line it writes.</param>
+    /// <param name="runId">
+    /// The run, begun and said by the command that asks for it before anything could refuse it, which every record and
+    /// the ledger name.
+    /// </param>
+    /// <param name="request">What the command was asked to do.</param>
+    /// <param name="work">What one leg does once its tree is ready.</param>
+    /// <param name="cancellationToken">Stops the run.</param>
+    public async Task<LegRunResult> ExecuteAsync(
+        string commandName,
+        RunId runId,
+        LegRunRequest request,
+        Func<LegWork, CancellationToken, Task<LegEntry>> work,
+        CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(commandName);
         ArgumentNullException.ThrowIfNull(runId);
@@ -238,7 +260,7 @@ public sealed class LegRunService(
             var nothing = LegRunPlan.NothingRuns(skipped, request.NothingRunsExit);
 
             // Before the run has a directory: there is none to name.
-            return Stopped(request, runId, nothing.ExitCode, nothing.Message, LedgerReport.From(skipped, factor), nothing.Details ?? [], runDirectory: null);
+            return Stopped(commandName, request, runId, nothing.ExitCode, nothing.Message, LedgerReport.From(skipped, factor), nothing.Details ?? [], runDirectory: null);
         }
 
         // Before any copy is made: a tree whose .legs git does not ignore would have every copy a run made there committed
@@ -279,10 +301,12 @@ public sealed class LegRunService(
         {
             // Two runs writing one set of logs would each read the other's output as its own, which
             // is why this is its own verdict and its own exit code rather than a lock refusal - and
-            // the verdict of every leg this run would have started.
+            // the verdict of every leg this run would have started. Nor is it waited out as a lock is:
+            // the remedy is to point this run elsewhere, so it carries no cause a caller would retry on.
             var held = $"another run owns '{runDirectory}': {claim.HeldBy}";
 
             return Stopped(
+                commandName,
                 request,
                 runId,
                 LegExit.LogHeld,
@@ -291,6 +315,9 @@ public sealed class LegRunService(
                 [$"logs: {runDirectory}"],
                 runDirectory);
         }
+
+        // Made as it was claimed: a front end is told where the run's records are as they begin, not only once it ends.
+        _output.Publish(new RecordWritten("run directory", runDirectory));
 
         // Trees another run holds, by tree: a verdict for the legs that need one, as a variant
         // another run holds is, and no end to the legs that do not.
@@ -350,6 +377,7 @@ public sealed class LegRunService(
                 var reached = ledger.Build(factor);
 
                 return Stopped(
+                    commandName,
                     request,
                     runId,
                     ex.ExitCode,
@@ -359,7 +387,7 @@ public sealed class LegRunService(
                     runDirectory);
             }
 
-            return Report(commandName, context, ledger, execution, runId, runDirectory, placed, request.Json, request.MutationRecord);
+            return Report(commandName, context, ledger, execution, runId, runDirectory, placed, request.MutationRecord);
         }
         finally
         {
@@ -615,6 +643,7 @@ public sealed class LegRunService(
     /// What a run ends with when something other than its legs ended it, with the legs that had a
     /// line by then.
     /// </summary>
+    /// <param name="commandName">The command the run reports under.</param>
     /// <param name="request">What the command was asked to do.</param>
     /// <param name="runId">The run, which its document names whatever ended it.</param>
     /// <param name="exitCode">What the process exits with.</param>
@@ -632,7 +661,8 @@ public sealed class LegRunService(
     /// reasons - it reached the machine that dispatched the leg as a host whose answer could not be
     /// read, where the host had said exactly what happened.
     /// </remarks>
-    private CommandOutcome Stopped(
+    private static LegRunResult Stopped(
+        string commandName,
         LegRunRequest request,
         RunId runId,
         int exitCode,
@@ -640,12 +670,18 @@ public sealed class LegRunService(
         LedgerReport reached,
         IReadOnlyList<string> details,
         string? runDirectory)
-        => request.Json
-            ? new CommandOutcome(exitCode, message)
-            {
-                Data = [reached.ToJson(exitCode, message, runDirectory, _output.Shown, runId, request.MutationRecord)],
-            }
-            : CommandOutcome.Failed(exitCode, message, [.. details, .. reached.LeftRunningSaid]);
+        => new(
+            commandName,
+            runId,
+            runDirectory,
+            reached,
+            exitCode,
+            message,
+            Cancelled: exitCode == HarnessExit.Cancelled,
+            Unfinished: [],
+            [.. details, .. reached.LeftRunningSaid],
+            Stopped: true,
+            request.MutationRecord);
 
     /// <summary>
     /// Where a run's records are, as its text form says it: this run's directory, then each leg's own directory of
@@ -1182,7 +1218,7 @@ public sealed class LegRunService(
             .ConfigureAwait(false);
     }
 
-    private CommandOutcome Report(
+    private LegRunResult Report(
         string commandName,
         HarnessContext context,
         LegLedger ledger,
@@ -1190,26 +1226,14 @@ public sealed class LegRunService(
         RunId runId,
         string runDirectory,
         IReadOnlyList<PlacedLeg> placed,
-        bool json,
         string? mutationRecord = null)
     {
         var report = ledger.Build(context.Config.Defaults.DurationWarningFactor);
 
-        // One code and one line, whichever form the ledger is shown in. Deciding them per branch
-        // is how the JSON branch came to report a failing run with an empty line: a host is always
+        // One code and one line, whichever form the ledger is shown in. Deciding them per form
+        // is how the JSON form came to report a failing run with an empty line: a host is always
         // asked for JSON, so every failure on another machine read as `FAIL - ` and nothing else.
         var exitCode = report.ExitCodeGiven(execution.Cancelled, execution.Unfinished);
-        var message = report.Summarize(execution.Cancelled, execution.Unfinished);
-
-        if (json)
-        {
-            return new CommandOutcome(exitCode, message)
-            {
-                Data = [report.ToJson(execution.Cancelled, execution.Unfinished, runDirectory, _output.Shown, runId, mutationRecord)],
-                Quiet = true,
-            };
-        }
-
         var details = new List<string>(report.Render());
         details.AddRange(Logs(runDirectory, report, placed));
 
@@ -1218,6 +1242,22 @@ public sealed class LegRunService(
             details.Add($"left unfinished: {string.Join(", ", execution.Unfinished)}");
         }
 
-        return new CommandOutcome(exitCode, message, details);
+        return new LegRunResult(
+            commandName,
+            runId,
+            runDirectory,
+            report,
+            exitCode,
+            report.Summarize(execution.Cancelled, execution.Unfinished),
+            execution.Cancelled,
+            execution.Unfinished,
+            details,
+            Stopped: false,
+            mutationRecord)
+        {
+            // A refusal the run's legs met at a lock another run holds is waited out, not put right: where that is what
+            // its code says, a caller that can try again knows to.
+            Cause = report.CauseGiven(execution.Cancelled, execution.Unfinished),
+        };
     }
 }
