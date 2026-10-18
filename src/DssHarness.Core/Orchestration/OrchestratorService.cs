@@ -269,7 +269,11 @@ public sealed class OrchestratorService(
                     + "Nothing was changed.");
             }
 
-            var open = agents.Where(agent => agent.Record!.State != AgentStates.Deleted).Select(agent => agent.Name).ToList();
+            // An agent that reads the main tree holds nothing but records: it does not stand in the way, and goes with
+            // the orchestrator. Everything it kept - its evidence and its transcripts today, its steps and its sessions
+            // once the engine writes them - is counted below, under the guard --delete-evidence gives. What git lists
+            // below is refused on its own below, so the open agents are asked of the records alone.
+            var open = OrchestrationRules.OpenAgents(name, agents, []);
 
             if (open.Count > 0)
             {
@@ -476,11 +480,15 @@ public sealed class OrchestratorService(
     /// <summary>
     /// One agent as the listing reports it: where its worktree is, from its own record - the worktrees root it was made
     /// under - and whether anything is there, asked of that path; for a record that does not read, the configured root.
+    /// An agent that reads the main tree has no worktree, so it names none.
     /// </summary>
     private AgentInventory Inventory(HarnessLayout layout, string configuredRoot, OrchestratorLayout orchestrator, AgentEntry agent)
     {
-        var path = agent.Record?.WorktreePath(layout) ?? WorktreeAddress.Nested(orchestrator.Name, agent.Name).PathUnder(layout.WorktreesDirectoryUnder(configuredRoot));
-        return new AgentInventory(agent, WorktreeExists(path), path, Evidence(orchestrator, agent.Name), Files(orchestrator.TranscriptsDirectory(agent.Name)));
+        var path = agent.Record is { Reads: true }
+            ? null
+            : agent.Record?.WorktreePath(layout) ?? WorktreeAddress.Nested(orchestrator.Name, agent.Name).PathUnder(layout.WorktreesDirectoryUnder(configuredRoot));
+
+        return new AgentInventory(agent, path is not null && WorktreeExists(path), path, Evidence(orchestrator, agent.Name), Files(orchestrator.TranscriptsDirectory(agent.Name)));
     }
 
     /// <summary>Whether anything is at an agent's worktree path; a path that cannot be looked at is said to be there, never gone.</summary>
@@ -526,13 +534,13 @@ public sealed record OrchestratorInventory(
 /// <summary>One agent, as list-orchestrator reports it.</summary>
 /// <param name="Entry">Its directory's record, or why it has none that reads.</param>
 /// <param name="WorktreeExists">Whether anything is at its worktree's path.</param>
-/// <param name="WorktreePath">Where its worktree is, or was: under the worktrees root it was made under.</param>
+/// <param name="WorktreePath">Where its worktree is, or was: under the worktrees root it was made under; null where it reads the main tree and has none.</param>
 /// <param name="Evidence">The evidence directories kept for it, relative to its directory.</param>
 /// <param name="Transcripts">How many transcript files are kept for it.</param>
 public sealed record AgentInventory(
     AgentEntry Entry,
     bool WorktreeExists,
-    string WorktreePath,
+    string? WorktreePath,
     IReadOnlyList<string> Evidence,
     int Transcripts);
 

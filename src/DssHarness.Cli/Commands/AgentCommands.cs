@@ -21,6 +21,12 @@ internal static class CreateAgentCommand
         Description = "Hand it nothing: record that it was made at a commit and given none of the main tree's uncommitted state.",
     };
 
+    private static readonly Option<bool> NoWorktreeOption = new("--no-worktree")
+    {
+        Description = "Make an agent with no worktree, which reads the main tree and writes only its own scratch. The engine "
+            + "makes one for a read-only reason step; a person has no use for making such an agent by hand.",
+    };
+
     private static readonly Option<string?> SessionOption = OrchestrationArguments.Session(
         "The agent's Claude session id, or its subagent's id, whose transcripts delete-agent keeps. Run again, it records only this.");
 
@@ -33,18 +39,21 @@ internal static class CreateAgentCommand
         command.Arguments.Add(AgentArgument);
         command.Options.Add(ModelOption);
         command.Options.Add(EmptyOption);
+        command.Options.Add(NoWorktreeOption);
         command.Options.Add(SessionOption);
         GlobalOptions.AddTo(command);
 
-        CommandRunner.Wire(command, (context, cancellationToken) => context.Get<IAgentService>()
+        CommandRunner.Wire(command, async (context, cancellationToken) => (await context.Get<IAgentService>()
             .CreateAsync(
-                context.Directory,
-                context.ParseResult.GetRequiredValue(OrchestratorArgument),
-                context.ParseResult.GetRequiredValue(AgentArgument),
-                context.ParseResult.GetRequiredValue(ModelOption),
-                context.ParseResult.GetValue(EmptyOption),
-                context.ParseResult.GetValue(SessionOption),
-                cancellationToken));
+                new AgentCreateRequest(
+                    context.Directory,
+                    context.ParseResult.GetRequiredValue(OrchestratorArgument),
+                    context.ParseResult.GetRequiredValue(AgentArgument),
+                    context.ParseResult.GetRequiredValue(ModelOption),
+                    context.ParseResult.GetValue(EmptyOption),
+                    context.ParseResult.GetValue(SessionOption),
+                    context.ParseResult.GetValue(NoWorktreeOption)),
+                cancellationToken).ConfigureAwait(false)).Outcome);
 
         return command;
     }

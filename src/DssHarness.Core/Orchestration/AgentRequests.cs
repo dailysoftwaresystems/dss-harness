@@ -7,7 +7,8 @@ namespace DssHarness.Core.Orchestration;
 /// <param name="Model">The model the agent works as, as a definition names one.</param>
 /// <param name="Empty">Whether its making hands it nothing, rather than the main tree's uncommitted state.</param>
 /// <param name="Session">The session to record for it, where one is given.</param>
-public sealed record AgentCreateRequest(string StartDirectory, string Orchestrator, string Agent, string Model, bool Empty, string? Session);
+/// <param name="NoWorktree">Whether it is made with no worktree, reading the main tree: the engine's own, for a read-only reason step.</param>
+public sealed record AgentCreateRequest(string StartDirectory, string Orchestrator, string Agent, string Model, bool Empty, string? Session, bool NoWorktree = false);
 
 /// <summary>What seeding an agent again was asked: what its seeding hands it, and whether it may overwrite its own work.</summary>
 /// <param name="StartDirectory">The directory the command was run from.</param>

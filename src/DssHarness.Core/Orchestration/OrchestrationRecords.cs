@@ -87,14 +87,39 @@ public sealed record AgentRecord
     /// <summary>When it was created.</summary>
     public required DateTimeOffset CreatedAt { get; init; }
 
-    /// <summary>Its worktree's address, <c>orchestrator/agent</c>.</summary>
-    public required string Worktree { get; init; }
+    /// <summary>What <see cref="Access"/> holds for an agent that works in a worktree of its own.</summary>
+    public const string AccessWrite = "write";
+
+    /// <summary>What <see cref="Access"/> holds for an agent that reads the main tree and has no worktree.</summary>
+    public const string AccessRead = "read";
+
+    /// <summary>
+    /// Whether the agent works in a worktree of its own (<see cref="AccessWrite"/>, which every record said before
+    /// there was another kind) or reads the main tree and has none (<see cref="AccessRead"/>), which the engine makes
+    /// for a read-only reason step. Null is write, so the tool writes no <c>access</c> for an agent with a worktree and
+    /// an older tool still reads its record.
+    /// </summary>
+    public string? Access { get; init; }
+
+    /// <summary>
+    /// Whether the agent reads the main tree and has no worktree: what <see cref="Access"/> spells, read here as a
+    /// fact and written nowhere - a record is what another tool reads, and this is not one of its members.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool Reads => Access == AccessRead;
+
+    /// <summary>
+    /// Its worktree's address, <c>orchestrator/agent</c>: absent for an agent that reads the main tree, which
+    /// <see cref="Problem(string, string)"/> requires of one that does not.
+    /// </summary>
+    public string? Worktree { get; init; }
 
     /// <summary>
     /// The worktrees root its worktree was made under, relative to the main checkout, as the configuration named it then:
-    /// where its worktree is, whatever the configuration says later.
+    /// where its worktree is, whatever the configuration says later. Absent for an agent that reads the main tree, which
+    /// <see cref="Problem(string, string)"/> requires of one that does not.
     /// </summary>
-    public required string WorktreesRoot { get; init; }
+    public string? WorktreesRoot { get; init; }
 
     /// <summary>The commit its worktree was made from; null until the worktree is made.</summary>
     public string? Base { get; init; }
@@ -141,13 +166,15 @@ public sealed record AgentRecord
 
     /// <summary>
     /// Where its worktree is in the repository at <paramref name="layout"/>: under the worktrees root it was made under,
-    /// whatever the configuration names now.
+    /// whatever the configuration names now. Null for an agent that reads the main tree, which has none.
     /// </summary>
     /// <param name="layout">The repository.</param>
-    public string WorktreePath(Repository.HarnessLayout layout)
+    public string? WorktreePath(Repository.HarnessLayout layout)
     {
         ArgumentNullException.ThrowIfNull(layout);
-        return WorktreeAddress.Nested(Orchestrator, Name).PathUnder(layout.WorktreesDirectoryUnder(WorktreesRoot));
+        return Reads || WorktreesRoot is not { } root
+            ? null
+            : WorktreeAddress.Nested(Orchestrator, Name).PathUnder(layout.WorktreesDirectoryUnder(root));
     }
 
     /// <summary>What is wrong with this record, kept in <paramref name="directoryName"/> under <paramref name="orchestrator"/>; null when nothing is.</summary>
@@ -175,16 +202,68 @@ public sealed record AgentRecord
             return named;
         }
 
-        if (Worktree != WorktreeAddress.Nested(Orchestrator, Name).Name)
+        if (Access is not null && Access != AccessRead && Access != AccessWrite)
         {
-            return $"its worktree is '{Worktree}', and an agent's is '{WorktreeAddress.Nested(Orchestrator, Name).Name}'";
+            return $"its access is '{Access}', and an agent's is '{AccessRead}' or '{AccessWrite}'";
+        }
+
+        if (Reads)
+        {
+            // An agent that reads the main tree holds none of what a worktree is made of, and a record that says any
+            // of it is not the record of such an agent.
+            if (Worktree is { } worktree)
+            {
+                return $"it reads the main tree, and records the worktree '{worktree}'";
+            }
+
+            if (WorktreesRoot is { } root)
+            {
+                return $"it reads the main tree, and records the worktrees root '{root}'";
+            }
+
+            if (Base is { } from)
+            {
+                return $"it reads the main tree, and records the base '{from}'";
+            }
+
+            if (Moving is { } to)
+            {
+                return $"it reads the main tree, and records a move of a base to '{to}'";
+            }
+
+            if (MovingWith is not null)
+            {
+                return "it reads the main tree, and records what a move of a base was told";
+            }
+
+            if (MovingRemoved is not null)
+            {
+                return "it reads the main tree, and records what a move of a base removed";
+            }
+        }
+        else
+        {
+            if (Worktree is null)
+            {
+                return "it records no worktree, and an agent that does not read the main tree has one of its own";
+            }
+
+            if (WorktreesRoot is null)
+            {
+                return "it records no worktrees root, and an agent that does not read the main tree was made under one";
+            }
+
+            if (Worktree != WorktreeAddress.Nested(Orchestrator, Name).Name)
+            {
+                return $"its worktree is '{Worktree}', and an agent's is '{WorktreeAddress.Nested(Orchestrator, Name).Name}'";
+            }
         }
 
         if ((OrchestrationRules.ModelProblem(Model)
             ?? OrchestrationRules.SessionProblem(Session)
             ?? OrchestrationRules.CommitProblem(Base, "base")
             ?? OrchestrationRules.CommitProblem(Moving, "base's move")
-            ?? OrchestrationRules.RelativePathProblem(WorktreesRoot, "its worktrees root")) is { } problem)
+            ?? (WorktreesRoot is { } under ? OrchestrationRules.RelativePathProblem(under, "its worktrees root") : null)) is { } problem)
         {
             return problem;
         }
@@ -375,14 +454,15 @@ public static partial class OrchestrationRules
 
     /// <summary>
     /// The agents of <paramref name="orchestrator"/> that count against its limit, by name: every one not deleted - a closed
-    /// agent's worktree may still be there - and every one whose worktree git lists, record or not.
+    /// agent's worktree may still be there - and every one whose worktree git lists, record or not. An agent that reads
+    /// the main tree is none of these: the limit is a limit on worktrees, and it has none.
     /// </summary>
     /// <param name="orchestrator">The orchestrator's name.</param>
     /// <param name="agents">Its agents' directories, each with its record where it reads.</param>
     /// <param name="worktrees">The worktrees git lists, by address.</param>
     public static IReadOnlyList<string> OpenAgents(string orchestrator, IEnumerable<AgentEntry> agents, IEnumerable<string> worktrees)
         => [.. agents
-            .Where(entry => entry.Record is not { State: AgentStates.Deleted })
+            .Where(entry => entry.Record is not { State: AgentStates.Deleted } && entry.Record is not { Access: AgentRecord.AccessRead })
             .Select(entry => entry.Name)
             .Concat(worktrees.Select(worktree => WorktreeAddress.AgentOf(orchestrator, worktree)).OfType<string>())
             .Distinct(StringComparer.Ordinal)

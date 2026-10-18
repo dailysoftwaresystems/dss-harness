@@ -700,6 +700,17 @@ stops part way (exit 21) leaves only records that read, and run again it finishe
 orchestrator's open agents as create-agent does (`OrchestrationRules.OpenAgents`), and says where each agent's
 worktree is from its own record, the worktrees root it was made under.
 
+An agent can also be made with no worktree (`create-agent --no-worktree`): a record and the two directories every
+agent gets outside a worktree - `work/<agent>/` and `plans/<agent>/` - and nothing in the tree. Its record says
+`"access": "read"` (`AgentRecord.Access`); a record that says nothing is an agent with a worktree, which is every
+record an older tool wrote and what the tool still writes for one, so those records read as they always did. The
+engine makes one for a read-only reason step, and nothing else does - the option's help says a person has no use for
+one by hand. It counts against no limit, the limit being a limit on worktrees: `OrchestrationRules.OpenAgents` leaves
+it out, and so do list-orchestrator's open agents and delete-orchestrator's way, since a live one holds nothing but
+records and goes with the orchestrator. It is never seeded, refreshed, rebased or folded - each refuses, exit 13,
+before anything is asked of git - and deleting it is one write, `live` to `deleted`, the path the states already have
+for an agent whose worktree was never made; its directory stays, as every deleted agent's does.
+
 ### Seeding and folding
 
 The seed is the main tree's uncommitted state handed to the agent when it is made - every path git status lists,

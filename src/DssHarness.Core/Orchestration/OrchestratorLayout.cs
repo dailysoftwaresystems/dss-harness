@@ -19,6 +19,9 @@ namespace DssHarness.Core.Orchestration;
 /// agents/&lt;agent&gt;/rows/        the anchor rows it files, one directory for each
 /// agents/&lt;agent&gt;/applied-rows.json   the rows its folds applied, each as declared then
 /// agents/&lt;agent&gt;/evidence/    what its worktree's evidence roots held when it was deleted
+/// agents/&lt;agent&gt;/sessions/&lt;id&gt;/   API clients only: one conversation with the provider, in the provider's own form
+/// agents/&lt;agent&gt;/steps/&lt;instance&gt;/   one step the agent runs, or that runs in or for its worktree, everything of the step in it
+/// steps/&lt;instance&gt;/          one step of the run that no agent owns, the create-agent that makes an agent included
 /// </code>
 /// The orchestrator's name and each agent's are the directories they are kept in, and an agent is never named as its
 /// orchestrator, since the two would share a log and a plans directory.
@@ -53,6 +56,15 @@ public sealed record OrchestratorLayout(string Name, string Directory)
 
     /// <summary>The name of the file the rows an agent's folds applied are kept in.</summary>
     public const string AppliedRowsFileName = "applied-rows.json";
+
+    /// <summary>The directory an agent's conversations with an API client are kept in.</summary>
+    public const string SessionsDirectoryName = "sessions";
+
+    /// <summary>The directory steps are kept in, under the run and inside each agent's directory.</summary>
+    public const string StepsDirectoryName = "steps";
+
+    /// <summary>The name of the file a step's handoff is kept in.</summary>
+    public const string HandoffFileName = "handoff.md";
 
     /// <summary>The directory an agent's evidence is kept in when it is deleted.</summary>
     public const string EvidenceDirectoryName = "evidence";
@@ -130,6 +142,48 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <summary>The rows the folds of <paramref name="agent"/> applied, each as declared then.</summary>
     /// <param name="agent">The agent's name.</param>
     public string AppliedRowsFile(string agent) => Path.Combine(AgentDirectory(agent), AppliedRowsFileName);
+
+    /// <summary>
+    /// Where the steps of the run are kept that no agent owns - the <c>create-agent</c> that makes one included, which
+    /// stays under the run because the agent it makes is not there yet.
+    /// </summary>
+    public string StepsDirectory => Path.Combine(Directory, StepsDirectoryName);
+
+    /// <summary>Where one step of the run is kept, which no agent owns.</summary>
+    /// <param name="instance">The step instance's name.</param>
+    public string StepDirectory(string instance) => Path.Combine(StepsDirectory, instance);
+
+    /// <summary>
+    /// Where the steps <paramref name="agent"/> runs are kept - every reason step, and every step that names it with
+    /// <c>in</c> or <c>of</c> - one directory for each.
+    /// </summary>
+    /// <param name="agent">The agent's name.</param>
+    public string AgentStepsDirectory(string agent) => Path.Combine(AgentDirectory(agent), StepsDirectoryName);
+
+    /// <summary>Where one step <paramref name="agent"/> runs, or that runs in or for its worktree, is kept.</summary>
+    /// <param name="agent">The agent's name.</param>
+    /// <param name="instance">The step instance's name.</param>
+    public string AgentStepDirectory(string agent, string instance) => Path.Combine(AgentStepsDirectory(agent), instance);
+
+    /// <summary>
+    /// Where the conversations <paramref name="agent"/> holds with an API client are kept, one directory for each. A
+    /// Claude Code launch has none: a conversation cannot be handed to it.
+    /// </summary>
+    /// <param name="agent">The agent's name.</param>
+    public string AgentSessionsDirectory(string agent) => Path.Combine(AgentDirectory(agent), SessionsDirectoryName);
+
+    /// <summary>Where one conversation <paramref name="agent"/> holds with an API client is kept.</summary>
+    /// <param name="agent">The agent's name.</param>
+    /// <param name="id">The conversation's id.</param>
+    public string AgentSessionDirectory(string agent, string id) => Path.Combine(AgentSessionsDirectory(agent), id);
+
+    /// <summary>
+    /// The handoff of one step <paramref name="agent"/> ran, kept in the step's own directory: what its agent said when
+    /// a pause or a limit stopped it while it reasoned, or what the engine wrote where it could not answer.
+    /// </summary>
+    /// <param name="agent">The agent's name.</param>
+    /// <param name="instance">The step instance's name.</param>
+    public string HandoffFile(string agent, string instance) => Path.Combine(AgentStepDirectory(agent, instance), HandoffFileName);
 
     /// <summary>Where the evidence of <paramref name="agent"/> is kept when it is deleted.</summary>
     /// <param name="agent">The agent's name.</param>
