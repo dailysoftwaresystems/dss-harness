@@ -34,6 +34,9 @@ internal static class TestChild
             "read-lines-for" => ReadLinesFor(standardOutput, arguments),
             "close-input-then-sleep" => CloseInputThenSleep(arguments),
             "sleep" => Sleep(arguments),
+            "print-ids" => PrintIds(standardOutput),
+            "spawn-orphan" => SpawnOrphan(standardOutput, arguments),
+            "spawn-orphan-and-sleep" => SpawnOrphanAndSleep(standardOutput, arguments),
             "stream" => Stream(standardOutput, standardError, arguments),
             "flood" => Flood(standardOutput, arguments),
             "flood-error" => Flood(standardError, arguments),
@@ -261,6 +264,186 @@ internal static class TestChild
         Thread.Sleep(int.Parse(arguments[0], CultureInfo.InvariantCulture));
         return 0;
     }
+
+    /// <summary>
+    /// Writes this process's own id, the id of its process group and of its session: what a test of
+    /// containment reads, since where a process stands is the group and session it is in. The
+    /// session and group calls are the C library's, and the ids have no spelling on Windows.
+    /// </summary>
+    private static int PrintIds(TextWriter output)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            output.Write($"pid={getpid()} pgid={getpgid(0)} sid={getsid(0)}\n");
+            return 0;
+        }
+
+        return 98;
+    }
+
+    /// <summary>
+    /// Starts a sleeper of its own, writes its process id, and exits at once: what a test of
+    /// containment ends reads, since the sleeper's parent is gone and only the container it was
+    /// born in can reach it. On Windows the sleeper inherits no handle: were it to hold the pipe
+    /// this process writes to, whoever reads that pipe would wait for the sleeper's own end.
+    /// </summary>
+    private static int SpawnOrphan(TextWriter output, string[] arguments)
+    {
+        var milliseconds = arguments.Length > 0 ? arguments[0] : "300000";
+
+        if (OperatingSystem.IsWindows())
+        {
+            var commandLine = $"\"{TestHost.DotnetExecutable}\" exec \"{TestHost.AssemblyPath}\" {milliseconds}";
+            var startup = new StartupInfo { Size = System.Runtime.InteropServices.Marshal.SizeOf<StartupInfo>() };
+
+            // The mode travels in the environment the sleeper inherits; set here and taken back at
+            // once, it is in the sleeper's and in no other's.
+            Environment.SetEnvironmentVariable(TestHost.ChildModeVariable, "sleep");
+
+            try
+            {
+                if (CreateProcessW(
+                        null,
+                        [.. commandLine, '\0'],
+                        IntPtr.Zero,
+                        IntPtr.Zero,
+                        inheritHandles: false,
+                        CreateNoWindow | NewProcessGroup,
+                        IntPtr.Zero,
+                        null,
+                        ref startup,
+                        out var started))
+                {
+                    output.Write($"orphan={started.ProcessId}\n");
+                    return 0;
+                }
+
+                return 99;
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable(TestHost.ChildModeVariable, null);
+            }
+        }
+
+        var start = new ProcessStartInfo(TestHost.DotnetExecutable)
+        {
+            UseShellExecute = false,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+
+        start.ArgumentList.Add("exec");
+        start.ArgumentList.Add(TestHost.AssemblyPath);
+        start.ArgumentList.Add(milliseconds);
+        start.Environment[TestHost.ChildModeVariable] = "sleep";
+
+        using var sleeper = Process.Start(start)
+            ?? throw new InvalidOperationException("The sleeper did not start.");
+
+        output.Write($"orphan={sleeper.Id}\n");
+
+        return 0;
+    }
+
+    /// <summary>A console of its own, with no window.</summary>
+    private const uint CreateNoWindow = 0x08000000;
+
+    /// <summary>A process group of its own.</summary>
+    private const uint NewProcessGroup = 0x00000200;
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true, ExactSpelling = true)]
+    [System.Runtime.InteropServices.DefaultDllImportSearchPaths(System.Runtime.InteropServices.DllImportSearchPath.System32)]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool CreateProcessW(
+        string? applicationName,
+        char[] commandLine,
+        IntPtr processAttributes,
+        IntPtr threadAttributes,
+        [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)] bool inheritHandles,
+        uint creationFlags,
+        IntPtr environment,
+        string? currentDirectory,
+        ref StartupInfo startupInfo,
+        out ProcessInformation processInformation);
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct StartupInfo
+    {
+        public int Size;
+        public IntPtr Reserved;
+        public IntPtr Desktop;
+        public IntPtr Title;
+        public int X;
+        public int Y;
+        public int Width;
+        public int Height;
+        public int Columns;
+        public int Rows;
+        public int FillAttribute;
+        public int Flags;
+        public short ShowWindow;
+        public short ReservedSize;
+        public IntPtr ReservedBytes;
+        public IntPtr StandardInput;
+        public IntPtr StandardOutput;
+        public IntPtr StandardError;
+    }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct ProcessInformation
+    {
+        public IntPtr Process;
+        public IntPtr Thread;
+        public int ProcessId;
+        public int ThreadId;
+    }
+
+    /// <summary>
+    /// Starts, through a middle process that exits at once, a sleeper of its own in this process's
+    /// group, writes the sleeper's process id, and goes on sleeping: a stop that reaches the group
+    /// ends the sleeper with this process, where a stop that walks the tree cannot - the middle is
+    /// gone, the sleeper is no one's child, and the group is the only thing that holds them both.
+    /// </summary>
+    private static int SpawnOrphanAndSleep(TextWriter output, string[] arguments)
+    {
+        var milliseconds = arguments.Length > 0 ? arguments[0] : "300000";
+
+        var start = new ProcessStartInfo(TestHost.DotnetExecutable)
+        {
+            UseShellExecute = false,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+
+        start.ArgumentList.Add("exec");
+        start.ArgumentList.Add(TestHost.AssemblyPath);
+        start.ArgumentList.Add(milliseconds);
+        start.Environment[TestHost.ChildModeVariable] = "spawn-orphan";
+
+        using var middle = Process.Start(start)
+            ?? throw new InvalidOperationException("The middle process did not start.");
+
+        // The middle writes the sleeper's id and exits; read to its end so it is not held.
+        output.Write(middle.StandardOutput.ReadToEnd());
+
+        middle.WaitForExit();
+
+        Thread.Sleep(int.Parse(arguments.Length > 1 ? arguments[1] : "300000", CultureInfo.InvariantCulture));
+
+        return 0;
+    }
+
+    [System.Runtime.InteropServices.DllImport("libc")]
+    private static extern int getpid();
+
+    [System.Runtime.InteropServices.DllImport("libc")]
+    private static extern int getpgid(int process);
+
+    [System.Runtime.InteropServices.DllImport("libc")]
+    private static extern int getsid(int process);
 
     /// <summary>
     /// Writes one line, then waits for the parent to prove it received that line while

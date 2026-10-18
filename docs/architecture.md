@@ -50,7 +50,8 @@ password is asked at its terminal (`ConsoleHost`).
 which operating system it runs on and builds what differs by it. Everything above them depends
 on `IHostPlatform`, `IFilePermissions`, `IProcessTable`, `IProcessRunner` and `IFileSystem`.
 Below that seam a few primitives ask the runtime for one fact each, where nothing else is
-asked - `PhysicalFileSystem`, `ProcessRunner`, `DetachedProcessLauncher`, `UserState`,
+asked - `PhysicalFileSystem`, `ProcessRunner`, `DetachedProcessLauncher`, `Containment` (the
+session, group and job-object calls containment is made of, read by `ContainExec`), `UserState`,
 `WslDiskImages`, `CMakeToolchainReader`, `ProcessContext` (the process's current directory) and the
 command that holds a host awake.
 
@@ -109,6 +110,20 @@ would parse a second time, and a path without one starts that path with `.exe` a
 program a leg's configuration names by a relative path is read from the directory its phase
 starts in - a step's working directory, the test runner's - never from wherever the harness was
 started: for a leg on a worktree those are different copies of the same file.
+
+A request can ask for a child **contained**: a stopped one and what it started end together, what
+a killed engine leaves behind ends with it, and a signal to the harness does not reach it. A
+process has to be where it is contained before it runs a line of its
+own, and `Process.Start` offers no moment between a child's making and its start on any system, so
+the runner - the one owner of processes - starts a contained child through a copy of this tool that
+puts itself there first: the hidden `contain-exec` command, which on Linux and macOS makes itself
+the leader of a new session and process group (`setsid`) and then becomes the program (`execvp`,
+under the same process id), and on Windows joins the named job object the engine made - one whose
+members end when its last handle closes - and starts the program in a process group of its own,
+handing the streams it was given on to it. The group alone, apart from the terminal but within the
+session, is the lesser level a request asks for by name (`ApartFromTerminal`): an interruption
+typed at the harness's terminal is sent to a group, and that group is not the child's. No leg is
+contained: a `build`, `test` or `run` typed by hand starts its legs as it always has.
 
 ### Paths come from git
 

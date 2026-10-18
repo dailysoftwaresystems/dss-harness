@@ -62,6 +62,9 @@ root.Subcommands.Add(HostAgentCommand.Create(RunInAsync));
 // Started by a host agent asked to hold its machine awake between commands, detached, and never typed.
 root.Subcommands.Add(HostHoldCommand.Create());
 
+// Started by the process runner itself, as the step that places a contained child, and never typed.
+root.Subcommands.Add(ContainExecCommand.Create());
+
 return await RunAsync(args, CancellationToken.None).ConfigureAwait(false);
 
 async Task<int> RunAsync(string[] arguments, CancellationToken cancellationToken)

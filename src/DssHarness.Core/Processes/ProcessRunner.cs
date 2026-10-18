@@ -7,10 +7,21 @@ using DssHarness.Core.Platform;
 namespace DssHarness.Core.Processes;
 
 /// <inheritdoc cref="IProcessRunner"/>
-public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions filePermissions) : IProcessRunner
+public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions filePermissions, string? containThrough = null)
+    : IProcessRunner
 {
     /// <summary>ENOENT on Linux and macOS, ERROR_FILE_NOT_FOUND on Windows.</summary>
     private const int ErrorFileNotFound = 2;
+
+    /// <summary>How long a contained group is given to end on the signal that asks, before the one that makes it.</summary>
+    private static readonly TimeSpan GroupGrace = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// The program that puts a child where it is contained: this tool, run as
+    /// <c>contain-exec</c> - or a program a test gives in its place, standing in for the tool the
+    /// way the test assembly stands in for the commands it drives.
+    /// </summary>
+    private readonly string? _containThrough = containThrough;
 
     /// <summary>ERROR_PATH_NOT_FOUND on Windows. On Linux and macOS the same number means something else.</summary>
     private const int WindowsErrorPathNotFound = 3;
@@ -98,11 +109,6 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             CreateNoWindow = true,
         };
 
-        foreach (var argument in request.Arguments)
-        {
-            startInfo.ArgumentList.Add(argument);
-        }
-
         foreach (var (key, value) in request.Environment)
         {
             // A name is one variable whatever case the configuration spelled it in, as on Windows,
@@ -139,9 +145,59 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         // Looked up on the PATH the child is given, not on this process's own. The two used to differ
         // whenever a request changed PATH, and then the program started was one the child's own
         // lookups could not see: cmake resolved from one PATH and the ninja it starts from another.
-        startInfo.FileName = ResolveProgram(
+        var resolved = ResolveProgram(
             request.FileName,
             startInfo.Environment.TryGetValue(PathVariable, out var effective) ? effective : null);
+
+        // The job a contained run on Windows is held in, kept for as long as the run: closed at the
+        // end of this method, it ends whatever the child left behind, and closed by this process's
+        // own end it ends the child with it.
+        var jobName = request.Contained && _platform.Current == PlatformId.Windows ? JobName() : null;
+        using var job = jobName is null ? null : Containment.CreateJob(jobName);
+
+        if (request.Contained || request.ApartFromTerminal)
+        {
+            // Placed before it runs a line of its own, through this tool's own step: the container
+            // is joined and the program started from inside it, so no child is ever outside for an
+            // instant, which a child put in after its start would be.
+            var (self, leading) = Self();
+            startInfo.FileName = self;
+
+            foreach (var argument in leading)
+            {
+                startInfo.ArgumentList.Add(argument);
+            }
+
+            startInfo.ArgumentList.Add(ContainExec.CommandName);
+
+            if (jobName is not null)
+            {
+                startInfo.ArgumentList.Add(ContainExec.JobOption);
+                startInfo.ArgumentList.Add(jobName);
+            }
+
+            if (request.ApartFromTerminal && !request.Contained)
+            {
+                startInfo.ArgumentList.Add(ContainExec.GroupOption);
+            }
+
+            startInfo.ArgumentList.Add(ContainExec.Separator);
+            startInfo.ArgumentList.Add(resolved);
+
+            foreach (var argument in request.Arguments)
+            {
+                startInfo.ArgumentList.Add(argument);
+            }
+        }
+        else
+        {
+            startInfo.FileName = resolved;
+
+            foreach (var argument in request.Arguments)
+            {
+                startInfo.ArgumentList.Add(argument);
+            }
+        }
 
         // A caller that has given up already starts nothing. Started only to be stopped at once, a short program can
         // finish first - a set-up's down script did, on Linux - and be reported as having run after its time had passed.
@@ -192,10 +248,12 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         }
         catch (OperationCanceledException)
         {
-            // Whether for the budget or because the caller gave up, the whole tree goes: a
-            // descendant left running keeps the pipes, and whatever it was building, busy.
+            // Whether for the budget or because the caller gave up, the whole of it goes: a
+            // descendant left running keeps the pipes, and whatever it was building, busy - and a
+            // contained child is ended through its container, which reaches what detached itself
+            // from its parent as surely as what did not.
             stopped = true;
-            KillTree(process);
+            Stop(request, job, posixGroups: _platform.Current != PlatformId.Windows, process);
             await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
         }
 
@@ -237,8 +295,35 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     }
 
     /// <summary>
-    /// How long a program that will not start for being written is started again before that is its failure.
+    /// Stops a child as its request says: a contained one through its container - and any other,
+    /// and a contained one whose container was asked for in the moment before it was joined, by
+    /// its tree.
     /// </summary>
+    /// <param name="request">The child's request, saying whether it was contained.</param>
+    /// <param name="job">The job holding a contained child on Windows, or <see langword="null"/>.</param>
+    /// <param name="posixGroups">Whether the child's group is the C library's, as it is where the session is.</param>
+    /// <param name="process">The child.</param>
+    private static void Stop(ProcessRequest request, Microsoft.Win32.SafeHandles.SafeWaitHandle? job, bool posixGroups, Process process)
+    {
+        if (job is not null)
+        {
+            Containment.Terminate(job);
+        }
+        else if (posixGroups && (request.Contained || request.ApartFromTerminal))
+        {
+            // The child leads the group it was placed in - it became the program on Linux and
+            // macOS under the same id - so the group is named by the child itself, and everything
+            // in it is asked to end and then made to.
+            Containment.EndGroup(process.Id, GroupGrace);
+        }
+
+        // The tree as well: a stop that lands in the moment before the child joined its container
+        // reaches nothing through the container, and the child itself must still go, or the wait
+        // that follows would never end.
+        KillTree(process);
+    }
+
+    /// <summary>How long a program that will not start for being written is started again before that is its failure.</summary>
     /// <remarks>
     /// Linux starts no program a descriptor still holds open for writing, and a process forked while the program was
     /// being written - by any thread of the process writing it, for a child of its own - holds that descriptor until it
@@ -304,6 +389,19 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         var path = ProgramAtPath(command, _platform.Current == PlatformId.Windows);
         return _filePermissions.IsExecutable(path) ? path : null;
     }
+
+    /// <summary>
+    /// The program that puts a child where it is contained: this tool, as it is run - or the
+    /// program a test gave in this one's place.
+    /// </summary>
+    private (string Program, IReadOnlyList<string> Leading) Self()
+        => _containThrough is { } given
+            ? (given, [])
+            : DetachedProcessLauncher.Self();
+
+    /// <summary>A job object's name, unique to this contained child of this process.</summary>
+    private static string JobName()
+        => $"dssharness-contain-{Guid.NewGuid():N}";
 
     /// <summary>
     /// Whether <paramref name="program"/> names a file by its path rather than a program to look up by
