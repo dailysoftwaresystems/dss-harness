@@ -1880,7 +1880,7 @@ public sealed class WorkflowValidatorTests
                 "step 'dropped' discards what is not committed and says what its fold may carry; a deletion that discards folds nothing, so allow and within would be read by nothing",
                 "step 'reads' names writes and only reads; a step that writes says access: write and names the create-agent step it works in",
                 "step 'lost' names 'nowhere' as its of, which is no step an enclosing group declares",
-                "step 'weighs-both' says paths and all; all is every path the main tree moved, in place of paths, and a step that said both would never tell which it weighed",
+                "step 'weighs-both' takes refresh: --all weighs every path the main tree moved, so it takes no path beside it: give the paths, or --all",
             ],
             problems);
     }
@@ -2223,6 +2223,212 @@ public sealed class WorkflowValidatorTests
         Assert.Equal(
             ["'gate.when' is not written whole: column 6: '+' is not part of an expression, and nothing past there would be checked"],
             problems);
+    }
+
+    /// <summary>
+    /// V29: a fold's allow is held as the request the verb takes - <c>FoldAllowances.Problem()</c> itself - with
+    /// its spellings the one wordings, the first problem the request finds written out when the definition is loaded.
+    /// </summary>
+    [Fact]
+    public void AFoldsAllow_IsHeldAsTheRequestTheVerbTakes()
+    {
+        static IReadOnlyList<string> OneAllow(string body)
+            => Problems(
+                "name: flow\nsteps:\n  - name: make\n    type: create-agent\n    agent: agents/worker.md\n"
+                + "  - name: close\n    type: fold\n    of: make\n    allow:\n" + body);
+
+        Assert.Equal(
+            ["step 'close' takes allow: 'src/a.cs' is named with both --merge and --settled: a path is merged for you, or reconciled by hand, never both."],
+            OneAllow("      settled: [src/a.cs]\n      merge: [src/a.cs]\n"));
+
+        Assert.Equal(
+            ["step 'close' takes allow: --new 'an id' is not an anchor id: an id is not empty, and holds no space and no colon."],
+            OneAllow("      new: ['an id']\n"));
+
+        Assert.Equal(
+            ["step 'close' takes allow: --accept-lost '3:priority' is not <ID>:<cell>, where the id is an anchor's and the cell is trigger, closing, cross-refs."],
+            OneAllow("      acceptLost: [3:priority]\n"));
+
+        Assert.Equal(
+            ["step 'close' takes allow: --accept-over '4:form' is not <ID>:<cell>, where the id is an anchor's and the cell is priority, status, trigger, closing, cross-refs."],
+            OneAllow("      acceptOver: [4:form]\n"));
+
+        // A deletion takes the same allow a fold does, through the same request.
+        var dropped = Problems("""
+            name: flow
+            steps:
+              - name: make
+                type: create-agent
+                agent: agents/worker.md
+              - name: close
+                type: delete-agent
+                of: make
+                allow:
+                  new: ['an id']
+            """);
+
+        Assert.Equal(
+            ["step 'close' takes allow: --new 'an id' is not an anchor id: an id is not empty, and holds no space and no colon."],
+            dropped);
+    }
+
+    /// <summary>V29: a refresh's keys are held as the request the verb takes, and a rebase's merge and settled with them.</summary>
+    [Fact]
+    public void ARefreshsKeysAndARebases_AreHeldAsTheRequestTheVerbTakes()
+    {
+        var refresh = Problems("""
+            name: flow
+            steps:
+              - name: make
+                type: create-agent
+                agent: agents/worker.md
+              - name: weigh
+                type: refresh
+                of: make
+                paths: [.]
+                except: [src/a.cs]
+                stale: [src/b.cs]
+                merge: [src/a.cs]
+            """);
+
+        Assert.Equal(
+            [
+                "step 'weigh' takes refresh: '.' names the whole tree, not a path in it: pass --all to weigh every path the main tree moved",
+            ],
+            refresh);
+
+        var twice = Problems("""
+            name: flow
+            steps:
+              - name: make
+                type: create-agent
+                agent: agents/worker.md
+              - name: weigh
+                type: refresh
+                of: make
+                except: [src/a.cs]
+                stale: [src/a.cs]
+            """);
+
+        Assert.Equal(
+            [
+                "step 'weigh' takes refresh: 'src/a.cs' is named with both --except and --stale: a path is left as the agent changed it, or handed the main tree's copy, never both.",
+            ],
+            twice);
+
+        var rebase = Problems("""
+            name: flow
+            steps:
+              - name: make
+                type: create-agent
+                agent: agents/worker.md
+              - name: move
+                type: rebase
+                of: make
+                settled: [src/a.cs]
+                merge: [src/a.cs]
+            """);
+
+        Assert.Equal(
+            [
+                "step 'move' takes a rebase: 'src/a.cs' is named with both --merge and --settled: a path is merged for you, or reconciled by hand, never both.",
+            ],
+            rebase);
+    }
+
+    /// <summary>
+    /// V32's patterns: within and writes are patterns, and a pattern that could name nothing in the tree is a typo,
+    /// refused where the definition is loaded.
+    /// </summary>
+    [Fact]
+    public void WithinAndWrites_ArePatternsAPathCouldMatch()
+    {
+        var problems = Problems("""
+            name: flow
+            steps:
+              - name: make
+                type: create-agent
+                agent: agents/worker.md
+              - name: close
+                type: delete-agent
+                of: make
+                within: ['**x']
+            """);
+
+        Assert.Equal(
+            ["step 'close' takes within: the pattern '**x' holds '**' inside a segment; '**' is a segment of its own, standing for any number of segments"],
+            problems);
+    }
+
+    /// <summary>V32's other half, where the key lives: a reason step's written-out writes are patterns, each one a path could match.</summary>
+    [Fact]
+    public void AReasonStepsWrittenOutWrites_ArePatternsAPathCouldMatch()
+    {
+        var problems = Problems("""
+            name: flow
+            steps:
+              - name: make
+                type: create-agent
+                agent: agents/worker.md
+              - name: think
+                type: reason
+                agent: agents/worker.md
+                prompt: prompts/think.md
+                outputs: schemas/think.json
+                access: write
+                in: make
+                writes: ['**oops']
+            """);
+
+        Assert.Equal(
+            ["step 'think' names the pattern '**oops' in writes, and it holds '**' inside a segment; '**' is a segment of its own, standing for any number of segments"],
+            problems);
+    }
+
+    /// <summary>
+    /// V41's key rule where the owner cannot see it: a refresh saying <c>all</c> beside a paths EXPRESSION, whose written
+    /// paths a request never reads; a written paths beside all is the request's own refusal.
+    /// </summary>
+    [Fact]
+    public void ARefreshSayingAll_BesideAPathsExpression_IsRefused()
+    {
+        var problems = Problems("""
+            name: flow
+            inputs:
+              - name: paths
+                kind: text
+            steps:
+              - name: make
+                type: create-agent
+                agent: agents/worker.md
+              - name: weigh
+                type: refresh
+                of: make
+                all: true
+                paths: input.paths
+            """);
+
+        Assert.Equal(
+            ["step 'weigh' says paths and all; all is every path the main tree moved, in place of paths, and a step that said both would never tell which it weighs"],
+            problems);
+    }
+
+    /// <summary>A workflow's own outputs read by expression, and a read that names nothing the flow declares is refused there too.</summary>
+    [Fact]
+    public void AWorkflowOutputReadingNothing_IsRefused()
+    {
+        var problems = Problems("""
+            name: flow
+            steps:
+              - name: gate
+                type: orient
+            outputs:
+              - name: done
+                from: nowhere.value
+            """);
+
+        Assert.Single(problems);
+        Assert.Contains("'done.output 'done'.from' reads 'nowhere.value'", problems[0], StringComparison.Ordinal);
     }
 
     /// <summary>V26: a workflow declares at most 200 steps, the recovery's among them, for they run.</summary>

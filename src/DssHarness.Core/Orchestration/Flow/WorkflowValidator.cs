@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using DssHarness.Core.Anchors;
+using DssHarness.Core.Repository;
 
 namespace DssHarness.Core.Orchestration.Flow;
 
@@ -868,6 +870,18 @@ public static class WorkflowValidator
             {
                 Expression(entry, writes, "writes");
             }
+            else
+            {
+                // V32's other half, where the key lives: a reason step's written-out writes are patterns, and a
+                // pattern that could name nothing is a typo the run would refuse at its start.
+                foreach (var pattern in step.Writes?.Written ?? [])
+                {
+                    if (GlobPattern.Problem(pattern) is { } typo)
+                    {
+                        _problems.Add($"{where} names the pattern '{pattern}' in writes, and it {typo}");
+                    }
+                }
+            }
         }
 
         /// <summary>
@@ -966,11 +980,6 @@ public static class WorkflowValidator
                 _problems.Add($"{where} discards what is not committed and says what its fold may carry; a deletion that discards folds nothing, so allow and within would be read by nothing");
             }
 
-            if (step.Paths is not null && step.All is true)
-            {
-                _problems.Add($"{where} says paths and all; all is every path the main tree moved, in place of paths, and a step that said both would never tell which it weighed");
-            }
-
             foreach (var (key, list) in new[] { ("within", step.Within), ("paths", step.Paths), ("except", step.Except), ("stale", step.Stale), ("merge", step.Merge) })
             {
                 if (list?.Expression is { } expression)
@@ -987,6 +996,65 @@ public static class WorkflowValidator
             if (step.Allow?.Merge?.Expression is { } merged)
             {
                 Expression(entry, merged, "allow.merge");
+            }
+
+            // V32's patterns: within is a pattern list, and a pattern that could name nothing is a typo the run
+            // would refuse at its start. (writes is a reason step's key; its patterns are checked there.)
+            foreach (var pattern in step.Within?.Written ?? [])
+            {
+                if (GlobPattern.Problem(pattern) is { } typo)
+                {
+                    _problems.Add($"{where} takes within: the pattern '{pattern}' {typo}");
+                }
+            }
+
+            // V29: the fold family's keys, read to the requests the verbs take - the requests of slice 7 themselves,
+            // their spellings the one wordings, written out here, when the definition is loaded, so a key that names
+            // what the run would refuse at its start is refused before a run begins. The list-ness of allow's settled,
+            // lost and over and a rebase's settled is the reader's own refusal, where the file is read.
+            if (step.Allow is { } allow && new FoldAllowances
+                {
+                    Merge = [.. allow.Merge?.Written ?? []],
+                    Settled = allow.Settled,
+                    New = [.. allow.New?.Written ?? []],
+                    AcceptLost = allow.AcceptLost,
+                    AcceptOver = allow.AcceptOver,
+                }.Problem() is { } spelling)
+            {
+                _problems.Add($"{where} takes allow: {spelling}");
+            }
+
+            // V41's keys rule, where the owner cannot see it: all beside a paths EXPRESSION, which a request built
+            // from the written paths alone never meets. A written paths beside all is the request's own refusal.
+            if (step.Paths?.Expression is not null && step.All is true)
+            {
+                _problems.Add($"{where} says paths and all; all is every path the main tree moved, in place of paths, and a step that said both would never tell which it weighs");
+            }
+
+            if (step.Type == "refresh")
+            {
+                var request = new RefreshRequest
+                {
+                    Paths = [.. step.Paths?.Written ?? []],
+                    All = step.All is true,
+                    Except = [.. step.Except?.Written ?? []],
+                    Stale = [.. step.Stale?.Written ?? []],
+                    Merge = [.. step.Merge?.Written ?? []],
+                };
+
+                if (request.Problem() is { } refresh)
+                {
+                    _problems.Add($"{where} takes refresh: {refresh}");
+                }
+            }
+
+            if (step.Type == "rebase" && new RebaseRequest
+                {
+                    Merge = [.. step.Merge?.Written ?? []],
+                    Settled = [.. step.Settled ?? []],
+                }.Problem() is { } rebase)
+            {
+                _problems.Add($"{where} takes a rebase: {rebase}");
             }
         }
 
