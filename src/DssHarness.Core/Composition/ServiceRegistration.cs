@@ -1,4 +1,5 @@
 using DssHarness.Core.Anchors;
+using DssHarness.Core.Agents;
 using DssHarness.Core.Application;
 using DssHarness.Core.Application.Legs;
 using DssHarness.Core.Build;
@@ -152,6 +153,10 @@ public static class ServiceRegistration
         services.AddSingleton<ClaudeTranscripts>();
         services.AddSingleton<IOrchestratorService, OrchestratorService>();
         services.AddSingleton<IAgentService, AgentService>();
+
+        // The one way an agent's step is worked, whatever the client is. No client is built in yet: the clients
+        // register themselves when their slices land, and a test registers its fake the same way.
+        services.AddSingleton<IAgentRunner, AgentRunner>();
         services.AddSingleton<IWorkflowValidationService, WorkflowValidationService>();
         services.AddSingleton<IWorkflowExportService, WorkflowExportService>();
 
