@@ -49,6 +49,7 @@ internal static class TestChild
             "write-file" => WriteFile(arguments),
             "watch-process" => WatchProcess(arguments),
             "link-directory" => LinkDirectory(arguments),
+            "claude-code" => ClaudeCode(standardOutput),
             "exit" => int.Parse(arguments[0], CultureInfo.InvariantCulture),
             _ => 99,
         };
@@ -613,6 +614,122 @@ internal static class TestChild
     private static int PrintEnvironment(TextWriter output, string[] arguments)
     {
         output.Write((Environment.GetEnvironmentVariable(arguments[0]) ?? "<unset>") + "\n");
+        return 0;
+    }
+
+    /// <summary>
+    /// The fake <c>claude</c>: a child that speaks the protocol the probe recorded
+    /// (<c>fixtures/claude-code</c>), asks the host about a read, and waits for the answer. An allow runs the
+    /// read; a deny does not, and the turn's result counts the denial; no answer is waited for, as long as it
+    /// takes - and an answer in a shape the recording does not know (a flat envelope) is not heard at all, which
+    /// is what the real child does.
+    /// </summary>
+    /// <remarks>
+    /// The shapes are the curated fixture's, with ids that stand in as it does. Nothing here runs anything,
+    /// reads any file, or asks the network: the one live test that recorded these shapes is the machine's own
+    /// and runs only where a person opted in - a continuous-integration runner has no login and never sets the
+    /// variable that would ask for it.
+    /// </remarks>
+    private static int ClaudeCode(TextWriter output)
+    {
+        using var input = new StreamReader(Console.OpenStandardInput(), Utf8NoBom);
+
+        string? Line() => input.ReadLine();
+
+        void Say(string line)
+        {
+            output.Write(line + "\n");
+            output.Flush();
+        }
+
+        var session = "00000000-0000-4000-8000-000000000001";
+        var ask = "00000000-0000-4000-8000-000000000002";
+        var call = "toolu_01FakeToolUseId000000000001";
+
+        void ToolResult(bool ok, string content)
+            => Say("{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"content\":\"" + content
+                + "\",\"is_error\":" + (ok ? "false" : "true") + ",\"tool_use_id\":\"" + call + "\"}]},\"parent_tool_use_id\":null,\"session_id\":\""
+                + session + "\",\"uuid\":\"00000000-0000-4000-8000-000000000004\",\"timestamp\":\"2026-10-18T00:00:00.000Z\"}");
+
+        // The turn every message gets: a read held for the host's decision, then the schema's envelope.
+        void Turn()
+        {
+            Say("{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"read a.txt\"},\"parent_tool_use_id\":null,\"uuid\":\"00000000-0000-4000-8000-000000000005\",\"timestamp\":\"2026-10-18T00:00:00.000Z\",\"isReplay\":true}");
+            Say("{\"type\":\"stream_event\",\"event\":{\"type\":\"message_start\",\"message\":{\"model\":\"claude-sonnet-5-5\",\"usage\":{\"input_tokens\":6}}},\"session_id\":\"" + session + "\"}");
+            Say("{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"" + call + "\",\"name\":\"Read\",\"input\":{}}},\"session_id\":\"" + session + "\"}");
+            Say("{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"file_path\\\": \\\"a.txt\\\"}\"}},\"session_id\":\"" + session + "\"}");
+            Say("{\"type\":\"assistant\",\"message\":{\"model\":\"claude-sonnet-5-5\",\"role\":\"assistant\",\"stop_reason\":\"tool_use\",\"usage\":{\"input_tokens\":6,\"output_tokens\":20},\"content\":[{\"type\":\"tool_use\",\"id\":\"" + call + "\",\"name\":\"Read\",\"input\":{\"file_path\":\"a.txt\"}}]},\"session_id\":\"" + session + "\"}");
+
+            // It asks, and waits: nothing more is written until the host answers in the recorded shape.
+            Say("{\"type\":\"control_request\",\"request_id\":\"" + ask + "\",\"request\":{\"subtype\":\"can_use_tool\",\"tool_name\":\"Read\",\"display_name\":\"Read\",\"input\":{\"file_path\":\"a.txt\"},\"description\":\"a.txt\",\"decision_reason_type\":\"rule\",\"tool_use_id\":\"" + call + "\"}}");
+        }
+
+        void Ended(bool denied)
+        {
+            ToolResult(ok: !denied, denied ? "denied by the host" : "1\\talpha\\n2\\t");
+
+            if (!denied)
+            {
+                Say("{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"[structured-output-enforce] You MUST call the StructuredOutput tool to complete this request. Call this tool now.\"}]},\"session_id\":\"" + session + "\"}");
+            }
+
+            Say("{\"type\":\"assistant\",\"message\":{\"model\":\"claude-sonnet-5-5\",\"role\":\"assistant\",\"stop_reason\":\"tool_use\",\"usage\":{\"input_tokens\":6,\"output_tokens\":20},\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_01FakeStructuredOutput000001\",\"name\":\"StructuredOutput\",\"input\":{\"answer\":\"" + (denied ? "denied" : "alpha") + "\"}}]},\"session_id\":\"" + session + "\"}");
+            ToolResult(ok: true, "Structured output provided successfully");
+
+            Say("{\"duration_api_ms\":12,\"stop_reason\":\"stop_sequence\",\"session_id\":\"" + session
+                + "\",\"total_cost_usd\":0.01,\"usage\":{\"input_tokens\":6,\"output_tokens\":40,\"cache_read_input_tokens\":100,\"cache_creation_input_tokens\":0,\"server_tool_use\":{\"web_search_requests\":0,\"web_fetch_requests\":0}},\"modelUsage\":{},\"permission_denials\":"
+                + (denied ? "[{\"tool_name\":\"Read\",\"tool_use_id\":\"" + call + "\",\"tool_input\":{\"file_path\":\"a.txt\"}}]" : "[]")
+                + ",\"terminal_reason\":\"completed\",\"is_error\":false,\"num_turns\":2,\"subtype\":\"success\",\"result\":{\"answer\":\"" + (denied ? "denied" : "alpha") + "\"}"
+                + ",\"type\":\"result\",\"duration_ms\":80,\"uuid\":\"00000000-0000-4000-8000-000000000003\",\"queued_turn_count\":0,\"result_index\":0}");
+        }
+
+        while (Line() is { } line)
+        {
+            string? kind = null, sub = null, requestId = null;
+
+            try
+            {
+                var node = System.Text.Json.Nodes.JsonNode.Parse(line);
+
+                kind = node?["type"]?.GetValue<string>();
+                sub = node?["request"]?["subtype"]?.GetValue<string>();
+                requestId = node?["request_id"]?.GetValue<string>();
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                // What the real child does with a line it cannot read: nothing, and the stream goes on.
+                continue;
+            }
+            if (kind == "control_request" && sub == "initialize")
+            {
+                Say("{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"" + requestId
+                    + "\",\"response\":{\"elided\":\"the commands, agents, output styles, models and account of a machine\"}}}");
+                Say("{\"type\":\"system\",\"subtype\":\"init\",\"cwd\":\"<scratch>\",\"session_id\":\"" + session
+                    + "\",\"tools\":[\"Bash\",\"Edit\",\"Glob\",\"Grep\",\"NotebookEdit\",\"Read\",\"StructuredOutput\",\"WebFetch\",\"WebSearch\",\"Write\"],\"mcp_servers\":[],\"model\":\"claude-sonnet-5-5\",\"permissionMode\":\"default\",\"apiKeySource\":\"none\",\"claude_code_version\":\"fake\",\"output_style\":\"default\",\"capabilities\":[\"interrupt_receipt_v1\",\"interrupt_cancel_queued_v1\"],\"uuid\":\"00000000-0000-4000-8000-000000000006\"}");
+            }
+            else if (kind == "user")
+            {
+                Turn();
+            }
+            else if (kind == "control_request" && sub == "interrupt")
+            {
+                Say("{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"" + requestId + "\",\"response\":{}}}");
+                Say("{\"duration_api_ms\":5,\"stop_reason\":\"stop_sequence\",\"session_id\":\"" + session
+                    + "\",\"total_cost_usd\":0,\"usage\":{\"input_tokens\":6,\"output_tokens\":10},\"modelUsage\":{},\"permission_denials\":[],\"terminal_reason\":\"aborted_streaming\",\"is_error\":false,\"num_turns\":1,\"subtype\":\"success\",\"result\":\"\",\"type\":\"result\",\"duration_ms\":40,\"uuid\":\"00000000-0000-4000-8000-000000000007\",\"queued_turn_count\":0,\"result_index\":0}");
+            }
+            else if (kind == "control_response")
+            {
+                // The answer an ask waits for: nested, its id inside. Any other shape is not heard.
+                var heard = line.Contains("\"request_id\":\"" + ask + "\"", StringComparison.Ordinal)
+                    && line.Contains("\"behavior\":\"", StringComparison.Ordinal);
+
+                if (heard)
+                {
+                    Ended(line.Contains("\"behavior\":\"deny\"", StringComparison.Ordinal));
+                }
+            }
+        }
+
         return 0;
     }
 }
