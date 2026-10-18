@@ -36,17 +36,26 @@ public static class WorkflowStepTypes
     /// The default of the type's <c>failOn</c> key - <c>red</c> or <c>never</c> - for the types that
     /// check something; <see langword="null"/> for the types that check nothing.
     /// </param>
+    /// <param name="Calls">The service the type calls, as the plan's table names it: the engine's switch reads this and nothing else.</param>
+    /// <param name="Claims">What a step of the type holds while it runs, as the plan's table names each.</param>
+    /// <param name="CountsAgainst">The limit a step of the type counts against, or what its slot does; <see langword="null"/> where it counts against nothing.</param>
     public sealed record StepType(
         string Type,
         IReadOnlyList<KeyDescription> Keys,
         IReadOnlyList<string> TemplateKeys,
-        string? FailOnDefault)
+        string? FailOnDefault,
+        string Calls = "",
+        IReadOnlyList<string>? Claims = null,
+        string? CountsAgainst = null)
     {
         /// <summary>Whether the type checks something, so that its verdicts can be red.</summary>
         public bool IsCheck => FailOnDefault is not null;
 
         /// <summary>Which of the type's own keys the step must name: those <see cref="Keys"/> marks required.</summary>
         public IReadOnlyList<string> Required => [.. Keys.Where(key => key.Required).Select(key => key.Name)];
+
+        /// <summary>What a step of the type holds while it runs; empty where it holds nothing.</summary>
+        public IReadOnlyList<string> ClaimsOf => Claims ?? [];
     }
 
     /// <summary>The keys every step takes, group or typed step alike.</summary>
@@ -80,7 +89,7 @@ public static class WorkflowStepTypes
     /// <summary>Every type, in the order <c>help workflows</c> lists them.</summary>
     public static IReadOnlyList<StepType> All { get; } =
     [
-        new("orient", [], [], null),
+        new("orient", [], [], null, "IGitClient (ResolveCommitAsync, GetStatusAsync), OrchestrationStore.Agents, LegSelection.Resolve", ["read main"], null),
         new(
             "reason",
             [
@@ -108,26 +117,38 @@ public static class WorkflowStepTypes
                 new("onAddress", $"{WorkflowStep.Recover}: an issue the step decides to fix is given to the workflow's recover, which fixes it at its root; required beside raised"),
             ],
             [],
-            null),
-        new("build", LegKeys, [], "red"),
-        new("test", [.. LegKeys, .. TestKeys], ["filter", "exclude", "labels"], "red"),
-        new("run", [.. LegKeys, new("runner", "the predefined runner the step runs") { Required = true }, RunInputs], ["inputs"], "red"),
+            null,
+            "IAgentClient; a read-only one that begins work first makes its agent (IAgentService.CreateAsync, no worktree)",
+            ["read main", "write the agent's tree where its access is write"],
+            "maxReasoningAgents"),
+        new("build", LegKeys, [], "red", "IBuildLegs over LegRunService", ["run(tree)"], "maxParallelProcesses"),
+        new("test", [.. LegKeys, .. TestKeys], ["filter", "exclude", "labels"], "red", "ITestLegs over LegRunService", ["run(tree)"], "maxParallelProcesses"),
+        new("run", [.. LegKeys, new("runner", "the predefined runner the step runs") { Required = true }, RunInputs], ["inputs"], "red", "IRunnerLegs over LegRunService", ["run(tree)", "write(tree) where its runner says writesTree"], "maxParallelProcesses"),
         new(
             "check-mutations",
             [.. LegKeys, new("arms", "the arms it runs, by id; absent, every arm"), new("pending", "drive only the arms with no recorded passed that still holds")],
             [],
-            "red"),
+            "red",
+            "IMutationLegs through MutationService, over LegRunService",
+            ["run(tree)"],
+            "maxParallelProcesses"),
         new(
             "create-agent",
             [new("agent", "the agent definition, as agents/<name>.md in the workflow's directory") { Required = true }, new("empty", "make the agent with nothing handed to it")],
             [],
-            null),
-        new("fold", FoldKeys, [], null),
+            null,
+            "IAgentService.CreateAsync",
+            ["write main"],
+            "an open-agent slot"),
+        new("fold", FoldKeys, [], null, "IAgentService.FoldAsync", ["write main", "write the agent's tree"], null),
         new(
             "delete-agent",
             [.. FoldKeys, new("discardUncommitted", "discard what is not committed rather than folding it; it then folds nothing, and takes no allow and no within")],
             [],
-            null),
+            null,
+            "IAgentService.DeleteAsync",
+            ["write main", "write the agent's tree"],
+            "releases the open-agent slot"),
         new(
             "refresh",
             [
@@ -140,6 +161,9 @@ public static class WorkflowStepTypes
                 new("merge", "paths both trees changed whose clean three-way merge it takes"),
             ],
             [],
+            null,
+            "IAgentService.RefreshAsync",
+            ["write main", "write its target"],
             null),
         new(
             "rebase",
@@ -150,27 +174,42 @@ public static class WorkflowStepTypes
                 new("merge", "paths both trees changed whose clean three-way merge it takes"),
             ],
             [],
+            null,
+            "IAgentService.RebaseAsync",
+            ["write its target"],
             null),
         new(
             "validate-plan",
             [new("items", "an expression yielding the work items to check") { Required = true }, new("scope", "an expression yielding the pieces of a plan update, checked with them")],
             [],
+            null,
+            "PlanValidator with IPathBudget.Check and CopyPathBudget.Check",
+            ["read main"],
             null),
         new(
             "anchor-balance",
             [new("base", "the commit it measures from"), new("rows", "the row ids it is held to; absent, the whole tree"), new("failOn", "what a red finding does: red (the default) or never")],
             ["base"],
-            "red"),
+            "red",
+            "IAnchorBalanceService.CheckAsync",
+            ["read main"],
+            null),
         new(
             "anchor-citations",
             [new("subject", "what it judges: currentTree (the default), currentCommit or currentPullRequest"), new("paths", "the files it is held to; absent, the whole tree"), new("failOn", "what a red finding does: red (the default) or never")],
             [],
-            "red"),
+            "red",
+            "IAnchorCitationService.CheckAsync",
+            ["read main"],
+            null),
         new(
             "ci-read",
             [new("branch", "the branch it reads"), new("limit", "how many of the branch's runs it looks at"), new("timeoutMinutes", "minutes the read is given"), new("failOn", "what a red leg does: never (the default) or red")],
             ["branch"],
-            "never"),
+            "never",
+            "ICiLegsService.CheckAsync",
+            [],
+            null),
         new(
             "ci-wait",
             [
@@ -183,16 +222,25 @@ public static class WorkflowStepTypes
                 new("failOn", "what a red check does: red (the default) or never"),
             ],
             ["commit"],
-            "red"),
+            "red",
+            "ICiChecksService",
+            [],
+            null),
         new(
             "commit",
             [new("message", "the commit message it writes; required where the config declares no commit.template, and not used where it declares one"), new("variables", "the values the message template reads"), new("timeoutMinutes", "minutes git is given")],
             ["message", "variables"],
+            null,
+            "IGitPublisher",
+            ["write main"],
             null),
         new(
             "push",
             [new("remote", "the remote it pushes to; absent, the tracked one"), new("checkpoint", "push a checkpoint commit"), new("timeoutMinutes", "minutes git is given")],
             [],
+            null,
+            "IGitPublisher",
+            ["the remote resource"],
             null),
         new(
             "pull-request",
@@ -204,6 +252,9 @@ public static class WorkflowStepTypes
                 new("timeoutMinutes", "minutes the forge is given"),
             ],
             ["title", "base"],
+            null,
+            "IGitPublisher",
+            ["the remote resource"],
             null),
         new(
             "pause",
@@ -216,6 +267,9 @@ public static class WorkflowStepTypes
                 new("preAnswer", "answers the person gave beforehand with the run's input") { Keys = PreAnswerKeys },
             ],
             ["question"],
+            null,
+            "the engine itself",
+            [],
             null),
     ];
 
