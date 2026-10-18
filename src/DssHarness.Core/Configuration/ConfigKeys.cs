@@ -17,15 +17,48 @@ public static class ConfigKeys
     /// <typeparam name="TSection">The type a section of the file is read into.</typeparam>
     public static IReadOnlyList<KeyDescription> Of<TSection>() => Of(typeof(TSection));
 
-    private static IReadOnlyList<KeyDescription> Of(Type section)
-        =>
-        [
-            .. JsonConfigOptions.Default.GetTypeInfo(section).Properties.Select(property => new KeyDescription(property.Name, MeaningOf(property))
+    private static IReadOnlyList<KeyDescription> Of(Type section) => Of(section, [section]);
+
+    private static IReadOnlyList<KeyDescription> Of(Type section, IReadOnlyList<Type> walked)
+    {
+        var keys = new List<KeyDescription>();
+
+        foreach (var property in JsonConfigOptions.Default.GetTypeInfo(section).Properties)
+        {
+            var nested = SectionIn(property.PropertyType);
+
+            // A section that holds its own kind again - a step holding steps - would list its keys inside
+            // its own keys without end: the guard cuts the walk there and says what the key takes, so the
+            // listing stays finite and says where the rest is.
+            if (nested is not null && walked.Contains(nested))
+            {
+                keys.Add(new KeyDescription(property.Name, $"takes a {SingularOf(nested)}'s keys")
+                {
+                    Required = property.IsRequired,
+                });
+                continue;
+            }
+
+            keys.Add(new KeyDescription(property.Name, MeaningOf(property))
             {
                 Required = property.IsRequired,
-                Keys = SectionIn(property.PropertyType) is { } nested ? Of(nested) : [],
-            }),
-        ];
+                Keys = nested is { } inner ? Of(inner, [.. walked, inner]) : [],
+            });
+        }
+
+        return keys;
+    }
+
+    /// <summary>The one word for what a section's kind is called, from its type's name: a <c>WorkflowStep</c> is a step.</summary>
+    private static string SingularOf(Type section)
+    {
+        var name = section.Name;
+
+        // The harness's model prefixes name the file the type is read from, not the thing it is.
+        var bare = name.StartsWith("Workflow", StringComparison.Ordinal) ? name["Workflow".Length..] : name;
+
+        return bare.Length == 0 ? name : $"{char.ToLowerInvariant(bare[0])}{bare[1..]}";
+    }
 
     private static string MeaningOf(JsonPropertyInfo property)
         => property.AttributeProvider?

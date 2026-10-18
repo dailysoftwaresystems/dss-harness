@@ -1,3 +1,4 @@
+using System.Text;
 using DssHarness.Core.Orchestration.Flow;
 
 namespace DssHarness.Tests;
@@ -402,6 +403,7 @@ public sealed class WorkflowValidatorTests
 
         Assert.Equal(
             [
+                "the workflow has a dependency cycle: release -> release",
                 "step 'after-report' depends on 'report', an always step; an always step is started by the end of the session, and no step waits for it",
                 "step 'gate' depends on 'release', which is declared after it; steps are declared in the order they run, and a dependency declared after the step that waits for it is met never or too late",
                 "step 'release' depends on itself; a step waits for what runs before it, and this one would wait for itself",
@@ -1494,6 +1496,7 @@ public sealed class WorkflowValidatorTests
 
         Assert.Equal(
             [
+                "the workflow has a dependency cycle: stage.build -> stage.succeeded -> stage.build",
                 "group 'stage': retries must be from 1 to 20, found -1",
                 "group 'stage' says maxVisits without on; it bounds how often a handler is raised, and the schedule starts a step once",
                 "step 'stage.self' is raised by its own ending, and so calls itself; a step never does - one that is to run again after it failed says retries",
@@ -2174,6 +2177,73 @@ public sealed class WorkflowValidatorTests
                   - name: opened
                     type: orient
                     when: '((orient.ok'
+                """));
+    }
+
+    /// <summary>
+    /// V15: the first cycle the walk closes is said whole - each node a step's name, a member's under its group's -
+    /// beside whatever else the same flow refuses.
+    /// </summary>
+    [Fact]
+    public void ADependencyCycle_IsSaidWhole()
+    {
+        var problems = Problems("""
+            name: flow
+            steps:
+              - name: s
+                type: orient
+              - name: gate
+                dependsOn: [s]
+                steps:
+                  - name: h
+                    type: orient
+                    on:
+                      step: s
+                      outcome: failure
+            """);
+
+        Assert.Contains("the workflow has a dependency cycle: s -> gate.h -> s", problems);
+    }
+
+    /// <summary>
+    /// The grammar itself beside wholeness: what the engine will one day read must parse today, with the column it
+    /// stopped at.
+    /// </summary>
+    [Fact]
+    public void AnExpressionThatDoesNotParse_IsRefusedWithItsColumn()
+    {
+        var problems = Problems("""
+            name: flow
+            steps:
+              - name: gate
+                type: orient
+                when: 'plan +'
+            """);
+
+        Assert.Equal(
+            ["'gate.when' is not written whole: column 6: '+' is not part of an expression, and nothing past there would be checked"],
+            problems);
+    }
+
+    /// <summary>V26: a workflow declares at most 200 steps, the recovery's among them, for they run.</summary>
+    [Fact]
+    public void AWorkflowDeclaresAtMostTwoHundredSteps()
+    {
+        var steps = new StringBuilder("steps:");
+
+        for (var index = 0; index < 201; index++)
+        {
+            steps.AppendLine();
+            steps.Append($"  - name: s{index}");
+            steps.AppendLine();
+            steps.Append("    type: orient");
+        }
+
+        Assert.Contains(
+            "the workflow declares 201 steps; at most 200",
+            Problems($"""
+                name: flow
+                {steps}
                 """));
     }
 }
