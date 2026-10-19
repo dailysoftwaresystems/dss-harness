@@ -124,6 +124,34 @@ public sealed class JsonSchemaSubsetTests
     }
 
     /// <summary>
+    /// An object's keys - properties, required and additionalProperties - are said of an object alone, as every
+    /// other key is of its type, so a schema that names properties says an object and closes it, and one that
+    /// does not is refused key by key: the document check never holds an answer to an object left open.
+    /// </summary>
+    [Fact]
+    public void PropertiesRequiredAndAdditionalProperties_OnlyOnAnObject()
+    {
+        var untyped = Schema("""{"properties":{"verdict":{"enum":["pass","fail"]}},"required":["verdict"]}""");
+        var answer = JsonNode.Parse("""{"verdict":"pass","notes":"x"}""");
+
+        Assert.Equal(
+            ["$.properties: only an object's properties are said", "$.required: only an object's properties are said"],
+            JsonSchemaSubset.SubsetProblems(untyped));
+        Assert.Throws<ArgumentException>("schema", () => JsonSchemaSubset.Problems(untyped, answer));
+
+        Assert.Equal(
+            ["$.additionalProperties: only an object's properties are said"],
+            JsonSchemaSubset.SubsetProblems(Schema("""{"type":"string","additionalProperties":false}""")));
+
+        var typed = Schema("""
+            {"type":["object","null"],"additionalProperties":false,"properties":{"verdict":{"enum":["pass","fail"]}},"required":["verdict"]}
+            """);
+
+        Assert.Empty(JsonSchemaSubset.SubsetProblems(typed));
+        Assert.Equal(["$.notes: is said by no property of the schema"], JsonSchemaSubset.Problems(typed, answer));
+    }
+
+    /// <summary>
     /// A definition reached through itself is refused at the reference that closes the loop - whether it names
     /// itself or comes back through another - and nowhere else.
     /// </summary>
@@ -471,8 +499,10 @@ public sealed class JsonSchemaSubsetTests
     /// <summary>
     /// A pattern is read as ECMA-262 reads it: <c>$</c> is the end of the text alone, never the place before a
     /// final line feed; <c>.</c> takes no line terminator; <c>\d</c> and <c>\w</c> are ASCII; an identity escape
-    /// is its character; within a class, or escaped, <c>$</c> and <c>.</c> are characters; and a class closes at
-    /// its first <c>]</c>, so <c>[]</c> is the empty class nothing answers and <c>[^]</c> takes any one character.
+    /// is its character; <c>\s</c> is ECMA-262's white space and <c>\S</c> its complement, in a class or out;
+    /// within a class, or escaped, <c>$</c> and <c>.</c> are characters; and a class closes at its first
+    /// <c>]</c>, so <c>[]</c> is the empty class nothing answers, <c>[^]</c> takes any one character, and
+    /// <c>[a-z-[aeiou]]</c> is a class and a <c>]</c>, never .NET's subtraction.
     /// </summary>
     [Theory]
     [InlineData(@"^[a-z]+$", "abc", null)]
@@ -488,6 +518,18 @@ public sealed class JsonSchemaSubsetTests
     [InlineData(@"[]a]", "]a", "\"]a\"")]
     [InlineData(@"^[^]$", "x", null)]
     [InlineData(@"^[^]$", "x\n", "\"x\\n\"")]
+    [InlineData(@"^\s$", "\uFEFF", null)]
+    [InlineData(@"^\s$", "\u2028", null)]
+    [InlineData(@"^\S+$", "a\u00A0b", "\"a\\u00A0b\"")]
+    [InlineData(@"^[\s]$", "\u00A0", null)]
+    [InlineData(@"^[\S]+$", "a\u3000b", "\"a\\u3000b\"")]
+    [InlineData(@"^[x\S]+$", "x-y", null)]
+    [InlineData(@"^[x\S]+$", "x\u00A0", "\"x\\u00A0\"")]
+    [InlineData(@"^[^\S]$", "\u00A0", null)]
+    [InlineData(@"^[^a\S]$", "\u00A0", null)]
+    [InlineData(@"^[^ \S]$", " ", "\" \"")]
+    [InlineData(@"^[a-z-[aeiou]]$", "b]", null)]
+    [InlineData(@"^[a-z-[aeiou]]$", "b", "\"b\"")]
     public void APattern_IsReadAsEcma262ReadsIt(string pattern, string text, string? refused)
     {
         var schema = new JsonObject { ["type"] = "string", ["pattern"] = pattern };

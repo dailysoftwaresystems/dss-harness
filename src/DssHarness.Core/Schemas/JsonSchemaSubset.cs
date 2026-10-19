@@ -20,7 +20,10 @@ namespace DssHarness.Core.Schemas;
 /// <c>default</c>, <c>minItems</c> and <c>maxItems</c>, the three <c>format</c>s that are checked (RFC 3339's
 /// date-time and full-date, and a uuid written in its hyphenated form) and an ECMA-262 <c>pattern</c>, read within
 /// one second. Anything else is refused where the definition is checked, naming the place in the schema that says
-/// it. A <c>$ref</c> stands alone, beside nothing but words that say nothing of a document - and, at the root, the
+/// it. Each key is said of its own type alone - <c>properties</c>, <c>required</c> and
+/// <c>additionalProperties</c> of an object, <c>items</c> and the bounds of an array, <c>format</c> and
+/// <c>pattern</c> of a string - so a schema that names properties says an object, and closes it. A <c>$ref</c>
+/// stands alone, beside nothing but words that say nothing of a document - and, at the root, the
 /// definitions it names - since the drafts disagree on whether what is said beside one is read at all.
 /// </para>
 /// <para>
@@ -41,6 +44,9 @@ public static class JsonSchemaSubset
     /// <summary>The formats that are checked; every other is refused where the schema is.</summary>
     private static readonly IReadOnlyList<string> Formats = ["date-time", "date", "uuid"];
 
+    /// <summary>The keys that say an object's properties.</summary>
+    private static readonly IReadOnlyList<string> ObjectKeys = ["properties", "required", "additionalProperties"];
+
     /// <summary>The keys that bound an array's length.</summary>
     private static readonly IReadOnlyList<string> Bounds = ["minItems", "maxItems"];
 
@@ -55,6 +61,13 @@ public static class JsonSchemaSubset
 
     /// <summary>A pattern is read within one second, so a hostile one cannot hold a run.</summary>
     private static readonly TimeSpan PatternLimit = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// ECMA-262's white space and line terminators, written as a class's members: tab, line feed, vertical tab,
+    /// form feed, carriage return, every space separator, the byte order mark, and the line and paragraph
+    /// separators.
+    /// </summary>
+    private const string Space = @"\t\n\v\f\r\p{Zs}\uFEFF\p{Zl}\p{Zp}";
 
     /// <summary>
     /// How a value or a name is written into a problem: as JSON, escaping only what JSON itself must, so a model
@@ -323,10 +336,19 @@ public static class JsonSchemaSubset
         }
 
         // Every object says what it holds, so a property the schema does not name is refused, and never slips
-        // past by a schema that says nothing.
+        // past by a schema that says nothing: an object's keys are said of an object alone, and an object always
+        // closes its properties.
         if (SaysType(schema, "object") && !schema.ContainsKey("additionalProperties"))
         {
             problems.Add($"{at}: an object holds additionalProperties: false, saying every property is one it names");
+        }
+
+        foreach (var key in ObjectKeys)
+        {
+            if (schema.ContainsKey(key) && !SaysType(schema, "object"))
+            {
+                problems.Add($"{at}.{key}: only an object's properties are said");
+            }
         }
 
         if (schema.ContainsKey("items") && !SaysType(schema, "array"))
@@ -525,8 +547,9 @@ public static class JsonSchemaSubset
 
             var properties = said["properties"] as JsonObject;
 
-            // Only a schema that closes its properties refuses one it does not name: an anyOf's shapes speak for
-            // the properties of a schema that says nothing of them itself.
+            // A schema says properties only where it says an object, and closes them there, so it refuses every
+            // property it does not name; one that says no type - an anyOf's, say - leaves an object's properties to
+            // its shapes.
             var closed = said["additionalProperties"] is JsonValue additional && additional.GetValueKind() == JsonValueKind.False;
 
             foreach (var (name, value) in map)
@@ -796,9 +819,12 @@ public static class JsonSchemaSubset
     /// both checks share, so a pattern the subset check passes is one the document check runs. Read in .NET's
     /// ECMAScript mode, where <c>\d</c> and <c>\w</c> are ASCII; with its end anchor <c>$</c> made the end of the
     /// text alone, where .NET would also take the place before a final line feed; with <c>.</c> taking no line
-    /// terminator, where .NET takes all but the line feed; with <c>[]</c> the empty class; and refusing the groups
-    /// ECMA-262 does not write - inline options, comments, atomic and conditional groups - since they change what
-    /// <c>$</c> and <c>.</c> mean.
+    /// terminator, where .NET takes all but the line feed; with <c>\s</c> and <c>\S</c> ECMA-262's white space and
+    /// its complement, in a class or out, where .NET takes ASCII's; with a class closed at its first <c>]</c>,
+    /// <c>[]</c> the empty class and a <c>[</c> within it a character, where .NET reads class subtraction; and
+    /// refusing the groups ECMA-262 does not write - inline options, comments, atomic and conditional groups -
+    /// since they change what <c>$</c> and <c>.</c> mean. .NET's own escapes - <c>\A</c>, <c>\Z</c>, <c>\z</c>,
+    /// <c>\G</c>, <c>\p{...}</c> - are still read as .NET reads them.
     /// </summary>
     /// <param name="pattern">The pattern as the schema writes it.</param>
     /// <param name="problem">Why it cannot be read; <see langword="null"/> where it can.</param>
@@ -812,8 +838,18 @@ public static class JsonSchemaSubset
             {
                 case '\\':
                     // An escape is copied whole, so the character it escapes is never read as an anchor or a dot;
-                    // a control escape takes the character after its 'c' as well.
-                    var escape = index + 1 < pattern.Length && pattern[index + 1] == 'c' ? 3 : 2;
+                    // a control escape takes the character after its 'c' as well, and white space is ECMA-262's,
+                    // where .NET's ECMAScript mode takes ASCII's alone.
+                    var escaped = index + 1 < pattern.Length ? pattern[index + 1] : '\0';
+
+                    if (escaped is 's' or 'S')
+                    {
+                        read.Append(escaped == 's' ? "[" : "[^").Append(Space).Append(']');
+                        index++;
+                        break;
+                    }
+
+                    var escape = escaped == 'c' ? 3 : 2;
 
                     read.Append(pattern, index, Math.Min(escape, pattern.Length - index));
                     index += escape - 1;
@@ -860,11 +896,15 @@ public static class JsonSchemaSubset
     }
 
     /// <summary>
-    /// Copies a character class whole and answers the index of its closing bracket. A class closes at its first
-    /// unescaped <c>]</c>, as ECMA-262 reads it: <c>[^]</c> takes any one character, as .NET's ECMAScript mode
-    /// reads it too, and <c>[]</c> is the empty class no character answers - written as a group that matches
-    /// nothing, since .NET would read that bracket as one of the class's characters. Within a class <c>$</c> and
-    /// <c>.</c> are characters, so nothing in it is rewritten.
+    /// Copies a character class as ECMA-262 reads it and answers the index of its closing bracket. A class closes
+    /// at its first unescaped <c>]</c>: <c>[^]</c> takes any one character, as .NET's ECMAScript mode reads it
+    /// too, and <c>[]</c> is the empty class no character answers - written as a group that matches nothing,
+    /// since .NET would read that bracket as one of the class's characters. A <c>[</c> within is a character, and
+    /// is escaped so .NET never reads <c>-[...]</c> as the subtraction ECMA-262 does not have. <c>\s</c> within
+    /// is ECMA-262's white space, and a class holding <c>\S</c> - whose ECMA-262 meaning no list of .NET class
+    /// members spells - is written as the choice between its other members and every character but white space,
+    /// or, negated, as white space its other members do not hold. Within a class
+    /// <c>$</c> and <c>.</c> are characters, so nothing else in it is rewritten.
     /// </summary>
     private static int CopyClass(string pattern, int index, StringBuilder read)
     {
@@ -874,30 +914,54 @@ public static class JsonSchemaSubset
             return index + 1;
         }
 
-        read.Append('[');
         index++;
 
-        if (index < pattern.Length && pattern[index] == '^')
-        {
-            read.Append('^');
-            index++;
-        }
+        var negated = index < pattern.Length && pattern[index] == '^';
+        var members = new StringBuilder();
+        var notSpace = false;
 
-        for (; index < pattern.Length; index++)
+        for (index += negated ? 1 : 0; index < pattern.Length && pattern[index] != ']'; index++)
         {
-            read.Append(pattern[index]);
-
             if (pattern[index] == '\\' && index + 1 < pattern.Length)
             {
-                read.Append(pattern[++index]);
+                switch (pattern[++index])
+                {
+                    case 's':
+                        members.Append(Space);
+                        break;
+
+                    case 'S':
+                        notSpace = true;
+                        break;
+
+                    default:
+                        members.Append('\\').Append(pattern[index]);
+                        break;
+                }
             }
-            else if (pattern[index] == ']')
+            else
             {
-                return index;
+                members.Append(pattern[index] == '[' ? @"\[" : pattern[index].ToString());
             }
         }
 
-        // Unclosed: the pattern is refused where it is compiled.
+        if (index == pattern.Length)
+        {
+            // Unclosed: the pattern is refused where it is compiled.
+            read.Append(negated ? "[^" : "[").Append(members);
+            return index;
+        }
+
+        read.Append((negated, notSpace, members.Length) switch
+        {
+            (false, false, _) => $"[{members}]",
+            (true, false, _) => $"[^{members}]",
+            (false, true, 0) => $"[^{Space}]",
+            (false, true, _) => $"(?:[{members}]|[^{Space}])",
+            (true, true, 0) => $"[{Space}]",
+            (true, true, _) => $"(?:(?![{members}])[{Space}])",
+        });
+
         return index;
     }
 
