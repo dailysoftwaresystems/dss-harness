@@ -131,9 +131,8 @@ public static class PathPatterns
 
     /// <summary>
     /// Why <paramref name="path"/> is spelled so that no path it names compares equal to it, or
-    /// <see langword="null"/> where it is not: a <c>..</c> segment, which no path inside the tree
-    /// holds once it is spelled as its owner spells it, or a <c>.</c> segment or a doubled separator
-    /// inside it, which the file system reads past and a comparison of paths as written never does.
+    /// <see langword="null"/> where it is not: a <c>.</c> segment or a doubled separator inside it,
+    /// which the file system reads past and a comparison of paths as written never does.
     /// </summary>
     /// <param name="path">The path, as written.</param>
     /// <remarks>
@@ -141,8 +140,9 @@ public static class PathPatterns
     /// drops them first. Refused rather than read past: the same spelling is read elsewhere as written
     /// - init writes the worktrees root into <c>.gitignore</c> as given - so tidying it here would only
     /// make the two disagree. The one spelling rule of both matchers, this one and
-    /// <see cref="GlobPattern"/>'s: a configured path that climbs out is refused before this is asked
-    /// of it, as one outside the tree, so it is never refused twice.
+    /// <see cref="GlobPattern"/>'s. A <c>..</c> segment is no misspelling here: a path that climbs out
+    /// is refused by the rule that owns that (<see cref="Platform.PlatformPaths.ClimbsOut"/>), which
+    /// each reader asks for itself.
     /// </remarks>
     public static string? Misspelling(string? path) => MisspellingOf(Normalize(path));
 
@@ -150,12 +150,6 @@ public static class PathPatterns
     private static string? MisspellingOf(string normalized)
     {
         var segments = normalized.Split('/');
-
-        if (segments.Any(segment => segment == ".."))
-        {
-            return "holds a '..' segment, which no path inside the tree holds, so it would name nothing; "
-                + "name the path from the tree's root";
-        }
 
         return segments.Length > 1 && segments.Any(segment => segment is "" or ".")
             ? "holds a '.' segment or a doubled separator, which the file system reads past and a comparison "

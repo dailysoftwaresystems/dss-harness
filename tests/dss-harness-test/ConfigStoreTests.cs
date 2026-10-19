@@ -638,23 +638,35 @@ public sealed class ConfigStoreTests
     }
 
     /// <summary>
-    /// A configured path that climbs out of the tree is one problem, refused as outside it: the
-    /// spelling rule its '..' also breaks - the one the agent clients' patterns share with these
-    /// lists - is asked of a configured path only once it is inside the tree, so no entry is
-    /// refused twice.
+    /// A configured path that climbs out of the tree is refused as outside it, and every other problem it has is said
+    /// beside that, in the order the file is checked, as released: a '*' the list does not understand, a doubled
+    /// separator. A '..' alone is said once - it is no misspelling to the lists' spelling rule - and a rule that left
+    /// a climbing entry unchecked to keep it so dropped every other reason with it.
     /// </summary>
     [Theory]
-    [InlineData("""{ "sync": { "exclude": ["../outside"] } }""", "../outside")]
-    [InlineData("""{ "sync": { "neverTransfer": ["a/../b"] } }""", "a/../b")]
-    [InlineData("""{ "lineEndings": { "exclude": ["../x"] } }""", "../x")]
-    [InlineData("""{ "worktrees": { "root": "../trees" } }""", "../trees")]
-    [InlineData("""{ "mutations": { "registry": "../arms.registry" } }""", "../arms.registry")]
-    public void Load_RefusesAPathThatClimbsOut_AsOneProblem(string json, string entry)
+    [InlineData(
+        """{ "sync": { "exclude": ["../cache/*"] } }""",
+        "sync.exclude entry '../cache/*' must be a relative path inside the tree, without '..'",
+        "sync.exclude names '../cache/*', which holds '*', which is only understood as a leading '**/' meaning that name at any depth")]
+    [InlineData(
+        """{ "worktrees": { "root": "../a//b" } }""",
+        "worktrees.root entry '../a//b' must be a relative path inside the tree, without '..'",
+        "worktrees.root names '../a//b', which holds a '.' segment or a doubled separator, which the file system reads past and a comparison of paths never does; write '../a/b'")]
+    [InlineData(
+        """{ "mutations": { "registry": "../t//arms.registry" } }""",
+        "mutations.registry entry '../t//arms.registry' must be a relative path inside the tree, without '..'",
+        "mutations.registry names '../t//arms.registry', which holds a '.' segment or a doubled separator, which the file system reads past and a comparison of paths never does; write '../t/arms.registry'")]
+    [InlineData(
+        """{ "sync": { "exclude": ["../outside"] } }""",
+        "sync.exclude entry '../outside' must be a relative path inside the tree, without '..'")]
+    public void Load_RefusesAPathThatClimbsOut_WithEveryOtherProblemItHas(string json, params string[] problems)
     {
         var exception = LoadInvalid(json);
+        const string Listed = "  - ";
 
-        Assert.Single(exception.Message.Split(Environment.NewLine), line => line.Contains($"'{entry}'", StringComparison.Ordinal));
-        Assert.Contains($"entry '{entry}' must be a relative path inside the tree, without '..'", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(
+            problems,
+            exception.Message.Split(Environment.NewLine).Where(line => line.StartsWith(Listed, StringComparison.Ordinal)).Select(line => line[Listed.Length..]));
     }
 
     /// <summary>

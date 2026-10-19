@@ -280,8 +280,10 @@ public sealed class GlobPatternTests
     /// <summary>
     /// A misspelling is asked of the pattern as written, by the one spelling rule the configured
     /// lists are held to, so a pattern refused there is refused here: <c>././x</c> once passed, read
-    /// past one <c>./</c> at a time. A <c>..</c> segment is refused by the same rule, since no path a
-    /// pattern is matched against holds one; and the root alone, which no path in it is.
+    /// past one <c>./</c> at a time. A <c>..</c> segment is refused in its own words, since no path a
+    /// pattern is matched against holds one - by the rule that refuses a configured path outside the
+    /// tree, while the configured lists' spelling rule stays as it was released; and the root alone,
+    /// which no path in it is.
     /// </summary>
     [Fact]
     public void AMisspelledPattern_IsRefusedByTheOneSpellingRuleBothMatchersShare()
@@ -293,7 +295,7 @@ public sealed class GlobPatternTests
         Assert.Equal(Dotted, PathPatterns.Problem("././x"));
         Assert.Equal(Climbing, GlobPattern.Problem("../x/**"));
         Assert.Equal(Climbing, GlobPattern.Problem("a/../b"));
-        Assert.Equal(Climbing, PathPatterns.Misspelling(".."));
+        Assert.Null(PathPatterns.Misspelling("../x"));
 
         foreach (var root in new[] { ".", "./", "/." })
         {

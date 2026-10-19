@@ -1,3 +1,4 @@
+using DssHarness.Core.Platform;
 using DssHarness.Core.Results;
 
 namespace DssHarness.Core.Repository;
@@ -25,8 +26,9 @@ namespace DssHarness.Core.Repository;
 /// anchor cites): that grammar is poorer on purpose - an entry is rooted and <c>*</c> is refused -
 /// and no configured list is read by this and no rule by that. A pattern that would mean one thing
 /// as each of the two is a pattern nobody can read. What the two share is the spelling rule
-/// (<see cref="PathPatterns.Misspelling"/>), which a pattern here and a path matched against it are
-/// both held to.
+/// (<see cref="PathPatterns.Misspelling"/>) and the rule that a path climbing out of the tree names
+/// nothing in it (<see cref="PlatformPaths.ClimbsOut"/>), which a pattern here and a path matched
+/// against it are both held to.
 /// </para>
 /// <para>
 /// A trailing <c>/**</c> matches everything <em>beneath</em> what precedes it and not that path
@@ -90,10 +92,11 @@ public sealed class GlobPattern
     /// </summary>
     /// <param name="pattern">The pattern, as written.</param>
     /// <remarks>
-    /// A misspelling - a <c>.</c> segment or a doubled separator, which the file system reads past,
-    /// and a <c>..</c> segment, which no path inside the tree holds - is refused as the configured
-    /// path lists refuse it, by the one spelling rule the two share, asked of the pattern as written:
-    /// a pattern that looks right and matches nothing is a rule that silently protects nothing.
+    /// A <c>..</c> segment, which no path inside the tree holds, is refused by the rule that owns it,
+    /// as the configured path lists refuse a path outside the tree; a misspelling - a <c>.</c> segment
+    /// or a doubled separator, which the file system reads past - by the one spelling rule the two
+    /// share. Both are asked of the pattern as written: a pattern that looks right and matches nothing
+    /// is a rule that silently protects nothing.
     /// </remarks>
     public static string? Problem(string? pattern)
     {
@@ -107,6 +110,12 @@ public sealed class GlobPattern
         if (normalized == ".")
         {
             return "is '.', the root itself, which no path in it is; write '**' for everything beneath it";
+        }
+
+        if (PlatformPaths.ClimbsOut(pattern!))
+        {
+            return "holds a '..' segment, which no path inside the tree holds, so it would name nothing; "
+                + "name the path from the tree's root";
         }
 
         if (PathPatterns.Misspelling(pattern) is { } misspelled)
@@ -157,7 +166,7 @@ public sealed class GlobPattern
 
         var candidate = PathPatterns.Normalize(relativePath);
 
-        if (candidate.Length == 0 || candidate == "." || PathPatterns.Misspelling(relativePath) is not null)
+        if (candidate.Length == 0 || candidate == "." || PlatformPaths.ClimbsOut(relativePath) || PathPatterns.Misspelling(relativePath) is not null)
         {
             throw new ArgumentException(
                 $"'{relativePath}' is not a path inside the tree spelled as its owner spells one: it is the root alone, or "
