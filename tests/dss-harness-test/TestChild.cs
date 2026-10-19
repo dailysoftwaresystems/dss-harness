@@ -66,7 +66,7 @@ internal static class TestChild
             "write-file" => WriteFile(arguments),
             "watch-process" => WatchProcess(arguments),
             "link-directory" => LinkDirectory(arguments),
-            "claude-code" => ClaudeCode(standardOutput),
+            "claude-code" => ClaudeCode(standardOutput, arguments),
             "exit" => int.Parse(arguments[0], CultureInfo.InvariantCulture),
             _ => 99,
         };
@@ -971,19 +971,35 @@ internal static class TestChild
     }
 
     /// <summary>
-    /// The fake <c>claude</c>: a child that speaks the protocol the probe recorded
-    /// (<c>fixtures/claude-code</c>), asks the host about a read, and waits for the answer. An allow runs the
-    /// read; a deny does not, and the turn's result counts the denial; no answer is waited for, as long as it
-    /// takes - and an answer in a shape the recording does not know (a flat envelope) is not heard at all, which
-    /// is what the real child does.
+    /// The fake <c>claude</c>: a child that speaks the protocol the probe recorded (<c>fixtures/claude-code</c>), started
+    /// with the launch's argument list and reading it as the real one does. Each message begins a turn that asks the
+    /// host about a read and waits for the answer: an allow runs the read; a deny does not, and the turn's result counts
+    /// the denial; an <c>error</c> answer fails the call, counted as a denial too; no answer is waited for, as long as it
+    /// takes - and an answer in a shape the recording does not know (a flat envelope) is not heard at all, which is what
+    /// the real child does. The input closing while an ask waits fails the call, ends the turn and then the process.
     /// </summary>
     /// <remarks>
-    /// The shapes are the curated fixture's, with ids that stand in as it does. Nothing here runs anything,
-    /// reads any file, or asks the network: the one live test that recorded these shapes is the machine's own
-    /// and runs only where a person opted in - a continuous-integration runner has no login and never sets the
-    /// variable that would ask for it.
+    /// <para>
+    /// What the probe measured of the launch, on every version it ran: <c>--model</c> is run as written and named in
+    /// <c>system/init</c> and every message, a model the provider does not know ending each turn in an API error; only
+    /// <c>--permission-prompt-tool stdio</c> sends an ask to the host (without it the call is denied on the spot, a
+    /// <c>system/permission_denied</c> line saying so); <c>--max-turns</c> ends the turn whose tool call would need one
+    /// more, <c>error_max_turns</c>; <c>--max-budget-usd</c> ends the turn whose first request spent past it while its
+    /// ask is still waiting, <c>error_max_budget_usd</c>, and every turn after it at once; the window
+    /// <c>CLAUDE_CODE_MAX_CONTEXT_TOKENS</c> sets ends a turn whose context would pass it at <c>blocking_limit</c>, and
+    /// every turn after it (nothing is compacted); an interrupted turn ends <c>error_during_execution</c> at
+    /// <c>aborted_streaming</c>. A completed turn's result carries the schema's envelope twice, as text in <c>result</c>
+    /// and as its JSON in <c>structured_output</c>; an error subtype carries <c>errors</c> and no <c>result</c>. The
+    /// process exits 1 where its last turn ended in error, 0 otherwise.
+    /// </para>
+    /// <para>
+    /// The shapes are the curated fixture's, with ids that stand in as it does; its own measures - ten thousand tokens of
+    /// context and a cent of cost for each turn's request - are the fake's alone. Nothing here runs anything, reads any
+    /// file, or asks the network: the one live test that recorded these shapes is the machine's own and runs only where a
+    /// person opted in - a continuous-integration runner has no login and never sets the variable that would ask for it.
+    /// </para>
     /// </remarks>
-    private static int ClaudeCode(TextWriter output)
+    private static int ClaudeCode(TextWriter output, string[] arguments)
     {
         using var input = new StreamReader(Console.OpenStandardInput(), Utf8NoBom);
 
@@ -995,45 +1011,142 @@ internal static class TestChild
             output.Flush();
         }
 
+        string? Option(string name)
+        {
+            var at = Array.IndexOf(arguments, name);
+            return at >= 0 && at + 1 < arguments.Length ? arguments[at + 1] : null;
+        }
+
+        var model = Option("--model") ?? "claude-sonnet-5-5";
+        var known = model is "claude-fable-5-1" or "claude-opus-5-5" or "claude-sonnet-5-5" or "claude-haiku-5-5";
+        var asksTheHost = Option("--permission-prompt-tool") == "stdio";
+        var maxTurns = int.TryParse(Option("--max-turns"), NumberStyles.None, CultureInfo.InvariantCulture, out var turns) ? turns : int.MaxValue;
+        var budget = Option("--max-budget-usd");
+        var limit = decimal.TryParse(budget, NumberStyles.Number, CultureInfo.InvariantCulture, out var usd) ? usd : decimal.MaxValue;
+        var window = int.TryParse(Environment.GetEnvironmentVariable("CLAUDE_CODE_MAX_CONTEXT_TOKENS"), NumberStyles.None, CultureInfo.InvariantCulture, out var tokens) ? tokens : int.MaxValue;
+
         var session = "00000000-0000-4000-8000-000000000001";
         var ask = "00000000-0000-4000-8000-000000000002";
         var call = "toolu_000000000000000000000001";
+        var context = 0;
+        var spent = 0m;
+        var waiting = false;
+        var lastWasError = false;
+
+        string Cost() => spent.ToString(CultureInfo.InvariantCulture);
 
         void ToolResult(bool ok, string content)
             => Say("{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"content\":\"" + content
                 + "\",\"is_error\":" + (ok ? "false" : "true") + ",\"tool_use_id\":\"" + call + "\"}]},\"parent_tool_use_id\":null,\"session_id\":\""
                 + session + "\",\"uuid\":\"00000000-0000-4000-8000-000000000004\",\"timestamp\":\"2026-10-18T00:00:00.000Z\"}");
 
-        // The turn every message gets: a read held for the host's decision, then the schema's envelope.
-        void Turn()
+        // A turn's result line; the members a subtype carries are the recording's: a success carries `result`, an error `errors`.
+        void Result(string subtype, string reason, bool error, string stopReason, int numberOfTurns, string denials, string? result, string? errors, string? structured = null)
         {
-            Say("{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"read a.txt\"},\"parent_tool_use_id\":null,\"uuid\":\"00000000-0000-4000-8000-000000000005\",\"timestamp\":\"2026-10-18T00:00:00.000Z\",\"isReplay\":true}");
-            Say("{\"type\":\"stream_event\",\"event\":{\"type\":\"message_start\",\"message\":{\"model\":\"claude-sonnet-5-5\",\"usage\":{\"input_tokens\":6}}},\"session_id\":\"" + session + "\"}");
+            lastWasError = error;
+            Say("{\"duration_api_ms\":12,\"stop_reason\":" + stopReason + ",\"session_id\":\"" + session
+                + "\",\"total_cost_usd\":" + Cost() + ",\"usage\":{\"input_tokens\":6,\"output_tokens\":40,\"cache_read_input_tokens\":100,\"cache_creation_input_tokens\":0,\"server_tool_use\":{\"web_search_requests\":0,\"web_fetch_requests\":0}},\"modelUsage\":{},\"permission_denials\":"
+                + denials + ",\"terminal_reason\":\"" + reason + "\",\"is_error\":" + (error ? "true" : "false") + ",\"num_turns\":"
+                + numberOfTurns.ToString(CultureInfo.InvariantCulture) + ",\"subtype\":\"" + subtype + "\""
+                + (result is null ? "" : ",\"result\":" + result) + (structured is null ? "" : ",\"structured_output\":" + structured)
+                + (errors is null ? "" : ",\"errors\":[\"" + errors + "\"]")
+                + ",\"type\":\"result\",\"duration_ms\":80,\"uuid\":\"00000000-0000-4000-8000-000000000003\",\"queued_turn_count\":0,\"result_index\":0}");
+        }
+
+        // The message the provider never wrote: a failure Claude Code tells the stream in an assistant line of its own.
+        void Synthetic(string error, string text)
+            => Say("{\"type\":\"assistant\",\"message\":{\"id\":\"00000000-0000-4000-8000-000000000008\",\"model\":\"<synthetic>\",\"role\":\"assistant\",\"stop_reason\":\"stop_sequence\",\"stop_sequence\":\"\",\"type\":\"message\",\"usage\":{\"input_tokens\":0,\"output_tokens\":0},\"content\":[{\"type\":\"text\",\"text\":\""
+                + text + "\"}]},\"parent_tool_use_id\":null,\"session_id\":\"" + session + "\",\"uuid\":\"00000000-0000-4000-8000-000000000009\",\"error\":\"" + error + "\",\"is_api_error_message\":true}");
+
+        void BudgetSpent(string stopReason)
+            => Result("error_max_budget_usd", "budget_exhausted", error: true, stopReason, 1, "[]", null, "Reached maximum budget ($" + budget + ")");
+
+        // The turn every message gets: a read held for the host's decision, unless the launch's own bounds end it first.
+        void Turn(string? message)
+        {
+            Say("{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"" + (message ?? "") + "\"},\"parent_tool_use_id\":null,\"uuid\":\"00000000-0000-4000-8000-000000000005\",\"timestamp\":\"2026-10-18T00:00:00.000Z\",\"isReplay\":true}");
+            Say("{\"type\":\"system\",\"subtype\":\"status\",\"status\":\"requesting\",\"session_id\":\"" + session + "\",\"uuid\":\"00000000-0000-4000-8000-000000000010\"}");
+
+            if (spent > limit)
+            {
+                BudgetSpent("null");
+                return;
+            }
+
+            if (!known)
+            {
+                var refusal = "There's an issue with the selected model (" + model + "). It may not exist or you may not have access to it. Run --model to pick a different model.";
+                Synthetic("model_not_found", refusal);
+                Result("success", "api_error", error: true, "\"stop_sequence\"", 1, "[]", "\"" + refusal + "\"", null);
+                return;
+            }
+
+            context += 10_000;
+
+            if (context > window)
+            {
+                Synthetic("invalid_request", "Prompt is too long");
+                Result("success", "blocking_limit", error: true, "\"stop_sequence\"", 1, "[]", "\"Prompt is too long\"", null);
+                return;
+            }
+
+            spent += 0.01m;
+            Say("{\"type\":\"stream_event\",\"event\":{\"type\":\"message_start\",\"message\":{\"model\":\"" + model + "\",\"usage\":{\"input_tokens\":6}}},\"session_id\":\"" + session + "\"}");
             Say("{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"" + call + "\",\"name\":\"Read\",\"input\":{}}},\"session_id\":\"" + session + "\"}");
             Say("{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"file_path\\\": \\\"a.txt\\\"}\"}},\"session_id\":\"" + session + "\"}");
-            Say("{\"type\":\"assistant\",\"message\":{\"model\":\"claude-sonnet-5-5\",\"role\":\"assistant\",\"stop_reason\":\"tool_use\",\"usage\":{\"input_tokens\":6,\"output_tokens\":20},\"content\":[{\"type\":\"tool_use\",\"id\":\"" + call + "\",\"name\":\"Read\",\"input\":{\"file_path\":\"a.txt\"}}]},\"session_id\":\"" + session + "\"}");
+            Say("{\"type\":\"assistant\",\"message\":{\"model\":\"" + model + "\",\"role\":\"assistant\",\"stop_reason\":\"tool_use\",\"usage\":{\"input_tokens\":6,\"output_tokens\":20},\"content\":[{\"type\":\"tool_use\",\"id\":\"" + call + "\",\"name\":\"Read\",\"input\":{\"file_path\":\"a.txt\"}}]},\"session_id\":\"" + session + "\"}");
+
+            if (!asksTheHost)
+            {
+                // Without the prompt tool nothing is put to the host: the ask rule's call is denied on the spot.
+                var denied = "Claude requested permissions to use Read, but you haven't granted it yet.";
+                Say("{\"type\":\"system\",\"subtype\":\"permission_denied\",\"tool_name\":\"Read\",\"tool_use_id\":\"" + call + "\",\"decision_reason_type\":\"rule\",\"message\":\"" + denied + "\",\"uuid\":\"00000000-0000-4000-8000-000000000011\",\"session_id\":\"" + session + "\"}");
+                Ended(denied, "unread");
+                return;
+            }
 
             // It asks, and waits: nothing more is written until the host answers in the recorded shape.
             Say("{\"type\":\"control_request\",\"request_id\":\"" + ask + "\",\"request\":{\"subtype\":\"can_use_tool\",\"tool_name\":\"Read\",\"display_name\":\"Read\",\"input\":{\"file_path\":\"a.txt\"},\"description\":\"a.txt\",\"decision_reason_type\":\"rule\",\"tool_use_id\":\"" + call + "\"}}");
+
+            if (spent > limit)
+            {
+                // The budget is read after the request that spent it: the turn ends with its ask unanswered, and the read never runs.
+                BudgetSpent("\"tool_use\"");
+                return;
+            }
+
+            waiting = true;
         }
 
-        void Ended(bool denied)
+        // The turn's end after its read was decided: the tool result, the schema's envelope, and the result counting a denial where there was one.
+        void Ended(string? failure, string answer)
         {
-            ToolResult(ok: !denied, denied ? "denied by the host" : "1\\talpha\\n2\\t");
+            waiting = false;
+            ToolResult(ok: failure is null, failure ?? "1\\talpha\\n2\\t");
 
-            if (!denied)
+            if (failure is null && maxTurns <= 1)
+            {
+                Result("error_max_turns", "max_turns", error: true, "\"tool_use\"", 2, "[]", null, "Reached maximum number of turns (" + maxTurns.ToString(CultureInfo.InvariantCulture) + ")");
+                return;
+            }
+
+            if (failure is null)
             {
                 Say("{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"[structured-output-enforce] You MUST call the StructuredOutput tool to complete this request. Call this tool now.\"}]},\"session_id\":\"" + session + "\"}");
             }
 
-            Say("{\"type\":\"assistant\",\"message\":{\"model\":\"claude-sonnet-5-5\",\"role\":\"assistant\",\"stop_reason\":\"tool_use\",\"usage\":{\"input_tokens\":6,\"output_tokens\":20},\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_000000000000000000000002\",\"name\":\"StructuredOutput\",\"input\":{\"answer\":\"" + (denied ? "denied" : "alpha") + "\"}}]},\"session_id\":\"" + session + "\"}");
+            Say("{\"type\":\"assistant\",\"message\":{\"model\":\"" + model + "\",\"role\":\"assistant\",\"stop_reason\":\"tool_use\",\"usage\":{\"input_tokens\":6,\"output_tokens\":20},\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_000000000000000000000002\",\"name\":\"StructuredOutput\",\"input\":{\"answer\":\"" + answer + "\"}}]},\"session_id\":\"" + session + "\"}");
             ToolResult(ok: true, "Structured output provided successfully");
-
-            Say("{\"duration_api_ms\":12,\"stop_reason\":\"stop_sequence\",\"session_id\":\"" + session
-                + "\",\"total_cost_usd\":0.01,\"usage\":{\"input_tokens\":6,\"output_tokens\":40,\"cache_read_input_tokens\":100,\"cache_creation_input_tokens\":0,\"server_tool_use\":{\"web_search_requests\":0,\"web_fetch_requests\":0}},\"modelUsage\":{},\"permission_denials\":"
-                + (denied ? "[{\"tool_name\":\"Read\",\"tool_use_id\":\"" + call + "\",\"tool_input\":{\"file_path\":\"a.txt\"}}]" : "[]")
-                + ",\"terminal_reason\":\"completed\",\"is_error\":false,\"num_turns\":2,\"subtype\":\"success\",\"result\":{\"answer\":\"" + (denied ? "denied" : "alpha") + "\"}"
-                + ",\"type\":\"result\",\"duration_ms\":80,\"uuid\":\"00000000-0000-4000-8000-000000000003\",\"queued_turn_count\":0,\"result_index\":0}");
+            Result(
+                "success",
+                "completed",
+                error: false,
+                "\"stop_sequence\"",
+                2,
+                failure is null ? "[]" : "[{\"tool_name\":\"Read\",\"tool_use_id\":\"" + call + "\",\"tool_input\":{\"file_path\":\"a.txt\"}}]",
+                "\"{\\\"answer\\\":\\\"" + answer + "\\\"}\"",
+                null,
+                "{\"answer\":\"" + answer + "\"}");
         }
 
         // A member's text, where the member is there and is text; null for anything else, as the real child reads it.
@@ -1063,33 +1176,55 @@ internal static class TestChild
                 Say("{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"" + requestId
                     + "\",\"response\":{\"elided\":\"the commands, agents, output styles, models and account of a machine\"}}}");
                 Say("{\"type\":\"system\",\"subtype\":\"init\",\"cwd\":\"<scratch>\",\"session_id\":\"" + session
-                    + "\",\"tools\":[\"Bash\",\"Edit\",\"Glob\",\"Grep\",\"NotebookEdit\",\"Read\",\"StructuredOutput\",\"WebFetch\",\"WebSearch\",\"Write\"],\"mcp_servers\":[],\"model\":\"claude-sonnet-5-5\",\"permissionMode\":\"default\",\"apiKeySource\":\"none\",\"claude_code_version\":\"fake\",\"output_style\":\"default\",\"capabilities\":[\"interrupt_receipt_v1\",\"interrupt_cancel_queued_v1\"],\"uuid\":\"00000000-0000-4000-8000-000000000006\"}");
+                    + "\",\"tools\":[\"Bash\",\"Edit\",\"Glob\",\"Grep\",\"NotebookEdit\",\"Read\",\"StructuredOutput\",\"WebFetch\",\"WebSearch\",\"Write\"],\"mcp_servers\":[],\"model\":\"" + model
+                    + "\",\"permissionMode\":\"default\",\"apiKeySource\":\"none\",\"claude_code_version\":\"fake\",\"output_style\":\"default\",\"capabilities\":[\"interrupt_receipt_v1\",\"interrupt_cancel_queued_v1\"],\"uuid\":\"00000000-0000-4000-8000-000000000006\"}");
             }
             else if (kind == "user")
             {
-                Turn();
+                Turn(Text(node?["message"]?["content"]));
             }
             else if (kind == "control_request" && sub == "interrupt")
             {
+                waiting = false;
                 Say("{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"" + requestId + "\",\"response\":{}}}");
-                Say("{\"duration_api_ms\":5,\"stop_reason\":\"stop_sequence\",\"session_id\":\"" + session
-                    + "\",\"total_cost_usd\":0,\"usage\":{\"input_tokens\":6,\"output_tokens\":10},\"modelUsage\":{},\"permission_denials\":[],\"terminal_reason\":\"aborted_streaming\",\"is_error\":false,\"num_turns\":1,\"subtype\":\"success\",\"result\":\"\",\"type\":\"result\",\"duration_ms\":40,\"uuid\":\"00000000-0000-4000-8000-000000000007\",\"queued_turn_count\":0,\"result_index\":0}");
+                Result("error_during_execution", "aborted_streaming", error: true, "null", 1, "[]", null, "[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null");
             }
-            else if (kind == "control_response")
+            else if (kind == "control_response" && waiting)
             {
                 // The answer an ask waits for, in the envelope the probe recorded: a success whose own response names
-                // the ask inside it and carries the behavior one level further in. Any other shape - the id or the
-                // behavior outside, no subtype - is not heard, which is the silence the real child keeps.
+                // the ask inside it and carries the behavior one level further in, or an error naming the ask beside
+                // its error. Any other shape - the id or the behavior outside, no subtype - is not heard, which is the
+                // silence the real child keeps.
                 var response = node?["response"];
+                var subtype = Text(response?["subtype"]);
                 var behavior = Text(response?["response"]?["behavior"]);
 
-                if (Text(response?["subtype"]) == "success" && Text(response?["request_id"]) == ask && behavior is "allow" or "deny")
+                if (Text(response?["request_id"]) != ask)
                 {
-                    Ended(denied: behavior == "deny");
+                    continue;
+                }
+
+                if (subtype == "success" && behavior == "allow")
+                {
+                    Ended(null, "alpha");
+                }
+                else if (subtype == "success" && behavior == "deny")
+                {
+                    Ended("denied by the host", "denied");
+                }
+                else if (subtype == "error" && Text(response?["error"]) is { } error)
+                {
+                    Ended("Tool permission request failed: Error: " + error, "failed");
                 }
             }
         }
 
-        return 0;
+        // The input is gone: an ask still waiting fails as the real child fails it, the turn ends around it, and so does the process.
+        if (waiting)
+        {
+            Ended("Tool permission request failed: AbortError: Tool permission stream closed before response received", "unread");
+        }
+
+        return lastWasError ? 1 : 0;
     }
 }
