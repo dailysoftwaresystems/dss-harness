@@ -251,7 +251,7 @@ public sealed class AgentService(
             return CommandOutcome.Usage(shape);
         }
 
-        var (context, layout, _, _) = await OrchestratorAsync(startDirectory, orchestrator, CreateCommand, cancellationToken).ConfigureAwait(false);
+        var (context, layout, _) = await OrchestratorAsync(startDirectory, orchestrator, CreateCommand, cancellationToken).ConfigureAwait(false);
 
         if (!WorktreeName.Validate(agent, context.Config.Worktrees.MaxNameLength).TryGetName(out _, out var length))
         {
@@ -755,7 +755,7 @@ public sealed class AgentService(
 
         if (at.Refusal is { } refusal)
         {
-            return Answered(refusal, json, at.Ended);
+            return Answered(refusal, json);
         }
 
         var met = new HoldersMet();
@@ -767,7 +767,7 @@ public sealed class AgentService(
         // --apply refused at its hold, which names the run it met. A usage error or a refusal returned above, before the
         // agent was found, brings the same document, empty, as the command's plumbing answers every exit that brings
         // none - and its facts, which say as much.
-        return Answered(answered, apply, json, met, at.Ended);
+        return Answered(answered, apply, json, met);
     }
 
     /// <summary>Refreshing a live agent, once it is found.</summary>
@@ -1096,7 +1096,7 @@ public sealed class AgentService(
 
         if (at.Refusal is { } refusal)
         {
-            return Answered(refusal, json, at.Ended);
+            return Answered(refusal, json);
         }
 
         var met = new HoldersMet();
@@ -1105,7 +1105,7 @@ public sealed class AgentService(
 
         // Asked for one document, what the live agent answered brings one, and what was returned above brings the same
         // document, empty, with its facts, as refresh-agent says.
-        return Answered(answered, apply, json, met, at.Ended);
+        return Answered(answered, apply, json, met);
     }
 
     /// <summary>Moving a live agent's base, once it is found.</summary>
@@ -1506,7 +1506,7 @@ public sealed class AgentService(
 
         if (at.Refusal is { } refusal)
         {
-            return Answered(refusal, json, at.Ended);
+            return Answered(refusal, json);
         }
 
         var met = new HoldersMet();
@@ -1515,7 +1515,7 @@ public sealed class AgentService(
 
         // Asked for one document, what the live agent answered brings one, and what was returned above brings the same
         // document, empty, with its facts, as refresh-agent says.
-        return Answered(answered, apply, json, met, at.Ended);
+        return Answered(answered, apply, json, met);
     }
 
     /// <summary>Folding a live agent, once it is found.</summary>
@@ -1620,7 +1620,7 @@ public sealed class AgentService(
 
         if (found.Refusal is { } refusal)
         {
-            return Answered(refusal, json, found.Ended);
+            return Answered(refusal, json);
         }
 
         var met = new HoldersMet();
@@ -1629,7 +1629,7 @@ public sealed class AgentService(
 
         // Asked for one document, what the agent found answered brings one, and what was returned above brings the same
         // document, empty, with its facts, as refresh-agent says.
-        return Answered(answered, apply, json, met, found.Ended);
+        return Answered(answered, apply, json, met);
     }
 
     /// <summary>Deleting an agent, once its record is found.</summary>
@@ -3006,7 +3006,7 @@ public sealed class AgentService(
     /// <param name="orchestrator">The orchestrator's name.</param>
     /// <param name="command">The command, which the sweep's lines name.</param>
     /// <param name="cancellationToken">Stops the search for the repository.</param>
-    private async Task<(HarnessContext Context, OrchestratorLayout Layout, OrchestratorRecord Record, IReadOnlyList<EndedChildSession> Ended)> OrchestratorAsync(
+    private async Task<(HarnessContext Context, OrchestratorLayout Layout, OrchestratorRecord Record)> OrchestratorAsync(
         string startDirectory,
         string orchestrator,
         string command,
@@ -3020,20 +3020,21 @@ public sealed class AgentService(
             throw new HarnessException(HarnessExit.Refused, OrchestrationReports.NoOrchestrator(orchestrator));
         }
 
-        // Before anything else of it is read: what a killed process left running of its steps' contained children.
-        var ended = await _sessions.SweepAsync(layout, command).ConfigureAwait(false);
+        // Before anything else of it is read: what a killed process left running of its steps' contained children. What
+        // it ended, every document this command answers with says, whatever it goes on to meet (EndedChildSessions).
+        await _sessions.SweepAsync(layout, command).ConfigureAwait(false);
 
-        return (context, layout, record, ended);
+        return (context, layout, record);
     }
 
     /// <summary>The agent named, of the orchestrator named, with its record: every command on an existing agent starts here.</summary>
     private async Task<AgentAt> FindAsync(string startDirectory, string orchestrator, string agent, string command, CancellationToken cancellationToken)
     {
-        var (context, layout, _, ended) = await OrchestratorAsync(startDirectory, orchestrator, command, cancellationToken).ConfigureAwait(false);
+        var (context, layout, _) = await OrchestratorAsync(startDirectory, orchestrator, command, cancellationToken).ConfigureAwait(false);
 
         return _store.ReadAgent(layout, agent) is { } record
-            ? new AgentAt(null, ended, context, layout, record)
-            : new AgentAt(CommandOutcome.Refused($"Orchestrator '{orchestrator}' has no agent named '{agent}'."), ended);
+            ? new AgentAt(null, context, layout, record)
+            : new AgentAt(CommandOutcome.Refused($"Orchestrator '{orchestrator}' has no agent named '{agent}'."));
     }
 
     /// <summary>A live agent whose worktree git records as its own, and whose making finished: what seeding, refreshing and folding work on.</summary>
@@ -3054,8 +3055,7 @@ public sealed class AgentService(
                 record.State == AgentStates.Closed
                     ? $"{Agent(record)} is closed: its deletion began, and it is never seeded, refreshed or folded again. "
                         + $"{OrchestrationReports.DeleteAgentLine(orchestrator, agent)} finishes deleting it."
-                    : $"{Agent(record)} was deleted at {OrchestrationReports.Moment(record.DeletedAt!.Value)}."),
-                found.Ended);
+                    : $"{Agent(record)} was deleted at {OrchestrationReports.Moment(record.DeletedAt!.Value)}."));
         }
 
         // An agent that reads the main tree is never seeded, refreshed, rebased or folded, and git is asked nothing about
@@ -3063,28 +3063,27 @@ public sealed class AgentService(
         if (record.Reads)
         {
             return new AgentAt(CommandOutcome.Refused(
-                $"{Agent(record)} has no worktree: it reads the main tree, and there is nothing of it to seed, refresh, rebase or fold."),
-                found.Ended);
+                $"{Agent(record)} has no worktree: it reads the main tree, and there is nothing of it to seed, refresh, rebase or fold."));
         }
 
         var (path, moved) = WorktreeOf(context, record);
 
         if (moved is not null)
         {
-            return new AgentAt(CommandOutcome.Refused(moved), found.Ended);
+            return new AgentAt(CommandOutcome.Refused(moved));
         }
 
         var standing = await StandingAsync(context, path, cancellationToken).ConfigureAwait(false);
 
         if (standing.Kind != Standing.Registered)
         {
-            return new AgentAt(CommandOutcome.Refused(Unusable(record, path, standing)), found.Ended);
+            return new AgentAt(CommandOutcome.Refused(Unusable(record, path, standing)));
         }
 
         // Seeding is how an agent never seeded is made whole, so only a missing base refuses here.
         if (record.Base is null)
         {
-            return new AgentAt(CommandOutcome.Refused($"{Agent(record)} is not whole - making it stopped part way: {MakingUnfinished(record, seed: null)}."), found.Ended);
+            return new AgentAt(CommandOutcome.Refused($"{Agent(record)} is not whole - making it stopped part way: {MakingUnfinished(record, seed: null)}."));
         }
 
         return found with { Path = path };
@@ -3342,8 +3341,7 @@ public sealed class AgentService(
     /// <param name="apply">Whether --apply was given.</param>
     /// <param name="json">Whether to answer with one JSON document.</param>
     /// <param name="met">The run the --apply's hold met, where one was in its way, and what it folded, where it folded.</param>
-    /// <param name="ended">The sessions a killed process left running that finding the agent ended.</param>
-    private static CommandOutcome Answered(CommandOutcome answered, bool apply, bool json, HoldersMet met, IReadOnlyList<EndedChildSession> ended)
+    private static CommandOutcome Answered(CommandOutcome answered, bool apply, bool json, HoldersMet met)
     {
         var had = answered.Facts as AgentVerbFacts;
         var standing = had?.Standing ?? (met.Held is null ? StandingOfApply(answered) : RequestStanding.Sound);
@@ -3357,24 +3355,11 @@ public sealed class AgentService(
             had?.Needs ?? [],
             had?.Refusals ?? Reasons(standing, met.Reasons),
             met.Folded ?? had?.Folded,
-            had?.Planned ?? met.Planned,
-            ended);
+            had?.Planned ?? met.Planned);
 
-        if (!json)
-        {
-            return answered with { Facts = facts };
-        }
-
-        if (answered.Data.Count == 0)
-        {
-            return OrchestrationReports.Document(answered, facts);
-        }
-
-        // A dry run's document is the facts it was made of, serialised: made again from them with the sessions ended
-        // beside them, it says what it said and those too.
-        return ended.Count == 0
-            ? answered with { Facts = facts }
-            : OrchestrationReports.Document(answered, (had ?? throw new InvalidOperationException("A document came with no facts it was made of.")) with { Ended = ended }) with { Facts = facts };
+        return json && answered.Data.Count == 0
+            ? OrchestrationReports.Document(answered, facts)
+            : answered with { Facts = facts };
     }
 
     /// <summary>
@@ -3386,13 +3371,12 @@ public sealed class AgentService(
     /// </summary>
     /// <param name="stopped">The usage error or the refusal it stopped with.</param>
     /// <param name="json">Whether to answer with one JSON document.</param>
-    /// <param name="ended">The sessions a killed process left running that finding the agent's orchestrator ended; none where it stopped before.</param>
-    private static CommandOutcome Answered(CommandOutcome stopped, bool json, IReadOnlyList<EndedChildSession>? ended = null)
+    private static CommandOutcome Answered(CommandOutcome stopped, bool json)
     {
-        var facts = new AgentVerbFacts(stopped.ExitCode, stopped.Message, Applied: false, Standing: null, Holders: null, Lines: [], Needs: [], Refusals: [], Ended: ended);
+        var facts = new AgentVerbFacts(stopped.ExitCode, stopped.Message, Applied: false, Standing: null, Holders: null, Lines: [], Needs: [], Refusals: []);
 
         return json && stopped.Data.Count == 0
-            ? stopped with { Data = [OrchestrationReports.Stopped(stopped.ExitCode, stopped.Message, ended)], Quiet = true, Facts = facts }
+            ? stopped with { Data = [OrchestrationReports.Stopped(stopped.ExitCode, stopped.Message)], Quiet = true, Facts = facts }
             : stopped with { Facts = facts };
     }
 
@@ -3645,13 +3629,9 @@ public sealed class AgentService(
     /// <summary>What the directory at an agent's worktree path is, its git directory where it is a worktree, and why where it is not usable.</summary>
     private sealed record WorktreeStanding(Standing Kind, string? AdministrativeDirectory, string? Why);
 
-    /// <summary>
-    /// An agent found - or a live one to work on, with its worktree - or why it cannot be; and either way, each session a
-    /// killed process left running that finding its orchestrator ended.
-    /// </summary>
+    /// <summary>An agent found - or a live one to work on, with its worktree - or why it cannot be.</summary>
     private sealed record AgentAt(
         CommandOutcome? Refusal,
-        IReadOnlyList<EndedChildSession> Ended,
         HarnessContext? Context = null,
         OrchestratorLayout? Layout = null,
         AgentRecord? Record = null,

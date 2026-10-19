@@ -695,7 +695,8 @@ internal static class TestChild
             new Core.FileSystem.PhysicalFileSystem(permissions),
             new Core.Execution.ProcessIdentity(platform),
             new Core.Processes.LeftSessions(platform, Core.Platform.ProcessTableFactory.Create(platform, runner)),
-            new Core.Output.ConsoleHarnessOutput(TextWriter.Null, TextWriter.Null, verbose: false, home: null));
+            new Core.Output.ConsoleHarnessOutput(TextWriter.Null, TextWriter.Null, verbose: false, home: null),
+            new Core.Orchestration.EndedChildSessions());
         var said = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         // Its lines are read only once it is said to have started, and it is said to have started only once its record

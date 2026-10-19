@@ -2,11 +2,18 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json.Nodes;
+using DssHarness.Core.Application;
+using DssHarness.Core.Composition;
 using DssHarness.Core.Execution;
 using DssHarness.Core.Orchestration;
+using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
+using DssHarness.Core.Worktrees;
+using Microsoft.Extensions.DependencyInjection;
+using NSubstitute;
+using NSubstitute.ExceptionExtensions;
 
 namespace DssHarness.Tests;
 
@@ -208,19 +215,17 @@ public sealed class ChildSessionsTests
             await owner.WaitAsync(LongBound, Token);
             Assert.True(StillAlive(said.Contained), $"the contained child {said.Contained} ended with the process that started it");
 
-            var listed = await kit.Harness.OrchestratorService.ListAsync(kit.Main, OrchestrationKit.Orchestrator, json: true, Token);
+            var listed = await ListAsync(kit);
 
-            Assert.True(listed.Succeeded, OrchestrationKit.Describe(listed));
+            Assert.Equal(HarnessExit.Success, listed.Completion.ExitCode);
             Assert.True(AwaitGone(said.Contained), $"the contained child {said.Contained} outlived the command that found it left");
             Assert.False(File.Exists(record), $"the record of the ended session is still at '{record}'");
             Assert.Contains(
                 $"list-orchestrator: step 's1' of 'o1' left session {said.Contained} ('{TestHost.AssemblyProgram}') running, and the process that started it (pid {said.Owner}) has gone; it was ended",
-                Lines(kit.Harness.StandardOutput));
+                Lines(listed.Error));
             Assert.True(
-                JsonNode.DeepEquals(
-                    new JsonArray(Ended(null, "s1", said.Contained, said.Owner)),
-                    JsonNode.Parse(Assert.Single(listed.Data))!["ended"]),
-                listed.Data[0]);
+                JsonNode.DeepEquals(new JsonArray(Ended(null, "s1", said.Contained, said.Owner)), listed.Document[EndedChildSessions.Member]),
+                listed.Output);
         }
         finally
         {
@@ -243,14 +248,15 @@ public sealed class ChildSessionsTests
         var kit = await OrchestrationKit.PrepareAsync(temp);
         await kit.CreateAgentAsync("a1");
 
-        var foldBefore = await FoldDocumentAsync(kit, "a1");
-        var stoppedBefore = await RefreshDocumentAsync(kit, "nobody");
+        var foldBefore = (await FoldAsync(kit, "a1")).Document;
+        var stoppedBefore = (await RefreshAsync(kit, "nobody")).Document;
 
         var (folded, foldLeader) = await LeftAsync(kit, kit.Layout.AgentStepDirectory("a1", "s2"));
-        var fold = await FoldDocumentAsync(kit, "a1");
+        var foldAnswer = await FoldAsync(kit, "a1");
+        var fold = foldAnswer.Document;
 
         var (refreshed, refreshLeader) = await LeftAsync(kit, kit.Layout.StepDirectory("s3"));
-        var stopped = await RefreshDocumentAsync(kit, "nobody");
+        var stopped = (await RefreshAsync(kit, "nobody")).Document;
 
         Assert.True(JsonNode.DeepEquals(new JsonArray(Ended("a1", "s2", foldLeader, Environment.ProcessId)), fold["ended"]), fold.ToJsonString());
         Assert.True(JsonNode.DeepEquals(new JsonArray(Ended(null, "s3", refreshLeader, Environment.ProcessId)), stopped["ended"]), stopped.ToJsonString());
@@ -265,11 +271,44 @@ public sealed class ChildSessionsTests
 
         Assert.Contains(
             $"fold-agent: step 's2' of agent 'a1' of 'o1' left session {foldLeader} ('{TestHost.AssemblyProgram}') running, and the process that started it (pid {Environment.ProcessId}) has gone; it was ended",
-            Lines(kit.Harness.StandardOutput));
+            Lines(foldAnswer.Error));
 
         // Each ended by the sweep, its run hears its end.
         await folded.WaitAsync(LongBound, Token);
         await refreshed.WaitAsync(LongBound, Token);
+    }
+
+    /// <summary>
+    /// A command that stops after its sweep ended a session - here list-orchestrator, whose list of worktrees, read after
+    /// the sweep, throws - answers with the stopped form of its document holding <c>ended</c> whole: what it ended is said
+    /// on every exit, not only where the command went through.
+    /// </summary>
+    [Fact]
+    public async Task ACommandThatStopsAfterItsSweepEndedASession_SaysWhatItEndedInItsStoppedDocument()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "a contained child there is held in a job, and nothing is recorded.");
+
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var (left, leader) = await LeftAsync(kit, kit.Layout.AgentStepDirectory("a9", "s1"));
+        var refusing = Substitute.For<IWorktreeService>();
+
+        refusing.ListAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .ThrowsAsync(new HarnessException(HarnessExit.CommandFailed, "git would not list the worktrees."));
+
+        var listed = await ListAsync(kit, services => services.AddSingleton(refusing));
+
+        var expected = JsonNode.Parse(OrchestrationReports.ListStopped(HarnessExit.CommandFailed, "git would not list the worktrees."))!.AsObject();
+        expected[EndedChildSessions.Member] = new JsonArray(Ended("a9", "s1", leader, Environment.ProcessId));
+
+        Assert.Equal(HarnessExit.CommandFailed, listed.Completion.ExitCode);
+        Assert.True(JsonNode.DeepEquals(expected, listed.Document), listed.Output);
+        Assert.Equal(
+            [.. expected.Select(member => member.Key)],
+            listed.Document.Select(member => member.Key));
+        Assert.True(AwaitGone(leader), $"the session {leader} the sweep found left outlived it");
+
+        await left.WaitAsync(LongBound, Token);
     }
 
     /// <summary>A session whose owner still runs is its owner's to end: the sweep leaves it, and its record, as they are.</summary>
@@ -288,14 +327,14 @@ public sealed class ChildSessionsTests
             var record = OrchestratorLayout.ChildFile(step, leader);
             var written = File.ReadAllText(record);
 
-            var listed = await kit.Harness.OrchestratorService.ListAsync(kit.Main, OrchestrationKit.Orchestrator, json: true, Token);
+            var listed = await ListAsync(kit);
 
-            Assert.True(listed.Succeeded, OrchestrationKit.Describe(listed));
+            Assert.Equal(HarnessExit.Success, listed.Completion.ExitCode);
             Assert.Equal(written, File.ReadAllText(record));
             Assert.True(StillAlive(leader), $"the session {leader}, whose owner runs, was ended");
-            Assert.False(JsonNode.Parse(Assert.Single(listed.Data))!.AsObject().ContainsKey("ended"), listed.Data[0]);
-            Assert.DoesNotContain("left session", kit.Harness.StandardOutput.ToString(), StringComparison.Ordinal);
-            Assert.DoesNotContain(ChildSessions.RecordKind, kit.Harness.StandardError.ToString(), StringComparison.Ordinal);
+            Assert.False(listed.Document.ContainsKey(EndedChildSessions.Member), listed.Output);
+            Assert.DoesNotContain("left session", listed.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain(ChildSessions.RecordKind, listed.Error, StringComparison.Ordinal);
         }
         finally
         {
@@ -322,14 +361,14 @@ public sealed class ChildSessionsTests
             Writer(kit, laterStart: true).For(step).Placed(leader, TestHost.AssemblyProgram);
             var record = OrchestratorLayout.ChildFile(step, leader);
 
-            var listed = await kit.Harness.OrchestratorService.ListAsync(kit.Main, OrchestrationKit.Orchestrator, json: true, Token);
+            var listed = await ListAsync(kit);
 
-            Assert.True(listed.Succeeded, OrchestrationKit.Describe(listed));
+            Assert.Equal(HarnessExit.Success, listed.Completion.ExitCode);
             Assert.False(File.Exists(record), $"the record naming a session nothing leads any more is still at '{record}'");
             Assert.True(StillAlive(leader), $"the process {leader}, given the recorded leader's id, was ended");
-            Assert.False(JsonNode.Parse(Assert.Single(listed.Data))!.AsObject().ContainsKey("ended"), listed.Data[0]);
-            Assert.DoesNotContain("left session", kit.Harness.StandardOutput.ToString(), StringComparison.Ordinal);
-            Assert.DoesNotContain(ChildSessions.RecordKind, kit.Harness.StandardError.ToString(), StringComparison.Ordinal);
+            Assert.False(listed.Document.ContainsKey(EndedChildSessions.Member), listed.Output);
+            Assert.DoesNotContain("left session", listed.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain(ChildSessions.RecordKind, listed.Error, StringComparison.Ordinal);
         }
         finally
         {
@@ -458,20 +497,68 @@ public sealed class ChildSessionsTests
     /// had been given to another since.
     /// </summary>
     private static ChildSessions Writer(OrchestrationKit kit, bool laterStart)
-        => new(kit.Harness.FileSystem, new Gone(kit.Harness.Identity, laterStart), new LeftSessions(kit.Harness.Platform, kit.Harness.ProcessTable), kit.Harness.Output);
+        => new(kit.Harness.FileSystem, new Gone(kit.Harness.Identity, laterStart), new LeftSessions(kit.Harness.Platform, kit.Harness.ProcessTable), kit.Harness.Output, new EndedChildSessions());
 
-    /// <summary>fold-agent's dry run of <paramref name="agent"/>, as its document.</summary>
-    private static async Task<JsonObject> FoldDocumentAsync(OrchestrationKit kit, string agent)
-    {
-        var outcome = await kit.Harness.AgentService.FoldAsync(kit.Main, OrchestrationKit.Orchestrator, agent, new FoldAllowances(), apply: false, Token, json: true);
-        return JsonNode.Parse(Assert.Single(outcome.Data))!.AsObject();
-    }
+    /// <summary>list-orchestrator --json over orchestrator o1, as the command line runs it, over the services <paramref name="replace"/> leaves.</summary>
+    private static Task<Answer> ListAsync(OrchestrationKit kit, Action<IServiceCollection>? replace = null)
+        => CommandAsync(
+            kit,
+            OrchestratorService.ListCommand,
+            (_, exitCode, summary) => OrchestrationReports.ListStopped(exitCode, summary),
+            services => services.GetRequiredService<IOrchestratorService>().ListAsync(kit.Main, OrchestrationKit.Orchestrator, json: true, Token),
+            replace);
 
-    /// <summary>refresh-agent's dry run of <paramref name="agent"/>, as its document.</summary>
-    private static async Task<JsonObject> RefreshDocumentAsync(OrchestrationKit kit, string agent)
+    /// <summary>fold-agent --json's dry run of <paramref name="agent"/>, as the command line runs it.</summary>
+    private static Task<Answer> FoldAsync(OrchestrationKit kit, string agent)
+        => CommandAsync(
+            kit,
+            AgentService.FoldCommand,
+            (_, exitCode, summary) => OrchestrationReports.Stopped(exitCode, summary),
+            services => services.GetRequiredService<IAgentService>().FoldAsync(kit.Main, OrchestrationKit.Orchestrator, agent, new FoldAllowances(), apply: false, Token, json: true));
+
+    /// <summary>refresh-agent --json's dry run of <paramref name="agent"/>, as the command line runs it.</summary>
+    private static Task<Answer> RefreshAsync(OrchestrationKit kit, string agent)
+        => CommandAsync(
+            kit,
+            AgentService.RefreshCommand,
+            (_, exitCode, summary) => OrchestrationReports.Stopped(exitCode, summary),
+            services => services.GetRequiredService<IAgentService>().RefreshAsync(kit.Main, OrchestrationKit.Orchestrator, agent, new RefreshRequest(), apply: false, Token, json: true));
+
+    /// <summary>
+    /// One operation asked for its document, run as the command line runs one - its session over the tool's own services,
+    /// one set per operation, in the main checkout - writing to buffers of its own: what it answered, its lines, and how it
+    /// ended.
+    /// </summary>
+    /// <param name="kit">The repository.</param>
+    /// <param name="command">The command's name.</param>
+    /// <param name="stopped">The stopped form of its document, as the command line registers it.</param>
+    /// <param name="body">What the command does, over the operation's services.</param>
+    /// <param name="replace">Puts a service in the place of the tool's own, for a command made to meet what it would not.</param>
+    private static async Task<Answer> CommandAsync(
+        OrchestrationKit kit,
+        string command,
+        Func<SessionContext, int, string, string> stopped,
+        Func<IServiceProvider, Task<CommandOutcome>> body,
+        Action<IServiceCollection>? replace = null)
     {
-        var outcome = await kit.Harness.AgentService.RefreshAsync(kit.Main, OrchestrationKit.Orchestrator, agent, new RefreshRequest(), apply: false, Token, json: true);
-        return JsonNode.Parse(Assert.Single(outcome.Data))!.AsObject();
+        var output = new StringWriter();
+        var error = new StringWriter();
+        var host = new DssHarnessHost((options, operation) =>
+        {
+            var services = new ServiceCollection().AddDssHarness(options, operation, output: _ => new ConsoleHarnessOutput(output, error, verbose: false, home: null));
+            replace?.Invoke(services);
+            return services.BuildServiceProvider();
+        });
+
+        var session = host.Begin(
+            new SessionOptions { Command = command, Directory = kit.Main, Prompting = false, Document = DocumentKind.Own },
+            new SessionFrontEnd(Stopped: stopped));
+
+        await using (session)
+        {
+            var completion = await session.RunAsync((scope, _) => body(scope.Services), Token);
+            return new Answer(completion, output.ToString(), error.ToString());
+        }
     }
 
     /// <summary>A session ended, as a document's <c>ended</c> names it, of orchestrator o1, with nothing it could not reach.</summary>
@@ -488,8 +575,11 @@ public sealed class ChildSessionsTests
         };
 
     /// <summary>What an output wrote, line by line.</summary>
-    private static string[] Lines(StringWriter written)
-        => written.ToString().Split('\n').Select(line => line.TrimEnd('\r')).ToArray();
+    private static string[] Lines(StringWriter written) => Lines(written.ToString());
+
+    /// <summary>What a stream held, line by line.</summary>
+    private static string[] Lines(string written)
+        => written.Split('\n').Select(line => line.TrimEnd('\r')).ToArray();
 
     /// <summary>The number after <paramref name="name"/> where <paramref name="line"/> is that and a number.</summary>
     private static int? Id(string line, string name)
@@ -542,6 +632,13 @@ public sealed class ChildSessionsTests
         {
             // Already gone, or going.
         }
+    }
+
+    /// <summary>What one operation answered: how it ended, its standard output - the document alone - and its standard error.</summary>
+    private sealed record Answer(CommandCompletion Completion, string Output, string Error)
+    {
+        /// <summary>The document, the whole of its standard output.</summary>
+        public JsonObject Document => JsonNode.Parse(Output)!.AsObject();
     }
 
     /// <summary>A record that says, in order, what the runner asked of it.</summary>

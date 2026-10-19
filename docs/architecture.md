@@ -727,7 +727,10 @@ the same document, empty (`OrchestrationReports.Stopped`): `applied` false, `req
 Each of these documents, and list-orchestrator's, also says `ended` where finding the orchestrator ended a session a
 killed process left running (see containment, above): one object per session, its `orchestrator`, `agent` (null for a
 step no agent owns), `step`, `session`, `program`, `owner` (the process id that had gone) and `unreached` (null where
-everything in it was reached); with nothing ended there is no `ended`, and the document is what it always was.
+everything in it was reached); with nothing ended there is no `ended`, and the document is what it always was. No
+command writes it: the operation keeps what its sweeps ended (`EndedChildSessions`, one per operation), and its session
+writes it into whatever document the operation answers with (`IDocumentFacts`) - its own, or the stopped form where it
+answered without one, threw or stopped after the sweep - so a command over an orchestrator added later says it too.
 
 An agent's worktree is `<worktrees.root>/<orchestrator>/<agent>`, addressed `orchestrator/agent` by list-worktree
 and delete-worktree, its host copies named `orchestrator--agent` (`WorktreeAddress`). The directory named for an

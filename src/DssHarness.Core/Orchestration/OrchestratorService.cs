@@ -486,11 +486,9 @@ public sealed class OrchestratorService(
         }
 
         // Before anything else of each is read: what a killed process left running of its steps' contained children.
-        var ended = new List<EndedChildSession>();
-
         foreach (var orchestrator in orchestrators)
         {
-            ended.AddRange(await _sessions.SweepAsync(orchestrator, ListCommand).ConfigureAwait(false));
+            await _sessions.SweepAsync(orchestrator, ListCommand).ConfigureAwait(false);
         }
 
         var listed = await _worktrees.ListAsync(layout.MainCheckoutRoot, cancellationToken).ConfigureAwait(false);
@@ -509,7 +507,7 @@ public sealed class OrchestratorService(
                 OrchestrationRules.OpenAgents(orchestrator.Name, agents, listed.Select(worktree => worktree.Name))));
         }
 
-        return OrchestrationReports.List(inventory, json, ended);
+        return OrchestrationReports.List(inventory, json);
     }
 
     /// <summary>

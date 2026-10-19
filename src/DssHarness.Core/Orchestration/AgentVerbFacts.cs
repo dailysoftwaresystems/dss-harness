@@ -115,11 +115,6 @@ public sealed record AgentPlanned(
 /// What the plan of refresh-agent or rebase-agent names, wherever it was measured, its dry run's and its
 /// <c>--apply</c>'s alike; null for fold-agent and delete-agent, and where no plan was measured.
 /// </param>
-/// <param name="Ended">
-/// Each session a killed process left running of the orchestrator's contained children that finding the agent ended
-/// (<see cref="ChildSessions.SweepAsync"/>), in the document as <c>ended</c> where there was one; null or empty where
-/// there was none, and where the command stopped before its orchestrator was found.
-/// </param>
 public sealed record AgentVerbFacts(
     int ExitCode,
     string Summary,
@@ -130,5 +125,4 @@ public sealed record AgentVerbFacts(
     IReadOnlyList<ConsentKind> Needs,
     IReadOnlyList<RefusalKind> Refusals,
     AgentFolded? Folded = null,
-    AgentPlanned? Planned = null,
-    IReadOnlyList<EndedChildSession>? Ended = null);
+    AgentPlanned? Planned = null);

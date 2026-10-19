@@ -74,12 +74,17 @@ public sealed record EndedChildSession(string Orchestrator, string? Agent, strin
 /// An owner on another machine is never taken to have gone, since nothing here can ask that machine. Windows records
 /// nothing: a contained child there is held in a job that ends with the process holding it.
 /// </para>
+/// <para>
+/// Each session a sweep ends is said as it is ended, and kept in the operation's <see cref="EndedChildSessions"/>, which
+/// every document the operation answers with says, however it goes on to end.
+/// </para>
 /// </remarks>
 /// <param name="fileSystem">Reads, writes and removes the records.</param>
 /// <param name="identity">This process, the owner of what it records, and how another process's liveness and start are told.</param>
 /// <param name="left">Ends a session its owner left running.</param>
 /// <param name="output">Says what a sweep ended, and a record it could not read or remove.</param>
-public sealed class ChildSessions(IFileSystem fileSystem, IProcessIdentity identity, LeftSessions left, IHarnessOutput output)
+/// <param name="ended">What this operation's sweeps ended, for its documents.</param>
+public sealed class ChildSessions(IFileSystem fileSystem, IProcessIdentity identity, LeftSessions left, IHarnessOutput output, EndedChildSessions ended)
 {
     /// <summary>What a record is, as a line that cannot read one names it.</summary>
     public const string RecordKind = "the record of a contained child's session";
@@ -92,6 +97,8 @@ public sealed class ChildSessions(IFileSystem fileSystem, IProcessIdentity ident
 
     private readonly IHarnessOutput _output = output ?? throw new ArgumentNullException(nameof(output));
 
+    private readonly EndedChildSessions _ended = ended ?? throw new ArgumentNullException(nameof(ended));
+
     /// <summary>Where a contained child of the step kept at <paramref name="stepDirectory"/> records its session, as its request names it.</summary>
     /// <param name="stepDirectory">The step's own directory.</param>
     public IContainedSessionRecord For(string stepDirectory)
@@ -102,7 +109,8 @@ public sealed class ChildSessions(IFileSystem fileSystem, IProcessIdentity ident
 
     /// <summary>
     /// Ends each session a contained child of the orchestrator's steps leads whose owner has gone, as that owner would have
-    /// ended it, and removes its record: said, each, as a line of <paramref name="command"/>.
+    /// ended it, and removes its record: said, each, as a line of <paramref name="command"/>, and kept for the documents
+    /// the operation answers with (<see cref="EndedChildSessions"/>).
     /// </summary>
     /// <param name="orchestrator">The orchestrator.</param>
     /// <param name="command">The command sweeping, which its lines name.</param>
@@ -152,6 +160,7 @@ public sealed class ChildSessions(IFileSystem fileSystem, IProcessIdentity ident
                 var session = new EndedChildSession(orchestrator.Name, agent, step, record.Session, record.Program, record.Owner.ProcessId, unreached);
 
                 _output.Info(command, Line(session));
+                _ended.Add(session);
                 ended.Add(session);
             }
         }

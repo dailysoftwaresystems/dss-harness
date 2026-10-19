@@ -146,7 +146,7 @@ public sealed class HarnessFactory
     /// </summary>
     /// <param name="fileSystem">Reads, writes and removes the records.</param>
     public ChildSessions SessionsOver(IFileSystem fileSystem)
-        => new(fileSystem, Identity, new LeftSessions(Platform, ProcessTable), Output);
+        => new(fileSystem, Identity, new LeftSessions(Platform, ProcessTable), Output, new EndedChildSessions());
 
     /// <summary>The records of orchestrators' contained children over the real disk.</summary>
     public ChildSessions ChildSessions { get; }

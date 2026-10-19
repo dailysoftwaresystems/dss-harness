@@ -14,53 +14,15 @@ public static class OrchestrationReports
     /// <summary>What list-orchestrator reports.</summary>
     /// <param name="orchestrators">The orchestrators listed.</param>
     /// <param name="json">Whether to answer with one JSON document rather than lines.</param>
-    /// <param name="ended">
-    /// Each session a killed process left running that the sweep before the listing ended, which its own lines said as
-    /// it ended them: in the document as <c>ended</c>, which is there only where one was.
-    /// </param>
-    public static CommandOutcome List(IReadOnlyList<OrchestratorInventory> orchestrators, bool json, IReadOnlyList<EndedChildSession> ended)
+    public static CommandOutcome List(IReadOnlyList<OrchestratorInventory> orchestrators, bool json)
     {
         ArgumentNullException.ThrowIfNull(orchestrators);
-        ArgumentNullException.ThrowIfNull(ended);
 
         var message = orchestrators.Count == 0 ? "no orchestrators" : ReportText.Counted(orchestrators.Count, "orchestrator");
 
         return json
-            ? CommandOutcome.Ok(message) with { Data = [WithEnded(Document(orchestrators), ended).ToJsonString(ReportJson.Options)], Quiet = true }
+            ? CommandOutcome.Ok(message) with { Data = [Document(orchestrators).ToJsonString(ReportJson.Options)], Quiet = true }
             : CommandOutcome.Ok(message, [.. Lines(orchestrators)]);
-    }
-
-    /// <summary>
-    /// <paramref name="document"/> with <c>ended</c> - each session a killed process left running that the command's sweep
-    /// ended, as <see cref="ChildSessions.Line"/> says it - where there was one, and unchanged where there was none.
-    /// </summary>
-    /// <param name="document">A command's document.</param>
-    /// <param name="ended">The sessions its sweep ended.</param>
-    private static JsonObject WithEnded(JsonObject document, IReadOnlyList<EndedChildSession> ended)
-    {
-        if (ended.Count == 0)
-        {
-            return document;
-        }
-
-        var list = new JsonArray();
-
-        foreach (var session in ended)
-        {
-            list.Add(new JsonObject
-            {
-                ["orchestrator"] = session.Orchestrator,
-                ["agent"] = session.Agent,
-                ["step"] = session.Step,
-                ["session"] = session.Session,
-                ["program"] = session.Program,
-                ["owner"] = session.Owner,
-                ["unreached"] = session.Unreached,
-            });
-        }
-
-        document["ended"] = list;
-        return document;
     }
 
     /// <summary>
@@ -592,8 +554,7 @@ public static class OrchestrationReports
             facts.Needs,
             facts.Refusals,
             facts.Folded,
-            facts.Planned,
-            facts.Ended ?? []);
+            facts.Planned);
 
         return outcome with { Data = [document], Quiet = true, Facts = facts };
     }
@@ -606,9 +567,8 @@ public static class OrchestrationReports
     /// </summary>
     /// <param name="exitCode">The code the command exits with.</param>
     /// <param name="summary">The line it ends on.</param>
-    /// <param name="ended">Each session a killed process left running that finding the agent's orchestrator ended; none where it was not found.</param>
-    public static string Stopped(int exitCode, string summary, IReadOnlyList<EndedChildSession>? ended = null)
-        => AgentDocument(exitCode, summary, applied: false, standing: null, heldNow: null, heldUnread: null, [], needs: [], refusals: [], folded: null, planned: null, ended ?? []);
+    public static string Stopped(int exitCode, string summary)
+        => AgentDocument(exitCode, summary, applied: false, standing: null, heldNow: null, heldUnread: null, [], needs: [], refusals: [], folded: null, planned: null);
 
     /// <summary>The name a consent's kind has in the document.</summary>
     /// <param name="kind">The kind.</param>
@@ -642,9 +602,8 @@ public static class OrchestrationReports
         IReadOnlyList<ConsentKind> needs,
         IReadOnlyList<RefusalKind> refusals,
         AgentFolded? folded,
-        AgentPlanned? planned,
-        IReadOnlyList<EndedChildSession> ended)
-        => WithEnded(new JsonObject
+        AgentPlanned? planned)
+        => new JsonObject
         {
             ["exitCode"] = exitCode,
             ["summary"] = summary,
@@ -684,7 +643,7 @@ public static class OrchestrationReports
                     ["merged"] = Texts(planned.Merged),
                     ["armRegistry"] = planned.ArmRegistry,
                 },
-        }, ended).ToJsonString(ReportJson.Options);
+        }.ToJsonString(ReportJson.Options);
 
     /// <summary><paramref name="texts"/> as a document's array of strings, in order.</summary>
     private static JsonArray Texts(IEnumerable<string> texts) => new([.. texts.Select(text => (JsonNode?)text)]);
