@@ -453,7 +453,9 @@ starts. A file that cannot be written takes back what was written before it, wit
 made, so no folder is left with part of a workflow in it - or the refusal says why it could not.
 
 This build checks workflow definitions - the shape of every key, every step, input, param and
-output an expression names, every file the definition points at - and refuses (12) naming each
+output an expression, a template or a prompt names, every path typed by the schema or the built-in
+output that holds it, every operator and every key held to what it takes (a `when` a boolean, a
+`forEach` a list), every file the definition points at - and refuses (12) naming each
 problem, without running anything, as a `config.json` that does not hold is refused. A
 `config.json` that declares no workflow has nothing to check and is refused (13), saying how to
 declare the implementation one. It holds a definition to the configuration too: a `run` step whose

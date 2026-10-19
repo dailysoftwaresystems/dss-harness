@@ -1,7 +1,9 @@
+using System.Text.Json.Nodes;
 using DssHarness.Core.Anchors;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
+using DssHarness.Core.Schemas;
 
 namespace DssHarness.Tests;
 
@@ -134,5 +136,86 @@ public sealed class WorkflowStepTypesTests
 
         // On the command line, an option is its flag.
         Assert.Equal("--accept-lost", OptionSpelling.Flag.Spell(AnchorBatchRequest.AcceptLostOption));
+    }
+
+    /// <summary>
+    /// Every type the plan lists an output for has a built-in schema the subset reads, holding the members the plan
+    /// names and no other, so a path into a step of it is typed when the definition is loaded; a reason step's output is
+    /// the schema file it names, and a type the plan lists none for - a create-agent, a refresh, a rebase - has none.
+    /// </summary>
+    [Fact]
+    public void EveryBuiltInOutput_IsASchemaTheSubsetReads_HoldingTheMembersThePlanNames()
+    {
+        var outputs = WorkflowStepTypes.All
+            .Select(type => (type.Type, Members: type.Output is { } output
+                ? string.Join(", ", ((JsonObject)JsonNode.Parse(output)!["properties"]!).Select(member => member.Key))
+                : null))
+            .ToList();
+
+        Assert.Equal(
+            [
+                ("orient", "branch, baseBranch, startCommit, hasRemote, hasLegs, legCount, anchors, ciConfigured, hasMutations, tests, dirtyPaths, openAgents, inFlight"),
+                ("reason", null),
+                ("build", "passed, exitCode, verdicts, red, runDirectory"),
+                ("test", "passed, exitCode, verdicts, red, runDirectory"),
+                ("run", "passed, exitCode, verdicts, red, runDirectory"),
+                ("check-mutations", "passed, exitCode, verdicts, red, runDirectory"),
+                ("create-agent", null),
+                ("fold", "written, deleted, registries, rows"),
+                ("delete-agent", "written, deleted, registries, rows"),
+                ("refresh", null),
+                ("rebase", null),
+                ("validate-plan", "ok, problems, items"),
+                ("anchor-balance", "passed, findings"),
+                ("anchor-citations", "passed, findings"),
+                ("ci-read", "passed, branch, matrixRan, legs, red"),
+                ("ci-wait", "passed, commit, checks, red, pending, unsettled"),
+                ("commit", "committed, sha, paths"),
+                ("push", "pushed, remote, branch, sha"),
+                ("pull-request", "number, url, created"),
+                ("pause", "answer, text"),
+            ],
+            outputs);
+
+        foreach (var type in WorkflowStepTypes.All.Where(type => type.Output is not null))
+        {
+            Assert.Empty(JsonSchemaSubset.SubsetProblems(JsonNode.Parse(type.Output!)!));
+        }
+
+        // A sweep's red legs each name the arm, beside what every leg step's say.
+        var arm = JsonSchemaSubset.Read(JsonNode.Parse(WorkflowStepTypes.Find("check-mutations")!.Output!)!).Member("red")!.Items!;
+        var leg = JsonSchemaSubset.Read(JsonNode.Parse(WorkflowStepTypes.Find("test")!.Output!)!).Member("red")!.Items!;
+
+        Assert.Equal(["string"], arm.Member("arm")!.Kinds);
+        Assert.Null(leg.Member("arm"));
+    }
+
+    /// <summary>
+    /// The keys of a step that hold an expression, and those that take a list or an expression yielding one, are each
+    /// one list - read by the grammar, never filled as a template - and every one is a key a step takes.
+    /// </summary>
+    [Fact]
+    public void TheKeysHoldingAnExpression_AreOneListEach_AndEachIsAStepsKey()
+    {
+        Assert.Equal(
+            ["when", "forEach", "repeat.until", "repeat.blocking", "repeat.leftover", "items", "scope", "questions", "preAnswer.when", "preAnswer.quote.text"],
+            WorkflowStepTypes.ExpressionKeys);
+        Assert.Equal(
+            ["writes", "within", "paths", "except", "stale", "merge", "rows", "allow.new", "allow.merge"],
+            WorkflowStepTypes.ListOrExpressionKeys);
+
+        var keys = new HashSet<string>(
+            [
+                .. KeyDescription.Names(WorkflowStepTypes.Common),
+                .. KeyDescription.Names(WorkflowStepTypes.Group),
+                .. WorkflowStepTypes.AllKeys,
+                .. KeyDescription.Names(WorkflowStepTypes.RepeatKeys).Select(key => $"repeat.{key}"),
+                .. KeyDescription.Names(WorkflowStepTypes.PreAnswerKeys).Select(key => $"preAnswer.{key}"),
+                .. KeyDescription.Names(WorkflowStepTypes.QuoteKeys).Select(key => $"preAnswer.quote.{key}"),
+                .. KeyDescription.Names(WorkflowStepTypes.AllowKeys).Select(key => $"allow.{key}"),
+            ],
+            StringComparer.Ordinal);
+
+        Assert.All(WorkflowStepTypes.ExpressionKeys.Concat(WorkflowStepTypes.ListOrExpressionKeys), key => Assert.Contains(key, keys));
     }
 }

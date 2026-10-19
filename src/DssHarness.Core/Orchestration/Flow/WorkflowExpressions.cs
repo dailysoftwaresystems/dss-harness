@@ -1,3 +1,5 @@
+using DssHarness.Core.Schemas;
+
 namespace DssHarness.Core.Orchestration.Flow;
 
 /// <summary>
@@ -14,10 +16,11 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <c>it</c> for the member.
 /// </para>
 /// <para>
-/// What the segments after the first <em>mean</em> - that a member named after a step is one the
-/// step's schema holds - is the engine's to check when it runs; what this grammar decides is where
-/// a read starts, so that a definition can be refused for naming a step, an input or a param that
-/// does not exist.
+/// What this grammar decides is where a read starts, so that a definition can be refused for naming a step, an
+/// input or a param that does not exist. What the segments after the first mean - that a member named after a step
+/// is one the step's schema holds - is typed where the definition is loaded, by
+/// <see cref="FlowExpression.TypeOf"/> over what this class says each of the run's own names and each of the
+/// engine's facts is.
 /// </para>
 /// </remarks>
 public static class WorkflowExpressions
@@ -40,6 +43,53 @@ public static class WorkflowExpressions
     /// of a reasoning step its newest output and what its agent assumed.
     /// </summary>
     public static readonly IReadOnlyList<string> StepFacts = ["outcome", "code", "error", "question", "latest", "assumptions"];
+
+    /// <summary>
+    /// What each of the engine's facts of a step is, as a path into one is typed: how the step ended (<c>done</c>,
+    /// <c>failed</c>, <c>skipped</c>, <c>stopped</c>, <c>notRun</c>), its exit code, its message, the kind of the
+    /// question its failure was answered with, and what its agent assumed, as a list. <c>latest</c> is the step's own
+    /// output, and is typed as the step is.
+    /// </summary>
+    public static IReadOnlyDictionary<string, JsonSchemaSubset.Reading> StepFactReadings { get; } = new Dictionary<string, JsonSchemaSubset.Reading>(StringComparer.Ordinal)
+    {
+        ["outcome"] = JsonSchemaSubset.Reading.Of("string"),
+        ["code"] = JsonSchemaSubset.Reading.Of("integer"),
+        ["error"] = JsonSchemaSubset.Reading.Of("string", "null"),
+        ["question"] = JsonSchemaSubset.Reading.Of("string", "null"),
+        ["assumptions"] = JsonSchemaSubset.Reading.ListOf(JsonSchemaSubset.Reading.Of("string")),
+    };
+
+    /// <summary>
+    /// The run's own values an expression reads after <c>run</c>: its name, and how it stands without its
+    /// <c>always</c> steps - its status, whether it is done, failed, paused or stopped, and how many failed steps were
+    /// passed over.
+    /// </summary>
+    public static IReadOnlyDictionary<string, JsonSchemaSubset.Reading> RunValues { get; } = new Dictionary<string, JsonSchemaSubset.Reading>(StringComparer.Ordinal)
+    {
+        ["name"] = JsonSchemaSubset.Reading.Of("string"),
+        ["status"] = JsonSchemaSubset.Reading.Of("string"),
+        ["done"] = JsonSchemaSubset.Reading.Of("boolean"),
+        ["failed"] = JsonSchemaSubset.Reading.Of("boolean"),
+        ["paused"] = JsonSchemaSubset.Reading.Of("boolean"),
+        ["stopped"] = JsonSchemaSubset.Reading.Of("boolean"),
+        ["passedOver"] = JsonSchemaSubset.Reading.Of("integer"),
+    };
+
+    /// <summary>
+    /// The run's values that say how it stands without its <c>always</c> steps, which only an <c>always</c> step - or a
+    /// member of an <c>always</c> group - reads, so that none reads its own effect.
+    /// </summary>
+    public static IReadOnlyList<string> RunStatuses { get; } = ["status", "done", "failed", "paused", "stopped"];
+
+    /// <summary>
+    /// The run's texts after <c>run</c>, written by the engine from its step records for a template - what it checked,
+    /// what it has not yet, what it knows to be red, what its loops left, what its agents assumed, and the pre-existing
+    /// issues it took - never values for an expression.
+    /// </summary>
+    public static IReadOnlyList<string> RunTexts { get; } = ["ran", "notRun", "red", "leftover", "assumptions", "preExisting"];
+
+    /// <summary>The texts after <c>carried</c>: the same three of what one commit carries, for its message and its variables alone.</summary>
+    public static IReadOnlyList<string> CarriedTexts { get; } = ["ran", "notRun", "red"];
 
     /// <summary>The literals an identifier can be without naming anything.</summary>
     private static readonly IReadOnlyList<string> Literals = ["true", "false", "null"];

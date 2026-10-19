@@ -691,4 +691,91 @@ public sealed class JsonSchemaSubsetTests
 
         Assert.Equal(["$: its pattern could not be read within a second"], problems);
     }
+
+    /// <summary>
+    /// A schema is read for what it says of a document, as an expression's path is typed: the kinds a value may be -
+    /// a number standing for a whole number too - what each member is, and what each item is, through a reference and
+    /// through each shape of an anyOf. A member no closed object names is none, and where nothing says what a value is,
+    /// it and its members and items may be anything.
+    /// </summary>
+    [Fact]
+    public void AReading_SaysTheKindsMembersAndItemsASchemaAllows()
+    {
+        var reading = JsonSchemaSubset.Read(Schema("""
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "title": { "type": "string" },
+                "count": { "type": ["integer", "null"] },
+                "score": { "type": "number" },
+                "items": { "type": "array", "items": { "$ref": "#/$defs/item" } },
+                "loose": { "type": "array" },
+                "either": { "anyOf": [ { "type": "string" }, { "$ref": "#/$defs/item" } ] },
+                "level": { "enum": ["low", 3, null] },
+                "free": { "description": "anything" }
+              },
+              "$defs": {
+                "item": { "type": "object", "additionalProperties": false, "properties": { "ok": { "type": "boolean" } } }
+              }
+            }
+            """));
+
+        Assert.Equal(["object"], reading.Kinds);
+        Assert.Equal(["string"], reading.Member("title")!.Kinds);
+        Assert.Equal(["integer", "null"], reading.Member("count")!.Kinds);
+        Assert.Equal(["integer", "number"], reading.Member("score")!.Kinds);
+        Assert.Null(reading.Member("titel"));
+
+        // Items through a reference, and a member of each.
+        var item = reading.Member("items")!.Items!;
+
+        Assert.Equal(["object"], item.Kinds);
+        Assert.Equal(["boolean"], item.Member("ok")!.Kinds);
+        Assert.Null(item.Member("oke"));
+        Assert.Null(reading.Member("title")!.Items);
+        Assert.Null(reading.Member("title")!.Member("x"));
+
+        // A list whose items are not said holds items of any kind.
+        Assert.Null(reading.Member("loose")!.Items!.Kinds);
+
+        // Each shape of an anyOf is one way the value may be: a member is one of the shape that holds it.
+        var either = reading.Member("either")!;
+
+        Assert.Equal(["object", "string"], either.Kinds);
+        Assert.Equal(["boolean"], either.Member("ok")!.Kinds);
+
+        // An enum's values say its kinds; a schema that says no kind says any, and its members may be anything.
+        Assert.Equal(["string", "integer", "null"], reading.Member("level")!.Kinds);
+        Assert.Null(reading.Member("free")!.Kinds);
+        Assert.Null(reading.Member("free")!.Member("anything")!.Kinds);
+    }
+
+    /// <summary>
+    /// A reading is joined with another as either, has a kind taken out of it, and is made of kinds alone or as a list
+    /// of what its items are - the readings an expression's operators yield. A schema the subset refuses types nothing:
+    /// reading it is refused, as holding a document to it is.
+    /// </summary>
+    [Fact]
+    public void AReading_IsJoinedNarrowedAndMadeOfKinds_AndNoneIsMadeOfASchemaTheSubsetRefuses()
+    {
+        var text = JsonSchemaSubset.Reading.Of("string", "null");
+        var list = JsonSchemaSubset.Reading.ListOf(JsonSchemaSubset.Reading.Of("boolean"));
+
+        Assert.Equal(["string", "null"], text.Kinds);
+        Assert.Equal(["string"], text.Without("null").Kinds);
+        Assert.Equal(["array", "string", "null"], list.Or(text).Kinds);
+        Assert.Equal(["boolean"], list.Or(text).Items!.Kinds);
+        Assert.True(text.MayBe("null"));
+        Assert.False(text.MayBe("boolean"));
+        Assert.True(JsonSchemaSubset.Reading.Anything.MayBe("boolean"));
+        Assert.Null(JsonSchemaSubset.Reading.Anything.Kinds);
+        Assert.Equal(["object", "array", "string", "integer", "number", "boolean"], JsonSchemaSubset.Reading.Anything.Without("null").Kinds);
+
+        var refused = Assert.Throws<ArgumentException>("schema", () => JsonSchemaSubset.Read(Schema("""{"type":"object"}""")));
+
+        Assert.Equal(
+            "The schema is not one this engine reads, so nothing is typed by it: $: an object holds additionalProperties: false, saying every property is one it names. (Parameter 'schema')",
+            refused.Message);
+    }
 }

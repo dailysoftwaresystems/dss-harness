@@ -1248,7 +1248,20 @@ workflows` lists from, so what is listed is what is read), every step, input, pa
 expression or a template names - a step looked up from where the reader is (`FlowScope`) and one
 that has ended before the reader runs: never a group's member in the group's own `when`, by bare
 name or by path, nor the group around the reader, and the iteration before (`previous`) only
-inside a repeat, where a step nested deeper than a bare name reaches is read by its path - every question
+inside a repeat, where a step nested deeper than a bare name reaches is read by its path - and what
+each read is: every path typed by what holds it (a reason step's schema through `JsonSchemaSubset`,
+the output a built-in type answers, which `WorkflowStepTypes` holds, the engine's facts of a step and
+the run's own names, which `WorkflowExpressions` holds), every operator held to what it takes
+(`FlowExpression`: `!`, `&&` and `||` a boolean, `==` and `!=` no list and no object, `any` a list
+and a test that yields a boolean, `??` and `empty(...)` anything) and every key to what it reads (a
+`when`, an `until` and a `blocking` a boolean, a `forEach` and a key that takes a list a list) - a value
+refused only where none its reading allows could be what is taken, so that one that may be null is
+the run's to read. How the run stands without its `always` steps (`run.status`, `run.done` and the
+rest) is read by an `always` step alone; a placeholder stands in a key that is a template and is
+refused in any other where the file is read; a pull request's `base` reads nothing but the run's
+inputs and `run.name`, one base for every pull request; and a prompt's own placeholders - a reason
+step's `prompt` and `resumePrompt`, a pull request's `body` - are read as the step reads, each said at
+its line, the iteration before only in a `resumePrompt`. It checks every question
 kind an answer names, and every file the
 definition points at, beside the definition that names it - a runner or a leg no configuration
 declares is said the same way, as is a definition that cannot be read, and a workflow whose
@@ -1259,7 +1272,9 @@ anything: a definition that does not hold is configuration that does not, refuse
 has nothing to check, and is refused (13), saying that `"workflows": ["implementation"]` declares the one
 `init` writes; an empty answer is never read as a pass. The structural rules live in Core
 (`WorkflowValidator`), pure, so the engine can run them at the start of a run without reading a
-file. This build checks workflow definitions and
+file: the text of the schemas and prompts a definition names is handed to it by whoever reads them -
+`validate-workflow` from the repository, and the shipped definition from what this build embeds.
+This build checks workflow definitions and
 does not run them: the engine that runs them - the coordinator, the agents, the steps over the
 services the tool already has - is the next thing the tool grows.
 

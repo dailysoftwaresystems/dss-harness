@@ -1,3 +1,6 @@
+using System.Globalization;
+using DssHarness.Core.Schemas;
+
 namespace DssHarness.Core.Orchestration.Flow;
 
 /// <summary>
@@ -86,6 +89,158 @@ public abstract record FlowExpression
     {
     }
 
+    /// <summary>
+    /// What this expression yields, as far as the definition says, with every operator held to what it takes when the
+    /// definition is loaded: <c>!</c>, <c>&amp;&amp;</c> and <c>||</c> a boolean, <c>==</c> and <c>!=</c> no list and
+    /// no object, <c>any</c> a list and a test that yields a boolean; <c>??</c> and <c>empty(...)</c> take anything. A
+    /// value is refused only where no value its reading allows is what the operator takes: one that may be null, or
+    /// whose kind nothing says, is the run's to read, which refuses null and Missing then.
+    /// </summary>
+    /// <param name="read">
+    /// What a path yields - a step's output or one of its facts, an input, one of the run's own names - for the caller
+    /// to say, and to refuse where nothing holds it, answering <see cref="JsonSchemaSubset.Reading.Anything"/> then. A
+    /// path from <c>it</c> is read here, as an item of the list the nearest <c>any(...)</c> looks into.
+    /// </param>
+    /// <param name="problem">Takes each misuse, said as what follows the expression's own name: <c>applies ! to ...</c>.</param>
+    public JsonSchemaSubset.Reading TypeOf(Func<Path, JsonSchemaSubset.Reading> read, Action<string> problem)
+    {
+        ArgumentNullException.ThrowIfNull(read);
+        ArgumentNullException.ThrowIfNull(problem);
+
+        return Typed(new Typing(read, problem));
+    }
+
+    /// <summary>
+    /// The expression as it reads, rebuilt from the tree: spaced as this class writes it, and parenthesized only where
+    /// the grammar needs it, so a refusal quotes a part of it as one would write it.
+    /// </summary>
+    public abstract string Written { get; }
+
+    /// <summary>How tightly this node binds, loosest first: a part written inside a tighter one is parenthesized.</summary>
+    private protected virtual int Binding => Primary;
+
+    /// <summary>The binding of a primary - a path, a literal, a placeholder, a call - which nothing parenthesizes.</summary>
+    private const int Primary = 6;
+
+    /// <summary><paramref name="part"/> written inside a node that takes parts binding at least <paramref name="least"/>.</summary>
+    private static string Inside(FlowExpression part, int least) => part.Binding < least ? $"({part.Written})" : part.Written;
+
+    /// <summary>What this node yields, given what its paths yield, saying each misuse as it is found.</summary>
+    private protected abstract JsonSchemaSubset.Reading Typed(Typing typing);
+
+    /// <summary>
+    /// One typing of one expression: what its paths yield, where its misuses go, and the items the <c>any(...)</c>
+    /// calls around the part being typed look into, the nearest last.
+    /// </summary>
+    private protected sealed record Typing(Func<Path, JsonSchemaSubset.Reading> Read, Action<string> Problem)
+    {
+        /// <summary>Each <c>any(...)</c> around the part being typed: what an item of its list is, and the list as written.</summary>
+        public Stack<(JsonSchemaSubset.Reading Item, string List)> Items { get; } = new();
+    }
+
+    /// <summary>A boolean, as every comparison, every test and every join yields.</summary>
+    private static JsonSchemaSubset.Reading Boolean => JsonSchemaSubset.Reading.Of("boolean");
+
+    /// <summary>
+    /// Says <paramref name="part"/> is no boolean where it can be none, as <paramref name="what"/> words the misuse
+    /// around it: nothing is read as true or as false but <c>true</c> and <c>false</c>.
+    /// </summary>
+    private static void HeldToABoolean(FlowExpression part, Typing typing, Func<string, string> what)
+    {
+        var reading = part.Typed(typing);
+
+        if (!reading.MayBe("boolean"))
+        {
+            typing.Problem(what(Said(reading)));
+        }
+    }
+
+    /// <summary>
+    /// The kinds <paramref name="reading"/> may be, in words: <c>a text</c>, <c>a list or an object</c>, <c>a whole
+    /// number or null</c> - a number standing for a whole number too, as the subset reads one.
+    /// </summary>
+    /// <param name="reading">What a value is said to be; its kinds known.</param>
+    internal static string Said(JsonSchemaSubset.Reading reading)
+    {
+        ArgumentNullException.ThrowIfNull(reading);
+
+        var kinds = reading.Kinds ?? [];
+        var number = kinds.Contains("number", StringComparer.Ordinal);
+        var words = kinds
+            .Where(kind => !(number && kind == "integer"))
+            .Select(kind => kind switch
+            {
+                "object" => "an object",
+                "array" => "a list",
+                "string" => "a text",
+                "integer" => "a whole number",
+                "number" => "a number",
+                "boolean" => "a boolean",
+                _ => "null",
+            })
+            .ToList();
+
+        return words.Count switch
+        {
+            0 => "nothing",
+            1 => words[0],
+            _ => $"{string.Join(", ", words.Take(words.Count - 1))} or {words[^1]}",
+        };
+    }
+
+    /// <summary>
+    /// What <paramref name="steps"/> walk to from <paramref name="start"/>, a value written <paramref name="written"/>:
+    /// each key a member of the value so far, each index an item of it. <see langword="null"/> where a step finds
+    /// nothing a value its reading allows could hold, and <paramref name="why"/> says it, as what follows the owner of
+    /// the reading: <c>has no property 'itemz'</c>, <c>says 'plan.summary' is a text, which has no property 'x'</c>.
+    /// </summary>
+    /// <param name="start">What the value the walk starts from is said to be.</param>
+    /// <param name="written">The value the walk starts from, as the read writes it.</param>
+    /// <param name="steps">The keys and indexes walked, in order.</param>
+    /// <param name="why">Why the walk found nothing; <see langword="null"/> where it found something.</param>
+    internal static JsonSchemaSubset.Reading? Walk(JsonSchemaSubset.Reading start, string written, IEnumerable<Path.Segment> steps, out string? why)
+    {
+        ArgumentNullException.ThrowIfNull(start);
+        ArgumentNullException.ThrowIfNull(steps);
+
+        var reading = start;
+        var at = written;
+
+        foreach (var step in steps)
+        {
+            if (step.Key is { } key)
+            {
+                if (!reading.MayBe("object"))
+                {
+                    why = $"says '{at}' is {Said(reading)}, which has no property '{key}'";
+                    return null;
+                }
+
+                if (reading.Member(key) is not { } member)
+                {
+                    why = at == written ? $"has no property '{key}'" : $"has no property '{key}' in '{at}'";
+                    return null;
+                }
+
+                reading = member;
+                at = $"{at}.{key}";
+                continue;
+            }
+
+            if (!reading.MayBe("array"))
+            {
+                why = $"says '{at}' is {Said(reading)}, which is no list to index";
+                return null;
+            }
+
+            reading = reading.Items ?? JsonSchemaSubset.Reading.Anything;
+            at = $"{at}[{step.Index}]";
+        }
+
+        why = null;
+        return reading;
+    }
+
     /// <summary>Adds <paramref name="read"/> where its whole name is not read already, as the scanner adds one.</summary>
     private protected static void Add(List<WorkflowExpressions.Read> reads, WorkflowExpressions.Read read)
     {
@@ -98,47 +253,117 @@ public abstract record FlowExpression
     /// <summary><c>a || b || c</c>: true where any term is true, short-circuiting left to right.</summary>
     public sealed record Or(IReadOnlyList<FlowExpression> Terms) : FlowExpression
     {
+        /// <inheritdoc/>
+        public override string Written => string.Join(" || ", Terms.Select(term => Inside(term, 2)));
+
+        private protected override int Binding => 1;
+
         protected internal override void Collect(List<WorkflowExpressions.Read> reads, bool insideAny)
         {
             foreach (var term in Terms)
             {
                 term.Collect(reads, insideAny);
             }
+        }
+
+        private protected override JsonSchemaSubset.Reading Typed(Typing typing)
+        {
+            foreach (var term in Terms)
+            {
+                HeldToABoolean(term, typing, said => $"joins '{term.Written}', which is {said}, with ||; || joins booleans, and nothing is read as true or as false but true and false");
+            }
+
+            return Boolean;
         }
     }
 
     /// <summary><c>a &amp;&amp; b</c>: true where every term is true, short-circuiting left to right.</summary>
     public sealed record And(IReadOnlyList<FlowExpression> Terms) : FlowExpression
     {
+        /// <inheritdoc/>
+        public override string Written => string.Join(" && ", Terms.Select(term => Inside(term, 3)));
+
+        private protected override int Binding => 2;
+
         protected internal override void Collect(List<WorkflowExpressions.Read> reads, bool insideAny)
         {
             foreach (var term in Terms)
             {
                 term.Collect(reads, insideAny);
             }
+        }
+
+        private protected override JsonSchemaSubset.Reading Typed(Typing typing)
+        {
+            foreach (var term in Terms)
+            {
+                HeldToABoolean(term, typing, said => $"joins '{term.Written}', which is {said}, with &&; && joins booleans, and nothing is read as true or as false but true and false");
+            }
+
+            return Boolean;
         }
     }
 
     /// <summary><c>a == b</c> or <c>a != b</c>: two scalars, or null, compared for equality or its opposite.</summary>
     public sealed record Compare(FlowExpression Left, string Operator, FlowExpression Right) : FlowExpression
     {
+        /// <inheritdoc/>
+        public override string Written => $"{Inside(Left, 4)} {Operator} {Inside(Right, 4)}";
+
+        private protected override int Binding => 3;
+
         protected internal override void Collect(List<WorkflowExpressions.Read> reads, bool insideAny)
         {
             Left.Collect(reads, insideAny);
             Right.Collect(reads, insideAny);
+        }
+
+        /// <remarks>
+        /// Two scalars of different kinds are unequal, never an error, and null equals only null; a side that can be
+        /// nothing but a list or an object is refused, since no scalar is ever one.
+        /// </remarks>
+        private protected override JsonSchemaSubset.Reading Typed(Typing typing)
+        {
+            foreach (var side in new[] { Left, Right })
+            {
+                var reading = side.Typed(typing);
+
+                if (reading.Kinds is { Count: > 0 } kinds && kinds.All(kind => kind is "array" or "object"))
+                {
+                    typing.Problem($"compares '{side.Written}', which is {Said(reading)}, with {Operator}; {Operator} compares two scalars, or null, and a list or an object is never one");
+                }
+            }
+
+            return Boolean;
         }
     }
 
     /// <summary><c>!a</c>: the opposite of a boolean.</summary>
     public sealed record Not(FlowExpression Inner) : FlowExpression
     {
+        /// <inheritdoc/>
+        public override string Written => $"!{Inside(Inner, 4)}";
+
+        private protected override int Binding => 4;
+
         protected internal override void Collect(List<WorkflowExpressions.Read> reads, bool insideAny)
             => Inner.Collect(reads, insideAny);
+
+        private protected override JsonSchemaSubset.Reading Typed(Typing typing)
+        {
+            HeldToABoolean(Inner, typing, said => $"applies ! to '{Inner.Written}', which is {said}; ! takes a boolean, and nothing is read as true or as false but true and false");
+            return Boolean;
+        }
     }
 
     /// <summary><c>a ?? b</c>: the left side where it is there and not null, the right otherwise.</summary>
     public sealed record Coalesce(IReadOnlyList<FlowExpression> Terms) : FlowExpression
     {
+        /// <inheritdoc/>
+        public override string Written => string.Join(" ?? ", Terms.Select(term => Inside(term, Primary)));
+
+        private protected override int Binding => 5;
+
         protected internal override void Collect(List<WorkflowExpressions.Read> reads, bool insideAny)
         {
             foreach (var term in Terms)
@@ -146,17 +371,43 @@ public abstract record FlowExpression
                 term.Collect(reads, insideAny);
             }
         }
+
+        /// <remarks>Takes anything: it yields any side but the last where that side is not null, and the last as it is.</remarks>
+        private protected override JsonSchemaSubset.Reading Typed(Typing typing)
+        {
+            JsonSchemaSubset.Reading? yielded = null;
+
+            foreach (var (term, index) in Terms.Select((term, index) => (term, index)))
+            {
+                var reading = term.Typed(typing);
+                var given = index < Terms.Count - 1 ? reading.Without("null") : reading;
+
+                yielded = yielded is null ? given : yielded.Or(given);
+            }
+
+            return yielded!;
+        }
     }
 
     /// <summary><c>empty(x)</c>: true for null, <c>""</c>, <c>[]</c>, <c>{}</c> and a name that reads nothing.</summary>
     public sealed record Empty(FlowExpression Inner) : FlowExpression
     {
+        /// <inheritdoc/>
+        public override string Written => $"empty({Inner.Written})";
+
         protected internal override void Collect(List<WorkflowExpressions.Read> reads, bool insideAny)
         {
             // The scanner reads the word itself, as a root of the run's own: the tree reads it too, so the two
             // agree on every expression.
             Add(reads, new WorkflowExpressions.Read("empty", "empty", Template: false, insideAny));
             Inner.Collect(reads, insideAny);
+        }
+
+        /// <remarks>Takes anything, and says whether it holds nothing.</remarks>
+        private protected override JsonSchemaSubset.Reading Typed(Typing typing)
+        {
+            _ = Inner.Typed(typing);
+            return Boolean;
         }
     }
 
@@ -166,6 +417,9 @@ public abstract record FlowExpression
     /// </summary>
     public sealed record Any(FlowExpression List, FlowExpression Test) : FlowExpression
     {
+        /// <inheritdoc/>
+        public override string Written => $"any({List.Written}, {Test.Written})";
+
         protected internal override void Collect(List<WorkflowExpressions.Read> reads, bool insideAny)
         {
             // The scanner marks every read within an any(...) call, its list as its test: the tree reads it the
@@ -173,16 +427,60 @@ public abstract record FlowExpression
             List.Collect(reads, insideAny: true);
             Test.Collect(reads, insideAny: true);
         }
+
+        private protected override JsonSchemaSubset.Reading Typed(Typing typing)
+        {
+            var list = List.Typed(typing);
+
+            if (!list.MayBe("array"))
+            {
+                typing.Problem($"looks into '{List.Written}' with any, and it is {Said(list)}; any looks into a list");
+            }
+
+            typing.Items.Push((list.Items ?? JsonSchemaSubset.Reading.Anything, List.Written));
+            HeldToABoolean(Test, typing, said => $"tests each item of '{List.Written}' with '{Test.Written}', which is {said}; the test of any yields a boolean for each item");
+            typing.Items.Pop();
+
+            return Boolean;
+        }
     }
 
     /// <summary>A literal as written: <c>true</c>, <c>false</c>, <c>null</c>, a number, or a quoted string.</summary>
-    public sealed record Literal(object? Value) : FlowExpression;
+    public sealed record Literal(object? Value) : FlowExpression
+    {
+        /// <inheritdoc/>
+        public override string Written => Value switch
+        {
+            null => "null",
+            true => "true",
+            false => "false",
+            string text => text.Contains('\'', StringComparison.Ordinal) ? $"\"{text}\"" : $"'{text}'",
+            IFormattable number => number.ToString(null, CultureInfo.InvariantCulture),
+            _ => Value.ToString() ?? string.Empty,
+        };
+
+        private protected override JsonSchemaSubset.Reading Typed(Typing typing)
+            => JsonSchemaSubset.Reading.Of(Value switch
+            {
+                null => "null",
+                bool => "boolean",
+                long => "integer",
+                double => "number",
+                _ => "string",
+            });
+    }
 
     /// <summary>A <c>{path}</c> placeholder read inside an expression: a read of its own, filled as templates are.</summary>
     public sealed record Placeholder(string Whole) : FlowExpression
     {
+        /// <inheritdoc/>
+        public override string Written => $"{{{Whole}}}";
+
         protected internal override void Collect(List<WorkflowExpressions.Read> reads, bool insideAny)
             => Add(reads, Read(Whole, Template: true, insideAny));
+
+        /// <remarks>Filled as a template is, its value written as text whatever it reads.</remarks>
+        private protected override JsonSchemaSubset.Reading Typed(Typing typing) => JsonSchemaSubset.Reading.Of("string");
     }
 
     /// <summary>One step of a path: a key of what the last step named, or an index into its list.</summary>
@@ -201,8 +499,37 @@ public abstract record FlowExpression
         /// <summary>The whole name as the expression wrote it, indexes included.</summary>
         public string Whole => $"{Root}{string.Concat(Steps.Select(step => step.IsKey ? $".{step.Key}" : $"[{step.Index}]"))}";
 
+        /// <inheritdoc/>
+        public override string Written => Whole;
+
         protected internal override void Collect(List<WorkflowExpressions.Read> reads, bool insideAny)
             => Add(reads, Read(Whole, Template: false, insideAny));
+
+        /// <remarks>
+        /// A path from <c>it</c> walks an item of the list the nearest <c>any(...)</c> looks into; every other path is
+        /// the caller's to say. Outside every <c>any(...)</c>, <c>it</c> names nothing, which its read's own check
+        /// refuses.
+        /// </remarks>
+        private protected override JsonSchemaSubset.Reading Typed(Typing typing)
+        {
+            if (Root != "it")
+            {
+                return typing.Read(this);
+            }
+
+            if (!typing.Items.TryPeek(out var around))
+            {
+                return JsonSchemaSubset.Reading.Anything;
+            }
+
+            if (Walk(around.Item, Root, Steps, out var why) is { } walked)
+            {
+                return walked;
+            }
+
+            typing.Problem($"reads '{Whole}', and each item of '{around.List}' {why}");
+            return JsonSchemaSubset.Reading.Anything;
+        }
     }
 
     /// <summary>One read as the scanner spells it: root, whole name, template or not, and whether it sits in an <c>any</c> test.</summary>

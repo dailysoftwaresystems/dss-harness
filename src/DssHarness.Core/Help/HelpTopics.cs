@@ -2981,9 +2981,15 @@ public static class HelpTopics
             builder,
             $"An expression reads names joined by &&, ||, !, ==, != and ?? with ( ) to group, 'empty(x)' for whether a read holds nothing "
             + "and 'any(list, test)' for whether any member meets a test written with 'it' for the member: every step, input and param it "
-            + "names must be declared before it, and a placeholder in braces - '{step.member}' - in a template key reads the same names, as "
-            + $"one in a prompt does. '{ToolPackage.Command} validate-workflow' checks the definition - the shape of every key, every name an "
-            + "expression or a template key reads, every file the definition names; a prompt's own placeholders are not read yet - and "
+            + "names must be declared before it, every path it reads is typed by what holds it - a reason step's schema, the output a "
+            + "built-in type answers, the engine's facts of a step, the run's own names - and every operator takes what it says: !, && and "
+            + "|| a boolean, == and != no list and no object, any a list and a test that yields a boolean. A when, an until and a blocking "
+            + "yield a boolean, and a forEach and a key that takes a list a list; how the run stands without its always steps "
+            + $"({string.Join(", ", WorkflowExpressions.RunStatuses.Select(status => $"run.{status}"))}) is read by an always step alone. A placeholder in braces - "
+            + "'{step.member}' - in a template key reads the same names, typed the same way, as one in a prompt does; one in any other key "
+            + "is refused, and a pull request's base reads nothing but the run's inputs and run.name, the same for every pull request. "
+            + $"'{ToolPackage.Command} validate-workflow' checks the definition - the shape of every key, every name an expression, a "
+            + "template key or a prompt reads, every file the definition names - and "
             + $"refuses ({HarnessExit.ConfigInvalid}) naming each problem, without running anything, as a "
             + "config.json that does not hold is refused. Where config.json declares no workflow there is nothing to check, and it is "
             + $"refused ({HarnessExit.Refused}), saying that \"workflows\": [\"{WorkflowTemplates.ShippedWorkflowName}\"] declares the one init writes.");

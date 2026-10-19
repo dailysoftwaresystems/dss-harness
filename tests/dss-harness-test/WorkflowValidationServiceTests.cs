@@ -965,6 +965,54 @@ public sealed class WorkflowValidationServiceTests
         throw new InvalidOperationException($"'{text}' read as JSON.");
     }
 
+    /// <summary>
+    /// The files a definition names are read for what the definition reads: a reason step's path is typed by the schema
+    /// file the step names, and its prompt's placeholders are read as the step reads, each said at its line.
+    /// </summary>
+    [Fact]
+    public async Task ASchemaAndAPrompt_AreReadForWhatTheDefinitionReads()
+    {
+        using var repository = await RepositoryAsync(new HarnessConfig { Workflows = ["small"] });
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        await WriteAsync(
+            repository,
+            "small",
+            """
+            name: small
+            steps:
+              - name: draft
+                type: reason
+                agent: worker
+                prompt: prompts/work.md
+                outputs: schemas/work.json
+              - name: after
+                type: orient
+                when: 'draft.okk'
+            """,
+            cancellationToken,
+            "agents/worker.md");
+
+        var directory = Path.Combine(repository.Path, ".harness-config", "workflows", "small");
+
+        Directory.CreateDirectory(Path.Combine(directory, "prompts"));
+        Directory.CreateDirectory(Path.Combine(directory, "schemas"));
+        await File.WriteAllTextAsync(Path.Combine(directory, "prompts", "work.md"), "Work on {ghost.title}.\n", cancellationToken);
+        await File.WriteAllTextAsync(
+            Path.Combine(directory, "schemas", "work.json"),
+            """{"type":"object","additionalProperties":false,"properties":{"ok":{"type":"boolean"}}}""",
+            cancellationToken);
+
+        var report = await Service(repository).CheckAsync(repository.Path, "small", cancellationToken);
+
+        Assert.Equal(
+            [
+                $"{Shown("small")}: step 'draft' prompt 'prompts/work.md' line 1 reads 'ghost.title', which no step before 'draft', no input and no param provides",
+                $"{Shown("small")}: 'after.when' reads 'draft.okk', and the schema 'schemas/work.json' of step 'draft' has no property 'okk'",
+            ],
+            report.Lines);
+    }
+
     /// <summary>Writes the definition of <paramref name="name"/> and each of <paramref name="files"/> beside it, as their own paths.</summary>
     private static async Task WriteAsync(Repository repository, string name, string definition, CancellationToken cancellationToken, params string[] files)
     {

@@ -1,6 +1,10 @@
 using System.Diagnostics;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using DssHarness.Core.Anchors;
 using DssHarness.Core.Repository;
+using DssHarness.Core.Schemas;
 
 namespace DssHarness.Core.Orchestration.Flow;
 
@@ -123,10 +127,25 @@ public static class WorkflowValidator
     /// did not choose.
     /// </param>
     public static IReadOnlyList<string> Validate(WorkflowDefinition definition, bool hasCommitTemplate)
+        => Validate(definition, hasCommitTemplate, files: null);
+
+    /// <summary>
+    /// Returns every problem found, in the order the definition declares what they concern, typing a reason step's
+    /// output by the schema file it names and checking each prompt's placeholders against what its step can read.
+    /// </summary>
+    /// <param name="definition">A workflow's parsed definition.</param>
+    /// <param name="hasCommitTemplate">Whether the configuration the definition is checked under declares a <c>commit.template</c>.</param>
+    /// <param name="files">
+    /// The text of a file the definition names, by the path it names it with, relative to the workflow's directory; or
+    /// <see langword="null"/> where it cannot be given, which the caller that reads files says on its own. A schema that
+    /// is not one the subset reads types nothing. Where no files are given at all, a reason step's output may be
+    /// anything and no prompt is read.
+    /// </param>
+    public static IReadOnlyList<string> Validate(WorkflowDefinition definition, bool hasCommitTemplate, Func<string, string?>? files)
     {
         ArgumentNullException.ThrowIfNull(definition);
 
-        var check = new Check(definition, hasCommitTemplate);
+        var check = new Check(definition, hasCommitTemplate, files);
         return check.Problems;
     }
 
@@ -152,10 +171,11 @@ public static class WorkflowValidator
         /// </summary>
         private Entry? _recover;
 
-        internal Check(WorkflowDefinition definition, bool hasCommitTemplate)
+        internal Check(WorkflowDefinition definition, bool hasCommitTemplate, Func<string, string?>? files)
         {
             _definition = definition;
             _hasCommitTemplate = hasCommitTemplate;
+            _files = files;
 
             DefinitionRules();
             Index(definition.Steps, parent: null);
@@ -170,6 +190,7 @@ public static class WorkflowValidator
             SharedEndings();
             Fallbacks();
             Outputs();
+            PullRequests();
         }
 
         internal IReadOnlyList<string> Problems => _problems;
@@ -509,6 +530,7 @@ public static class WorkflowValidator
                 }
 
                 Templates(entry, type);
+                Prompts(entry);
             }
         }
 
@@ -1367,7 +1389,7 @@ public static class WorkflowValidator
 
                     foreach (var read in WorkflowExpressions.TemplateReads(text))
                     {
-                        CheckRead(entry, read, $"{entry.Path}.{key}");
+                        TemplateRead(entry, read, $"{entry.Path}.{key}");
                     }
                 }
             }
@@ -1401,9 +1423,18 @@ public static class WorkflowValidator
                 return false;
             }
 
+            var before = _problems.Count;
+
             foreach (var read in WorkflowExpressions.ReadsOf(expression))
             {
                 CheckRead(entry, read, $"{entry.Path}.{key}", within);
+            }
+
+            // Typed where every name it reads is one the definition holds: a read already refused is not refused again
+            // for what it would have been.
+            if (_problems.Count == before)
+            {
+                Types(entry, expression, key, within);
             }
 
             return true;
@@ -1489,6 +1520,16 @@ public static class WorkflowValidator
                     }
 
                 case "run":
+                    // How the run stands without its always steps is an always step's to read, so that none reads its own
+                    // effect; a member of an always group is one.
+                    if (segments.Count > 1
+                        && WorkflowExpressions.RunStatuses.Contains(segments[1], StringComparer.Ordinal)
+                        && entry.Step.Always is not true
+                        && AlwaysAround(entry) is null)
+                    {
+                        _problems.Add($"'{what}' reads '{read.Whole}', how the run stands without its always steps, and '{entry.Path}' is neither an always step nor in an always group; only an always step reads how the rest of the flow came to, so that none reads its own effect");
+                    }
+
                     return;
 
                 case "carried":
@@ -2337,5 +2378,612 @@ public static class WorkflowValidator
 
         /// <summary>What a step is, as a refusal says it: a group, or a step of its type.</summary>
         private static string KindOf(WorkflowStep step) => step.IsGroup ? "a group" : $"a {step.Type} step";
+
+        /// <summary>The text of a file the definition names, by the path it names it with; <see langword="null"/> where no files are given.</summary>
+        private readonly Func<string, string?>? _files;
+
+        /// <summary>Each reason step's schema as a reading, by the path its <c>outputs</c> names; <see langword="null"/> where it types nothing.</summary>
+        private readonly Dictionary<string, JsonSchemaSubset.Reading?> _schemas = new(StringComparer.Ordinal);
+
+        /// <summary>The expressions being typed, by the step and the key: one whose reading needs its own is read as anything.</summary>
+        private readonly HashSet<(Entry Entry, string Key)> _yielding = [];
+
+        /// <summary>Every typing refusal said: one path read twice in one key is said once.</summary>
+        private readonly HashSet<string> _reported = new(StringComparer.Ordinal);
+
+        /// <summary>Each built-in type's output schema as a reading, read once.</summary>
+        private static readonly Lazy<IReadOnlyDictionary<string, JsonSchemaSubset.Reading>> BuiltIn = new(() =>
+            WorkflowStepTypes.All
+                .Where(type => type.Output is not null)
+                .ToDictionary(type => type.Type, type => JsonSchemaSubset.Read(JsonNode.Parse(type.Output!)!), StringComparer.Ordinal));
+
+        /// <summary>
+        /// What each key that holds an expression must yield, and why, where it must be one kind (V16-V19, and the keys
+        /// that take a list, checked as a <c>forEach</c> is); a key not here - a <c>leftover</c>, an output's
+        /// <c>from</c> - takes anything.
+        /// </summary>
+        private static readonly IReadOnlyDictionary<string, (string Kind, string Why)> Yields = new Dictionary<string, (string Kind, string Why)>(StringComparer.Ordinal)
+        {
+            ["when"] = ("boolean", TrueOrFalse),
+            ["repeat.until"] = ("boolean", TrueOrFalse),
+            ["repeat.blocking"] = ("boolean", TrueOrFalse),
+            ["preAnswer.when"] = ("boolean", TrueOrFalse),
+            ["forEach"] = ("array", "the group runs its steps once for each of its items"),
+            ["items"] = ("array", "the plan check checks the work items it holds"),
+            ["scope"] = ("array", "a plan update is the pieces it holds"),
+            ["amend.scope"] = ("array", "a plan update is the pieces it holds"),
+            ["questions"] = ("array", "the step shows each question it holds under its own"),
+            ["writes"] = ("array", Listed),
+            ["within"] = ("array", Listed),
+            ["paths"] = ("array", Listed),
+            ["except"] = ("array", Listed),
+            ["stale"] = ("array", Listed),
+            ["merge"] = ("array", Listed),
+            ["rows"] = ("array", Listed),
+            ["allow.new"] = ("array", Listed),
+            ["allow.merge"] = ("array", Listed),
+            ["preAnswer.quote.text"] = ("string", "a quote is the words looked for in what the person gave"),
+        };
+
+        /// <summary>Why a boolean is what a test reads.</summary>
+        private const string TrueOrFalse = "nothing is read as true or as false but true and false";
+
+        /// <summary>Why a key that takes a list is read as one.</summary>
+        private const string Listed = "the key takes a list, written out or as an expression that yields one";
+
+        /// <summary>Says a typing refusal, once however many times its read is met in one key.</summary>
+        private void Report(string problem)
+        {
+            if (_reported.Add(problem))
+            {
+                _problems.Add(problem);
+            }
+        }
+
+        /// <summary>
+        /// Types one expression whose every read the definition holds: each path is held to what holds it - a step's
+        /// schema, the engine's facts of it, an input, the run's own names - each operator to what it takes, and the
+        /// whole to what its key reads (<see cref="Yields"/>).
+        /// </summary>
+        private void Types(Entry entry, string expression, string key, bool within)
+        {
+            var what = $"{entry.Path}.{key}";
+            var yielded = Yield(entry, expression, key, within, Report);
+
+            // A placeholder in an expression is filled as a template is: its path is held to what holds it all the same.
+            foreach (var read in WorkflowExpressions.ReadsOf(expression).Where(read => read.Template))
+            {
+                _ = Typed(entry, read, what, within, template: true, Report);
+            }
+
+            if (Yields.TryGetValue(key, out var yields) && !yielded.MayBe(yields.Kind))
+            {
+                _problems.Add($"'{what}' yields {FlowExpression.Said(yielded)}, where {KindSaid(yields.Kind)} is read: {yields.Why}");
+            }
+        }
+
+        /// <summary><paramref name="kind"/>, one the subset names, as a sentence says it.</summary>
+        private static string KindSaid(string kind) => FlowExpression.Said(JsonSchemaSubset.Reading.Of(kind));
+
+        /// <summary>
+        /// What <paramref name="expression"/>, the <paramref name="key"/> of <paramref name="entry"/>, yields, saying each
+        /// misuse to <paramref name="report"/> - or to nothing, where it is read only for what it yields. One whose
+        /// reading needs its own, or that does not parse, may be anything.
+        /// </summary>
+        private JsonSchemaSubset.Reading Yield(Entry entry, string expression, string key, bool within, Action<string>? report)
+        {
+            if (!_yielding.Add((entry, key)))
+            {
+                return JsonSchemaSubset.Reading.Anything;
+            }
+
+            try
+            {
+                var what = $"{entry.Path}.{key}";
+
+                // A path's refusal is said whole where the path is read; an operator's after the key's name.
+                return FlowExpression.Parse(expression).TypeOf(
+                    path => Reading(entry, path.Root, path.Steps, path.Whole, what, within, template: false, report),
+                    problem => report?.Invoke($"'{what}' {problem}"));
+            }
+            catch (ArgumentException)
+            {
+                // Refused for its grammar where the key is checked.
+                return JsonSchemaSubset.Reading.Anything;
+            }
+            finally
+            {
+                _yielding.Remove((entry, key));
+            }
+        }
+
+        /// <summary>Checks one placeholder of a template, and types it where the definition holds its name.</summary>
+        private void TemplateRead(Entry entry, WorkflowExpressions.Read read, string what)
+        {
+            var before = _problems.Count;
+
+            CheckRead(entry, read, what);
+
+            if (_problems.Count == before)
+            {
+                _ = Typed(entry, read, what, within: false, template: true, Report);
+            }
+        }
+
+        /// <summary>What one read yields, its names walked as keys: a placeholder takes no index.</summary>
+        private JsonSchemaSubset.Reading Typed(Entry entry, WorkflowExpressions.Read read, string what, bool within, bool template, Action<string>? report)
+            => Reading(entry, read.Root, [.. read.Names.Skip(1).Select(name => new FlowExpression.Segment(name, null))], read.Whole, what, within, template, report);
+
+        /// <summary>
+        /// What a path from <paramref name="root"/> through <paramref name="steps"/> yields, read from where
+        /// <paramref name="entry"/> sits, its name already found by <see cref="CheckRead"/>: a step's output by its
+        /// schema, the engine's facts of a step, an input or a param as a text, the work item of the nearest
+        /// <c>forEach</c>, the step a handler's <c>source</c> names, the iteration before, and the run's own names.
+        /// Where nothing holds the path, <paramref name="report"/> is told why and it may be anything; the names this
+        /// check does not type - a skill, the bar, a question's, an update's, a piece's, a status's, an issue, the run
+        /// facts a prompt reads, and a <c>source</c> in the recovery - may be anything.
+        /// </summary>
+        private JsonSchemaSubset.Reading Reading(
+            Entry entry,
+            string root,
+            IReadOnlyList<FlowExpression.Segment> steps,
+            string whole,
+            string what,
+            bool within,
+            bool template,
+            Action<string>? report)
+        {
+            var said = new Subject(whole, what, report);
+
+            switch (root)
+            {
+                case "input" or "param":
+                    return steps is [{ Key: { } declared }, ..]
+                        ? said.Walked(JsonSchemaSubset.Reading.Of("string"), $"{root}.{declared}", steps.Skip(1), $"{root} '{declared}'")
+                        : JsonSchemaSubset.Reading.Anything;
+
+                case "index" or "iteration" or "visit":
+                    return said.Walked(JsonSchemaSubset.Reading.Of("integer"), root, steps, "the run");
+
+                case "item":
+                    return Nearest(entry, scope => scope.ForEach is not null) is { } group
+                        ? said.Walked(Yield(group, group.Step.ForEach!, "forEach", within: false, report: null).Items ?? JsonSchemaSubset.Reading.Anything, root, steps, $"the work item of group '{group.Path}'")
+                        : JsonSchemaSubset.Reading.Anything;
+
+                case "run":
+                    return RunReading(steps, template, said);
+
+                case "carried":
+                    return CarriedReading(steps, template, said);
+
+                case "previous":
+                    {
+                        var keys = steps.Where(step => step.Key is not null).Select(step => step.Key!).ToList();
+
+                        if (FlowScope.Read(keys, _definition, ScopeOf(entry, within), out _) is not { } found
+                            || _byPath.GetValueOrDefault(found.Step.Path) is not { } before)
+                        {
+                            return JsonSchemaSubset.Reading.Anything;
+                        }
+
+                        var (written, rest) = Split(steps, keys.Count - found.After.Count);
+                        return StepReading(before, rest, $"previous{written}", said);
+                    }
+
+                case "source":
+                    {
+                        // A handler, or a step inside one, reads the step whose ending raised it; the recovery's steps
+                        // and a step raised by a pre-existing issue read whichever step it was, which nothing types.
+                        if (Nearest(entry, scope => scope.On is not null) is not { Step.On: { } on } handler
+                            || Sibling(handler, on.Step) is not { } raised)
+                        {
+                            return JsonSchemaSubset.Reading.Anything;
+                        }
+
+                        var (member, written, rest) = Descend(raised, steps);
+                        return StepReading(member, rest, $"source{written}", said);
+                    }
+
+                default:
+                    {
+                        if (WorkflowExpressions.IsRoot(root))
+                        {
+                            return JsonSchemaSubset.Reading.Anything;
+                        }
+
+                        List<string> names = [root, .. steps.Where(step => step.Key is not null).Select(step => step.Key!)];
+
+                        if (FlowScope.Read(names, _definition, ScopeOf(entry, within), out _) is not { } found
+                            || _byPath.GetValueOrDefault(found.Step.Path) is not { } step)
+                        {
+                            return JsonSchemaSubset.Reading.Anything;
+                        }
+
+                        var (written, rest) = Split(steps, names.Count - found.After.Count - 1);
+                        return StepReading(step, rest, $"{root}{written}", said);
+                    }
+            }
+        }
+
+        /// <summary>
+        /// One read being typed, and where its refusal goes: the read whole and the key it is read in, said as every
+        /// refusal of a read is, <c>'{what}' reads '{whole}', and ...</c>.
+        /// </summary>
+        private sealed record Subject(string Whole, string What, Action<string>? Report)
+        {
+            /// <summary>
+            /// What <paramref name="steps"/> walk to from <paramref name="start"/>, a value written
+            /// <paramref name="at"/> that <paramref name="owner"/> says; where they find nothing, the refusal says so and
+            /// the value may be anything.
+            /// </summary>
+            public JsonSchemaSubset.Reading Walked(JsonSchemaSubset.Reading start, string at, IEnumerable<FlowExpression.Segment> steps, string owner)
+            {
+                if (FlowExpression.Walk(start, at, steps, out var why) is { } walked)
+                {
+                    return walked;
+                }
+
+                Refused($"{owner} {why}");
+                return JsonSchemaSubset.Reading.Anything;
+            }
+
+            /// <summary>Says why the read is refused, after the read itself.</summary>
+            public void Refused(string why) => Report?.Invoke($"'{What}' reads '{Whole}', and {why}");
+
+            /// <summary>Says the read is refused for what it is, with nothing after the read but <paramref name="why"/>.</summary>
+            public void RefusedAs(string why) => Report?.Invoke($"'{What}' reads '{Whole}', {why}");
+        }
+
+        /// <summary>
+        /// What a read of the run's own names yields: a value an expression reads, or a text a template alone takes;
+        /// any other name the run has none of.
+        /// </summary>
+        private static JsonSchemaSubset.Reading RunReading(IReadOnlyList<FlowExpression.Segment> steps, bool template, Subject said)
+        {
+            var values = string.Join(", ", WorkflowExpressions.RunValues.Keys.Select(name => $"run.{name}"));
+            var texts = string.Join(", ", WorkflowExpressions.RunTexts.Select(name => $"run.{name}"));
+
+            if (steps is not [{ Key: { } name }, ..])
+            {
+                said.RefusedAs($"which names none of the run's own: an expression reads {values}, and a template {texts} too");
+                return JsonSchemaSubset.Reading.Anything;
+            }
+
+            var under = steps.Skip(1);
+
+            if (WorkflowExpressions.RunValues.TryGetValue(name, out var value))
+            {
+                return said.Walked(value, $"run.{name}", under, "the run");
+            }
+
+            if (WorkflowExpressions.RunTexts.Contains(name, StringComparer.Ordinal))
+            {
+                if (template)
+                {
+                    return said.Walked(JsonSchemaSubset.Reading.Of("string"), $"run.{name}", under, "the run");
+                }
+
+                said.RefusedAs("which is text for a template, not a value for an expression: the engine writes it from its step records for a person to read");
+                return JsonSchemaSubset.Reading.Anything;
+            }
+
+            said.Refused($"the run has no '{name}': an expression reads {values}, and a template {texts} too");
+            return JsonSchemaSubset.Reading.Anything;
+        }
+
+        /// <summary>What a read of what a commit carries yields: a text for the commit's message and its variables, and nothing else.</summary>
+        private static JsonSchemaSubset.Reading CarriedReading(IReadOnlyList<FlowExpression.Segment> steps, bool template, Subject said)
+        {
+            if (steps is not [{ Key: { } name }, ..] || !WorkflowExpressions.CarriedTexts.Contains(name, StringComparer.Ordinal))
+            {
+                said.Refused($"what a commit carries is {string.Join(", ", WorkflowExpressions.CarriedTexts.Select(text => $"carried.{text}"))}, and nothing else");
+                return JsonSchemaSubset.Reading.Anything;
+            }
+
+            if (!template)
+            {
+                said.RefusedAs("which is text for a template, not a value for an expression: the engine writes it from its step records for a person to read");
+                return JsonSchemaSubset.Reading.Anything;
+            }
+
+            return said.Walked(JsonSchemaSubset.Reading.Of("string"), $"carried.{name}", steps.Skip(1), "the run");
+        }
+
+        /// <summary>
+        /// What a read of <paramref name="step"/>, written <paramref name="start"/>, yields through
+        /// <paramref name="rest"/>: one of the engine's facts of it - <c>latest</c> its own output - or its output.
+        /// </summary>
+        private JsonSchemaSubset.Reading StepReading(Entry step, IReadOnlyList<FlowExpression.Segment> rest, string start, Subject said)
+        {
+            if (rest is [{ Key: { } fact }, ..] && WorkflowExpressions.StepFacts.Contains(fact, StringComparer.Ordinal))
+            {
+                IReadOnlyList<FlowExpression.Segment> after = [.. rest.Skip(1)];
+
+                return fact == "latest"
+                    ? Output(step, after, $"{start}.{fact}", said)
+                    : said.Walked(WorkflowExpressions.StepFactReadings[fact], $"{start}.{fact}", after, $"the engine's fact '{fact}' of step '{step.Path}'");
+            }
+
+            return Output(step, rest, start, said);
+        }
+
+        /// <summary>
+        /// What the output of <paramref name="step"/>, written <paramref name="start"/>, yields through
+        /// <paramref name="rest"/>: a reason step's by the schema file it names, a built-in type's by its built-in
+        /// schema - a plan check's items by what its <c>items</c> yields - and a block's by what it gathers. A type with
+        /// no output, and a group that gathers nothing, have nothing to read.
+        /// </summary>
+        private JsonSchemaSubset.Reading Output(Entry step, IReadOnlyList<FlowExpression.Segment> rest, string start, Subject said)
+        {
+            var path = step.Path;
+
+            if (step.Step.IsGroup)
+            {
+                if (step.Step.Gather.Count == 0)
+                {
+                    said.Refused(rest is [{ Key: { } named }, ..]
+                        ? $"group '{path}' holds no step '{named}' and gathers nothing"
+                        : $"group '{path}' gathers nothing: its steps are read by their own names");
+                    return JsonSchemaSubset.Reading.Anything;
+                }
+
+                if (rest is [])
+                {
+                    return JsonSchemaSubset.Reading.Of("object");
+                }
+
+                if (rest[0].Key is { } gathered && step.Step.Gather.Contains(gathered, StringComparer.Ordinal))
+                {
+                    return said.Walked(Gathered(step, gathered), $"{start}.{gathered}", rest.Skip(1), $"what group '{path}' gathers");
+                }
+
+                said.Refused(rest[0].Key is { } other
+                    ? $"group '{path}' holds no step '{other}' and gathers none of that name"
+                    : $"what group '{path}' gathers says '{start}' is an object, which is no list to index");
+                return JsonSchemaSubset.Reading.Anything;
+            }
+
+            if (WorkflowStepTypes.Find(step.Step.Type ?? string.Empty) is not { } type)
+            {
+                return JsonSchemaSubset.Reading.Anything;
+            }
+
+            if (type.Type == "reason")
+            {
+                return step.Step.Outputs is { } outputs && SchemaOf(outputs) is { } schema
+                    ? said.Walked(schema, start, rest, $"the schema '{outputs}' of step '{path}'")
+                    : JsonSchemaSubset.Reading.Anything;
+            }
+
+            if (!BuiltIn.Value.TryGetValue(type.Type, out var output))
+            {
+                said.Refused($"step '{path}', {Article(type.Type)} {type.Type} step, has no output to read");
+                return JsonSchemaSubset.Reading.Anything;
+            }
+
+            // What a plan check checked is what its items key yields, so a work item it hands a forEach is typed as one.
+            if (type.Type == "validate-plan" && rest is [{ Key: "items" }, ..] && step.Step.Items is { } items)
+            {
+                return said.Walked(Yield(step, items, "items", within: false, report: null), $"{start}.items", rest.Skip(1), $"the work items step '{path}' checks");
+            }
+
+            return said.Walked(output, start, rest, $"the output of step '{path}', {Article(type.Type)} {type.Type} step,");
+        }
+
+        /// <summary>
+        /// The list a block gathers under <paramref name="name"/>: the items of that list in each member's output, and in
+        /// what a nested group among them gathers of that name, as any one of them.
+        /// </summary>
+        private JsonSchemaSubset.Reading Gathered(Entry group, string name)
+        {
+            JsonSchemaSubset.Reading? items = null;
+            var silent = new Subject(string.Empty, string.Empty, Report: null);
+
+            foreach (var member in group.Step.Steps)
+            {
+                if (_byPath.GetValueOrDefault($"{group.Path}.{member.Name}") is not { } entry)
+                {
+                    continue;
+                }
+
+                var list = member.IsGroup
+                    ? member.Gather.Contains(name, StringComparer.Ordinal) ? Gathered(entry, name) : null
+                    : Output(entry, [], member.Name, silent).Member(name);
+
+                if (list?.Items is { } each)
+                {
+                    items = items is null ? each : items.Or(each);
+                }
+            }
+
+            return JsonSchemaSubset.Reading.ListOf(items ?? JsonSchemaSubset.Reading.Anything);
+        }
+
+        /// <summary>
+        /// The schema the reason step's <paramref name="outputs"/> names, as a reading; <see langword="null"/> where no
+        /// files are given, the file is not there, or it is no schema the subset reads - each said by whoever reads files.
+        /// </summary>
+        private JsonSchemaSubset.Reading? SchemaOf(string outputs)
+        {
+            if (_files is null)
+            {
+                return null;
+            }
+
+            if (!_schemas.TryGetValue(outputs, out var reading))
+            {
+                try
+                {
+                    reading = _files(outputs) is { } text
+                        && JsonNode.Parse(text) is JsonObject schema
+                        && JsonSchemaSubset.SubsetProblems(schema).Count == 0
+                            ? JsonSchemaSubset.Read(schema)
+                            : null;
+                }
+                catch (JsonException)
+                {
+                    reading = null;
+                }
+
+                _schemas[outputs] = reading;
+            }
+
+            return reading;
+        }
+
+        /// <summary>The nearest of <paramref name="entry"/> and the groups around it that <paramref name="holds"/> says, or <see langword="null"/>.</summary>
+        private static Entry? Nearest(Entry entry, Func<WorkflowStep, bool> holds)
+        {
+            for (var scope = entry; scope is not null; scope = scope.Parent)
+            {
+                if (holds(scope.Step))
+                {
+                    return scope;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// The step <paramref name="steps"/> name inside <paramref name="step"/>, a member's name after its group's, with
+        /// how much of the read that took and what is left after it.
+        /// </summary>
+        private (Entry Step, string Written, IReadOnlyList<FlowExpression.Segment> Left) Descend(Entry step, IReadOnlyList<FlowExpression.Segment> steps)
+        {
+            var taken = 0;
+
+            while (taken < steps.Count
+                && steps[taken].Key is { } name
+                && step.Step.Steps.Any(each => each.Name == name)
+                && _byPath.GetValueOrDefault($"{step.Path}.{name}") is { } member)
+            {
+                step = member;
+                taken++;
+            }
+
+            return (step, string.Concat(steps.Take(taken).Select(each => $".{each.Key}")), [.. steps.Skip(taken)]);
+        }
+
+        /// <summary>
+        /// <paramref name="steps"/> split after their first <paramref name="keys"/> keys: what those keys and the indexes
+        /// among them write, and what is left.
+        /// </summary>
+        private static (string Written, IReadOnlyList<FlowExpression.Segment> Left) Split(IReadOnlyList<FlowExpression.Segment> steps, int keys)
+        {
+            var written = new StringBuilder();
+            var index = 0;
+
+            for (var counted = 0; index < steps.Count && counted < keys; index++)
+            {
+                written.Append(steps[index].IsKey ? $".{steps[index].Key}" : $"[{steps[index].Index}]");
+                counted += steps[index].IsKey ? 1 : 0;
+            }
+
+            return (written.ToString(), [.. steps.Skip(index)]);
+        }
+
+        /// <summary>The article a type's name takes: <c>an orient step</c>, <c>a build step</c>.</summary>
+        private static string Article(string type) => type[0] is 'a' or 'e' or 'i' or 'o' or 'u' ? "an" : "a";
+
+        /// <summary>
+        /// Checks every placeholder of the files a step is asked with - a reason step's <c>prompt</c> and
+        /// <c>resumePrompt</c>, a pull request's <c>body</c> - against what the step can read from where it sits, each
+        /// said at the line it first stands on: a name nothing provides, a path no schema holds, and in a
+        /// <c>prompt</c>, which the first iteration is asked with too, the iteration before. A skill a prompt names is
+        /// looked for by whoever reads the skills.
+        /// </summary>
+        private void Prompts(Entry entry)
+        {
+            if (_files is null)
+            {
+                return;
+            }
+
+            var step = entry.Step;
+            var asked = new[]
+            {
+                ("prompt", step.Type == "reason" ? step.Prompt : null),
+                ("resumePrompt", step.Type == "reason" ? step.ResumePrompt : null),
+                ("body", step.Type == "pull-request" ? step.Body : null),
+            };
+
+            foreach (var (key, file) in asked)
+            {
+                if (file is null || _files(file) is not { } text)
+                {
+                    continue;
+                }
+
+                var where = $"step '{entry.Path}' {key} '{file}'";
+
+                if (WorkflowExpressions.TemplateSyntaxProblem(text) is { } broken)
+                {
+                    _problems.Add($"{where} is not written whole: {broken}, and nothing it reads past there would be checked");
+                    continue;
+                }
+
+                var what = $"{entry.Path}.{key}";
+                var seen = new HashSet<string>(StringComparer.Ordinal);
+                var lines = text.Split('\n');
+
+                for (var line = 0; line < lines.Length; line++)
+                {
+                    foreach (var read in WorkflowExpressions.TemplateReads(lines[line]).Where(read => read.Root != "skill" && seen.Add(read.Whole)))
+                    {
+                        var at = $"{where} line {line + 1}";
+
+                        if (read.Root == "previous" && key == "prompt")
+                        {
+                            _problems.Add($"{at} reads '{read.Whole}': a prompt is what the first iteration is asked with too, which has none before it; the iteration before is read in a resumePrompt");
+                            continue;
+                        }
+
+                        // A read's refusal names the key it is read in; a prompt's names the file and the line instead.
+                        var before = _problems.Count;
+
+                        TemplateRead(entry, read, what);
+
+                        for (var index = before; index < _problems.Count; index++)
+                        {
+                            if (_problems[index].StartsWith($"'{what}' ", StringComparison.Ordinal))
+                            {
+                                _problems[index] = at + _problems[index][$"'{what}'".Length..];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// A pull request's <c>base</c>, which <c>orient</c>, the first step, fills to say <c>orient.baseBranch</c> before
+        /// any other step has run: it reads nothing but the run's inputs and <c>run.name</c>, and every pull request of the
+        /// flow names the same one, since <c>orient.baseBranch</c> is one branch every step reads.
+        /// </summary>
+        private void PullRequests()
+        {
+            var requests = _entries.Where(entry => entry.Step.Type == "pull-request").ToList();
+
+            foreach (var request in requests)
+            {
+                if (request.Step.Base is not { } named || WorkflowExpressions.TemplateSyntaxProblem(named) is not null)
+                {
+                    continue;
+                }
+
+                foreach (var read in WorkflowExpressions.TemplateReads(named).Where(read => read.Root != "input" && read.Whole != "run.name"))
+                {
+                    _problems.Add($"step '{request.Path}' opens its pull request against {{{read.Whole}}}: a pull request's base reads nothing but the run's inputs and run.name, so that orient, the first step, fills orient.baseBranch with it before any other step has run");
+                }
+            }
+
+            foreach (var other in requests.Skip(1).Where(other => !string.Equals(other.Step.Base, requests[0].Step.Base, StringComparison.Ordinal)))
+            {
+                _problems.Add($"steps '{requests[0].Path}' and '{other.Path}' open pull requests against different bases, {Base(requests[0])} and {Base(other)}; orient.baseBranch is one branch, which every step of the flow reads");
+            }
+
+            static string Base(Entry request) => request.Step.Base is { } named ? $"'{named}'" : "the remote's default branch";
+        }
     }
 }

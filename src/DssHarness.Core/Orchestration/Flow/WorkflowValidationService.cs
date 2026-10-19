@@ -148,7 +148,10 @@ public sealed class WorkflowValidationService(
             return new WorkflowCheck(name, [$"{Shown(name)} names itself '{definition.Name}'; a workflow's name is its directory's and its file's, said again in the file so a copied directory cannot pass as the workflow it was copied from"]);
         }
 
-        var problems = new List<string>(WorkflowValidator.Validate(definition, context.Config.Commit.Template is not null));
+        var problems = new List<string>(WorkflowValidator.Validate(
+            definition,
+            context.Config.Commit.Template is not null,
+            named => Text(named, directory, name)));
         problems.AddRange(Files(definition, directory, name, context.Config));
 
         if (problems.Count > 0)
@@ -459,6 +462,28 @@ public sealed class WorkflowValidationService(
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// The text of a file the definition names, for the validator to type a schema's paths and check a prompt's
+    /// placeholders by; <see langword="null"/> where it is not a file of the workflow's own directory there to read,
+    /// which <see cref="Check(WorkflowFiles.Named, string, string)"/> says.
+    /// </summary>
+    private string? Text(string named, string directory, string name)
+    {
+        if (NamedFile(named, directory, name, string.Empty, out var path) is not null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return _fileSystem.ReadAllText(path);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     /// <summary>That a schema file is there, can be read, and holds a JSON object.</summary>

@@ -39,6 +39,12 @@ public static class WorkflowStepTypes
     /// <param name="Calls">The service the type calls, as the plan's table names it: the engine's switch reads this and nothing else.</param>
     /// <param name="Claims">What a step of the type holds while it runs, as the plan's table names each.</param>
     /// <param name="CountsAgainst">The limit a step of the type counts against, or what its slot does; <see langword="null"/> where it counts against nothing.</param>
+    /// <param name="Output">
+    /// The type's built-in output schema, in the subset <see cref="Schemas.JsonSchemaSubset"/> reads, which a path into a
+    /// step of the type is typed by when the definition is loaded; <see langword="null"/> where the type has none - a
+    /// reason step's is the schema file it names, and a type the plan lists no output for has none, so a read of one is
+    /// refused.
+    /// </param>
     public sealed record StepType(
         string Type,
         IReadOnlyList<KeyDescription> Keys,
@@ -46,7 +52,8 @@ public static class WorkflowStepTypes
         string? FailOnDefault,
         string Calls = "",
         IReadOnlyList<string>? Claims = null,
-        string? CountsAgainst = null)
+        string? CountsAgainst = null,
+        string? Output = null)
     {
         /// <summary>Whether the type checks something, so that its verdicts can be red.</summary>
         public bool IsCheck => FailOnDefault is not null;
@@ -92,7 +99,7 @@ public static class WorkflowStepTypes
     /// <summary>Every type, in the order <c>help workflows</c> lists them.</summary>
     public static IReadOnlyList<StepType> All { get; } =
     [
-        new("orient", [], [], null, "IGitClient (ResolveCommitAsync, GetStatusAsync), OrchestrationStore.Agents, LegSelection.Resolve", ["read main"], null),
+        new("orient", [], [], null, "IGitClient (ResolveCommitAsync, GetStatusAsync), OrchestrationStore.Agents, LegSelection.Resolve", ["read main"], null, Output: OrientOutput),
         new(
             "reason",
             [
@@ -124,9 +131,9 @@ public static class WorkflowStepTypes
             "IAgentClient; a read-only one that begins work first makes its agent (IAgentService.CreateAsync, no worktree)",
             ["read main", "write the agent's tree where its access is write"],
             "maxReasoningAgents"),
-        new("build", LegKeys, [], "red", "IBuildLegs over LegRunService", ["run(tree)"], "maxParallelProcesses"),
-        new("test", [.. LegKeys, .. TestKeys], ["filter", "exclude", "labels"], "red", "ITestLegs over LegRunService", ["run(tree)"], "maxParallelProcesses"),
-        new("run", [.. LegKeys, new("runner", "the predefined runner the step runs") { Required = true }, RunInputs], ["inputs"], "red", "IRunnerLegs over LegRunService", ["run(tree)", "write(tree) where its runner says writesTree"], "maxParallelProcesses"),
+        new("build", LegKeys, [], "red", "IBuildLegs over LegRunService", ["run(tree)"], "maxParallelProcesses", LegsOutput(arms: false)),
+        new("test", [.. LegKeys, .. TestKeys], ["filter", "exclude", "labels"], "red", "ITestLegs over LegRunService", ["run(tree)"], "maxParallelProcesses", LegsOutput(arms: false)),
+        new("run", [.. LegKeys, new("runner", "the predefined runner the step runs") { Required = true }, RunInputs], ["inputs"], "red", "IRunnerLegs over LegRunService", ["run(tree)", "write(tree) where its runner says writesTree"], "maxParallelProcesses", LegsOutput(arms: false)),
         new(
             "check-mutations",
             [.. LegKeys, new("arms", "the arms it runs, by id; absent, every arm"), new("pending", "drive only the arms with no recorded passed that still holds")],
@@ -134,7 +141,8 @@ public static class WorkflowStepTypes
             "red",
             "IMutationLegs through MutationService, over LegRunService",
             ["run(tree)"],
-            "maxParallelProcesses"),
+            "maxParallelProcesses",
+            LegsOutput(arms: true)),
         new(
             "create-agent",
             [new("agent", "the agent definition, as agents/<name>.md in the workflow's directory") { Required = true }, new("empty", "make the agent with nothing handed to it")],
@@ -143,7 +151,7 @@ public static class WorkflowStepTypes
             "IAgentService.CreateAsync",
             ["write main"],
             "an open-agent slot"),
-        new("fold", FoldKeys, [], null, "IAgentService.FoldAsync", ["write main", "write the agent's tree"], null),
+        new("fold", FoldKeys, [], null, "IAgentService.FoldAsync", ["write main", "write the agent's tree"], null, FoldOutput),
         new(
             "delete-agent",
             [.. FoldKeys, new("discardUncommitted", "discard what is not committed rather than folding it; it then folds nothing, and takes no allow and no within")],
@@ -151,7 +159,8 @@ public static class WorkflowStepTypes
             null,
             "IAgentService.DeleteAsync",
             ["write main", "write the agent's tree"],
-            "releases the open-agent slot"),
+            "releases the open-agent slot",
+            FoldOutput),
         new(
             "refresh",
             [
@@ -188,7 +197,8 @@ public static class WorkflowStepTypes
             null,
             "PlanValidator with IPathBudget.Check and CopyPathBudget.Check",
             ["read main"],
-            null),
+            null,
+            ObjectOf(("ok", Flag), ("problems", ListOf(Text)), ("items", UntypedList))),
         new(
             "anchor-balance",
             [new("base", "the commit it measures from"), new("rows", "the row ids it is held to; absent, the whole tree"), new("failOn", "what a red finding does: red (the default) or never")],
@@ -196,7 +206,8 @@ public static class WorkflowStepTypes
             "red",
             "IAnchorBalanceService.CheckAsync",
             ["read main"],
-            null),
+            null,
+            AnchorOutput),
         new(
             "anchor-citations",
             [new("subject", "what it judges: currentTree (the default), currentCommit or currentPullRequest"), new("paths", "the files it is held to; absent, the whole tree"), new("failOn", "what a red finding does: red (the default) or never")],
@@ -204,7 +215,8 @@ public static class WorkflowStepTypes
             "red",
             "IAnchorCitationService.CheckAsync",
             ["read main"],
-            null),
+            null,
+            AnchorOutput),
         new(
             "ci-read",
             [new("branch", "the branch it reads"), new("limit", "how many of the branch's runs it looks at"), new("timeoutMinutes", "minutes the read is given"), new("failOn", "what a red leg does: never (the default) or red")],
@@ -212,7 +224,8 @@ public static class WorkflowStepTypes
             "never",
             "ICiLegsService.CheckAsync",
             [],
-            null),
+            null,
+            ObjectOf(("passed", Flag), ("branch", Text), ("matrixRan", Flag), ("legs", UntypedList), ("red", UntypedList))),
         new(
             "ci-wait",
             [
@@ -228,7 +241,8 @@ public static class WorkflowStepTypes
             "red",
             "ICiChecksService",
             [],
-            null),
+            null,
+            CiWaitOutput),
         new(
             "commit",
             [new("message", "the commit message it writes; required where the config declares no commit.template, and not used where it declares one"), new("variables", "the values the message template reads"), new("timeoutMinutes", "minutes git is given")],
@@ -236,7 +250,8 @@ public static class WorkflowStepTypes
             null,
             "IGitPublisher",
             ["write main"],
-            null),
+            null,
+            ObjectOf(("committed", Flag), ("sha", TextOrNull), ("paths", ListOf(Text)))),
         new(
             "push",
             [new("remote", "the remote it pushes to; absent, the tracked one"), new("checkpoint", "push a checkpoint commit"), new("timeoutMinutes", "minutes git is given")],
@@ -244,7 +259,8 @@ public static class WorkflowStepTypes
             null,
             "IGitPublisher",
             ["the remote resource"],
-            null),
+            null,
+            ObjectOf(("pushed", Flag), ("remote", Text), ("branch", Text), ("sha", Text))),
         new(
             "pull-request",
             [
@@ -258,7 +274,8 @@ public static class WorkflowStepTypes
             null,
             "IGitPublisher",
             ["the remote resource"],
-            null),
+            null,
+            ObjectOf(("number", WholeNumber), ("url", Text), ("created", Flag))),
         new(
             "pause",
             [
@@ -273,8 +290,26 @@ public static class WorkflowStepTypes
             null,
             "the engine itself",
             [],
-            null),
+            null,
+            ObjectOf(("answer", Text), ("text", Text))),
     ];
+
+    /// <summary>
+    /// The keys of a step whose value is an expression, by their path in the step - a <c>repeat</c>'s and a
+    /// pre-answer's under theirs: read by the grammar, never filled as a template.
+    /// </summary>
+    public static IReadOnlyList<string> ExpressionKeys { get; } =
+    [
+        "when", "forEach", "repeat.until", "repeat.blocking", "repeat.leftover", "items", "scope", "questions",
+        "preAnswer.when", "preAnswer.quote.text",
+    ];
+
+    /// <summary>
+    /// The keys of a step that take a list written out, or an expression that yields one: an expression where the value
+    /// is a single one, and a list of names where it is a list.
+    /// </summary>
+    public static IReadOnlyList<string> ListOrExpressionKeys { get; } =
+        ["writes", "within", "paths", "except", "stale", "merge", "rows", "allow.new", "allow.merge"];
 
     /// <summary>The type <paramref name="type"/> names, or <see langword="null"/> where none does.</summary>
     /// <param name="type">The value of a step's <c>type</c> key.</param>
@@ -386,6 +421,75 @@ public static class WorkflowStepTypes
         new("text", "an expression yielding the words to look for") { Required = true },
         new("input", "the input to look in, one the workflow declares") { Required = true },
     ];
+
+    /// <summary>
+    /// What an <c>orient</c> step answers: the run's branch and the one its pull request goes to, the commit it started
+    /// on, and what the repository has - a remote, legs and how each tests, anchors, CI, mutation arms - with what is
+    /// dirty, which agents are open and what is in flight.
+    /// </summary>
+    private static string OrientOutput => ObjectOf(
+        ("branch", Text),
+        ("baseBranch", TextOrNull),
+        ("startCommit", Text),
+        ("hasRemote", Flag),
+        ("hasLegs", Flag),
+        ("legCount", WholeNumber),
+        ("anchors", Flag),
+        ("ciConfigured", Flag),
+        ("hasMutations", Flag),
+        ("tests", ListOf(ObjectOf(("name", Text), ("program", Text), ("filterArg", TextOrNull), ("exclude", ListOf(Text)), ("remoteExcludes", ListOf(Text))))),
+        ("dirtyPaths", ListOf(Text)),
+        ("openAgents", UntypedList),
+        ("inFlight", UntypedList));
+
+    /// <summary>
+    /// What a step that runs legs answers - <c>build</c>, <c>test</c>, <c>run</c> and, naming each red entry's
+    /// <paramref name="arms"/>, <c>check-mutations</c>: whether it passed, the command's exit code, each leg's verdict,
+    /// the red legs alone with the tail of the phase that did not pass, and where the run's records are.
+    /// </summary>
+    private static string LegsOutput(bool arms) => ObjectOf(
+        ("passed", Flag),
+        ("exitCode", WholeNumber),
+        ("verdicts", ListOf(ObjectOf(("leg", Text), ("verdict", Text)))),
+        ("red", ListOf(ObjectOf([("leg", Text), ("verdict", Text), ("phase", Text), ("detail", Text), ("tail", ListOf(Text)), .. arms ? [("arm", Text)] : Array.Empty<(string, string)>()]))),
+        ("runDirectory", Text));
+
+    /// <summary>What a fold and a deletion answer: the paths written and deleted, the registries changed, and the ids of the rows applied.</summary>
+    private static string FoldOutput => ObjectOf(("written", ListOf(Text)), ("deleted", ListOf(Text)), ("registries", ListOf(Text)), ("rows", ListOf(Text)));
+
+    /// <summary>What an anchor check answers: whether it passed, and each finding as a line the check prints.</summary>
+    private static string AnchorOutput => ObjectOf(("passed", Flag), ("findings", ListOf(Text)));
+
+    /// <summary>What a wait for the checks answers: whether they passed, the commit, each check, the red ones with their logs, and those still pending or unsettled.</summary>
+    private static string CiWaitOutput => ObjectOf(
+        ("passed", Flag),
+        ("commit", Text),
+        ("checks", ListOf(ObjectOf(("name", Text), ("state", Text), ("conclusion", TextOrNull), ("url", Text)))),
+        ("red", ListOf(ObjectOf(("name", Text), ("job", Text), ("workflow", Text), ("step", Text), ("leg", TextOrNull), ("overran", Flag), ("url", Text), ("tail", ListOf(Text)), ("log", Text)))),
+        ("pending", UntypedList),
+        ("unsettled", UntypedList));
+
+    /// <summary>A schema of a text.</summary>
+    private static string Text => """{"type":"string"}""";
+
+    /// <summary>A schema of a text, or null where there is none.</summary>
+    private static string TextOrNull => """{"type":["string","null"]}""";
+
+    /// <summary>A schema of a boolean.</summary>
+    private static string Flag => """{"type":"boolean"}""";
+
+    /// <summary>A schema of a whole number.</summary>
+    private static string WholeNumber => """{"type":"integer"}""";
+
+    /// <summary>A schema of a list whose items nothing types.</summary>
+    private static string UntypedList => """{"type":"array"}""";
+
+    /// <summary>A schema of a list whose items are each <paramref name="items"/>.</summary>
+    private static string ListOf(string items) => $$"""{"type":"array","items":{{items}}}""";
+
+    /// <summary>A schema of an object holding exactly <paramref name="properties"/>, each named and none other, as the subset closes every object.</summary>
+    private static string ObjectOf(params (string Name, string Schema)[] properties)
+        => $$$"""{"type":"object","additionalProperties":false,"properties":{{{{string.Join(",", properties.Select(property => $"\"{property.Name}\":{property.Schema}"))}}}}}""";
 
     /// <summary>What one answer of an <c>answers</c> map takes.</summary>
     public static IReadOnlyList<KeyDescription> AnswerKeys =>

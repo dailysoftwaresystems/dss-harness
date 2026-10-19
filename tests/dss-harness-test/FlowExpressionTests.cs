@@ -1,4 +1,6 @@
+using System.Text.Json.Nodes;
 using DssHarness.Core.Orchestration.Flow;
+using DssHarness.Core.Schemas;
 
 namespace DssHarness.Tests;
 
@@ -177,6 +179,114 @@ public sealed class FlowExpressionTests
         Assert.Equal(problem, FlowExpression.GrammarProblem(new string('!', levels - 1) + "plan.ok"));
         Assert.Equal(problem, FlowExpression.GrammarProblem("plan" + string.Concat(Enumerable.Repeat(".ok", levels))));
         Assert.Equal(problem, FlowExpression.GrammarProblem(string.Concat(Enumerable.Repeat("empty(", levels)) + "plan" + new string(')', levels)));
+    }
+
+    /// <summary>A plan's output as the operator tests read it: a text, a text or null, a boolean, a whole number, a list of objects, an object.</summary>
+    private static readonly IReadOnlyDictionary<string, JsonSchemaSubset.Reading> Plan = new Dictionary<string, JsonSchemaSubset.Reading>(StringComparer.Ordinal)
+    {
+        ["plan.title"] = JsonSchemaSubset.Reading.Of("string"),
+        ["plan.maybe"] = JsonSchemaSubset.Reading.Of("string", "null"),
+        ["plan.ok"] = JsonSchemaSubset.Reading.Of("boolean"),
+        ["plan.flag"] = JsonSchemaSubset.Reading.Of("boolean", "null"),
+        ["plan.count"] = JsonSchemaSubset.Reading.Of("integer"),
+        ["plan.items"] = JsonSchemaSubset.Read(JsonNode.Parse("""
+            {"type":"array","items":{"type":"object","additionalProperties":false,"properties":{"title":{"type":"string"},"ok":{"type":"boolean"}}}}
+            """)!),
+        ["plan.meta"] = JsonSchemaSubset.Reading.Of("object"),
+    };
+
+    /// <summary>Every misuse <paramref name="expression"/> makes, its paths read as <see cref="Plan"/> says and any other as anything.</summary>
+    private static IReadOnlyList<string> Misuses(string expression)
+    {
+        var problems = new List<string>();
+
+        _ = FlowExpression.Parse(expression).TypeOf(path => Plan.GetValueOrDefault(path.Whole) ?? JsonSchemaSubset.Reading.Anything, problems.Add);
+        return problems;
+    }
+
+    /// <summary>
+    /// Each operator is held to what it takes when the definition is loaded, as part 04's table says: '!', '&amp;&amp;'
+    /// and '||' a boolean, '==' and '!=' no list and no object - two scalars of different kinds are unequal, never an
+    /// error - and any a list and a test that yields a boolean for each item, whose 'it' is an item of that list. '??'
+    /// and empty(...) take anything. A value that may be what the operator takes - one that may be null, or whose kind
+    /// nothing says - is the run's to read.
+    /// </summary>
+    [Fact]
+    public void EachOperator_IsHeldToWhatItTakes()
+    {
+        Assert.Equal(
+            ["applies ! to 'plan.title', which is a text; ! takes a boolean, and nothing is read as true or as false but true and false"],
+            Misuses("!plan.title"));
+        Assert.Equal(
+            ["applies ! to 'null', which is null; ! takes a boolean, and nothing is read as true or as false but true and false"],
+            Misuses("!null"));
+        Assert.Equal(
+            [
+                "joins 'plan.title', which is a text, with &&; && joins booleans, and nothing is read as true or as false but true and false",
+                "joins 'plan.items', which is a list, with ||; || joins booleans, and nothing is read as true or as false but true and false",
+            ],
+            Misuses("plan.title && plan.ok || plan.items"));
+        Assert.Equal(
+            [
+                "compares 'plan.items', which is a list, with ==; == compares two scalars, or null, and a list or an object is never one",
+                "compares 'plan.meta', which is an object, with ==; == compares two scalars, or null, and a list or an object is never one",
+            ],
+            Misuses("plan.items == plan.meta"));
+        Assert.Equal(
+            ["looks into 'plan.title' with any, and it is a text; any looks into a list"],
+            Misuses("any(plan.title, plan.ok)"));
+        Assert.Equal(
+            ["tests each item of 'plan.items' with 'it.title', which is a text; the test of any yields a boolean for each item"],
+            Misuses("any(plan.items, it.title)"));
+        Assert.Equal(
+            ["reads 'it.titel', and each item of 'plan.items' has no property 'titel'"],
+            Misuses("any(plan.items, it.titel == 'x')"));
+
+        // What is never refused when the definition is loaded: scalars of different kinds, null, a value that may be
+        // null or anything, '??' and empty(...) of anything, and an item's own boolean.
+        Assert.Empty(Misuses("plan.count != 'three' && plan.maybe == null && !plan.flag && !unknown.anything"));
+        Assert.Empty(Misuses("!(plan.title ?? true) && !empty(plan.items) && empty(plan.meta) && any(plan.items, it.ok)"));
+    }
+
+    /// <summary>
+    /// What an expression yields is typed by its operators: every comparison, test and join a boolean, a literal its own
+    /// kind, a placeholder a text, and '??' any side but the last where that side is not null, and the last as it is.
+    /// </summary>
+    [Fact]
+    public void WhatAnExpressionYields_IsTypedByItsOperators()
+    {
+        static IReadOnlyList<string>? Kinds(string expression)
+            => FlowExpression.Parse(expression).TypeOf(path => Plan.GetValueOrDefault(path.Whole) ?? JsonSchemaSubset.Reading.Anything, _ => { }).Kinds;
+
+        Assert.Equal(["boolean"], Kinds("plan.title == 'x' || any(plan.items, it.ok)"));
+        Assert.Equal(["boolean"], Kinds("!empty(plan.title)"));
+        Assert.Equal(["string"], Kinds("plan.maybe ?? 'none'"));
+        Assert.Equal(["string", "boolean", "null"], Kinds("plan.maybe ?? plan.flag ?? null"));
+        Assert.Equal(["string"], Kinds("{plan.count}"));
+        Assert.Equal(["integer"], Kinds("7"));
+        Assert.Equal(["number"], Kinds("0.5"));
+        Assert.Equal(["null"], Kinds("null"));
+        Assert.Equal(["object", "array", "string", "integer", "number", "boolean"], Kinds("unknown.anything ?? 'x'"));
+    }
+
+    /// <summary>
+    /// An expression is written back from its tree as one would write it - spaced, and parenthesized only where the
+    /// grammar needs it - so a refusal quotes a part of it readably, and what it writes reads back as the same tree.
+    /// </summary>
+    [Theory]
+    [InlineData("a||b&&c", "a || b && c")]
+    [InlineData("(a || b) && c", "(a || b) && c")]
+    [InlineData("!(a == b)", "!(a == b)")]
+    [InlineData("!a ?? b", "!a ?? b")]
+    [InlineData("(!a) ?? b", "(!a) ?? b")]
+    [InlineData("(a ?? b) == 'x'", "a ?? b == 'x'")]
+    [InlineData("any(review.findings,it.severity!='low')", "any(review.findings, it.severity != 'low')")]
+    [InlineData("empty( x ) && {plan.title} == \"it's\"", "empty(x) && {plan.title} == \"it's\"")]
+    [InlineData("a.b[2].c != 0.5 && d == null && e != true", "a.b[2].c != 0.5 && d == null && e != true")]
+    public void AnExpression_IsWrittenBackAsItReads(string text, string written)
+    {
+        Assert.Equal(written, FlowExpression.Parse(text).Written);
+        Assert.Equal(written, FlowExpression.Parse(written).Written);
     }
 
     /// <summary>

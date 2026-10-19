@@ -329,7 +329,7 @@ public sealed class WorkflowValidatorTests
               - name: blocked
                 type: pause
                 dependsOn: [intake]
-                when: 'intake.gathered && orient.anything'
+                when: '!empty(intake.stops) && orient.hasLegs'
                 question: 'waits on {intake.stops} and {later.step}'
                 options: [continue]
               - name: later
@@ -388,8 +388,13 @@ public sealed class WorkflowValidatorTests
                 body: prompts/pr-body.md
             """);
 
+        // Each is read where it is declared, and typed as what it is: a param is a text, and so is no list and no boolean.
         Assert.Equal(
             [
+                "'check.items' yields a text, where a list is read: the plan check checks the work items it holds",
+                "'itemised.forEach' yields a text, where a list is read: the group runs its steps once for each of its items",
+                "'itemised.build.when' joins 'param.rounds', which is a text, with &&; && joins booleans, and nothing is read as true or as false but true and false",
+                "'looped.repeat.until' reads 'previous.self.ok', and the output of step 'looped.self', an orient step, has no property 'ok'",
                 "'wrong.when' reads 'item.owned', whose 'item' names the work item of a forEach group, and no group holding 'wrong' runs one",
                 "'wrong.when' reads 'previous.self.ok', whose 'previous' names the iteration of a repeat group before this one, and no group holding 'wrong' runs one",
                 "'wrong.when' reads 'input.missing', and the workflow declares no input 'missing'",
@@ -700,7 +705,7 @@ public sealed class WorkflowValidatorTests
               - name: both
                 forEach: 'check.items'
                 repeat:
-                  until: 'inner.ok'
+                  until: 'inner.hasLegs'
                   maxIterations: 3
                 gather: [findings]
                 steps:
@@ -708,31 +713,31 @@ public sealed class WorkflowValidatorTests
                     type: orient
               - name: unbouned
                 repeat:
-                  until: 'inner.ok'
+                  until: 'inner.hasLegs'
                 steps:
                   - name: inner
                     type: orient
               - name: roundless
                 repeat:
-                  until: 'inner.ok'
+                  until: 'inner.hasLegs'
                   maxIterations: 3
-                  blocking: 'any(check.findings, it.severity != ''low'')'
+                  blocking: 'any(check.problems, it != ''low'')'
                 steps:
                   - name: inner
                     type: orient
               - name: blockless
                 repeat:
-                  until: 'inner.ok'
+                  until: 'inner.hasLegs'
                   rounds: 3
                 steps:
                   - name: inner
                     type: orient
               - name: doubly
                 repeat:
-                  until: 'inner.ok'
+                  until: 'inner.hasLegs'
                   maxIterations: 3
                   rounds: 2
-                  blocking: 'inner.blocking'
+                  blocking: 'inner.hasLegs'
                 steps:
                   - name: inner
                     type: orient
@@ -768,21 +773,21 @@ public sealed class WorkflowValidatorTests
                 type: orient
               - name: blind
                 repeat:
-                  until: 'check.ok || input.done'
+                  until: 'check.hasLegs || empty(input.done)'
                   maxIterations: 3
                 steps:
                   - name: inner
                     type: orient
               - name: seeing
                 repeat:
-                  until: 'check.ok && inner.ok'
+                  until: 'check.hasLegs && inner.hasLegs'
                   maxIterations: 3
                 steps:
                   - name: inner
                     type: orient
               - name: by-path
                 repeat:
-                  until: 'by-path.deep.inner.ok'
+                  until: 'by-path.deep.inner.hasLegs'
                   maxIterations: 3
                 steps:
                   - name: deep
@@ -791,7 +796,7 @@ public sealed class WorkflowValidatorTests
                         type: orient
               - name: remembering
                 repeat:
-                  until: 'previous.inner.ok'
+                  until: 'previous.inner.hasLegs'
                   maxIterations: 3
                 steps:
                   - name: inner
@@ -799,7 +804,7 @@ public sealed class WorkflowValidatorTests
             """);
 
         Assert.Equal(
-            ["group 'blind' repeats until 'check.ok || input.done', which reads nothing its own steps produce; no iteration could change what it says, so the loop would stop after its first or run to its bound"],
+            ["group 'blind' repeats until 'check.hasLegs || empty(input.done)', which reads nothing its own steps produce; no iteration could change what it says, so the loop would stop after its first or run to its bound"],
             problems);
     }
 
@@ -831,7 +836,7 @@ public sealed class WorkflowValidatorTests
               - name: fine
             outputs:
               - name: title
-                from: 'orient.anything'
+                from: 'orient.branch'
             """);
 
         Assert.Equal(
@@ -1720,7 +1725,7 @@ public sealed class WorkflowValidatorTests
                   agent: diagnostician
                   prompt: prompts/diagnose.md
                   outputs: schemas/diagnosis.json
-                  when: "last.ok && source.code != 13"
+                  when: "last.hasLegs && source.code != 13"
                 - name: fixes
                   dependsOn: [diagnose]
                   forEach: 'diagnose.items'
@@ -2275,9 +2280,9 @@ public sealed class WorkflowValidatorTests
                     timeoutMinutes: 0
                   - name: rounds
                     repeat:
-                      until: 'inner.ok'
+                      until: 'inner.hasLegs'
                       rounds: 21
-                      blocking: 'inner.blocking'
+                      blocking: 'inner.hasLegs'
                       blockersLimitRounds: 0
                     steps:
                       - name: inner
@@ -2298,9 +2303,9 @@ public sealed class WorkflowValidatorTests
             steps:
               - name: loop
                 repeat:
-                  until: 'review.clean'
+                  until: 'review.hasLegs'
                   rounds: 3
-                  blocking: 'review.blocking'
+                  blocking: 'review.hasLegs'
                   blockersLimitRounds: false
                 steps:
                   - name: review
@@ -2679,7 +2684,7 @@ public sealed class WorkflowValidatorTests
               - name: os
             outputs:
               - name: Title
-                from: 'orient.title'
+                from: 'orient.branch'
             steps:
               - name: orient
                 type: orient
@@ -2765,7 +2770,7 @@ public sealed class WorkflowValidatorTests
             steps:
               - name: loop
                 repeat:
-                  until: 'inner.ok'
+                  until: 'inner.hasLegs'
                   maxIterations: 2
                 steps:
                   - name: inner
@@ -2781,7 +2786,7 @@ public sealed class WorkflowValidatorTests
               - name: commit
                 type: commit
                 dependsOn: [said]
-                message: '{plann.title | upper} {loop.inner.title|lower}'
+                message: '{plann.title | upper} {loop.inner.branch|lower}'
             """);
 
         Assert.Equal(
@@ -2910,10 +2915,10 @@ public sealed class WorkflowValidatorTests
                   - name: after
                     type: orient
                     dependsOn: [review]
-                    when: review.correctness.ok
+                    when: review.correctness.hasLegs
               - name: rounds
                 repeat:
-                  until: 'audit.clean && outer.review.correctness.ok && previous.check.soundness.ok'
+                  until: 'audit.hasLegs && outer.review.correctness.hasLegs && previous.check.soundness.hasLegs'
                   maxIterations: 3
                 steps:
                   - name: audit
@@ -2931,7 +2936,7 @@ public sealed class WorkflowValidatorTests
                 - name: remedy
                   type: orient
                   dependsOn: [diagnose]
-                  when: 'diagnose.ok && plan.ok'
+                  when: 'diagnose.hasLegs && plan.hasLegs'
             """));
 
         Assert.Equal(
@@ -2951,7 +2956,7 @@ public sealed class WorkflowValidatorTests
                   - name: plan
                     type: orient
                   - name: items
-                    forEach: 'plan.items'
+                    forEach: 'plan.dirtyPaths'
                     steps:
                       - name: verify
                         type: orient
@@ -3252,8 +3257,12 @@ public sealed class WorkflowValidatorTests
                 paths: input.paths
             """);
 
+        // The input is a text, so the expression is no list either: each refusal is said.
         Assert.Equal(
-            ["step 'weigh' takes refresh: all weighs every path the main tree moved, so it takes no path beside it: give the paths, or all"],
+            [
+                "'weigh.paths' yields a text, where a list is read: the key takes a list, written out or as an expression that yields one",
+                "step 'weigh' takes refresh: all weighs every path the main tree moved, so it takes no path beside it: give the paths, or all",
+            ],
             problems);
     }
 
@@ -3332,5 +3341,426 @@ public sealed class WorkflowValidatorTests
 
             return text.ToString();
         }
+    }
+
+    /// <summary>
+    /// Every problem of a definition whose files are <paramref name="files"/>, by the paths it names them with: a reason
+    /// step's output typed by its schema, and each prompt read for what it reads.
+    /// </summary>
+    private static IReadOnlyList<string> Problems(string text, IReadOnlyDictionary<string, string> files)
+        => [.. WorkflowValidator.Validate(Parse(text), hasCommitTemplate: false, path => files.GetValueOrDefault(path))];
+
+    /// <summary>
+    /// V16-V19's types, for a built-in step: a path is typed by the output part 04 lists for its type, and one no
+    /// output holds is refused - a member it does not name, a member of a text, an index into one, and a read of a type
+    /// that has no output at all. The engine's facts of a step, an input and the run's own names are typed as what they
+    /// are: an input is a text, the run holds the values an expression reads and the texts a template does, and a work
+    /// item is an item of what its group's forEach yields - a plan check's items being what its own items key yields.
+    /// A block's gathered list is a list of what its members' lists hold; a group that gathers nothing has no output.
+    /// </summary>
+    [Fact]
+    public void APathNoOutputHolds_IsRefused_AsIsANameTheRunHasNot()
+    {
+        Assert.Equal(
+            [
+                "'a.when' reads 'orient.hasLegz', and the output of step 'orient', an orient step, has no property 'hasLegz'",
+                "'b.when' reads 'orient.branch.name', and the output of step 'orient', an orient step, says 'orient.branch' is a text, which has no property 'name'",
+                "'c.when' reads 'orient.branch[0]', and the output of step 'orient', an orient step, says 'orient.branch' is a text, which is no list to index",
+                "'d.when' reads 'make.ready', and step 'make', a create-agent step, has no output to read",
+                "'e.when' reads 'check.code.x', and the engine's fact 'code' of step 'check' says 'check.code' is a whole number, which has no property 'x'",
+                "'f.when' reads 'input.request.x', and input 'request' says 'input.request' is a text, which has no property 'x'",
+                "'g.when' reads 'run.statuz', and the run has no 'statuz': an expression reads run.name, run.status, run.done, run.failed, run.paused, run.stopped, run.passedOver, and a template run.ran, run.notRun, run.red, run.leftover, run.assumptions, run.preExisting too",
+                "'h.when' reads 'run.ran', which is text for a template, not a value for an expression: the engine writes it from its step records for a person to read",
+                "'items.inner.when' reads 'item.path', and the work item of group 'items' says 'item' is a text, which has no property 'path'",
+                "'i.when' reads 'checks.found', and group 'checks' holds no step 'found' and gathers none of that name",
+                "'i.when' reads 'it.x', and each item of 'checks.findings' says 'it' is a text, which has no property 'x'",
+                "'j.when' reads 'items.x', and group 'items' holds no step 'x' and gathers nothing",
+            ],
+            Problems(
+                """
+                name: flow
+                inputs:
+                  - name: request
+                steps:
+                  - name: orient
+                    type: orient
+                  - name: make
+                    type: create-agent
+                    agent: worker
+                  - name: check
+                    type: validate-plan
+                    items: 'orient.dirtyPaths'
+                  - name: a
+                    type: orient
+                    when: 'orient.hasLegz'
+                  - name: b
+                    type: orient
+                    when: "orient.branch.name == 'x'"
+                  - name: c
+                    type: orient
+                    when: "orient.branch[0] == 'x'"
+                  - name: d
+                    type: orient
+                    when: 'make.ready'
+                  - name: e
+                    type: orient
+                    when: 'check.code.x'
+                  - name: f
+                    type: orient
+                    when: "input.request.x == 'y'"
+                  - name: g
+                    type: orient
+                    when: 'run.statuz'
+                  - name: h
+                    type: orient
+                    when: "run.ran == 'x'"
+                  - name: items
+                    forEach: 'check.items'
+                    steps:
+                      - name: inner
+                        type: orient
+                        when: "item.path == 'x' && check.ok"
+                  - name: checks
+                    gather: [findings]
+                    steps:
+                      - name: balance
+                        type: anchor-balance
+                      - name: citations
+                        type: anchor-citations
+                  - name: i
+                    type: orient
+                    when: "checks.found || any(checks.findings, it.x == 'y')"
+                  - name: j
+                    type: orient
+                    when: 'items.x'
+                """));
+    }
+
+    /// <summary>
+    /// A reason step's output is typed by the schema file it names, where the files are given (part 04, "Checked
+    /// against files"): a property no schema holds is refused, at the root and inside a list's items, and so is a member
+    /// of a text, its newest output (latest) typed as the step is; a work item a forEach hands its steps is an item of the
+    /// list the plan check checked. A schema the subset does not read types nothing, and without the files a reason
+    /// step's output may be anything.
+    /// </summary>
+    [Fact]
+    public void AReasonStepsOutput_IsTypedByTheSchemaItNames()
+    {
+        const string definition = """
+            name: flow
+            steps:
+              - name: plan
+                type: reason
+                agent: planner
+                prompt: prompts/plan.md
+                outputs: schemas/plan.json
+              - name: check
+                type: validate-plan
+                items: 'plan.items'
+              - name: items
+                forEach: 'check.items'
+                steps:
+                  - name: build
+                    type: orient
+                    when: "item.ready && plan.itemz == null && plan.items[0].titel == 'x' && plan.latest.summary.x == 'y' && item.titel == 'x'"
+              - name: loose
+                type: reason
+                agent: planner
+                prompt: prompts/plan.md
+                outputs: schemas/unread.json
+              - name: after
+                type: orient
+                when: 'loose.anything'
+            """;
+
+        var files = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["prompts/plan.md"] = "Plan the work.\n",
+            ["schemas/plan.json"] = """
+                {"type":"object","additionalProperties":false,"properties":{
+                  "summary":{"type":"string"},
+                  "items":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{"title":{"type":"string"},"ready":{"type":"boolean"}}}}}}
+                """,
+            ["schemas/unread.json"] = """{"type":"object"}""",
+        };
+
+        Assert.Equal(
+            [
+                "'items.build.when' reads 'plan.itemz', and the schema 'schemas/plan.json' of step 'plan' has no property 'itemz'",
+                "'items.build.when' reads 'plan.items[0].titel', and the schema 'schemas/plan.json' of step 'plan' has no property 'titel' in 'plan.items[0]'",
+                "'items.build.when' reads 'plan.latest.summary.x', and the schema 'schemas/plan.json' of step 'plan' says 'plan.latest.summary' is a text, which has no property 'x'",
+                "'items.build.when' reads 'item.titel', and the work item of group 'items' has no property 'titel'",
+            ],
+            Problems(definition, files));
+
+        Assert.Empty(Problems(definition));
+    }
+
+    /// <summary>
+    /// What each key reads, its expression yields (part 04): a when, an until, a blocking and a pre-answer's when a
+    /// boolean; a forEach, a pause's questions and every key that takes a list a list; a quote the words it looks for, a
+    /// text. A leftover takes anything. A value that can be none of what is read is refused, named by its kind.
+    /// </summary>
+    [Fact]
+    public void EachKeysExpression_YieldsWhatTheKeyReads()
+    {
+        Assert.Equal(
+            [
+                "'pick.when' yields a text, where a boolean is read: nothing is read as true or as false but true and false",
+                "'pick.questions' yields a boolean, where a list is read: the step shows each question it holds under its own",
+                "'pick.preAnswer.when' yields a text, where a boolean is read: nothing is read as true or as false but true and false",
+                "'pick.preAnswer.quote.text' yields a list, where a text is read: a quote is the words looked for in what the person gave",
+                "'each.forEach' yields a whole number, where a list is read: the group runs its steps once for each of its items",
+                "'loop.repeat.until' yields a whole number, where a boolean is read: nothing is read as true or as false but true and false",
+                "'fold.within' yields a text, where a list is read: the key takes a list, written out or as an expression that yields one",
+            ],
+            Problems(
+                """
+                name: flow
+                inputs:
+                  - name: request
+                steps:
+                  - name: orient
+                    type: orient
+                  - name: pick
+                    type: pause
+                    question: 'pick'
+                    options: [go]
+                    when: 'orient.branch'
+                    questions: 'orient.hasLegs'
+                    preAnswer:
+                      - when: 'input.request'
+                        answer: go
+                        quote:
+                          text: 'orient.tests'
+                          input: request
+                  - name: each
+                    forEach: 'orient.legCount'
+                    steps:
+                      - name: inner
+                        type: orient
+                  - name: loop
+                    repeat:
+                      until: 'inner.legCount'
+                      maxIterations: 2
+                      leftover: 'inner.tests'
+                    steps:
+                      - name: inner
+                        type: orient
+                  - name: make
+                    type: create-agent
+                    agent: worker
+                  - name: fold
+                    type: fold
+                    of: make
+                    within: 'orient.branch'
+                """));
+    }
+
+    /// <summary>
+    /// Each operator of an expression is held to what it takes, said after the key it is read in: '!' and the joins a
+    /// boolean, a comparison no list and no object, any a list. A path a refusal already named is not typed again.
+    /// </summary>
+    [Fact]
+    public void AnExpressionsOperators_AreHeldToWhatTheyTake_NamingTheKey()
+    {
+        Assert.Equal(
+            [
+                "'gate.when' applies ! to 'orient.branch', which is a text; ! takes a boolean, and nothing is read as true or as false but true and false",
+                "'gate.when' joins 'orient.legCount', which is a whole number, with &&; && joins booleans, and nothing is read as true or as false but true and false",
+                "'gate.when' compares 'orient.tests', which is a list, with ==; == compares two scalars, or null, and a list or an object is never one",
+                "'gate.when' looks into 'orient.branch' with any, and it is a text; any looks into a list",
+                "'later.when' reads 'ghost.ok', which no step before 'later', no input and no param provides",
+            ],
+            Problems(
+                """
+                name: flow
+                steps:
+                  - name: orient
+                    type: orient
+                  - name: gate
+                    type: orient
+                    when: "!orient.branch && orient.legCount && orient.tests == null && any(orient.branch, true)"
+                  - name: later
+                    type: orient
+                    when: "ghost.ok && orient.branch"
+                """));
+    }
+
+    /// <summary>
+    /// How the run stands without its always steps - run.status, done, failed, paused and stopped - is read only by an
+    /// always step or a member of an always group, so that none reads its own effect; its name and how many steps were
+    /// passed over are read anywhere. A template reads it under the same rule, and so does a workflow's output, which is
+    /// no step.
+    /// </summary>
+    [Fact]
+    public void HowTheRunStands_IsReadOnlyByAnAlwaysStep()
+    {
+        const string Why = "how the run stands without its always steps, and '{0}' is neither an always step nor in an always group; only an always step reads how the rest of the flow came to, so that none reads its own effect";
+
+        Assert.Equal(
+            [
+                $"'early.when' reads 'run.stopped', {string.Format(System.Globalization.CultureInfo.InvariantCulture, Why, "early")}",
+                $"'note.message' reads 'run.status', {string.Format(System.Globalization.CultureInfo.InvariantCulture, Why, "note")}",
+                $"'outputs.state.from' reads 'run.paused', {string.Format(System.Globalization.CultureInfo.InvariantCulture, Why, "outputs.state")}",
+            ],
+            Problems(
+                """
+                name: flow
+                steps:
+                  - name: start
+                    type: orient
+                  - name: report
+                    type: orient
+                    always: true
+                    when: "run.failed || run.status == 'failed'"
+                  - name: closing
+                    always: true
+                    steps:
+                      - name: inner
+                        type: orient
+                        when: 'run.done && run.passedOver == 0'
+                  - name: early
+                    type: orient
+                    dependsOn: [start]
+                    when: "run.stopped && run.name == 'x' && run.passedOver == 0"
+                  - name: note
+                    type: commit
+                    dependsOn: [early]
+                    message: 'run {run.name}: {run.status}'
+                outputs:
+                  - name: state
+                    from: 'run.paused'
+                """));
+    }
+
+    /// <summary>
+    /// A pull request's base reads nothing but the run's inputs and run.name, since orient fills orient.baseBranch with
+    /// it before any other step has run; and every pull request of the flow names the same base - one written, or none,
+    /// the remote's default branch - since orient.baseBranch is one branch.
+    /// </summary>
+    [Fact]
+    public void APullRequestsBase_ReadsTheRunsInputsAlone_AndIsOneForEveryPullRequest()
+    {
+        Assert.Equal(
+            [
+                "step 'third' opens its pull request against {orient.branch}: a pull request's base reads nothing but the run's inputs and run.name, so that orient, the first step, fills orient.baseBranch with it before any other step has run",
+                "steps 'first' and 'second' open pull requests against different bases, '{input.target}' and 'release/{run.name}'; orient.baseBranch is one branch, which every step of the flow reads",
+                "steps 'first' and 'third' open pull requests against different bases, '{input.target}' and '{orient.branch}'; orient.baseBranch is one branch, which every step of the flow reads",
+                "steps 'first' and 'fourth' open pull requests against different bases, '{input.target}' and the remote's default branch; orient.baseBranch is one branch, which every step of the flow reads",
+            ],
+            Problems(
+                """
+                name: flow
+                inputs:
+                  - name: target
+                steps:
+                  - name: orient
+                    type: orient
+                  - name: first
+                    type: pull-request
+                    dependsOn: [orient]
+                    title: 'one'
+                    body: prompts/body.md
+                    base: '{input.target}'
+                  - name: second
+                    type: pull-request
+                    dependsOn: [first]
+                    title: 'two'
+                    body: prompts/body.md
+                    base: 'release/{run.name}'
+                  - name: third
+                    type: pull-request
+                    dependsOn: [second]
+                    title: 'three'
+                    body: prompts/body.md
+                    base: '{orient.branch}'
+                  - name: fourth
+                    type: pull-request
+                    dependsOn: [third]
+                    title: 'four'
+                    body: prompts/body.md
+                """));
+
+        Assert.Empty(Problems(
+            """
+            name: flow
+            inputs:
+              - name: target
+            steps:
+              - name: first
+                type: pull-request
+                title: 'one'
+                body: prompts/body.md
+                base: 'release/{input.target}'
+              - name: second
+                type: pull-request
+                dependsOn: [first]
+                title: 'two'
+                body: prompts/body.md
+                base: 'release/{input.target}'
+            """));
+    }
+
+    /// <summary>
+    /// A prompt's own placeholders - a reason step's prompt and resumePrompt, a pull request's body - are checked against
+    /// what the step can read from where it sits, each said at the line it first stands on: a name nothing provides, a
+    /// path no schema holds, and in a prompt, which the first iteration is asked with too, the iteration before; a
+    /// resumePrompt reads it. A prompt not written whole is refused, and a skill it names is looked for by whoever reads
+    /// the skills. Without the files, no prompt is read.
+    /// </summary>
+    [Fact]
+    public void APromptsPlaceholders_AreReadAsItsStepReads()
+    {
+        const string definition = """
+            name: flow
+            inputs:
+              - name: request
+            steps:
+              - name: plan
+                type: reason
+                agent: planner
+                prompt: prompts/plan.md
+                outputs: schemas/plan.json
+              - name: rounds
+                dependsOn: [plan]
+                repeat:
+                  until: 'draft.ok'
+                  maxIterations: 2
+                steps:
+                  - name: draft
+                    type: reason
+                    agent: planner
+                    resume: draft
+                    prompt: prompts/draft.md
+                    resumePrompt: prompts/again.md
+                    outputs: schemas/plan.json
+              - name: pr
+                type: pull-request
+                dependsOn: [rounds]
+                title: 'done'
+                body: prompts/body.md
+            """;
+
+        var files = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["schemas/plan.json"] = """{"type":"object","additionalProperties":false,"properties":{"summary":{"type":"string"},"ok":{"type":"boolean"}}}""",
+            ["prompts/plan.md"] = "Plan {input.request}.\n{skill.notes}\nBefore: {previous.draft.summary}\n",
+            ["prompts/draft.md"] = "Draft from {plan.summary} and {plan.sumary}.\nIteration {iteration}, after {previous.draft.summary}.\nAgain {plan.sumary}.\n",
+            ["prompts/again.md"] = "Again, after {previous.draft.summary}.\nAnd {later.x}.\n",
+            ["prompts/body.md"] = "Body {rounds.draft.summary}\n{oops\n",
+        };
+
+        Assert.Equal(
+            [
+                "step 'plan' prompt 'prompts/plan.md' line 3 reads 'previous.draft.summary': a prompt is what the first iteration is asked with too, which has none before it; the iteration before is read in a resumePrompt",
+                "step 'rounds.draft' prompt 'prompts/draft.md' line 1 reads 'plan.sumary', and the schema 'schemas/plan.json' of step 'plan' has no property 'sumary'",
+                "step 'rounds.draft' prompt 'prompts/draft.md' line 2 reads 'previous.draft.summary': a prompt is what the first iteration is asked with too, which has none before it; the iteration before is read in a resumePrompt",
+                "step 'rounds.draft' resumePrompt 'prompts/again.md' line 2 reads 'later.x', which no step before 'rounds.draft', no input and no param provides",
+                "step 'pr' body 'prompts/body.md' is not written whole: the placeholder at column 1 of line 2 is never closed, and nothing it reads past there would be checked",
+            ],
+            Problems(definition, files));
+
+        Assert.Empty(Problems(definition));
     }
 }

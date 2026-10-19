@@ -960,4 +960,54 @@ public sealed class WorkflowFileParserTests
                       settled: { paths: src }
                 """));
     }
+
+    /// <summary>
+    /// V16-V19: a placeholder stands only in a key that is a template - text a step hands on - and in every other key
+    /// of a step it is refused where it is written, naming the key and what the step fills: an agent, a description, a
+    /// leg in a list, a handler's source, a written-out list of paths, a consent. An expression is the grammar's to read,
+    /// as a key that takes a list is where it is given one expression, and a template key is filled.
+    /// </summary>
+    [Fact]
+    public void APlaceholderInAKeyThatIsNoTemplate_IsRefusedWhereItIsWritten()
+    {
+        Assert.Equal(
+            [
+                "line 5, column 12: 'draft.agent' holds {input.agent}, and agent is no template: it is read as it is written, never filled; a reason step fills none of its keys.",
+                "line 8, column 18: 'draft.description' holds {plan.title}, and description is no template: it is read as it is written, never filled; a reason step fills none of its keys.",
+                "line 13, column 19: 'build.legs' holds {input.leg}, and legs is no template: it is read as it is written, never filled; a test step fills filter, exclude and labels.",
+                "line 16, column 13: 'build.on.step' holds {draft.next}, and on.step is no template: it is read as it is written, never filled; a test step fills filter, exclude and labels.",
+                "line 24, column 14: 'fold.within' holds {input.dir}, and within is no template: it is read as it is written, never filled; a fold step fills none of its keys.",
+                "line 27, column 17: 'fold.allow.settled' holds {input.settled}, and allow.settled is no template: it is read as it is written, never filled; a fold step fills none of its keys.",
+            ],
+            Problems(
+                """
+                name: flow
+                steps:
+                  - name: draft
+                    type: reason
+                    agent: '{input.agent}'
+                    prompt: prompts/plan.md
+                    outputs: schemas/plan.json
+                    description: 'drafts {plan.title}'
+                    when: "{orient.branch} == 'main'"
+                    writes: 'item.paths'
+                  - name: build
+                    type: test
+                    legs: [linux, '{input.leg}']
+                    filter: '{item.filter}'
+                    on:
+                      step: '{draft.next}'
+                      outcome: failure
+                  - name: make
+                    type: create-agent
+                    agent: worker
+                  - name: fold
+                    type: fold
+                    of: make
+                    within: ['src/{input.dir}/**']
+                    allow:
+                      new: 'draft.rows'
+                      settled: ['{input.settled}']
+                """));
+    }
 }

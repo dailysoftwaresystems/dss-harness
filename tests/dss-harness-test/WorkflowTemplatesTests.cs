@@ -32,6 +32,38 @@ public sealed class WorkflowTemplatesTests
     }
 
     /// <summary>
+    /// The shipped flow is held to its own files, not only parsed beside them: where its diagnosis schema holds no
+    /// <c>choices</c>, the question that shows them to a person is refused, and where the diagnosis prompt reads the
+    /// iteration before, that prompt is - each named as the definition writes it.
+    /// </summary>
+    [Fact]
+    public void TheShippedFlow_IsTypedByItsOwnSchemas_AndItsPromptsAreRead()
+    {
+        var definition = WorkflowTemplates.ShippedDefinition();
+        var diagnosis = JsonNode.Parse(WorkflowTemplates.TextOf("schemas/diagnosis.schema.json")!)!.AsObject();
+        var required = diagnosis["required"]!.AsArray();
+        var prompt = WorkflowTemplates.TextOf("prompts/diagnose.md")!;
+        var added = prompt.Count(character => character == '\n') + 1; // The line the read is added on, below the last.
+
+        diagnosis["properties"]!.AsObject().Remove("choices");
+        required.RemoveAt(required.Select(name => name!.GetValue<string>()).ToList().IndexOf("choices"));
+
+        var problems = WorkflowValidator.Validate(definition, hasCommitTemplate: false, file => file switch
+        {
+            "schemas/diagnosis.schema.json" => diagnosis.ToJsonString(),
+            "prompts/diagnose.md" => prompt + "{previous.course}\n",
+            _ => WorkflowTemplates.TextOf(file),
+        });
+
+        Assert.Equal(
+            [
+                $"step 'recover.diagnose' prompt 'prompts/diagnose.md' line {added} reads 'previous.course': a prompt is what the first iteration is asked with too, which has none before it; the iteration before is read in a resumePrompt",
+                "'recover.direction.question' reads 'diagnose.choices', and the schema 'schemas/diagnosis.schema.json' of step 'recover.diagnose' has no property 'choices'",
+            ],
+            problems);
+    }
+
+    /// <summary>
     /// The embedded set is whole: every file the templates declare is in the assembly, and every file the assembly
     /// carries under the workflow's root is one the templates declare - no orphan the definition cannot name, no named
     /// file the build lacks.

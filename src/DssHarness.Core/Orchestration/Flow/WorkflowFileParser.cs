@@ -766,6 +766,8 @@ public static class WorkflowFileParser
             }
         }
 
+        RefusePlaceholders([.. keys.Where(entry => allowed.Contains(entry.Key, StringComparer.Ordinal))], typed, where, problems);
+
         var step = new WorkflowStep
         {
             Name = name ?? string.Empty,
@@ -883,6 +885,76 @@ public static class WorkflowFileParser
         }
 
         yield return step;
+    }
+
+    /// <summary>
+    /// Refuses a placeholder in a key of a step that is not a template (V16-V19): only the text a step hands on is
+    /// filled (<see cref="WorkflowStepTypes.StepType.TemplateKeys"/>), and every other key is read as it is written, so a
+    /// placeholder there would be handed on as its own braces, or name nothing. An expression is the grammar's to read,
+    /// a step's name and type are refused for what they are, and a group's steps are each read as a step.
+    /// </summary>
+    private static void RefusePlaceholders(IReadOnlyList<(string Key, YamlNode Value)> keys, WorkflowStepTypes.StepType? type, string where, List<string> problems)
+    {
+        IReadOnlyList<string> filled = type?.TemplateKeys ?? [];
+        var owner = type is null ? "a group" : $"a {type.Type} step";
+        var fills = filled switch
+        {
+            [] => "none of its keys",
+            [var one] => one,
+            _ => $"{string.Join(", ", filled.Take(filled.Count - 1))} and {filled[^1]}",
+        };
+
+        foreach (var (key, value) in keys.Where(entry => entry.Key is not ("name" or "type" or "steps") && !filled.Contains(entry.Key, StringComparer.Ordinal)))
+        {
+            foreach (var (path, scalar) in TextsIn(key, value, inList: false))
+            {
+                foreach (var read in WorkflowExpressions.TemplateReads(scalar.Value!))
+                {
+                    problems.Add(YamlReading.At(scalar, $"'{where}.{path}' holds {{{read.Whole}}}, and {path} is no template: it is read as it is written, never filled; {owner} fills {fills}."));
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Every scalar under <paramref name="node"/>, the value of the step's key at <paramref name="path"/>, that is no
+    /// expression: a key of <see cref="WorkflowStepTypes.ExpressionKeys"/> is one, and so is a key of
+    /// <see cref="WorkflowStepTypes.ListOrExpressionKeys"/> given a single value; a list such a key is given is names.
+    /// </summary>
+    private static IEnumerable<(string Path, YamlScalarNode Scalar)> TextsIn(string path, YamlNode node, bool inList)
+    {
+        switch (node)
+        {
+            case YamlScalarNode { Value: not null } scalar:
+                if (inList || !(WorkflowStepTypes.ExpressionKeys.Contains(path, StringComparer.Ordinal) || WorkflowStepTypes.ListOrExpressionKeys.Contains(path, StringComparer.Ordinal)))
+                {
+                    yield return (path, scalar);
+                }
+
+                break;
+
+            case YamlSequenceNode sequence:
+                foreach (var found in sequence.Children.SelectMany(child => TextsIn(path, child, inList: child is YamlScalarNode)))
+                {
+                    yield return found;
+                }
+
+                break;
+
+            case YamlMappingNode mapping:
+                foreach (var (key, value) in mapping.Children)
+                {
+                    if (YamlReading.ScalarOf(key) is { } name)
+                    {
+                        foreach (var found in TextsIn($"{path}.{name}", value, inList: false))
+                        {
+                            yield return found;
+                        }
+                    }
+                }
+
+                break;
+        }
     }
 
     /// <summary>Reads the keys that belong to a step's type alone.</summary>

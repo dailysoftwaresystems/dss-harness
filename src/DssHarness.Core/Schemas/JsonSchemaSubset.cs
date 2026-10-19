@@ -128,6 +128,285 @@ public static class JsonSchemaSubset
         return Check(root, document, "$", new DocumentCheck(root));
     }
 
+    /// <summary>
+    /// What <paramref name="schema"/> says of the document at its root, as an expression's path or a placeholder is
+    /// typed by: the kinds of value it may be, and what its members and its items are said to be.
+    /// </summary>
+    /// <param name="schema">A schema free of subset problems.</param>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="schema"/> has subset problems: nothing is typed by a schema this engine does not read.
+    /// </exception>
+    public static Reading Read(JsonNode schema)
+    {
+        ArgumentNullException.ThrowIfNull(schema);
+
+        var subset = SubsetProblems(schema);
+
+        if (subset.Count > 0)
+        {
+            throw new ArgumentException(
+                $"The schema is not one this engine reads, so nothing is typed by it: {string.Join("; ", subset)}.",
+                nameof(schema));
+        }
+
+        return Reading.Of((JsonObject)schema);
+    }
+
+    /// <summary>
+    /// What is said of the value at one place of a document: the kinds it may be, what a member of it is said to be,
+    /// and what an item of it is - each place read from the schemas that say it, an <c>anyOf</c> read as its shapes,
+    /// a <c>$ref</c> as the definition it names. Where nothing says what the value is, it may be anything, and so may
+    /// its members and its items: a reading refuses only what no value its schema allows could be.
+    /// </summary>
+    public sealed class Reading
+    {
+        /// <summary>The ways the value may be, any one of which it is; none where no value is.</summary>
+        private readonly IReadOnlyList<Shape> _shapes;
+
+        /// <summary>A reading of the shapes given, any one of which the value is.</summary>
+        private Reading(IReadOnlyList<Shape> shapes) => _shapes = shapes;
+
+        /// <summary>
+        /// One way the value may be: the schemas that hold of it at once, each with the root its references are read
+        /// in; the kinds it is limited to beside them, where something other than a schema limits it; and the reading
+        /// of its items, where that is said other than by a schema. No schema and no limit is a value of any kind.
+        /// </summary>
+        private sealed record Shape(IReadOnlyList<(JsonObject Root, JsonObject Schema)> Said, IReadOnlySet<string>? Limit, Reading? ItemsSaid);
+
+        /// <summary>A value nothing says anything of: any kind, with members and items of any kind.</summary>
+        public static Reading Anything { get; } = new([new Shape([], null, null)]);
+
+        /// <summary>A value of one of <paramref name="kinds"/>, and nothing more said of it: its members and its items may be anything.</summary>
+        /// <param name="kinds">The kinds, each one the subset names.</param>
+        public static Reading Of(params string[] kinds)
+        {
+            ArgumentNullException.ThrowIfNull(kinds);
+
+            return new([new Shape([], new HashSet<string>(kinds, StringComparer.Ordinal), null)]);
+        }
+
+        /// <summary>The document at the root of <paramref name="root"/>, a schema the subset check passed.</summary>
+        internal static Reading Of(JsonObject root) => new([.. Shapes(root, [root])]);
+
+        /// <summary>A list whose items are <paramref name="items"/>.</summary>
+        /// <param name="items">What each item of the list is.</param>
+        public static Reading ListOf(Reading items)
+        {
+            ArgumentNullException.ThrowIfNull(items);
+
+            return new([new Shape([], new HashSet<string>(["array"], StringComparer.Ordinal), items)]);
+        }
+
+        /// <summary>
+        /// The kinds the value may be, in the order the subset names them; <see langword="null"/> where it may be any:
+        /// a place no schema gives a type, or one an <c>anyOf</c> shape leaves open.
+        /// </summary>
+        public IReadOnlyList<string>? Kinds
+        {
+            get
+            {
+                var kinds = new HashSet<string>(StringComparer.Ordinal);
+
+                foreach (var shape in _shapes)
+                {
+                    if (KindsOf(shape) is not { } said)
+                    {
+                        return null;
+                    }
+
+                    kinds.UnionWith(said);
+                }
+
+                return [.. Types.Where(kinds.Contains)];
+            }
+        }
+
+        /// <summary>Whether the value may be of <paramref name="kind"/>: always, where it may be any.</summary>
+        /// <param name="kind">A kind the subset names.</param>
+        public bool MayBe(string kind) => Kinds is not { } kinds || kinds.Contains(kind, StringComparer.Ordinal);
+
+        /// <summary>The value read as either this or <paramref name="other"/>: any shape of the one or of the other.</summary>
+        /// <param name="other">The other reading.</param>
+        public Reading Or(Reading other)
+        {
+            ArgumentNullException.ThrowIfNull(other);
+
+            return new([.. _shapes, .. other._shapes]);
+        }
+
+        /// <summary>The value read where it is not <paramref name="kind"/>: what is left of each shape once that kind is taken out.</summary>
+        /// <param name="kind">A kind the subset names.</param>
+        public Reading Without(string kind)
+            => new([.. _shapes.Select(shape => shape with
+            {
+                Limit = new HashSet<string>(
+                    ((IEnumerable<string>?)KindsOf(shape) ?? Types).Where(each => !string.Equals(each, kind, StringComparison.Ordinal)),
+                    StringComparer.Ordinal),
+            })]);
+
+        /// <summary>
+        /// What the member <paramref name="name"/> of the value is said to be, or <see langword="null"/> where no value
+        /// the reading allows holds it: every object a schema says closes its properties, so a member none of them
+        /// names is none. Where a shape says nothing of the value's members, the member may be anything.
+        /// </summary>
+        /// <param name="name">The member's name.</param>
+        public Reading? Member(string name)
+        {
+            ArgumentNullException.ThrowIfNull(name);
+
+            var found = new List<Shape>();
+
+            foreach (var shape in _shapes)
+            {
+                if (KindsOf(shape) is { } kinds && !kinds.Contains("object"))
+                {
+                    continue;
+                }
+
+                // Every schema that says an object closes it (additionalProperties: false), so the member is one each
+                // of them names; where none says an object, nothing here says what the value holds.
+                var objects = shape.Said.Where(said => SaysType(said.Schema, "object")).ToList();
+
+                if (objects.Count == 0)
+                {
+                    found.AddRange(Anything._shapes);
+                    continue;
+                }
+
+                var named = objects
+                    .Select(said => said.Schema["properties"] is JsonObject properties && properties[name] is JsonObject property ? property : null)
+                    .ToList();
+
+                if (named.All(property => property is not null))
+                {
+                    found.AddRange(Shapes(objects[0].Root, [.. named.Select(property => property!)]));
+                }
+            }
+
+            return found.Count == 0 ? null : new Reading(found);
+        }
+
+        /// <summary>
+        /// What an item of the value is said to be, or <see langword="null"/> where no value the reading allows is a
+        /// list. Where a list's items are not said, an item may be anything.
+        /// </summary>
+        public Reading? Items
+        {
+            get
+            {
+                var found = new List<Shape>();
+
+                foreach (var shape in _shapes)
+                {
+                    if (KindsOf(shape) is { } kinds && !kinds.Contains("array"))
+                    {
+                        continue;
+                    }
+
+                    if (shape.ItemsSaid is { } said)
+                    {
+                        found.AddRange(said._shapes);
+                        continue;
+                    }
+
+                    // Every schema that says the items holds of each, so an item answers them all at once.
+                    var items = shape.Said.Where(each => each.Schema["items"] is JsonObject).ToList();
+
+                    found.AddRange(items.Count == 0
+                        ? Anything._shapes
+                        : Shapes(items[0].Root, [.. items.Select(each => (JsonObject)each.Schema["items"]!)]));
+                }
+
+                return found.Count == 0 ? null : new Reading(found);
+            }
+        }
+
+        /// <summary>
+        /// The shapes the schemas <paramref name="said"/> allow together, each read in <paramref name="root"/>: a
+        /// reference read as the definition it names, and each <c>anyOf</c> as one shape for each of its own, beside
+        /// what the rest say. A subset schema never recurses, so the reading ends.
+        /// </summary>
+        private static IEnumerable<Shape> Shapes(JsonObject root, IReadOnlyList<JsonObject> said)
+        {
+            var resolved = said.Select(schema => Resolve(root, schema)).ToList();
+            IEnumerable<IReadOnlyList<JsonObject>> combinations = [[]];
+
+            foreach (var schema in resolved)
+            {
+                var choices = schema["anyOf"] is JsonArray shapes
+                    ? shapes.Select(shape => (IReadOnlyList<JsonObject>)[schema, Resolve(root, (JsonObject)shape!)]).ToList()
+                    : [[schema]];
+
+                combinations = combinations.SelectMany(combination => choices.Select(choice => (IReadOnlyList<JsonObject>)[.. combination, .. choice])).ToList();
+            }
+
+            return combinations.Select(combination => new Shape([.. combination.Select(schema => (root, schema))], null, null));
+        }
+
+        /// <summary>The definition a reference names, or the schema itself where it is none.</summary>
+        private static JsonObject Resolve(JsonObject root, JsonObject schema)
+            => schema["$ref"] is JsonValue reference
+                ? (JsonObject)root["$defs"]![reference.GetValue<string>()[Definitions.Length..]]!
+                : schema;
+
+        /// <summary>The kinds one shape allows, or <see langword="null"/> where it allows any.</summary>
+        private static IReadOnlySet<string>? KindsOf(Shape shape)
+        {
+            IReadOnlySet<string>? kinds = shape.Limit;
+
+            foreach (var (_, schema) in shape.Said)
+            {
+                if (SaidKinds(schema) is { } said)
+                {
+                    kinds = kinds is null ? said : new HashSet<string>(kinds.Where(said.Contains), StringComparer.Ordinal);
+                }
+            }
+
+            return kinds;
+        }
+
+        /// <summary>
+        /// The kinds one schema, on its own, says: its <c>type</c>, an integer being a number too; else those of its
+        /// <c>const</c> or its <c>enum</c>; else <see langword="null"/>, any.
+        /// </summary>
+        private static IReadOnlySet<string>? SaidKinds(JsonObject schema)
+        {
+            if (TypeOf(schema) is { } type)
+            {
+                var kinds = new HashSet<string>(type.Split('+'), StringComparer.Ordinal);
+
+                if (kinds.Contains("number"))
+                {
+                    kinds.Add("integer");
+                }
+
+                return kinds;
+            }
+
+            if (schema.ContainsKey("const"))
+            {
+                return new HashSet<string>([KindOfValue(schema["const"])], StringComparer.Ordinal);
+            }
+
+            return schema["enum"] is JsonArray options
+                ? new HashSet<string>(options.Select(KindOfValue), StringComparer.Ordinal)
+                : null;
+        }
+
+        /// <summary>The kind a scalar written in a schema is.</summary>
+        private static string KindOfValue(JsonNode? value)
+            => value?.GetValueKind() switch
+            {
+                null or JsonValueKind.Null => "null",
+                JsonValueKind.String => "string",
+                JsonValueKind.True or JsonValueKind.False => "boolean",
+                JsonValueKind.Number when value is JsonValue number && number.TryGetValue(out long _) => "integer",
+                JsonValueKind.Number => "number",
+                JsonValueKind.Array => "array",
+                _ => "object",
+            };
+    }
+
     /// <summary>A <c>$ref</c> as the walk found it: the definition it sits in, if any, where it is, and the definition it names.</summary>
     /// <param name="Owner">The name of the root's definition the reference is written in; <see langword="null"/> outside them.</param>
     /// <param name="At">The reference's own path in the schema.</param>
