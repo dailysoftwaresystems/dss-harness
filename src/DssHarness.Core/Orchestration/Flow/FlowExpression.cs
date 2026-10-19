@@ -111,6 +111,36 @@ public abstract record FlowExpression
     }
 
     /// <summary>
+    /// What this expression yields as a run reads it, over what each path yields then: the same operators, with the same
+    /// short-circuits, evaluated left to right. A value an operator does not take - a Missing name where a value was
+    /// needed - throws <see cref="UnresolvedReadException"/>, and the step that read it failed with 12.
+    /// </summary>
+    /// <param name="read">
+    /// What a path yields when the run reads it - a step's output or one of its facts, an input, one of the run's own
+    /// names - answering <see cref="FlowValue.Missing"/> where nothing holds it. A path from <c>it</c> is read here, as
+    /// an item of the list the nearest <c>any(...)</c> looks into.
+    /// </param>
+    public FlowValue Evaluate(Func<Path, FlowValue> read)
+    {
+        ArgumentNullException.ThrowIfNull(read);
+
+        return Yield(new Evaluating(read));
+    }
+
+    /// <summary>What this node yields, given what its paths yield and the items the <c>any(...)</c> calls around it look into.</summary>
+    private protected abstract FlowValue Yield(Evaluating evaluating);
+
+    /// <summary>
+    /// One reading of one expression at run time: what its paths yield, and the items the <c>any(...)</c> calls around
+    /// the part being read look into, the nearest last.
+    /// </summary>
+    private protected sealed record Evaluating(Func<Path, FlowValue> Read)
+    {
+        /// <summary>Each <c>any(...)</c> around the part being read: the item its test names <c>it</c>.</summary>
+        public Stack<FlowValue> Items { get; } = new();
+    }
+
+    /// <summary>
     /// The expression as it reads, rebuilt from the tree: spaced as this class writes it, and parenthesized only where
     /// the grammar needs it, so a refusal quotes a part of it as one would write it.
     /// </summary>
@@ -275,6 +305,20 @@ public abstract record FlowExpression
 
             return Boolean;
         }
+
+        private protected override FlowValue Yield(Evaluating evaluating)
+        {
+            foreach (var term in Terms)
+            {
+                // A true term settles the join; the terms after it are not read, which is the short-circuit.
+                if (term.Yield(evaluating).AsBoolean(term.Written))
+                {
+                    return FlowValue.Of(true);
+                }
+            }
+
+            return FlowValue.Of(false);
+        }
     }
 
     /// <summary><c>a &amp;&amp; b</c>: true where every term is true, short-circuiting left to right.</summary>
@@ -301,6 +345,20 @@ public abstract record FlowExpression
             }
 
             return Boolean;
+        }
+
+        private protected override FlowValue Yield(Evaluating evaluating)
+        {
+            foreach (var term in Terms)
+            {
+                // A false term settles the join; the terms after it are not read, which is the short-circuit.
+                if (!term.Yield(evaluating).AsBoolean(term.Written))
+                {
+                    return FlowValue.Of(false);
+                }
+            }
+
+            return FlowValue.Of(true);
         }
     }
 
@@ -336,6 +394,15 @@ public abstract record FlowExpression
 
             return Boolean;
         }
+
+        private protected override FlowValue Yield(Evaluating evaluating)
+        {
+            var left = Left.Yield(evaluating).AsScalar(Left.Written);
+            var right = Right.Yield(evaluating).AsScalar(Right.Written);
+            var equal = FlowValue.ScalarsEqual(left, right);
+
+            return FlowValue.Of(Operator == "==" ? equal : !equal);
+        }
     }
 
     /// <summary><c>!a</c>: the opposite of a boolean.</summary>
@@ -354,6 +421,9 @@ public abstract record FlowExpression
             HeldToABoolean(Inner, typing, said => $"applies ! to '{Inner.Written}', which is {said}; ! takes a boolean, and nothing is read as true or as false but true and false");
             return Boolean;
         }
+
+        private protected override FlowValue Yield(Evaluating evaluating)
+            => FlowValue.Of(!Inner.Yield(evaluating).AsBoolean(Inner.Written));
     }
 
     /// <summary><c>a ?? b</c>: the left side where it is there and not null, the right otherwise.</summary>
@@ -387,6 +457,25 @@ public abstract record FlowExpression
 
             return yielded!;
         }
+
+        private protected override FlowValue Yield(Evaluating evaluating)
+        {
+            // The first term that is there and not null settles it: Missing and null both fall through, and the last
+            // term is yielded as it is.
+            for (var index = 0; index < Terms.Count; index++)
+            {
+                var value = Terms[index].Yield(evaluating);
+
+                if (index < Terms.Count - 1 && (value.IsMissing || value.IsNull))
+                {
+                    continue;
+                }
+
+                return value;
+            }
+
+            return FlowValue.Missing;
+        }
     }
 
     /// <summary><c>empty(x)</c>: true for null, <c>""</c>, <c>[]</c>, <c>{}</c> and a name that reads nothing.</summary>
@@ -409,6 +498,9 @@ public abstract record FlowExpression
             _ = Inner.Typed(typing);
             return Boolean;
         }
+
+        private protected override FlowValue Yield(Evaluating evaluating)
+            => FlowValue.Of(Inner.Yield(evaluating).HoldsNothing);
     }
 
     /// <summary>
@@ -443,6 +535,30 @@ public abstract record FlowExpression
 
             return Boolean;
         }
+
+        private protected override FlowValue Yield(Evaluating evaluating)
+        {
+            var list = List.Yield(evaluating).AsList(List.Written);
+
+            foreach (var item in list)
+            {
+                evaluating.Items.Push(FlowValue.Of(item));
+
+                try
+                {
+                    if (Test.Yield(evaluating).AsBoolean(Test.Written))
+                    {
+                        return FlowValue.Of(true);
+                    }
+                }
+                finally
+                {
+                    evaluating.Items.Pop();
+                }
+            }
+
+            return FlowValue.Of(false);
+        }
     }
 
     /// <summary>A literal as written: <c>true</c>, <c>false</c>, <c>null</c>, a number, or a quoted string.</summary>
@@ -468,6 +584,8 @@ public abstract record FlowExpression
                 double => "number",
                 _ => "string",
             });
+
+        private protected override FlowValue Yield(Evaluating evaluating) => FlowValue.Of(Value);
     }
 
     /// <summary>A <c>{path}</c> placeholder read inside an expression: a read of its own, filled as templates are.</summary>
@@ -481,6 +599,21 @@ public abstract record FlowExpression
 
         /// <remarks>Filled as a template is, its value written as text whatever it reads.</remarks>
         private protected override JsonSchemaSubset.Reading Typed(Typing typing) => JsonSchemaSubset.Reading.Of("string");
+
+        private protected override FlowValue Yield(Evaluating evaluating)
+        {
+            // A placeholder names one value by its dotted name - no index, none of a template's spellings - and what it
+            // yields is written as text, as a template fills it.
+            var path = new Path(Whole, Whole.Split('.').Select(name => new Segment(name, null)).ToList());
+            var value = evaluating.Read(path);
+
+            if (value.IsMissing)
+            {
+                throw new UnresolvedReadException($"{{{Whole}}} reads nothing");
+            }
+
+            return FlowValue.Of(value.AsTemplateText());
+        }
     }
 
     /// <summary>One step of a path: a key of what the last step named, or an index into its list.</summary>
@@ -529,6 +662,24 @@ public abstract record FlowExpression
 
             typing.Problem($"reads '{Whole}', and each item of '{around.List}' {why}");
             return JsonSchemaSubset.Reading.Anything;
+        }
+
+        private protected override FlowValue Yield(Evaluating evaluating)
+        {
+            var value = Root == "it"
+                ? evaluating.Items.TryPeek(out var item)
+                    ? item
+                    : throw new UnresolvedReadException($"'it' names the member of the list any looks into, and there is none here")
+                : evaluating.Read(this);
+
+            // Each step walks what the last one named; a step that finds nothing leaves the value Missing, which ?? and
+            // empty(...) take and nothing else does.
+            foreach (var step in Steps)
+            {
+                value = step.Key is { } key ? value.Member(key) : value.At(step.Index ?? 0);
+            }
+
+            return value;
         }
     }
 
