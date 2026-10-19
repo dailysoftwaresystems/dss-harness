@@ -146,7 +146,10 @@ public sealed record AgentRecord
     /// </summary>
     public IReadOnlyList<string>? MovingRemoved { get; init; }
 
-    /// <summary>The Claude session the agent runs as - a session's id or a subagent's - where it was given.</summary>
+    /// <summary>
+    /// The Claude session the agent runs as - a session's id or a subagent's - where it was given: never for an agent that
+    /// reads the main tree, which <see cref="Problem(string, string)"/> refuses.
+    /// </summary>
     public string? Session { get; init; }
 
     /// <summary>One of <see cref="AgentStates"/>.</summary>
@@ -239,6 +242,13 @@ public sealed record AgentRecord
             if (MovingRemoved is not null)
             {
                 return "it reads the main tree, and records what a move of a base removed";
+            }
+
+            // Nor does it record a session: deleting it looks for no transcript, so a session it named would be kept by
+            // nothing.
+            if (Session is { } session)
+            {
+                return $"it reads the main tree, and records the session '{session}'";
             }
         }
         else

@@ -2526,7 +2526,10 @@ public static class HelpTopics
             + "An agent's worktree is <worktrees.root>/<orchestrator>/<agent>, which list-worktree and delete-worktree name "
             + "orchestrator/agent; the copies hosts keep of it are named orchestrator--agent. An agent can also be made with no "
             + $"worktree ({AgentService.CreateCommand} --no-worktree), reading the main tree and writing only its scratch: the engine "
-            + "makes one for a read-only reason step, and a person has no use for one by hand. Agents write their handoffs, pause "
+            + "makes one for a read-only reason step, and a person has no use for one by hand. It records no session - --session "
+            + "beside --no-worktree is a usage error - and delete-agent marks it deleted in one write, folding nothing, removing no "
+            + "worktree and looking for no transcript; --discard-uncommitted and the allowances have nothing to act on there, and "
+            + "it says so. Agents write their handoffs, pause "
             + "and stop points as .md files in their own directory. Every command that writes an agent's records names where they are "
             + "on each way out once it has: its record, its seed, the directory of the bytes it shares where it keeps any, and the rows "
             + "its folds applied - each that is there.");
@@ -2557,11 +2560,12 @@ public static class HelpTopics
         builder.AppendLine();
         AppendWrapped(
             builder,
-            $"--parallel, {OrchestratorRecord.DefaultParallel} unless given, is the most open agents at once - every agent not yet "
-            + "deleted, and every worktree git lists below the orchestrator's directory: create-agent refuses the next, naming them, "
-            + "and list-orchestrator counts them. Run again, create-orchestrator changes only the limit and the session, and "
-            + "create-agent records only the session; for an agent whose making stopped part way, it says so and names what "
-            + "finishes it. An agent's name is never used twice: a deleted agent's directory stays as its history.");
+            $"--parallel, {OrchestratorRecord.DefaultParallel} unless given, is the most open agents at once - every agent with a "
+            + "worktree not yet deleted, and every worktree git lists below the orchestrator's directory: create-agent refuses the "
+            + "next, naming them, and list-orchestrator counts them. An agent with no worktree is never open. Run again, "
+            + "create-orchestrator changes only the limit and the session, and create-agent records only the session, and nothing "
+            + "of an agent with no worktree; for an agent whose making stopped part way, it says so and names what finishes it. "
+            + "An agent's name is never used twice: a deleted agent's directory stays as its history.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -2841,11 +2845,11 @@ public static class HelpTopics
             + "kept in it, and a mutation worker, each in its own words. delete-agent refuses to run from "
             + "inside the worktree it removes, and so does its dry run, "
             + "and an agent made under a worktrees root the configuration no longer names is refused with nothing touched. "
-            + "delete-orchestrator deletes the orchestrator once every agent of it is deleted and no worktree is left below its "
-            + "directory, nor any directory holding a .git of its own that git records no worktree at - until then it refuses "
-            + $"({HarnessExit.Refused}), naming each - and the evidence and transcripts its agents kept only with "
-            + "--delete-evidence; it removes the record "
-            + "last, so one that stops part way finishes when run again.");
+            + "delete-orchestrator deletes the orchestrator once every agent of it with a worktree is deleted and no worktree is "
+            + "left below its directory, nor any directory holding a .git of its own that git records no worktree at - until then "
+            + $"it refuses ({HarnessExit.Refused}), naming each - and the evidence and transcripts its agents kept only with "
+            + "--delete-evidence; an agent with no worktree holds nothing but records, and goes with it, deleted or not. It "
+            + "removes the record last, so one that stops part way finishes when run again.");
 
         return builder.ToString();
     }
@@ -3003,6 +3007,17 @@ public static class HelpTopics
         builder.AppendLine("                                     orchestrator and its agents keep, in the main");
         builder.AppendLine("                                     checkout, and never sent to a host by sync");
         builder.AppendLine($"                                     ('{ToolPackage.Command} help orchestrators')");
+        var agentDirectory = $"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.AgentsDirectoryName}/<agent>";
+        builder.AppendLine($"  {HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.StepsDirectoryName}/<instance>/");
+        builder.AppendLine("                                     ignored; one step of a run that no agent owns,");
+        builder.AppendLine("                                     the create-agent that makes an agent included");
+        builder.AppendLine($"  {agentDirectory}/{OrchestratorLayout.StepsDirectoryName}/<instance>/");
+        builder.AppendLine("                                     ignored; one step the agent runs, or that");
+        builder.AppendLine("                                     runs in or for its worktree: everything of the");
+        builder.AppendLine($"                                     step, its {OrchestratorLayout.HandoffFileName} where one stopped it");
+        builder.AppendLine($"  {agentDirectory}/{OrchestratorLayout.SessionsDirectoryName}/<id>/");
+        builder.AppendLine("                                     ignored; API clients only: one conversation with");
+        builder.AppendLine("                                     the provider, in the provider's own form");
         builder.AppendLine($"  {HarnessLayout.MutationsDirectoryName}/                        contents ignored, .gitkeep tracked; the tree's");
         builder.AppendLine("                                     mutation workers, in every tree, never sent to");
         builder.AppendLine($"                                     a host by sync ('{ToolPackage.Command} help mutations')");

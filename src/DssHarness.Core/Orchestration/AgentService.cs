@@ -231,7 +231,16 @@ public sealed class AgentService(
         {
             return CommandOutcome.Usage(
                 "--empty hands an agent's worktree nothing of the main tree's uncommitted state, and an agent made with "
-                + "--no-worktree has no worktree to hand anything to. Give one or the other. Nothing was created.");
+                + "--no-worktree has no worktree to hand anything to. Give one or the other. Nothing was changed.");
+        }
+
+        // An agent with no worktree records no session, and deleting it looks for no transcript: the engine, which alone
+        // makes one, hands it none.
+        if (noWorktree && session is not null)
+        {
+            return CommandOutcome.Usage(
+                "--session records the Claude session whose transcripts delete-agent keeps, and an agent made with "
+                + "--no-worktree records none, so deleting it looks for none. Give one or the other. Nothing was changed.");
         }
 
         if ((Shape(orchestrator, agent) ?? OrchestrationRules.ModelProblem(model) ?? OrchestrationRules.SessionProblem(session)) is { } shape)
@@ -291,7 +300,6 @@ public sealed class AgentService(
                     Model = model,
                     CreatedAt = now,
                     Access = AgentRecord.AccessRead,
-                    Session = session,
                     State = AgentStates.Live,
                 });
 
@@ -508,7 +516,10 @@ public sealed class AgentService(
             : $"{OrchestrationReports.DeleteAgentLine(orchestrator, agent, "--apply --discard-uncommitted")} drops it; nothing else can finish it, "
                 + "since its record names no commit its worktree was made from.";
 
-    /// <summary>What running create-agent again does: records the session, and nothing else.</summary>
+    /// <summary>
+    /// What running create-agent again does: records the session, and nothing else - and nothing at all for an agent with no
+    /// worktree, which records none.
+    /// </summary>
     private CommandOutcome Again(OrchestratorLayout layout, AgentRecord existing, string model, bool empty, string? session, bool noWorktree)
     {
         if (existing.State == AgentStates.Deleted)
@@ -529,13 +540,16 @@ public sealed class AgentService(
             return CommandOutcome.Refused($"{Agent(existing)} has no worktree: an agent with one is another agent. Nothing was changed.");
         }
 
+        // One with no worktree records no session, so run again there is nothing create-agent records of it: no session
+        // reaches here beside --no-worktree.
         if (!string.Equals(existing.Model, model, StringComparison.Ordinal) || empty)
         {
             return CommandOutcome.Refused(
-                $"{Agent(existing)} exists, created for model '{existing.Model}'. Run again, create-agent records only a session (--session); "
+                $"{Agent(existing)} exists, created for model '{existing.Model}'. "
                 + (existing.Reads
-                    ? "Nothing was changed."
-                    : $"{OrchestrationReports.Line(SeedCommand, existing.Orchestrator, existing.Name)} seeds it again. Nothing was changed."));
+                    ? "Run again, create-agent changes nothing of an agent with no worktree. Nothing was changed."
+                    : $"Run again, create-agent records only a session (--session); {OrchestrationReports.Line(SeedCommand, existing.Orchestrator, existing.Name)} "
+                        + "seeds it again. Nothing was changed."));
         }
 
         // An agent whose making stopped part way is said to be one, never "already as asked"; one that reads the main
@@ -1665,8 +1679,8 @@ public sealed class AgentService(
 
     /// <summary>
     /// Deleting an agent that reads the main tree: one write, live to deleted, which is the path the states already have
-    /// for an agent whose worktree was never made. Nothing is folded and no worktree is removed, because it has neither;
-    /// its directory stays, as every deleted agent's does.
+    /// for an agent whose worktree was never made. Nothing is folded and no worktree is removed, because it has neither,
+    /// and no transcript is looked for, because it records no session; its directory stays, as every deleted agent's does.
     /// </summary>
     private CommandOutcome DeleteReadingAsync(
         HarnessContext context,
@@ -1686,14 +1700,18 @@ public sealed class AgentService(
             nothing.Add("--discard-uncommitted discards the changes in an agent's worktree, and this agent has none");
         }
 
-        if (allowances.Merge.Count + allowances.Settled.Count + allowances.New.Count + allowances.AcceptLost.Count + allowances.AcceptOver.Count > 0)
+        if (allowances.Given.Count > 0)
         {
             nothing.Add("the allowances let a fold write, and there is nothing of this agent to fold");
         }
 
+        string[] lines = [$"record {layout.AgentRecordFile(record.Name)}", TranscriptsPlan(record), .. nothing];
+
         if (!apply)
         {
-            var (tail, _) = Ending(DeleteCommand, record, allowances, rows: null, "do it");
+            // The line that does it leaves out the options that have nothing to act on, so none of them reads as doing
+            // something.
+            var tail = nothing.Count == 0 ? "pass --apply to do it" : $"{OrchestrationReports.DeleteAgentLine(record.Orchestrator, record.Name)} does it";
 
             return Dry(
                 json,
@@ -1702,8 +1720,8 @@ public sealed class AgentService(
                 CommandOutcome.Ok(
                     $"dry run: deleting {Lower(Agent(record))} folds nothing and removes no worktree - it reads the main tree, and has neither - "
                     + $"and marks it deleted; {tail}",
-                    [$"record {layout.AgentRecordFile(record.Name)}", .. nothing]),
-                standing: null);
+                    lines),
+                RequestStanding.Sound);
         }
 
         _store.UpdateAgent(
@@ -1714,7 +1732,7 @@ public sealed class AgentService(
         // Unlogged here, as every delete path's apply is: the caller logs it once.
         return CommandOutcome.Ok(
             $"deleted {Lower(Agent(record))}, which read the main tree: nothing was folded and no worktree removed, and its directory is kept as its history",
-            [$"record {layout.AgentRecordFile(record.Name)}", .. nothing]);
+            lines);
     }
 
     /// <summary>
@@ -3407,10 +3425,16 @@ public sealed class AgentService(
         return (lines, kept.Failed);
     }
 
+    /// <summary>
+    /// What deleting an agent says of its transcripts before it looks: whose it looks for, or that it looks for none - and
+    /// how one is recorded, save for an agent with no worktree, which never records one.
+    /// </summary>
     private static string TranscriptsPlan(AgentRecord record)
-        => record.Session is null
-            ? $"no Claude session is recorded for it, so no transcript is looked for; {OrchestrationReports.Line(CreateCommand, record.Orchestrator, record.Name, "--model", record.Model, "--session", "<id>")} records one"
-            : $"transcripts: session {record.Session}'s, where Claude Code keeps them";
+        => record.Session is not null
+            ? $"transcripts: session {record.Session}'s, where Claude Code keeps them"
+            : record.Reads
+                ? "no Claude session is recorded for it - an agent with no worktree records none - so no transcript is looked for"
+                : $"no Claude session is recorded for it, so no transcript is looked for; {OrchestrationReports.Line(CreateCommand, record.Orchestrator, record.Name, "--model", record.Model, "--session", "<id>")} records one";
 
     private static string EvidenceLine(EvidenceKept kept, string destination)
         => (kept.Kept.Count == 0 ? "its evidence roots held nothing to keep" : $"kept {ReportText.Counted(kept.Kept.Count, "evidence file")} in '{destination}', each proved")

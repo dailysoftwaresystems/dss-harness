@@ -712,7 +712,17 @@ one by hand. It counts against no limit, the limit being a limit on worktrees: `
 it out, and so do list-orchestrator's open agents and delete-orchestrator's way, since a live one holds nothing but
 records and goes with the orchestrator. It is never seeded, refreshed, rebased or folded - each refuses, exit 13,
 before anything is asked of git - and deleting it is one write, `live` to `deleted`, the path the states already have
-for an agent whose worktree was never made; its directory stays, as every deleted agent's does.
+for an agent whose worktree was never made; its directory stays, as every deleted agent's does. It records no session:
+`--session` beside `--no-worktree` is a usage error, and such an agent's record that names one does not read
+(`AgentRecord.Problem`), so deleting it says no session is recorded and looks for no transcript, and keeps no evidence
+either, having no worktree. `--discard-uncommitted` and the allowances have nothing to act on there; delete-agent says
+so, line by line, and its dry run's line for `--apply` leaves them out.
+
+A `dssharness` from before the agent with no worktree reads its record strictly, finds no worktree in it, and cannot
+tell what the agent is: its list-orchestrator prints the agent as one whose record does not read, and its
+delete-orchestrator refuses that orchestrator and changes nothing. As across the tool's rename, update while no
+`dssharness` is running, and do not go back. An agent with a worktree is not touched by this - the tool writes no
+`access` for one, so its record is what an older tool reads.
 
 ### Seeding and folding
 

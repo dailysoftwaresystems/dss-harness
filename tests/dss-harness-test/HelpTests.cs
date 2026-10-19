@@ -2253,7 +2253,7 @@ public sealed partial class HelpTests
         Assert.Contains("a file changed or new since is work, left for you", text, StringComparison.Ordinal);
         Assert.Contains("one not found is said, and one found and not kept stops it before anything is closed", text, StringComparison.Ordinal);
         Assert.Contains("A path this process cannot look at is never read as absent: the fold fails, nothing written.", text, StringComparison.Ordinal);
-        Assert.Contains("it removes the record last, so one that stops part way finishes when run again", text, StringComparison.Ordinal);
+        Assert.Contains("It removes the record last, so one that stops part way finishes when run again.", text, StringComparison.Ordinal);
         Assert.Contains("Seeding again hands besides every path the main tree holds otherwise than the agent shares it, committed or not.", text, StringComparison.Ordinal);
         Assert.Contains(
             "a symbolic link the main tree committed is named and never handed, and so is a submodule's entry. A file the main tree turned into a "
@@ -2303,7 +2303,8 @@ public sealed partial class HelpTests
 
     /// <summary>
     /// The orchestrators topic says that delete-orchestrator refuses while a directory below the orchestrator's holds a
-    /// .git of its own that git records no worktree at, as it does while a worktree is left there.
+    /// .git of its own that git records no worktree at, as it does while a worktree is left there, and that an agent with
+    /// no worktree never stands in its way.
     /// </summary>
     [Fact]
     public async Task OrchestratorsTopic_SaysDeleteOrchestratorRefuses_WhileADirectoryGitRecordsNoWorktreeAtIsBelowIt()
@@ -2311,11 +2312,62 @@ public sealed partial class HelpTests
         var result = HelpText.Of("agents");
 
         Assert.Contains(
-            "delete-orchestrator deletes the orchestrator once every agent of it is deleted and no worktree is left below its "
-                + "directory, nor any directory holding a .git of its own that git records no worktree at - until then it refuses "
-                + $"({HarnessExit.Refused}), naming each - and the evidence and transcripts its agents kept only with --delete-evidence;",
+            "delete-orchestrator deletes the orchestrator once every agent of it with a worktree is deleted and no worktree is left "
+                + "below its directory, nor any directory holding a .git of its own that git records no worktree at - until then it "
+                + $"refuses ({HarnessExit.Refused}), naming each - and the evidence and transcripts its agents kept only with "
+                + "--delete-evidence; an agent with no worktree holds nothing but records, and goes with it, deleted or not.",
             Prose.Words(result.StandardOutput),
             StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The orchestrators topic says what an agent with no worktree is to the verbs a person types: never open, so the
+    /// limit leaves it out; nothing recorded of it when create-agent runs again; no session, --session beside
+    /// --no-worktree refused; and a deletion that is one write, saying what has nothing to act on.
+    /// </summary>
+    [Fact]
+    public async Task OrchestratorsTopic_SaysWhatTheVerbsDoWithAnAgentWithNoWorktree()
+    {
+        var text = Prose.Words(HelpText.Of("agents").StandardOutput);
+
+        foreach (var said in new[]
+        {
+            "It records no session - --session beside --no-worktree is a usage error - and delete-agent marks it deleted in one "
+                + "write, folding nothing, removing no worktree and looking for no transcript; --discard-uncommitted and the "
+                + "allowances have nothing to act on there, and it says so.",
+            $"--parallel, {OrchestratorRecord.DefaultParallel} unless given, is the most open agents at once - every agent with a "
+                + "worktree not yet deleted, and every worktree git lists below the orchestrator's directory: create-agent refuses "
+                + "the next, naming them, and list-orchestrator counts them. An agent with no worktree is never open. Run again, "
+                + "create-orchestrator changes only the limit and the session, and create-agent records only the session, and "
+                + "nothing of an agent with no worktree;",
+        })
+        {
+            Assert.Contains(said, text, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// The layout topic names where a run keeps a step no agent owns, and where an agent keeps its steps - a step's
+    /// handoff among them - and its conversations with an API client, each from the layout's own names.
+    /// </summary>
+    [Fact]
+    public async Task LayoutTopic_NamesWhereARunsStepsAndAnAgentsStepsAndSessionsAre()
+    {
+        var result = HelpText.Of("layout");
+        var agent = $"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.AgentsDirectoryName}/<agent>";
+
+        foreach (var said in new[]
+        {
+            $"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.StepsDirectoryName}/<instance>/ ignored; one step of a "
+                + "run that no agent owns, the create-agent that makes an agent included",
+            $"{agent}/{OrchestratorLayout.StepsDirectoryName}/<instance>/ ignored; one step the agent runs, or that runs in or for "
+                + $"its worktree: everything of the step, its {OrchestratorLayout.HandoffFileName} where one stopped it",
+            $"{agent}/{OrchestratorLayout.SessionsDirectoryName}/<id>/ ignored; API clients only: one conversation with the "
+                + "provider, in the provider's own form",
+        })
+        {
+            Assert.Contains(said, Prose.Words(result.StandardOutput), StringComparison.Ordinal);
+        }
     }
 
     /// <summary>

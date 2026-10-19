@@ -69,7 +69,7 @@ public static class OrchestrationReports
 
         return record.State switch
         {
-            AgentStates.Live when record.Reads => $"{record.Name}  live, reads the main tree (no worktree){Session(record.Session)}{kept}",
+            AgentStates.Live when record.Reads => $"{record.Name}  live, reads the main tree (no worktree){kept}",
             AgentStates.Live when !agent.WorktreeExists => $"{record.Name}  live, and its worktree is gone from '{agent.WorktreePath}'{kept}",
             AgentStates.Live => $"{record.Name}  live at '{agent.WorktreePath}', base {Base(record.Base)}{Session(record.Session)}{kept}",
             AgentStates.Closed => $"{record.Name}  closed at {Moment(record.Closing!.At)}{abandoned}, and its removal did not finish{(agent.WorktreeExists ? $": its worktree is still at '{agent.WorktreePath}'" : string.Empty)}{kept}",

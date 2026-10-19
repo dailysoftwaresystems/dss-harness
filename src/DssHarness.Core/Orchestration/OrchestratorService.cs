@@ -27,9 +27,9 @@ public interface IOrchestratorService : IUseCase
     Task<CommandOutcome> CreateAsync(string startDirectory, string name, string model, int? parallel, string? session, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Deletes an orchestrator, once none of its agents is live or closed and no worktree is left below its directory
-    /// under the worktrees root. The evidence and transcripts its agents kept go with it only with
-    /// <paramref name="deleteEvidence"/>.
+    /// Deletes an orchestrator, once none of its agents with a worktree is live or closed and no worktree is left below its
+    /// directory under the worktrees root; an agent with no worktree holds nothing but records, and goes with it whatever
+    /// its state. The evidence and transcripts its agents kept go with it only with <paramref name="deleteEvidence"/>.
     /// </summary>
     /// <param name="startDirectory">A directory in the repository.</param>
     /// <param name="name">The orchestrator's name.</param>
@@ -270,9 +270,8 @@ public sealed class OrchestratorService(
             }
 
             // An agent that reads the main tree holds nothing but records: it does not stand in the way, and goes with
-            // the orchestrator. Everything it kept - its evidence and its transcripts today, its steps and its sessions
-            // once the engine writes them - is counted below, under the guard --delete-evidence gives. What git lists
-            // below is refused on its own below, so the open agents are asked of the records alone.
+            // the orchestrator. It keeps no evidence, having no worktree, and no transcript, having no session. What git
+            // lists below is refused on its own below, so the open agents are asked of the records alone.
             var open = OrchestrationRules.OpenAgents(name, agents, []);
 
             if (open.Count > 0)
@@ -316,11 +315,20 @@ public sealed class OrchestratorService(
                     + $"{OrchestrationReports.Line(DeleteCommand, name, deleteEvidence ? "--delete-evidence" : string.Empty)} run again finishes it.");
             }
 
+            // Every agent left is deleted, or has no worktree and was not: each is counted as what it is.
+            var deleted = agents.Count(agent => agent.Record!.State == AgentStates.Deleted);
+            var reading = agents.Count - deleted;
+            string[] went =
+            [
+                .. deleted == 0 ? [] : new[] { ReportText.Counted(deleted, "deleted agent") },
+                .. reading == 0 ? [] : new[] { $"{ReportText.Counted(reading, "agent")} with no worktree, not deleted" },
+            ];
+
             return CommandOutcome.Ok(
                 $"deleted orchestrator '{name}'",
                 [
                     $"removed {orchestrator.Directory}",
-                    .. agents.Count == 0 ? [] : new[] { $"with the history of {ReportText.Counted(agents.Count, "deleted agent")}" },
+                    .. went.Length == 0 ? [] : new[] { $"with the history of {string.Join(" and ", went)}" },
                     .. kept.Count == 0 ? [] : new[] { $"and {ReportText.Counted(kept.Sum(agent => agent.Evidence), "evidence file")} and {ReportText.Counted(kept.Sum(agent => agent.Transcripts), "transcript file")}" },
                 ]);
         });

@@ -115,9 +115,9 @@ public sealed class OrchestrationStoreTests
     }
 
     /// <summary>
-    /// A record that says it reads the main tree holds none of what a worktree's record does, and a record that says
-    /// nothing - which is every record an older tool wrote - holds all of it: each is refused where it is not so. An
-    /// <c>access</c> that names no kind of agent is refused on any record, never read as the default kind.
+    /// A record that says it reads the main tree holds none of what a worktree's record does, nor a session, and a record
+    /// that says nothing - which is every record an older tool wrote - holds all of it: each is refused where it is not
+    /// so. An <c>access</c> that names no kind of agent is refused on any record, never read as the default kind.
     /// </summary>
     [Theory]
     [InlineData("worktree", "it reads the main tree, and records the worktree 'o1/ag'")]
@@ -126,6 +126,7 @@ public sealed class OrchestrationStoreTests
     [InlineData("a move of its base", "it reads the main tree, and records a move of a base to")]
     [InlineData("what a move of its base was told", "it reads the main tree, and records what a move of a base was told")]
     [InlineData("what a move of its base removed", "it reads the main tree, and records what a move of a base removed")]
+    [InlineData("a session", "it reads the main tree, and records the session 'sess1'")]
     [InlineData("an access no agent has", "its access is 'banana', and an agent's is 'read' or 'write'")]
     [InlineData("closed with no closing", "it is closed, and records no closing, or records a deletion")]
     public async Task ARecordThatReads_HoldingAnyOfAWorktreeRecordsMembers_IsRefused(string what, string why)
@@ -144,6 +145,7 @@ public sealed class OrchestrationStoreTests
             "a move of its base" => text.Replace("{", "{\n  \"moving\": \"0123456789abcdef0123456789abcdef01234567\",", StringComparison.Ordinal),
             "what a move of its base was told" => text.Replace("{", "{\n  \"movingWith\": [ \"--merge\", \"a.txt\" ],", StringComparison.Ordinal),
             "what a move of its base removed" => text.Replace("{", "{\n  \"movingRemoved\": [ \"a.txt\" ],", StringComparison.Ordinal),
+            "a session" => text.Replace("{", "{\n  \"session\": \"sess1\",", StringComparison.Ordinal),
             "closed with no closing" => text.Replace("\"state\": \"live\"", "\"state\": \"closed\"", StringComparison.Ordinal),
             _ => text.Replace("\"access\": \"read\"", "\"access\": \"banana\"", StringComparison.Ordinal),
         });
