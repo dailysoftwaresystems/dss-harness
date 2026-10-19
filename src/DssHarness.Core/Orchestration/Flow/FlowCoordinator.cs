@@ -27,6 +27,12 @@ public enum FlowInstanceState
     /// <summary>Waiting on a question it asked or its failure raised; it holds nothing while it waits.</summary>
     Paused,
 
+    /// <summary>
+    /// A safe pause, a hard stop or the answer <c>abort</c> ended it where it stood: it runs again - or is recorded -
+    /// at the resume, and nothing it depends on is satisfied or blocked for ever by it.
+    /// </summary>
+    Stopped,
+
     /// <summary>Never reached: something it depends on failed and was neither handled nor passed over, or the run ended first.</summary>
     NotRun,
 }
@@ -45,6 +51,9 @@ public enum FlowRunStatus
 
     /// <summary>A question is open, and nothing more can run until it is answered.</summary>
     Paused,
+
+    /// <summary>A hard stop, the answer <c>abort</c>, or the run asked to stop where it stood ended it: it goes on at a resume.</summary>
+    Stopped,
 }
 
 /// <summary>How a session of a run ended: its status, the failures it counted, the questions it leaves open.</summary>
@@ -53,12 +62,14 @@ public enum FlowRunStatus
 /// <param name="Failed">The instances whose failures ended the run failed, in the order they ended.</param>
 /// <param name="OpenQuestions">The questions the session leaves open, in the order they were raised.</param>
 /// <param name="Summary">The session in words: <c>done; 2 steps failed and were passed over: ci, items[3].verify</c>.</param>
+/// <param name="Pause">The safe pause the session ended by, where one asked for it: its cause, whether the machine steps were stopped too, and every handoff it wrote.</param>
 public sealed record FlowSessionEnd(
     FlowRunStatus Status,
     IReadOnlyList<string> PassedOver,
     IReadOnlyList<string> Failed,
     IReadOnlyList<FlowQuestion> OpenQuestions,
-    string Summary);
+    string Summary,
+    FlowPauseState? Pause = null);
 
 /// <summary>
 /// One instance of a step of a run, as the coordinator holds it: its state, its output, what it ended with, and what
@@ -105,6 +116,12 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
     /// <c>&lt;step&gt;.question</c>, which a handler reads. <see langword="null"/> for every other ending.
     /// </summary>
     public string? EndedByQuestion { get; internal set; }
+
+    /// <summary>The handoff a safe pause wrote when it stopped this step, where one did; <see langword="null"/> otherwise.</summary>
+    public FlowHandoff? Handoff { get; internal set; }
+
+    /// <summary>Cancels what this instance's runner runs: a safe pause that stops machine steps and a hard stop cancel it.</summary>
+    internal CancellationTokenSource? Stoppable;
 
     /// <summary>Whether this step runs in the always phase: it says <c>always</c>, or a group around it does.</summary>
     public bool IsAlways { get; internal set; }
@@ -157,10 +174,12 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
 /// with the slices that own them.
 /// </para>
 /// <para>
-/// What is not here, by the plan's own order: the safe pause, the hard stop and the budget, the handlers an ending
-/// raises (<c>on</c>, <c>then</c>, and the visits a redirect sends the run back for), a repeat's <c>rounds</c> and
-/// <c>blocking</c>, and the recovery. A workflow that asks this coordinator to run either of the last two is refused
-/// loudly when the run meets it, never quietly misplayed.
+/// What is not here, by the plan's own order: the handlers an ending raises (<c>on</c>, <c>then</c>, and the visits a
+/// redirect sends the run back for), a repeat's <c>rounds</c> and <c>blocking</c>, and the recovery. A workflow that
+/// asks this coordinator to run either of the last two is refused loudly when the run meets it, never quietly
+/// misplayed. The safe pause, the hard stop and the budget are here in memory; their records on disk - the report,
+/// <c>flow.json</c>, <c>stop.json</c>, the handoff file, the resume and the refusals that guard it - are built on
+/// this, and the step runner it calls is given, not looked up.
 /// </para>
 /// </remarks>
 public sealed class FlowCoordinator
@@ -177,7 +196,7 @@ public sealed class FlowCoordinator
     private readonly List<Scope> _scopes = [];
     private readonly List<FlowQuestion> _questions = [];
     private readonly HashSet<string> _open = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, FlowInstance> _answerable = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, FlowInstance?> _answerable = new(StringComparer.Ordinal);
     private readonly List<FlowInstance> _passedOver = [];
     private readonly List<FlowInstance> _failed = [];
     private readonly List<Wake> _wakes = [];
@@ -191,6 +210,18 @@ public sealed class FlowCoordinator
     private bool _alwaysPhase;
     private bool _inSession;
     private bool _answeredAtOnce;
+    private bool _pausing;
+    private bool _hardStop;
+    private FlowPauseRequest? _pauseRequest;
+    private FlowPauseState? _pause;
+    private readonly FlowBudgetSpent _spent = new();
+    private readonly Dictionary<string, DateTimeOffset> _reasonStarted = new(StringComparer.Ordinal);
+    private readonly List<FlowInstance> _owedFailures = [];
+    private readonly List<CancellationTokenSource> _handoffBounds = [];
+    private int _budgetGranted;
+    private bool _budgetAsked;
+    private bool _pauseAllAsked;
+    private bool _stopApplied;
     private int _questionsRaised;
     private FlowSessionEnd? _last;
     private Task<Message>? _pending;
@@ -249,13 +280,141 @@ public sealed class FlowCoordinator
                 return FlowRunStatus.Running;
             }
 
-            return _open.Count > 0 ? FlowRunStatus.Paused : _stopping || _failed.Count > 0 ? FlowRunStatus.Failed : FlowRunStatus.Done;
+            return _open.Count > 0 ? FlowRunStatus.Paused : _hardStop ? FlowRunStatus.Stopped : _pausing ? FlowRunStatus.Paused : _stopping || _failed.Count > 0 ? FlowRunStatus.Failed : FlowRunStatus.Done;
         }
     }
 
     /// <summary>
-    /// Drives the run until nothing more can run: a session. A session ends done, failed, or paused on an open
-    /// question; a paused run goes on when a question is answered (<see cref="TryAnswer(string, string, out string?)"/>) and this is called again.
+    /// Asks for a safe pause of the run: the first interrupt typed at the engine's terminal, the command
+    /// <c>pause-orchestrator</c>, a front end's stop button, or the engine's own budget at its reserve. The session
+    /// this run is in ends in order: no step more is started, every reason step in progress hands off, the machine
+    /// steps in progress are left to finish (<paramref name="all"/> stops them) and are recorded, and the run ends
+    /// <see cref="FlowRunStatus.Paused"/>. A later request that says <paramref name="all"/> after one that did not
+    /// stops the machine steps the first left running.
+    /// </summary>
+    /// <param name="cause">Who asks for the pause, one of <see cref="FlowPauseRequest.Causes"/>.</param>
+    /// <param name="all">Whether the machine steps in progress are stopped too.</param>
+    public void RequestPause(string cause, bool all = false)
+    {
+        if (!FlowPauseRequest.Causes.Contains(cause, StringComparer.Ordinal))
+        {
+            throw new ArgumentOutOfRangeException(nameof(cause), cause, "a pause is asked for by an interrupt, a command, a front end, or the budget");
+        }
+
+        if (_hardStop)
+        {
+            return;
+        }
+
+        if (_pausing)
+        {
+            // A later request changes one thing at most: one that says all, after one that did not, stops the machine
+            // steps the first left running. The loop applies it, for the graph is the loop's alone to change; this
+            // only asks.
+            if (all)
+            {
+                _pauseAllAsked = true;
+                WakeTheLoop();
+            }
+
+            return;
+        }
+
+        _pauseRequest = new FlowPauseRequest(cause, all);
+        WakeTheLoop();
+    }
+
+    /// <summary>
+    /// Stops the run where it stands: the second interrupt while the handoffs are being written, or
+    /// <c>stop-orchestrator</c>. Everything in flight is cancelled and ends <see cref="FlowInstanceState.Stopped"/>,
+    /// the handoff turns with it, no handoff is kept, the <c>always</c> steps do not run, and the run ends
+    /// <see cref="FlowRunStatus.Stopped"/> - as the answer <c>abort</c> ends it too. The loop applies it where a
+    /// session is running; between sessions the next one begins by applying it.
+    /// </summary>
+    public void RequestStop()
+    {
+        _hardStop = true;
+        _pausing = false;
+        _stopping = true;
+        CancelHandoffTurns();
+        WakeTheLoop();
+    }
+
+    /// <summary>The stop itself, applied by the one who owns the graph: the loop, or a caller between sessions.</summary>
+    private void ApplyTheStop()
+    {
+        _stopApplied = true;
+        foreach (var instance in _created.Where(instance => instance.State is FlowInstanceState.Running or FlowInstanceState.Paused).ToList())
+        {
+            instance.Stoppable?.Cancel();
+
+            if (instance.Step.IsGroup)
+            {
+                continue;
+            }
+
+            if (instance.Step.Type == "reason" && _reasonStarted.Remove(instance.Id, out var began))
+            {
+                CountMinutes(began);
+            }
+
+            End(instance, FlowInstanceState.Stopped, null, null);
+        }
+
+        _wakes.Clear();
+
+        // No handoff is kept: the stop cancelled the turns, and whatever they had written is not a stop's to keep.
+        foreach (var handed in _created.Where(instance => instance.Handoff is not null).ToList())
+        {
+            handed.Handoff = null;
+        }
+
+        if (_pause is { })
+        {
+            _pause._handoffs.Clear();
+            _pause = null;
+        }
+
+        // What a question had open is withdrawn, not answered: the run is stopped, and a resume draws its steps anew.
+        foreach (var id in _open.ToList())
+        {
+            _questions.First(question => question.Id == id).State = "withdrawn";
+            _ = _open.Remove(id);
+            _ = _answerable.Remove(id);
+        }
+    }
+
+    /// <summary>Cancels every handoff turn in flight, wherever the loop is parked awaiting them.</summary>
+    private void CancelHandoffTurns()
+    {
+        CancellationTokenSource[] inFlight;
+
+        lock (_handoffBounds)
+        {
+            inFlight = [.. _handoffBounds];
+        }
+
+        foreach (var bound in inFlight)
+        {
+            try
+            {
+                bound.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // The turn ended inside its bound already.
+            }
+        }
+    }
+
+    /// <summary>Wakes the loop where it waits on the channel: a request made from outside the session must reach it.</summary>
+    private void WakeTheLoop()
+        => _ = _messages.Writer.TryWrite(default);
+
+    /// <summary>
+    /// Drives the run until nothing more can run: a session. A session ends done, failed, paused on an open
+    /// question, or ended by a safe pause or a hard stop; a paused run goes on when a question is answered
+    /// (<see cref="TryAnswer(string, string, out string?)"/>) and this is called again.
     /// </summary>
     /// <param name="cancellationToken">Stops the waiting; nothing of the run is changed by a cancellation.</param>
     public async Task<FlowSessionEnd> RunAsync(CancellationToken cancellationToken)
@@ -271,18 +430,79 @@ public sealed class FlowCoordinator
         }
 
         _inSession = true;
+        _pausing = false;
+        _alwaysPhase = false;
+        _stopApplied = false;
+        _pause = null;
 
         try
         {
+            // A stop asked between sessions is applied before anything else: the run is stopped, and this session
+            // says so over what it finds.
+            if (_hardStop)
+            {
+                _stopApplied = true;
+                ApplyTheStop();
+            }
+
+            // What a pause or a stop stopped, runs again: a new attempt of its visit, as a retry is, its handoff
+            // spent. What the pause left owed - the policies of failures recorded while it recorded what it left
+            // running - is made now, at the resume, before anything else runs.
+            foreach (var stopped in _created.Where(instance => instance.State is FlowInstanceState.Stopped).ToList())
+            {
+                stopped.State = FlowInstanceState.NotStarted;
+                stopped.Exit = null;
+                stopped.Error = null;
+                stopped.Handoff = null;
+                stopped.EndedByQuestion = null;
+                stopped.Attempt++;
+            }
+
+            foreach (var owed in _owedFailures.ToList())
+            {
+                _ = _owedFailures.Remove(owed);
+                HandleFailure(owed);
+            }
+
             while (true)
             {
                 Progress();
+                CheckBudget();
+
+                if (_hardStop && !_stopApplied)
+                {
+                    // A stop asked while the loop was parked - between two waits, or while the handoff turns ran -
+                    // is applied here, by the one who owns the graph.
+                    ApplyTheStop();
+                }
+
+                if (_pauseAllAsked && _pause is { All: false })
+                {
+                    // A later request that says all, after one that did not: it stops the machine steps the first
+                    // left running, and the pause's record says so.
+                    _pauseAllAsked = false;
+                    _pause.All = true;
+
+                    foreach (var instance in _created.Where(instance => instance.State is FlowInstanceState.Running && instance.Step.Type is not ("reason" or "ci-wait")).ToList())
+                    {
+                        instance.Stoppable?.Cancel();
+                        End(instance, FlowInstanceState.Stopped, null, null);
+                    }
+                }
 
                 if (_answeredAtOnce)
                 {
                     // A configuration answered a question this pass raised, in the place of a person: its answer has
                     // already changed the graph, so the loop goes round again rather than wait on what asked.
                     _answeredAtOnce = false;
+                    continue;
+                }
+
+                if (_pauseRequest is { } request && !_pausing)
+                {
+                    // The safe pause, in order: recorded, nothing more started from here on, the handoffs written,
+                    // the machine steps left to finish or stopped.
+                    await PauseInOrderAsync(request, cancellationToken).ConfigureAwait(false);
                     continue;
                 }
 
@@ -323,6 +543,242 @@ public sealed class FlowCoordinator
 
         _last = Finish();
         return _last;
+    }
+
+    /// <summary>
+    /// One safe pause, in order: recorded before anything is touched; nothing more started from here on; every reason
+    /// step in progress handed off, all at once, each within the run's <c>handoffSeconds</c> - an agent that gives no
+    /// account leaves a handoff the engine writes; the machine steps in progress left to finish - or stopped, where
+    /// the request says <c>all</c> - and recorded as they end; a <c>ci-wait</c> ends Stopped at once, for it runs
+    /// nothing between two reads.
+    /// </summary>
+    private async Task PauseInOrderAsync(FlowPauseRequest request, CancellationToken cancellationToken)
+    {
+        _pausing = true;
+        _pauseRequest = null;
+        _pause = new FlowPauseState(request.Cause, request.All, _clock.GetUtcNow());
+
+        if (request.Cause == "budget")
+        {
+            // Each pause of the budget asks its own question: a run granted more reaches its new reserve and asks
+            // again.
+            _budgetAsked = false;
+        }
+
+        // No retry that was waiting is started: the run goes on with it at the resume, as the instance it belongs to.
+        foreach (var wake in _wakes.ToList())
+        {
+            _ = _wakes.Remove(wake);
+            wake.Instance.Attempt++;
+            wake.Instance.State = FlowInstanceState.NotStarted;
+        }
+
+        var bound = _definition.HandoffSeconds ?? 180;
+        var handingOff = new List<FlowInstance>();
+
+        foreach (var instance in _created.Where(instance => instance.State is FlowInstanceState.Running && !instance.Step.IsGroup).ToList())
+        {
+            if (instance.Step.Type == "reason")
+            {
+                // Its turn is ended where it stands - what it started is cancelled - and it is given one more, the
+                // handoff turn, beside the others.
+                instance.Stoppable?.Cancel();
+                _reasonStarted.Remove(instance.Id, out var began);
+                CountMinutes(began);
+                Release(instance);
+                handingOff.Add(instance);
+            }
+            else if (instance.Step.Type == "ci-wait")
+            {
+                instance.Stoppable?.Cancel();
+                End(instance, FlowInstanceState.Stopped, null, null);
+            }
+            else if (request.All)
+            {
+                instance.Stoppable?.Cancel();
+                End(instance, FlowInstanceState.Stopped, null, null);
+            }
+        }
+
+        foreach (var instance in handingOff)
+        {
+            instance.State = FlowInstanceState.Stopped;
+        }
+
+        if (handingOff.Count > 0)
+        {
+            // All the turns at once, each bounded; what each spent is counted, for the budget counts a handoff turn
+            // as it counts the attempt it ends.
+            var turns = handingOff.Select(instance => HandoffTurnAsync(instance, bound)).ToList();
+            var accounts = await Task.WhenAll(turns).ConfigureAwait(false);
+
+            for (var at = 0; at < handingOff.Count; at++)
+            {
+                var instance = handingOff[at];
+                _spent.Minutes += accounts[at].Minutes.TotalMinutes;
+
+                if (_hardStop)
+                {
+                    // No handoff is kept by a stop: the turn was cancelled, and whatever it wrote is not the stop's
+                    // to keep.
+                    continue;
+                }
+
+                instance.Handoff = accounts[at].Text is { Length: > 0 } written
+                    ? new FlowHandoff(written, "agent")
+                    : new FlowHandoff($"Written by the engine: the agent gave no account before its handoff turn's {bound} s bound", "engine");
+                _pause._handoffs.Add(instance.Id);
+            }
+        }
+    }
+
+    /// <summary>One reason step's handoff turn: the agent's account where it gives one, and what the turn spent.</summary>
+    private async Task<(string? Text, TimeSpan Minutes)> HandoffTurnAsync(FlowInstance instance, int seconds)
+    {
+        var began = _clock.GetUtcNow();
+        string? text = null;
+
+        try
+        {
+            using var boundToCancel = new CancellationTokenSource();
+            lock (_handoffBounds)
+            {
+                _handoffBounds.Add(boundToCancel);
+            }
+
+            try
+            {
+                using var timer = _clock.CreateTimer(_ =>
+                {
+                    try
+                    {
+                        boundToCancel.Cancel();
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        // The turn answered inside its bound: the timer outlived the source it was to cancel.
+                    }
+                }, null, TimeSpan.FromSeconds(seconds), TimeSpan.FromMilliseconds(-1));
+
+                var run = new FlowStepRun(instance.Step, instance.Id, instance.Attempt, instance.Item, instance.Index, instance.Iteration, [.. instance._answers], new RunEvents(this, instance, instance.Attempt));
+
+                try
+                {
+                    text = await _runner.HandoffAsync(run, boundToCancel.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                }
+                catch (Exception)
+                {
+                    // An agent that cannot answer - its client ended, its conversation out of context - still leaves
+                    // a handoff: the engine writes it.
+                }
+            }
+            finally
+            {
+                lock (_handoffBounds)
+                {
+                    _ = _handoffBounds.Remove(boundToCancel);
+                }
+            }
+        }
+        finally
+        {
+        }
+
+        return (text, _clock.GetUtcNow() - began);
+    }
+
+    /// <summary>Adds the minutes a reason step ran from <paramref name="began"/> to now, where it was running.</summary>
+    private void CountMinutes(DateTimeOffset began)
+        => _spent.Minutes += (_clock.GetUtcNow() - began).TotalMinutes;
+
+    /// <summary>
+    /// The run's budget at its reserve: what was spent reached the share of an amount the reserve leaves, and the run
+    /// is paused before the budget is spent - or, where the workflow's own <c>answers</c> give <c>more</c> a counted
+    /// number of times, the amounts are allowed once again and the run goes on, the question recorded answered as
+    /// every configured answer is.
+    /// </summary>
+    private void CheckBudget()
+    {
+        if (_definition.Budget is not { } budget || _pausing || _hardStop)
+        {
+            return;
+        }
+
+        var reached = ReachedOf(budget);
+
+        if (reached is not { } hit)
+        {
+            return;
+        }
+
+        if (_definition.Answers.TryGetValue("runBudget", out var entry) && entry.Answer == "more")
+        {
+            var given = _answerSpent.GetValueOrDefault("runBudget|run");
+
+            if (given < (entry.Times ?? 1))
+            {
+                // The amounts are allowed once again: the same budget, one more time.
+                _answerSpent["runBudget|run"] = given + 1;
+                _budgetGranted++;
+                var granted = BudgetQuestion(hit);
+                granted._given.Add(new FlowAnswerEntry("more", null, "configuration", "the orchestrator's answers"));
+                granted.State = "answered";
+                _questions.Add(granted);
+                return;
+            }
+
+            if (entry.Then == "abort")
+            {
+                var stopped = BudgetQuestion(hit);
+                stopped._given.Add(new FlowAnswerEntry("abort", null, "configuration", "the orchestrator's answers"));
+                stopped.State = "answered";
+                _questions.Add(stopped);
+                RequestStop();
+                return;
+            }
+        }
+
+        // The reserve is what the handoffs are written in, so the pause begins before the budget ends and not at it.
+        _pauseRequest = new FlowPauseRequest("budget", false);
+    }
+
+    /// <summary>The amount of <paramref name="budget"/> whose reserve the run has reached, with what was spent against it; null where none has.</summary>
+    private (string Kind, string SpentOf)? ReachedOf(FlowBudget budget)
+    {
+        var reserve = (100 - (budget.ReservePercent ?? 10)) / 100.0;
+        var times = _budgetGranted + 1;
+
+        if (budget.Usd is { } usd && _spent.Usd >= usd * times * reserve)
+        {
+            return ("usd", $"{_spent.Usd.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)} of {(usd * times).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)} USD");
+        }
+
+        if (budget.Tokens is { } tokens && _spent.Tokens >= tokens * times * reserve)
+        {
+            return ("tokens", $"{_spent.Tokens} of {tokens * times} tokens");
+        }
+
+        if (budget.Minutes is { } minutes && _spent.Minutes >= minutes * times * reserve)
+        {
+            return ("minutes", $"{_spent.Minutes.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)} of {(minutes * times).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)} minutes");
+        }
+
+        return null;
+    }
+
+    /// <summary>The question the run's budget asks at its reserve, worded as the run's person reads it.</summary>
+    private FlowQuestion BudgetQuestion((string Kind, string SpentOf) reached)
+    {
+        var reserve = _definition.Budget?.ReservePercent ?? 10;
+        return new FlowQuestion(
+            $"q{++_questionsRaised}",
+            "runBudget",
+            "run",
+            $"run 'r1' has spent {reached.SpentOf} (its reserve of {reserve}% was reached)",
+            FlowQuestions.OptionsOf("runBudget", null));
     }
 
     /// <summary>
@@ -367,7 +823,7 @@ public sealed class FlowCoordinator
             return false;
         }
 
-        var needsText = asked.Kind == "pause" && _answerable[question].Step.Text.Contains(answer, StringComparer.Ordinal);
+        var needsText = asked.Kind == "pause" && _answerable[question]?.Step.Text.Contains(answer, StringComparer.Ordinal) == true;
 
         if (needsText && string.IsNullOrWhiteSpace(text))
         {
@@ -387,7 +843,26 @@ public sealed class FlowCoordinator
         var instance = _answerable[question];
         _ = _answerable.Remove(question);
 
-        ApplyAnswer(instance, asked, answer, string.IsNullOrWhiteSpace(text) ? null : text, by: null);
+        if (asked.Kind == "runBudget")
+        {
+            // The budget's question is the run's alone: more allows each amount once again and the run goes on at the
+            // next session; abort ends it as a hard stop does.
+            asked._given.Add(new FlowAnswerEntry(answer, null, "person", null));
+            asked.State = "answered";
+
+            if (answer == "more")
+            {
+                _budgetGranted++;
+            }
+            else
+            {
+                RequestStop();
+            }
+
+            return true;
+        }
+
+        ApplyAnswer(instance!, asked, answer, string.IsNullOrWhiteSpace(text) ? null : text, by: null);
 
         return true;
     }
@@ -404,10 +879,13 @@ public sealed class FlowCoordinator
 
         if (answer == "abort" && asked.Kind is not ("failure" or "loopBound"))
         {
-            // abort is taken for any question, and ends the run as a hard stop does.
+            // abort is taken for any question, and ends the run as a hard stop does: everything in flight is
+            // cancelled and ends stopped, and the asking step fails with the answer's words.
             _stopping = true;
+            _hardStop = true;
             _failed.Add(instance);
             End(instance, FlowInstanceState.Failed, HarnessExit.CommandFailed, "the run was aborted by the answer to its question");
+            ApplyTheStop();
             return;
         }
 
@@ -490,8 +968,10 @@ public sealed class FlowCoordinator
                 break;
             default:
                 _stopping = true;
+                _hardStop = true;
                 _failed.Add(instance);
                 End(instance, FlowInstanceState.Failed, instance.Exit, instance.Error);
+                ApplyTheStop();
                 break;
         }
     }
@@ -524,8 +1004,10 @@ public sealed class FlowCoordinator
                 }
 
                 _stopping = true;
+                _hardStop = true;
                 _failed.Add(instance);
                 End(instance, FlowInstanceState.Failed, HarnessExit.CommandFailed, "aborted at its bound");
+                ApplyTheStop();
                 break;
         }
     }
@@ -572,7 +1054,9 @@ public sealed class FlowCoordinator
     /// Instantiates the declarations of <paramref name="scope"/> whose dependencies have freed them: a leaf becomes a
     /// candidate, a group opens, a declaration a failed dependency blocks for ever is NotRun at once, and a false
     /// <c>when</c> ends skipped. An always step waits for the always phase, and a stopping run reaches nothing that is
-    /// not one.
+    /// not one. A pause under way starts nothing new either - no ready step, no next iteration, no expansion - save,
+    /// once the machine steps it left running have ended, the always steps that are machine steps; a reason step
+    /// among them does not run until the next session.
     /// </summary>
     private bool Instantiate(Scope scope)
     {
@@ -588,6 +1072,13 @@ public sealed class FlowCoordinator
             if (IsAlways(declaration, scope) && !_alwaysPhase)
             {
                 // The always steps wait for the rest to be quiescent, in any state, and run once.
+                continue;
+            }
+
+            if (_pausing && (!_alwaysPhase || !IsAlways(declaration, scope) || declaration.Type == "reason"))
+            {
+                // A pause under way draws nothing new - and once its machine steps have ended, only the always steps
+                // that are machine steps; a reason step among them does not run until the next session.
                 continue;
             }
 
@@ -791,6 +1282,13 @@ public sealed class FlowCoordinator
         {
             var scopes = ScopesOf(instance);
 
+            if (_pausing && scopes.Any(scope => scope.Members.Values.Any(member => _owedFailures.Contains(member))))
+            {
+                // A member the pause left running ended failed and its policy is owed to the resume: the group does
+                // not end over it now, for what its failure owes has yet to decide the group.
+                continue;
+            }
+
             if (instance.Failing is { } failure)
             {
                 if (scopes.All(ScopeEnded))
@@ -853,6 +1351,19 @@ public sealed class FlowCoordinator
             .OrderBy(instance => _declarationOrder.GetValueOrDefault(instance.Path, int.MaxValue))
             .ThenBy(instance => instance.Id, StringComparer.Ordinal))
         {
+            if (_pausing && !_alwaysPhase || _hardStop)
+            {
+                // A pause under way and a hard stop start nothing.
+                break;
+            }
+
+            if (_pausing && instance.IsAlways && instance.Step.Type == "reason")
+            {
+                // A reason step among the always steps does not run while a safe pause is under way: it stays as it
+                // is and runs in the next session.
+                continue;
+            }
+
             if (_stopping && !instance.IsAlways)
             {
                 continue;
@@ -936,25 +1447,37 @@ public sealed class FlowCoordinator
 
         async Task AskRunner()
         {
+            // What this attempt is, taken where it begins: a message of an attempt that is over - the step was
+            // stopped and runs again, or was answered - says nothing about the attempt the run is on now.
+            var attempt = instance.Attempt;
+
             try
             {
+                instance.Stoppable = new CancellationTokenSource();
+                var token = instance.Stoppable.Token;
+
+                if (instance.Step.Type == "reason")
+                {
+                    _reasonStarted[instance.Id] = _clock.GetUtcNow();
+                }
+
                 var result = await _runner.RunAsync(
                     new FlowStepRun(
                         instance.Step,
                         instance.Id,
-                        instance.Attempt,
+                        attempt,
                         instance.Item,
                         instance.Index,
                         instance.Iteration,
                         [.. instance._answers],
-                        new RunEvents(this, instance)),
-                    CancellationToken.None).ConfigureAwait(false);
+                        new RunEvents(this, instance, attempt)),
+                    token).ConfigureAwait(false);
 
-                _ = _messages.Writer.TryWrite(new Message(instance, result, null));
+                _ = _messages.Writer.TryWrite(new Message(instance, result, null, Attempt: attempt));
             }
             catch (Exception ex)
             {
-                _ = _messages.Writer.TryWrite(new Message(instance, FlowStepResult.Ended(passed: false, HarnessExit.InternalError, ex.Message), null));
+                _ = _messages.Writer.TryWrite(new Message(instance, FlowStepResult.Ended(passed: false, HarnessExit.InternalError, ex.Message), null, Attempt: attempt));
             }
         }
     }
@@ -965,6 +1488,12 @@ public sealed class FlowCoordinator
         if (instance.State is not FlowInstanceState.Running)
         {
             return;
+        }
+
+        if (instance.Step.Type == "reason" && _reasonStarted.Remove(instance.Id, out var began))
+        {
+            // The budget's minutes are the time reason steps ran, each attempt and each handoff turn counted.
+            CountMinutes(began);
         }
 
         if (result.Asked is { } asking)
@@ -1030,12 +1559,20 @@ public sealed class FlowCoordinator
         instance.Output = result.Output;
 
         // An incomplete step is run again by the table's row for its code, capped by its retries: a reasoning step is
-        // never retried at step level, for its client owns its transient errors.
+        // never retried at step level, for its client owns its transient errors. A pause under way starts no retry:
+        // one that ends incomplete with retries left is stopped where it stands and runs again at the resume.
         if (!passed
             && instance.Step.Type != "reason"
             && FlowRetry.Wait(exit, result.Cause, instance.Attempt - 1) is { } wait
             && instance.Attempt <= RetryCap(instance.Step))
         {
+            if (_pausing)
+            {
+                Release(instance);
+                End(instance, FlowInstanceState.Stopped, exit, error);
+                return;
+            }
+
             // Its attempt is over, its claims go back, and its next attempt waits as the table says - at once, where
             // the table says no wait.
             Release(instance);
@@ -1048,7 +1585,17 @@ public sealed class FlowCoordinator
 
         if (!passed)
         {
-            HandleFailure(instance);
+            if (_pausing)
+            {
+                // A machine step the pause left running ended failed: it is recorded as it ended, and what its ending
+                // owes - its policy, the handler it would raise - waits for the resume, for nothing is started and no
+                // question is asked while the run records what it left running.
+                _owedFailures.Add(instance);
+            }
+            else
+            {
+                HandleFailure(instance);
+            }
         }
     }
 
@@ -1280,6 +1827,8 @@ public sealed class FlowCoordinator
         instance.Exit ??= exit;
         instance.Error ??= error;
         Release(instance);
+        instance.Stoppable?.Dispose();
+        instance.Stoppable = null;
 
         if (instance.Step.Type == "create-agent" && state == FlowInstanceState.Done)
         {
@@ -1358,10 +1907,26 @@ public sealed class FlowCoordinator
         return true;
     }
 
-    /// <summary>Ends the session: what never started is NotRun - where no question is open, for what waits on one goes on when it is answered - and the run's status is said with its failures and its passed-over steps.</summary>
+    /// <summary>
+    /// Ends the session: what never started is NotRun - where no question is open and no pause leaves it for the
+    /// resume, for what waits on a question goes on when it is answered and what a pause stopped runs again - and the
+    /// run's status is said with its failures, its passed-over steps, and the pause or stop that ended it.
+    /// </summary>
     private FlowSessionEnd Finish()
     {
-        if (_open.Count == 0)
+        if (_pause is { Cause: "budget" } && !_hardStop && !_budgetAsked)
+        {
+            // The budget's pause has ended: the run holds its question, which a person or the workflow's own answers
+            // settle - more allows each amount once again, abort ends the run.
+            _budgetAsked = true;
+            var reached = ReachedOf(_definition.Budget!);
+            var question = BudgetQuestion(reached ?? ("usd", "its budget"));
+            _questions.Add(question);
+            _open.Add(question.Id);
+            _answerable.Add(question.Id, null);
+        }
+
+        if (_open.Count == 0 && !_pausing)
         {
             foreach (var instance in _created.Where(instance => instance.State is FlowInstanceState.NotStarted).ToList())
             {
@@ -1371,9 +1936,15 @@ public sealed class FlowCoordinator
         }
 
         var open = OpenQuestions;
-        var status = _stopping || _failed.Count > 0 ? FlowRunStatus.Failed : open.Count > 0 ? FlowRunStatus.Paused : FlowRunStatus.Done;
+        var status = _hardStop ? FlowRunStatus.Stopped
+            : _pausing ? FlowRunStatus.Paused
+            : _stopping || _failed.Count > 0 ? FlowRunStatus.Failed
+            : open.Count > 0 ? FlowRunStatus.Paused
+            : FlowRunStatus.Done;
         var summary = status switch
         {
+            FlowRunStatus.Stopped => "stopped",
+            FlowRunStatus.Paused when _pausing => PausedSummary(open),
             FlowRunStatus.Done when _passedOver.Count > 0 => _passedOver.Count == 1
                 ? $"done; 1 step failed and was passed over: {_passedOver[0].Id}"
                 : $"done; {_passedOver.Count} steps failed and were passed over: {string.Join(", ", _passedOver.Select(instance => instance.Id))}",
@@ -1384,7 +1955,20 @@ public sealed class FlowCoordinator
             _ => $"paused; waiting on {string.Join(", ", open.Select(question => question.Id))}",
         };
 
-        return new FlowSessionEnd(status, [.. _passedOver.Select(instance => instance.Id)], [.. _failed.Select(instance => instance.Id)], open, summary);
+        return new FlowSessionEnd(
+            status,
+            [.. _passedOver.Select(instance => instance.Id)],
+            [.. _failed.Select(instance => instance.Id)],
+            open,
+            summary,
+            _pause);
+
+        string PausedSummary(IReadOnlyList<FlowQuestion> openQuestions)
+        {
+            var handoffs = _pause?._handoffs.Count ?? 0;
+            var head = handoffs == 0 ? "paused" : handoffs == 1 ? "paused; 1 handoff written" : $"paused; {handoffs} handoffs written";
+            return openQuestions.Count > 0 ? $"{head}, waiting on {string.Join(", ", openQuestions.Select(question => question.Id))}" : head;
+        }
     }
 
     /// <summary>Waits for the next thing the run learns - a completion, an event of a leg, or a retry's time coming - and takes it. One read of the channel is kept open across the waits a retry's turn takes, so no message is read by a wait that no longer stands.</summary>
@@ -1431,6 +2015,13 @@ public sealed class FlowCoordinator
 
         void Take(Message message)
         {
+            if (message.Instance is null || message.Attempt != message.Instance.Attempt)
+            {
+                // A message of an attempt that is over - the step was stopped and runs again, or was answered - says
+                // nothing about the attempt the run is on now.
+                return;
+            }
+
             if (message.Result is { } result)
             {
                 _ = _wakes.RemoveAll(wake => ReferenceEquals(wake.Instance, message.Instance));
@@ -1439,6 +2030,13 @@ public sealed class FlowCoordinator
             else if (message.Leg is { } leg)
             {
                 TakeEvent(message.Instance, leg);
+            }
+            else if (message.Usage is { } usage)
+            {
+                // What a reason step's conversation spent as it ran, counted against the run's budget the moment it
+                // is reported.
+                _spent.Usd += usage.Usd;
+                _spent.Tokens += usage.Tokens;
             }
         }
     }
@@ -1569,7 +2167,7 @@ public sealed class FlowCoordinator
     /// <summary>Whether every declaration of <paramref name="scope"/> has been instantiated and every one of its members has ended.</summary>
     private bool ScopeEnded(Scope scope)
         => DeclarationsOf(scope).All(declaration => scope.Instantiated.Contains(declaration.Name))
-            && scope.Members.Values.All(member => member.State is not (FlowInstanceState.NotStarted or FlowInstanceState.Running or FlowInstanceState.Paused));
+            && scope.Members.Values.All(member => member.State is not (FlowInstanceState.NotStarted or FlowInstanceState.Running or FlowInstanceState.Paused or FlowInstanceState.Stopped));
 
     /// <summary>The scopes of a group: a block's own one, or every item and iteration of a loop.</summary>
     private static IReadOnlyList<Scope> ScopesOf(FlowInstance group)
@@ -1699,6 +2297,7 @@ public sealed class FlowCoordinator
             FlowInstanceState.Done => "done",
             FlowInstanceState.Failed => "failed",
             FlowInstanceState.Skipped => "skipped",
+            FlowInstanceState.Stopped => "stopped",
             FlowInstanceState.NotRun => "notRun",
             _ => null,
         };
@@ -2052,7 +2651,7 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>One thing the coordinator learns while it waits: a step's ending, or an event of one of its legs.</summary>
-    private readonly record struct Message(FlowInstance Instance, FlowStepResult? Result, FlowLegEvent? Leg);
+    private readonly record struct Message(FlowInstance Instance, FlowStepResult? Result, FlowLegEvent? Leg, (double Usd, long Tokens)? Usage = null, int Attempt = 0);
 
     /// <summary>One event of one leg of a running step.</summary>
     /// <param name="Leg">The leg's name.</param>
@@ -2068,19 +2667,23 @@ public sealed class FlowCoordinator
     private sealed record Wake(FlowInstance Instance, DateTimeOffset At, Task Delay);
 
     /// <summary>The events of one running step, posted to the coordinator's channel.</summary>
-    private sealed class RunEvents(FlowCoordinator coordinator, FlowInstance instance) : IFlowRunEvents
+    private sealed class RunEvents(FlowCoordinator coordinator, FlowInstance instance, int attempt) : IFlowRunEvents
     {
         /// <inheritdoc/>
         public void LegPlaced(string leg, bool inACopy)
-            => _ = coordinator._messages.Writer.TryWrite(new Message(instance, null, new FlowLegEvent(leg, CopyMade: false, Ended: false, InACopy: inACopy)));
+            => _ = coordinator._messages.Writer.TryWrite(new Message(instance, null, new FlowLegEvent(leg, CopyMade: false, Ended: false, InACopy: inACopy), Attempt: attempt));
 
         /// <inheritdoc/>
         public void LegCopyMade(string leg)
-            => _ = coordinator._messages.Writer.TryWrite(new Message(instance, null, new FlowLegEvent(leg, CopyMade: true, Ended: false, InACopy: false)));
+            => _ = coordinator._messages.Writer.TryWrite(new Message(instance, null, new FlowLegEvent(leg, CopyMade: true, Ended: false, InACopy: false), Attempt: attempt));
 
         /// <inheritdoc/>
         public void LegEnded(string leg)
-            => _ = coordinator._messages.Writer.TryWrite(new Message(instance, null, new FlowLegEvent(leg, CopyMade: false, Ended: true, InACopy: false)));
+            => _ = coordinator._messages.Writer.TryWrite(new Message(instance, null, new FlowLegEvent(leg, CopyMade: false, Ended: true, InACopy: false), Attempt: attempt));
+
+        /// <inheritdoc/>
+        public void Used(long tokens, double usd)
+            => _ = coordinator._messages.Writer.TryWrite(new Message(instance, null, null, (usd, tokens), attempt));
     }
 }
 

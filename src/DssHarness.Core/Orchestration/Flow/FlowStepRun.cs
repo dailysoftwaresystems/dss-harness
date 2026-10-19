@@ -45,14 +45,24 @@ public interface IFlowStepRunner
 {
     /// <summary>Runs one instance of a step of a run.</summary>
     /// <param name="run">The step, the instance, the scope it sits in, and the answers its questions were given.</param>
-    /// <param name="cancellationToken">Stops the work; nothing of the run is changed by a cancellation.</param>
+    /// <param name="cancellationToken">Stops the work: a safe pause that stops machine steps and a hard stop cancel it; nothing of the run is changed by a cancellation.</param>
     Task<FlowStepResult> RunAsync(FlowStepRun run, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The handoff turn of a reason step a safe pause stopped: the agent's account of what it did, what is left and
+    /// what it was in the middle of. Answer <see langword="null"/> where the agent gave none - its client had ended,
+    /// its turn passed its bound, its answer was empty - and the engine writes the handoff itself.
+    /// </summary>
+    /// <param name="run">The step, the instance and its scope, as it was last asked.</param>
+    /// <param name="cancellationToken">Cancels the turn: a hard stop, or the bound the engine applies, ends it.</param>
+    Task<string?> HandoffAsync(FlowStepRun run, CancellationToken cancellationToken);
 }
 
 /// <summary>
 /// What a step tells the coordinator while it runs, beside the result it ends with: where each of its legs works, and
-/// when each one's copy is made and each one's work in the tree itself has ended. The engine owns the claims; these
-/// events are how the runner says what the leg services know.
+/// when each one's copy is made and each one's work in the tree itself has ended, and what its reasoning spent. The
+/// engine owns the claims and the budget; these events are how the runner says what the leg services and the clients
+/// know.
 /// </summary>
 public interface IFlowRunEvents
 {
@@ -72,6 +82,11 @@ public interface IFlowRunEvents
     /// <summary>The leg <paramref name="leg"/>'s work in the tree itself has ended: for a leg that works in the tree, the tree is held to this.</summary>
     /// <param name="leg">The leg's name.</param>
     void LegEnded(string leg);
+
+    /// <summary>What a reason step's conversation has spent as it runs: tokens and dollars, counted against the run's budget.</summary>
+    /// <param name="tokens">The tokens the clients report: input, cache write, cache read and output.</param>
+    /// <param name="usd">What they cost, at the prices the configuration gives each model.</param>
+    void Used(long tokens, double usd);
 }
 
 /// <summary>

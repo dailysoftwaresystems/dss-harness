@@ -20,6 +20,7 @@ public sealed class FlowCoordinatorTests
     private sealed class FakeRunner : IFlowStepRunner
     {
         private readonly Dictionary<string, Func<FlowStepRun, Task<FlowStepResult>>> _scripts = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, Func<FlowStepRun, Task<string?>>> _handoffs = new(StringComparer.Ordinal);
         private readonly Dictionary<string, TaskCompletionSource> _starts = new(StringComparer.Ordinal);
 
         /// <summary>Every instance asked, in the order the coordinator started it.</summary>
@@ -39,6 +40,20 @@ public sealed class FlowCoordinatorTests
         public FakeRunner On(string step, Func<FlowStepRun, FlowStepResult> script)
         {
             _scripts[step] = run => Task.FromResult(script(run));
+            return this;
+        }
+
+        /// <summary>Answers <paramref name="step"/>'s handoff turn with one account, every time it is asked.</summary>
+        public FakeRunner HandsOff(string step, string? account)
+        {
+            _handoffs[step] = _ => Task.FromResult(account);
+            return this;
+        }
+
+        /// <summary>Answers <paramref name="step"/>'s handoff turn by its script.</summary>
+        public FakeRunner HandsOff(string step, Func<FlowStepRun, Task<string?>> account)
+        {
+            _handoffs[step] = account;
             return this;
         }
 
@@ -83,6 +98,10 @@ public sealed class FlowCoordinatorTests
 
             return _scripts.GetValueOrDefault(run.Step.Name, _ => Task.FromResult(FlowStepResult.Ended(passed: true, HarnessExit.Success)))(run);
         }
+
+        /// <inheritdoc/>
+        public Task<string?> HandoffAsync(FlowStepRun run, CancellationToken cancellationToken)
+            => _handoffs.GetValueOrDefault(run.Step.Name, _ => Task.FromResult<string?>(null))(run);
     }
 
     /// <summary>A held step's completion, in the test's hand.</summary>

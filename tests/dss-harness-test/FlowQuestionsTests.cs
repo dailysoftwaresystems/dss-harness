@@ -58,6 +58,10 @@ public sealed class FlowQuestionsTests
 
             return _scripts.GetValueOrDefault(run.Step.Name, _ => Task.FromResult(FlowStepResult.Ended(passed: true, HarnessExit.Success)))(run);
         }
+
+        /// <inheritdoc/>
+        public Task<string?> HandoffAsync(FlowStepRun run, CancellationToken cancellationToken)
+            => Task.FromResult<string?>(null);
     }
 
     /// <summary>A step's output, read from JSON text.</summary>
@@ -601,12 +605,13 @@ public sealed class FlowQuestionsTests
 
         await aborting.RunAsync(TestContext.Current.CancellationToken);
 
-        // abort stands among no options, and is taken all the same: it ends the run.
+        // abort stands among no options, and is taken all the same: it ends the run as a hard stop does - stopped.
         Assert.True(aborting.TryAnswer(aborting.OpenQuestions.Single().Id, "abort", out _));
 
         end = await aborting.RunAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(FlowRunStatus.Failed, end.Status);
+        Assert.Equal(FlowRunStatus.Stopped, end.Status);
+        Assert.Equal("stopped", end.Summary);
         var approval = aborting.Instances["approval"];
         Assert.Equal(FlowInstanceState.Failed, approval.State);
         Assert.Equal(HarnessExit.CommandFailed, approval.Exit);
