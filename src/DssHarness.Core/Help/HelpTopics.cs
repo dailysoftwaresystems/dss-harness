@@ -2521,6 +2521,7 @@ public static class HelpTopics
                 ($"  {OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.SessionsDirectoryName}/<id>/", "API clients only: one conversation with the provider, in the provider's own form"),
                 ($"  {OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.StepsDirectoryName}/<instance>/", "one step the agent runs, or that runs in or for its worktree: everything of the step, its handoff.md where one stopped it"),
                 ($"  {OrchestratorLayout.StepsDirectoryName}/<instance>/", "one step of the run that no agent owns, the create-agent that makes an agent included"),
+                ($"  <step>/{OrchestratorLayout.ChildrenDirectoryName}/<session>{OrchestratorLayout.ChildExtension}", "in either kind of step, on Linux and macOS: a session a contained child of the step leads while it runs"),
             ]);
         builder.AppendLine();
         AppendWrapped(
@@ -2561,6 +2562,18 @@ public static class HelpTopics
             $"{OrchestratorService.ListCommand} lists the orchestrators, or the one named, their agents and where each stands, "
             + "and the worktrees below an orchestrator's directory that no agent records; --json prints the listing as one JSON "
             + $"document. {StoppedDocument}");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "What a killed process left running. On Linux and macOS a contained child of a step leads a session of its own, "
+            + $"which nothing ends when the process that started it is killed, so it is recorded in its step's {OrchestratorLayout.ChildrenDirectoryName}/ "
+            + "while it runs and the record taken back once that process ends it. Every command over an orchestrator - the three "
+            + "orchestrator commands and each agent command - first ends each recorded session whose starter has gone, as a stop "
+            + "ends one (SIGTERM, then SIGKILL five seconds later), removes its record, and says so in a line, and in the document's "
+            + "ended where it answers with --json. A session whose starter still runs is left; one whose id a later process "
+            + "carries ends nothing, and its record goes; a record that does not read as one is said and left; a starter on another "
+            + "machine is never taken to have gone. Windows records nothing: a job ends a contained child with the process that "
+            + "started it.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -3049,6 +3062,11 @@ public static class HelpTopics
         builder.AppendLine($"  {agentDirectory}/{OrchestratorLayout.SessionsDirectoryName}/<id>/");
         builder.AppendLine("                                     ignored; API clients only: one conversation with");
         builder.AppendLine("                                     the provider, in the provider's own form");
+        builder.AppendLine($"  <step>/{OrchestratorLayout.ChildrenDirectoryName}/<session>{OrchestratorLayout.ChildExtension}");
+        builder.AppendLine("                                     ignored; in either kind of step, on Linux and");
+        builder.AppendLine("                                     macOS: a session a contained child of the step");
+        builder.AppendLine("                                     leads while it runs, ended by the next command");
+        builder.AppendLine("                                     over the orchestrator where its starter was killed");
         builder.AppendLine($"  {HarnessLayout.MutationsDirectoryName}/                        contents ignored, .gitkeep tracked; the tree's");
         builder.AppendLine("                                     mutation workers, in every tree, never sent to");
         builder.AppendLine($"                                     a host by sync ('{ToolPackage.Command} help mutations')");

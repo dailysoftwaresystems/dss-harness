@@ -150,6 +150,11 @@ public static class ServiceRegistration
         services.AddSingleton(TimeProvider.System);
         services.AddSingleton<OrchestrationStore>();
         services.AddSingleton<OrchestrationLog>();
+
+        // The sessions a killed tool left its contained children running in, recorded where their steps are and ended by
+        // the next command over the orchestrator.
+        services.AddSingleton<LeftSessions>();
+        services.AddSingleton<ChildSessions>();
         services.AddSingleton<ClaudeTranscripts>();
         services.AddSingleton<IOrchestratorService, OrchestratorService>();
         services.AddSingleton<IAgentService, AgentService>();

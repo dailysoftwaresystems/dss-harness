@@ -315,6 +315,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         }
 
         var stopped = false;
+        var placed = false;
         string? uncontained = null;
 
         if (status is not null)
@@ -328,7 +329,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
                     throw await NotStartedAsync(request.FileName, resolved, heard, process).ConfigureAwait(false);
                 }
 
-                request.OnStarted?.Invoke();
+                placed = true;
             }
             catch (OperationCanceledException) when (timeoutSource.IsCancellationRequested)
             {
@@ -345,6 +346,13 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
                     $"'{resolved}' could not be started: what contain-exec said of its start could not be read: {ex.Message}",
                     ex);
             }
+        }
+
+        var recorded = placed ? await RecordedAsync(request, resolved, windows, job, process).ConfigureAwait(false) : null;
+
+        if (placed)
+        {
+            request.OnStarted?.Invoke();
         }
 
         // Both streams are read from the moment the child runs: a child that fills a pipe nobody is
@@ -390,6 +398,12 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             // leftover holding the output - a server started in the background, a build's node -
             // would otherwise keep the reading below from ever ending.
             uncontained = await EndContainerAsync(job, process).ConfigureAwait(false);
+        }
+
+        // The session is ended, at the child's own end or at a stop: its record has nothing left to name.
+        if (recorded is not null)
+        {
+            Cleared(recorded);
         }
 
         // No beat is written to a child that has gone.
@@ -486,6 +500,66 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         _processTable ??= ProcessTableFactory.Create(_platform, this);
 
         return Containment.EndSessionAsync(process.Id, _processTable.ReadAsync, SessionGrace);
+    }
+
+    /// <summary>
+    /// Records a placed child's session where its request names a record and the session would outlive this process -
+    /// on Linux and macOS, where nothing ends a session when the process that started it is killed - before the child is
+    /// said to have started, so the next run of the tool over the same records ends what a killed one left. A job ends
+    /// with its last handle, so on Windows nothing is recorded.
+    /// </summary>
+    /// <param name="request">The child's request, naming its record where it has one.</param>
+    /// <param name="resolved">The program the child runs.</param>
+    /// <param name="windows">Whether this is Windows, where the job holds the child.</param>
+    /// <param name="job">The job holding the child on Windows, or <see langword="null"/>.</param>
+    /// <param name="process">The child, which leads its session under its own id.</param>
+    /// <returns>The record written, to be taken back once the session is ended; <see langword="null"/> where none was.</returns>
+    /// <exception cref="ProgramStartException">The record could not be written: the child was ended, and never said to have started.</exception>
+    private async Task<IContainedSessionRecord?> RecordedAsync(ProcessRequest request, string resolved, bool windows, SafeWaitHandle? job, Process process)
+    {
+        if (!request.Contained || windows || request.SessionRecord is not { } record)
+        {
+            return null;
+        }
+
+        try
+        {
+            record.Placed(process.Id, resolved);
+            return record;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // A child no record names is one a killed tool would leave running unseen: it is not run.
+            try
+            {
+                await EndContainerAsync(job, process).ConfigureAwait(false);
+            }
+            finally
+            {
+                KillTree(process);
+            }
+
+            await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+
+            throw new ProgramStartException(request.FileName, $"'{resolved}' could not be started: its session could not be recorded: {ex.Message}", ex);
+        }
+    }
+
+    /// <summary>
+    /// Takes back the record of a session this runner ended. One that cannot be taken back names a session that has
+    /// ended, which the next sweep of the records removes without ending anything once this process has gone.
+    /// </summary>
+    /// <param name="record">The record written when the child was placed.</param>
+    private static void Cleared(IContainedSessionRecord record)
+    {
+        try
+        {
+            record.Ended();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Left for the sweep, as above.
+        }
     }
 
     /// <summary>

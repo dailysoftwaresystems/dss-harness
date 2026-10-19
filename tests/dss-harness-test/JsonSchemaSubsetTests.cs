@@ -632,6 +632,25 @@ public sealed class JsonSchemaSubsetTests
     }
 
     /// <summary>
+    /// A group's name given twice is refused where the schema says it - in one alternative or in two - since .NET reads
+    /// it as one group and a provider refuses the schema outright, and the subset is what every client is sent. Names
+    /// that differ are read.
+    /// </summary>
+    [Theory]
+    [InlineData("^(?<x>a)(?<x>b)$", "x")]
+    [InlineData("^(?<x>a)|(?<x>b)$", "x")]
+    [InlineData("^(?<x>a)(?<y>b)(?:(?<y>c))$", "y")]
+    public void AGroupNamedTwice_IsRefusedWhereTheSchemaIs(string pattern, string name)
+    {
+        var schema = new JsonObject { ["type"] = "string", ["pattern"] = pattern };
+
+        Assert.Equal(
+            [$"$.items.pattern: '(?<{name}>' names group '{name}' a second time, which a provider reading ECMA-262, the dialect a pattern is written in, refuses"],
+            JsonSchemaSubset.SubsetProblems(new JsonObject { ["type"] = "array", ["items"] = schema }));
+        Assert.Empty(JsonSchemaSubset.SubsetProblems(new JsonObject { ["type"] = "string", ["pattern"] = "^(?<x>a)(?<y>b)$" }));
+    }
+
+    /// <summary>
     /// A name no identifier spells is written in brackets, as JSON - in the schema's paths and the document's -
     /// so a name holding a dot is never read as two, and names and values are written as they were, escaping only
     /// what JSON itself must.

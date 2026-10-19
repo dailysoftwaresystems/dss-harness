@@ -64,6 +64,7 @@ public interface IOrchestratorService : IUseCase
 /// <param name="worktrees">The worktrees there are, for the listing.</param>
 /// <param name="store">The records.</param>
 /// <param name="log">The logs.</param>
+/// <param name="sessions">Ends what a killed process left of an orchestrator's contained children, first in every command over it.</param>
 /// <param name="clock">When an orchestrator is created.</param>
 public sealed class OrchestratorService(
     IHarnessContextLoader contextLoader,
@@ -74,6 +75,7 @@ public sealed class OrchestratorService(
     IWorktreeService worktrees,
     OrchestrationStore store,
     OrchestrationLog log,
+    ChildSessions sessions,
     TimeProvider clock) : IOrchestratorService
 {
     /// <summary>The command that creates one.</summary>
@@ -93,6 +95,7 @@ public sealed class OrchestratorService(
     private readonly IWorktreeService _worktrees = worktrees;
     private readonly OrchestrationStore _store = store;
     private readonly OrchestrationLog _log = log;
+    private readonly ChildSessions _sessions = sessions;
     private readonly TimeProvider _clock = clock;
 
     public Task<CommandOutcome> CreateAsync(
@@ -135,6 +138,9 @@ public sealed class OrchestratorService(
         }
 
         var orchestrator = OrchestratorLayout.Of(layout, name);
+
+        // Before anything else of it is read: what a killed process left running of its steps' contained children.
+        await _sessions.SweepAsync(orchestrator, CreateCommand).ConfigureAwait(false);
 
         // Everything an orchestrator keeps is machine-local: a record, a log, a transcript committed by `git add -A` would
         // travel to every clone. init keeps the directory in git and everything made in it out.
@@ -243,6 +249,11 @@ public sealed class OrchestratorService(
         var context = await MainTree.LoadAsync(_contextLoader, _platform, startDirectory, cancellationToken).ConfigureAwait(false);
         var layout = context.Layout;
         var orchestrator = OrchestratorLayout.Of(layout, name);
+
+        // Before anything else of it is read, and before its records can go with it: what a killed process left running
+        // of its steps' contained children.
+        await _sessions.SweepAsync(orchestrator, DeleteCommand).ConfigureAwait(false);
+
         var worktreesDirectory = layout.WorktreesDirectoryUnder(context.Config.Worktrees.Root);
         var group = WorktreeAddress.Plain(name).PathUnder(worktreesDirectory);
 
@@ -474,6 +485,14 @@ public sealed class OrchestratorService(
             return CommandOutcome.Refused(OrchestrationReports.NoOrchestrator(name));
         }
 
+        // Before anything else of each is read: what a killed process left running of its steps' contained children.
+        var ended = new List<EndedChildSession>();
+
+        foreach (var orchestrator in orchestrators)
+        {
+            ended.AddRange(await _sessions.SweepAsync(orchestrator, ListCommand).ConfigureAwait(false));
+        }
+
         var listed = await _worktrees.ListAsync(layout.MainCheckoutRoot, cancellationToken).ConfigureAwait(false);
         var inventory = new List<OrchestratorInventory>();
 
@@ -490,7 +509,7 @@ public sealed class OrchestratorService(
                 OrchestrationRules.OpenAgents(orchestrator.Name, agents, listed.Select(worktree => worktree.Name))));
         }
 
-        return OrchestrationReports.List(inventory, json);
+        return OrchestrationReports.List(inventory, json, ended);
     }
 
     /// <summary>

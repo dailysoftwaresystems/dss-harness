@@ -51,6 +51,7 @@ internal static class TestChild
             "say-pid-and-sleep" => SayPidAndSleep(standardOutput, arguments),
             "say-pid-then" => SayPidThen(standardOutput, arguments),
             "contain-and-wait" => ContainAndWait(standardOutput, arguments),
+            "contain-recorded-and-wait" => ContainRecordedAndWait(standardOutput, arguments),
             "interrupt-own-console" => InterruptOwnConsole(standardOutput),
             "print-code-page" => PrintCodePage(standardOutput),
             "print-parent" => PrintParent(standardOutput),
@@ -677,6 +678,52 @@ internal static class TestChild
                 }
             },
         };
+    }
+
+    /// <summary>
+    /// Starts a sleeper for <c>arguments[2]</c> milliseconds contained, through a process runner of its own that starts
+    /// contained children through the tool <c>arguments[0]</c> names, its session recorded in the step directory
+    /// <c>arguments[1]</c> as an orchestrator's step records it; writes its own id and the sleeper's on one line once the
+    /// record is written, and waits for it: the process a test kills, so the record names a session whose owner has gone.
+    /// </summary>
+    private static int ContainRecordedAndWait(TextWriter output, string[] arguments)
+    {
+        var platform = new Core.Platform.HostPlatform();
+        var permissions = Core.Platform.FilePermissionsFactory.Create();
+        var runner = new Core.Processes.ProcessRunner(platform, permissions, arguments[0]);
+        var sessions = new Core.Orchestration.ChildSessions(
+            new Core.FileSystem.PhysicalFileSystem(permissions),
+            new Core.Execution.ProcessIdentity(platform),
+            new Core.Processes.LeftSessions(platform, Core.Platform.ProcessTableFactory.Create(platform, runner)),
+            new Core.Output.ConsoleHarnessOutput(TextWriter.Null, TextWriter.Null, verbose: false, home: null));
+        var said = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // Its lines are read only once it is said to have started, and it is said to have started only once its record
+        // is written: its id heard, the record names it.
+        var contained = runner.RunAsync(TestHost.ChildRequest("say-pid-and-sleep", arguments[2]) with
+        {
+            FileName = TestHost.AssemblyProgram,
+            Arguments = [arguments[2]],
+            Contained = true,
+            SessionRecord = sessions.For(arguments[1]),
+            OnOutputLine = line =>
+            {
+                if (line.StartsWith("pid=", StringComparison.Ordinal))
+                {
+                    said.TrySetResult(line["pid=".Length..]);
+                }
+            },
+        });
+
+        if (Task.WhenAny(said.Task, contained).GetAwaiter().GetResult() != said.Task)
+        {
+            return 95;
+        }
+
+        output.Write($"owner={Environment.ProcessId} contained={said.Task.Result}\n");
+        contained.GetAwaiter().GetResult();
+
+        return 0;
     }
 
     /// <summary>

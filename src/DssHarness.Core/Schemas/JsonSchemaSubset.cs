@@ -1157,7 +1157,8 @@ public static class JsonSchemaSubset
     /// <c>\'name'</c> and a group's number in angle brackets - which ECMA-262 reads as characters or refuses; and a
     /// backreference by number that the two read apart, .NET counting the named groups after every other and taking
     /// <c>\12</c>, where there are fewer than twelve groups, as <c>\1</c> and a <c>2</c>, where ECMA-262 takes the
-    /// character it codes. The escapes are refused rather than read as ECMA-262 reads them: nobody writes <c>\A</c>
+    /// character it codes; and a group's name given twice, which .NET reads as one group and a provider refuses
+    /// outright, so a schema the subset passes would be no schema to whoever is sent it. The escapes are refused rather than read as ECMA-262 reads them: nobody writes <c>\A</c>
     /// to mean the letter, and ECMA-262 read with its <c>u</c> flag, as a provider may read a schema's patterns,
     /// refuses each of them - or, for <c>\p{..}</c>, reads the category .NET does.
     /// </remarks>
@@ -1171,6 +1172,9 @@ public static class JsonSchemaSubset
         // written - held to the groups once all of them are known, since a reference can come before its group.
         var named = new List<bool>();
         var numbered = new List<string>();
+
+        // Each group's name, once: .NET reads a name given twice as one group, which a provider refuses outright.
+        var names = new HashSet<string>(StringComparer.Ordinal);
 
         for (var index = 0; index < pattern.Length; index++)
         {
@@ -1233,6 +1237,14 @@ public static class JsonSchemaSubset
                     // A lookbehind is no group; anything else '(?<' opens that the check above takes is a named one.
                     if (pattern.AsSpan(index + 2) is ['<', not ('=' or '!'), ..])
                     {
+                        var name = pattern[(index + 3)..pattern.IndexOf('>', index + 3)];
+
+                        if (!names.Add(name))
+                        {
+                            problem = $"'(?<{name}>' names group '{name}' a second time, which a provider reading ECMA-262, the dialect a pattern is written in, refuses";
+                            return null;
+                        }
+
                         named.Add(true);
                     }
 

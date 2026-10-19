@@ -304,7 +304,10 @@ public sealed record AgentStepRequest(
 /// <param name="StepDirectory">
 /// The step's own directory, where the client keeps what it records of its own beside the stored stream: the control
 /// messages, a result too large for its event, what the child said on its standard error. The stream itself is
-/// written by the runner from the events the client emits, and by nothing else.
+/// written by the runner from the events the client emits, and by nothing else. A child the client starts contained
+/// records its session here too, by the request's <see cref="Processes.ProcessRequest.SessionRecord"/> being
+/// <see cref="Orchestration.ChildSessions.For"/> this directory, so a process killed before it ended the child leaves
+/// the child for the next command over the orchestrator to end.
 /// </param>
 /// <param name="Handoff">The signal the engine raises when the run is pausing.</param>
 /// <param name="Messages">What the engine has to tell the agent while it works.</param>

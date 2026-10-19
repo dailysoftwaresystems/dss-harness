@@ -94,7 +94,8 @@ public sealed class HarnessFactory
         OrchestrationStore = new OrchestrationStore(FileSystem, Output);
         OrchestrationLog = new OrchestrationLog(FileSystem, TimeProvider.System, Output);
         Transcripts = TranscriptsOver(FileSystem);
-        OrchestratorService = new OrchestratorService(ContextLoader, GitClient, FileSystem, Platform, Output, WorktreeService, OrchestrationStore, OrchestrationLog, TimeProvider.System);
+        ChildSessions = SessionsOver(FileSystem);
+        OrchestratorService = new OrchestratorService(ContextLoader, GitClient, FileSystem, Platform, Output, WorktreeService, OrchestrationStore, OrchestrationLog, ChildSessions, TimeProvider.System);
         AgentService = Agents(FileSystem, AnchorRegistryService);
     }
 
@@ -134,9 +135,21 @@ public sealed class HarnessFactory
             TranscriptsOver(fileSystem),
             new OrchestrationStore(fileSystem, Output),
             new OrchestrationLog(fileSystem, TimeProvider.System, Output),
+            SessionsOver(fileSystem),
             TimeProvider.System,
             ProcessContext);
     }
+
+    /// <summary>
+    /// The records of orchestrators' contained children over <paramref name="fileSystem"/>, ending what a killed process
+    /// left as the real command ends it, and saying so on this factory's output.
+    /// </summary>
+    /// <param name="fileSystem">Reads, writes and removes the records.</param>
+    public ChildSessions SessionsOver(IFileSystem fileSystem)
+        => new(fileSystem, Identity, new LeftSessions(Platform, ProcessTable), Output);
+
+    /// <summary>The records of orchestrators' contained children over the real disk.</summary>
+    public ChildSessions ChildSessions { get; }
 
     /// <summary>
     /// The record of heavy legs a test's agents read, kept under a scratch directory of its own so no test ever reads

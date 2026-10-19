@@ -2379,6 +2379,37 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The orchestrators and layout topics say where a step's contained child's session is recorded, and that every command
+    /// over an orchestrator first ends what a killed process left of them - and on which systems - from the layout's own names.
+    /// </summary>
+    [Fact]
+    public void OrchestratorsTopic_SaysWhatAKilledProcessLeftRunning_IsEndedByTheNextCommand()
+    {
+        var orchestrators = Prose.Words(HelpText.Of("orchestrators").StandardOutput);
+        var layout = Prose.Words(HelpText.Of("layout").StandardOutput);
+        var record = $"<step>/{OrchestratorLayout.ChildrenDirectoryName}/<session>{OrchestratorLayout.ChildExtension}";
+
+        Assert.Contains($"{record} in either kind of step, on Linux and macOS: a session a contained child of the step leads while it runs", orchestrators, StringComparison.Ordinal);
+        Assert.Contains(
+            "What a killed process left running. On Linux and macOS a contained child of a step leads a session of its own, "
+            + $"which nothing ends when the process that started it is killed, so it is recorded in its step's {OrchestratorLayout.ChildrenDirectoryName}/ "
+            + "while it runs and the record taken back once that process ends it. Every command over an orchestrator - the three "
+            + "orchestrator commands and each agent command - first ends each recorded session whose starter has gone, as a stop "
+            + "ends one (SIGTERM, then SIGKILL five seconds later), removes its record, and says so in a line, and in the document's "
+            + "ended where it answers with --json. A session whose starter still runs is left; one whose id a later process "
+            + "carries ends nothing, and its record goes; a record that does not read as one is said and left; a starter on another "
+            + "machine is never taken to have gone. Windows records nothing: a job ends a contained child with the process that "
+            + "started it.",
+            orchestrators,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"{record} ignored; in either kind of step, on Linux and macOS: a session a contained child of the step leads while it "
+            + "runs, ended by the next command over the orchestrator where its starter was killed",
+            layout,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The orchestrators topic says what a fold does with a path both trees changed: what a three-way merge of it gives
     /// is said, a clean one is taken only where --merge names it, what is never merged, and that whether a file can be
     /// run is merged with its content. The bound it names is the code's.

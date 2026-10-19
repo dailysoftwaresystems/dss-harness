@@ -73,6 +73,14 @@ public sealed record ProcessRequest
     public Action? OnStarted { get; init; }
 
     /// <summary>
+    /// Where a <see cref="Contained"/> child's session is recorded while it runs, so a later run of the tool ends it where
+    /// this process was killed and left it running; <see langword="null"/> where it is recorded nowhere. Written on Linux
+    /// and macOS alone, where a session outlives the process that started it: on Windows the job that holds the child ends
+    /// it with this process, and nothing is recorded. A record that cannot be written is a start that failed.
+    /// </summary>
+    public IContainedSessionRecord? SessionRecord { get; init; }
+
+    /// <summary>
     /// Invoked for each stdout line as it arrives, in addition to capture.
     /// Raised on background threads, so implementations must be thread safe. One that throws is handed no more lines,
     /// and what it threw is raised once the child has gone.

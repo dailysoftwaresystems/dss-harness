@@ -22,6 +22,7 @@ namespace DssHarness.Core.Orchestration;
 /// agents/&lt;agent&gt;/sessions/&lt;id&gt;/   API clients only: one conversation with the provider, in the provider's own form
 /// agents/&lt;agent&gt;/steps/&lt;instance&gt;/   one step the agent runs, or that runs in or for its worktree, everything of the step in it
 /// steps/&lt;instance&gt;/          one step of the run that no agent owns, the create-agent that makes an agent included
+/// &lt;step&gt;/children/&lt;id&gt;.json   in either kind of step's directory: a session a contained child of the step leads while it runs, on Linux and macOS
 /// </code>
 /// The orchestrator's name and each agent's are the directories they are kept in, and an agent is never named as its
 /// orchestrator, since the two would share a log and a plans directory.
@@ -71,6 +72,12 @@ public sealed record OrchestratorLayout(string Name, string Directory)
 
     /// <summary>The extension of a log: one JSON object to a line.</summary>
     public const string LogExtension = ".jsonl";
+
+    /// <summary>The directory, in a step's own, where each session a contained child of the step leads is recorded while it runs.</summary>
+    public const string ChildrenDirectoryName = "children";
+
+    /// <summary>The extension of the record of a contained child's session.</summary>
+    public const string ChildExtension = ".json";
 
     /// <summary>Where the orchestrator named <paramref name="name"/> of the repository at <paramref name="layout"/> is kept.</summary>
     /// <param name="layout">The repository.</param>
@@ -184,6 +191,19 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <param name="agent">The agent's name.</param>
     /// <param name="instance">The step instance's name.</param>
     public string HandoffFile(string agent, string instance) => Path.Combine(AgentStepDirectory(agent, instance), HandoffFileName);
+
+    /// <summary>
+    /// Where the sessions the contained children of the step kept at <paramref name="stepDirectory"/> lead are recorded
+    /// while they run: a step of the run's or of an agent's alike.
+    /// </summary>
+    /// <param name="stepDirectory">The step's own directory.</param>
+    public static string ChildrenDirectory(string stepDirectory) => Path.Combine(stepDirectory, ChildrenDirectoryName);
+
+    /// <summary>The record of the session <paramref name="session"/>, which a contained child of the step at <paramref name="stepDirectory"/> leads.</summary>
+    /// <param name="stepDirectory">The step's own directory.</param>
+    /// <param name="session">The session's id: its leader's process id.</param>
+    public static string ChildFile(string stepDirectory, int session)
+        => Path.Combine(ChildrenDirectory(stepDirectory), session.ToString(System.Globalization.CultureInfo.InvariantCulture) + ChildExtension);
 
     /// <summary>Where the evidence of <paramref name="agent"/> is kept when it is deleted.</summary>
     /// <param name="agent">The agent's name.</param>

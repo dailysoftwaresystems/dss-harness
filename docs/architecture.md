@@ -133,8 +133,22 @@ what it holds. A process table that cannot be read - macOS's is read through `ps
 that has used up every process it may start leaves unable to start - takes nothing from the stop:
 the group is still asked and then killed by its id, which needs no table, the tree is still ended,
 and what went unreached is said in the result (`ProcessResult.Uncontained`), or in the
-cancellation where the caller gave up. Nothing ends a contained child there when the engine itself
-is killed: it runs on until something ends it.
+cancellation where the caller gave up. A process killed there - a crash, `kill -9` - ends nothing
+of the sessions it started, so each one a step of an orchestrator starts is recorded while it runs,
+by the runner through the tool's own records: once the child is placed in its session and before
+it is said to have started, `<step>/children/<session>.json` in the step's own directory - its
+session (the child's process id), the child's start stamp, its program, and the process that
+started it with that process's machine and stamp (`ChildSessions`, the request's
+`SessionRecord`) - and taken back once the runner has ended the session. A record that cannot be
+written is a start that failed: the child is ended, and never said to have started. Every command
+over an orchestrator - `create-`, `list-` and `delete-orchestrator`, and each agent verb - first
+sweeps its records, before it reads anything else of it: a session whose starter still stands is
+its starter's and is left; one whose starter has gone is ended as the runner ends one at a stop,
+its record removed and the end said in the command's lines and in its document's `ended` where it
+answers with one - but only where the process carrying the session's id still has the recorded
+start, since a session's id given to a later process ends nothing, and that record simply goes. A
+record that does not read as one is said and left, and a starter on another machine is never taken
+to have gone. Windows records nothing: its job already ends a killed starter's children.
 
 Whether the program started is said on a channel of the runner's own (`--status`), never in the
 program's streams or an exit code a program could give too: a program that cannot start is
@@ -710,6 +724,10 @@ anything is weighed - a command line the parser refuses, a `--directory` that is
 initialised, another usage error, or a refusal met before then, an agent that is not there among them - answers with
 the same document, empty (`OrchestrationReports.Stopped`): `applied` false, `request`, `heldNow` and `heldUnread` null, no `lines`, no
 `needs`, no `refusals`, and `folded` and `planned` null, its `exitCode` and `summary` the code it exits with and the line it ends on.
+Each of these documents, and list-orchestrator's, also says `ended` where finding the orchestrator ended a session a
+killed process left running (see containment, above): one object per session, its `orchestrator`, `agent` (null for a
+step no agent owns), `step`, `session`, `program`, `owner` (the process id that had gone) and `unreached` (null where
+everything in it was reached); with nothing ended there is no `ended`, and the document is what it always was.
 
 An agent's worktree is `<worktrees.root>/<orchestrator>/<agent>`, addressed `orchestrator/agent` by list-worktree
 and delete-worktree, its host copies named `orchestrator--agent` (`WorktreeAddress`). The directory named for an
