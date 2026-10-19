@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using DssHarness.Core.Results;
 
 namespace DssHarness.Core.Agents;
@@ -76,40 +77,39 @@ public enum AgentNotStartedBecause
 public sealed record AgentServedModel(string Model, int FromTurn);
 
 /// <summary>
-/// What a run's usage cost, and where the number is from: reported by the client, or counted at the configuration's
-/// prices - or unknown, naming the price that is missing.
+/// What a run's usage cost, in United States dollars, with where each number is from, kept side by side as
+/// <c>cost.reported</c> and <c>cost.counted</c>: what the client said the launch cost, where it says (Claude Code's
+/// <c>total_cost_usd</c>), and what this tool counted at the configuration's prices - or, where a price was missing,
+/// which one, for a cost no price was there for is unknown and never zero.
 /// </summary>
-public sealed record AgentCost
+/// <param name="Reported">What the client said the run cost; null where the client says nothing of it, as the two APIs do.</param>
+/// <param name="Counted">What this tool counted at the configuration's prices; null where a price it needed was missing.</param>
+/// <param name="MissingPrice">The price that was missing, where the cost could not be counted: the model and the key to fill; null where it was counted.</param>
+public sealed record AgentCost(decimal? Reported = null, decimal? Counted = null, string? MissingPrice = null)
 {
-    /// <summary>The cost in United States dollars.</summary>
-    public required decimal Usd { get; init; }
-
-    /// <summary>Where the number is from: <c>reported</c>, <c>counted</c>, or <c>unknown</c>.</summary>
-    public required string Source { get; init; }
-
-    /// <summary>Which price is missing, where the cost is unknown; null otherwise.</summary>
-    public string? MissingPrice { get; init; }
-
-    /// <summary>The client reported what its provider charged.</summary>
-    public const string Reported = "reported";
-
-    /// <summary>This tool counted the cost at the configuration's prices.</summary>
-    public const string Counted = "counted";
-
-    /// <summary>No price was there to count with.</summary>
-    public const string Unknown = "unknown";
+    /// <summary>
+    /// The run's cost: the client's own number where it reports one, for it holds what the stream does not show as the
+    /// agent's; the counted one where it does not; null where neither is known.
+    /// </summary>
+    [JsonIgnore]
+    public decimal? Usd => Reported ?? Counted;
 }
+
+/// <summary>One model's part of what a run used.</summary>
+/// <param name="Model">The model.</param>
+/// <param name="Usage">What it used.</param>
+public sealed record AgentModelUsage(string Model, AgentUsage Usage);
 
 /// <summary>What a run used: in all, and for each model that served it.</summary>
 /// <param name="Total">The whole of it.</param>
 /// <param name="PerModel">Each model's part, in the order they served.</param>
-/// <param name="Cost">What it cost, and where the number is from.</param>
-public sealed record AgentUsageReport(AgentUsage Total, IReadOnlyList<(string Model, AgentUsage Usage)> PerModel, AgentCost? Cost);
+/// <param name="Cost">What it cost, and where each number is from; null where nothing has said or counted it.</param>
+public sealed record AgentUsageReport(AgentUsage Total, IReadOnlyList<AgentModelUsage> PerModel, AgentCost? Cost = null);
 
 /// <summary>The agent's answer to the handoff turn, or why there is none.</summary>
 /// <param name="Answer">The answer, masked; null where the agent gave none.</param>
 /// <param name="WhyNone">Why there is none; null where it answered.</param>
-public sealed record AgentHandoff(string? Answer, string? WhyNone)
+public sealed record AgentHandoff(string? Answer = null, string? WhyNone = null)
 {
     /// <summary>There is an answer.</summary>
     public bool Answered => Answer is not null;
@@ -168,6 +168,7 @@ public sealed record AgentRunResult(
 
     /// <summary>The files it wrote and read; always filled, empty where it touched none.</summary>
     public IReadOnlyList<string> Files { get; init; } = [];
+
     /// <summary>
     /// The exit code the run command answers for a step whose agent asked the person and produced no output: its own
     /// per-command code, which the run command's slice wires.

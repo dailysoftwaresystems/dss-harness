@@ -644,7 +644,7 @@ internal static class TestChild
 
         var session = "00000000-0000-4000-8000-000000000001";
         var ask = "00000000-0000-4000-8000-000000000002";
-        var call = "toolu_01FakeToolUseId000000000001";
+        var call = "toolu_000000000000000000000001";
 
         void ToolResult(bool ok, string content)
             => Say("{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"content\":\"" + content
@@ -673,7 +673,7 @@ internal static class TestChild
                 Say("{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"[structured-output-enforce] You MUST call the StructuredOutput tool to complete this request. Call this tool now.\"}]},\"session_id\":\"" + session + "\"}");
             }
 
-            Say("{\"type\":\"assistant\",\"message\":{\"model\":\"claude-sonnet-5-5\",\"role\":\"assistant\",\"stop_reason\":\"tool_use\",\"usage\":{\"input_tokens\":6,\"output_tokens\":20},\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_01FakeStructuredOutput000001\",\"name\":\"StructuredOutput\",\"input\":{\"answer\":\"" + (denied ? "denied" : "alpha") + "\"}}]},\"session_id\":\"" + session + "\"}");
+            Say("{\"type\":\"assistant\",\"message\":{\"model\":\"claude-sonnet-5-5\",\"role\":\"assistant\",\"stop_reason\":\"tool_use\",\"usage\":{\"input_tokens\":6,\"output_tokens\":20},\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_000000000000000000000002\",\"name\":\"StructuredOutput\",\"input\":{\"answer\":\"" + (denied ? "denied" : "alpha") + "\"}}]},\"session_id\":\"" + session + "\"}");
             ToolResult(ok: true, "Structured output provided successfully");
 
             Say("{\"duration_api_ms\":12,\"stop_reason\":\"stop_sequence\",\"session_id\":\"" + session
@@ -683,23 +683,28 @@ internal static class TestChild
                 + ",\"type\":\"result\",\"duration_ms\":80,\"uuid\":\"00000000-0000-4000-8000-000000000003\",\"queued_turn_count\":0,\"result_index\":0}");
         }
 
+        // A member's text, where the member is there and is text; null for anything else, as the real child reads it.
+        static string? Text(System.Text.Json.Nodes.JsonNode? node)
+            => node is System.Text.Json.Nodes.JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
+
         while (Line() is { } line)
         {
-            string? kind = null, sub = null, requestId = null;
+            System.Text.Json.Nodes.JsonNode? node;
 
             try
             {
-                var node = System.Text.Json.Nodes.JsonNode.Parse(line);
-
-                kind = node?["type"]?.GetValue<string>();
-                sub = node?["request"]?["subtype"]?.GetValue<string>();
-                requestId = node?["request_id"]?.GetValue<string>();
+                node = System.Text.Json.Nodes.JsonNode.Parse(line);
             }
             catch (System.Text.Json.JsonException)
             {
                 // What the real child does with a line it cannot read: nothing, and the stream goes on.
                 continue;
             }
+
+            var kind = Text(node?["type"]);
+            var sub = Text(node?["request"]?["subtype"]);
+            var requestId = Text(node?["request_id"]);
+
             if (kind == "control_request" && sub == "initialize")
             {
                 Say("{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"" + requestId
@@ -719,13 +724,15 @@ internal static class TestChild
             }
             else if (kind == "control_response")
             {
-                // The answer an ask waits for: nested, its id inside. Any other shape is not heard.
-                var heard = line.Contains("\"request_id\":\"" + ask + "\"", StringComparison.Ordinal)
-                    && line.Contains("\"behavior\":\"", StringComparison.Ordinal);
+                // The answer an ask waits for, in the envelope the probe recorded: a success whose own response names
+                // the ask inside it and carries the behavior one level further in. Any other shape - the id or the
+                // behavior outside, no subtype - is not heard, which is the silence the real child keeps.
+                var response = node?["response"];
+                var behavior = Text(response?["response"]?["behavior"]);
 
-                if (heard)
+                if (Text(response?["subtype"]) == "success" && Text(response?["request_id"]) == ask && behavior is "allow" or "deny")
                 {
-                    Ended(line.Contains("\"behavior\":\"deny\"", StringComparison.Ordinal));
+                    Ended(denied: behavior == "deny");
                 }
             }
         }

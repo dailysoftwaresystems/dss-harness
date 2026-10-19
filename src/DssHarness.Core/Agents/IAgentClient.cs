@@ -10,7 +10,10 @@ namespace DssHarness.Core.Agents;
 /// <remarks>
 /// A client never touches the console, the exit code or a file of the engine's: it is given its run, it emits events,
 /// and it answers with a result. What its wire becomes is <see cref="AgentEvent"/>s, and the stored stream is written
-/// by the runner's sink, not by the client.
+/// by the runner's sink, not by the client, which is handed no writer of it: what it keeps of its own - the control
+/// messages, a result too large for its event - goes beside the stream, in <see cref="AgentRun.StepDirectory"/>. The
+/// two ends of a run, <see cref="RunStarted"/> and <see cref="RunFinished"/>, are the runner's, and a client that emits
+/// either is refused.
 /// </remarks>
 public interface IAgentClient
 {
@@ -23,14 +26,18 @@ public interface IAgentClient
     /// <summary>Works the run, emitting what happens to <paramref name="events"/> in the order it happens.</summary>
     /// <param name="run">The run, resolved: everything the client may act on.</param>
     /// <param name="events">Where what happens is emitted; called serially, in order.</param>
-    /// <param name="cancellationToken">The hard stop.</param>
+    /// <param name="cancellationToken">
+    /// The hard stop: the caller's, or the runner's own where the step's record could not be written, for a run whose
+    /// record is lost is not one to go on with.
+    /// </param>
     /// <returns>How the run ended, and everything it knows beyond its text.</returns>
     Task<AgentRunResult> RunAsync(AgentRun run, IAgentEventSink events, CancellationToken cancellationToken);
 }
 
 /// <summary>
-/// Where the events of one run go. Called serially, in <see cref="AgentEvent.Seq"/> order, by the one pump a run has;
-/// a sink that throws gets no more events, and its exception is raised once the run has ended.
+/// Where the events of one run go. Called serially, in <see cref="AgentEvent.Seq"/> order, by the one pump a run has,
+/// after the step's stored stream has written each; a sink that throws gets no more events, and its exception is raised
+/// once the run has ended.
 /// </summary>
 public interface IAgentEventSink
 {
@@ -229,6 +236,10 @@ public sealed class AgentMessages
 /// <param name="Run">The orchestrator run's name.</param>
 /// <param name="Agent">The agent the step works as.</param>
 /// <param name="StepInstance">The step instance's name.</param>
+/// <param name="Attempt">
+/// Which attempt of the step instance this is, from one: a step stopped and run again is the same instance, and its
+/// next attempt appends to the same stored stream, beginning with a <see cref="RunStarted"/> that names it.
+/// </param>
 /// <param name="AgentDefinition">The agent definition's name, where the step names one.</param>
 /// <param name="Provider">The step's own provider, where it names one.</param>
 /// <param name="Client">The step's own client, where it names one.</param>
@@ -252,6 +263,7 @@ public sealed record AgentStepRequest(
     string Run,
     string Agent,
     string StepInstance,
+    int Attempt,
     string? AgentDefinition,
     string? Provider,
     string? Client,
@@ -274,7 +286,7 @@ public sealed record AgentStepRequest(
 
 /// <summary>
 /// A run, resolved: what a client gets and all a client gets. The prompt is filled, the places are absolute, the
-/// stream is the step's own, and the bounds are the run's own - the step's definition has said its last word by here.
+/// step's directory is its own, and the bounds are the run's own - the step's definition has said its last word by here.
 /// </summary>
 /// <param name="SystemPrompt">The system prompt, as sent.</param>
 /// <param name="UserPrompt">The prompt, filled with its values.</param>
@@ -289,7 +301,11 @@ public sealed record AgentStepRequest(
 /// <param name="Files">The files the run was handed, by path.</param>
 /// <param name="Skills">The skills its prompt named, as it was given them.</param>
 /// <param name="Mask">What masks the secrets its lines may carry; never null, masking nothing where the step carries none.</param>
-/// <param name="Stream">The writer of the step's stored stream.</param>
+/// <param name="StepDirectory">
+/// The step's own directory, where the client keeps what it records of its own beside the stored stream: the control
+/// messages, a result too large for its event, what the child said on its standard error. The stream itself is
+/// written by the runner from the events the client emits, and by nothing else.
+/// </param>
 /// <param name="Handoff">The signal the engine raises when the run is pausing.</param>
 /// <param name="Messages">What the engine has to tell the agent while it works.</param>
 public sealed record AgentRun(
@@ -306,6 +322,6 @@ public sealed record AgentRun(
     IReadOnlyList<string> Files,
     IReadOnlyList<AgentSkill> Skills,
     ILineMask Mask,
-    StoredStream Stream,
+    string StepDirectory,
     AgentHandoffSignal Handoff,
     AgentMessages Messages);

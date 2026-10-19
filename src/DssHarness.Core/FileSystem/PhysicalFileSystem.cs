@@ -542,6 +542,15 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
             });
     }
 
+    public IAppendFile OpenForAppend(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        // Read and written by its one writer, and read beside it: a live step's record is read while it grows, and a
+        // second writer would interleave its lines with the first's.
+        return new PhysicalAppendFile(new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read));
+    }
+
     public async Task WriteAllBytesAtomicAsync(
         string path,
         byte[] contents,

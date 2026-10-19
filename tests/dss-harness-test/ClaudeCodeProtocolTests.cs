@@ -49,6 +49,50 @@ public sealed class ClaudeCodeProtocolTests
     }
 
     /// <summary>
+    /// The curated recordings are the public repository's, so they keep nothing of the account that made them: every id
+    /// a server gave - a request's, a message's, a tool call's - and every uuid is a stable stand-in, the same one
+    /// wherever the recording names the same thing, and the account's own members of a rate limit are elided. A
+    /// regeneration that forgot to scrub them is refused here.
+    /// </summary>
+    [Theory]
+    [InlineData("stable")]
+    [InlineData("latest")]
+    public void TheCuratedRecording_KeepsNothingOfTheAccountThatMadeIt(string channel)
+    {
+        var text = File.ReadAllText(Fixtures(channel, "shapes.jsonl"));
+
+        // An id is a long run after its prefix, which a word of the protocol (msg_lifecycle_v1) is not.
+        var ids = System.Text.RegularExpressions.Regex.Matches(text, @"\b(?:req|msg|toolu|srvtoolu)_[A-Za-z0-9]{16,}").Select(found => found.Value).ToList();
+        var uuids = System.Text.RegularExpressions.Regex.Matches(text, "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}").Select(found => found.Value).ToList();
+
+        Assert.NotEmpty(ids);
+        Assert.All(ids, id => Assert.Matches("^(req|msg|toolu|srvtoolu)_[0-9]{24}$", id));
+        Assert.All(uuids, uuid => Assert.StartsWith("00000000-0000-4000-8000-", uuid, StringComparison.Ordinal));
+
+        // The stand-ins still pair up: every call a result or an ask names is a call a message made.
+        var lines = ClaudeCodeProbe.Read(Fixtures(channel, "shapes.jsonl"));
+        var made = lines
+            .Where(line => line.Kind == "assistant")
+            .SelectMany(line => (line.Node["message"]?["content"] as JsonArray ?? []).OfType<JsonObject>())
+            .Where(block => block["type"]?.GetValue<string>() == "tool_use")
+            .Select(block => block["id"]!.GetValue<string>())
+            .ToHashSet(StringComparer.Ordinal);
+        var asked = lines.Select(ClaudeCodeProbe.AskOf).OfType<ClaudeCodeProbe.Ask>().Select(ask => ask.ToolUseId).ToList();
+
+        Assert.NotEmpty(asked);
+        Assert.All(asked, call => Assert.Contains(call, made));
+
+        var limits = lines.Where(line => line.Kind == "rate_limit_event").Select(line => line.Node["rate_limit_info"]!).ToList();
+
+        Assert.NotEmpty(limits);
+        Assert.All(limits, limit =>
+        {
+            Assert.Equal("<elided: the account's own>", limit["overageStatus"]!.GetValue<string>());
+            Assert.Equal("<elided: the account's own>", limit["overageDisabledReason"]!.GetValue<string>());
+        });
+    }
+
+    /// <summary>
     /// The recordings hold the five points: asks for every kind of call, their allowed tool results, a denial the
     /// host made and the result that counts it, an interrupt that ends the turn under way, a turn answered after
     /// it, and a call that failed because the host never answered.
@@ -174,11 +218,17 @@ public sealed class ClaudeCodeProtocolTests
 
     /// <summary>
     /// A call with the host silent is waited for: nothing more is written, as long as the silence holds - and an
-    /// answer in the shape the recording does not know is the same silence, which is what the real child does to a
-    /// flat envelope.
+    /// answer in a shape the recording does not know is the same silence, which is what the real child does to a
+    /// flat envelope (<c>probe.md</c>: a flat shape is not heard at all). Each shape names the ask and an allow, so
+    /// only the envelope, read as JSON, tells them from the one that is heard.
     /// </summary>
-    [Fact]
-    public async Task TheFakeWaitsWhileTheHostIsSilent_AndDoesNotHearAShapeItDoesNotKnow()
+    [Theory]
+    [InlineData("""{"type":"control_response","response_to":"00000000-0000-4000-8000-000000000002","response":{"behavior":"allow"}}""")]
+    [InlineData("""{"type":"control_response","request_id":"00000000-0000-4000-8000-000000000002","behavior":"allow"}""")]
+    [InlineData("""{"type":"control_response","response":{"request_id":"00000000-0000-4000-8000-000000000002","behavior":"allow"}}""")]
+    [InlineData("""{"type":"control_response","response":{"subtype":"success","request_id":"00000000-0000-4000-8000-000000000002","behavior":"allow"}}""")]
+    [InlineData("""{"type":"control_response","response":{"request_id":"00000000-0000-4000-8000-000000000002","response":{"behavior":"allow"}}}""")]
+    public async Task TheFakeWaitsWhileTheHostIsSilent_AndDoesNotHearAShapeItDoesNotKnow(string shape)
     {
         using var child = Fake();
         await WriteAsync(child, """
@@ -186,14 +236,12 @@ public sealed class ClaudeCodeProtocolTests
             """);
         await UntilAsync(child, line => line.Contains("\"subtype\":\"can_use_tool\"", StringComparison.Ordinal));
 
-        // The shape the recording does not know: flat, the id outside, as the real child is not heard by.
-        await WriteAsync(child, """
-            {"type":"control_response","response_to":"00000000-0000-4000-8000-000000000002","response":{"behavior":"allow"}}
-            """);
+        await WriteAsync(child, shape);
 
         var after = await ReadForAsync(child, TimeSpan.FromSeconds(2));
 
         Assert.DoesNotContain("\"type\":\"result\"", after, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"type\":\"tool_result\"", after, StringComparison.Ordinal);
     }
 
     /// <summary>Starts the fake <c>claude</c>, this assembly as a child in its <c>claude-code</c> mode.</summary>

@@ -13,6 +13,11 @@ namespace DssHarness.Core.Agents;
 /// so nothing is lost by a keeper of records leaving them out - which the stored stream does.
 /// </para>
 /// <para>
+/// A member that may be absent is one whose parameter has a default: a line is written without its null members and read
+/// back by the options that refuse a member the type needs and the line leaves out, so a nullable member with no default
+/// would make the line it was null in unreadable.
+/// </para>
+/// <para>
 /// Each member that carries text a person or a model wrote carries it whole: a record read "as best it can be" is how
 /// a continuation ends up carrying the wrong words. Where text is kept it is masked by the keeper, never here.
 /// </para>
@@ -42,6 +47,7 @@ namespace DssHarness.Core.Agents;
 [JsonDerivedType(typeof(PersonAsked), "personAsked")]
 [JsonDerivedType(typeof(PersonAnswered), "personAnswered")]
 [JsonDerivedType(typeof(Notice), "notice")]
+[JsonDerivedType(typeof(RunStarted), "runStarted")]
 [JsonDerivedType(typeof(RunFinished), "runFinished")]
 public abstract record AgentEvent
 {
@@ -58,7 +64,7 @@ public abstract record AgentEvent
 /// </summary>
 /// <param name="Kind">Which of the two: <c>EnvFile</c> or <c>Login</c>.</param>
 /// <param name="Variable">The variable's name, where the kind is <c>EnvFile</c>; null where it is <c>Login</c>.</param>
-public sealed record AgentCredentialSource(string Kind, string? Variable)
+public sealed record AgentCredentialSource(string Kind, string? Variable = null)
 {
     /// <summary>The credential was a variable of the key slot's file.</summary>
     public const string EnvironmentFile = "EnvFile";
@@ -141,7 +147,7 @@ public sealed record AgentToolCall(string Id, string Name);
 /// <param name="Text">The question.</param>
 /// <param name="Choices">The answers there are to pick from, where the question offers them.</param>
 /// <param name="Recommended">The one it recommends, where it does.</param>
-public sealed record AgentQuestion(string Text, IReadOnlyList<string> Choices, string? Recommended);
+public sealed record AgentQuestion(string Text, IReadOnlyList<string> Choices, string? Recommended = null);
 
 /// <summary>The launch began: what it runs as, where its credential came from, and what it was given.</summary>
 /// <param name="Client">The client's key, as the configuration names it.</param>
@@ -238,7 +244,7 @@ public sealed record PermissionDenied(string Tool, string Subject, string Rule, 
 /// <param name="Allowed">Whether it was allowed.</param>
 /// <param name="Status">The status of what came back; null where nothing did.</param>
 /// <param name="Size">The size of what came back; null where nothing did.</param>
-public sealed record WebRequested(string QueryOrAddress, AgentToolRunner Runner, bool Allowed, int? Status, long? Size) : AgentEvent;
+public sealed record WebRequested(string QueryOrAddress, AgentToolRunner Runner, bool Allowed, int? Status = null, long? Size = null) : AgentEvent;
 
 /// <summary>What the run has used, as the client reported it.</summary>
 /// <param name="Turn">This turn's usage.</param>
@@ -324,5 +330,22 @@ public sealed record PersonAnswered(string Answer) : AgentEvent;
 /// <param name="Text">What was said.</param>
 public sealed record Notice(string Text) : AgentEvent;
 
-/// <summary>The run of a step ended: the last event of every run, whatever the end.</summary>
-public sealed record RunFinished : AgentEvent;
+/// <summary>
+/// The run of a step began: the first event of every run, written by the runner before a client is chosen - never by a
+/// client - as <see cref="RunFinished"/> is its last.
+/// </summary>
+/// <remarks>
+/// Every attempt of a step appends to the step's one stored stream, and its numbering begins again at one, so this is
+/// where an attempt's own events begin: the newest attempt's stream, which a continuation and a handoff are written
+/// from, is what follows the last of these, whether the attempt before it ended or was killed.
+/// </remarks>
+/// <param name="Attempt">Which attempt of the step the run is, from one.</param>
+public sealed record RunStarted(int Attempt) : AgentEvent;
+
+/// <summary>
+/// The run of a step ended: the last event of every run, whatever the end - written by the runner, never by a client,
+/// once the client has returned or thrown, and where no client could be taken.
+/// </summary>
+/// <param name="Status">How it ended, as its result says.</param>
+/// <param name="Error">Why it failed, where it did; null where it did not.</param>
+public sealed record RunFinished(AgentRunStatus Status, string? Error = null) : AgentEvent;

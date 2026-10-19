@@ -134,8 +134,20 @@ and more, differing slightly between the channels (`latest` adds `request_marker
   committed recordings hold `completed` and `aborted_streaming` only.
 - The `-p` half of "with `-p` and without": only the without-`-p` mode ran (checked by hand once,
   headless, before the login was renewed; not recorded).
-- "Or after it has gone": the host silent was measured for 45 seconds; the host gone (input
-  closed) was not.
+- Whether `--permission-prompt-tool stdio`, which only the source shows, is needed beside the
+  documented `--permission-prompts host`: every launch passed both, and none was started with
+  one alone, so what either does without the other is unknown.
+- "Or after it has gone", and what becomes of a waiting call when the host dies, closes the input
+  or answers `error`: the host silent was measured for 45 seconds; the host gone (dead, or its
+  input closed) was not, and no ask was answered `error` — the host answered `allow`, `deny` or
+  nothing.
+- Whether the `env` of `--settings` wins over the user's own `env` for a name both set: what was
+  measured ("The flags" above) is the `env` of `--settings` against the **process's**
+  environment, and the user's own settings were never given the name, so their `env` was not set
+  beside it.
+- What `system/init`'s `apiKeySource` says under each way of signing in: only the login ran, and
+  said `none`; under a key from the slot it was not measured, no key being in the environment by
+  design.
 - "What a full context says": no turn filled the context; `DISABLE_COMPACT` is shown accepted,
   never shown to hold.
 - A protected path denied by the built-in rules (no write outside the worktree was asked for);

@@ -176,6 +176,17 @@ public interface IFileSystem
     Stream OpenRead(string path);
 
     /// <summary>
+    /// Opens a file of lines that only grows, made where it is not there: read back from any place and cut to a length
+    /// while its writer recovers it, and appended to with each write on the disk before the next is taken. Others may
+    /// read it while it is open, and no one else may write it.
+    /// </summary>
+    /// <param name="path">The file, its directory already there.</param>
+    /// <returns>The file, open for its one writer.</returns>
+    /// <exception cref="IOException">It could not be opened, or another writer holds it.</exception>
+    /// <exception cref="UnauthorizedAccessException">This process may not write it.</exception>
+    IAppendFile OpenForAppend(string path);
+
+    /// <summary>
     /// When <paramref name="path"/> was last written, in UTC.
     /// </summary>
     /// <param name="path">The file to ask about.</param>

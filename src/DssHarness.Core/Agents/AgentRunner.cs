@@ -1,107 +1,141 @@
 using System.Runtime.CompilerServices;
+using System.Runtime.ExceptionServices;
 using System.Text.Json;
+using System.Threading.Channels;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Repository;
-using DssHarness.Core.Results;
 
 namespace DssHarness.Core.Agents;
 
 /// <summary>
 /// Works an agent's step, from its request to its result: it chooses the client, opens the step's stored stream - the
-/// one sink always attached - and drives the client through the contract, so what happened is a stream of events and
-/// how it ended is a result, whatever the client is.
+/// one sink always attached, and the one the run cannot do without - and drives the client through the contract, so
+/// what happened is a stream of events and how it ended is a result, whatever the client is.
 /// </summary>
 /// <remarks>
+/// <para>
 /// The skeleton of it: the client is found by its name among those registered, the prompt is filled from its template
 /// by name, and the models are as the step named them. The resolution of tiers and fallbacks, the continuation of
 /// earlier work and the policy a run is held to come with their own slices and join the request then; nothing here
 /// names a provider, and nothing here runs anything live.
+/// </para>
+/// <para>
+/// Whatever the end, the record says it: every run's stream begins with the runner's <see cref="RunStarted"/> and ends
+/// with its <see cref="RunFinished"/> - a client that returned, one that threw, one that was stopped, and a run no client
+/// could be taken for alike - and <c>result.json</c> is written once that last line is, so the two never disagree. A
+/// client that threw has its failure raised after both are written. A record that could not be written stops the run,
+/// and its result says so.
+/// </para>
 /// </remarks>
-public sealed class AgentRunner(IEnumerable<IAgentClient> clients) : IAgentRunner
+/// <param name="clients">The clients registered, one of which works each step.</param>
+/// <param name="fileSystem">The file system the step's records are kept on.</param>
+/// <param name="clock">When each event happened.</param>
+public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem fileSystem, TimeProvider clock) : IAgentRunner
 {
     /// <summary>The run's own record, in the step's directory: the result as it ended.</summary>
     public const string ResultFileName = "result.json";
 
+    /// <summary>What a run stopped by its hard stop says it ended with.</summary>
+    public const string StoppedError = "The run was stopped before it ended.";
+
     private readonly IReadOnlyList<IAgentClient> _clients = [.. (clients ?? throw new ArgumentNullException(nameof(clients)))];
+
+    private readonly IFileSystem _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
+
+    private readonly TimeProvider _clock = clock ?? throw new ArgumentNullException(nameof(clock));
 
     /// <summary>Works the step, from its request to its result, emitting what happens beside the stored stream.</summary>
     /// <param name="step">The step, as the engine resolved it.</param>
-    /// <param name="events">A sink beside the stored stream; null where only the record is wanted.</param>
+    /// <param name="events">A listener beside the stored stream, handed each event after the stream has it; null where only the record is wanted.</param>
     /// <param name="cancellationToken">The hard stop.</param>
-    /// <returns>How the run ended.</returns>
+    /// <returns>How the run ended, also written as <c>result.json</c> beside its stream.</returns>
+    /// <exception cref="Exception">
+    /// What the client threw, raised once the stream and <c>result.json</c> say how the run ended; else what the listener
+    /// threw, raised once the run has ended.
+    /// </exception>
     public async Task<AgentRunResult> RunAsync(AgentStepRequest step, IAgentEventSink? events, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(step);
+        ArgumentOutOfRangeException.ThrowIfLessThan(step.Attempt, 1);
 
-        var stream = StoredStream.Open(StepDirectory(step), step.Mask ?? Masking.Nothing);
+        var directory = StepDirectory(step);
+        var mask = step.Mask ?? Masking.Nothing;
+
+        AgentRunResult result;
+        Exception? thrown;
+        Exception? listenerFailure;
+
+        var stream = StoredStream.Open(_fileSystem, directory, mask);
 
         try
         {
-            if (Client(step) is not { } client)
+            var pump = new AgentEventPump(stream, _clock, cancellationToken);
+
+            await using (pump.ConfigureAwait(false))
             {
-                // Never begun, and the configuration is why: a record of the step exists all the same, saying so.
-                return Ended(step, new AgentRunResult(
-                    AgentRunStatus.NotStarted,
-                    AgentNotStartedBecause.ConfigurationWrong,
-                    Error: step.Client is { } missing
-                        ? $"No agent client named '{missing}' is registered."
-                        : "The step names no agent client, and there is not exactly one to take it."));
+                if (events is not null)
+                {
+                    pump.Attach(events);
+                }
+
+                await pump.PostOwnAsync(new RunStarted(step.Attempt)).ConfigureAwait(false);
+
+                (var worked, thrown) = await WorkAsync(step, directory, mask, pump, cancellationToken).ConfigureAwait(false);
+                result = worked;
+
+                // The end is made once every event before it has been handed over, for only then is it known whether the
+                // record holds them: the record is the run's evidence, and without it the run is not one to keep -
+                // whatever the client made of its stop, it failed, and its result names why.
+                await pump.FinishAsync(lost =>
+                {
+                    result = lost is null ? worked : worked with
+                    {
+                        Status = AgentRunStatus.Failed,
+                        Error = mask.Redact($"The step's stored stream '{stream.FilePath}' could not be written, so the run was stopped: {lost.Message}"),
+                    };
+
+                    return new RunFinished(result.Status, result.Error);
+                }).ConfigureAwait(false);
+
+                // A stop the record's loss raised is the runner's own doing and not the client's failure; anything else
+                // the client threw is still its own.
+                if (pump.RecordFailure is not null && thrown is OperationCanceledException && !cancellationToken.IsCancellationRequested)
+                {
+                    thrown = null;
+                }
+
+                listenerFailure = pump.ListenerFailure;
             }
-
-            var messages = new AgentMessages();
-            var pump = new AgentEventPump();
-            pump.Attach(stream);
-
-            if (events is not null)
-            {
-                pump.Attach(events);
-            }
-
-            AgentRunResult result;
-
-            try
-            {
-                result = await client.RunAsync(Resolved(step, stream, messages), pump, cancellationToken).ConfigureAwait(false);
-            }
-            catch
-            {
-                // The run's own failure is the one to answer with: what was said is drained and the record closed
-                // quietly around it, and a listener's failure is not raised into the middle of the run's.
-                messages.Complete();
-                pump.Complete();
-                await pump.Drained.ConfigureAwait(false);
-                stream.Dispose();
-                throw;
-            }
-
-            messages.Complete();
-            pump.Complete();
-            await pump.Drained.ConfigureAwait(false);
-            stream.Dispose();
-
-            // The record is whole and the run has ended: the result is written after the stream that says how it went,
-            // so the two cannot disagree, and a listener's failure is raised here, once the run is over.
-            var ended = Ended(step, result);
-
-            if (pump.Failure is { } failed)
-            {
-                throw failed;
-            }
-
-            return ended;
         }
         finally
         {
             stream.Dispose();
         }
+
+        // The record is whole, closed, and the run has ended: the result is written after the stream that says how it
+        // went, so the two cannot disagree. Then the client's own failure is raised, and else a listener's.
+        Ended(directory, result);
+
+        if (thrown is not null)
+        {
+            ExceptionDispatchInfo.Throw(thrown);
+        }
+
+        if (listenerFailure is not null)
+        {
+            ExceptionDispatchInfo.Throw(listenerFailure);
+        }
+
+        return result;
     }
 
     /// <summary>Works the step, yielding what happens as it happens, the stored stream attached as always.</summary>
     /// <remarks>
-    /// A reader that stops early or is cancelled leaves the run to finish on its own, writing its records for a step
-    /// no one is watching: the enumerator is a view, never the run's own lifetime.
+    /// A reader that stops early or is cancelled leaves the run to finish on its own, writing its records for a step no
+    /// one is watching: the enumerator is a view, never the run's own lifetime. What the run then raises is seen to, so
+    /// that a failure no reader is left to take is never raised unobserved, and what it emits no reader holds.
     /// </remarks>
     /// <param name="step">The step, as the engine resolved it.</param>
     /// <param name="cancellationToken">The hard stop.</param>
@@ -110,8 +144,9 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients) : IAgentRunne
     {
         ArgumentNullException.ThrowIfNull(step);
 
-        var yielded = System.Threading.Channels.Channel.CreateUnbounded<AgentEvent>();
+        var yielded = Channel.CreateUnbounded<AgentEvent>(new UnboundedChannelOptions { SingleReader = true });
 
+        // Begun whatever the token says, so that a run stopped before it began is recorded as one.
         var run = Task.Run(
             async () =>
             {
@@ -124,17 +159,88 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients) : IAgentRunne
                     yielded.Writer.TryComplete();
                 }
             },
-            cancellationToken);
+            CancellationToken.None);
 
-        while (await yielded.Reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
+        var readToTheEnd = false;
+
+        try
         {
-            while (yielded.Reader.TryRead(out var @event))
+            while (await yielded.Reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
             {
-                yield return @event;
+                while (yielded.Reader.TryRead(out var @event))
+                {
+                    yield return @event;
+                }
+            }
+
+            readToTheEnd = true;
+        }
+        finally
+        {
+            if (!readToTheEnd)
+            {
+                yielded.Writer.TryComplete();
+                _ = run.ContinueWith(
+                    static alone => _ = alone.Exception,
+                    CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
             }
         }
 
         await run.ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Has the client work the step, where one can be taken: how it ended, and what it threw where it threw. A client that
+    /// threw has ended too - stopped where the hard stop was what it threw, failed otherwise - for the record to say so.
+    /// </summary>
+    /// <param name="step">The step.</param>
+    /// <param name="directory">The step's own directory.</param>
+    /// <param name="mask">What masks the secrets the run's text may carry.</param>
+    /// <param name="pump">The run's pump, the sink the client is handed.</param>
+    /// <param name="cancellationToken">The hard stop.</param>
+    private async Task<(AgentRunResult Result, Exception? Thrown)> WorkAsync(
+        AgentStepRequest step,
+        string directory,
+        ILineMask mask,
+        AgentEventPump pump,
+        CancellationToken cancellationToken)
+    {
+        if (Client(step) is not { } client)
+        {
+            // Never begun, and the configuration is why: a record of the step exists all the same, saying so.
+            return (new AgentRunResult(
+                AgentRunStatus.NotStarted,
+                AgentNotStartedBecause.ConfigurationWrong,
+                Model: step.Model,
+                Error: step.Client is { } missing ? $"No agent client named '{missing}' is registered."
+                    : _clients.Count == 0 ? "The step names no agent client, and none is registered."
+                    : $"The step names no agent client, and {_clients.Count} are registered ({string.Join(", ", _clients.Select(one => $"'{one.Name}'"))}): where there is more than one, a step names the one it is worked by."),
+                null);
+        }
+
+        var messages = new AgentMessages();
+
+        try
+        {
+            var result = await client.RunAsync(Resolved(step, directory, mask, messages), pump, pump.Stopping).ConfigureAwait(false);
+            return (result, null);
+        }
+        catch (Exception ex)
+        {
+            var stopped = ex is OperationCanceledException && cancellationToken.IsCancellationRequested;
+
+            return (new AgentRunResult(
+                stopped ? AgentRunStatus.Cancelled : AgentRunStatus.Failed,
+                Model: step.Model,
+                Error: stopped ? StoppedError : mask.Redact(ex.Message)),
+                ex);
+        }
+        finally
+        {
+            messages.Complete();
+        }
     }
 
     /// <summary>The client the step names, or the one there is where it names none; null where there is none.</summary>
@@ -144,22 +250,18 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients) : IAgentRunne
             ? _clients.FirstOrDefault(client => string.Equals(client.Name, named, StringComparison.Ordinal))
             : _clients.Count == 1 ? _clients[0] : null;
 
-    /// <summary>Writes the run's own record beside its stream, and answers it.</summary>
-    /// <param name="step">The step.</param>
+    /// <summary>Writes the run's own record beside its stream, in one step, so that one there is one written whole.</summary>
+    /// <param name="directory">The step's own directory.</param>
     /// <param name="result">How the run ended.</param>
-    /// <returns>The result.</returns>
-    private AgentRunResult Ended(AgentStepRequest step, AgentRunResult result)
-    {
-        File.WriteAllText(Path.Combine(StepDirectory(step), ResultFileName), JsonSerializer.Serialize(result, JsonStateFile.Options) + "\n");
+    private void Ended(string directory, AgentRunResult result)
+        => _fileSystem.WriteAllTextAtomic(Path.Combine(directory, ResultFileName), JsonSerializer.Serialize(result, JsonStateFile.Options) + "\n");
 
-        return result;
-    }
-
-    /// <summary>The step's run, as the client takes it: the prompt filled, the places as they are, the stream its own.</summary>
+    /// <summary>The step's run, as the client takes it: the prompt filled, the places as they are, the directory its own.</summary>
     /// <param name="step">The step.</param>
-    /// <param name="stream">The step's stored stream, opened.</param>
+    /// <param name="directory">The step's own directory.</param>
+    /// <param name="mask">What masks the secrets its lines may carry.</param>
     /// <param name="messages">Where the engine tells the agent what it has to.</param>
-    private static AgentRun Resolved(AgentStepRequest step, StoredStream stream, AgentMessages messages)
+    private static AgentRun Resolved(AgentStepRequest step, string directory, ILineMask mask, AgentMessages messages)
         => new(
             step.SystemPrompt,
             Filled(step.PromptTemplate, step.PromptValues),
@@ -173,8 +275,8 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients) : IAgentRunne
             [],
             [],
             [],
-            step.Mask ?? Masking.Nothing,
-            stream,
+            mask,
+            directory,
             new AgentHandoffSignal(Bound(step)),
             messages);
 
@@ -205,9 +307,9 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients) : IAgentRunne
             @"\{(\w+)\}",
             matched => values.TryGetValue(matched.Groups[1].Value, out var value) ? value : matched.Value);
 
-    /// <summary>One sink that takes each event into a channel, as the front end reads it.</summary>
+    /// <summary>One sink that takes each event into a channel, as the front end reads it; nothing once no one reads.</summary>
     /// <param name="yielded">The channel the events are yielded through.</param>
-    private sealed class ChannelSink(System.Threading.Channels.Channel<AgentEvent> yielded) : IAgentEventSink
+    private sealed class ChannelSink(Channel<AgentEvent> yielded) : IAgentEventSink
     {
         public ValueTask EmitAsync(AgentEvent @event)
         {
