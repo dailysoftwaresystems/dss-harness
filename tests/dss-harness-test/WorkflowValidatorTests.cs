@@ -403,7 +403,6 @@ public sealed class WorkflowValidatorTests
 
         Assert.Equal(
             [
-                "the workflow has a dependency cycle: release -> release",
                 "step 'after-report' depends on 'report', an always step; an always step is started by the end of the session, and no step waits for it",
                 "step 'gate' depends on 'release', which is declared after it; steps are declared in the order they run, and a dependency declared after the step that waits for it is met never or too late",
                 "step 'release' depends on itself; a step waits for what runs before it, and this one would wait for itself",
@@ -1496,7 +1495,6 @@ public sealed class WorkflowValidatorTests
 
         Assert.Equal(
             [
-                "the workflow has a dependency cycle: stage.build -> stage.succeeded -> stage.build",
                 "group 'stage': retries must be from 1 to 20, found -1",
                 "group 'stage' says maxVisits without on; it bounds how often a handler is raised, and the schedule starts a step once",
                 "step 'stage.self' is raised by its own ending, and so calls itself; a step never does - one that is to run again after it failed says retries",
@@ -1880,7 +1878,7 @@ public sealed class WorkflowValidatorTests
                 "step 'dropped' discards what is not committed and says what its fold may carry; a deletion that discards folds nothing, so allow and within would be read by nothing",
                 "step 'reads' names writes and only reads; a step that writes says access: write and names the create-agent step it works in",
                 "step 'lost' names 'nowhere' as its of, which is no step an enclosing group declares",
-                "step 'weighs-both' takes refresh: --all weighs every path the main tree moved, so it takes no path beside it: give the paths, or --all",
+                "step 'weighs-both' takes refresh: all weighs every path the main tree moved, so it takes no path beside it: give the paths, or all",
             ],
             problems);
     }
@@ -2181,28 +2179,229 @@ public sealed class WorkflowValidatorTests
     }
 
     /// <summary>
-    /// V15: the first cycle the walk closes is said whole - each node a step's name, a member's under its group's -
-    /// beside whatever else the same flow refuses.
+    /// V15: the first cycle the walk closes is said whole - each node a step's path - and a handler waits for its
+    /// source: a source that depends on its own handler, as a step may, would wait for an ending that waits for it.
+    /// The recovery's own steps are walked too.
     /// </summary>
     [Fact]
     public void ADependencyCycle_IsSaidWhole()
     {
-        var problems = Problems("""
-            name: flow
-            steps:
-              - name: s
-                type: orient
-              - name: gate
-                dependsOn: [s]
+        Assert.Equal(
+            ["the workflow has a dependency cycle: fix -> build -> fix"],
+            Problems("""
+                name: flow
                 steps:
-                  - name: h
+                  - name: fix
                     type: orient
                     on:
-                      step: s
+                      step: build
                       outcome: failure
-            """);
+                  - name: build
+                    type: build
+                    dependsOn: [fix]
+                """));
 
-        Assert.Contains("the workflow has a dependency cycle: s -> gate.h -> s", problems);
+        Assert.Equal(
+            ["the workflow has a dependency cycle: recover.fix -> recover.build -> recover.fix"],
+            Problems("""
+                name: flow
+                steps:
+                  - name: plan
+                    type: orient
+                    onFailure: recover
+                recover:
+                  onSuccess: failed-step
+                  onFailure: pause
+                  steps:
+                    - name: fix
+                      type: orient
+                      on:
+                        step: build
+                        outcome: failure
+                    - name: build
+                      type: build
+                      dependsOn: [fix]
+                """));
+    }
+
+    /// <summary>
+    /// A handler's source is a sibling and nothing else: one named from inside a group that waits for it is refused as
+    /// no sibling, and draws no cycle - the group waits for the step, and the handler would wait for it too.
+    /// </summary>
+    [Fact]
+    public void AHandlersSourceOutsideItsGroup_IsNoSibling_AndNoCycle()
+    {
+        Assert.Equal(
+            ["step 'gate.h' is raised by 's', which is no step declared beside it; a handler is raised by its own siblings"],
+            Problems("""
+                name: flow
+                steps:
+                  - name: s
+                    type: orient
+                  - name: gate
+                    dependsOn: [s]
+                    steps:
+                      - name: h
+                        type: orient
+                        on:
+                          step: s
+                          outcome: failure
+                """));
+    }
+
+    /// <summary>
+    /// Every name a read starts with is looked up from where the reader is (<c>FlowScope</c>): a sibling block's member
+    /// by the block's bare name from inside a group, a recovery step's sibling from inside the recovery, a repeat's own
+    /// members from within its loop. Nothing else is: a member of a group from outside it by bare name, a member
+    /// nested deeper than a loop's own - now or in the iteration before - a group's member in the group's when, read
+    /// before any member ran, and a forEach's member from outside it, which would be one of many.
+    /// </summary>
+    [Fact]
+    public void EveryRead_IsLookedUpFromWhereTheReaderIs()
+    {
+        Assert.Empty(Problems("""
+            name: flow
+            steps:
+              - name: plan
+                type: orient
+                onFailure: recover
+              - name: outer
+                steps:
+                  - name: review
+                    steps:
+                      - name: correctness
+                        type: orient
+                  - name: after
+                    type: orient
+                    dependsOn: [review]
+                    when: review.correctness.ok
+              - name: rounds
+                repeat:
+                  until: 'audit.clean && outer.review.correctness.ok'
+                  maxIterations: 3
+                steps:
+                  - name: audit
+                    type: orient
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: diagnose
+                  type: orient
+                - name: remedy
+                  type: orient
+                  dependsOn: [diagnose]
+                  when: 'diagnose.ok && plan.ok'
+            """));
+
+        Assert.Equal(
+            [
+                "'gate.when' reads 'inner.ok', which no step before 'gate', no input and no param provides",
+                "'rounds.repeat.until' reads 'correctness.ok', which no step before 'rounds', no input and no param provides",
+                "'rounds.repeat.until' reads 'previous.correctness.ok', and 'correctness' is no step of the group 'rounds' repeats",
+                "'after.when' reads 'items.verify.ok', and 'items' runs a forEach: read from outside it, a member is one of many, and nothing says which",
+                "'after.when' reads 'inner.ok', which no step before 'after', no input and no param provides",
+            ],
+            Problems("""
+                name: flow
+                steps:
+                  - name: plan
+                    type: orient
+                  - name: items
+                    forEach: 'plan.items'
+                    steps:
+                      - name: verify
+                        type: orient
+                  - name: gate
+                    when: inner.ok
+                    steps:
+                      - name: inner
+                        type: orient
+                  - name: rounds
+                    repeat:
+                      until: 'correctness.ok || audit.ok || previous.correctness.ok'
+                      maxIterations: 3
+                    steps:
+                      - name: audit
+                        type: orient
+                      - name: review
+                        steps:
+                          - name: correctness
+                            type: orient
+                  - name: after
+                    type: orient
+                    when: 'items.verify.ok || inner.ok'
+                """));
+    }
+
+    /// <summary>
+    /// A step's name is a lower-case word with dashes within, and nothing after it: a name that ends in a line's end -
+    /// which a pattern anchored with <c>$</c> would take - is refused, as an instance id refuses it.
+    /// </summary>
+    [Fact]
+    public void AStepsNameEndingInANewLine_IsRefused()
+    {
+        Assert.Equal(
+            ["step 'build\n' is named 'build\n', which is not a lower-case word with dashes within; a read's segments are told apart by dots, so a name may not hold one"],
+            Problems("""
+                name: flow
+                steps:
+                  - name: "build\n"
+                    type: orient
+                """));
+
+        Assert.False(FlowInstanceId.IsWellFormed("build\n"));
+    }
+
+    /// <summary>
+    /// Every expression ends: one nested past what the grammar's guard allows - a long chain of '!', empty(...) inside
+    /// empty(...), any(...) inside any(...), a path of a hundred thousand names - is refused with the depth it went
+    /// past, through the grammar and through the validator alike, and never spends the stack of the process that reads it.
+    /// </summary>
+    [Theory]
+    [InlineData("a hundred thousand '!'")]
+    [InlineData("a hundred empty(...) inside each other")]
+    [InlineData("a hundred any(...) inside each other")]
+    [InlineData("a path of a hundred thousand names")]
+    public void AnExpressionNestedTooDeep_IsRefused_AndNeverSpendsTheStack(string nested)
+    {
+        var expression = TooDeep(nested);
+
+        Assert.Equal($"the expression nests more than {FlowExpression.MostNesting} deep", FlowExpression.GrammarProblem(expression));
+        Assert.Throws<ArgumentException>(() => FlowExpression.Parse(expression));
+
+        Assert.Equal(
+            [$"'gate.when' is not written whole: the expression nests more than {FlowExpression.MostNesting} deep, and nothing past there would be checked"],
+            Problems($"""
+                name: flow
+                steps:
+                  - name: plan
+                    type: orient
+                  - name: gate
+                    type: orient
+                    dependsOn: [plan]
+                    when: '{expression}'
+                """));
+    }
+
+    /// <summary>An expression nested past the guard by the construct <paramref name="nested"/> names, built here so no test's name carries it.</summary>
+    internal static string TooDeep(string nested)
+    {
+        var any = "plan.ok";
+
+        for (var level = 0; level < 100; level++)
+        {
+            any = $"any(plan.items, {any})";
+        }
+
+        return nested switch
+        {
+            "a hundred thousand '!'" => new string('!', 100_000) + "plan.ok",
+            "a hundred empty(...) inside each other" => string.Concat(Enumerable.Repeat("empty(", 100)) + "plan.ok" + new string(')', 100),
+            "a hundred any(...) inside each other" => any,
+            "a path of a hundred thousand names" => "plan" + string.Concat(Enumerable.Repeat(".ok", 99_999)),
+            _ => throw new ArgumentOutOfRangeException(nameof(nested), nested, "no such nesting"),
+        };
     }
 
     /// <summary>
@@ -2238,19 +2437,19 @@ public sealed class WorkflowValidatorTests
                 + "  - name: close\n    type: fold\n    of: make\n    allow:\n" + body);
 
         Assert.Equal(
-            ["step 'close' takes allow: 'src/a.cs' is named with both --merge and --settled: a path is merged for you, or reconciled by hand, never both."],
+            ["step 'close' takes allow: 'src/a.cs' is named with both merge and settled: a path is merged for you, or reconciled by hand, never both."],
             OneAllow("      settled: [src/a.cs]\n      merge: [src/a.cs]\n"));
 
         Assert.Equal(
-            ["step 'close' takes allow: --new 'an id' is not an anchor id: an id is not empty, and holds no space and no colon."],
+            ["step 'close' takes allow: new 'an id' is not an anchor id: an id is not empty, and holds no space and no colon."],
             OneAllow("      new: ['an id']\n"));
 
         Assert.Equal(
-            ["step 'close' takes allow: --accept-lost '3:priority' is not <ID>:<cell>, where the id is an anchor's and the cell is trigger, closing, cross-refs."],
+            ["step 'close' takes allow: acceptLost '3:priority' is not <ID>:<cell>, where the id is an anchor's and the cell is trigger, closing, cross-refs."],
             OneAllow("      acceptLost: [3:priority]\n"));
 
         Assert.Equal(
-            ["step 'close' takes allow: --accept-over '4:form' is not <ID>:<cell>, where the id is an anchor's and the cell is priority, status, trigger, closing, cross-refs."],
+            ["step 'close' takes allow: acceptOver '4:form' is not <ID>:<cell>, where the id is an anchor's and the cell is priority, status, trigger, closing, cross-refs."],
             OneAllow("      acceptOver: [4:form]\n"));
 
         // A deletion takes the same allow a fold does, through the same request.
@@ -2268,7 +2467,7 @@ public sealed class WorkflowValidatorTests
             """);
 
         Assert.Equal(
-            ["step 'close' takes allow: --new 'an id' is not an anchor id: an id is not empty, and holds no space and no colon."],
+            ["step 'close' takes allow: new 'an id' is not an anchor id: an id is not empty, and holds no space and no colon."],
             dropped);
     }
 
@@ -2293,7 +2492,7 @@ public sealed class WorkflowValidatorTests
 
         Assert.Equal(
             [
-                "step 'weigh' takes refresh: '.' names the whole tree, not a path in it: pass --all to weigh every path the main tree moved",
+                "step 'weigh' takes refresh: '.' names the whole tree, not a path in it: say all: true to weigh every path the main tree moved",
             ],
             refresh);
 
@@ -2312,7 +2511,7 @@ public sealed class WorkflowValidatorTests
 
         Assert.Equal(
             [
-                "step 'weigh' takes refresh: 'src/a.cs' is named with both --except and --stale: a path is left as the agent changed it, or handed the main tree's copy, never both.",
+                "step 'weigh' takes refresh: 'src/a.cs' is named with both except and stale: a path is left as the agent changed it, or handed the main tree's copy, never both.",
             ],
             twice);
 
@@ -2331,7 +2530,7 @@ public sealed class WorkflowValidatorTests
 
         Assert.Equal(
             [
-                "step 'move' takes a rebase: 'src/a.cs' is named with both --merge and --settled: a path is merged for you, or reconciled by hand, never both.",
+                "step 'move' takes a rebase: 'src/a.cs' is named with both merge and settled: a path is merged for you, or reconciled by hand, never both.",
             ],
             rebase);
     }
@@ -2409,7 +2608,7 @@ public sealed class WorkflowValidatorTests
             """);
 
         Assert.Equal(
-            ["step 'weigh' says paths and all; all is every path the main tree moved, in place of paths, and a step that said both would never tell which it weighs"],
+            ["step 'weigh' takes refresh: all weighs every path the main tree moved, so it takes no path beside it: give the paths, or all"],
             problems);
     }
 
@@ -2427,29 +2626,66 @@ public sealed class WorkflowValidatorTests
                 from: nowhere.value
             """);
 
-        Assert.Single(problems);
-        Assert.Contains("'done.output 'done'.from' reads 'nowhere.value'", problems[0], StringComparison.Ordinal);
+        // The output's key is named as the file names it, 'outputs.<name>.from', and read from the flow's top level.
+        Assert.Equal(
+            ["'outputs.done.from' reads 'nowhere.value', which no step before 'outputs.done', no input and no param provides"],
+            problems);
     }
 
-    /// <summary>V26: a workflow declares at most 200 steps, the recovery's among them, for they run.</summary>
+    /// <summary>
+    /// V26: a workflow declares at most 200 steps - groups and their members each one, the recovery's among them, for
+    /// they run. Exactly 200 is a flow; 201, however they are split between the flow, its groups and the recovery, is
+    /// refused.
+    /// </summary>
     [Fact]
     public void AWorkflowDeclaresAtMostTwoHundredSteps()
     {
-        var steps = new StringBuilder("steps:");
+        Assert.Empty(Problems(Flow(top: WorkflowValidator.MostSteps, recovered: 0)));
 
-        for (var index = 0; index < 201; index++)
+        Assert.Equal(
+            ["the workflow declares 201 steps; at most 200"],
+            Problems(Flow(top: 201, recovered: 0)));
+
+        Assert.Equal(
+            ["the workflow declares 201 steps; at most 200"],
+            Problems(Flow(top: 150, recovered: 51)));
+
+        // A group and its 199 members are 200 steps, and one more step beside them is the 201st.
+        var nested = new StringBuilder("name: flow\nsteps:\n  - name: alone\n    type: orient\n  - name: group\n    steps:");
+
+        for (var index = 0; index < 199; index++)
         {
-            steps.AppendLine();
-            steps.Append($"  - name: s{index}");
-            steps.AppendLine();
-            steps.Append("    type: orient");
+            nested.Append($"\n      - name: s{index}\n        type: orient");
         }
 
-        Assert.Contains(
-            "the workflow declares 201 steps; at most 200",
-            Problems($"""
-                name: flow
-                {steps}
-                """));
+        Assert.Equal(["the workflow declares 201 steps; at most 200"], Problems(nested.ToString()));
+
+        // A flow of top-level steps, the first of which gives its failure to a recovery of so many steps.
+        static string Flow(int top, int recovered)
+        {
+            var text = new StringBuilder("name: flow\nsteps:");
+
+            for (var index = 0; index < top; index++)
+            {
+                text.Append($"\n  - name: s{index}\n    type: orient");
+
+                if (index == 0 && recovered > 0)
+                {
+                    text.Append("\n    onFailure: recover");
+                }
+            }
+
+            if (recovered > 0)
+            {
+                text.Append("\nrecover:\n  onSuccess: failed-step\n  onFailure: pause\n  steps:");
+
+                for (var index = 0; index < recovered; index++)
+                {
+                    text.Append($"\n    - name: r{index}\n      type: orient");
+                }
+            }
+
+            return text.ToString();
+        }
     }
 }

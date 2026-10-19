@@ -55,4 +55,36 @@ public sealed class FlowInstanceIdTests
             FlowInstanceId.Problem("verify+1"));
         Assert.Equal("'rounds#0': an iteration is counted from 1", FlowInstanceId.Problem("rounds#0"));
     }
+
+    /// <summary>
+    /// Every count is written one way - digits alone, no sign, no space, no leading zero - so one instance is never
+    /// named by two ids, and an id written any other way says how its mark is written.
+    /// </summary>
+    [Theory]
+    [InlineData("rounds#02", "'rounds#02': an iteration is written #n, from 1")]
+    [InlineData("rounds#+2", "'rounds#+2': an iteration is written #n, from 1")]
+    [InlineData("rounds# 2", "'rounds# 2': an iteration is written #n, from 1")]
+    [InlineData("items[01]", "'items[01]': an item is written [n], an index from 0")]
+    [InlineData("items[ 1]", "'items[ 1]': an item is written [n], an index from 0")]
+    [InlineData("items[+1]", "'items[+1]': an item is written [n], an index from 0")]
+    [InlineData("verify+02", "'verify+02': a visit is written +n, from 2")]
+    [InlineData("verify+ 2", "'verify+ 2': a visit is written +n, from 2")]
+    public void ACountWrittenAnyOtherWay_IsRefused(string id, string problem)
+        => Assert.Equal(problem, FlowInstanceId.Problem(id));
+
+    /// <summary>
+    /// A segment carries one mark at most, whichever order two would be written in: no spelling is given to a
+    /// repeat's iteration within a later visit, and none is guessed at.
+    /// </summary>
+    [Theory]
+    [InlineData("fix#2+2")]
+    [InlineData("fix+2#1")]
+    [InlineData("items[1]+2")]
+    public void ASegmentWithTwoMarks_IsRefused(string id)
+        => Assert.Equal($"'{id}': a segment of an id is a step's name, with at most one mark after it", FlowInstanceId.Problem(id));
+
+    /// <summary>A segment's name is spelt as a step's is, to its end: one that ends in a line's end is no step's name.</summary>
+    [Fact]
+    public void ASegmentEndingInANewLine_IsNoStepsName()
+        => Assert.Equal("'verify\n': a segment of an id is a step's name, with at most one mark after it", FlowInstanceId.Problem("verify\n"));
 }

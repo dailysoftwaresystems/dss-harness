@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using DssHarness.Core.Orchestration.Flow;
 
 // The guard's subjects must live where the walk looks for sections - the configuration's own namespace - and the
 // test that holds them to their rule sits with them.
@@ -36,6 +37,25 @@ public sealed class ConfigKeysGuardTests
 
         Assert.Equal("takes a step's keys", cut.Meaning);
         Assert.Empty(cut.Keys);
+    }
+
+    /// <summary>
+    /// The workflow's key tables are written by hand, beside their reader, and where a section holds its own kind again -
+    /// a group's steps, the recovery's steps - they say it in the guard's own words: a workflow's step is a step, its
+    /// model's prefix naming the file it is read from, not the thing it is.
+    /// </summary>
+    [Fact]
+    public void TheWorkflowsKeyTables_SayWhatAStepsKeyTakes_InTheGuardsWords()
+    {
+        Assert.Equal("takes a step's keys", ConfigKeys.TakesKeysOf(typeof(WorkflowStep)));
+
+        Assert.Equal(
+            "the group's own steps; each takes a step's keys",
+            Assert.Single(WorkflowStepTypes.Group, key => key.Name == "steps").Meaning);
+
+        Assert.Equal(
+            "the recovery's own steps; each takes a step's keys, reads the step that failed as source, and sees every step of the flow",
+            Assert.Single(WorkflowKeys.Recover, key => key.Name == "steps").Meaning);
     }
 }
 

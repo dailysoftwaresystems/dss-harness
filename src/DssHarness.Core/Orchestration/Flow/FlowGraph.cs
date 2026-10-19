@@ -2,10 +2,10 @@ namespace DssHarness.Core.Orchestration.Flow;
 
 /// <summary>
 /// Walks a workflow's declaration as a graph and finds its dependency cycles: every declared step a node, groups
-/// included, and an edge for each dependency - resolved as a read of it would be, among the siblings of the scope
-/// that declared it, then the scopes around it - for a group's hold on each of its children, for the dependencies
-/// a child inherits from every group around it, and for an <c>on</c>: a handler starts after its source as a
-/// dependent does.
+/// included, the recovery's own steps among them, and an edge from each step to each step it waits for - for each
+/// dependency, for a group's hold on each of its children, for the dependencies a child inherits from every group
+/// around it, and for an <c>on</c>: a handler waits for its source's ending as a dependent waits for what it depends
+/// on.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -14,168 +14,120 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// it, first-found first, and no stack is spent on a flow however deep.
 /// </para>
 /// <para>
+/// Every edge runs from the waiter to what it waits for: a step to its dependency, a group to each child it does not
+/// end before, a child to what its groups wait for, a handler to its source. Every name is found through
+/// <see cref="FlowScope"/>, the one owner of where a name is: a dependency and a source are a sibling of the step
+/// that names them, a child's inherited dependency a sibling of the group that declared it.
+/// </para>
+/// <para>
 /// Declaration level is enough: an instance graph is a copy of an acyclic body, and a <c>repeat</c> is sequencing,
 /// not an edge. <c>then</c> is no edge either - it is the one back edge the engine allows, drawn when a handler
 /// ends and bounded by <c>maxVisits</c> - and what it may name is a rule of its own, checked beside this walk and
-/// not by it. A dependency that names nothing the flow declares is no edge here: the validator owns that
-/// refusal, and this walk runs beside it over files the reader accepted, whatever the validator will say of them -
-/// so nothing here throws and nothing here refuses; where siblings share a name, the last declaration is the one
-/// the edges draw to, as a read of it would find.
+/// not by it. A name that finds no sibling, and a step that names itself, draw no edge here: the validator owns
+/// those refusals ("depends on itself", "is raised by its own ending"), each said once, and this walk runs beside it
+/// over files the reader accepted, whatever the validator will say of them - so nothing here throws and nothing here
+/// refuses.
 /// </para>
 /// </remarks>
 public static class FlowGraph
 {
     /// <summary>
-    /// Finds the workflow's first dependency cycle, as the path that closes it - each node a step's name, a
-    /// member's under its group's, joined in walk order - or <see langword="null"/> where the flow has none.
+    /// Finds the workflow's first dependency cycle, as the path that closes it - each node a step's path, a member's
+    /// under its group's and a step of the recovery's under <see cref="FlowScope.Recovery"/>, joined in walk order -
+    /// or <see langword="null"/> where the flow has none.
     /// </summary>
     /// <param name="definition">The workflow, as it was read.</param>
     public static IReadOnlyList<string>? FindCycle(WorkflowDefinition definition)
     {
         ArgumentNullException.ThrowIfNull(definition);
 
-        var nodes = new List<Node>();
-
-        Collect(definition.Steps, id: null, inherited: [], nodes);
-
-        // The id of each node, last declaration winning where siblings share a name: a duplicate is the
-        // validator's to refuse, and the walk still answers over what was read.
-        var byId = new Dictionary<string, WorkflowStep>(StringComparer.Ordinal);
-
-        foreach (var node in nodes)
-        {
-            byId[node.Id] = node.Step;
-        }
-
+        // Steps that share a name share a path, and so one node: a duplicate is the validator's to refuse, and the
+        // walk still answers over what was read, with the edges of every declaration of it.
+        var order = new List<string>();
         var edges = new Dictionary<string, List<string>>(StringComparer.Ordinal);
 
-        foreach (var node in nodes)
+        Collect(definition.Steps, scope: null, inherited: [], definition, order, edges);
+
+        if (definition.Recover is { } recover)
         {
-            var outEdges = new List<string>();
-
-            // Each dependency names a sibling of the scope that declared it, and is looked for nowhere else.
-            foreach (var (name, at) in node.Dependencies)
-            {
-                if (SiblingThenOutward(name, at, definition, byId) is { } target && !outEdges.Contains(target, StringComparer.Ordinal))
-                {
-                    outEdges.Add(target);
-                }
-            }
-
-            edges[node.Id] = outEdges;
+            Collect(recover.Steps, FlowScope.Recovery, inherited: [], definition, order, edges);
         }
 
-        foreach (var node in nodes)
-        {
-            if (node.Step.On is not { } raised)
-            {
-                continue;
-            }
-
-            // A handler starts after its source as a dependent does: the edge runs from the source to it, the
-            // source named in the handler's own scope.
-            if (SiblingThenOutward(raised.Step, ScopeOf(node.Id), definition, byId) is { } source
-                && edges.TryGetValue(source, out var fromSource)
-                && !fromSource.Contains(node.Id, StringComparer.Ordinal))
-            {
-                fromSource.Add(node.Id);
-            }
-        }
-
-        foreach (var node in nodes)
-        {
-            if (node.Step.Steps.Count == 0)
-            {
-                continue;
-            }
-
-            // A group holds each of its children: what it waits for, they wait for, and it does not end before
-            // they do - an edge down, beside the dependencies up and out.
-            foreach (var child in node.Step.Steps)
-            {
-                var childId = $"{node.Id}.{child.Name}";
-
-                if (byId.ContainsKey(childId) && !edges[node.Id].Contains(childId, StringComparer.Ordinal))
-                {
-                    edges[node.Id].Add(childId);
-                }
-            }
-        }
-
-        return Walk(nodes, edges);
+        return Walk(order, edges);
     }
 
-    /// <summary>One declared step in its place: its id among the flow, what it declares, and the dependencies it inherited with the scope each was declared in.</summary>
-    /// <param name="Id">The step's path among the flow: its name, a member's under its group's.</param>
-    /// <param name="Step">The step as it was read.</param>
-    /// <param name="Dependencies">Every dependency the step holds - its own and what it inherited - each with the path of the scope that declared it.</param>
-    private sealed record Node(string Id, WorkflowStep Step, IReadOnlyList<(string Name, string At)> Dependencies);
-
-    /// <summary>Gathers every declared step in declaration order, groups first among their own.</summary>
-    private static void Collect(IReadOnlyList<WorkflowStep> siblings, string? id, IReadOnlyList<(string Name, string At)> inherited, List<Node> nodes)
+    /// <summary>
+    /// Places every step of <paramref name="siblings"/> and of every group among them as a node, in declaration order,
+    /// a group before its members, with the edges from it to what it waits for.
+    /// </summary>
+    private static void Collect(
+        IReadOnlyList<WorkflowStep> siblings,
+        string? scope,
+        IReadOnlyList<string> inherited,
+        WorkflowDefinition definition,
+        List<string> order,
+        Dictionary<string, List<string>> edges)
     {
         foreach (var step in siblings)
         {
-            var stepId = id is null ? step.Name : $"{id}.{step.Name}";
+            var id = scope is null ? step.Name : $"{scope}.{step.Name}";
 
-            // A dependency is declared in the scope its holder sits in: its own among its siblings, a group's
-            // among the group's siblings. A child inherits every one of them, each keeping the scope it was
-            // declared in, and none is looked for anywhere else.
-            var held = new List<(string Name, string At)>(inherited);
+            if (!edges.TryGetValue(id, out var waits))
+            {
+                waits = [];
+                edges[id] = waits;
+                order.Add(id);
+            }
+
+            // A dependency is found where it was declared, among the siblings of the step that names it, and a child
+            // inherits it as it was found there: never looked for again among the child's own siblings.
+            var held = new List<string>(inherited);
 
             foreach (var name in step.DependsOn)
             {
-                held.Add((name, ScopeOf(stepId)));
+                if (FlowScope.SiblingOf(name, definition, scope) is { } dependency && dependency.Path != id)
+                {
+                    held.Add(dependency.Path);
+                }
             }
 
-            nodes.Add(new Node(stepId, step, held));
+            foreach (var waited in held)
+            {
+                Draw(waits, waited);
+            }
+
+            // A handler waits for its source's ending, a sibling of its own, as a dependent waits for its dependency.
+            if (step.On is { } raised
+                && FlowScope.SiblingOf(raised.Step, definition, scope) is { } source
+                && source.Path != id)
+            {
+                Draw(waits, source.Path);
+            }
+
+            // A group holds each of its children: it does not end before they do.
+            foreach (var child in step.Steps)
+            {
+                Draw(waits, $"{id}.{child.Name}");
+            }
 
             if (step.Steps.Count > 0)
             {
-                Collect(step.Steps, stepId, held, nodes);
+                Collect(step.Steps, id, held, definition, order, edges);
             }
         }
     }
 
-    /// <summary>The scope a step sits in: the path of its group, or the flow's top where it has none.</summary>
-    private static string ScopeOf(string stepId)
-        => stepId.Contains('.') ? stepId[..stepId.LastIndexOf('.')] : string.Empty;
-
-    /// <summary>
-    /// A name's id, resolved as a read of it would be: among the scope's siblings first, then the scopes around
-    /// it, outward to the top. A file the rules accept hits the sibling and never walks out; a file they refuse -
-    /// whose names this walk still answers over - may name an outer step, and the edge is drawn where it says,
-    /// for the validator refuses that file whatever this walk reports of it.
-    /// </summary>
-    private static string? SiblingThenOutward(string name, string at, WorkflowDefinition definition, IReadOnlyDictionary<string, WorkflowStep> byId)
+    /// <summary>Adds an edge to <paramref name="target"/> where the node has none to it yet.</summary>
+    private static void Draw(List<string> waits, string target)
     {
-        var scope = at.Length == 0 ? null : at;
-
-        while (true)
+        if (!waits.Contains(target, StringComparer.Ordinal))
         {
-            if (scope is null)
-            {
-                var top = definition.Steps.LastOrDefault(step => string.Equals(step.Name, name, StringComparison.Ordinal));
-
-                return top is null ? null : top.Name;
-            }
-
-            if (byId.TryGetValue(scope, out var group))
-            {
-                var member = group.Steps.LastOrDefault(step => string.Equals(step.Name, name, StringComparison.Ordinal));
-
-                if (member is not null)
-                {
-                    return $"{scope}.{member.Name}";
-                }
-            }
-
-            scope = scope.Contains('.') ? scope[..scope.LastIndexOf('.')] : null;
+            waits.Add(target);
         }
     }
 
     /// <summary>The walk: three colours, declaration order, the first closing path reported whole.</summary>
-    private static IReadOnlyList<string>? Walk(List<Node> nodes, IReadOnlyDictionary<string, List<string>> edges)
+    private static IReadOnlyList<string>? Walk(IReadOnlyList<string> nodes, IReadOnlyDictionary<string, List<string>> edges)
     {
         const byte white = 0, grey = 1, black = 2;
 
@@ -183,20 +135,20 @@ public static class FlowGraph
 
         foreach (var node in nodes)
         {
-            colour[node.Id] = white;
+            colour[node] = white;
         }
 
         foreach (var start in nodes)
         {
-            if (colour[start.Id] != white)
+            if (colour[start] != white)
             {
                 continue;
             }
 
             // The stack holds the path: a node and how far along its edges the walk is.
             var path = new Stack<(string Id, int Next)>();
-            colour[start.Id] = grey;
-            path.Push((start.Id, 0));
+            colour[start] = grey;
+            path.Push((start, 0));
 
             while (path.Count > 0)
             {
@@ -223,21 +175,7 @@ public static class FlowGraph
                         // The path from the first sighting of the node closed: report it, closed. The stack
                         // says its newest first, so the path is read from its oldest.
                         var walked = path.Select(frame => frame.Id).Reverse().ToList();
-                        var closed = new List<string>();
-                        var seen = false;
-
-                        foreach (var stepId in walked)
-                        {
-                            if (seen)
-                            {
-                                closed.Add(stepId);
-                            }
-                            else if (string.Equals(stepId, along, StringComparison.Ordinal))
-                            {
-                                seen = true;
-                                closed.Add(stepId);
-                            }
-                        }
+                        var closed = walked.SkipWhile(id => !string.Equals(id, along, StringComparison.Ordinal)).ToList();
 
                         closed.Add(along);
                         return closed;

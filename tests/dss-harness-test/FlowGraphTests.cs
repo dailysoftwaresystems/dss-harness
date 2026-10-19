@@ -3,9 +3,9 @@ using DssHarness.Core.Orchestration.Flow;
 namespace DssHarness.Tests;
 
 /// <summary>
-/// The graph of a workflow's declaration: every step a node, each dependency an edge, a group's hold on each child,
-/// the dependencies a child inherits, and an <c>on</c> from a source to its handler - walked in declaration order,
-/// the first cycle that closes reported as its path.
+/// The graph of a workflow's declaration: every step a node, the recovery's among them, and an edge from each step to
+/// what it waits for - its dependencies, a group to each child, a child to what its groups wait for, a handler to its
+/// source - walked in declaration order, the first cycle that closes reported as its path.
 /// </summary>
 public sealed class FlowGraphTests
 {
@@ -58,18 +58,39 @@ public sealed class FlowGraphTests
                 dependsOn: [b]
             """);
 
-        var cycle = FlowGraph.FindCycle(definition);
-
-        Assert.NotNull(cycle);
-        Assert.Equal(["a", "c", "b", "a"], cycle);
+        Assert.Equal(["a", "c", "b", "a"], FlowGraph.FindCycle(definition));
     }
 
     /// <summary>
-    /// An <c>on</c> is an edge from the source to its handler: a handler that waits for its own source closes a
-    /// cycle of two, though each dependency names an earlier sibling.
+    /// A handler waits for its source's ending, as a dependent waits for what it depends on, so its edge runs from the
+    /// handler to the source: a source that depends on its own handler - which a step may, to wait for it - waits for
+    /// an ending that waits for it, and the deadlock is found.
     /// </summary>
     [Fact]
-    public void AnOnEdgeRunsFromTheSourceToItsHandler_ACycleThroughItIsFound()
+    public void AHandlerWaitsForItsSource_ASourceThatDependsOnItsHandlerIsACycle()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: fix
+                type: orient
+                on:
+                  step: build
+                  outcome: failure
+              - name: build
+                type: orient
+                dependsOn: [fix]
+            """);
+
+        Assert.Equal(["fix", "build", "fix"], FlowGraph.FindCycle(definition));
+    }
+
+    /// <summary>
+    /// A handler that also depends on its source waits for it twice over - the validator refuses the dependency, not
+    /// a cycle - so both edges run the one way and close none.
+    /// </summary>
+    [Fact]
+    public void AHandlerThatAlsoDependsOnItsSource_IsNoCycle()
     {
         var definition = Parse("""
             name: flow
@@ -84,47 +105,41 @@ public sealed class FlowGraphTests
                   outcome: failure
             """);
 
-        var cycle = FlowGraph.FindCycle(definition);
-
-        Assert.NotNull(cycle);
-        Assert.Equal(["check", "hold", "check"], cycle);
+        Assert.Null(FlowGraph.FindCycle(definition));
     }
 
     /// <summary>
-    /// A child inherits its group's dependencies, and an <c>on</c> runs from the source to its handler: a group
-    /// that waits for a step, holding a handler of that step's ending, closes a cycle through them - a flow the
-    /// rules of dependencies alone would never make, and the walk refuses for the engine.
+    /// A child inherits its group's dependencies as they were found where the group declared them: a member that shares
+    /// the dependency's name - a shadowing the validator refuses - is not what the child waits for, so no cycle is drawn
+    /// through it.
     /// </summary>
     [Fact]
-    public void AChildInheritsItsGroupsDependencies_AnOnEdgeThroughThemMakesACycle()
+    public void AnInheritedDependency_IsFoundWhereItsGroupDeclaredIt()
     {
         var definition = Parse("""
             name: flow
             steps:
-              - name: s
+              - name: x
                 type: orient
               - name: gate
-                dependsOn: [s]
+                dependsOn: [x]
                 steps:
-                  - name: h
+                  - name: c
                     type: orient
-                    on:
-                      step: s
-                      outcome: failure
+                  - name: x
+                    type: orient
+                    dependsOn: [c]
             """);
 
-        var cycle = FlowGraph.FindCycle(definition);
-
-        Assert.NotNull(cycle);
-        Assert.Equal(["s", "gate.h", "s"], cycle);
+        Assert.Null(FlowGraph.FindCycle(definition));
     }
 
     /// <summary>
-    /// A dependency that names a step of another scope - a member of a group from outside it - is not resolved and
-    /// draws no edge: the validator owns that refusal, and the walk answers over the file as it was read.
+    /// A dependency and a handler's source name a sibling and nothing else: a name of another scope draws no edge,
+    /// as <see cref="FlowScope.SiblingOf"/> finds none - the validator owns that refusal.
     /// </summary>
     [Fact]
-    public void ADependencyNamingAnotherScopesMember_IsNoEdge_AndNoCycle()
+    public void ANameOfAnotherScope_IsNoEdge_AndNoCycle()
     {
         var definition = Parse("""
             name: flow
@@ -132,7 +147,74 @@ public sealed class FlowGraphTests
               - name: first
                 type: orient
                 dependsOn: [gate.inner]
+              - name: s
+                type: orient
+                dependsOn: [gate]
               - name: gate
+                steps:
+                  - name: inner
+                    type: orient
+                  - name: h
+                    type: orient
+                    on:
+                      step: s
+                      outcome: failure
+            """);
+
+        Assert.Null(FlowGraph.FindCycle(definition));
+    }
+
+    /// <summary>
+    /// The recovery's steps are walked as the flow's are, in a scope of their own: a cycle among them is found, each
+    /// node named under <c>recover</c>.
+    /// </summary>
+    [Fact]
+    public void TheRecoverysSteps_AreWalked()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: plan
+                type: orient
+                onFailure: recover
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: fix
+                  type: orient
+                  on:
+                    step: build
+                    outcome: failure
+                - name: build
+                  type: orient
+                  dependsOn: [fix]
+            """);
+
+        Assert.Equal(["recover.fix", "recover.build", "recover.fix"], FlowGraph.FindCycle(definition));
+    }
+
+    /// <summary>
+    /// A step that names itself - in its dependsOn or its on - draws no edge: the validator says that defect once, in
+    /// its own words, and the walk does not say it again as a cycle; a group's self-dependency is no edge of its
+    /// children either.
+    /// </summary>
+    [Fact]
+    public void AStepThatNamesItself_IsNoEdge()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: release
+                type: orient
+                dependsOn: [release]
+              - name: self
+                type: orient
+                on:
+                  step: self
+                  outcome: failure
+              - name: gate
+                dependsOn: [gate]
                 steps:
                   - name: inner
                     type: orient
@@ -181,7 +263,7 @@ public sealed class FlowGraphTests
 
     /// <summary>
     /// Where siblings share a name - a duplicate the validator refuses, not the reader - the walk still answers:
-    /// the last declaration is the one the edges draw to, and no exception is raised into the validator's path.
+    /// the steps share one node, and no exception is raised into the validator's path.
     /// </summary>
     [Fact]
     public void WhereSiblingsShareAName_TheWalkStillAnswers()

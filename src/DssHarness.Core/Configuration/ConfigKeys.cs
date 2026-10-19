@@ -32,7 +32,7 @@ public static class ConfigKeys
             // listing stays finite and says where the rest is.
             if (nested is not null && walked.Contains(nested))
             {
-                keys.Add(new KeyDescription(property.Name, $"takes a {SingularOf(nested)}'s keys")
+                keys.Add(new KeyDescription(property.Name, TakesKeysOf(nested))
                 {
                     Required = property.IsRequired,
                 });
@@ -47,6 +47,19 @@ public static class ConfigKeys
         }
 
         return keys;
+    }
+
+    /// <summary>
+    /// What a key holding <paramref name="section"/>'s own kind again takes, as the guard says it where it cuts the walk:
+    /// <c>takes a step's keys</c>. Read by the walk here and by every key table written by hand where a section holds its
+    /// own kind - a workflow's group holding steps - so the one sentence is said one way wherever help lists it.
+    /// </summary>
+    /// <param name="section">The type the key's value is read into: a <c>WorkflowStep</c> for a group's <c>steps</c>.</param>
+    public static string TakesKeysOf(Type section)
+    {
+        ArgumentNullException.ThrowIfNull(section);
+
+        return $"takes a {SingularOf(section)}'s keys";
     }
 
     /// <summary>The one word for what a section's kind is called, from its type's name: a <c>WorkflowStep</c> is a step.</summary>

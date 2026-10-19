@@ -16,7 +16,9 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// </para>
 /// <para>
 /// Pure text rules, nothing more: the scheduler that counts the iterations, items and visits is its own, and this
-/// class only owns how one of its instances is said.
+/// class only owns how one of its instances is said. A segment carries one mark at most; its name is spelt as a
+/// step's is (<see cref="FlowScope.IsWellFormedName"/>) and its count as an index is
+/// (<see cref="WorkflowExpressions.WholeNumber"/>), each rule written once.
 /// </para>
 /// </remarks>
 public static class FlowInstanceId
@@ -44,6 +46,10 @@ public static class FlowInstanceId
 
         foreach (var segment in id.Split('.'))
         {
+            // One mark at most: an iteration, an item or a visit. A segment that would need two - a repeat's
+            // iteration within a visit after its first - is given no spelling here, and is refused, whichever
+            // order its marks are written in, rather than read one way or the other.
+            var shape = $"'{segment}': a segment of an id is a step's name, with at most one mark after it";
             var name = segment;
             char mark = '\0';
             var written = string.Empty;
@@ -53,10 +59,22 @@ public static class FlowInstanceId
             if (hash > 0)
             {
                 (name, mark, written) = (segment[..hash], '#', segment[(hash + 1)..]);
+
+                // A mark after the count is a second one; a sign before it is a count written another way.
+                if (written.IndexOfAny(['#', '[', '+']) > 0)
+                {
+                    return shape;
+                }
             }
             else if (segment.Contains('[') || segment.EndsWith(']'))
             {
                 var open = segment.IndexOf('[');
+                var close = open < 0 ? -1 : segment.IndexOf(']', open);
+
+                if (close >= 0 && close < segment.Length - 1)
+                {
+                    return shape;
+                }
 
                 if (open <= 0 || !segment.EndsWith(']'))
                 {
@@ -70,9 +88,9 @@ public static class FlowInstanceId
                 (name, mark, written) = (segment[..plus], '+', segment[(plus + 1)..]);
             }
 
-            if (!StepNameIs(name))
+            if (!FlowScope.IsWellFormedName(name))
             {
-                return $"'{segment}': a segment of an id is a step's name, with at most one mark after it";
+                return shape;
             }
 
             if (mark == '\0')
@@ -80,8 +98,7 @@ public static class FlowInstanceId
                 continue;
             }
 
-            if (!int.TryParse(written, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var count)
-                || count < 0 || written.StartsWith('0') && written.Length > 1)
+            if (WorkflowExpressions.WholeNumber(written) is not { } count)
             {
                 return mark switch
                 {
@@ -136,10 +153,4 @@ public static class FlowInstanceId
                 ? $"{segment.Replace("@", "[")}]"
                 : segment));
     }
-
-    /// <summary>Whether a name is a step's: the model's own shape, a lower-case word with dashes and digits.</summary>
-    private static bool StepNameIs(string name)
-        => name.Length > 0
-            && name[0] is >= 'a' and <= 'z'
-            && name.All(c => c is >= 'a' and <= 'z' or >= '0' and <= '9' or '-');
 }

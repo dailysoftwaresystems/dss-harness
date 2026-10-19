@@ -1,3 +1,6 @@
+using DssHarness.Core.Anchors;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
 
 namespace DssHarness.Tests;
@@ -107,5 +110,29 @@ public sealed class WorkflowStepTypesTests
                 ("pause", null),
             ],
             against);
+    }
+
+    /// <summary>
+    /// A fold family request's refusal names its options in a step's words where a workflow wrote it: each option the
+    /// command line takes, spelt as a key, is the key the step's table lists for it - every one of a fold's allow, and
+    /// those a refresh and a rebase take - so one sentence of a rule reads right on either side.
+    /// </summary>
+    [Fact]
+    public void TheFoldFamilysOptions_SpeltAsKeys_AreTheKeysItsStepsTake()
+    {
+        static IReadOnlyList<string> Keys(params string[] options) => [.. options.Select(option => OptionSpelling.Key.Spell(option)).Order(StringComparer.Ordinal)];
+
+        Assert.Equal(
+            [.. KeyDescription.Names(WorkflowStepTypes.AllowKeys).Order(StringComparer.Ordinal)],
+            Keys(FoldAllowances.MergeOption, FoldAllowances.SettledOption, AnchorBatchRequest.NewOption, AnchorBatchRequest.AcceptLostOption, AnchorBatchRequest.AcceptOverOption));
+
+        Assert.Equal(["all", "except", "merge", "stale"], Keys(RefreshRequest.AllOption, RefreshRequest.ExceptOption, RefreshRequest.StaleOption, FoldAllowances.MergeOption));
+        Assert.Subset(WorkflowStepTypes.KeysOf(WorkflowStepTypes.Find("refresh")!).ToHashSet(StringComparer.Ordinal), Keys(RefreshRequest.AllOption, RefreshRequest.ExceptOption, RefreshRequest.StaleOption, FoldAllowances.MergeOption).ToHashSet(StringComparer.Ordinal));
+
+        Assert.Equal(["merge", "settled"], Keys(FoldAllowances.MergeOption, FoldAllowances.SettledOption));
+        Assert.Subset(WorkflowStepTypes.KeysOf(WorkflowStepTypes.Find("rebase")!).ToHashSet(StringComparer.Ordinal), Keys(FoldAllowances.MergeOption, FoldAllowances.SettledOption).ToHashSet(StringComparer.Ordinal));
+
+        // On the command line, an option is its flag.
+        Assert.Equal("--accept-lost", OptionSpelling.Flag.Spell(AnchorBatchRequest.AcceptLostOption));
     }
 }

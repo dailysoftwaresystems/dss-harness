@@ -11,18 +11,28 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <c>cmp = not [ ("==" | "!=") not ]</c>, <c>not = "!" not | coalesce</c>, <c>coalesce = primary { "??" primary
 /// }</c>, and a primary is a group, <c>empty(...)</c>, <c>any(list, test)</c>, a literal, a <c>{path}</c>
 /// placeholder or a path. A path is a root - a step's name, <c>previous</c> with a step's name, one of the run's
-/// own names - walked by keys and integer indexes. Identifiers are letters, underscores, digits and dashes, so a
-/// step's name needs no quoting; there is no arithmetic, for expressions select and never compute.
+/// own names - walked by keys and integer indexes, and written whole: no space stands before its dots or its
+/// brackets, so <c>review .findings</c> is two values side by side and refused, never one path. Identifiers are
+/// letters, underscores, digits and dashes, so a step's name needs no quoting; there is no arithmetic, for
+/// expressions select and never compute.
+/// </para>
+/// <para>
+/// Every expression ends: nothing nests more than <see cref="MostNesting"/> deep - a group, a <c>!</c>, an
+/// <c>empty(...)</c> and an <c>any(...)</c> inside another each go one deeper, as does each name of a path after
+/// its first - so no text a file holds can spend the stack of the process that reads it.
 /// </para>
 /// <para>
 /// <see cref="WorkflowExpressions"/> stays the one owner of the names an expression reads and of what must be
 /// written whole: that class scans, this one parses, and where an expression parses, its reads here are the reads
-/// that class finds - pinned by test, so the two cannot drift. A path with an index reads as one name here where
-/// the scanner reads its segments apart, each checked on its own; both spell the same names.
+/// that class finds - pinned by test, so the two cannot drift. Both spell a read through the one
+/// <see cref="WorkflowExpressions.ReadOf"/>, an indexed path as one read whose root is its first name.
 /// </para>
 /// </remarks>
 public abstract record FlowExpression
 {
+    /// <summary>The most an expression nests: a guard, so no file can spend the stack however it is written.</summary>
+    public const int MostNesting = 64;
+
     /// <summary>
     /// Parses <paramref name="text"/> as one expression, refusing what the grammar does not say: the refusal
     /// names the column it stopped at, as <see cref="WorkflowExpressions.SyntaxProblem"/> does.
@@ -197,21 +207,14 @@ public abstract record FlowExpression
 
     /// <summary>One read as the scanner spells it: root, whole name, template or not, and whether it sits in an <c>any</c> test.</summary>
     private static WorkflowExpressions.Read Read(string whole, bool Template, bool insideAny)
-    {
-        var segments = whole.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        var root = segments.Length > 0 ? segments[0] : whole;
-
-        return new WorkflowExpressions.Read(root, string.Join('.', segments), Template, insideAny);
-    }
+        => WorkflowExpressions.ReadOf(whole, Template, insideAny);
 
     /// <summary>The recursive-descent reader of the grammar, over the text as written.</summary>
     private sealed class Parser(string text)
     {
-        /// <summary>The most a group may nest: a guard, so no file can spend the stack.</summary>
-        private const int MostNesting = 64;
-
         private readonly string _text = text;
 
+        /// <summary>How deep the reader is: each construct inside another, and each name of a path after its first.</summary>
         private int _depth;
 
         /// <summary>The parameter a refusal names.</summary>
@@ -267,7 +270,17 @@ public abstract record FlowExpression
 
         /// <summary>not = "!" not | coalesce</summary>
         private FlowExpression Not()
-            => Takes("!") ? new Not(Not()) : Coalesce();
+        {
+            if (!Takes("!"))
+            {
+                return Coalesce();
+            }
+
+            Deeper();
+            var inner = Not();
+            _depth--;
+            return new Not(inner);
+        }
 
         /// <summary>coalesce = primary { "??" primary }</summary>
         private FlowExpression Coalesce()
@@ -294,11 +307,7 @@ public abstract record FlowExpression
 
             if (_text[at] == '(')
             {
-                if (++_depth > MostNesting)
-                {
-                    throw new ArgumentException($"the expression nests more than {MostNesting} groups deep", Text);
-                }
-
+                Deeper();
                 At = at + 1;
                 var inner = Or();
                 Expect(')');
@@ -337,18 +346,22 @@ public abstract record FlowExpression
                 if (string.Equals(name, "empty", StringComparison.Ordinal))
                 {
                     Expect('(');
+                    Deeper();
                     var inner = Or();
                     Expect(')');
+                    _depth--;
                     return new Empty(inner);
                 }
 
                 if (string.Equals(name, "any", StringComparison.Ordinal))
                 {
                     Expect('(');
+                    Deeper();
                     var list = Or();
                     Expect(',');
                     var test = Or();
                     Expect(')');
+                    _depth--;
                     return new Any(list, test);
                 }
 
@@ -375,30 +388,33 @@ public abstract record FlowExpression
             throw new ArgumentException($"column {at + 1}: '{_text[at]}' does not start a value", Text);
         }
 
-        /// <summary>path = root { "." key | "[" int "]" }, the root already read.</summary>
+        /// <summary>
+        /// path = root { "." key | "[" int "]" }, the root already read: written whole, so a dot or a bracket is part
+        /// of the path only where it follows the name with no space between.
+        /// </summary>
         private FlowExpression Walk(string root)
         {
             var steps = new List<Path.Segment>();
 
             while (true)
             {
-                var at = Skip();
+                var at = At;
 
                 if (at < _text.Length && _text[at] == '.' && at + 1 < _text.Length && StartsName(_text[at + 1]))
                 {
+                    Deeper();
                     var (key, next) = Name(at + 1);
                     steps.Add(new Path.Segment(key, null));
                     At = next;
                 }
                 else if (at < _text.Length && _text[at] == '[')
                 {
+                    Deeper();
                     var close = _text.IndexOf(']', at + 1);
 
-                    if (close < 0
-                        || !int.TryParse(_text[(at + 1)..close], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var index)
-                        || index < 0)
+                    if (close < 0 || WorkflowExpressions.WholeNumber(_text[(at + 1)..close]) is not { } index)
                     {
-                        throw new ArgumentException($"the index at column {at + 1} is not a whole number from 0", Text);
+                        throw new ArgumentException($"the index at column {at + 1} is not a whole number from 0, written in digits alone with no leading zero", Text);
                     }
 
                     steps.Add(new Path.Segment(null, index));
@@ -406,8 +422,19 @@ public abstract record FlowExpression
                 }
                 else
                 {
+                    // A path's names went one deeper each; past the path the reader is as deep as before it.
+                    _depth -= steps.Count;
                     return new Path(root, steps);
                 }
+            }
+        }
+
+        /// <summary>Goes one deeper, refusing past <see cref="MostNesting"/>: the one bound on every recursion of the reader and of the tree it builds.</summary>
+        private void Deeper()
+        {
+            if (++_depth > MostNesting)
+            {
+                throw new ArgumentException($"the expression nests more than {MostNesting} deep", Text);
             }
         }
 

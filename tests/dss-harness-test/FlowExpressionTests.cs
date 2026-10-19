@@ -8,19 +8,21 @@ namespace DssHarness.Tests;
 /// </summary>
 public sealed class FlowExpressionTests
 {
-    /// <summary>Every form of the grammar parses to the node that says it.</summary>
+    /// <summary>Every form of the grammar parses to the node that says it, a literal holding the value it writes - a string's without its quotes.</summary>
     [Fact]
     public void EveryFormOfTheGrammar_ParsesToItsNode()
     {
         Assert.IsType<FlowExpression.Path>(FlowExpression.Parse("plan.ok"));
-        Assert.IsType<FlowExpression.Literal>(FlowExpression.Parse("true"));
-        Assert.IsType<FlowExpression.Literal>(FlowExpression.Parse("42"));
-        Assert.IsType<FlowExpression.Literal>(FlowExpression.Parse("'approved'"));
-        Assert.IsType<FlowExpression.Literal>(FlowExpression.Parse("\"approved\""));
-        Assert.IsType<FlowExpression.Literal>(FlowExpression.Parse("null"));
+        Assert.Equal(new FlowExpression.Literal(true), FlowExpression.Parse("true"));
+        Assert.Equal(new FlowExpression.Literal(false), FlowExpression.Parse("false"));
+        Assert.Equal(new FlowExpression.Literal(42L), FlowExpression.Parse("42"));
+        Assert.Equal(new FlowExpression.Literal(0.5), FlowExpression.Parse("0.5"));
+        Assert.Equal(new FlowExpression.Literal("approved"), FlowExpression.Parse("'approved'"));
+        Assert.Equal(new FlowExpression.Literal("approved"), FlowExpression.Parse("\"approved\""));
+        Assert.Equal(new FlowExpression.Literal(null), FlowExpression.Parse("null"));
         Assert.IsType<FlowExpression.Not>(FlowExpression.Parse("!plan.ok"));
         Assert.IsType<FlowExpression.Empty>(FlowExpression.Parse("empty(plan.findings)"));
-        Assert.IsType<FlowExpression.Placeholder>(FlowExpression.Parse("{plan.title}"));
+        Assert.Equal(new FlowExpression.Placeholder("plan.title"), FlowExpression.Parse("{plan.title}"));
         Assert.IsType<FlowExpression.And>(FlowExpression.Parse("(plan.ok || plan.late) && !empty(plan.findings)"));
     }
 
@@ -90,6 +92,8 @@ public sealed class FlowExpressionTests
             "any(review.findings, it.severity != 'low')",
             "empty(input.request) || run.leftover",
             "source.code == 0",
+            "findings[0].severity == 'high'",
+            "any(review.findings[2].notes, it.ok) && plan.items[0][1]",
         ];
 
         foreach (var expression in expressions)
@@ -101,39 +105,92 @@ public sealed class FlowExpressionTests
     }
 
     /// <summary>
-    /// A path with an index reads as one name in the tree where the scanner reads its segments apart - each checked
-    /// on its own - so both spell the same names.
+    /// A path with an index is one read, in the tree and in the scanner alike: its whole name keeps the index, its
+    /// root is its first name, and its names - what a lookup walks - leave the index out.
     /// </summary>
     [Fact]
-    public void AnIndexedPath_ReadsAsOneNameInTheTree()
+    public void AnIndexedPath_IsOneRead_WhoseRootIsAName()
     {
-        var path = (FlowExpression.Path)FlowExpression.Parse("findings[0].severity");
+        var tree = Assert.Single(FlowExpression.Parse("findings[0].severity").Reads());
+        var scanned = Assert.Single(WorkflowExpressions.ReadsOf("findings[0].severity"));
 
-        Assert.Equal(["findings[0].severity"], path.Reads().Select(read => read.Whole));
-        Assert.Equal(["findings", "severity"], WorkflowExpressions.ReadsOf("findings[0].severity").Select(read => read.Whole));
+        Assert.Equal(new WorkflowExpressions.Read("findings", "findings[0].severity", Template: false, InsideAny: false), tree);
+        Assert.Equal(tree, scanned);
+        Assert.Equal(["findings", "severity"], scanned.Names);
     }
 
-    /// <summary>What the grammar does not say is refused, naming the column it stopped at.</summary>
+    /// <summary>
+    /// A path is written whole: a space before its dot or its bracket ends it, so what follows is no part of an
+    /// expression - in a folded scalar too - and the tree never reads as one name what the scanner reads as two.
+    /// </summary>
     [Theory]
-    [InlineData("plan +", "column 6")]
-    [InlineData("(plan.ok", "ends before its ')'")]
-    [InlineData("'unclosed", "never closed")]
-    [InlineData("plan.ok)", "column 8")]
-    [InlineData("@broken", "column 1")]
-    [InlineData("previous", "say which one")]
+    [InlineData("review .findings", "column 8: '.' is not part of an expression")]
+    [InlineData("review\n.findings", "column 8: '.' is not part of an expression")]
+    [InlineData("findings [0]", "column 10: '[' is not part of an expression")]
+    public void APathWithASpaceInIt_IsRefused(string text, string problem)
+        => Assert.Equal(problem, FlowExpression.GrammarProblem(text));
+
+    /// <summary>
+    /// An index is a whole number from 0, written in digits alone: a sign, a space or a leading zero would let one
+    /// place in a list be written two ways, and is refused naming the column of its bracket.
+    /// </summary>
+    [Theory]
+    [InlineData("findings[+1]")]
+    [InlineData("findings[ 1]")]
+    [InlineData("findings[1 ]")]
+    [InlineData("findings[01]")]
+    [InlineData("findings[-1]")]
+    [InlineData("findings[x]")]
+    [InlineData("findings[1")]
+    public void AnIndexWrittenAnyOtherWay_IsRefused(string text)
+        => Assert.Equal("the index at column 9 is not a whole number from 0, written in digits alone with no leading zero", FlowExpression.GrammarProblem(text));
+
+    /// <summary>What the grammar does not say is refused, naming where it stopped, every refusal said whole.</summary>
+    [Theory]
+    [InlineData("plan +", "column 6: '+' is not part of an expression")]
+    [InlineData("(plan.ok", "the expression ends before its ')' at column 9")]
+    [InlineData("'unclosed", "the quote at column 1 is never closed")]
+    [InlineData("plan.ok)", "column 8: ')' is not part of an expression")]
+    [InlineData("@broken", "column 1: '@' does not start a value")]
+    [InlineData("previous", "column 1: 'previous' names a step's work; say which one")]
+    [InlineData("plan &&", "the expression ends at column 8 where a value was to be read")]
     public void WhatTheGrammarDoesNotSay_IsRefusedNamingTheColumn(string text, string said)
     {
         var problem = Assert.Throws<ArgumentException>(() => FlowExpression.Parse(text));
 
-        Assert.Contains(said, problem.Message, StringComparison.Ordinal);
+        Assert.Equal("text", problem.ParamName);
+        Assert.Equal(said, FlowExpression.GrammarProblem(text));
     }
 
-    /// <summary>A group nests at most 64 deep: a guard, so no file can spend the stack however it is written.</summary>
-    [Fact]
-    public void AGroupNestsAtMostSixtyFourDeep()
+    /// <summary>
+    /// Nothing nests more than 64 deep - a group, a '!', an empty(...) and an any(...) inside another, and each name of
+    /// a path after its first, go one deeper each - so no file can spend the stack however it is written: 64 is read,
+    /// and one more is refused.
+    /// </summary>
+    [Theory]
+    [InlineData(64, null)]
+    [InlineData(65, "the expression nests more than 64 deep")]
+    public void NothingNestsMoreThanSixtyFourDeep(int levels, string? problem)
     {
-        var deep = new string('(', 65) + "plan.ok" + new string(')', 65);
+        Assert.Equal(64, FlowExpression.MostNesting);
+        Assert.Equal(problem, FlowExpression.GrammarProblem(new string('(', levels) + "plan" + new string(')', levels)));
+        Assert.Equal(problem, FlowExpression.GrammarProblem(new string('!', levels - 1) + "plan.ok"));
+        Assert.Equal(problem, FlowExpression.GrammarProblem("plan" + string.Concat(Enumerable.Repeat(".ok", levels))));
+        Assert.Equal(problem, FlowExpression.GrammarProblem(string.Concat(Enumerable.Repeat("empty(", levels)) + "plan" + new string(')', levels)));
+    }
 
-        Assert.Contains("the expression nests more than 64 groups deep", Assert.Throws<ArgumentException>(() => FlowExpression.Parse(deep)).Message, StringComparison.Ordinal);
+    /// <summary>
+    /// The scanner reads a path of a hundred thousand names in one pass, as one read: it never recurses once for each
+    /// name, so no text can spend the stack of the process that reads it.
+    /// </summary>
+    [Fact]
+    public void TheScanner_ReadsAPathOfAnyLength_InOnePass()
+    {
+        var path = "plan" + string.Concat(Enumerable.Repeat(".ok", 99_999));
+
+        var read = Assert.Single(WorkflowExpressions.ReadsOf(path));
+
+        Assert.Equal("plan", read.Root);
+        Assert.Equal(100_000, read.Names.Count);
     }
 }

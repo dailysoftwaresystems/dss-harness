@@ -965,7 +965,7 @@ public static class WorkflowFileParser
                 {
                     Of = ScalarIn(keys, $"{where}.of", problems),
                     Others = ScalarIn(keys, $"{where}.others", problems),
-                    Settled = StringListIn(keys, $"{where}.settled", problems) ?? [],
+                    Settled = PersonsListIn(keys, where, "settled", problems),
                     Merge = FlowListIn(keys, $"{where}.merge", problems),
                 };
                 break;
@@ -1117,11 +1117,31 @@ public static class WorkflowFileParser
         var allowKeys = CollectKeys(mapping, $"{where}.allow", KeyDescription.Names(WorkflowStepTypes.AllowKeys), problems);
 
         return new FlowAllow(
-            StringListIn(allowKeys, $"{where}.allow.settled", problems) ?? [],
+            PersonsListIn(allowKeys, where, "allow.settled", problems),
             FlowListIn(allowKeys, $"{where}.allow.new", problems),
-            StringListIn(allowKeys, $"{where}.allow.acceptLost", problems) ?? [],
+            PersonsListIn(allowKeys, where, "allow.acceptLost", problems),
             FlowListIn(allowKeys, $"{where}.allow.merge", problems),
-            StringListIn(allowKeys, $"{where}.allow.acceptOver", problems) ?? []);
+            PersonsListIn(allowKeys, where, "allow.acceptOver", problems));
+    }
+
+    /// <summary>
+    /// A list only a person gives - the paths a fold, a deletion or a rebase leaves out as settled by hand, and the lost
+    /// and over cells a fold accepts - written out, never read from an expression: a single value there is one, and is
+    /// refused as V29 words it, whatever else it says. Anything else that is not a list is refused as any list is.
+    /// </summary>
+    /// <param name="keys">The keys of the mapping that holds it.</param>
+    /// <param name="where">The step's name, as every key under it is named in a problem.</param>
+    /// <param name="key">The key, as the step spells it beneath itself: <c>allow.settled</c>, or a rebase's <c>settled</c>.</param>
+    /// <param name="problems">Where a problem is told.</param>
+    private static IReadOnlyList<string> PersonsListIn(IReadOnlyList<(string Key, YamlNode Value)> keys, string where, string key, List<string> problems)
+    {
+        if (NodeIn(keys, KeyNameOf(key)) is YamlScalarNode { Value: not null } scalar)
+        {
+            problems.Add(YamlReading.At(scalar, $"step '{where}' takes {key} from an output: paths settled by hand, and lost and over cells, are a person's to accept; only new rows and merges may be read from one."));
+            return [];
+        }
+
+        return StringListIn(keys, $"{where}.{key}", problems);
     }
 
     private static IReadOnlyList<FlowPreAnswer> ReadPreAnswers(List<(string Key, YamlNode Value)> keys, string where, List<string> problems)

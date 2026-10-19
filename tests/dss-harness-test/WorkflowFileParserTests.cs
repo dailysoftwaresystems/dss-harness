@@ -860,4 +860,59 @@ public sealed class WorkflowFileParserTests
             Assert.Equal(policy, read!.Recover!.OnFailure);
         }
     }
+
+    /// <summary>
+    /// V29: what only a person gives - the paths a fold or a rebase leaves out as settled by hand, and the lost and over
+    /// cells a fold accepts - is written out, never read from an output: a single value under one of those keys is an
+    /// expression, refused in the rule's own words, never told that a list is missing. Anything else that is not a
+    /// list is refused as any list is.
+    /// </summary>
+    [Fact]
+    public void WhatOnlyAPersonGives_IsWrittenOut_NeverReadFromAnOutput()
+    {
+        const string Rule = "from an output: paths settled by hand, and lost and over cells, are a person's to accept; only new rows and merges may be read from one.";
+
+        Assert.Equal(
+            [
+                $"line 10, column 16: step 'close' takes allow.settled {Rule}",
+                $"line 11, column 19: step 'close' takes allow.acceptLost {Rule}",
+                $"line 12, column 19: step 'close' takes allow.acceptOver {Rule}",
+                $"line 16, column 14: step 'move' takes settled {Rule}",
+            ],
+            Problems(
+                """
+                name: flow
+                steps:
+                  - name: make
+                    type: create-agent
+                    agent: worker
+                  - name: close
+                    type: fold
+                    of: make
+                    allow:
+                      settled: plan.latest.paths
+                      acceptLost: plan.latest.lost
+                      acceptOver: plan.latest.over
+                  - name: move
+                    type: rebase
+                    of: make
+                    settled: plan.latest.paths
+                """));
+
+        Assert.Equal(
+            ["line 10, column 16: 'close.allow.settled' is not a list."],
+            Problems(
+                """
+                name: flow
+                steps:
+                  - name: make
+                    type: create-agent
+                    agent: worker
+                  - name: close
+                    type: fold
+                    of: make
+                    allow:
+                      settled: { paths: src }
+                """));
+    }
 }

@@ -111,18 +111,8 @@ public static class WorkflowValidator
     private static bool Folds(WorkflowStep step)
         => step.Type == "fold" || (step.Type == "delete-agent" && step.DiscardUncommitted is not true);
 
-    /// <summary>The path the recovery's own steps are placed under, as every refusal about one of them names it.</summary>
-    private const string RecoverPath = "recover";
-
     /// <summary>V26: the most steps one workflow may declare, the recovery's among them, for they run. How deep a flow nests is <see cref="WorkflowFileParser.MaxDepth"/>'s own bound.</summary>
-    private const int MostSteps = 200;
-
-    /// <summary>How a step's name is spelled: a lower-case word, with dashes within.</summary>
-    /// <remarks>
-    /// Dots separate the segments of a read, so a name may not hold one; and a read's first segment
-    /// is resolved against names and reserved words alike, so a name may not be a reserved word.
-    /// </remarks>
-    private static readonly System.Text.RegularExpressions.Regex NamePattern = new("^[a-z][a-z0-9-]*$", System.Text.RegularExpressions.RegexOptions.Compiled);
+    internal const int MostSteps = 200;
 
     /// <summary>Returns every problem found, in the order the definition declares what they concern.</summary>
     /// <param name="definition">A workflow's parsed definition.</param>
@@ -150,7 +140,10 @@ public static class WorkflowValidator
         /// <summary>Every step, in the order the definition declares them.</summary>
         private readonly List<Entry> _entries = [];
 
-        /// <summary>Every step's full path, from the flow's root, to its entry.</summary>
+        /// <summary>
+        /// Every step's full path, from the flow's root, to its entry: the first declared where siblings share a name,
+        /// as <see cref="FlowScope"/> finds one.
+        /// </summary>
         private readonly Dictionary<string, Entry> _byPath = new(StringComparer.Ordinal);
 
         /// <summary>
@@ -165,7 +158,7 @@ public static class WorkflowValidator
             _hasCommitTemplate = hasCommitTemplate;
 
             DefinitionRules();
-            Index(definition.Steps, parentPath: null);
+            Index(definition.Steps, parent: null);
             IndexRecover();
             Shadowing();
             Size();
@@ -178,9 +171,12 @@ public static class WorkflowValidator
 
         internal IReadOnlyList<string> Problems => _problems;
 
-        /// <summary>One step, placed in the flow.</summary>
-        private sealed record Entry(WorkflowStep Step, string Path, int Order, string? ParentPath)
+        /// <summary>One step, placed in the flow: the group it is declared in is <paramref name="Parent"/>, none at the top level.</summary>
+        private sealed record Entry(WorkflowStep Step, string Path, int Order, Entry? Parent)
         {
+            /// <summary>The path of the group it is declared in - the scope its names are read in - or <see langword="null"/> at the top level.</summary>
+            public string? ParentPath => Parent?.Path;
+
             /// <summary>Whether <paramref name="other"/> is declared inside this step's own subtree.</summary>
             public bool Owns(Entry other) => other.Path.StartsWith(Path + ".", StringComparison.Ordinal);
         }
@@ -278,9 +274,10 @@ public static class WorkflowValidator
         }
 
         /// <summary>Walks the flow once, placing every step and checking every sibling list's names.</summary>
-        private void Index(IReadOnlyList<WorkflowStep> steps, string? parentPath)
+        private void Index(IReadOnlyList<WorkflowStep> steps, Entry? parent)
         {
             var names = new HashSet<string>(StringComparer.Ordinal);
+            var parentPath = parent?.Path;
 
             foreach (var step in steps)
             {
@@ -290,7 +287,7 @@ public static class WorkflowValidator
                 {
                     _problems.Add($"step '{where}' is named '{step.Name}', a word a definition reads for its own; a read could not tell the step from the word");
                 }
-                else if (!NamePattern.IsMatch(step.Name))
+                else if (!FlowScope.IsWellFormedName(step.Name))
                 {
                     _problems.Add($"step '{where}' is named '{step.Name}', which is not a lower-case word with dashes within; a read's segments are told apart by dots, so a name may not hold one");
                 }
@@ -300,13 +297,13 @@ public static class WorkflowValidator
                     _problems.Add($"two steps of '{parentPath ?? "the flow's root"}' are named '{step.Name}'; what depends on it, or reads it, could only ever mean one of them");
                 }
 
-                var entry = new Entry(step, where, _entries.Count, parentPath);
+                var entry = new Entry(step, where, _entries.Count, parent);
                 _entries.Add(entry);
-                _byPath[where] = entry;
+                _byPath.TryAdd(where, entry);
 
                 if (step.Steps.Count > 0)
                 {
-                    Index(step.Steps, where);
+                    Index(step.Steps, entry);
                 }
             }
         }
@@ -328,11 +325,12 @@ public static class WorkflowValidator
             }
 
             // The recovery's own onFailure is what a failure of one of its steps does where the step says none, as a
-            // group's is for its members.
-            _recover = new Entry(new WorkflowStep { Name = RecoverPath, Steps = recover.Steps, OnFailure = recover.OnFailure }, RecoverPath, _entries.Count, null);
+            // group's is for its members. Its place is the recovery's whatever a step of the flow is named, as
+            // FlowScope reads the path.
+            _recover = new Entry(new WorkflowStep { Name = FlowScope.Recovery, Steps = recover.Steps, OnFailure = recover.OnFailure }, FlowScope.Recovery, _entries.Count, null);
             _entries.Add(_recover);
-            _byPath[RecoverPath] = _recover;
-            Index(recover.Steps, RecoverPath);
+            _byPath[FlowScope.Recovery] = _recover;
+            Index(recover.Steps, _recover);
         }
 
         /// <summary>
@@ -343,20 +341,10 @@ public static class WorkflowValidator
         /// </summary>
         private void Shadowing()
         {
-            foreach (var entry in _entries)
+            // FlowScope owns which name an inner step can see; the wording is this check's.
+            foreach (var (path, shadowed) in FlowScope.Shadowings(_definition))
             {
-                for (var scope = entry.ParentPath is null ? null : _byPath.GetValueOrDefault(entry.ParentPath);
-                    scope is not null;
-                    scope = scope.ParentPath is null ? null : _byPath.GetValueOrDefault(scope.ParentPath))
-                {
-                    if (_entries.FirstOrDefault(other => other.ParentPath == scope.ParentPath
-                            && !ReferenceEquals(other, _recover)
-                            && string.Equals(other.Step.Name, entry.Step.Name, StringComparison.Ordinal)) is { } outer)
-                    {
-                        _problems.Add($"step '{entry.Path}' has the name of step '{outer.Path}', which it can see from where it is: names are looked up from the inside out, so the inner one would be read in its place");
-                        break;
-                    }
-                }
+                _problems.Add($"step '{path}' has the name of step '{shadowed}', which it can see from where it is: names are looked up from the inside out, so the inner one would be read in its place");
             }
         }
 
@@ -716,25 +704,25 @@ public static class WorkflowValidator
                     _problems.Add($"{where} says {(repeat.Blocking is not null ? "blocking" : "blockersLimitRounds")} without rounds; past the rounds is the only place either is read");
                 }
 
-                Expression(entry, repeat.Until, "repeat.until");
+                // A loop's own keys are read once an iteration has ended, from within the group: its members are
+                // read by their bare names there, as a member reads its siblings.
+                var whole = Expression(entry, repeat.Until, "repeat.until", within: true);
 
                 // An until is read once each iteration has ended, to say whether another is needed: one that reads none of
                 // what the iterations produce says the same after every one of them.
-                if (!string.IsNullOrWhiteSpace(repeat.Until)
-                    && WorkflowExpressions.SyntaxProblem(repeat.Until) is null
-                    && !WorkflowExpressions.ReadsOf(repeat.Until).Any(read => ReadsOwnSteps(entry, read)))
+                if (whole && !WorkflowExpressions.ReadsOf(repeat.Until).Any(read => ReadsOwnSteps(entry, read)))
                 {
                     _problems.Add($"{where} repeats until '{repeat.Until}', which reads nothing its own steps produce; no iteration could change what it says, so the loop would stop after its first or run to its bound");
                 }
 
                 if (repeat.Blocking is not null)
                 {
-                    Expression(entry, repeat.Blocking, "repeat.blocking");
+                    Expression(entry, repeat.Blocking, "repeat.blocking", within: true);
                 }
 
                 if (repeat.Leftover is not null)
                 {
-                    Expression(entry, repeat.Leftover, "repeat.leftover");
+                    Expression(entry, repeat.Leftover, "repeat.leftover", within: true);
                 }
 
                 Within(repeat.MaxIterations, 1, 20, $"{where}: repeat.maxIterations");
@@ -764,7 +752,7 @@ public static class WorkflowValidator
                 return true;
             }
 
-            return !WorkflowExpressions.IsRoot(read.Root) && Resolve(group, read.Whole) is { } resolved && group.Owns(resolved.Step);
+            return !WorkflowExpressions.IsRoot(read.Root) && Resolve(group, read, within: true) is { } resolved && group.Owns(resolved.Step);
         }
 
         private void ReasonRules(Entry entry)
@@ -1008,10 +996,10 @@ public static class WorkflowValidator
                 }
             }
 
-            // V29: the fold family's keys, read to the requests the verbs take - the requests of slice 7 themselves,
-            // their spellings the one wordings, written out here, when the definition is loaded, so a key that names
-            // what the run would refuse at its start is refused before a run begins. The list-ness of allow's settled,
-            // lost and over and a rebase's settled is the reader's own refusal, where the file is read.
+            // V29: the fold family's keys, read to the requests the verbs themselves take, each rule's wording the
+            // request's and spelt in a step's keys, written out here, when the definition is loaded, so a key that
+            // names what the run would refuse at its start is refused before a run begins. That allow's settled, lost
+            // and over and a rebase's settled are written out is the reader's own refusal, where the file is read.
             if (step.Allow is { } allow && new FoldAllowances
                 {
                     Merge = [.. allow.Merge?.Written ?? []],
@@ -1019,16 +1007,9 @@ public static class WorkflowValidator
                     New = [.. allow.New?.Written ?? []],
                     AcceptLost = allow.AcceptLost,
                     AcceptOver = allow.AcceptOver,
-                }.Problem() is { } spelling)
+                }.Problem(OptionSpelling.Key) is { } spelling)
             {
                 _problems.Add($"{where} takes allow: {spelling}");
-            }
-
-            // V41's keys rule, where the owner cannot see it: all beside a paths EXPRESSION, which a request built
-            // from the written paths alone never meets. A written paths beside all is the request's own refusal.
-            if (step.Paths?.Expression is not null && step.All is true)
-            {
-                _problems.Add($"{where} says paths and all; all is every path the main tree moved, in place of paths, and a step that said both would never tell which it weighs");
             }
 
             if (step.Type == "refresh")
@@ -1042,7 +1023,11 @@ public static class WorkflowValidator
                     Merge = [.. step.Merge?.Written ?? []],
                 };
 
-                if (request.Problem() is { } refresh)
+                // All beside paths an expression yields is the request's own rule, said in its words: the request built
+                // from what is written out never holds those paths, which are known only when the step runs.
+                if ((step.Paths?.Expression is not null && step.All is true
+                        ? RefreshRequest.AllBesidePathsProblem(OptionSpelling.Key)
+                        : request.Problem(OptionSpelling.Key)) is { } refresh)
                 {
                     _problems.Add($"{where} takes refresh: {refresh}");
                 }
@@ -1052,7 +1037,7 @@ public static class WorkflowValidator
                 {
                     Merge = [.. step.Merge?.Written ?? []],
                     Settled = [.. step.Settled ?? []],
-                }.Problem() is { } rebase)
+                }.Problem(OptionSpelling.Key) is { } rebase)
             {
                 _problems.Add($"{where} takes a rebase: {rebase}");
             }
@@ -1087,7 +1072,7 @@ public static class WorkflowValidator
 
             foreach (var before in step.PreAnswer)
             {
-                Expression(entry, before.When, "preAnswer.when");
+                var whole = Expression(entry, before.When, "preAnswer.when");
 
                 if (!options.Contains(before.Answer))
                 {
@@ -1105,8 +1090,7 @@ public static class WorkflowValidator
                 // A pre-answer is what the person said with the run, so it is found in what they gave: an input its when
                 // reads, or words it quotes from one. One that reads neither would answer whatever was typed.
                 if (before.Quote is null
-                    && !string.IsNullOrWhiteSpace(before.When)
-                    && WorkflowExpressions.SyntaxProblem(before.When) is null
+                    && whole
                     && !WorkflowExpressions.ReadsOf(before.When).Any(read => read.Root == "input"))
                 {
                     _problems.Add($"{where} is answered beforehand by an entry that reads no input and quotes none: a pre-answer is what the person gave with the run, and an answer the configuration gives whatever was typed is written under answers");
@@ -1185,7 +1169,7 @@ public static class WorkflowValidator
 
             foreach (var (key, named) in new[] { ("step", amend.Step), ("before", amend.Before), ("whenAddScope", amend.WhenAddScope), ("whenChangeScope", amend.WhenChangeScope), ("whenRemoveScope", amend.WhenRemoveScope) })
             {
-                if (named is not null && (named == RecoverPath || named.StartsWith(RecoverPath + ".", StringComparison.Ordinal)))
+                if (named is not null && (named == FlowScope.Recovery || named.StartsWith(FlowScope.Recovery + ".", StringComparison.Ordinal)))
                 {
                     _problems.Add($"amend.{key} names '{named}', a step of the recovery; a plan update is planned and placed by the flow's own steps");
                 }
@@ -1202,8 +1186,9 @@ public static class WorkflowValidator
             {
                 DeclaredNameRules(output.Name, "output");
 
-                // An output is read when the run has ended: the whole flow is behind it.
-                Expression(new Entry(new WorkflowStep { Name = output.Name }, output.Name, int.MaxValue, null), output.From, $"output '{output.Name}'.from");
+                // An output is read when the run has ended, at the flow's top level: the whole flow is behind it. It is
+                // named as the file names the key, 'outputs.<name>.from'.
+                Expression(new Entry(new WorkflowStep { Name = output.Name }, $"outputs.{output.Name}", int.MaxValue, null), output.From, "from");
             }
         }
 
@@ -1367,19 +1352,24 @@ public static class WorkflowValidator
             }
         }
 
-        /// <summary>Checks one expression: that it says something, is written whole, and reads only the flow's own names.</summary>
-        private void Expression(Entry entry, string expression, string key)
+        /// <summary>
+        /// Checks one expression: that it says something, is written whole, and reads only the flow's own names - read
+        /// from where <paramref name="entry"/> sits, or from within the group itself where <paramref name="within"/>
+        /// says its loop reads what its iterations produced. Answers whether it was whole, so that a rule over what it
+        /// reads is asked only of one that parses.
+        /// </summary>
+        private bool Expression(Entry entry, string expression, string key, bool within = false)
         {
             if (string.IsNullOrWhiteSpace(expression))
             {
                 _problems.Add($"'{entry.Path}.{key}' is empty; an expression is read for what it says, and an empty one says nothing");
-                return;
+                return false;
             }
 
             if (WorkflowExpressions.SyntaxProblem(expression) is { } broken)
             {
                 _problems.Add($"'{entry.Path}.{key}' is not written whole: {broken}, and nothing it reads past there would be checked");
-                return;
+                return false;
             }
 
             // The grammar itself, beside wholeness: what the engine will one day read must parse today, or the
@@ -1387,27 +1377,29 @@ public static class WorkflowValidator
             if (FlowExpression.GrammarProblem(expression) is { } grammar)
             {
                 _problems.Add($"'{entry.Path}.{key}' is not written whole: {grammar}, and nothing past there would be checked");
-                return;
+                return false;
             }
 
             foreach (var read in WorkflowExpressions.ReadsOf(expression))
             {
-                CheckRead(entry, read, $"{entry.Path}.{key}");
+                CheckRead(entry, read, $"{entry.Path}.{key}", within);
             }
+
+            return true;
         }
 
         /// <summary>
         /// Checks one read - of an expression or of a template - against the steps, inputs and params
         /// the definition declares.
         /// </summary>
-        private void CheckRead(Entry entry, WorkflowExpressions.Read read, string what)
+        private void CheckRead(Entry entry, WorkflowExpressions.Read read, string what, bool within = false)
         {
-            var segments = read.Whole.Split('.');
+            var segments = read.Names;
 
             switch (read.Root)
             {
                 case "input":
-                    if (segments.Length < 2)
+                    if (segments.Count < 2)
                     {
                         _problems.Add($"'{what}' reads '{read.Whole}', which names no input; read 'input.<name>'");
                         return;
@@ -1421,7 +1413,7 @@ public static class WorkflowValidator
                     return;
 
                 case "param":
-                    if (segments.Length < 2)
+                    if (segments.Count < 2)
                     {
                         _problems.Add($"'{what}' reads '{read.Whole}', which names no param; read 'param.<name>'");
                         return;
@@ -1446,7 +1438,8 @@ public static class WorkflowValidator
                     {
                         // The iteration before this one: readable inside a repeat group, whose own
                         // until is read once an iteration has ended, and whose members name one
-                        // another as the iteration before theirs.
+                        // another as the iteration before theirs. The step it names is found as a
+                        // bare name is, from where it is read, and is one the repeat holds.
                         var repeated = RepeatAround(entry);
 
                         if (repeated is null)
@@ -1455,7 +1448,10 @@ public static class WorkflowValidator
                             return;
                         }
 
-                        if (segments.Length > 1 && !NamedIn(repeated, segments[1]))
+                        if (segments.Count > 1
+                            && !(FlowScope.Resolve(segments[1], _definition, ScopeOf(entry, within)) is { } named
+                                && _byPath.GetValueOrDefault(named.Path) is { } held
+                                && repeated.Owns(held)))
                         {
                             _problems.Add($"'{what}' reads '{read.Whole}', and '{segments[1]}' is no step of the group '{repeated.Path}' repeats");
                         }
@@ -1502,7 +1498,7 @@ public static class WorkflowValidator
 
                     return;
 
-                case RecoverPath:
+                case FlowScope.Recovery:
                     _problems.Add($"'{what}' reads '{read.Whole}': the recovery's steps are read by their own names inside it, and nothing outside it reads them");
                     return;
 
@@ -1512,7 +1508,17 @@ public static class WorkflowValidator
                         return;
                     }
 
-                    if (Resolve(entry, read.Whole) is not { } resolved)
+                    var located = Resolve(entry, read, within, out var why);
+
+                    if (why is not null)
+                    {
+                        _problems.Add($"'{what}' reads '{read.Whole}', and {why}");
+                        return;
+                    }
+
+                    // Where a name is, FlowScope says; whether the step it finds is there to be read, this check: one
+                    // declared before the reader, or one of a group's own members that its loop reads.
+                    if (located is not { } resolved || !(resolved.Step.Order < entry.Order || entry.Owns(resolved.Step)))
                     {
                         _problems.Add($"'{what}' reads '{read.Whole}', which no step before '{entry.Path}', no input and no param provides");
                         return;
@@ -1528,70 +1534,30 @@ public static class WorkflowValidator
         }
 
         /// <summary>
-        /// The step <paramref name="name"/> reads where <paramref name="entry"/> sits, with the segments after it - the
-        /// members of its output, or the engine's facts of it - or <see langword="null"/> where no step it can read is
-        /// named. A first segment is the name of a step the reader sees - declared before it in its own scope or one
-        /// around it, or inside its own subtree, which its loops read - and the segments after it go down into that
-        /// step's own steps while they name one; failing that, it is a step's path from the flow's root, the longest
-        /// that is one, declared before the reader.
+        /// The step <paramref name="read"/> names where <paramref name="entry"/> sits - or from within the group itself,
+        /// where <paramref name="within"/> says its loop reads it - with the names after it, the members of its output or
+        /// the engine's facts of it; <see langword="null"/> where it names none. <see cref="FlowScope.Read"/> owns where
+        /// the name is, and <paramref name="why"/> is its reason where a <c>forEach</c> holds the member read.
         /// </summary>
-        private (Entry Step, string[] After)? Resolve(Entry entry, string name)
-        {
-            var segments = name.Split('.');
+        private (Entry Step, IReadOnlyList<string> After)? Resolve(Entry entry, WorkflowExpressions.Read read, bool within, out string? why)
+            => FlowScope.Read(read.Names, _definition, ScopeOf(entry, within), out why) is { } found
+                && _byPath.GetValueOrDefault(found.Step.Path) is { } step
+                    ? (step, found.After)
+                    : null;
 
-            if (Visible(entry, segments[0]) is { } seen)
-            {
-                return Down(seen, segments, 1);
-            }
+        /// <inheritdoc cref="Resolve(Entry, WorkflowExpressions.Read, bool, out string?)"/>
+        private (Entry Step, IReadOnlyList<string> After)? Resolve(Entry entry, WorkflowExpressions.Read read, bool within)
+            => Resolve(entry, read, within, out _);
 
-            for (var length = segments.Length; length >= 1; length--)
-            {
-                if (_byPath.TryGetValue(string.Join('.', segments[..length]), out var found)
-                    && !ReferenceEquals(found, _recover)
-                    && (found.Order < entry.Order || entry.Owns(found)))
-                {
-                    return (found, segments[length..]);
-                }
-            }
+        /// <summary>
+        /// The scope <paramref name="entry"/> reads its names in: the group it is declared in, or the group itself where
+        /// <paramref name="within"/> says its loop reads what its iterations produced.
+        /// </summary>
+        private static string? ScopeOf(Entry entry, bool within) => within ? entry.Path : entry.ParentPath;
 
-            return null;
-
-            (Entry Step, string[] After) Down(Entry step, string[] read, int next)
-            {
-                while (next < read.Length
-                    && _entries.FirstOrDefault(other => other.ParentPath == step.Path && string.Equals(other.Step.Name, read[next], StringComparison.Ordinal)) is { } member)
-                {
-                    step = member;
-                    next++;
-                }
-
-                return (step, read[next..]);
-            }
-        }
-
-        /// <summary>The step named <paramref name="name"/> that is visible where <paramref name="entry"/> sits, and declared before it, or <see langword="null"/>.</summary>
-        private Entry? Visible(Entry entry, string name)
-        {
-            for (var scope = entry; scope is not null; scope = scope.ParentPath is null ? null : _byPath.GetValueOrDefault(scope.ParentPath))
-            {
-                if (_entries.FirstOrDefault(other => other.ParentPath == scope.ParentPath
-                        && !ReferenceEquals(other, _recover)
-                        && other.Order < entry.Order
-                        && string.Equals(other.Step.Name, name, StringComparison.Ordinal)) is { } found)
-                {
-                    return found;
-                }
-            }
-
-            // A step's own subtree is readable by the step itself: a group's loop reads its members.
-            return _entries.FirstOrDefault(other => entry.Owns(other) && string.Equals(other.Step.Name, name, StringComparison.Ordinal));
-        }
-
-        /// <summary>The sibling of <paramref name="entry"/> named <paramref name="name"/>, or <see langword="null"/>.</summary>
+        /// <summary>The sibling of <paramref name="entry"/> named <paramref name="name"/>, as <see cref="FlowScope.SiblingOf"/> finds it, or <see langword="null"/>.</summary>
         private Entry? Sibling(Entry entry, string name)
-            => _entries.FirstOrDefault(other => other.ParentPath == entry.ParentPath
-                && !ReferenceEquals(other, _recover)
-                && string.Equals(other.Step.Name, name, StringComparison.Ordinal));
+            => FlowScope.SiblingOf(name, _definition, entry.ParentPath) is { } found ? _byPath.GetValueOrDefault(found.Path) : null;
 
         /// <summary>
         /// The <c>onFailure</c> that decides for <paramref name="entry"/>: its own, or the nearest group's around it that
@@ -1599,7 +1565,7 @@ public static class WorkflowValidator
         /// </summary>
         private (string Policy, Entry Owner)? EffectiveOnFailure(Entry entry)
         {
-            for (var scope = entry; scope is not null; scope = scope.ParentPath is null ? null : _byPath.GetValueOrDefault(scope.ParentPath))
+            for (var scope = entry; scope is not null; scope = scope.Parent)
             {
                 if (scope.Step.OnFailure is { } policy)
                 {
@@ -1613,9 +1579,9 @@ public static class WorkflowValidator
         /// <summary>The nearest group around <paramref name="entry"/> - never the step itself - that says <c>always</c>, or <see langword="null"/>.</summary>
         private Entry? AlwaysAround(Entry entry)
         {
-            for (var scope = entry.ParentPath is null ? null : _byPath.GetValueOrDefault(entry.ParentPath);
+            for (var scope = entry.Parent;
                 scope is not null;
-                scope = scope.ParentPath is null ? null : _byPath.GetValueOrDefault(scope.ParentPath))
+                scope = scope.Parent)
             {
                 if (scope.Step.Always is true)
                 {
@@ -1635,7 +1601,7 @@ public static class WorkflowValidator
         /// </summary>
         private Entry? AncestorBeside(Entry entry, Entry target)
         {
-            for (var scope = entry; scope is not null; scope = scope.ParentPath is null ? null : _byPath.GetValueOrDefault(scope.ParentPath))
+            for (var scope = entry; scope is not null; scope = scope.Parent)
             {
                 if (scope.ParentPath == target.ParentPath && !ReferenceEquals(scope, target))
                 {
@@ -1647,25 +1613,12 @@ public static class WorkflowValidator
         }
 
         /// <summary>
-        /// The step a name resolves to where <paramref name="entry"/> sits: itself, or a step of a
-        /// scope an enclosing group holds - the scopes a step's own <c>of</c>, <c>in</c> and
-        /// <c>resume</c> name, which reach the agents and worktrees of the groups around them.
+        /// The step a bare name resolves to where <paramref name="entry"/> sits, as <see cref="FlowScope.Resolve"/> finds
+        /// it: itself, or a step of a scope an enclosing group holds - the scopes a step's own <c>of</c>, <c>in</c>,
+        /// <c>resume</c> and <c>then</c> name, which reach the agents and worktrees of the groups around them.
         /// </summary>
         private Entry? Scope(Entry entry, string name)
-        {
-            for (var scope = entry; scope is not null; scope = scope.ParentPath is null ? null : _byPath.GetValueOrDefault(scope.ParentPath))
-            {
-                if (_entries.FirstOrDefault(other => other.ParentPath == scope.ParentPath
-                        && !ReferenceEquals(other, _recover)
-                        && string.Equals(other.Step.Name, name, StringComparison.Ordinal))
-                    is { } found)
-                {
-                    return found;
-                }
-            }
-
-            return null;
-        }
+            => FlowScope.Resolve(name, _definition, entry.ParentPath) is { } found ? _byPath.GetValueOrDefault(found.Path) : null;
 
         /// <summary>
         /// Whether any group <paramref name="entry"/> is part of - itself, or one holding it - holds what
@@ -1673,7 +1626,7 @@ public static class WorkflowValidator
         /// </summary>
         private bool Inside(Entry entry, Func<WorkflowStep, bool> holds)
         {
-            for (var scope = entry; scope is not null; scope = scope.ParentPath is null ? null : _byPath.GetValueOrDefault(scope.ParentPath))
+            for (var scope = entry; scope is not null; scope = scope.Parent)
             {
                 if (holds(scope.Step))
                 {
@@ -1690,7 +1643,7 @@ public static class WorkflowValidator
         /// </summary>
         private Entry? RepeatAround(Entry entry)
         {
-            for (var scope = entry; scope is not null; scope = scope.ParentPath is null ? null : _byPath.GetValueOrDefault(scope.ParentPath))
+            for (var scope = entry; scope is not null; scope = scope.Parent)
             {
                 if (scope.Step.Repeat is not null)
                 {
@@ -1701,18 +1654,13 @@ public static class WorkflowValidator
             return null;
         }
 
-        /// <summary>Whether a step named <paramref name="name"/> is <paramref name="scope"/> itself or declared inside it.</summary>
-        private bool NamedIn(Entry scope, string name)
-            => string.Equals(scope.Step.Name, name, StringComparison.Ordinal)
-                || _entries.Any(other => scope.Owns(other) && string.Equals(other.Step.Name, name, StringComparison.Ordinal));
-
         private void DeclaredNameRules(string name, string what)
         {
             if (FlowScope.IsReserved(name))
             {
                 _problems.Add($"the {what} '{name}' is named with a word a definition reads for its own; name it another way");
             }
-            else if (!NamePattern.IsMatch(name))
+            else if (!FlowScope.IsWellFormedName(name))
             {
                 _problems.Add($"the {what} '{name}' is not a lower-case word with dashes within");
             }

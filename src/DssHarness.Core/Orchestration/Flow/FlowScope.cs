@@ -3,14 +3,23 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <summary>
 /// Where the names of a workflow's steps live: how a name is looked up - among siblings, then the scopes around it
 /// - which names are looked up that way and which name a sibling only, what a group's member is called from outside
-/// it, and what a step may not be named.
+/// it, how a step's name is spelt, and what a step may not be named.
 /// </summary>
 /// <remarks>
 /// <para>
-/// Pure, over the definition as it was read. The engine's later reads - an expression's, a template's, a
-/// <c>resume</c>, an <c>in</c>, an <c>of</c>, an <c>others</c>, a <c>then</c> - all ask here, so that one owner
-/// answers where a name is; which visit of a step a name resolves to is the scheduler's own fact, built on these
-/// rules.
+/// Pure, over the definition as it was read, and the one door every reader of a name goes through: the validator's
+/// reads, dependencies, handlers, redirects and shadowings, the cycle walk's edges, and the engine's later reads - an
+/// expression's, a template's, a <c>resume</c>, an <c>in</c>, an <c>of</c>, an <c>others</c>, a <c>then</c> - all
+/// ask here, so that one owner answers where a name is. Which visit of a step a name resolves to is the scheduler's
+/// own fact, built on these rules; whether what a name finds runs before the step that reads it is the validator's.
+/// </para>
+/// <para>
+/// A name is looked up in a scope: the path of the group whose members are looked at first - the reader's own group,
+/// or, where a group's loop reads what its iterations produced, the group itself - <see cref="Recovery"/> for the
+/// recovery's own steps, and <see langword="null"/> for the flow's top level. Outward from a group is the scope it
+/// sits in; outward from the recovery is the flow's top level, so its steps see every step of the flow, the top
+/// level's by bare name and a member by its path. Where siblings share a name - a duplicate the validator refuses -
+/// the first declared is the one a name finds.
 /// </para>
 /// <para>
 /// The reserved names - the roots a read may start with, the engine's facts of a step, and the literals - are one
@@ -20,29 +29,76 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// </remarks>
 public static class FlowScope
 {
+    /// <summary>
+    /// The scope the recovery's own steps are declared in, and the first segment of every one of their paths
+    /// (<c>recover.diagnose</c>): a reserved name, so no step of the flow can be read in its place.
+    /// </summary>
+    public const string Recovery = "recover";
+
+    /// <summary>One step a name found, with its path among the flow: its name, a member's under its group's.</summary>
+    /// <param name="Path">The step's path, as every refusal and every instance id spells it.</param>
+    /// <param name="Step">The step as it was read.</param>
+    public sealed record Located(string Path, WorkflowStep Step);
+
     /// <summary>Whether <paramref name="name"/> is one a step may not have: a reserved name, read once from the one list that holds them.</summary>
     /// <param name="name">A step's name.</param>
     public static bool IsReserved(string name) => WorkflowExpressions.IsReserved(name);
 
     /// <summary>
-    /// A bare name looked up as most names are: among the siblings of <paramref name="path"/> - its own group's
-    /// members - then the members of each group around it, outward to the flow's top; the nearest scope's holds.
+    /// Whether <paramref name="name"/> is spelt as a step's name is: a lower-case letter, then lower-case letters,
+    /// digits and dashes, and nothing after them - not even a line's end, which a pattern anchored with <c>$</c>
+    /// would let through. A dot separates the segments of a read and of an instance id, so a name holds none. A
+    /// declared input's, param's and output's name is spelt the same way.
+    /// </summary>
+    /// <param name="name">The name, as written.</param>
+    public static bool IsWellFormedName(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+
+        return name.Length > 0
+            && name[0] is >= 'a' and <= 'z'
+            && name.All(character => character is >= 'a' and <= 'z' or >= '0' and <= '9' or '-');
+    }
+
+    /// <summary>The scope a step at <paramref name="path"/> sits in: its group's path, <see cref="Recovery"/> for one of the recovery's own steps, or <see langword="null"/> at the flow's top level.</summary>
+    /// <param name="path">A step's path among the flow.</param>
+    public static string? ScopeOf(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        var dot = path.LastIndexOf('.');
+        return dot < 0 ? null : path[..dot];
+    }
+
+    /// <summary>
+    /// A name a sibling only: the way <c>dependsOn</c> and <c>on.step</c> are read. A dependency is an earlier
+    /// sibling, a handler and its source are instances of one scope, and neither is looked for anywhere else.
+    /// </summary>
+    /// <param name="name">The name, as written.</param>
+    /// <param name="definition">The workflow, as it was read.</param>
+    /// <param name="scope">The scope the name is read in: the path of the group that declares the step naming it, <see cref="Recovery"/>, or <see langword="null"/> for the top level.</param>
+    public static Located? SiblingOf(string name, WorkflowDefinition definition, string? scope)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+
+        return Member(name, scope, definition);
+    }
+
+    /// <summary>
+    /// A bare name looked up as most names are: among the members of <paramref name="scope"/>, then the members of each
+    /// scope around it, outward to the flow's top level; the nearest scope's holds. A member of a group the reader is
+    /// not in is never found this way: from outside, it is read by its path (<see cref="Read"/>).
     /// </summary>
     /// <param name="name">The bare name, as written.</param>
     /// <param name="definition">The workflow, as it was read.</param>
-    /// <param name="path">The step the name is read from: its path among the flow, a member's under its group's.</param>
-    public static WorkflowStep? Resolve(string name, WorkflowDefinition definition, string path)
+    /// <param name="scope">The scope the name is read in (see the class's remarks).</param>
+    public static Located? Resolve(string name, WorkflowDefinition definition, string? scope)
     {
         ArgumentNullException.ThrowIfNull(definition);
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
-
-        var scope = path.Contains('.') ? path[..path.LastIndexOf('.')] : null;
 
         while (true)
         {
-            var siblings = scope is null ? definition.Steps : Chain(scope, definition)?[^1].Steps;
-
-            if (Sibling(name, siblings) is { } found)
+            if (Member(name, scope, definition) is { } found)
             {
                 return found;
             }
@@ -52,143 +108,152 @@ public static class FlowScope
                 return null;
             }
 
-            scope = scope.Contains('.') ? scope[..scope.LastIndexOf('.')] : null;
+            scope = ScopeOf(scope);
         }
     }
 
     /// <summary>
-    /// A name a sibling only: the way <c>dependsOn</c> and <c>on.step</c> are read. A dependency is an earlier
-    /// sibling, a handler and its source are instances of one scope, and neither is looked for anywhere else.
+    /// The step a read names, with the names after it - the members of its output, or the engine's facts of it - or
+    /// <see langword="null"/> where it names none. The first name is looked up as <see cref="Resolve"/> looks a bare
+    /// name up; each name after it that names a member of the step found so far goes down into it: a block's member is
+    /// the member, and a <c>repeat</c>'s the member's last iteration. A <c>forEach</c>'s member read from outside it
+    /// is nothing - it would be one of many, and nothing says which - and <paramref name="why"/> says so; from inside
+    /// it, the member is the reader's own item's.
     /// </summary>
-    /// <param name="name">The name, as written.</param>
+    /// <param name="names">The read's names in order, its indexes left out (<see cref="WorkflowExpressions.Read.Names"/>).</param>
     /// <param name="definition">The workflow, as it was read.</param>
-    /// <param name="path">The step the name is read from.</param>
-    public static WorkflowStep? SiblingOf(string name, WorkflowDefinition definition, string path)
+    /// <param name="scope">The scope the read is made in (see the class's remarks).</param>
+    /// <param name="why">Why nothing was named where a <c>forEach</c> holds the member; <see langword="null"/> otherwise.</param>
+    public static (Located Step, IReadOnlyList<string> After)? Read(IReadOnlyList<string> names, WorkflowDefinition definition, string? scope, out string? why)
     {
-        ArgumentNullException.ThrowIfNull(definition);
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
-
-        var scope = path.Contains('.') ? path[..path.LastIndexOf('.')] : null;
-        var siblings = scope is null ? definition.Steps : Chain(scope, definition)?[^1].Steps;
-
-        return Sibling(name, siblings);
-    }
-
-    /// <summary>
-    /// What a group's member is called from outside it, where the path names one: a block's member is the member, a
-    /// <c>repeat</c>'s the member's last iteration, and a <c>forEach</c>'s member is nothing - it would be one of
-    /// many, and nothing says which.
-    /// </summary>
-    /// <param name="path">The dotted path, as written from outside the group.</param>
-    /// <param name="definition">The workflow, as it was read.</param>
-    /// <param name="why">Why nothing was named, where nothing was: a <c>forEach</c> holds the member, or no step holds the path.</param>
-    public static WorkflowStep? FromOutside(string path, WorkflowDefinition definition, out string? why)
-    {
+        ArgumentNullException.ThrowIfNull(names);
         ArgumentNullException.ThrowIfNull(definition);
 
-        var walked = Chain(path, definition);
+        why = null;
 
-        if (walked is null || walked.Count < 2)
+        if (names.Count == 0 || Resolve(names[0], definition, scope) is not { } step)
         {
-            why = walked is null ? "no step holds the path" : "the path names no group's member";
             return null;
         }
 
-        // A forEach refuses anywhere along the path, not only at its last step: a path that crosses one names
-        // one instance per iteration, and nothing says which.
-        foreach (var group in walked[..^1])
+        var next = 1;
+
+        while (next < names.Count && First(names[next], step.Step.Steps) is { } member)
         {
-            if (group.ForEach is not null)
+            if (step.Step.ForEach is not null && !Holds(step.Path, scope))
             {
-                why = $"{group.Name} holds a forEach";
+                why = $"'{step.Path}' runs a forEach: read from outside it, a member is one of many, and nothing says which";
                 return null;
             }
+
+            step = new Located($"{step.Path}.{member.Name}", member);
+            next++;
         }
 
-        why = null;
-        return walked[^1];
+        return (step, [.. names.Skip(next)]);
     }
 
     /// <summary>
-    /// Every name an inner step reuses that it can see from where it is - a step beside a group around it, or that
-    /// group, declared before or after - as the paths that reuse them; and the recovery's steps are of the flow's
-    /// top level, reusing none of its names either. No shadowing: one path must say one thing.
+    /// Every inner step that takes, by bare name, a name it can see from where it is - a step beside a group around
+    /// it, or that group, declared before or after; for the recovery's steps, a step of the flow's top level - each
+    /// with the path of the step it hides, the nearest first. No shadowing: one name must say one thing wherever it
+    /// is read.
     /// </summary>
     /// <param name="definition">The workflow, as it was read.</param>
-    public static IReadOnlyList<(string Path, string Name)> Shadowings(WorkflowDefinition definition)
+    public static IReadOnlyList<(string Path, string Shadowed)> Shadowings(WorkflowDefinition definition)
     {
         ArgumentNullException.ThrowIfNull(definition);
 
-        var shadowings = new List<(string Path, string Name)>();
+        var shadowings = new List<(string Path, string Shadowed)>();
 
-        Walk(definition.Steps, parent: null, visible: [], shadowings);
-
-        // The recovery's steps are of the flow's top level: every name it can see, they may not reuse.
-        if (definition.Recover is { } recover && recover.Steps.Count > 0)
+        foreach (var (path, step) in Declared(definition))
         {
-            Walk(recover.Steps, parent: null, visible: [.. definition.Steps.Select(step => step.Name)], shadowings);
+            // A step's own siblings are its own scope, and their uniqueness is another rule: what it may not take is
+            // a name that already answers one scope out from its own.
+            if (ScopeOf(path) is { } scope && Resolve(step.Name, definition, ScopeOf(scope)) is { } hidden)
+            {
+                shadowings.Add((path, hidden.Path));
+            }
         }
 
         return shadowings;
     }
 
-    /// <summary>One step's own name among its siblings, where it is there; the last declaration wins.</summary>
-    private static WorkflowStep? Sibling(string name, IReadOnlyList<WorkflowStep>? siblings)
-        => siblings?.LastOrDefault(step => string.Equals(step.Name, name, StringComparison.Ordinal));
-
-    /// <summary>The steps a path names, from the flow's top to its last part; <see langword="null"/> where a part names nothing.</summary>
-    private static List<WorkflowStep>? Chain(string path, WorkflowDefinition definition)
+    /// <summary>
+    /// Every declared step with its path, in declaration order - a group before its members - the flow's steps first
+    /// and then the recovery's, under <see cref="Recovery"/>.
+    /// </summary>
+    /// <param name="definition">The workflow, as it was read.</param>
+    public static IEnumerable<(string Path, WorkflowStep Step)> Declared(WorkflowDefinition definition)
     {
+        ArgumentNullException.ThrowIfNull(definition);
+
+        var declared = Walk(definition.Steps, scope: null);
+
+        return definition.Recover is { } recover ? declared.Concat(Walk(recover.Steps, Recovery)) : declared;
+    }
+
+    /// <summary>Each step of <paramref name="steps"/> and of every group among them, with its path, a group before its members.</summary>
+    private static IEnumerable<(string Path, WorkflowStep Step)> Walk(IReadOnlyList<WorkflowStep> steps, string? scope)
+    {
+        foreach (var step in steps)
+        {
+            var path = scope is null ? step.Name : $"{scope}.{step.Name}";
+
+            yield return (path, step);
+
+            foreach (var inner in Walk(step.Steps, path))
+            {
+                yield return inner;
+            }
+        }
+    }
+
+    /// <summary>The member of <paramref name="scope"/> named <paramref name="name"/>, with its path, where there is one.</summary>
+    private static Located? Member(string name, string? scope, WorkflowDefinition definition)
+        => First(name, MembersOf(scope, definition)) is { } member
+            ? new Located(scope is null ? member.Name : $"{scope}.{member.Name}", member)
+            : null;
+
+    /// <summary>
+    /// The steps declared directly in <paramref name="scope"/>: the flow's top level, the recovery's own steps, or a
+    /// group's members, the group found by its path from the one or the other; none where the path names no group.
+    /// </summary>
+    private static IReadOnlyList<WorkflowStep> MembersOf(string? scope, WorkflowDefinition definition)
+    {
+        if (scope is null)
+        {
+            return definition.Steps;
+        }
+
+        var parts = scope.Split('.');
         var siblings = definition.Steps;
-        var walked = new List<WorkflowStep>();
+        var start = 0;
 
-        foreach (var part in path.Split('.'))
+        if (parts[0] == Recovery && definition.Recover is { } recover)
         {
-            if (Sibling(part, siblings) is not { } step)
-            {
-                return null;
-            }
-
-            walked.Add(step);
-            siblings = step.Steps;
+            siblings = recover.Steps;
+            start = 1;
         }
 
-        return walked;
-    }
-
-    /// <summary>Walks the declaration, naming each step by its path and reporting every name it reuses that it can see.</summary>
-    /// <remarks>
-    /// A step's own siblings are not names it shadows: they are its own scope, and their uniqueness is another rule.
-    /// What an inner scope may not reuse is every name visible around it - each ancestor's members and each
-    /// ancestor's own name - for they would answer a bare name that already answers at the inner scope's edge.
-    /// </remarks>
-    private static void Walk(IReadOnlyList<WorkflowStep> siblings, string? parent, IReadOnlyList<string> visible, List<(string Path, string Name)> shadowings)
-    {
-        foreach (var step in siblings)
+        foreach (var part in parts[start..])
         {
-            var path = parent is null ? step.Name : $"{parent}.{step.Name}";
-
-            if (visible.Contains(step.Name, StringComparer.Ordinal))
+            if (First(part, siblings) is not { } group)
             {
-                shadowings.Add((path, step.Name));
+                return [];
             }
 
-            if (step.Steps.Count > 0)
-            {
-                var around = new List<string>(visible);
-
-                foreach (var beside in siblings)
-                {
-                    if (!around.Contains(beside.Name, StringComparer.Ordinal))
-                    {
-                        around.Add(beside.Name);
-                    }
-                }
-
-                around.Add(step.Name);
-
-                Walk(step.Steps, path, around, shadowings);
-            }
+            siblings = group.Steps;
         }
+
+        return siblings;
     }
+
+    /// <summary>The first of <paramref name="steps"/> named <paramref name="name"/>, where one is.</summary>
+    private static WorkflowStep? First(string name, IReadOnlyList<WorkflowStep> steps)
+        => steps.FirstOrDefault(step => string.Equals(step.Name, name, StringComparison.Ordinal));
+
+    /// <summary>Whether the group at <paramref name="group"/> holds a reader in <paramref name="scope"/>: the scope is the group's own, or one inside it.</summary>
+    private static bool Holds(string group, string? scope)
+        => scope is not null && (scope == group || scope.StartsWith(group + ".", StringComparison.Ordinal));
 }

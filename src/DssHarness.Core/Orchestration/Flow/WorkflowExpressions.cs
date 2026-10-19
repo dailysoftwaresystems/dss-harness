@@ -53,11 +53,55 @@ public static class WorkflowExpressions
     public static IReadOnlyList<string> ReservedNames { get; } = [.. ReservedRoots.Concat(StepFacts).Concat(Literals).Distinct(StringComparer.Ordinal)];
 
     /// <summary>One name an expression reads: its first segment, whole, and how it was read.</summary>
-    /// <param name="Root">The read's first segment: where the rest of the name lives.</param>
-    /// <param name="Whole">The whole read, as written.</param>
+    /// <param name="Root">The read's first name, without an index: where the rest of the name lives.</param>
+    /// <param name="Whole">The whole read, as written, its indexes included: <c>plan.items[0].ok</c>.</param>
     /// <param name="Template">Whether the read came out of a <c>{...}</c> template.</param>
     /// <param name="InsideAny">Whether the read sits in the test of an <c>any(...)</c>, where <c>it</c> names the member.</param>
-    public sealed record Read(string Root, string Whole, bool Template, bool InsideAny);
+    public sealed record Read(string Root, string Whole, bool Template, bool InsideAny)
+    {
+        /// <summary>
+        /// The read's names in order, its indexes left out - <c>plan</c>, <c>items</c>, <c>ok</c> of
+        /// <c>plan.items[0].ok</c> - as a name is looked up: an index is a place in a list, and names nothing.
+        /// </summary>
+        public IReadOnlyList<string> Names => [.. Whole.Split('.').Select(segment => segment.IndexOf('[') is var open and >= 0 ? segment[..open] : segment)];
+    }
+
+    /// <summary>
+    /// <paramref name="written"/> as a read, the one way the scanner here and <see cref="FlowExpression"/> alike spell
+    /// one: its dotted segments trimmed of space and joined again, its root the first name without an index.
+    /// </summary>
+    /// <param name="written">The read, as the expression or the placeholder wrote it.</param>
+    /// <param name="template">Whether it came out of a <c>{...}</c> placeholder.</param>
+    /// <param name="insideAny">Whether it sits in an <c>any(...)</c>.</param>
+    internal static Read ReadOf(string written, bool template, bool insideAny)
+    {
+        // The read's own grammar - a dotted name - is walked here, so that 'a.b.c' is one read and not three.
+        // Anything after the first segment is the engine's to mean.
+        var segments = written.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var whole = segments.Length > 0 ? string.Join('.', segments) : written;
+        var first = segments.Length > 0 ? segments[0] : written;
+
+        return new Read(first.IndexOf('[') is var open and >= 0 ? first[..open] : first, whole, template, insideAny);
+    }
+
+    /// <summary>
+    /// The whole number <paramref name="written"/> says, as a path's index and an instance id's marks are written:
+    /// digits alone - no sign, no space - with no leading zero but in <c>0</c> itself; <see langword="null"/> where it
+    /// is not written so, or is past what an index can be. One spelling, so that one place in a list is never written
+    /// two ways.
+    /// </summary>
+    /// <param name="written">The digits, as written.</param>
+    public static int? WholeNumber(string written)
+    {
+        ArgumentNullException.ThrowIfNull(written);
+
+        return written.Length > 0
+            && written.All(character => character is >= '0' and <= '9')
+            && (written.Length == 1 || written[0] != '0')
+            && int.TryParse(written, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var value)
+                ? value
+                : null;
+    }
 
     /// <summary>
     /// Every name <paramref name="expression"/> reads, in the order it reads them, once each.
@@ -295,12 +339,7 @@ public static class WorkflowExpressions
 
     private static void Add(List<Read> reads, string name, bool Template, bool insideAny)
     {
-        // The read's own grammar - a dotted name - is walked here, so that 'a.b.c' is one read and
-        // not three. Anything after the first segment is the engine's to mean.
-        var segments = name.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        var root = segments.Length > 0 ? segments[0] : name;
-
-        var read = new Read(root, string.Join('.', segments), Template, insideAny);
+        var read = ReadOf(name, Template, insideAny);
 
         if (reads.All(earlier => !string.Equals(earlier.Whole, read.Whole, StringComparison.Ordinal)))
         {
@@ -330,27 +369,39 @@ public static class WorkflowExpressions
     private static bool StartsName(char character) => char.IsLetter(character) || character == '_';
 
     /// <summary>
-    /// Reads one dotted name: segments of name characters joined by dots. A dash is a name
+    /// Reads one path as it is written whole, with no space inside it: segments of name characters
+    /// joined by dots, each followed by any indexes into a list (<c>items[0]</c>). A dash is a name
     /// character, because a step's name may hold one; a dot is not, because it separates the
-    /// segments of a read.
+    /// segments of a read. Read in one pass, however many segments the path has.
     /// </summary>
     private static (string Name, int Next) ReadName(string expression, int index)
     {
         var end = index;
 
-        while (end < expression.Length && (char.IsLetterOrDigit(expression[end]) || expression[end] is '_' or '-'))
+        while (true)
         {
-            end++;
-        }
+            while (end < expression.Length && (char.IsLetterOrDigit(expression[end]) || expression[end] is '_' or '-'))
+            {
+                end++;
+            }
 
-        // A dotted read: a.b, a.b.c. A trailing dot (a member the engine fills) ends the name here.
-        if (end < expression.Length && expression[end] == '.' && end + 1 < expression.Length && StartsName(expression[end + 1]))
-        {
-            var (rest, next) = ReadName(expression, end + 1);
-            return ($"{expression[index..end]}.{rest}", next);
-        }
+            // An index is part of the path where it is written as one: '[', a whole number, ']'.
+            while (end < expression.Length && expression[end] == '['
+                && expression.IndexOf(']', end + 1) is var close and > 0
+                && WholeNumber(expression[(end + 1)..close]) is not null)
+            {
+                end = close + 1;
+            }
 
-        return (expression[index..end], end);
+            // A dotted read: a.b, a.b.c. A trailing dot (a member the engine fills) ends the name here.
+            if (end < expression.Length && expression[end] == '.' && end + 1 < expression.Length && StartsName(expression[end + 1]))
+            {
+                end++;
+                continue;
+            }
+
+            return (expression[index..end], end);
+        }
     }
 
     /// <summary>The position after the quoted string that starts at <paramref name="index"/>.</summary>

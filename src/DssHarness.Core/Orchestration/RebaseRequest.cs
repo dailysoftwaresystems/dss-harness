@@ -19,7 +19,8 @@ public sealed record RebaseRequest
     /// What is wrong with how it is spelt, before anything is read: a path that could name nothing in the tree, or one
     /// named both to be merged and as settled; <see langword="null"/> where nothing is.
     /// </summary>
-    public string? Problem() => FoldAllowances.PathsProblem(Merge, Settled);
+    /// <param name="spelling">Whose words the refusal names each option in: the command line's flags, or a workflow step's keys.</param>
+    public string? Problem(OptionSpelling spelling = OptionSpelling.Flag) => FoldAllowances.PathsProblem(Merge, Settled, spelling);
 
     /// <summary>The arguments that ask for this move again, each as a command line takes it: every path it names, once.</summary>
     public IEnumerable<string> Arguments() => FoldAllowances.PathArguments(Merge, Settled);

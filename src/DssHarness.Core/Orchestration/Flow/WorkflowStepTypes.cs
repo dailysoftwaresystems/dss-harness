@@ -77,10 +77,13 @@ public static class WorkflowStepTypes
         new("maxVisits", "how often this handler may be raised in one scope, from 1 to 20; absent, 3; past it the run asks"),
     ];
 
-    /// <summary>The keys a group takes, beyond the common ones: it names no type.</summary>
+    /// <summary>
+    /// The keys a group takes, beyond the common ones: it names no type. Its <c>steps</c> hold its own kind again, and say
+    /// so as the configuration's key guard does (<see cref="ConfigKeys.TakesKeysOf"/>): what a step takes is listed once.
+    /// </summary>
     public static IReadOnlyList<KeyDescription> Group =>
     [
-        new("steps", "the group's own steps") { Required = true },
+        new("steps", $"the group's own steps; each {ConfigKeys.TakesKeysOf(typeof(WorkflowStep))}") { Required = true },
         new("forEach", "an expression yielding the work items the group runs its steps for, once each"),
         new("repeat", "the group's bound: when its iterations end, and what is left") { Keys = RepeatKeys },
         new("gather", "members gathered from the group's steps into one list, named as its members read them"),

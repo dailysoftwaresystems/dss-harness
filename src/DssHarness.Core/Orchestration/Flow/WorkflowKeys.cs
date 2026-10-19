@@ -42,7 +42,7 @@ public static class WorkflowKeys
     /// <summary>What the <c>recover</c> section takes.</summary>
     public static IReadOnlyList<KeyDescription> Recover =>
     [
-        new("steps", "the recovery's own steps, taking the keys the flow's steps take; they read the step that failed as source, and see every step of the flow") { Required = true },
+        new("steps", $"the recovery's own steps; each {ConfigKeys.TakesKeysOf(typeof(WorkflowStep))}, reads the step that failed as source, and sees every step of the flow") { Required = true },
         new("onSuccess", "where the run goes once the recovery's steps are done: failed-step, the step that gave it its failure, which runs again from where it stopped") { Required = true },
         new("onFailure", "what a failure inside the recovery does once its steps' retries are spent: pause, a person is asked, or stop - never recover, since no step calls itself") { Required = true },
         new("maxVisits", $"how often the recovery may take the failures of one step in one scope, from 1 to {FlowRecover.MostVisits}; absent, the engine's bound of {FlowRecover.MostVisits} visits of one step in one scope; past it the run asks (recoveryBound), with the advisor's recommended fix"),
