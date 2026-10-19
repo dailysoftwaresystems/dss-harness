@@ -17,7 +17,8 @@ namespace DssHarness.Core.Agents;
 /// The record is the one sink the run cannot do without. It is handed each event before any listener is, so what a
 /// listener does - fail, or take its time - never stands between the event and the record. Where the record fails, it
 /// gets no more events, its failure is held in <see cref="RecordFailure"/>, and the run's stop is raised, for a run whose
-/// record is lost is not one to go on with. A listener that throws gets no more events, and its exception is held in
+/// record is lost is not one to go on with; what a callback on that stop raises is held in <see cref="StopFailure"/>.
+/// A listener that throws gets no more events, and its exception is held in
 /// <see cref="ListenerFailure"/> for after the run - the rule a line handler of a phase already has: what the child said
 /// is not lost to what a listener did. A listener still holding an event when the hard stop comes is let go: it gets no
 /// more events, and the record goes on without waiting for it.
@@ -82,6 +83,12 @@ public sealed class AgentEventPump : IAgentEventSink, IAsyncDisposable
     public Exception? ListenerFailure { get; private set; }
 
     /// <summary>
+    /// What a callback on the run's stop raised, where the pump raised that stop for the record lost: held until the run has
+    /// ended, as a listener's failure is. A stop the caller raised says its callbacks' failures to the caller.
+    /// </summary>
+    public Exception? StopFailure { get; private set; }
+
+    /// <summary>
     /// Attaches a listener. Called before the first event is taken: a listener attached later does not exist to the pump.
     /// </summary>
     /// <param name="sink">The listener, called serially, in order, after the record.</param>
@@ -125,32 +132,40 @@ public sealed class AgentEventPump : IAgentEventSink, IAsyncDisposable
     /// handed the end the run's result says.
     /// </summary>
     /// <param name="last">The run's end, made from what the record raised; null where the record holds every event.</param>
-    internal Task FinishAsync(Func<Exception?, AgentEvent> last)
+    internal async Task FinishAsync(Func<Exception?, AgentEvent> last)
     {
         _last = last ?? throw new ArgumentNullException(nameof(last));
-        _incoming.Writer.TryComplete();
-        return _draining;
+        await CompleteAsync().ConfigureAwait(false);
     }
 
     /// <summary>
-    /// Says no more events will be posted, and returns once what was posted has been handed to the sinks that are left.
+    /// Says no more events will be posted, and returns once what was posted has been handed to the sinks that are left and
+    /// a stop the pump raised has run its course. A failure stays in its property: nothing here raises one.
     /// </summary>
     public async Task CompleteAsync()
     {
         _incoming.Writer.TryComplete();
         await _draining.ConfigureAwait(false);
+
+        if (Interlocked.Exchange(ref _recordLost, null) is { } stopped)
+        {
+            try
+            {
+                await stopped.ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                // A callback on the stop threw - the client's, or whoever holds the token - and it is kept as a listener's
+                // failure is, for after the run, never raised into the middle of the run's own ending.
+                StopFailure ??= ex;
+            }
+        }
     }
 
     /// <summary>Ends the pumping, once what was posted has been handed over. A failure stays in its property.</summary>
     public async ValueTask DisposeAsync()
     {
         await CompleteAsync().ConfigureAwait(false);
-
-        if (_recordLost is { } stopped)
-        {
-            await stopped.ConfigureAwait(false);
-        }
-
         _stopping.Dispose();
     }
 

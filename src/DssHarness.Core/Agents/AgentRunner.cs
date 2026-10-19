@@ -53,7 +53,8 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
     /// <returns>How the run ended, also written as <c>result.json</c> beside its stream.</returns>
     /// <exception cref="Exception">
     /// What the client threw, raised once the stream and <c>result.json</c> say how the run ended; else what the listener
-    /// threw, raised once the run has ended.
+    /// threw, or a callback on the stop the runner raised for a lost record, raised once the run has ended. A record that
+    /// could not be written or closed is no exception: the result says the run failed, naming it.
     /// </exception>
     public async Task<AgentRunResult> RunAsync(AgentStepRequest step, IAgentEventSink? events, CancellationToken cancellationToken)
     {
@@ -65,7 +66,9 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
 
         AgentRunResult result;
         Exception? thrown;
-        Exception? listenerFailure;
+        Exception? kept;
+        var recordLost = false;
+        Exception? unclosed = null;
 
         var stream = StoredStream.Open(_fileSystem, directory, mask);
 
@@ -101,21 +104,42 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
 
                 // A stop the record's loss raised is the runner's own doing and not the client's failure; anything else
                 // the client threw is still its own.
-                if (pump.RecordFailure is not null && thrown is OperationCanceledException && !cancellationToken.IsCancellationRequested)
+                recordLost = pump.RecordFailure is not null;
+
+                if (recordLost && thrown is OperationCanceledException && !cancellationToken.IsCancellationRequested)
                 {
                     thrown = null;
                 }
 
-                listenerFailure = pump.ListenerFailure;
+                kept = pump.ListenerFailure ?? pump.StopFailure;
             }
         }
         finally
         {
-            stream.Dispose();
+            try
+            {
+                stream.Dispose();
+            }
+            catch (Exception ex)
+            {
+                // A record that cannot be closed whole is lost as one that could not be written is: it joins the result
+                // below rather than escaping before the result is written.
+                unclosed = ex;
+            }
+        }
+
+        if (unclosed is not null && !recordLost)
+        {
+            result = result with
+            {
+                Status = AgentRunStatus.Failed,
+                Error = mask.Redact($"The step's stored stream '{stream.FilePath}' could not be closed whole, so its last lines may not be on the disk: {unclosed.Message}"),
+            };
         }
 
         // The record is whole, closed, and the run has ended: the result is written after the stream that says how it
-        // went, so the two cannot disagree. Then the client's own failure is raised, and else a listener's.
+        // went, so the two cannot disagree. Then the client's own failure is raised, and else what a listener or a
+        // callback on the run's stop raised.
         Ended(directory, result);
 
         if (thrown is not null)
@@ -123,9 +147,9 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             ExceptionDispatchInfo.Throw(thrown);
         }
 
-        if (listenerFailure is not null)
+        if (kept is not null)
         {
-            ExceptionDispatchInfo.Throw(listenerFailure);
+            ExceptionDispatchInfo.Throw(kept);
         }
 
         return result;

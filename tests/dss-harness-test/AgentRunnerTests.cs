@@ -467,6 +467,85 @@ public sealed class AgentRunnerTests
     }
 
     /// <summary>
+    /// A record that fails on a line and then will not close either is lost once, not twice: the run is answered failed,
+    /// naming the first failure, <c>result.json</c> is written, and what the close raised does not escape before it.
+    /// </summary>
+    [Fact]
+    public async Task WhereTheRecordFailsAndThenWillNotClose_TheRunFailsNamingTheFirstFailure()
+    {
+        using var temp = new TempDirectory();
+        var disk = new WillNotClose(Disk(), failing: 3);
+        var client = new FakeClient { Script = async (_, events, _) => await Scripted(events) };
+
+        var result = await new AgentRunner([client], disk, TimeProvider.System).RunAsync(Step(temp), events: null, TestContext.Current.CancellationToken);
+
+        var error = $"The step's stored stream '{StreamFile(temp)}' could not be written, so the run was stopped: {WillNotClose.Unwritten}";
+
+        Assert.Equal(AgentRunStatus.Failed, result.Status);
+        Assert.Equal(error, result.Error);
+        Assert.Equal(1, disk.Closings);
+        Assert.Equal(AgentRunStatus.Failed, ReadResult(temp).Status);
+        Assert.Equal(error, ReadResult(temp).Error);
+    }
+
+    /// <summary>
+    /// A record every line of which was written but that will not close is a record lost all the same: its last lines may
+    /// not be on the disk, so the run is answered failed, naming the record and what the close raised, and
+    /// <c>result.json</c> says so rather than the close's failure escaping before it is written.
+    /// </summary>
+    [Fact]
+    public async Task WhereTheRecordWillNotClose_TheRunFailsNamingIt()
+    {
+        using var temp = new TempDirectory();
+        var disk = new WillNotClose(Disk(), failing: null);
+        var client = new FakeClient { Script = async (_, events, _) => await Scripted(events) };
+
+        var result = await new AgentRunner([client], disk, TimeProvider.System).RunAsync(Step(temp), events: null, TestContext.Current.CancellationToken);
+
+        var error = $"The step's stored stream '{StreamFile(temp)}' could not be closed whole, so its last lines may not be on the disk: {WillNotClose.Unclosed}";
+
+        Assert.Equal(AgentRunStatus.Failed, result.Status);
+        Assert.Equal(error, result.Error);
+        Assert.Equal(["runStarted", "sessionStarted", "assistantMessage", "runFinished"], Lines(temp).Select(LineKind));
+        Assert.Equal(error, ReadResult(temp).Error);
+    }
+
+    /// <summary>
+    /// A callback on the stop the runner raised for a lost record that throws - the client's, or whoever holds the token -
+    /// is kept as a listener's failure is: the run's end and <c>result.json</c> are written, saying the run failed for
+    /// its record, and the callback's failure is raised after them.
+    /// </summary>
+    [Fact]
+    public async Task ACallbackOnTheStopThatThrows_IsRaisedAfterTheResultIsWritten()
+    {
+        using var temp = new TempDirectory();
+        var disk = new SlowToFail(Disk(), failing: 3, after: TimeSpan.Zero);
+        var client = new FakeClient
+        {
+            Script = async (_, events, token) =>
+            {
+                await events.EmitAsync(new MessageSent("one", AgentMessageKind.FirstPrompt));
+                token.Register(static () => throw new InvalidOperationException("the callback broke"));
+                await events.EmitAsync(new AssistantMessage("two", []));
+                await Task.Delay(Timeout.Infinite, token);
+                throw new InvalidOperationException("never reached");
+            },
+        };
+
+        var raised = await Assert.ThrowsAsync<AggregateException>(
+            () => new AgentRunner([client], disk, TimeProvider.System)
+                .RunAsync(Step(temp), events: null, TestContext.Current.CancellationToken)
+                .WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken));
+
+        Assert.Equal(["the callback broke"], raised.InnerExceptions.Select(inner => inner.Message));
+        Assert.Equal(["runStarted", "messageSent"], Lines(temp).Select(LineKind));
+        Assert.Equal(AgentRunStatus.Failed, ReadResult(temp).Status);
+        Assert.Equal(
+            $"The step's stored stream '{StreamFile(temp)}' could not be written, so the run was stopped: {SlowToFail.Why}",
+            ReadResult(temp).Error);
+    }
+
+    /// <summary>
     /// <c>result.json</c> is written only once the stream is whole: a listener handed the run's end finds the stream
     /// ending in it, and no result written yet.
     /// </summary>
@@ -1034,6 +1113,55 @@ public sealed class AgentRunnerTests
 
             public void Dispose() => file.Dispose();
         }
+    }
+
+    /// <summary>
+    /// The real file system, whose appends to a file opened for appending fail from the one numbered
+    /// <paramref name="failing"/> on, where it names one, and whose file then will not close: a disk that failed a flush,
+    /// and fails it again when the file is closed.
+    /// </summary>
+    private sealed class WillNotClose(IFileSystem inner, int? failing) : PassThroughFileSystem(inner)
+    {
+        /// <summary>What the disk says to an append.</summary>
+        public const string Unwritten = "the flush did not reach the disk";
+
+        /// <summary>What the disk says to the close.</summary>
+        public const string Unclosed = "the flush did not reach the disk at the close either";
+
+        /// <summary>How many times a file of it was closed.</summary>
+        public int Closings { get; private set; }
+
+        public override IAppendFile OpenForAppend(string path) => new Appending(base.OpenForAppend(path), this);
+
+        private sealed class Appending(IAppendFile file, WillNotClose disk) : IAppendFile
+        {
+            private int _appended;
+
+            public long Length => file.Length;
+
+            public void ReadExactlyAt(long position, Span<byte> buffer) => file.ReadExactlyAt(position, buffer);
+
+            public void TruncateTo(long length) => file.TruncateTo(length);
+
+            public void AppendFlushed(ReadOnlySpan<byte> bytes)
+            {
+                if (++_appended >= disk.FailingFrom)
+                {
+                    throw new IOException(Unwritten);
+                }
+
+                file.AppendFlushed(bytes);
+            }
+
+            public void Dispose()
+            {
+                disk.Closings++;
+                file.Dispose();
+                throw new IOException(Unclosed);
+            }
+        }
+
+        private int FailingFrom => failing ?? int.MaxValue;
     }
 
     /// <summary>The real file system, recording what is opened for appending and what is written in one step.</summary>

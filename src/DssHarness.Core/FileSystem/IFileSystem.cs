@@ -178,7 +178,9 @@ public interface IFileSystem
     /// <summary>
     /// Opens a file of lines that only grows, made where it is not there: read back from any place and cut to a length
     /// while its writer recovers it, and appended to with each write on the disk before the next is taken. Others may
-    /// read it while it is open, and no one else may write it.
+    /// read it while it is open, and no one else may write it, on every system: a second writer, in this process or
+    /// another, is refused before it reads or cuts a byte, by a claim the writer holds on <c>&lt;file&gt;.lock</c> beside
+    /// it, which is left in place.
     /// </summary>
     /// <param name="path">The file, its directory already there.</param>
     /// <returns>The file, open for its one writer.</returns>

@@ -547,8 +547,8 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
         // Read and written by its one writer, and read beside it: a live step's record is read while it grows, and a
-        // second writer would interleave its lines with the first's.
-        return new PhysicalAppendFile(new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read));
+        // second writer would interleave its lines with the first's - or cut one the first is still writing.
+        return PhysicalAppendFile.Open(path);
     }
 
     public async Task WriteAllBytesAtomicAsync(
