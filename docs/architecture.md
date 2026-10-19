@@ -50,7 +50,9 @@ password is asked at its terminal (`ConsoleHost`).
 which operating system it runs on and builds what differs by it. Everything above them depends
 on `IHostPlatform`, `IFilePermissions`, `IProcessTable`, `IProcessRunner` and `IFileSystem`.
 Below that seam a few primitives ask the runtime for one fact each, where nothing else is
-asked - `PhysicalFileSystem`, `ProcessRunner`, `DetachedProcessLauncher`, `UserState`,
+asked - `PhysicalFileSystem`, `ProcessRunner`, `DetachedProcessLauncher`, `Containment` (the
+session, group, signal and job-object calls containment is made of, and the choice between them
+that `ContainExec` places a child through), `UserState`,
 `WslDiskImages`, `CMakeToolchainReader`, `ProcessContext` (the process's current directory) and the
 command that holds a host awake.
 
@@ -109,6 +111,57 @@ would parse a second time, and a path without one starts that path with `.exe` a
 program a leg's configuration names by a relative path is read from the directory its phase
 starts in - a step's working directory, the test runner's - never from wherever the harness was
 started: for a leg on a worktree those are different copies of the same file.
+
+A request can ask for a child **contained**: what it started ends with it, at its own end as at a
+stop, and a signal to the harness does not reach it. A process has to be where it is contained
+before it runs a line of its own, and `Process.Start` offers no moment between a child's making
+and its start on any system, so the runner - the one owner of processes - starts a contained child
+through a copy of this tool that puts itself there first: the hidden `contain-exec` command, which
+on Linux and macOS makes itself the leader of a new session and process group (`setsid`) and then
+becomes the program by its whole path (`execv`, under the same process id - never `execvp`, which
+runs a file with no interpreter line under `/bin/sh` where any other start refuses it), and on
+Windows joins the named job
+object the runner made and starts the program in a process group of its own, handing the streams
+it was given on to it. On Windows the job is ended as the child ends or is stopped, and every
+member goes with it; and since its members also end when its last handle closes, what a killed
+engine leaves behind ends with it there. On Linux and macOS the runner ends the child's session as
+the child ends or is stopped - every process still in it, and at a stop every one still in the
+child's tree, read before anything is signalled, asked to end with SIGTERM, and whatever still
+stands five seconds later killed - and the output is read for five seconds more at most: a process
+that made a session of its own away from the child's tree is not reached, and nothing waits for
+what it holds. A process table that cannot be read - macOS's is read through `ps`, which a session
+that has used up every process it may start leaves unable to start - takes nothing from the stop:
+the group is still asked and then killed by its id, which needs no table, the tree is still ended,
+and what went unreached is said in the result (`ProcessResult.Uncontained`), or in the
+cancellation where the caller gave up. A process killed there - a crash, `kill -9` - ends nothing
+of the sessions it started, so each one a step of an orchestrator starts is recorded while it runs,
+by the runner through the tool's own records: once the child is placed in its session and before
+it is said to have started, `<step>/children/<session>.json` in the step's own directory - its
+session (the child's process id), the child's start stamp, its program, and the process that
+started it with that process's machine and stamp (`ChildSessions`, the request's
+`SessionRecord`) - and taken back once the runner has ended the session. A record that cannot be
+written is a start that failed: the child is ended, and never said to have started. Every command
+over an orchestrator - `create-`, `list-` and `delete-orchestrator`, and each agent verb - first
+sweeps its records, before it reads anything else of it: a session whose starter still stands is
+its starter's and is left; one whose starter has gone is ended as the runner ends one at a stop,
+its record removed and the end said in the command's lines and in its document's `ended` where it
+answers with one - but only where the process carrying the session's id still has the recorded
+start, since a session's id given to a later process ends nothing, and that record simply goes. A
+record that does not read as one is said and left, and a starter on another machine is never taken
+to have gone. Windows records nothing: its job already ends a killed starter's children.
+
+Whether the program started is said on a channel of the runner's own (`--status`), never in the
+program's streams or an exit code a program could give too: a program that cannot start is
+reported as one that never ran (`ExecutableNotFoundException`, `ProgramStartException`, worded as
+for any other start, a program being written tried again as any start is), and the child is said
+to have started (`OnStarted`) only once the step has placed it. The group alone, apart from the
+terminal but within the session, is the lesser level a request asks for by name
+(`ApartFromTerminal`), and only Linux and macOS start a child through the step for it: an
+interruption typed at the harness's terminal is sent to a group, and that group is not the child's.
+On Windows such a child starts as any other, since a child started with no window already has a
+console of its own that an interruption typed at the harness's never reaches. A child apart from
+the terminal is stopped by its process tree, as any other, and what it leaves at its own end is
+left. No leg is contained: a `build`, `test` or `run` typed by hand starts its legs as it always has.
 
 ### Paths come from git
 
@@ -303,8 +356,11 @@ worktrees where nothing withholds or ignores them, and an entry would protect no
 orchestrators directory, `.orchestrators`, for the slots every tree keeps its own copies in,
 `.mutations` for a sweep's workers and `.legs` for the copies its legs work in, and for the harness
 directories a person fills by hand
-— `sshItems`, `wslDistros`, `runner/.env`, `runner/.secrets` — so a clone arrives with each
-directory in place. A configuration `init` writes names `.worktrees` as the root; one that names
+— the credential slots `sshItems`, `wslDistros`, `runner/.env`, `runner/.secrets` and
+`workflows/.env`, which is kept for the agent clients' keys and settings and which this build
+does not read yet — so a clone arrives with each directory in place. `init` writes the
+credential slots' rules and placeholders from the one list of them (`HarnessLayout.SecretSlots`),
+and no workflow may be named `.env`. A configuration `init` writes names `.worktrees` as the root; one that names
 none keeps `.harness-config/worktrees`, so worktrees made before stay where they are. The root
 was ignored whole, with no placeholder, and the costs of this shape were measured then and are
 accepted now: a directory holding a tracked file never reads as ignored itself, so `git
@@ -334,7 +390,7 @@ file it names, or a name inside the directory it rules on - and `git check-ignor
 says which rule decides each of those paths in the tree. A rule deciding one against the block is
 named as the rule git follows: it undoes the block there, whether it is a re-include after the
 block, a nested `.gitignore`, or a whole-directory rule such as `.env` - which takes the
-`runner/.env` directory, from which git re-includes no placeholder. The same paths are then asked of
+`runner/.env` and `workflows/.env` directories, from which git re-includes no placeholder. The same paths are then asked of
 the tree's own `.gitignore` with the block blanked out, in a scratch repository holding nothing
 else; a hand-written rule that would decide one the other way, where the tree's answer is the
 block's, is named as doing nothing there - but only where nothing the harness keeps in git rests
@@ -668,6 +724,13 @@ anything is weighed - a command line the parser refuses, a `--directory` that is
 initialised, another usage error, or a refusal met before then, an agent that is not there among them - answers with
 the same document, empty (`OrchestrationReports.Stopped`): `applied` false, `request`, `heldNow` and `heldUnread` null, no `lines`, no
 `needs`, no `refusals`, and `folded` and `planned` null, its `exitCode` and `summary` the code it exits with and the line it ends on.
+Each of these documents, and list-orchestrator's, also says `ended` where finding the orchestrator ended a session a
+killed process left running (see containment, above): one object per session, its `orchestrator`, `agent` (null for a
+step no agent owns), `step`, `session`, `program`, `owner` (the process id that had gone) and `unreached` (null where
+everything in it was reached); with nothing ended there is no `ended`, and the document is what it always was. No
+command writes it: the operation keeps what its sweeps ended (`EndedChildSessions`, one per operation), and its session
+writes it into whatever document the operation answers with (`IDocumentFacts`) - its own, or the stopped form where it
+answered without one, threw or stopped after the sweep - so a command over an orchestrator added later says it too.
 
 An agent's worktree is `<worktrees.root>/<orchestrator>/<agent>`, addressed `orchestrator/agent` by list-worktree
 and delete-worktree, its host copies named `orchestrator--agent` (`WorktreeAddress`). The directory named for an
@@ -684,6 +747,29 @@ every record last - each agent's after the rest of that agent, the orchestrator'
 stops part way (exit 21) leaves only records that read, and run again it finishes. list-orchestrator counts an
 orchestrator's open agents as create-agent does (`OrchestrationRules.OpenAgents`), and says where each agent's
 worktree is from its own record, the worktrees root it was made under.
+
+An agent can also be made with no worktree (`create-agent --no-worktree`): a record and the two directories every
+agent gets outside a worktree - `work/<agent>/` and `plans/<agent>/` - and nothing in the tree. Its record says
+`"access": "read"` (`AgentRecord.Access`); a record that says nothing is an agent with a worktree, which is every
+record an older tool wrote and what the tool still writes for one, so those records read as they always did. The
+engine makes one for a read-only reason step, and nothing else does - the option's help says a person has no use for
+one by hand. It counts against no limit, the limit being a limit on worktrees: `OrchestrationRules.OpenAgents` leaves
+it out, and so do list-orchestrator's open agents and delete-orchestrator's way, since a live one holds nothing but
+records and goes with the orchestrator; what every agent's directory keeps of the steps that ran as it and of its
+sessions with an API client is counted with its evidence and transcripts, and goes only with `--delete-evidence`,
+whatever the agent's kind or state. It is never seeded, refreshed, rebased or folded - each refuses, exit 13, once the
+repository is found and before git is asked anything about the agent - and deleting it is one write, `live` to `deleted`, the path the states already have
+for an agent whose worktree was never made; its directory stays, as every deleted agent's does. It records no session:
+`--session` beside `--no-worktree` is a usage error, and such an agent's record that names one does not read
+(`AgentRecord.Problem`), so deleting it says no session is recorded and looks for no transcript, and keeps no evidence
+either, having no worktree. `--discard-uncommitted` and the allowances have nothing to act on there; delete-agent says
+so, line by line, and its dry run's line for `--apply` leaves them out.
+
+A `dssharness` from before the agent with no worktree reads its record strictly, finds no worktree in it, and cannot
+tell what the agent is: its list-orchestrator prints the agent as one whose record does not read, and its
+delete-orchestrator refuses that orchestrator and changes nothing. As across the tool's rename, update while no
+`dssharness` is running, and do not go back. An agent with a worktree is not touched by this - the tool writes no
+`access` for one, so its record is what an older tool reads.
 
 ### Seeding and folding
 
@@ -1180,7 +1266,24 @@ recovery, the step it was in the way of running again after), `list` (added, pro
 `validate-workflow` checks a declared workflow, or every one declared: the file's shape, every key
 against the table that owns it (`WorkflowStepTypes`, which the parser reads exactly and `help
 workflows` lists from, so what is listed is what is read), every step, input, param and output an
-expression or a template names, every question kind an answer names, and every file the
+expression or a template names - a step looked up from where the reader is (`FlowScope`) and one
+that has ended before the reader runs: never a group's member in the group's own `when`, by bare
+name or by path, nor the group around the reader, and the iteration before (`previous`) only
+inside a repeat, where a step nested deeper than a bare name reaches is read by its path - and what
+each read is: every path typed by what holds it (a reason step's schema through `JsonSchemaSubset`,
+the output a built-in type answers, which `WorkflowStepTypes` holds, the engine's facts of a step and
+the run's own names, which `WorkflowExpressions` holds), every operator held to what it takes
+(`FlowExpression`: `!`, `&&` and `||` a boolean, `==` and `!=` no list and no object, `any` a list
+and a test that yields a boolean, `??` and `empty(...)` anything) and every key to what it reads (a
+`when`, an `until` and a `blocking` a boolean, a `forEach` and a key that takes a list a list) - a value
+refused only where none its reading allows could be what is taken, so that one that may be null is
+the run's to read. How the run stands without its `always` steps (`run.status`, `run.done` and the
+rest) is read by an `always` step alone; a placeholder stands in a key that is a template and is
+refused in any other where the file is read; a pull request's `base` reads nothing but the run's
+inputs and `run.name`, one base for every pull request; and a prompt's own placeholders - a reason
+step's `prompt` and `resumePrompt`, a pull request's `body` - are read as the step reads, each said at
+its line, the iteration before only in a `resumePrompt`. It checks every question
+kind an answer names, and every file the
 definition points at, beside the definition that names it - a runner or a leg no configuration
 declares is said the same way, as is a definition that cannot be read, and a workflow whose
 directory leads out of the workflows directory, or whose definition out of its own directory, once
@@ -1190,9 +1293,41 @@ anything: a definition that does not hold is configuration that does not, refuse
 has nothing to check, and is refused (13), saying that `"workflows": ["implementation"]` declares the one
 `init` writes; an empty answer is never read as a pass. The structural rules live in Core
 (`WorkflowValidator`), pure, so the engine can run them at the start of a run without reading a
-file. This build checks workflow definitions and
+file: the text of the schemas and prompts a definition names is handed to it by whoever reads them -
+`validate-workflow` from the repository, and the shipped definition from what this build embeds.
+This build checks workflow definitions and
 does not run them: the engine that runs them - the coordinator, the agents, the steps over the
 services the tool already has - is the next thing the tool grows.
+
+A definition is held to the `config.json` it is checked under as well: a `run` step whose runner -
+or a runner its run checks name - says `writesTree` names with `in` the create-agent step whose
+worktree it works in, since the run reads its definition in the main tree and folds into it; the
+agents a run makes, named `a` and a number that grows to the workflow's `maxInstances`, fit
+`worktrees.maxNameLength`; and a commit step gives a value for every variable `commit.template`
+requires and none for one it does not declare - or, with no template, a `message` and no
+`variables`. Within the definition, the `amend` block takes an amended request into a text
+`input`, a changed answer (`changedAnswerMinutes`) or both; its `step` is one step, outside every
+`forEach` and `always` group, raised by an update alone and going on with the work of a step beside
+it; `whenAddScope` names a step declared directly in a `forEach` group - the work-item group - and
+`whenChangeScope` and `whenRemoveScope` that step or alternatives of its type beside it, which say
+no wiring of their own and which no other step names; and the work-item group expands from the
+`items` of a `validate-plan` step it waits for. `piece` is read only in that group, and what only a
+prompt reads - `recommendations`, `question`, `status`, `update`, a skill - by no step's own key.
+What only a prompt reads stands where its agent is asked it: `{recommendations}` in a reason step's
+prompt and the advisor's, `{question.*}` in the advisor's alone, `{status.*}` in the reporter's two -
+`{status.question}` in its `askPrompt` alone - `{update.*}` in the prompts of the step that plans an
+update and of the steps of its scope, and `{piece.*}` in a step of the work-item group; the
+advisor's and the reporter's prompts are read too, and read no step by name, and a pull request's
+`body`, which the engine fills and no agent reads, reads what a template key reads and no skill.
+A question gives only the texts the engine names (`step`, `kind`, `problem`, `answers`, `record`),
+and so do the status (`facts`, `question`, `records`), a plan update (`cause`, `since`, `work`) and
+a piece (`kind`, `changed`, `keep`, `undo`, `instead`, `cause`, `before`) - each list kept once, in
+`WorkflowExpressions` beside the run's own texts, and read by the typing; the bar is one text, and so
+is each run fact (`WorkflowExpressions.RunFacts`), which a template reads and an expression does not.
+A `pushCheckpoints` with no push step that is a checkpoint, two handlers one ending raises that
+both name a `then`, a fallback that is its agent's own model or is named twice, a gathered name
+given twice, named for an engine's fact or for a member, `times` or `then` beside a `pause`
+answer, and an advisor whose `kinds` are given empty or name `ask` or `runBudget` are each refused.
 
 `export-workflow <workflow> --to <dir>` is a use case of Core (`WorkflowExportService`): it copies
 a workflow - its yml and every file it names, the one list `validate-workflow` and `init` read
@@ -1558,8 +1693,10 @@ is not dependable on such a host.
   prompt fails with ssh's own reason instead of waiting, and `connectTimeoutSeconds` and
   `keepAliveSeconds` bound a dead link. An `.env` other users can change is refused, because
   whoever can change it can send the harness somewhere else; a key other users can read, ssh
-  ignores, so it is refused too. Both are checked before connecting, and reported with the
-  command that fixes them. Per-host files also confine that risk: one world-writable shared
+  ignores, so it is refused too; and an `.env` other users can read that holds a `SUDO_PASSWORD`
+  is refused, as a credential already shared - one written blank holds none, declares none, and
+  is no reason to refuse. Each is checked before connecting, and reported with the command that
+  fixes it. Per-host files also confine that risk: one world-writable shared
   configuration file threatened every host at once.
 - **Names that resolve.** A host reached by an mDNS `.local` name on a DHCP network fails a
   lookup as a matter of course, and a name each ssh call looks up afresh is one each call can fail
@@ -1790,9 +1927,17 @@ DssHarness is told by the name of its program, as a host's is, so a build from s
 beside the installed tool is counted: wrongly, and safely. On macOS that name is read from a
 listing of its own (`ps -o comm=`), since the path of a program may hold a space and the listing
 that carries the command line does not say where the program ends: named by the first word of its
-line, a tool kept under a volume called `My Disk` was a process called `My`, and not counted. What
-is left open is the moment between the last look and the update, in which a command just started
-can still stop it: the failure then names that command.
+line, a tool kept under a volume called `My Disk` was a process called `My`, and not counted. Two
+updates of one place never change it together: the change and the reading of what it left hold a
+machine-wide lock named for the directory the tool is kept in (`ProgramUpdate.TryHold`, a
+`MachineWideMutex` held by a thread of its own, since the change is awaited and a mutex is let go
+only by the thread that took it). Two copies run beside the installed tool are each the program
+`dotnet`, so neither counts the other, and an update that finds the lock held changes nothing and
+is refused (exit 13), with `--wait` or without: it read the machine before the other changed it,
+and waiting would only make the change again over that reading. A lock whose holder was killed
+holding it is taken by the next update, which reads what was left as it reads anything installed.
+What is left open is the moment between the last look and the update, in which a command just
+started can still stop it: the failure then names that command.
 
 Both ends must be the same build, so before anything runs on a host:
 
@@ -3630,8 +3775,10 @@ sibling directory whose name merely starts the same way is outside, not inside.
   default - and for a secret, the environment. The guard against a secret in an argument list
   reads each argument as it will start, so a secret a name fills in is refused as one written out.
 - Values come from `.harness-config/runner/.env` and `.harness-config/runner/.secrets`, each a
-  directory of files. A value that came from `.secrets` never reaches a log, an argument list or
-  an error message.
+  directory of files, read by the one rule for a directory of dotenv files (`DotEnvDirectories`):
+  every file merged, and a name defined twice - in two files, in one file, or in both directories,
+  its case ignored - refused, as is a line that defines nothing, with its line. A value that came
+  from `.secrets` never reaches a log, an argument list or an error message.
 - An unknown key, at the top level or on a step, is an error, as it is in `config.json`: a
   silently ignored key is a rule nobody applied.
 - A step that performs a predefined action runs no program, so a key only a run block reads —

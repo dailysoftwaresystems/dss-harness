@@ -61,7 +61,9 @@ public sealed record SessionOptions
 
     /// <summary>
     /// Whether what this operation starts is out of reach of an interrupt typed at the terminal. Refused with
-    /// <see cref="NotSupportedException"/> until a process can be started that way, which this build cannot do yet.
+    /// <see cref="NotSupportedException"/> until a session hands it to the processes its operation starts
+    /// (<see cref="Processes.ProcessRequest.ApartFromTerminal"/>, which a process runner already honours), which this
+    /// build does not do yet.
     /// </summary>
     public bool ApartFromTerminal { get; init; }
 }

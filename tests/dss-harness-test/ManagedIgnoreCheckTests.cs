@@ -171,6 +171,7 @@ public sealed class ManagedIgnoreCheckTests
     [InlineData("", "", "")]
     [InlineData("!/.harness-config/sshItems/\n", "/.harness-config/*", ".harness-config/sshItems/.gitkeep")]
     [InlineData("!/.harness-config/runner/.env/\n", "/.harness-config/runner/*", ".harness-config/runner/.env/.gitkeep")]
+    [InlineData("!/.harness-config/workflows/\n", "/.harness-config/*", ".harness-config/workflows/.env/.gitkeep")]
     public async Task AnAllowlistsReIncludeOfASlot_IsLeftAlone_ForThePlaceholderRestsOnIt(string removed, string taking, string placeholder)
     {
         var (findings, _) = await FindAsync(before: removed.Length > 0 ? Allowlist.Replace(removed, string.Empty, StringComparison.Ordinal) : Allowlist);
@@ -216,6 +217,7 @@ public sealed class ManagedIgnoreCheckTests
                 ".harness-config/wslDistros/.gitkeep",
                 ".harness-config/runner/.env/.gitkeep",
                 ".harness-config/runner/.secrets/.gitkeep",
+                ".harness-config/workflows/.env/.gitkeep",
             ],
             ignoresAll.Paths);
 
@@ -263,14 +265,18 @@ public sealed class ManagedIgnoreCheckTests
     /// <summary>
     /// The tree's own ignore files beside its .gitignore files count as much: where .env is excluded
     /// in <c>.git/info/exclude</c>, or in the excludes file the tree's configuration names, the
-    /// re-include of the runner's .env slot is what keeps its placeholder, and is not named.
+    /// re-include of each .env slot - the runner's values, the agent clients' keys - is what keeps
+    /// its placeholder, and is not named.
     /// </summary>
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
     public async Task AReIncludeTheTreesOtherIgnoreFilesMakeNeeded_IsNeverNamed(bool infoExclude)
     {
-        var (findings, _) = await FindAsync(before: "!/.harness-config/runner/.env/\n", excluded: ".env\n", inInfoExclude: infoExclude);
+        var (findings, _) = await FindAsync(
+            before: "!/.harness-config/runner/.env/\n!/.harness-config/workflows/.env/\n",
+            excluded: ".env\n",
+            inInfoExclude: infoExclude);
 
         Assert.Empty(findings.Conflicts);
         Assert.Empty(findings.Unruled);
@@ -295,6 +301,7 @@ public sealed class ManagedIgnoreCheckTests
         Assert.Contains(".harness-config/config.json", kept);
         Assert.Contains(".harness-config/runner/actions/.gitkeep", kept);
         Assert.Contains(".harness-config/sshItems/.gitkeep", kept);
+        Assert.Contains(".harness-config/workflows/.env/.gitkeep", kept);
         Assert.Contains($"{WorktreeSettings.DefaultRoot}/.gitkeep", kept);
         Assert.Contains(".orchestrators/.gitkeep", kept);
         Assert.Contains($".harness-config/runner/actions/{ManagedIgnoreRule.AnyDirectoryName}/{ManagedIgnoreRule.AnyName}", kept);
@@ -366,6 +373,7 @@ public sealed class ManagedIgnoreCheckTests
                 ".harness-config/wslDistros/.gitkeep",
                 ".harness-config/runner/.env/.gitkeep",
                 ".harness-config/runner/.secrets/.gitkeep",
+                ".harness-config/workflows/.env/.gitkeep",
             ],
             conflict.Paths);
     }
@@ -393,7 +401,8 @@ public sealed class ManagedIgnoreCheckTests
     /// <summary>
     /// A broad rule taking a placeholder's whole directory is named, though it spells nothing of the
     /// harness's: '.env', which so many repositories ignore, is also the name of the directory the
-    /// runner's values live in, and git re-includes nothing from a directory it excludes.
+    /// runner's values and the agent clients' keys live in, and git re-includes nothing from a
+    /// directory it excludes.
     /// </summary>
     [Fact]
     public async Task ABroadRuleTakingAPlaceholdersDirectory_IsNamed()
@@ -405,7 +414,7 @@ public sealed class ManagedIgnoreCheckTests
         Assert.True(conflict.Wins);
         Assert.True(conflict.Ignores);
         Assert.Equal(2, conflict.Line);
-        Assert.Equal([".harness-config/runner/.env/.gitkeep"], conflict.Paths);
+        Assert.Equal([".harness-config/runner/.env/.gitkeep", ".harness-config/workflows/.env/.gitkeep"], conflict.Paths);
     }
 
     /// <summary>
@@ -748,8 +757,9 @@ public sealed class ManagedIgnoreCheckTests
     /// <summary>
     /// An excludes file the tree's configuration sets to nothing is none, as git reads it - never git's
     /// default one, which a tree leaving the name unset reads: with .env excluded there, the re-include of
-    /// the runner's .env slot keeps the placeholder in a tree that reads it, and is not named, and rests on
-    /// nothing in one that reads none, and is named as doing nothing.
+    /// each .env slot - the runner's values, the agent clients' keys - keeps the placeholder in a tree
+    /// that reads it, and is not named, and rests on nothing in one that reads none, and is named as
+    /// doing nothing.
     /// </summary>
     [Theory]
     [InlineData(false)]
@@ -762,7 +772,7 @@ public sealed class ManagedIgnoreCheckTests
         var token = TestContext.Current.CancellationToken;
 
         await harness.InitializeGitRepositoryAsync(temp.Path, token);
-        temp.WriteFile(".gitignore", "!/.harness-config/runner/.env/\n");
+        temp.WriteFile(".gitignore", "!/.harness-config/runner/.env/\n!/.harness-config/workflows/.env/\n");
         await harness.InitService.InitializeAsync(temp.Path, token);
 
         if (setToNothing)
@@ -790,10 +800,10 @@ public sealed class ManagedIgnoreCheckTests
 
         if (setToNothing)
         {
-            var named = Assert.Single(findings.Conflicts);
-
-            Assert.Equal("!/.harness-config/runner/.env/", named.Pattern);
-            Assert.False(named.Wins);
+            Assert.Equal(
+                ["!/.harness-config/runner/.env/", "!/.harness-config/workflows/.env/"],
+                [.. findings.Conflicts.Select(conflict => conflict.Pattern)]);
+            Assert.All(findings.Conflicts, conflict => Assert.False(conflict.Wins));
         }
         else
         {
@@ -837,11 +847,13 @@ public sealed class ManagedIgnoreCheckTests
     /// <summary>
     /// An allowlist as a repository writes one: everything under .harness-config excluded, and each
     /// directory it keeps in git re-included - the slots the block keeps a placeholder in among them -
-    /// with the runner's own contents excluded again, so its slots rest on their re-includes too.
+    /// with the runner's own contents excluded again, so its slots rest on their re-includes too, and
+    /// the workflows directory kept whole, the agent clients' key slot with it.
     /// </summary>
     private const string Allowlist = "/.harness-config/*\n!/.harness-config/sshItems/\n!/.harness-config/wslDistros/\n"
         + "!/.harness-config/runner/\n/.harness-config/runner/*\n!/.harness-config/runner/actions/\n"
-        + "!/.harness-config/runner/.env/\n!/.harness-config/runner/.secrets/\n";
+        + "!/.harness-config/runner/.env/\n!/.harness-config/runner/.secrets/\n"
+        + "!/.harness-config/workflows/\n";
 
     private static ManagedIgnoreCheck Check(HarnessFactory harness) => new(harness.GitClient, harness.FileSystem, harness.Platform, harness.Output);
 

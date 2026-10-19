@@ -48,5 +48,11 @@ Thumbs.db
 .claude/skills/*
 !.claude/skills/dss-harness/
 
+# The live Claude Code probe writes its raw recordings under each channel's raw/: a transcript
+# holds the machine's own commands, agents, skills and paths, and the repository is public. What
+# the suite reads are the curated shapes committed beside them (shapes.jsonl, probe.md, README.md);
+# the raw machine-written directory never leaves this machine.
+tests/dss-harness-test/fixtures/claude-code/**/raw/
+
 # Working notes and handoffs between sessions, kept beside the tree and never committed
 /.plans/

@@ -58,26 +58,42 @@ public sealed record RefreshRequest
     /// things of it - left as the agent changed it, handed the main tree's copy, merged; <see langword="null"/> where
     /// nothing is.
     /// </summary>
-    public string? Problem()
+    /// <param name="spelling">Whose words the refusal names each option in: the command line's flags, or a workflow step's keys.</param>
+    public string? Problem(OptionSpelling spelling = OptionSpelling.Flag)
     {
         if (Paths.Any(path => path.TrimEnd('/', '\\') is "." or ""))
         {
-            return $"'{Paths.First(path => path.TrimEnd('/', '\\') is "." or "")}' names the whole tree, not a path in it: pass {AllOption} to weigh every path the main tree moved";
+            var all = spelling.Spell(AllOption);
+            var asked = spelling == OptionSpelling.Flag ? $"pass {all}" : $"say {all}: true";
+
+            return $"'{Paths.First(path => path.TrimEnd('/', '\\') is "." or "")}' names the whole tree, not a path in it: {asked} to weigh every path the main tree moved";
         }
 
         if (All && Paths.Count > 0)
         {
-            return $"{AllOption} weighs every path the main tree moved, so it takes no path beside it: give the paths, or {AllOption}";
+            return AllBesidePathsProblem(spelling);
         }
 
-        return OrchestrationRules.PathsProblem(Paths, "a path to refresh")
-            ?? OrchestrationRules.PathsProblem(Except, ExceptOption)
-            ?? OrchestrationRules.PathsProblem(Stale, StaleOption)
-            ?? OrchestrationRules.PathsProblem(Merge, FoldAllowances.MergeOption)
+        return OrchestrationRules.PathsProblem(Paths, spelling == OptionSpelling.Flag ? "a path to refresh" : "paths")
+            ?? OrchestrationRules.PathsProblem(Except, spelling.Spell(ExceptOption))
+            ?? OrchestrationRules.PathsProblem(Stale, spelling.Spell(StaleOption))
+            ?? OrchestrationRules.PathsProblem(Merge, spelling.Spell(FoldAllowances.MergeOption))
             ?? OrchestrationRules.NamedTwiceProblem(
-                (ExceptOption, Except, ExceptDoes),
-                (StaleOption, Stale, StaleDoes),
-                (FoldAllowances.MergeOption, Merge, FoldAllowances.MergeDoes));
+                (spelling.Spell(ExceptOption), Except, ExceptDoes),
+                (spelling.Spell(StaleOption), Stale, StaleDoes),
+                (spelling.Spell(FoldAllowances.MergeOption), Merge, FoldAllowances.MergeDoes));
+    }
+
+    /// <summary>
+    /// The refusal of paths given beside <see cref="AllOption"/>, the one wording of that rule: whatever gives the paths
+    /// - a command line's, a step's written list, or a step's expression, whose paths are known only when it runs.
+    /// </summary>
+    /// <param name="spelling">Whose words the refusal names the option in: the command line's flag, or a workflow step's key.</param>
+    public static string AllBesidePathsProblem(OptionSpelling spelling = OptionSpelling.Flag)
+    {
+        var all = spelling.Spell(AllOption);
+
+        return $"{all} weighs every path the main tree moved, so it takes no path beside it: give the paths, or {all}";
     }
 
     /// <summary>

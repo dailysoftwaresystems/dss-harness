@@ -9,6 +9,22 @@ namespace DssHarness.Core.Execution;
 /// </param>
 public sealed record PhaseTiming(string Pattern, string Text, string Value);
 
+/// <summary>Which bound stopped a phase, where one did.</summary>
+public enum PhaseStop
+{
+    /// <summary>No bound stopped it: the child ran until it exited.</summary>
+    None,
+
+    /// <summary>
+    /// Its silence bound: the child went <see cref="PhaseResult.StallSeconds"/> without a line on
+    /// either stream, or took several times that to start, and was stopped as hung.
+    /// </summary>
+    Silence,
+
+    /// <summary>The wall-clock bound its request declared: the child ran past it and was stopped.</summary>
+    WallClock,
+}
+
 /// <summary>
 /// What running one phase established. Every field here is evidence: the exit code came from the
 /// process itself, the witness from the command's own output, and the duration from the monotonic
@@ -17,12 +33,19 @@ public sealed record PhaseTiming(string Pattern, string Text, string Value);
 /// <param name="Leg">The leg this phase belongs to.</param>
 /// <param name="Phase">The phase's name, which also names its log file.</param>
 /// <param name="ExitCode">The code the process reported, read from the process and not through a pipe or a wrapper.</param>
-/// <param name="Stalled">
-/// Whether the phase went <see cref="StallSeconds"/> without a line on either stream and was stopped
-/// as hung. A stall bound rather than a time budget: output cadence stays stable even when total
-/// duration does not, so an honest run that simply takes longer than someone guessed is never killed.
+/// <param name="Stopped">
+/// Which bound stopped the phase, if one did: its silence bound, when it went
+/// <see cref="StallSeconds"/> without a line on either stream and was stopped as hung, or the
+/// wall-clock bound its request declared, when it ran past that. A silence bound rather than a time
+/// budget is the default: output cadence stays stable even when total duration does not, so an
+/// honest run that simply takes longer than someone guessed is never killed - unless the phase
+/// itself declared the guess.
 /// </param>
-/// <param name="StallSeconds">The bound that was in force; zero means none was.</param>
+/// <param name="StallSeconds">
+/// The silence bound the phase ran under, in seconds, or zero where it ran under none - a
+/// wall-clock bound of its own may still have been in force, and <see cref="Stopped"/> says which
+/// bound, if any, stopped it.
+/// </param>
 /// <param name="Witnessed">
 /// Whether the declared success pattern matched the command's own output, or <see langword="null"/>
 /// when the phase declared no pattern. A pattern is never matched against anything the harness wrote.
@@ -55,7 +78,7 @@ public sealed record PhaseResult(
     string Leg,
     string Phase,
     int ExitCode,
-    bool Stalled,
+    PhaseStop Stopped,
     int StallSeconds,
     bool? Witnessed,
     TimeSpan Duration,
@@ -70,7 +93,7 @@ public sealed record PhaseResult(
     /// declared that pattern matched its own output. A zero exit code alone is not proof a command
     /// ran, which was measured three separate ways.
     /// </summary>
-    public bool Passed => !Stalled && ExitCode == 0 && Witnessed != false && MissingOutputs.Count == 0;
+    public bool Passed => Stopped == PhaseStop.None && ExitCode == 0 && Witnessed != false && MissingOutputs.Count == 0;
 
     /// <summary>How many of its last lines a phase that did not pass is shown by.</summary>
     public const int TailLines = 50;
@@ -118,11 +141,15 @@ public sealed record PhaseResult(
     /// </summary>
     public ReachedVerdict Verdict()
     {
-        if (Stalled)
+        // Named by the bound that stopped it, whichever others were in force: a phase stopped by its
+        // own clock with a silence bound beside it was not hung, and is not said to be.
+        switch (Stopped)
         {
-            return ReachedVerdict.Of(
-                LegVerdict.Failed,
-                $"{Phase} hung: no output for {StallSeconds}s");
+            case PhaseStop.Silence:
+                return ReachedVerdict.Of(LegVerdict.Failed, $"{Phase} hung: no output for {StallSeconds}s");
+
+            case PhaseStop.WallClock:
+                return ReachedVerdict.Of(LegVerdict.Failed, $"{Phase} passed its own wall-clock bound and was stopped");
         }
 
         if (ExitCode != 0)

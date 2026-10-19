@@ -17,6 +17,7 @@ using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 using DssHarness.Core.Runners;
 using DssHarness.Core.Runs;
+using DssHarness.Core.Secrets;
 using DssHarness.Core.SetUps;
 using DssHarness.Core.Sync;
 using DssHarness.Core.Tools;
@@ -322,7 +323,8 @@ public static class HelpTopics
         builder.AppendLine("machine nobody set up here.");
         builder.AppendLine();
         builder.AppendLine($"  .harness-config/{HarnessLayout.SshItemsDirectoryName}/<name>/{HarnessLayout.ItemEnvFileName}");
-        builder.AppendLine("                                     ADDRESS=, USER=, PORT= (optional)");
+        builder.AppendLine("                                     ADDRESS=, USER=, PORT= (optional), and the");
+        builder.AppendLine($"                                     superuser credential as {HostSecretsStore.SuperuserKey}= (optional)");
         builder.AppendLine($"  .harness-config/{HarnessLayout.SshItemsDirectoryName}/<name>/{HarnessLayout.ItemKeyFileName}");
         builder.AppendLine("                                     the private key");
         builder.AppendLine($"  .harness-config/{HarnessLayout.SshItemsDirectoryName}/<name>/{HarnessLayout.ItemKnownHostsFileName}");
@@ -337,9 +339,11 @@ public static class HelpTopics
         builder.AppendLine();
         builder.AppendLine("An .env other users can change is refused before anything connects, because");
         builder.AppendLine("whoever can change it can send the harness somewhere else. A key other users can");
-        builder.AppendLine("read is refused because ssh ignores it. Both refusals name the command that fixes");
-        builder.AppendLine("them. A credential is passed to a privileged command on standard input, and");
-        builder.AppendLine("reaches no log, no argument list and no error message.");
+        builder.AppendLine("read is refused because ssh ignores it, and so is an .env other users can read");
+        builder.AppendLine($"that holds a {HostSecretsStore.SuperuserKey}, a credential already shared; one written blank holds");
+        builder.AppendLine("none, and declares none. Each refusal names the command that fixes it. A");
+        builder.AppendLine("credential is passed to a privileged command on standard input, and reaches no");
+        builder.AppendLine("log, no argument list and no error message.");
         builder.AppendLine();
         builder.AppendLine("init writes the ignore rules that keep all of it out of git. A fresh clone plus");
         builder.AppendLine("this tree is enough for 'legs' to reach every host.");
@@ -1957,7 +1961,11 @@ public static class HelpTopics
             + $"{ToolUpdateService.WaitOption} it waits for them to end, saying who it waits for as it starts and every "
             + $"{ToolUpdateService.SaidAgainEvery.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes - but for a wait asked from inside "
             + $"a running {ToolPackage.Id}, which would never end and is refused, as is one where the process table names no "
-            + "process's parent. Once the update has begun this command does not stop it, interrupted or not, and reads back what it left: "
+            + "process's parent. Two updates of one place never change it together: the change holds a machine-wide lock on the "
+            + "directory the tool is kept in, and an update that finds it held - two run beside the installed tool are each the program "
+            + $"dotnet, and neither counts the other - changes nothing and is refused ({HarnessExit.Refused}), with "
+            + $"{ToolUpdateService.WaitOption} or without, since it read the machine before the other changed it. "
+            + "Once the update has begun this command does not stop it, interrupted or not, and reads back what it left: "
             + "it says the update done only once the tool is listed as that release, and a failure with what dotnet said and what "
             + $"is listed since, or why that is not known ({HarnessExit.CommandFailed}). Where nuget.org does not say which release "
             + "is the newest it says why - no route to it, no answer in time, an answer it cannot read - and changes nothing, "
@@ -2510,6 +2518,10 @@ public static class HelpTopics
                 ($"  {OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.RowsDirectoryName}/<ID>/", "an anchor row it files, a file for each cell"),
                 ($"  {OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.AppliedRowsFileName}", "the rows its folds applied, each as declared then"),
                 ($"  {OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.EvidenceDirectoryName}/", "its evidence roots' files, kept when it is deleted"),
+                ($"  {OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.SessionsDirectoryName}/<id>/", "API clients only: one conversation with the provider, in the provider's own form"),
+                ($"  {OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.StepsDirectoryName}/<instance>/", "one step the agent runs, or that runs in or for its worktree: everything of the step, its handoff.md where one stopped it"),
+                ($"  {OrchestratorLayout.StepsDirectoryName}/<instance>/", "one step of the run that no agent owns, the create-agent that makes an agent included"),
+                ($"  <step>/{OrchestratorLayout.ChildrenDirectoryName}/<session>{OrchestratorLayout.ChildExtension}", "in either kind of step, on Linux and macOS: a session a contained child of the step leads while it runs"),
             ]);
         builder.AppendLine();
         AppendWrapped(
@@ -2517,14 +2529,19 @@ public static class HelpTopics
             $"A row's cells are {string.Join(", ", AgentRows.RequiredCells.Select(cell => cell + AgentRows.CellExtension))}, and "
             + $"{AnchorCellNames.Priority}{AgentRows.CellExtension} where it declares one, each read as write-anchor reads a cell file. "
             + "An agent's worktree is <worktrees.root>/<orchestrator>/<agent>, which list-worktree and delete-worktree name "
-            + "orchestrator/agent; the copies hosts keep of it are named orchestrator--agent. Agents write their handoffs, pause "
+            + "orchestrator/agent; the copies hosts keep of it are named orchestrator--agent. An agent can also be made with no "
+            + $"worktree ({AgentService.CreateCommand} --no-worktree), reading the main tree and writing only its scratch: the engine "
+            + "makes one for a read-only reason step, and a person has no use for one by hand. It records no session - --session "
+            + "beside --no-worktree is a usage error - and delete-agent marks it deleted in one write, folding nothing, removing no "
+            + "worktree and looking for no transcript; --discard-uncommitted and the allowances have nothing to act on there, and "
+            + "it says so. Agents write their handoffs, pause "
             + "and stop points as .md files in their own directory. Every command that writes an agent's records names where they are "
             + "on each way out once it has: its record, its seed, the directory of the bytes it shares where it keeps any, and the rows "
             + "its folds applied - each that is there.");
         builder.AppendLine();
         builder.AppendLine("Commands");
         builder.AppendLine($"  {command} {OrchestratorService.CreateCommand} <o> --model <id> [--parallel <n>] [--session <id>]");
-        builder.AppendLine($"  {command} {AgentService.CreateCommand} <o> <a> --model <id> [--empty] [--session <id>]");
+        builder.AppendLine($"  {command} {AgentService.CreateCommand} <o> <a> --model <id> [--empty | --no-worktree] [--session <id>]");
         builder.AppendLine($"  {command} {AgentService.SeedCommand} <o> <a> [--empty] [--force]");
         builder.AppendLine($"  {command} {AgentService.RefreshCommand} <o> <a> [<path>... | {RefreshRequest.AllOption}] [{RefreshRequest.ExceptOption} <path>]...");
         builder.AppendLine($"      [{RefreshRequest.StaleOption} <path>]... [{FoldAllowances.MergeOption} <path>]... [--apply] [--json]");
@@ -2548,11 +2565,24 @@ public static class HelpTopics
         builder.AppendLine();
         AppendWrapped(
             builder,
-            $"--parallel, {OrchestratorRecord.DefaultParallel} unless given, is the most open agents at once - every agent not yet "
-            + "deleted, and every worktree git lists below the orchestrator's directory: create-agent refuses the next, naming them, "
-            + "and list-orchestrator counts them. Run again, create-orchestrator changes only the limit and the session, and "
-            + "create-agent records only the session; for an agent whose making stopped part way, it says so and names what "
-            + "finishes it. An agent's name is never used twice: a deleted agent's directory stays as its history.");
+            "What a killed process left running. On Linux and macOS a contained child of a step leads a session of its own, "
+            + $"which nothing ends when the process that started it is killed, so it is recorded in its step's {OrchestratorLayout.ChildrenDirectoryName}/ "
+            + "while it runs and the record taken back once that process ends it. Every command over an orchestrator - the three "
+            + "orchestrator commands and each agent command - first ends each recorded session whose starter has gone, as a stop "
+            + "ends one (SIGTERM, then SIGKILL five seconds later), removes its record, and says so in a line, and in the document's "
+            + "ended where it answers with --json. A session whose starter still runs is left; one whose id a later process "
+            + "carries ends nothing, and its record goes; a record that does not read as one is said and left; a starter on another "
+            + "machine is never taken to have gone. Windows records nothing: a job ends a contained child with the process that "
+            + "started it.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"--parallel, {OrchestratorRecord.DefaultParallel} unless given, is the most open agents at once - every agent with a "
+            + "worktree not yet deleted, and every worktree git lists below the orchestrator's directory: create-agent refuses the "
+            + "next, naming them, and list-orchestrator counts them. An agent with no worktree is never open. Run again, "
+            + "create-orchestrator changes only the limit and the session, and create-agent records only the session, and nothing "
+            + "of an agent with no worktree; for an agent whose making stopped part way, it says so and names what finishes it. "
+            + "An agent's name is never used twice: a deleted agent's directory stays as its history.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -2832,11 +2862,12 @@ public static class HelpTopics
             + "kept in it, and a mutation worker, each in its own words. delete-agent refuses to run from "
             + "inside the worktree it removes, and so does its dry run, "
             + "and an agent made under a worktrees root the configuration no longer names is refused with nothing touched. "
-            + "delete-orchestrator deletes the orchestrator once every agent of it is deleted and no worktree is left below its "
-            + "directory, nor any directory holding a .git of its own that git records no worktree at - until then it refuses "
-            + $"({HarnessExit.Refused}), naming each - and the evidence and transcripts its agents kept only with "
-            + "--delete-evidence; it removes the record "
-            + "last, so one that stops part way finishes when run again.");
+            + "delete-orchestrator deletes the orchestrator once every agent of it with a worktree is deleted and no worktree is "
+            + "left below its directory, nor any directory holding a .git of its own that git records no worktree at - until then "
+            + $"it refuses ({HarnessExit.Refused}), naming each - and the evidence, transcripts, steps and sessions its agents "
+            + "kept, whatever their kind or state, only with --delete-evidence; an agent with no worktree holds nothing but "
+            + "records, and goes with it, deleted or not. It "
+            + "removes the record last, so one that stops part way finishes when run again.");
 
         return builder.ToString();
     }
@@ -2911,6 +2942,15 @@ public static class HelpTopics
         builder.AppendLine("pre-existing-issues.json, shown at the end. Where a workflow has such a step, every other");
         builder.AppendLine("reasoning step names it, so no issue is lost.");
         builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "validate-workflow holds a definition to the config.json it is checked under too: a run step whose runner, or a runner "
+            + "its run checks name, writes the tree (writesTree) names with in the create-agent step whose worktree it works in, since "
+            + "the run reads its definition in the main tree and folds into it; the agents a run makes, named "
+            + $"'{OrchestrationRules.GeneratedAgentPrefix}' and a number that grows to the workflow's maxInstances, fit "
+            + "worktrees.maxNameLength; and a commit step gives a value for every variable commit.template requires and none for one "
+            + "it does not declare - or, where none is declared, a message and no variables.");
+        builder.AppendLine();
         builder.AppendLine("The keys of the file and of every step are listed below, generated from the tables the");
         builder.AppendLine("reader itself reads, so what is listed is what is read.");
         builder.AppendLine();
@@ -2954,14 +2994,31 @@ public static class HelpTopics
             builder,
             $"An expression reads names joined by &&, ||, !, ==, != and ?? with ( ) to group, 'empty(x)' for whether a read holds nothing "
             + "and 'any(list, test)' for whether any member meets a test written with 'it' for the member: every step, input and param it "
-            + "names must be declared before it, and a placeholder in braces - '{step.member}' - in a template key reads the same names, as "
-            + $"one in a prompt does. '{ToolPackage.Command} validate-workflow' checks the definition - the shape of every key, every name an "
-            + "expression or a template key reads, every file the definition names; a prompt's own placeholders are not read yet - and "
+            + "names must be declared before it, every path it reads is typed by what holds it - a reason step's schema, the output a "
+            + "built-in type answers, the engine's facts of a step, the run's own names - and every operator takes what it says: !, && and "
+            + "|| a boolean, == and != no list and no object, any a list and a test that yields a boolean. A when, an until and a blocking "
+            + "yield a boolean, and a forEach and a key that takes a list a list; how the run stands without its always steps "
+            + $"({string.Join(", ", WorkflowExpressions.RunStatuses.Select(status => $"run.{status}"))}) is read by an always step alone. A placeholder in braces - "
+            + "'{step.member}' - in a template key reads the same names, typed the same way, as one in a prompt does; one in any other key "
+            + "is refused, and a pull request's base reads nothing but the run's inputs and run.name, the same for every pull request. "
+            + "What only a prompt reads stands where its agent is asked it: {recommendations} in a reason step's prompt and the "
+            + "advisor's, {question.<name>} in the advisor's alone, {status.<name>} in the reporter's two - {status.question} in its "
+            + "askPrompt alone - {update.<name>} in the prompts of the step that plans an update and of the steps of its scope, and "
+            + "{piece.<name>} in a step of the work-item group; the advisor's and the reporter's prompts read no step by name, and a pull "
+            + "request's body, which the engine fills and no agent reads, reads what a template key reads and no skill. "
+            + $"A question gives only the texts the engine names ({Under("question", WorkflowExpressions.QuestionTexts)}), and so do the "
+            + $"status ({Under("status", WorkflowExpressions.StatusTexts)}), a plan update ({Under("update", WorkflowExpressions.UpdateTexts)}) "
+            + $"and a piece ({Under("piece", WorkflowExpressions.PieceTexts)}); the bar is one text, and so is each run fact "
+            + $"({string.Join(", ", WorkflowExpressions.RunFacts)}), which a template reads and an expression does not. "
+            + $"'{ToolPackage.Command} validate-workflow' checks the definition - the shape of every key, every name an expression, a "
+            + "template key or a prompt reads, every file the definition names - and "
             + $"refuses ({HarnessExit.ConfigInvalid}) naming each problem, without running anything, as a "
             + "config.json that does not hold is refused. Where config.json declares no workflow there is nothing to check, and it is "
             + $"refused ({HarnessExit.Refused}), saying that \"workflows\": [\"{WorkflowTemplates.ShippedWorkflowName}\"] declares the one init writes.");
 
         return builder.ToString();
+
+        static string Under(string root, IReadOnlyList<string> texts) => string.Join(", ", texts.Select(text => $"{root}.{text}"));
     }
 
     private static string RenderLayout()
@@ -2977,6 +3034,9 @@ public static class HelpTopics
         builder.AppendLine($"                                     its agents, prompts and schemas ('{ToolPackage.Command} help workflows');");
         builder.AppendLine("                                     each missing file written by init where");
         builder.AppendLine("                                     config.json declares the implementation one");
+        builder.AppendLine($"  {HarnessLayout.WorkflowsEnvSlotRelative}/    contents ignored; kept for the agent clients'");
+        builder.AppendLine("                                     keys and settings, which this build does not");
+        builder.AppendLine("                                     read yet; no workflow may be named .env");
         builder.AppendLine($"  {HarnessLayout.RunnerActionsDirectoryRelative}/<name>/<name>.yml");
         builder.AppendLine("                                     tracked; one directory per action, holding its");
         builder.AppendLine("                                     steps and whatever those steps run");
@@ -2991,6 +3051,22 @@ public static class HelpTopics
         builder.AppendLine("                                     orchestrator and its agents keep, in the main");
         builder.AppendLine("                                     checkout, and never sent to a host by sync");
         builder.AppendLine($"                                     ('{ToolPackage.Command} help orchestrators')");
+        var agentDirectory = $"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.AgentsDirectoryName}/<agent>";
+        builder.AppendLine($"  {HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.StepsDirectoryName}/<instance>/");
+        builder.AppendLine("                                     ignored; one step of a run that no agent owns,");
+        builder.AppendLine("                                     the create-agent that makes an agent included");
+        builder.AppendLine($"  {agentDirectory}/{OrchestratorLayout.StepsDirectoryName}/<instance>/");
+        builder.AppendLine("                                     ignored; one step the agent runs, or that");
+        builder.AppendLine("                                     runs in or for its worktree: everything of the");
+        builder.AppendLine($"                                     step, its {OrchestratorLayout.HandoffFileName} where one stopped it");
+        builder.AppendLine($"  {agentDirectory}/{OrchestratorLayout.SessionsDirectoryName}/<id>/");
+        builder.AppendLine("                                     ignored; API clients only: one conversation with");
+        builder.AppendLine("                                     the provider, in the provider's own form");
+        builder.AppendLine($"  <step>/{OrchestratorLayout.ChildrenDirectoryName}/<session>{OrchestratorLayout.ChildExtension}");
+        builder.AppendLine("                                     ignored; in either kind of step, on Linux and");
+        builder.AppendLine("                                     macOS: a session a contained child of the step");
+        builder.AppendLine("                                     leads while it runs, ended by the next command");
+        builder.AppendLine("                                     over the orchestrator where its starter was killed");
         builder.AppendLine($"  {HarnessLayout.MutationsDirectoryName}/                        contents ignored, .gitkeep tracked; the tree's");
         builder.AppendLine("                                     mutation workers, in every tree, never sent to");
         builder.AppendLine($"                                     a host by sync ('{ToolPackage.Command} help mutations')");
@@ -3027,19 +3103,19 @@ public static class HelpTopics
         builder.AppendLine("for the placeholder, since git never looks inside an excluded directory, so it is");
         builder.AppendLine("not named. A rule agreeing with the block is not named, however it is spelled.");
         builder.AppendLine("'.env', which many repositories ignore, is named: it takes the whole runner/.env");
-        builder.AppendLine("directory, and git re-includes no placeholder from an excluded one. A rule");
-        builder.AppendLine("re-including a directory the block ignores, such as each host's under sshItems, is");
-        builder.AppendLine("named too, though git itself names none for the files below it. A path git will");
-        builder.AppendLine("not answer about - one beyond a symbolic link - is named with git's reason, and the");
-        builder.AppendLine("rest are still asked. runs is ignored by name, with no trailing slash, so one kept");
-        builder.AppendLine("on another disk through a link is ignored as the link it is. The worktrees root,");
-        builder.AppendLine($"the orchestrators directory, {HarnessLayout.MutationsDirectoryName} and {HarnessLayout.LegsDirectoryName} are kept in git by their");
-        builder.AppendLine("placeholders, so each reads as not ignored itself while everything made in it is,");
-        builder.AppendLine("and none can be a link: init names one it finds, and writes nothing through it.");
-        builder.AppendLine("Sync withholds each by name. Each copy in them is a whole copy of the tree, so a");
-        builder.AppendLine("program of the repository's own that walks the tree from its root - a census, a");
-        builder.AppendLine("guard over every file - must leave out what the block ignores, as git does, or it");
-        builder.AppendLine("reads every file once more for each copy kept there.");
+        builder.AppendLine("and workflows/.env directories, and git re-includes no placeholder from an");
+        builder.AppendLine("excluded one. A rule re-including a directory the block ignores, such as each");
+        builder.AppendLine("host's under sshItems, is named too, though git itself names none for the files");
+        builder.AppendLine("below it. A path git will not answer about - one beyond a symbolic link - is named");
+        builder.AppendLine("with git's reason, and the rest are still asked. runs is ignored by name, with no");
+        builder.AppendLine("trailing slash, so one kept on another disk through a link is ignored as the link");
+        builder.AppendLine($"it is. The worktrees root, the orchestrators directory, {HarnessLayout.MutationsDirectoryName} and {HarnessLayout.LegsDirectoryName} are");
+        builder.AppendLine("kept in git by their placeholders, so each reads as not ignored itself while");
+        builder.AppendLine("everything made in it is, and none can be a link: init names one it finds, and");
+        builder.AppendLine("writes nothing through it. Sync withholds each by name. Each copy in them is a");
+        builder.AppendLine("whole copy of the tree, so a program of the repository's own that walks the tree");
+        builder.AppendLine("from its root - a census, a guard over every file - must leave out what the block");
+        builder.AppendLine("ignores, as git does, or it reads every file once more for each copy kept there.");
         builder.AppendLine();
         builder.AppendLine("A block an earlier build wrote under the markers of the tool's former name");
         builder.AppendLine($"('{GitIgnoreManager.RetiredBeginMarker}') is the managed block too: init");

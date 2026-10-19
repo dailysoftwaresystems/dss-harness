@@ -1649,6 +1649,10 @@ public sealed class LegAdmissionTests
         public bool IsAlive(int processId, string? stamp)
             => processId == real.CurrentId ? real.IsAlive(processId, stamp) : _alive.Contains(processId);
 
+        public string? StampOf(int processId) => processId == real.CurrentId ? real.StampOf(processId) : null;
+
+        public bool IsSame(int processId, string stamp) => processId == real.CurrentId && real.IsSame(processId, stamp);
+
         public void End(int processId) => _alive.Remove(processId);
     }
 }

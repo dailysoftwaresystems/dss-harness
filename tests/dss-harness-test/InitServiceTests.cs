@@ -55,6 +55,45 @@ public sealed class VerifyGitServiceTests
 
 public sealed class InitServiceTests
 {
+    /// <summary>
+    /// init's managed block is, rule for rule and in order: the lock, the runs, each root slot's contents ignored with its
+    /// placeholder kept, the same for each credential slot - made from the layout's one list of them, so a slot it gains
+    /// is ignored the day it is added - and what an action's steps write. Its placeholders under the harness directory
+    /// are the credential slots and the actions directory, in the order init creates them.
+    /// </summary>
+    [Fact]
+    public void TheManagedBlock_IsTheLockTheRunsAndEachSlot_InOrder()
+    {
+        Assert.Equal(
+            [
+                "/.harness-config/lock.json",
+                "/.harness-config/runs",
+                "/.worktrees/*", "!/.worktrees/.gitkeep",
+                "/.orchestrators/*", "!/.orchestrators/.gitkeep",
+                "/.mutations/*", "!/.mutations/.gitkeep",
+                "/.legs/*", "!/.legs/.gitkeep",
+                "/.harness-config/sshItems/*", "!/.harness-config/sshItems/.gitkeep",
+                "/.harness-config/wslDistros/*", "!/.harness-config/wslDistros/.gitkeep",
+                "/.harness-config/runner/.env/*", "!/.harness-config/runner/.env/.gitkeep",
+                "/.harness-config/runner/.secrets/*", "!/.harness-config/runner/.secrets/.gitkeep",
+                "/.harness-config/workflows/.env/*", "!/.harness-config/workflows/.env/.gitkeep",
+                "/.harness-config/runner/actions/**/build/",
+                "/.harness-config/runner/actions/**/artifacts/",
+            ],
+            InitService.BuildIgnoreRules(new WorktreeSettings { Root = WorktreeSettings.SeededRoot }).Select(rule => rule.Rule));
+
+        Assert.Equal(
+            [
+                ".harness-config/sshItems",
+                ".harness-config/wslDistros",
+                ".harness-config/runner/actions",
+                ".harness-config/runner/.env",
+                ".harness-config/runner/.secrets",
+                ".harness-config/workflows/.env",
+            ],
+            HarnessLayout.PlaceholderDirectories.Select(directory => $".harness-config/{directory.Replace('\\', '/')}"));
+    }
+
     [Fact]
     public async Task InitializeAsync_Refuses_OutsideAGitRepository()
     {
@@ -92,6 +131,7 @@ public sealed class InitServiceTests
         Assert.True(Directory.Exists(temp.Combine(".harness-config", "runner", "actions")));
         Assert.True(File.Exists(temp.Combine(".harness-config", "runner", ".env", ".gitkeep")));
         Assert.True(File.Exists(temp.Combine(".harness-config", "runner", ".secrets", ".gitkeep")));
+        Assert.True(File.Exists(temp.Combine(".harness-config", "workflows", ".env", ".gitkeep")));
         Assert.True(File.Exists(temp.Combine(".gitignore")));
 
         // A first init declares no leg, so there is nothing to install for and nothing to say about it.
@@ -196,7 +236,8 @@ public sealed class InitServiceTests
 
     /// <summary>
     /// A configuration that does not declare the implementation workflow - a repository's own arrangement, or one written before
-    /// workflows were - gets none of it: init writes nothing under the workflows directory and says nothing of it.
+    /// workflows were - gets none of it: init writes nothing under the workflows directory but the placeholder of the agent
+    /// clients' key slot, which every init keeps, and says nothing of the workflow.
     /// </summary>
     [Fact]
     public async Task InitializeAsync_WritesNoImplementationWorkflow_WhereTheConfigurationDoesNotDeclareIt()
@@ -214,8 +255,8 @@ public sealed class InitServiceTests
         Assert.True(outcome.Succeeded, outcome.Message);
         Assert.Empty(WorkflowLines(outcome.Details!));
         Assert.Equal(
-            [temp.Combine(".harness-config", "workflows", "release", "release.yml")],
-            Directory.GetFiles(temp.Combine(".harness-config", "workflows"), "*", SearchOption.AllDirectories));
+            [temp.Combine(".harness-config", "workflows", ".env", ".gitkeep"), temp.Combine(".harness-config", "workflows", "release", "release.yml")],
+            Directory.GetFiles(temp.Combine(".harness-config", "workflows"), "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal));
         Assert.Equal("name: release\n", File.ReadAllText(temp.Combine(".harness-config", "workflows", "release", "release.yml")));
     }
 
@@ -258,7 +299,7 @@ public sealed class InitServiceTests
         Assert.Contains("created .harness-config/config.json (no project detected; declare one under \"projects\")", refused.Details!);
         Assert.Empty(WorkflowLines(refused.Details!));
         Assert.Equal(
-            [WorkflowFile(temp, "agents/prioritizer.md"), WorkflowFile(temp, "agents/triage.md")],
+            [temp.Combine(".harness-config", "workflows", ".env", ".gitkeep"), WorkflowFile(temp, "agents/prioritizer.md"), WorkflowFile(temp, "agents/triage.md")],
             Directory.GetFiles(temp.Combine(".harness-config", "workflows"), "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal));
 
         var finished = await harness.InitService.InitializeAsync(temp.Path, token);
@@ -331,9 +372,13 @@ public sealed class InitServiceTests
             StringComparison.Ordinal);
     }
 
-    /// <summary>The lines of what init did that are about the workflows directory, in the order it said them.</summary>
+    /// <summary>
+    /// The lines of what init did that are about the workflows' own files, in the order it said them: every line about
+    /// the workflows directory but the agent clients' key slot beside them, whose placeholder every init keeps.
+    /// </summary>
     private static IReadOnlyList<string> WorkflowLines(IReadOnlyList<string> details)
-        => [.. details.Where(line => line.Contains(".harness-config/workflows/", StringComparison.Ordinal))];
+        => [.. details.Where(line => line.Contains(".harness-config/workflows/", StringComparison.Ordinal)
+            && !line.Contains($"{HarnessLayout.WorkflowsEnvSlotRelative}/", StringComparison.Ordinal))];
 
     /// <summary>Where <paramref name="file"/> of the implementation workflow is, in the tree at <paramref name="temp"/>.</summary>
     private static string WorkflowFile(TempDirectory temp, string file)
@@ -873,6 +918,7 @@ public sealed class InitServiceTests
         Directory.CreateDirectory(temp.Combine(".harness-config", "wslDistros", "probe-distro"));
         File.WriteAllText(temp.Combine(".harness-config", "wslDistros", "probe-distro", ".env"), "secret");
         File.WriteAllText(temp.Combine(".harness-config", "runner", ".secrets", "token.env"), "secret");
+        File.WriteAllText(temp.Combine(".harness-config", "workflows", ".env", "keys.env"), "ANTHROPIC_API_KEY=secret");
 
         await harness.RunGitAsync(temp.Path, ["add", "-A"], TestContext.Current.CancellationToken);
         var tracked = await harness.RunGitAsync(
@@ -894,6 +940,7 @@ public sealed class InitServiceTests
         Assert.Contains(".harness-config/wslDistros/.gitkeep", files);
         Assert.Contains(".harness-config/runner/.env/.gitkeep", files);
         Assert.Contains(".harness-config/runner/.secrets/.gitkeep", files);
+        Assert.Contains(".harness-config/workflows/.env/.gitkeep", files);
 
         Assert.DoesNotContain(".harness-config/lock.json", files);
         Assert.DoesNotContain(files, file => file.Contains("wt-a", StringComparison.Ordinal));
@@ -901,6 +948,7 @@ public sealed class InitServiceTests
         Assert.DoesNotContain(files, file => file.Contains("probe-host", StringComparison.Ordinal));
         Assert.DoesNotContain(files, file => file.Contains("probe-distro", StringComparison.Ordinal));
         Assert.DoesNotContain(files, file => file.EndsWith("token.env", StringComparison.Ordinal));
+        Assert.DoesNotContain(files, file => file.EndsWith("keys.env", StringComparison.Ordinal));
     }
 
     /// <summary>

@@ -47,6 +47,22 @@ public interface IProcessIdentity
     /// <param name="processId">The recorded id.</param>
     /// <param name="stamp">The recorded stamp, or <see langword="null"/> when none was recorded.</param>
     bool IsAlive(int processId, string? stamp);
+
+    /// <summary>
+    /// What tells the process now carrying <paramref name="processId"/> from another later given its id, as
+    /// <see cref="Current"/> tells this one; <see langword="null"/> where nothing carries it or its stamp cannot be read.
+    /// </summary>
+    /// <param name="processId">The process's id.</param>
+    string? StampOf(int processId);
+
+    /// <summary>
+    /// Whether the process carrying <paramref name="processId"/> now is the one recorded with <paramref name="stamp"/>:
+    /// its stamp read, and the same start. Unlike <see cref="IsAlive"/>, never where its stamp cannot be read - for what
+    /// acts on that process, not for what stands aside from it, taking another process for it is the worse mistake.
+    /// </summary>
+    /// <param name="processId">The recorded id.</param>
+    /// <param name="stamp">The recorded stamp.</param>
+    bool IsSame(int processId, string stamp);
 }
 
 /// <inheritdoc cref="IProcessIdentity"/>
@@ -103,6 +119,15 @@ public sealed class ProcessIdentity(IHostPlatform platform) : IProcessIdentity
         }
 
         return string.Equals(now, stamp, StringComparison.Ordinal) || ZonesApart(now, stamp);
+    }
+
+    public string? StampOf(int processId) => processId > 0 ? Stamp(processId) : null;
+
+    public bool IsSame(int processId, string stamp)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(stamp);
+
+        return StampOf(processId) is { Length: > 0 } now && (string.Equals(now, stamp, StringComparison.Ordinal) || ZonesApart(now, stamp));
     }
 
     /// <summary>The finest step between two time zones' offsets: every zone's is a whole number of them.</summary>

@@ -574,11 +574,11 @@ public sealed class ArmVerdictRecord(IFileSystem fileSystem, HarnessLayout layou
         }
 
         // What only this build's own hand keeps out: a null where entries or tables go, an entry with a key and nothing
-        // it was judged on, or a null inside what it was judged on where no null goes, would otherwise reach every
-        // comparison of it as a crash. Refused here, once, as unreadable.
+        // it was judged on, or a null among the values of a map it was judged on where no null goes, would otherwise
+        // reach every comparison of it as a crash. Refused here, once, as unreadable; a null item of a list never loads.
         foreach (var (arm, entries) in document.Arms)
         {
-            if (entries is null || entries.Any(entry => entry is null))
+            if (entries is null)
             {
                 return LegVerdictRecord.Unreadable(file, RecordUnread.Because($"it holds no list of entries for arm '{arm}'"));
             }
@@ -618,13 +618,13 @@ public sealed class ArmVerdictRecord(IFileSystem fileSystem, HarnessLayout layou
     }
 
     /// <summary>
-    /// Why a hand-damaged <paramref name="on"/> cannot be read - a null inside one of its collections, which the strict
-    /// reader lets load and no comparison can answer - or <see langword="null"/> where each is as this build writes it.
-    /// A member of its own turned to null never reaches here: the reader refuses it as it reads.
+    /// Why a hand-damaged <paramref name="on"/> cannot be read - a null among the values of one of its maps, which the
+    /// strict reader lets load and no comparison can answer - or <see langword="null"/> where each is as this build
+    /// writes it. A member of its own turned to null, or an item of its list of compilers, never reaches here: the reader
+    /// refuses it as it reads.
     /// </summary>
     private static string? Damaged(string arm, JudgedOn on)
         => on.Built.FirstOrDefault(built => built.Value is null) is { Key: { } target } ? $"it holds an entry of arm '{arm}' whose target '{target}' is named by no digest"
-        : on.Compilers.Any(compiler => compiler is null) ? $"it holds an entry of arm '{arm}' with a compiler that is no compiler"
         : on.RunReads.FirstOrDefault(read => read.Value is null) is { Key: { } named } ? $"it holds an entry of arm '{arm}' whose run-time read '{named}' is named by no hash"
         : null;
 

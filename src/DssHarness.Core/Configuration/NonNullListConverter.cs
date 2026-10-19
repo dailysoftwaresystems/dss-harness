@@ -4,25 +4,33 @@ using System.Text.Json.Serialization;
 namespace DssHarness.Core.Configuration;
 
 /// <summary>
-/// Deserializes every list of reference-type items in the configuration, refusing a
-/// <c>null</c> item.
+/// Deserializes every list of reference-type items in the configuration and in the state files, refusing a
+/// <c>null</c> item: a member declared a <see cref="List{T}"/> or any list interface the serializer reads into one -
+/// <see cref="IReadOnlyList{T}"/>, <see cref="IReadOnlyCollection{T}"/>, <see cref="IList{T}"/>,
+/// <see cref="ICollection{T}"/> and <see cref="IEnumerable{T}"/>.
 /// </summary>
 /// <remarks>
 /// The models declare their items non-nullable and the rest of the harness relies on it.
 /// System.Text.Json enforces nullable annotations on properties but not on the items of
 /// a collection, so <c>"legSets": { "gate": [null] }</c> would load and then fail far from
 /// the file, as a crash in whatever first read the list, instead of as a configuration
-/// error that names the line.
+/// error that names the line. Every shape of list is read here, not the concrete one alone: a
+/// record declares its lists read-only, and a list the refusal did not reach would read a
+/// <c>null</c> item back from a file the tool wrote.
 /// </remarks>
 public sealed class NonNullListConverter : JsonConverterFactory
 {
+    /// <summary>The lists read here: <see cref="List{T}"/>, and each list interface the serializer reads into one.</summary>
+    private static readonly IReadOnlyList<Type> Lists =
+        [typeof(List<>), typeof(IReadOnlyList<>), typeof(IReadOnlyCollection<>), typeof(IList<>), typeof(ICollection<>), typeof(IEnumerable<>)];
+
     /// <inheritdoc />
     public override bool CanConvert(Type typeToConvert)
     {
         ArgumentNullException.ThrowIfNull(typeToConvert);
 
         return typeToConvert.IsGenericType
-            && typeToConvert.GetGenericTypeDefinition() == typeof(List<>)
+            && Lists.Contains(typeToConvert.GetGenericTypeDefinition())
             && !typeToConvert.GetGenericArguments()[0].IsValueType;
     }
 
@@ -32,17 +40,19 @@ public sealed class NonNullListConverter : JsonConverterFactory
         ArgumentNullException.ThrowIfNull(typeToConvert);
 
         return (JsonConverter)Activator.CreateInstance(
-            typeof(NonNullListConverter<>).MakeGenericType(typeToConvert.GetGenericArguments()[0]))!;
+            typeof(NonNullListConverter<,>).MakeGenericType(typeToConvert, typeToConvert.GetGenericArguments()[0]))!;
     }
 }
 
 /// <summary>Reads and writes one list, refusing null items.</summary>
+/// <typeparam name="TList">The list's declared type: a <see cref="List{T}"/>, or an interface one answers to.</typeparam>
 /// <typeparam name="TItem">The list's item type.</typeparam>
-public sealed class NonNullListConverter<TItem> : JsonConverter<List<TItem>>
+public sealed class NonNullListConverter<TList, TItem> : JsonConverter<TList>
+    where TList : IEnumerable<TItem>
     where TItem : class
 {
     /// <inheritdoc />
-    public override List<TItem> Read(
+    public override TList Read(
         ref Utf8JsonReader reader,
         Type typeToConvert,
         JsonSerializerOptions options)
@@ -63,7 +73,7 @@ public sealed class NonNullListConverter<TItem> : JsonConverter<List<TItem>>
         {
             if (reader.TokenType == JsonTokenType.EndArray)
             {
-                return result;
+                return (TList)(IEnumerable<TItem>)result;
             }
 
             var item = reader.TokenType == JsonTokenType.Null
@@ -80,7 +90,7 @@ public sealed class NonNullListConverter<TItem> : JsonConverter<List<TItem>>
     /// <inheritdoc />
     public override void Write(
         Utf8JsonWriter writer,
-        List<TItem> value,
+        TList value,
         JsonSerializerOptions options)
     {
         ArgumentNullException.ThrowIfNull(writer);

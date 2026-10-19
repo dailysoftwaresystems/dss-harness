@@ -176,6 +176,22 @@ public sealed class ActionValues : ILineMask
         return [.. arguments.Select(Redact)];
     }
 
+    /// <summary>Whether any element of <paramref name="arguments"/> holds a secret value.</summary>
+    /// <remarks>
+    /// The check every built argument list is held to before the command it carries is started: a
+    /// value given with an input, or held in a values directory, reaches the list all the same once
+    /// its name is filled in, and the log header, the process table and any error quoting the
+    /// command would all carry it. Handing a secret over is the environment's job.
+    /// </remarks>
+    /// <param name="arguments">The argument list a command is about to be started with.</param>
+    public bool HoldsASecret(IReadOnlyList<string> arguments)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+
+        return _secrets.Count > 0
+            && arguments.Any(argument => !string.Equals(Redact(argument), argument, StringComparison.Ordinal));
+    }
+
     /// <summary>
     /// The secret values themselves.
     /// </summary>
@@ -197,20 +213,11 @@ public sealed class ActionValues : ILineMask
 /// Reads the values an action reads from the runner's two value directories.
 /// </summary>
 /// <remarks>
-/// <para>
 /// <c>.harness-config/runner/.env</c> and <c>.harness-config/runner/.secrets</c> are each a
-/// directory of dotenv files rather than a single file, so one repository can hold several
-/// unrelated sets and a machine can be given only the ones it needs. Every file in a directory is
-/// merged.
-/// </para>
-/// <para>
-/// A name defined twice is refused rather than letting the later file win. Silent precedence over a
-/// set of files whose order is a directory listing is a rule nobody can read off the files: the
-/// value that reached a run would depend on a file name, and renaming a file would change what ran
-/// without changing anything a reviewer looks at. That holds across the two directories too — a
+/// directory of dotenv files, read by the one rule for such a directory (<see cref="DotEnvDirectories"/>):
+/// every file merged, a name defined twice refused. The two are read as one set of names, since a
 /// name in both would leave <see cref="ActionValues.Redact(string?)"/> masking one value while the
 /// run used the other.
-/// </para>
 /// </remarks>
 public sealed class ActionValuesReader(IFileSystem fileSystem, IHarnessOutput output)
 {
@@ -236,13 +243,11 @@ public sealed class ActionValuesReader(IFileSystem fileSystem, IHarnessOutput ou
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        var problems = new List<string>();
-        var origins = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        var secrets = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
-        Merge(envDirectory, values, origins, problems, cancellationToken);
-        Merge(secretsDirectory, secrets, origins, problems, cancellationToken);
+        var directories = new DotEnvDirectories(_fileSystem);
+        var values = directories.Read(envDirectory, cancellationToken);
+        var secrets = directories.Read(secretsDirectory, cancellationToken);
+        var origins = directories.Origins;
+        var problems = new List<string>(directories.Problems);
 
         // A plain value is one a run line can name, so one named like a name this tool fills in is
         // refused, as an input so named is: a run line naming it got this tool's value, or this one
@@ -270,109 +275,5 @@ public sealed class ActionValuesReader(IFileSystem fileSystem, IHarnessOutput ou
             $"read {ReportText.Counted(values.Count, "value")} and {ReportText.Counted(secrets.Count, "secret")} for this action");
 
         return Task.FromResult(new ActionValues(values, secrets));
-    }
-
-    /// <summary>
-    /// The definitions one dotenv file holds.
-    /// </summary>
-    /// <remarks>
-    /// <c>NAME=value</c> lines, blank lines skipped, and a line whose first non-space character is
-    /// <c>#</c> treated as a comment. A <c>#</c> anywhere else is an ordinary character and stays in
-    /// the value: a generated credential contains one often enough that stripping it would produce a
-    /// value that is almost right, which fails later and somewhere else. A value wrapped in a
-    /// matching pair of quotes has them removed, so a value with leading or trailing spaces can be
-    /// written down.
-    /// </remarks>
-    /// <param name="text">The file's contents.</param>
-    /// <param name="path">Where it came from, quoted in any problem.</param>
-    /// <param name="problems">Collects what was wrong with the file.</param>
-    public static IReadOnlyList<KeyValuePair<string, string>> ParseDotEnv(
-        string text,
-        string path,
-        List<string> problems)
-    {
-        ArgumentNullException.ThrowIfNull(text);
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        ArgumentNullException.ThrowIfNull(problems);
-
-        var entries = new List<KeyValuePair<string, string>>();
-        var lines = text.Split('\n');
-
-        for (var index = 0; index < lines.Length; index++)
-        {
-            var line = lines[index].Trim();
-            var number = index + 1;
-
-            if (line.Length == 0 || line[0] == '#')
-            {
-                continue;
-            }
-
-            var separator = line.IndexOf('=', StringComparison.Ordinal);
-
-            if (separator < 0)
-            {
-                problems.Add($"'{path}' line {number}: no '=', so nothing is defined here.");
-                continue;
-            }
-
-            var name = line[..separator].Trim();
-
-            if (name.Length == 0)
-            {
-                problems.Add($"'{path}' line {number}: the name before '=' is empty.");
-                continue;
-            }
-
-            if (name.Any(char.IsWhiteSpace))
-            {
-                problems.Add($"'{path}' line {number}: '{name}' is not a name; "
-                    + "an environment variable's name holds no spaces.");
-                continue;
-            }
-
-            entries.Add(new KeyValuePair<string, string>(name, DotEnvFile.Unquote(line[(separator + 1)..].Trim())));
-        }
-
-        return entries;
-    }
-
-    private void Merge(
-        string directory,
-        Dictionary<string, string> target,
-        Dictionary<string, string> origins,
-        List<string> problems,
-        CancellationToken cancellationToken)
-    {
-        if (!_fileSystem.DirectoryExists(directory))
-        {
-            // Both directories are gitignored, so a fresh clone has neither. An action that needs a
-            // value it did not get is refused where the value is used, with the name it wanted.
-            return;
-        }
-
-        // Ordered so that "defined twice" names the same two files whatever order the file system
-        // enumerated them in, which is what makes the refusal reproducible.
-        var files = _fileSystem
-            .EnumerateFiles(directory, recursive: false)
-            .OrderBy(file => Path.GetFileName(file), StringComparer.Ordinal);
-
-        foreach (var file in files)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            foreach (var (name, value) in ParseDotEnv(_fileSystem.ReadAllText(file), file, problems))
-            {
-                if (origins.TryGetValue(name, out var first))
-                {
-                    problems.Add($"'{name}' is defined in '{first}' and again in '{file}'; "
-                        + "nothing can say which value a run used.");
-                    continue;
-                }
-
-                origins[name] = file;
-                target[name] = value;
-            }
-        }
     }
 }

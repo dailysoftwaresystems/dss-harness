@@ -591,6 +591,51 @@ public sealed class WorkflowFileParserTests
     }
 
     /// <summary>
+    /// V43: the kinds an advisor recommends for are given not empty - an advisor that names none recommends for every
+    /// kind, which kinds given empty would never be read as.
+    /// </summary>
+    [Fact]
+    public void AnAdvisorsKindsGivenEmpty_AreRefusedRatherThanReadAsEveryKind()
+    {
+        Assert.Equal(
+            ["line 5, column 10: 'advisor.kinds' is given empty, which is never read as every kind: name the kinds it recommends for, or leave the key out for every kind."],
+            Problems(
+                """
+                name: default
+                advisor:
+                  agent: advisor
+                  prompt: prompts/recommend.md
+                  kinds: []
+                steps:
+                  - name: orient
+                    type: orient
+                """));
+    }
+
+    /// <summary>
+    /// V44: everything about a plan update is said by the workflow's amend block, and no step carries a key of one: such a
+    /// key on a step is refused saying where it belongs, where any other key a step does not take lists those it does.
+    /// </summary>
+    [Fact]
+    public void APlanUpdatesKeyOnAStep_IsRefusedSayingItIsAmends()
+    {
+        Assert.Equal(
+            [
+                "line 5, column 5: 'whenAddScope' is not a key of a step; it is a key of amend, at the top of the file, the one place a plan update is said.",
+                "line 6, column 5: 'changedAnswerMinutes' is not a key of a step; it is a key of amend, at the top of the file, the one place a plan update is said.",
+            ],
+            Problems(
+                """
+                name: default
+                steps:
+                  - name: replan
+                    type: orient
+                    whenAddScope: items.build
+                    changedAnswerMinutes: 1
+                """));
+    }
+
+    /// <summary>
     /// A key that takes a list written out or an expression reads a scalar as the expression and a sequence as the
     /// list, and nothing else is read of it here.
     /// </summary>
@@ -859,5 +904,110 @@ public sealed class WorkflowFileParserTests
 
             Assert.Equal(policy, read!.Recover!.OnFailure);
         }
+    }
+
+    /// <summary>
+    /// V29: what only a person gives - the paths a fold or a rebase leaves out as settled by hand, and the lost and over
+    /// cells a fold accepts - is written out, never read from an output: a single value under one of those keys is an
+    /// expression, refused in the rule's own words, never told that a list is missing. Anything else that is not a
+    /// list is refused as any list is.
+    /// </summary>
+    [Fact]
+    public void WhatOnlyAPersonGives_IsWrittenOut_NeverReadFromAnOutput()
+    {
+        const string Rule = "from an output: paths settled by hand, and lost and over cells, are a person's to accept; only new rows and merges may be read from one.";
+
+        Assert.Equal(
+            [
+                $"line 10, column 16: step 'close' takes allow.settled {Rule}",
+                $"line 11, column 19: step 'close' takes allow.acceptLost {Rule}",
+                $"line 12, column 19: step 'close' takes allow.acceptOver {Rule}",
+                $"line 16, column 14: step 'move' takes settled {Rule}",
+            ],
+            Problems(
+                """
+                name: flow
+                steps:
+                  - name: make
+                    type: create-agent
+                    agent: worker
+                  - name: close
+                    type: fold
+                    of: make
+                    allow:
+                      settled: plan.latest.paths
+                      acceptLost: plan.latest.lost
+                      acceptOver: plan.latest.over
+                  - name: move
+                    type: rebase
+                    of: make
+                    settled: plan.latest.paths
+                """));
+
+        Assert.Equal(
+            ["line 10, column 16: 'close.allow.settled' is not a list."],
+            Problems(
+                """
+                name: flow
+                steps:
+                  - name: make
+                    type: create-agent
+                    agent: worker
+                  - name: close
+                    type: fold
+                    of: make
+                    allow:
+                      settled: { paths: src }
+                """));
+    }
+
+    /// <summary>
+    /// V16-V19: a placeholder stands only in a key that is a template - text a step hands on - and in every other key
+    /// of a step it is refused where it is written, naming the key and what the step fills: an agent, a description, a
+    /// leg in a list, a handler's source, a written-out list of paths, a consent. An expression is the grammar's to read,
+    /// as a key that takes a list is where it is given one expression, and a template key is filled.
+    /// </summary>
+    [Fact]
+    public void APlaceholderInAKeyThatIsNoTemplate_IsRefusedWhereItIsWritten()
+    {
+        Assert.Equal(
+            [
+                "line 5, column 12: 'draft.agent' holds {input.agent}, and agent is no template: it is read as it is written, never filled; a reason step fills none of its keys.",
+                "line 8, column 18: 'draft.description' holds {plan.title}, and description is no template: it is read as it is written, never filled; a reason step fills none of its keys.",
+                "line 13, column 19: 'build.legs' holds {input.leg}, and legs is no template: it is read as it is written, never filled; a test step fills filter, exclude and labels.",
+                "line 16, column 13: 'build.on.step' holds {draft.next}, and on.step is no template: it is read as it is written, never filled; a test step fills filter, exclude and labels.",
+                "line 24, column 14: 'fold.within' holds {input.dir}, and within is no template: it is read as it is written, never filled; a fold step fills none of its keys.",
+                "line 27, column 17: 'fold.allow.settled' holds {input.settled}, and allow.settled is no template: it is read as it is written, never filled; a fold step fills none of its keys.",
+            ],
+            Problems(
+                """
+                name: flow
+                steps:
+                  - name: draft
+                    type: reason
+                    agent: '{input.agent}'
+                    prompt: prompts/plan.md
+                    outputs: schemas/plan.json
+                    description: 'drafts {plan.title}'
+                    when: "{orient.branch} == 'main'"
+                    writes: 'item.paths'
+                  - name: build
+                    type: test
+                    legs: [linux, '{input.leg}']
+                    filter: '{item.filter}'
+                    on:
+                      step: '{draft.next}'
+                      outcome: failure
+                  - name: make
+                    type: create-agent
+                    agent: worker
+                  - name: fold
+                    type: fold
+                    of: make
+                    within: ['src/{input.dir}/**']
+                    allow:
+                      new: 'draft.rows'
+                      settled: ['{input.settled}']
+                """));
     }
 }

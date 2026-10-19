@@ -21,30 +21,40 @@ internal static class CreateAgentCommand
         Description = "Hand it nothing: record that it was made at a commit and given none of the main tree's uncommitted state.",
     };
 
+    private static readonly Option<bool> NoWorktreeOption = new("--no-worktree")
+    {
+        Description = "Used by the orchestrator engine for a step that only reads; of no use typed by hand. Makes an agent that "
+            + "has no worktree: it reads the main tree and keeps only records. Nothing of it is seeded, refreshed, rebased or folded.",
+    };
+
     private static readonly Option<string?> SessionOption = OrchestrationArguments.Session(
-        "The agent's Claude session id, or its subagent's id, whose transcripts delete-agent keeps. Run again, it records only this.");
+        "The agent's Claude session id, or its subagent's id, whose transcripts delete-agent keeps. Run again, it records only this. "
+        + "Not with --no-worktree: that agent records none.");
 
     internal static Command Create()
     {
         var command = new Command(
             Name,
-            "Create an agent of an orchestrator: its record, its worktree, and its seed - the main tree's uncommitted state handed to it, each changed file copied and each deletion made, every path recorded; refused past the orchestrator's limit.");
+            "Create an agent of an orchestrator: its record, its worktree, and its seed - the main tree's uncommitted state handed to it, each changed file copied and each deletion made, every path recorded; refused past the orchestrator's limit. With --no-worktree, the engine's agent: a record, with no worktree or seed, counted against no limit.");
         command.Arguments.Add(OrchestratorArgument);
         command.Arguments.Add(AgentArgument);
         command.Options.Add(ModelOption);
         command.Options.Add(EmptyOption);
+        command.Options.Add(NoWorktreeOption);
         command.Options.Add(SessionOption);
         GlobalOptions.AddTo(command);
 
-        CommandRunner.Wire(command, (context, cancellationToken) => context.Get<IAgentService>()
+        CommandRunner.Wire(command, async (context, cancellationToken) => (await context.Get<IAgentService>()
             .CreateAsync(
-                context.Directory,
-                context.ParseResult.GetRequiredValue(OrchestratorArgument),
-                context.ParseResult.GetRequiredValue(AgentArgument),
-                context.ParseResult.GetRequiredValue(ModelOption),
-                context.ParseResult.GetValue(EmptyOption),
-                context.ParseResult.GetValue(SessionOption),
-                cancellationToken));
+                new AgentCreateRequest(
+                    context.Directory,
+                    context.ParseResult.GetRequiredValue(OrchestratorArgument),
+                    context.ParseResult.GetRequiredValue(AgentArgument),
+                    context.ParseResult.GetRequiredValue(ModelOption),
+                    context.ParseResult.GetValue(EmptyOption),
+                    context.ParseResult.GetValue(SessionOption),
+                    context.ParseResult.GetValue(NoWorktreeOption)),
+                cancellationToken).ConfigureAwait(false)).Outcome);
 
         return command;
     }

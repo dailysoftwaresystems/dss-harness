@@ -1,16 +1,41 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.IO.Pipes;
 using System.Runtime.ExceptionServices;
 using System.Text;
 using DssHarness.Core.Platform;
+using Microsoft.Win32.SafeHandles;
 
 namespace DssHarness.Core.Processes;
 
 /// <inheritdoc cref="IProcessRunner"/>
-public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions filePermissions) : IProcessRunner
+public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions filePermissions, string? containThrough = null)
+    : IProcessRunner
 {
     /// <summary>ENOENT on Linux and macOS, ERROR_FILE_NOT_FOUND on Windows.</summary>
     private const int ErrorFileNotFound = 2;
+
+    /// <summary>How long what a contained child leaves on Linux and macOS is given to end on the signal that asks, before the one that makes it.</summary>
+    internal static readonly TimeSpan SessionGrace = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// How long a contained child's output is read for once its container has been ended: what was in it has gone, and
+    /// a process still holding the output is one that left the container, which nothing waits for.
+    /// </summary>
+    internal static readonly TimeSpan DrainBound = TimeSpan.FromSeconds(5);
+
+    /// <summary>How long a step that has ended is given for a connection it made to its channel to be taken.</summary>
+    private static readonly TimeSpan ReachGrace = TimeSpan.FromSeconds(1);
+
+    /// <summary>How long a step that did not start its program is given to end of itself before it is made to.</summary>
+    private static readonly TimeSpan StepEnding = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// The program that puts a child where it is contained: this tool, run as
+    /// <c>contain-exec</c> - or a program a test gives in its place, standing in for the tool the
+    /// way the test assembly stands in for the commands it drives.
+    /// </summary>
+    private readonly string? _containThrough = containThrough;
 
     /// <summary>ERROR_PATH_NOT_FOUND on Windows. On Linux and macOS the same number means something else.</summary>
     private const int WindowsErrorPathNotFound = 3;
@@ -45,6 +70,42 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
     private readonly IHostPlatform _platform = platform;
     private readonly IFilePermissions _filePermissions = filePermissions;
+
+    /// <summary>
+    /// What a contained child's session is read from on Linux and macOS: the machine's own, read through this runner where
+    /// the system is asked through a program - or a table a test gives in its place.
+    /// </summary>
+    private IProcessTable? _processTable;
+
+    /// <summary>
+    /// Makes the job object a contained child on Windows is held in, by the name the runner gave it: the system's own - or
+    /// a maker a test gives in its place, which learns the name only here and can arrange, before it asks the system,
+    /// what makes the system refuse the job.
+    /// </summary>
+    private readonly Func<string, SafeWaitHandle> _makeJob = Containment.CreateJob;
+
+    /// <summary>
+    /// A runner reading <paramref name="processTable"/> in place of the machine's own table, or making its jobs with
+    /// <paramref name="makeJob"/>: a test's. Not the public constructor's, because the container builds this runner from
+    /// that one, and the machine's table is itself built over this runner - a table asked of the container there would be
+    /// a runner waiting on itself.
+    /// </summary>
+    /// <param name="platform">The system this runs on.</param>
+    /// <param name="filePermissions">How the system says a file may be run.</param>
+    /// <param name="containThrough">The tool that starts a contained child, as the public constructor takes it.</param>
+    /// <param name="processTable">The table a contained child's session is read from; <see langword="null"/> for the machine's own.</param>
+    /// <param name="makeJob">What makes a contained child's job on Windows, by its name; <see langword="null"/> for the system's own.</param>
+    internal ProcessRunner(
+        IHostPlatform platform,
+        IFilePermissions filePermissions,
+        string? containThrough,
+        IProcessTable? processTable,
+        Func<string, SafeWaitHandle>? makeJob = null)
+        : this(platform, filePermissions, containThrough)
+    {
+        _processTable = processTable;
+        _makeJob = makeJob ?? Containment.CreateJob;
+    }
 
     /// <summary>
     /// The variable a program is looked up on. Spelled once: on Windows the environment a child is
@@ -98,11 +159,6 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             CreateNoWindow = true,
         };
 
-        foreach (var argument in request.Arguments)
-        {
-            startInfo.ArgumentList.Add(argument);
-        }
-
         foreach (var (key, value) in request.Environment)
         {
             // A name is one variable whatever case the configuration spelled it in, as on Windows,
@@ -139,9 +195,82 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         // Looked up on the PATH the child is given, not on this process's own. The two used to differ
         // whenever a request changed PATH, and then the program started was one the child's own
         // lookups could not see: cmake resolved from one PATH and the ninja it starts from another.
-        startInfo.FileName = ResolveProgram(
+        var resolved = ResolveProgram(
             request.FileName,
             startInfo.Environment.TryGetValue(PathVariable, out var effective) ? effective : null);
+
+        var windows = _platform.Current == PlatformId.Windows;
+
+        // Through this tool's own step where a container is asked for: every contained child, and on
+        // Linux and macOS a child apart from the terminal. On Windows a child apart from the terminal
+        // starts as any other: started with no window, it has a console of its own, which an
+        // interruption typed at this process's console never reaches.
+        var throughStep = request.Contained || (request.ApartFromTerminal && !windows);
+
+        if (throughStep && !File.Exists(resolved) && !Directory.Exists(resolved))
+        {
+            // Looked for before the step is started for it, as a start would look for it: what the
+            // step starts first is this tool, which is there. Anything that is there, and still
+            // cannot be started, the step says why of.
+            throw StartFailure(request.FileName, resolved, new Win32Exception(ErrorFileNotFound));
+        }
+
+        // The job a contained run on Windows is held in, kept for as long as the run: terminated as
+        // the child ends, it ends whatever the child left behind, and closed by this process's own
+        // end it ends the child with it.
+        var jobName = request.Contained && windows ? JobName() : null;
+        using var job = jobName is null ? null : MadeJob(jobName, request.FileName, resolved);
+
+        // The channel the step says whether the program started on, listened on before the step can
+        // reach it.
+        var statusName = throughStep ? StatusName(windows) : null;
+        using var status = statusName is null ? null : OpenedStatus(statusName, request.FileName, resolved);
+
+        if (throughStep)
+        {
+            // Placed before it runs a line of its own, through this tool's own step: the container
+            // is joined and the program started from inside it, so no child is ever outside for an
+            // instant, which a child put in after its start would be.
+            var (self, leading) = Self();
+            startInfo.FileName = self;
+
+            foreach (var argument in leading)
+            {
+                startInfo.ArgumentList.Add(argument);
+            }
+
+            startInfo.ArgumentList.Add(ContainExec.CommandName);
+
+            if (jobName is not null)
+            {
+                startInfo.ArgumentList.Add(ContainExec.JobOption);
+                startInfo.ArgumentList.Add(jobName);
+            }
+
+            if (!request.Contained)
+            {
+                startInfo.ArgumentList.Add(ContainExec.GroupOption);
+            }
+
+            startInfo.ArgumentList.Add(ContainExec.StatusOption);
+            startInfo.ArgumentList.Add(statusName!);
+            startInfo.ArgumentList.Add(ContainExec.Separator);
+            startInfo.ArgumentList.Add(resolved);
+
+            foreach (var argument in request.Arguments)
+            {
+                startInfo.ArgumentList.Add(argument);
+            }
+        }
+        else
+        {
+            startInfo.FileName = resolved;
+
+            foreach (var argument in request.Arguments)
+            {
+                startInfo.ArgumentList.Add(argument);
+            }
+        }
 
         // A caller that has given up already starts nothing. Started only to be stopped at once, a short program can
         // finish first - a set-up's down script did, on Linux - and be reported as having run after its time had passed.
@@ -150,23 +279,87 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         using var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
         var stopwatch = Stopwatch.StartNew();
 
+        using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        using var reaching = CancellationTokenSource.CreateLinkedTokenSource(timeoutSource.Token);
+
+        // Waited for before the step starts, so a step however quick to say how its start went is
+        // heard saying it.
+        var reached = status?.WaitForConnectionAsync(reaching.Token);
+
         try
         {
             await StartAsync(process, cancellationToken).ConfigureAwait(false);
 
             // Before the readers below, so nothing the child says can arrive ahead of the fact that
-            // it started.
-            request.OnStarted?.Invoke();
+            // it started. A child started through the step has started once the step says so.
+            if (status is null)
+            {
+                request.OnStarted?.Invoke();
+            }
         }
-        catch (Win32Exception ex)
+        catch (Exception ex) when (ex is Win32Exception or OperationCanceledException)
         {
-            throw StartFailure(request.FileName, startInfo.FileName, ex);
+            await GivenUpAsync(reaching, reached).ConfigureAwait(false);
+
+            if (ex is Win32Exception failed)
+            {
+                throw StartFailure(request.FileName, startInfo.FileName, failed);
+            }
+
+            throw;
         }
 
-        // Both streams are read from the moment the process starts: a child that fills a
-        // pipe nobody is reading blocks forever.
-        var standardOutput = CaptureAsync(OutputOf(process, request), request.OnOutputLine, request.OutputKept, request.CutLine);
-        var standardError = CaptureAsync(process.StandardError, request.OnErrorLine, request.ErrorKept, request.CutLine);
+        if (request.Timeout is { } budget)
+        {
+            timeoutSource.CancelAfter(budget);
+        }
+
+        var stopped = false;
+        var placed = false;
+        string? uncontained = null;
+
+        if (status is not null)
+        {
+            try
+            {
+                var heard = await HeardAsync(status, reached!, reaching, process, timeoutSource.Token).ConfigureAwait(false);
+
+                if (heard is not { Placed: true, Failure: null })
+                {
+                    throw await NotStartedAsync(request.FileName, resolved, heard, process).ConfigureAwait(false);
+                }
+
+                placed = true;
+            }
+            catch (OperationCanceledException) when (timeoutSource.IsCancellationRequested)
+            {
+                stopped = true;
+                uncontained = await StopAsync(request, job, process).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Nothing the step says can be read, so nothing it starts is run blind: it goes.
+                KillTree(process);
+
+                throw new ProgramStartException(
+                    request.FileName,
+                    $"'{resolved}' could not be started: what contain-exec said of its start could not be read: {ex.Message}",
+                    ex);
+            }
+        }
+
+        var recorded = placed ? await RecordedAsync(request, resolved, windows, job, process).ConfigureAwait(false) : null;
+
+        if (placed)
+        {
+            request.OnStarted?.Invoke();
+        }
+
+        // Both streams are read from the moment the child runs: a child that fills a pipe nobody is
+        // reading blocks forever. Until the step has said the program started, nothing but the step
+        // writes them, and it writes nothing there.
+        var standardOutput = new StreamCapture(OutputOf(process, request), request.OnOutputLine, request.OutputKept, request.CutLine);
+        var standardError = new StreamCapture(process.StandardError, request.OnErrorLine, request.ErrorKept, request.CutLine);
 
         // Written while both output streams are being read, so a child that answers as it reads
         // can never block this on a full output pipe, nor this block it on a full input pipe.
@@ -178,34 +371,57 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             request.HoldStandardInputOpen ? request.StandardInputBeat : null,
             exited.Token);
 
-        using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        if (request.Timeout is { } budget)
+        if (!stopped)
         {
-            timeoutSource.CancelAfter(budget);
+            try
+            {
+                await process.WaitForExitAsync(timeoutSource.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // Whether for the budget or because the caller gave up, the whole of it goes: a
+                // descendant left running keeps the pipes, and whatever it was building, busy - and a
+                // contained child is ended through its container, which reaches what detached itself
+                // from its parent as surely as what did not.
+                stopped = true;
+                uncontained = await StopAsync(request, job, process).ConfigureAwait(false);
+            }
         }
 
-        var stopped = false;
-
-        try
+        if (stopped)
         {
-            await process.WaitForExitAsync(timeoutSource.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            // Whether for the budget or because the caller gave up, the whole tree goes: a
-            // descendant left running keeps the pipes, and whatever it was building, busy.
-            stopped = true;
-            KillTree(process);
             await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        else if (request.Contained)
+        {
+            // What a contained child starts is ended with it, at its own end as at a stop: a
+            // leftover holding the output - a server started in the background, a build's node -
+            // would otherwise keep the reading below from ever ending.
+            uncontained = await EndContainerAsync(job, process).ConfigureAwait(false);
+        }
+
+        // The session is ended, at the child's own end or at a stop: its record has nothing left to name.
+        if (recorded is not null)
+        {
+            Cleared(recorded);
         }
 
         // No beat is written to a child that has gone.
         await exited.CancelAsync().ConfigureAwait(false);
 
         // The process has exited, but what it wrote just before exiting can still be in the
-        // pipes. Reading both streams to their end is what guarantees none of it is lost.
-        var capturedOutput = await standardOutput.ConfigureAwait(false);
-        var capturedError = await standardError.ConfigureAwait(false);
+        // pipes. Reading both streams to their end is what guarantees none of it is lost - for a
+        // contained child, within a bound, since all its container held has gone with it and what
+        // still holds a pipe is a process that left the container and is no part of this run.
+        var drained = Task.WhenAll(standardOutput.Reading, standardError.Reading);
+
+        if (!request.Contained || await Task.WhenAny(drained, Task.Delay(DrainBound, CancellationToken.None)).ConfigureAwait(false) == drained)
+        {
+            await drained.ConfigureAwait(false);
+        }
+
+        var capturedOutput = standardOutput.Taken();
+        var capturedError = standardError.Taken();
         var beatLost = await standardInput.ConfigureAwait(false);
 
         if (request.HoldStandardInputOpen)
@@ -222,7 +438,11 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
         if (stopped && cancellationToken.IsCancellationRequested)
         {
-            throw new OperationCanceledException(cancellationToken);
+            // What the stop could not reach is said where the stop is: a caller that gave up is
+            // handed no result to read it from.
+            throw uncontained is null
+                ? new OperationCanceledException(cancellationToken)
+                : new OperationCanceledException($"The run was stopped, and {uncontained}.", cancellationToken);
         }
 
         return new ProcessResult(
@@ -233,12 +453,268 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             TimedOut: stopped)
         {
             BeatLost = beatLost,
+            Uncontained = uncontained,
         };
     }
 
     /// <summary>
-    /// How long a program that will not start for being written is started again before that is its failure.
+    /// Stops a child as its request says: a contained one through its container - and any other,
+    /// a child apart from the terminal among them, and a contained one whose container was asked
+    /// for in the moment before it was joined, by its tree.
     /// </summary>
+    /// <param name="request">The child's request, saying whether it was contained.</param>
+    /// <param name="job">The job holding a contained child on Windows, or <see langword="null"/>.</param>
+    /// <param name="process">The child.</param>
+    /// <returns>What the container could not reach, or <see langword="null"/> where it reached all it holds.</returns>
+    private async Task<string?> StopAsync(ProcessRequest request, SafeWaitHandle? job, Process process)
+    {
+        try
+        {
+            return request.Contained ? await EndContainerAsync(job, process).ConfigureAwait(false) : null;
+        }
+        finally
+        {
+            // The tree as well, whatever ending the container met: a stop that lands in the moment
+            // before the child joined its container reaches nothing through the container, and the
+            // child itself must still go, or the wait that follows would never end.
+            KillTree(process);
+        }
+    }
+
+    /// <summary>
+    /// Ends everything a contained child's container holds: on Windows the job, all at once; on
+    /// Linux and macOS the session the child leads, asked to end and, once the grace is spent,
+    /// made to.
+    /// </summary>
+    /// <param name="job">The job holding the child on Windows, or <see langword="null"/> elsewhere.</param>
+    /// <param name="process">The child, which leads its session on Linux and macOS under its own id.</param>
+    /// <returns>What could not be reached, or <see langword="null"/> where all the container holds was.</returns>
+    private Task<string?> EndContainerAsync(SafeWaitHandle? job, Process process)
+    {
+        if (job is not null)
+        {
+            Containment.Terminate(job);
+            return Task.FromResult<string?>(null);
+        }
+
+        _processTable ??= ProcessTableFactory.Create(_platform, this);
+
+        return Containment.EndSessionAsync(process.Id, _processTable.ReadAsync, SessionGrace);
+    }
+
+    /// <summary>
+    /// Records a placed child's session where its request names a record and the session would outlive this process -
+    /// on Linux and macOS, where nothing ends a session when the process that started it is killed - before the child is
+    /// said to have started, so the next run of the tool over the same records ends what a killed one left. A job ends
+    /// with its last handle, so on Windows nothing is recorded.
+    /// </summary>
+    /// <param name="request">The child's request, naming its record where it has one.</param>
+    /// <param name="resolved">The program the child runs.</param>
+    /// <param name="windows">Whether this is Windows, where the job holds the child.</param>
+    /// <param name="job">The job holding the child on Windows, or <see langword="null"/>.</param>
+    /// <param name="process">The child, which leads its session under its own id.</param>
+    /// <returns>The record written, to be taken back once the session is ended; <see langword="null"/> where none was.</returns>
+    /// <exception cref="ProgramStartException">The record could not be written: the child was ended, and never said to have started.</exception>
+    private async Task<IContainedSessionRecord?> RecordedAsync(ProcessRequest request, string resolved, bool windows, SafeWaitHandle? job, Process process)
+    {
+        if (!request.Contained || windows || request.SessionRecord is not { } record)
+        {
+            return null;
+        }
+
+        try
+        {
+            record.Placed(process.Id, resolved);
+            return record;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // A child no record names is one a killed tool would leave running unseen: it is not run.
+            try
+            {
+                await EndContainerAsync(job, process).ConfigureAwait(false);
+            }
+            finally
+            {
+                KillTree(process);
+            }
+
+            await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+
+            throw new ProgramStartException(request.FileName, $"'{resolved}' could not be started: its session could not be recorded: {ex.Message}", ex);
+        }
+    }
+
+    /// <summary>
+    /// Takes back the record of a session this runner ended. One that cannot be taken back names a session that has
+    /// ended, which the next sweep of the records removes without ending anything once this process has gone.
+    /// </summary>
+    /// <param name="record">The record written when the child was placed.</param>
+    private static void Cleared(IContainedSessionRecord record)
+    {
+        try
+        {
+            record.Ended();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Left for the sweep, as above.
+        }
+    }
+
+    /// <summary>
+    /// What the step said on its channel once it ended or closed it, or <see langword="null"/> where it
+    /// ended without reaching it.
+    /// </summary>
+    /// <remarks>
+    /// The channel closes as the step ends, or on Linux and macOS as the program is become; a step
+    /// that ended before it reached the channel never closes it, so its end is watched for as well.
+    /// </remarks>
+    /// <param name="status">The channel.</param>
+    /// <param name="reached">The wait for the step to reach the channel, begun before it started.</param>
+    /// <param name="reaching">Gives that wait up.</param>
+    /// <param name="process">The step.</param>
+    /// <param name="cancellationToken">Stops the waiting: the run's bound, or its caller giving up.</param>
+    private static async Task<ContainExec.StartHeard?> HeardAsync(
+        NamedPipeServerStream status,
+        Task reached,
+        CancellationTokenSource reaching,
+        Process process,
+        CancellationToken cancellationToken)
+    {
+        var ended = process.WaitForExitAsync(cancellationToken);
+
+        if (await Task.WhenAny(reached, ended).ConfigureAwait(false) == ended && !reached.IsCompleted)
+        {
+            // Raises the stop, where that is what ended the wait.
+            await ended.ConfigureAwait(false);
+
+            // A connection made just before the step ended is taken still; a step that made none
+            // said nothing.
+            if (await Task.WhenAny(reached, Task.Delay(ReachGrace, CancellationToken.None)).ConfigureAwait(false) != reached)
+            {
+                await GivenUpAsync(reaching, reached).ConfigureAwait(false);
+                return null;
+            }
+        }
+
+        await reached.ConfigureAwait(false);
+
+        using var reader = new StreamReader(status, Utf8NoBom, detectEncodingFromByteOrderMarks: false, OutputBuffer, leaveOpen: true);
+
+        return ContainExec.Heard(await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false));
+    }
+
+    /// <summary>Gives up the wait for the step to reach its channel, where there is one, and lets it end.</summary>
+    private static async Task GivenUpAsync(CancellationTokenSource reaching, Task? reached)
+    {
+        if (reached is null)
+        {
+            return;
+        }
+
+        await reaching.CancelAsync().ConfigureAwait(false);
+
+        try
+        {
+            await reached.ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or IOException or ObjectDisposedException)
+        {
+            // The wait for a connection that never came, given up.
+        }
+    }
+
+    /// <summary>
+    /// Why a program started through the step did not start, once the step has ended: what the step
+    /// said failed, worded as a start that fails is, or the step's own end where it said nothing.
+    /// </summary>
+    /// <param name="requested">The program as the request names it.</param>
+    /// <param name="resolved">The file the step was asked to start.</param>
+    /// <param name="heard">What the step said, or <see langword="null"/> where it reached no channel.</param>
+    /// <param name="process">The step.</param>
+    private async Task<ProgramStartException> NotStartedAsync(string requested, string resolved, ContainExec.StartHeard? heard, Process process)
+    {
+        try
+        {
+            await process.WaitForExitAsync().WaitAsync(StepEnding).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            KillTree(process);
+            await process.WaitForExitAsync().ConfigureAwait(false);
+        }
+
+        switch (heard)
+        {
+            case { Failure: ContainExec.Stage.Start }:
+                return StartFailure(requested, resolved, new Win32Exception(heard.Code));
+
+            case { Failure: { } stage }:
+                return new ProgramStartException(
+                    requested,
+                    $"'{resolved}' could not be started: contain-exec could not {ContainExec.Doing(stage)}: {heard.Reason}");
+        }
+
+        // Its refusal of its own command line, or the failure of this tool's own start, is on its
+        // error stream, which nothing but the step has written.
+        var said = string.Empty;
+
+        try
+        {
+            said = (await process.StandardError.ReadToEndAsync().WaitAsync(StepEnding).ConfigureAwait(false))
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .FirstOrDefault() ?? string.Empty;
+        }
+        catch (TimeoutException)
+        {
+            // Held open by something it started: what it said is not had.
+        }
+
+        return new ProgramStartException(
+            requested,
+            $"'{resolved}' could not be started: contain-exec ended with {process.ExitCode} before it started it{(said.Length == 0 ? "." : $": {said}")}");
+    }
+
+    /// <summary>The job a contained child on Windows is held in, or the reason it could not be made as the start's failure.</summary>
+    private SafeWaitHandle MadeJob(string name, string requested, string resolved)
+    {
+        try
+        {
+            return _makeJob(name);
+        }
+        catch (Win32Exception ex)
+        {
+            throw new ProgramStartException(requested, $"'{resolved}' could not be started: the job object that would contain it could not be made: {ex.Message}", ex);
+        }
+    }
+
+    /// <summary>The channel a child started through the step is said started on, or the reason it could not be opened as the start's failure.</summary>
+    private static NamedPipeServerStream OpenedStatus(string name, string requested, string resolved)
+    {
+        try
+        {
+            return new NamedPipeServerStream(name, PipeDirection.In, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+            throw new ProgramStartException(requested, $"'{resolved}' could not be started: the channel contain-exec says its start on could not be opened: {ex.Message}", ex);
+        }
+    }
+
+    /// <summary>
+    /// A channel's name, unique to this child of this process: a name on Windows, and on Linux and
+    /// macOS the whole path of the socket it is, in this process's temporary directory - the step
+    /// reads its own from the environment the child is given, which a request may change.
+    /// </summary>
+    internal static string StatusName(bool windows)
+    {
+        var name = $"dssharness-{Guid.NewGuid():N}"[..27];
+
+        return windows ? name : Path.Combine(Path.GetTempPath(), name);
+    }
+
+    /// <summary>How long a program that will not start for being written is started again before that is its failure.</summary>
     /// <remarks>
     /// Linux starts no program a descriptor still holds open for writing, and a process forked while the program was
     /// being written - by any thread of the process writing it, for a child of its own - holds that descriptor until it
@@ -257,6 +733,15 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// <summary>Starts <paramref name="process"/>, again for as long as <see cref="BusyGrace"/> where it is being written.</summary>
     private static Task StartAsync(Process process, CancellationToken cancellationToken)
         => StartAsync(() => process.Start(), !OperatingSystem.IsWindows(), BusyGrace, cancellationToken);
+
+    /// <summary>
+    /// Runs <paramref name="start"/> as a start is run here, again for as long as <see cref="BusyGrace"/> where the program
+    /// is being written: what <c>contain-exec</c> does to become the program it was started for, so a program started
+    /// through it is given the same grace as one started directly.
+    /// </summary>
+    /// <param name="start">Starts the program, raising as <see cref="Process.Start()"/> does where it cannot.</param>
+    internal static void StartWhileBusy(Action start)
+        => StartAsync(start, !OperatingSystem.IsWindows(), BusyGrace, CancellationToken.None).GetAwaiter().GetResult();
 
     /// <summary>
     /// Runs <paramref name="start"/>, and again every <see cref="BusyPause"/> for as long as <paramref name="grace"/>
@@ -304,6 +789,19 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         var path = ProgramAtPath(command, _platform.Current == PlatformId.Windows);
         return _filePermissions.IsExecutable(path) ? path : null;
     }
+
+    /// <summary>
+    /// The program that puts a child where it is contained: this tool, as it is run - or the
+    /// program a test gave in this one's place.
+    /// </summary>
+    private (string Program, IReadOnlyList<string> Leading) Self()
+        => _containThrough is { } given
+            ? (given, [])
+            : DetachedProcessLauncher.Self();
+
+    /// <summary>A job object's name, unique to this contained child of this process.</summary>
+    private static string JobName()
+        => $"dssharness-contain-{Guid.NewGuid():N}";
 
     /// <summary>
     /// Whether <paramref name="program"/> names a file by its path rather than a program to look up by
@@ -505,8 +1003,9 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     internal static string WithWindowsExtension(string name) => Path.HasExtension(name) ? name : name + ".exe";
 
     /// <summary>
-    /// Reads one stream to its end, keeping the text exactly as the child wrote it - all of it, or its end where
-    /// <paramref name="kept"/> says so - and hands each complete line to <paramref name="onLine"/> as soon as it arrives.
+    /// One stream of a child, read to its end from the moment this is made, keeping the text exactly as the child wrote
+    /// it - all of it, or its end where its <see cref="StreamKept"/> says so - and handing each complete line to its handler
+    /// as soon as it arrives.
     /// </summary>
     /// <remarks>
     /// Text rebuilt from lines loses what separated them. git's NUL-separated output would
@@ -525,46 +1024,98 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// pipe holds would otherwise block on a pipe nobody reads, and one whose input is held open - a host's agent, reading a
     /// file back - would never end. What it raised is kept for the caller to raise once the child has gone.
     /// </para>
+    /// <para>
+    /// What was read is taken when the caller takes it - once the stream has ended, or once the caller has stopped
+    /// waiting for an end a process outside the child's container holds off. From then on nothing more is kept or handed
+    /// on: the run that asked has returned, and a line arriving after it would be news to nobody.
+    /// </para>
     /// </remarks>
-    private static async Task<Captured> CaptureAsync(StreamReader reader, Action<string>? onLine, StreamKept kept, Func<string, int>? cut)
+    private sealed class StreamCapture
     {
-        var tail = kept != StreamKept.Whole;
-        var cutting = kept == StreamKept.Tail;
-        var whole = tail ? null : new StringBuilder();
-        var end = tail ? new StreamTail(TailLength) : null;
-        ExceptionDispatchInfo? failed = null;
-        var lines = onLine is null ? null : new LineSplitter(Hand, cutting ? LongestLine : null, cutting ? cut : null);
-        var buffer = new char[ReadBufferSize];
-        int read;
+        private readonly Lock _gate = new();
+        private readonly Action<string>? _onLine;
+        private readonly StringBuilder? _whole;
+        private readonly StreamTail? _end;
+        private readonly LineSplitter? _lines;
+        private ExceptionDispatchInfo? _failed;
+        private bool _taken;
 
-        while ((read = await reader.ReadAsync(buffer.AsMemory()).ConfigureAwait(false)) > 0)
+        /// <summary>Starts reading <paramref name="reader"/>.</summary>
+        /// <param name="reader">The stream.</param>
+        /// <param name="onLine">Handed each line as it arrives, or <see langword="null"/>.</param>
+        /// <param name="kept">How much of the text is kept.</param>
+        /// <param name="cut">Where a long line of a tail is cut, or <see langword="null"/>.</param>
+        public StreamCapture(StreamReader reader, Action<string>? onLine, StreamKept kept, Func<string, int>? cut)
         {
-            var arrived = buffer.AsSpan(0, read);
+            var tail = kept != StreamKept.Whole;
+            var cutting = kept == StreamKept.Tail;
 
-            whole?.Append(arrived);
-            end?.Add(arrived);
-            lines?.Add(arrived);
+            _onLine = onLine;
+            _whole = tail ? null : new StringBuilder();
+            _end = tail ? new StreamTail(TailLength) : null;
+            _lines = onLine is null ? null : new LineSplitter(Hand, cutting ? LongestLine : null, cutting ? cut : null);
+            Reading = ReadAsync(reader);
         }
 
-        // A last line with no line break after it is still a line.
-        lines?.End();
+        /// <summary>Ends when the stream does.</summary>
+        public Task Reading { get; }
 
-        return new Captured(whole?.ToString() ?? end!.ToString(), failed);
-
-        void Hand(string line)
+        /// <summary>What has been read, and what the handler raised; nothing is kept or handed on after this.</summary>
+        public Captured Taken()
         {
-            if (failed is not null)
+            lock (_gate)
+            {
+                _taken = true;
+                return new Captured(_whole?.ToString() ?? _end!.ToString(), _failed);
+            }
+        }
+
+        private async Task ReadAsync(StreamReader reader)
+        {
+            var buffer = new char[ReadBufferSize];
+            int read;
+
+            while ((read = await reader.ReadAsync(buffer.AsMemory()).ConfigureAwait(false)) > 0)
+            {
+                lock (_gate)
+                {
+                    if (_taken)
+                    {
+                        return;
+                    }
+
+                    var arrived = buffer.AsSpan(0, read);
+
+                    _whole?.Append(arrived);
+                    _end?.Add(arrived);
+                    _lines?.Add(arrived);
+                }
+            }
+
+            lock (_gate)
+            {
+                // A last line with no line break after it is still a line.
+                if (!_taken)
+                {
+                    _lines?.End();
+                }
+            }
+        }
+
+        private void Hand(string line)
+        {
+            if (_failed is not null)
             {
                 return;
             }
 
             try
             {
-                onLine!(line);
+                _onLine!(line);
             }
             catch (Exception ex)
             {
-                failed = ExceptionDispatchInfo.Capture(ex);
+                _failed = ExceptionDispatchInfo.Capture(ex);
             }
         }
     }
@@ -581,7 +1132,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             ? new StreamReader(process.StandardOutput.BaseStream, exact, detectEncodingFromByteOrderMarks: false, OutputBuffer)
             : process.StandardOutput;
 
-    /// <summary>A stream read to its end: what is kept of it, and what its line handler raised, where it raised anything.</summary>
+    /// <summary>A stream as it was read: what is kept of it, and what its line handler raised, where it raised anything.</summary>
     private sealed record Captured(string Text, ExceptionDispatchInfo? Failed);
 
     /// <summary>

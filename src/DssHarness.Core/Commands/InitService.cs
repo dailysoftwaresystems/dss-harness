@@ -37,12 +37,14 @@ public sealed class InitService(
     /// <para>
     /// One shape for every directory the harness keeps in git while ignoring what is made in it: its
     /// <em>contents</em> are excluded and a placeholder is kept, which is the only way to do both, as git
-    /// cannot re-include a file whose parent directory is itself excluded. The four slots under the
-    /// harness's directory — <c>sshItems</c>, <c>wslDistros</c>, <c>runner/.env</c> and
-    /// <c>runner/.secrets</c> — are small directories a person fills by hand, and keeping each one in the
-    /// repository tells that person where the file goes. The two at the root of the tree — the worktrees
-    /// root and the directory orchestrators keep what they hold in — are kept so a clone arrives with both
-    /// in place, and the orchestrator commands make agents' worktrees and records in them.
+    /// cannot re-include a file whose parent directory is itself excluded. The five credential slots under
+    /// the harness's directory (<see cref="HarnessLayout.SecretSlots"/>) - <c>sshItems</c>, <c>wslDistros</c>,
+    /// <c>runner/.env</c>, <c>runner/.secrets</c> and the agent clients' <c>workflows/.env</c> - are small
+    /// directories a person fills by hand, and keeping each one in the repository tells that person where
+    /// the file goes. The four at the root of the tree (<see cref="HarnessLayout.RootSlots"/>) - the
+    /// worktrees root, the directory orchestrators keep what they hold in, and the two a tree keeps its own
+    /// copies in - are kept so a clone arrives with each in place, and the commands that make worktrees,
+    /// records and copies make them there.
     /// </para>
     /// <para>
     /// The worktrees root was excluded whole, with no placeholder, and the costs of this shape are
@@ -73,7 +75,6 @@ public sealed class InitService(
     {
         var root = HarnessLayout.DirectoryName;
         var keep = HarnessLayout.GitKeepFileName;
-        var runner = HarnessLayout.RunnerDirectoryRelative;
         var any = ManagedIgnoreRule.AnyName;
         var folder = ManagedIgnoreRule.AnyDirectoryName;
 
@@ -89,14 +90,11 @@ public sealed class InitService(
             // placeholder kept in each (see the remarks above).
             .. HarnessLayout.RootSlots(worktrees.Root).SelectMany(slot => Slot(slot, keep)),
 
-            // One directory per host, each holding an address, a user and a key. Nothing under
-            // either may ever be tracked.
-            .. Slot($"{root}/{HarnessLayout.SshItemsDirectoryName}", keep),
-            .. Slot($"{root}/{HarnessLayout.WslDistrosDirectoryName}", keep),
-
-            // Action files are tracked; the values they read are not.
-            .. Slot($"{runner}/{HarnessLayout.RunnerEnvDirectoryName}", keep),
-            .. Slot($"{runner}/{HarnessLayout.RunnerSecretsDirectoryName}", keep),
+            // The credential slots, from the layout's one list of them: one directory per host, each
+            // holding an address, a user and a key; the values actions read, beside the tracked action
+            // files; and the agent clients' keys, beside the tracked workflows. Nothing under any may
+            // ever be tracked.
+            .. HarnessLayout.SecretSlots.SelectMany(slot => Slot(slot, keep)),
 
             // What an action's steps write, and what they asked to keep. Both sit beside the
             // action's own tracked files, at whatever depth the author grouped it to, so these are

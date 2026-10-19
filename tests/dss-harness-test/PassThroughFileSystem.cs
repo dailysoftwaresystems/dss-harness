@@ -62,6 +62,8 @@ internal class PassThroughFileSystem(IFileSystem inner) : IFileSystem
 
     public virtual Stream OpenRead(string path) => inner.OpenRead(path);
 
+    public virtual IAppendFile OpenForAppend(string path) => inner.OpenForAppend(path);
+
     public virtual DateTime LastWriteTimeUtc(string path) => inner.LastWriteTimeUtc(path);
 
     public virtual DateTime CreationTimeUtc(string path) => inner.CreationTimeUtc(path);
@@ -93,12 +95,22 @@ internal sealed class Held(IFileSystem inner, string path, bool denied = false) 
         => Path.GetFullPath(read) != Path.GetFullPath(path) ? base.ReadAllText(read)
             : denied ? throw new UnauthorizedAccessException(Why)
             : throw new IOException(Why);
+
+    public override IAppendFile OpenForAppend(string open)
+        => Path.GetFullPath(open) != Path.GetFullPath(path) ? base.OpenForAppend(open)
+            : denied ? throw new UnauthorizedAccessException(Why)
+            : throw new IOException(Why);
 }
 
-/// <summary>The real file system, whose atomic writes fail while <see cref="Full"/> says so, as a full disk's do.</summary>
+/// <summary>
+/// The real file system, whose atomic writes and appends fail while <see cref="Full"/> says so, as a full disk's do.
+/// </summary>
 /// <param name="inner">The file system every member passes through to.</param>
 internal sealed class FullDiskFileSystem(IFileSystem inner) : PassThroughFileSystem(inner)
 {
+    /// <summary>What a full disk says to a write.</summary>
+    public const string Why = "There is not enough space on the disk.";
+
     /// <summary>Whether a write fails.</summary>
     public bool Full { get; set; }
 
@@ -106,10 +118,34 @@ internal sealed class FullDiskFileSystem(IFileSystem inner) : PassThroughFileSys
     {
         if (Full)
         {
-            throw new IOException("There is not enough space on the disk.");
+            throw new IOException(Why);
         }
 
         base.WriteAllTextAtomic(path, contents);
+    }
+
+    public override IAppendFile OpenForAppend(string path) => new Appending(base.OpenForAppend(path), this);
+
+    /// <summary>The real file, whose appends fail while the disk is full.</summary>
+    private sealed class Appending(IAppendFile file, FullDiskFileSystem disk) : IAppendFile
+    {
+        public long Length => file.Length;
+
+        public void ReadExactlyAt(long position, Span<byte> buffer) => file.ReadExactlyAt(position, buffer);
+
+        public void TruncateTo(long length) => file.TruncateTo(length);
+
+        public void AppendFlushed(ReadOnlySpan<byte> bytes)
+        {
+            if (disk.Full)
+            {
+                throw new IOException(Why);
+            }
+
+            file.AppendFlushed(bytes);
+        }
+
+        public void Dispose() => file.Dispose();
     }
 }
 

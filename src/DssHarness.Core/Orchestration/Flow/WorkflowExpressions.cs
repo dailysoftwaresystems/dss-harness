@@ -1,3 +1,5 @@
+using DssHarness.Core.Schemas;
+
 namespace DssHarness.Core.Orchestration.Flow;
 
 /// <summary>
@@ -14,14 +16,21 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <c>it</c> for the member.
 /// </para>
 /// <para>
-/// What the segments after the first <em>mean</em> - that a member named after a step is one the
-/// step's schema holds - is the engine's to check when it runs; what this grammar decides is where
-/// a read starts, so that a definition can be refused for naming a step, an input or a param that
-/// does not exist.
+/// What this grammar decides is where a read starts, so that a definition can be refused for naming a step, an
+/// input or a param that does not exist. What the segments after the first mean - that a member named after a step
+/// is one the step's schema holds - is typed where the definition is loaded, by
+/// <see cref="FlowExpression.TypeOf"/> over what this class says each of the run's own names and each of the
+/// engine's facts is.
 /// </para>
 /// </remarks>
 public static class WorkflowExpressions
 {
+    /// <summary>
+    /// The run facts a template reads, each one text with nothing under it; none is a value for an expression, of whose
+    /// run's own names <c>run</c> is the one root.
+    /// </summary>
+    public static readonly IReadOnlyList<string> RunFacts = ["worktree", "work", "plans", "rows", "orchestrator", "agent", "step", "os"];
+
     /// <summary>
     /// The words a read can start with that name no step: the run's own names - what it was given, where in its loops
     /// and handlers it is, what it knows of itself - the functions an expression calls, and the run facts a template
@@ -31,7 +40,7 @@ public static class WorkflowExpressions
     [
         "input", "param", "run", "carried", "previous", "source", "issue", "item", "it", "index", "iteration", "visit",
         "recover", "skill", "recommendations", "update", "piece", "status", "question", "empty", "any",
-        "worktree", "work", "plans", "rows", "orchestrator", "agent", "step", "os",
+        .. RunFacts,
     ];
 
     /// <summary>
@@ -40,6 +49,79 @@ public static class WorkflowExpressions
     /// of a reasoning step its newest output and what its agent assumed.
     /// </summary>
     public static readonly IReadOnlyList<string> StepFacts = ["outcome", "code", "error", "question", "latest", "assumptions"];
+
+    /// <summary>
+    /// What each of the engine's facts of a step is, as a path into one is typed: how the step ended (<c>done</c>,
+    /// <c>failed</c>, <c>skipped</c>, <c>stopped</c>, <c>notRun</c>), its exit code, its message, the kind of the
+    /// question its failure was answered with, and what its agent assumed, as a list. <c>latest</c> is the step's own
+    /// output, and is typed as the step is.
+    /// </summary>
+    public static IReadOnlyDictionary<string, JsonSchemaSubset.Reading> StepFactReadings { get; } = new Dictionary<string, JsonSchemaSubset.Reading>(StringComparer.Ordinal)
+    {
+        ["outcome"] = JsonSchemaSubset.Reading.Of("string"),
+        ["code"] = JsonSchemaSubset.Reading.Of("integer"),
+        ["error"] = JsonSchemaSubset.Reading.Of("string", "null"),
+        ["question"] = JsonSchemaSubset.Reading.Of("string", "null"),
+        ["assumptions"] = JsonSchemaSubset.Reading.ListOf(JsonSchemaSubset.Reading.Of("string")),
+    };
+
+    /// <summary>
+    /// The run's own values an expression reads after <c>run</c>: its name, and how it stands without its
+    /// <c>always</c> steps - its status, whether it is done, failed, paused or stopped, and how many failed steps were
+    /// passed over.
+    /// </summary>
+    public static IReadOnlyDictionary<string, JsonSchemaSubset.Reading> RunValues { get; } = new Dictionary<string, JsonSchemaSubset.Reading>(StringComparer.Ordinal)
+    {
+        ["name"] = JsonSchemaSubset.Reading.Of("string"),
+        ["status"] = JsonSchemaSubset.Reading.Of("string"),
+        ["done"] = JsonSchemaSubset.Reading.Of("boolean"),
+        ["failed"] = JsonSchemaSubset.Reading.Of("boolean"),
+        ["paused"] = JsonSchemaSubset.Reading.Of("boolean"),
+        ["stopped"] = JsonSchemaSubset.Reading.Of("boolean"),
+        ["passedOver"] = JsonSchemaSubset.Reading.Of("integer"),
+    };
+
+    /// <summary>
+    /// The run's values that say how it stands without its <c>always</c> steps, which only an <c>always</c> step - or a
+    /// member of an <c>always</c> group - reads, so that none reads its own effect.
+    /// </summary>
+    public static IReadOnlyList<string> RunStatuses { get; } = ["status", "done", "failed", "paused", "stopped"];
+
+    /// <summary>
+    /// The run's texts after <c>run</c>, written by the engine from its step records for a template - what it checked,
+    /// what it has not yet, what it knows to be red, what its loops left, what its agents assumed, and the pre-existing
+    /// issues it took - never values for an expression.
+    /// </summary>
+    public static IReadOnlyList<string> RunTexts { get; } = ["ran", "notRun", "red", "leftover", "assumptions", "preExisting"];
+
+    /// <summary>The texts after <c>carried</c>: the same three of what one commit carries, for its message and its variables alone.</summary>
+    public static IReadOnlyList<string> CarriedTexts { get; } = ["ran", "notRun", "red"];
+
+    /// <summary>
+    /// The texts after <c>question</c>, in the advisor's prompt: the question it recommends on - the step that asks, its
+    /// kind, the problem as the engine states it, each answer with what it does, and what the run stored of the steps it
+    /// is about.
+    /// </summary>
+    public static IReadOnlyList<string> QuestionTexts { get; } = ["step", "kind", "problem", "answers", "record"];
+
+    /// <summary>
+    /// The texts after <c>status</c>, in the reporter's prompts: the engine's facts about the run, the person's question,
+    /// and where the run's records are.
+    /// </summary>
+    public static IReadOnlyList<string> StatusTexts { get; } = ["facts", "question", "records"];
+
+    /// <summary>
+    /// The texts after <c>update</c>, in the prompts of the step that plans a plan update and of the steps of its scope:
+    /// what raised it, what has run since, and the work of the run with what to call each piece by.
+    /// </summary>
+    public static IReadOnlyList<string> UpdateTexts { get; } = ["cause", "since", "work"];
+
+    /// <summary>
+    /// The texts after <c>piece</c>, in a step of the work-item group: the piece of a plan update its work item is carried
+    /// out for - its kind, what it changes, keeps, takes back and does instead - what raised the update, and the state
+    /// the work starts from.
+    /// </summary>
+    public static IReadOnlyList<string> PieceTexts { get; } = ["kind", "changed", "keep", "undo", "instead", "cause", "before"];
 
     /// <summary>The literals an identifier can be without naming anything.</summary>
     private static readonly IReadOnlyList<string> Literals = ["true", "false", "null"];
@@ -53,11 +135,55 @@ public static class WorkflowExpressions
     public static IReadOnlyList<string> ReservedNames { get; } = [.. ReservedRoots.Concat(StepFacts).Concat(Literals).Distinct(StringComparer.Ordinal)];
 
     /// <summary>One name an expression reads: its first segment, whole, and how it was read.</summary>
-    /// <param name="Root">The read's first segment: where the rest of the name lives.</param>
-    /// <param name="Whole">The whole read, as written.</param>
+    /// <param name="Root">The read's first name, without an index: where the rest of the name lives.</param>
+    /// <param name="Whole">The whole read, as written, its indexes included: <c>plan.items[0].ok</c>.</param>
     /// <param name="Template">Whether the read came out of a <c>{...}</c> template.</param>
     /// <param name="InsideAny">Whether the read sits in the test of an <c>any(...)</c>, where <c>it</c> names the member.</param>
-    public sealed record Read(string Root, string Whole, bool Template, bool InsideAny);
+    public sealed record Read(string Root, string Whole, bool Template, bool InsideAny)
+    {
+        /// <summary>
+        /// The read's names in order, its indexes left out - <c>plan</c>, <c>items</c>, <c>ok</c> of
+        /// <c>plan.items[0].ok</c> - as a name is looked up: an index is a place in a list, and names nothing.
+        /// </summary>
+        public IReadOnlyList<string> Names => [.. Whole.Split('.').Select(segment => segment.IndexOf('[') is var open and >= 0 ? segment[..open] : segment)];
+    }
+
+    /// <summary>
+    /// <paramref name="written"/> as a read, the one way the scanner here and <see cref="FlowExpression"/> alike spell
+    /// one: its dotted segments trimmed of space and joined again, its root the first name without an index.
+    /// </summary>
+    /// <param name="written">The read, as the expression or the placeholder wrote it.</param>
+    /// <param name="template">Whether it came out of a <c>{...}</c> placeholder.</param>
+    /// <param name="insideAny">Whether it sits in an <c>any(...)</c>.</param>
+    internal static Read ReadOf(string written, bool template, bool insideAny)
+    {
+        // The read's own grammar - a dotted name - is walked here, so that 'a.b.c' is one read and not three.
+        // Anything after the first segment is the engine's to mean.
+        var segments = written.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var whole = segments.Length > 0 ? string.Join('.', segments) : written;
+        var first = segments.Length > 0 ? segments[0] : written;
+
+        return new Read(first.IndexOf('[') is var open and >= 0 ? first[..open] : first, whole, template, insideAny);
+    }
+
+    /// <summary>
+    /// The whole number <paramref name="written"/> says, as a path's index and an instance id's marks are written:
+    /// digits alone - no sign, no space - with no leading zero but in <c>0</c> itself; <see langword="null"/> where it
+    /// is not written so, or is past what an index can be. One spelling, so that one place in a list is never written
+    /// two ways.
+    /// </summary>
+    /// <param name="written">The digits, as written.</param>
+    public static int? WholeNumber(string written)
+    {
+        ArgumentNullException.ThrowIfNull(written);
+
+        return written.Length > 0
+            && written.All(character => character is >= '0' and <= '9')
+            && (written.Length == 1 || written[0] != '0')
+            && int.TryParse(written, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var value)
+                ? value
+                : null;
+    }
 
     /// <summary>
     /// Every name <paramref name="expression"/> reads, in the order it reads them, once each.
@@ -295,12 +421,7 @@ public static class WorkflowExpressions
 
     private static void Add(List<Read> reads, string name, bool Template, bool insideAny)
     {
-        // The read's own grammar - a dotted name - is walked here, so that 'a.b.c' is one read and
-        // not three. Anything after the first segment is the engine's to mean.
-        var segments = name.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        var root = segments.Length > 0 ? segments[0] : name;
-
-        var read = new Read(root, string.Join('.', segments), Template, insideAny);
+        var read = ReadOf(name, Template, insideAny);
 
         if (reads.All(earlier => !string.Equals(earlier.Whole, read.Whole, StringComparison.Ordinal)))
         {
@@ -330,27 +451,39 @@ public static class WorkflowExpressions
     private static bool StartsName(char character) => char.IsLetter(character) || character == '_';
 
     /// <summary>
-    /// Reads one dotted name: segments of name characters joined by dots. A dash is a name
+    /// Reads one path as it is written whole, with no space inside it: segments of name characters
+    /// joined by dots, each followed by any indexes into a list (<c>items[0]</c>). A dash is a name
     /// character, because a step's name may hold one; a dot is not, because it separates the
-    /// segments of a read.
+    /// segments of a read. Read in one pass, however many segments the path has.
     /// </summary>
     private static (string Name, int Next) ReadName(string expression, int index)
     {
         var end = index;
 
-        while (end < expression.Length && (char.IsLetterOrDigit(expression[end]) || expression[end] is '_' or '-'))
+        while (true)
         {
-            end++;
-        }
+            while (end < expression.Length && (char.IsLetterOrDigit(expression[end]) || expression[end] is '_' or '-'))
+            {
+                end++;
+            }
 
-        // A dotted read: a.b, a.b.c. A trailing dot (a member the engine fills) ends the name here.
-        if (end < expression.Length && expression[end] == '.' && end + 1 < expression.Length && StartsName(expression[end + 1]))
-        {
-            var (rest, next) = ReadName(expression, end + 1);
-            return ($"{expression[index..end]}.{rest}", next);
-        }
+            // An index is part of the path where it is written as one: '[', a whole number, ']'.
+            while (end < expression.Length && expression[end] == '['
+                && expression.IndexOf(']', end + 1) is var close and > 0
+                && WholeNumber(expression[(end + 1)..close]) is not null)
+            {
+                end = close + 1;
+            }
 
-        return (expression[index..end], end);
+            // A dotted read: a.b, a.b.c. A trailing dot (a member the engine fills) ends the name here.
+            if (end < expression.Length && expression[end] == '.' && end + 1 < expression.Length && StartsName(expression[end + 1]))
+            {
+                end++;
+                continue;
+            }
+
+            return (expression[index..end], end);
+        }
     }
 
     /// <summary>The position after the quoted string that starts at <paramref name="index"/>.</summary>

@@ -95,6 +95,18 @@ internal sealed class OrchestrationKit
         return Worktree(agent);
     }
 
+    /// <summary>
+    /// Creates agent <paramref name="agent"/> with no worktree, which reads the main tree and records no session, failing
+    /// the test where it is not created.
+    /// </summary>
+    public async Task CreateReadingAgentAsync(string agent)
+    {
+        var created = await Harness.AgentService.CreateAsync(
+            new AgentCreateRequest(Main, Orchestrator, agent, "model-b", Empty: false, Session: null, NoWorktree: true), Token);
+
+        Assert.True(created.Outcome.Succeeded, Describe(created.Outcome));
+    }
+
     public Task<CommandOutcome> FoldAsync(string agent, bool apply, params string[] settled)
         => FoldAsync(agent, apply, new FoldAllowances { Settled = settled });
 

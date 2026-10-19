@@ -860,6 +860,93 @@ public sealed class PhysicalFileSystemTests
     }
 
     /// <summary>
+    /// A file opened for appending has one writer on every system: a second open for appending is refused while the
+    /// first stands - before it reads or cuts a byte, so a line the first is still writing is not taken for a torn one -
+    /// a reader reads beside the writer all the while, and once the first has closed the next writer opens. Linux and
+    /// macOS lock a file only by advice, and grant a second writer what the first was granted unless the writer claims
+    /// something no other open may share.
+    /// </summary>
+    [Fact]
+    public void OpenForAppend_RefusesASecondWriterWhileTheFirstStands_AndAReaderStillReads()
+    {
+        using var temp = new TempDirectory();
+        var disk = Create();
+        var path = temp.Combine("stream.jsonl");
+
+        using (var first = disk.OpenForAppend(path))
+        {
+            first.AppendFlushed("{\"a\":1}\n"u8);
+
+            // A line the first is still writing: a second writer's recovery would take it for a torn one and cut it.
+            first.AppendFlushed("{\"b\""u8);
+
+            var refused = Assert.Throws<IOException>(() => disk.OpenForAppend(path));
+
+            Assert.Equal(
+                $"'{path}' is not opened for writing: another writer holds its claim '{path}.lock', or the claim could not be taken ({refused.InnerException!.Message}). Nothing was read or written.",
+                refused.Message);
+
+            using (var reading = new StreamReader(disk.OpenRead(path)))
+            {
+                Assert.Equal("{\"a\":1}\n{\"b\"", reading.ReadToEnd());
+            }
+
+            first.AppendFlushed(":2}\n"u8);
+        }
+
+        Assert.Equal("{\"a\":1}\n{\"b\":2}\n", File.ReadAllText(path));
+
+        using var next = disk.OpenForAppend(path);
+
+        Assert.Equal(16, next.Length);
+    }
+
+    /// <summary>
+    /// An append is the system's at once: the file is opened with no buffer of its own, so what was written is in the file
+    /// before any flush - and a write the disk refuses is refused by that write, never held to be written, and refused
+    /// again, when the file is closed.
+    /// </summary>
+    [Fact]
+    public void OpenForAppend_HoldsNothingInABufferOfItsOwn()
+    {
+        using var temp = new TempDirectory();
+        var path = temp.Combine("stream.jsonl");
+
+        using var file = PhysicalAppendFile.Open(path, (opened, options) => new Flushing(opened, options, fails: () => false, flushes: false));
+
+        file.AppendFlushed("{\"a\":1}\n"u8);
+
+        using var reading = new StreamReader(Create().OpenRead(path));
+
+        Assert.Equal("{\"a\":1}\n", reading.ReadToEnd());
+    }
+
+    /// <summary>
+    /// An append the disk would not put on the disk is taken back, so a line the record counted lost does not land later,
+    /// and closing the file raises nothing more: the failure is the append's, raised once.
+    /// </summary>
+    [Fact]
+    public void OpenForAppend_TakesBackAnAppendTheDiskWouldNotKeep_AndClosesQuietly()
+    {
+        using var temp = new TempDirectory();
+        var path = temp.Combine("stream.jsonl");
+        var full = false;
+
+        var file = PhysicalAppendFile.Open(path, (opened, options) => new Flushing(opened, options, fails: () => full, flushes: true));
+
+        file.AppendFlushed("{\"a\":1}\n"u8);
+        full = true;
+
+        var failed = Assert.Throws<IOException>(() => file.AppendFlushed("{\"b\":2}\n"u8));
+
+        full = false;
+        file.Dispose();
+
+        Assert.Equal(Flushing.Full, failed.Message);
+        Assert.Equal("{\"a\":1}\n", File.ReadAllText(path));
+    }
+
+    /// <summary>
     /// What is held under <paramref name="tree"/> once what held it has ended, looked at until nothing is: what a
     /// process lets go of as it ends is waited for rather than guessed at.
     /// </summary>
@@ -876,6 +963,29 @@ public sealed class PhysicalFileSystemTests
     /// A program left waiting in a directory of the test's choosing, ended when it is disposed, however the test
     /// ends: one left running would hold the test's directory after it.
     /// </summary>
+    /// <summary>
+    /// A file whose flush to the disk fails while <paramref name="fails"/> says so, as a full disk's does, and does nothing
+    /// where <paramref name="flushes"/> says not, so that only what the write itself put in the file is there.
+    /// </summary>
+    private sealed class Flushing(string path, FileStreamOptions options, Func<bool> fails, bool flushes) : FileStream(path, options)
+    {
+        /// <summary>What a full disk says to a flush.</summary>
+        public const string Full = "There is not enough space on the disk.";
+
+        public override void Flush(bool flushToDisk)
+        {
+            if (fails())
+            {
+                throw new IOException(Full);
+            }
+
+            if (flushes)
+            {
+                base.Flush(flushToDisk);
+            }
+        }
+    }
+
     private sealed class Waiting : IDisposable
     {
         private readonly Process _process;

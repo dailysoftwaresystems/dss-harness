@@ -1,6 +1,7 @@
 using System.Text.Json;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Help;
 using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Results;
 using DssHarness.Core.Runners;
@@ -568,8 +569,281 @@ public sealed class WorkflowValidationServiceTests
 
         Assert.False(report.Passed);
         Assert.Equal(
-            [".harness-config/workflows/small/small.yml: step 'format' runs 'formatter', which writes the tree, and names no 'in'; a runner that changes files works in an agent's worktree, never in the main tree"],
+            [".harness-config/workflows/small/small.yml: step 'format' runs 'formatter', which writes the tree (writesTree), on the main tree: the run reads its definition there and folds into it, so a runner that writes works in an agent's worktree. Name the create-agent step with 'in'"],
             report.Lines);
+    }
+
+    /// <summary>
+    /// V24: a runner a run step's runner names in its run checks runs within the step's legs, so one that writes the tree
+    /// holds the step to an agent's worktree as the step's own runner would; named with in, the step holds.
+    /// </summary>
+    [Fact]
+    public async Task ARunStepWhoseRunnersRunCheckWritesTheTree_NamesAnAgentToWorkIn()
+    {
+        using var repository = await RepositoryAsync(
+            new HarnessConfig
+            {
+                Workflows = ["small"],
+                PredefinedRunners = new Dictionary<string, RunnerConfig>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["formatter"] = new RunnerConfig
+                    {
+                        WritesTree = true,
+                        Phases = [new RunnerPhase { Name = "format", Command = ["tool"] }],
+                    },
+                    ["lint"] = new RunnerConfig
+                    {
+                        Phases = [new RunnerPhase { Name = "lint", Command = ["tool"] }],
+                        ExpectedExceptions =
+                        [
+                            new ExpectedException
+                            {
+                                ExceptionType = "Flake",
+                                Messages = ["it flaked"],
+                                Message = "excused: the formatter was mid-write",
+                                EarnedOn = "2026-10-13",
+                                EarnedAt = "local",
+                                Mechanism = "the formatter rewrites what lint reads",
+                                Anchor = "D-AREA-TOPIC-ONE",
+                                RunChecks = [new RunCheck { PredefinedRunner = "formatter" }],
+                            },
+                        ],
+                    },
+                },
+            });
+
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        await WriteAsync(
+            repository,
+            "small",
+            """
+            name: small
+            steps:
+              - name: make
+                type: create-agent
+                agent: worker
+              - name: lint
+                type: run
+                runner: lint
+              - name: lint-in-place
+                type: run
+                runner: lint
+                in: make
+                dependsOn: [make]
+            """,
+            cancellationToken,
+            "agents/worker.md");
+
+        var report = await Service(repository).CheckAsync(repository.Path, "small", cancellationToken);
+
+        Assert.Equal(
+            [".harness-config/workflows/small/small.yml: step 'lint' runs 'lint', whose run check 'formatter' writes the tree (writesTree), on the main tree: the run reads its definition there and folds into it, so a runner that writes works in an agent's worktree. Name the create-agent step with 'in'"],
+            report.Lines);
+    }
+
+    /// <summary>
+    /// V27: the agents a run makes are named 'a' and a number that grows to the workflow's most step instances, each
+    /// agent made by one at the most, and every name fits worktrees.maxNameLength as an agent's must when it is made. A
+    /// workflow that makes no agent, or whose bound keeps the number short enough, holds.
+    /// </summary>
+    [Fact]
+    public async Task TheAgentsARunMakes_AreNamedWithinTheWorktreesBound()
+    {
+        using var repository = await RepositoryAsync(new HarnessConfig { Workflows = ["small"], Worktrees = new WorktreeSettings { MaxNameLength = 4 } });
+        var cancellationToken = TestContext.Current.CancellationToken;
+        const string Makes = """
+            name: small
+            steps:
+              - name: make
+                type: create-agent
+                agent: worker
+            """;
+
+        await WriteAsync(repository, "small", Makes, cancellationToken, "agents/worker.md");
+
+        Assert.Equal(
+            [$"{Shown("small")}: the workflow creates agents, whose generated names ('a' and up to 4 digits) are 5 characters, and worktrees.maxNameLength is 4"],
+            (await Service(repository).CheckAsync(repository.Path, "small", cancellationToken)).Lines);
+
+        // A bound of 999 instances numbers no agent past a999.
+        await WriteAsync(repository, "small", Makes.Replace("name: small\n", "name: small\nmaxInstances: 999\n", StringComparison.Ordinal), cancellationToken, "agents/worker.md");
+
+        Assert.Equal(
+            [$"ok {Shown("small")} (1 step, 0 reasoning)"],
+            (await Service(repository).CheckAsync(repository.Path, "small", cancellationToken)).Lines);
+
+        await WriteAsync(repository, "small", "name: small\nsteps:\n  - name: orient\n    type: orient\n", cancellationToken);
+
+        Assert.Equal(
+            [$"ok {Shown("small")} (1 step, 0 reasoning)"],
+            (await Service(repository).CheckAsync(repository.Path, "small", cancellationToken)).Lines);
+    }
+
+    /// <summary>
+    /// V30, where config.json declares a commit.template: a commit step gives a value for every variable the template
+    /// requires, and none for a variable it does not declare, which nothing would fill in; one that gives each it
+    /// requires holds.
+    /// </summary>
+    [Fact]
+    public async Task ACommitStepsVariables_AreTheOnesTheCommitTemplateDeclares()
+    {
+        using var repository = await RepositoryAsync(
+            new HarnessConfig
+            {
+                Workflows = ["small"],
+                Commit = new CommitConfig
+                {
+                    Template = "{type}: {summary}",
+                    Variables = new Dictionary<string, CommitVariable>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["type"] = new CommitVariable { Required = true },
+                        ["summary"] = new CommitVariable { Default = "work" },
+                    },
+                },
+            });
+
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        await WriteAsync(
+            repository,
+            "small",
+            """
+            name: small
+            steps:
+              - name: save
+                type: commit
+                variables:
+                  summary: done
+                  scope: core
+              - name: whole
+                type: commit
+                dependsOn: [save]
+                variables:
+                  type: feat
+            """,
+            cancellationToken);
+
+        var report = await Service(repository).CheckAsync(repository.Path, "small", cancellationToken);
+
+        Assert.Equal(
+            [
+                $"{Shown("small")}: step 'save' is a commit step and gives no value for 'type', which commit.template requires: add it under the step's variables",
+                $"{Shown("small")}: step 'save' is a commit step and gives a value for 'scope', which commit.variables does not declare: the template is filled with the variables it declares, and this one would be read by nothing",
+            ],
+            report.Lines);
+    }
+
+    /// <summary>
+    /// The help, the README and the architecture say what validate-workflow holds a definition to of the configuration it
+    /// is checked under: a runner that writes the tree in an agent's worktree, the agents' names within the worktrees'
+    /// bound, and a commit step's variables against the commit template.
+    /// </summary>
+    [Fact]
+    public void TheHelpTheReadmeAndTheArchitecture_SayWhatADefinitionIsHeldToOfTheConfiguration()
+    {
+        var help = Prose.Words(HelpTopics.Render("workflows"));
+        var readme = Prose.Document("README.md");
+        var architecture = Prose.Document("docs", "architecture.md");
+
+        Assert.Contains(
+            "validate-workflow holds a definition to the config.json it is checked under too: a run step whose runner, or a runner its run checks "
+                + "name, writes the tree (writesTree) names with in the create-agent step whose worktree it works in, since the run reads its "
+                + "definition in the main tree and folds into it; the agents a run makes, named 'a' and a number that grows to the workflow's "
+                + "maxInstances, fit worktrees.maxNameLength; and a commit step gives a value for every variable commit.template requires and none "
+                + "for one it does not declare - or, where none is declared, a message and no variables.",
+            help,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "It holds a definition to the configuration too: a `run` step whose runner, or a runner its run checks name, writes the tree "
+                + "(`writesTree`) names with `in` the create-agent step whose worktree it works in; the agents a run makes, `a` and a number up to "
+                + "the workflow's `maxInstances`, fit `worktrees.maxNameLength`; and a commit step gives a value for every variable "
+                + "`commit.template` requires and none for one it does not declare - with no template, a `message` and no `variables`.",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A definition is held to the `config.json` it is checked under as well: a `run` step whose runner - or a runner its run checks "
+                + "name - says `writesTree` names with `in` the create-agent step whose worktree it works in, since the run reads its definition "
+                + "in the main tree and folds into it; the agents a run makes, named `a` and a number that grows to the workflow's "
+                + "`maxInstances`, fit `worktrees.maxNameLength`; and a commit step gives a value for every variable `commit.template` requires "
+                + "and none for one it does not declare - or, with no template, a `message` and no `variables`.",
+            architecture,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The help, the README and the architecture say where what only a prompt reads stands - each name in the prompts of
+    /// the agent asked it - that the advisor's and the reporter's prompts read no step by name, and that a pull request's
+    /// body reads what a template key reads.
+    /// </summary>
+    [Fact]
+    public void TheHelpTheReadmeAndTheArchitecture_SayWhereWhatOnlyAPromptReadsStands()
+    {
+        var help = Prose.Words(HelpTopics.Render("workflows"));
+        var readme = Prose.Document("README.md");
+        var architecture = Prose.Document("docs", "architecture.md");
+
+        Assert.Contains(
+            "What only a prompt reads stands where its agent is asked it: {recommendations} in a reason step's prompt and the advisor's, "
+                + "{question.<name>} in the advisor's alone, {status.<name>} in the reporter's two - {status.question} in its askPrompt alone - "
+                + "{update.<name>} in the prompts of the step that plans an update and of the steps of its scope, and {piece.<name>} in a step of "
+                + "the work-item group; the advisor's and the reporter's prompts read no step by name, and a pull request's body, which the "
+                + "engine fills and no agent reads, reads what a template key reads and no skill.",
+            help,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "What only a prompt reads stands where its agent is asked it: `{recommendations}` in a reason step's prompt and the advisor's, "
+                + "`{question.*}` in the advisor's alone, `{status.*}` in the reporter's two - `{status.question}` in its `askPrompt` alone - "
+                + "`{update.*}` in the prompts of the step that plans an update and of the steps of its scope, and `{piece.*}` in a step of the "
+                + "work-item group; the advisor's and the reporter's prompts read no step by name, and a pull request's `body`, which the engine "
+                + "fills and no agent reads, reads what a template key reads and no skill.",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "What only a prompt reads stands where its agent is asked it: `{recommendations}` in a reason step's prompt and the advisor's, "
+                + "`{question.*}` in the advisor's alone, `{status.*}` in the reporter's two - `{status.question}` in its `askPrompt` alone - "
+                + "`{update.*}` in the prompts of the step that plans an update and of the steps of its scope, and `{piece.*}` in a step of the "
+                + "work-item group; the advisor's and the reporter's prompts are read too, and read no step by name, and a pull request's "
+                + "`body`, which the engine fills and no agent reads, reads what a template key reads and no skill.",
+            architecture,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The help, the README and the architecture say what the engine gives under a question, the status, a plan update
+    /// and a piece - the help from the lists the typing reads - and that the bar and each run fact are one text, which
+    /// no expression reads.
+    /// </summary>
+    [Fact]
+    public void TheHelpTheReadmeAndTheArchitecture_SayWhatTextsTheEngineGivesAPrompt()
+    {
+        var help = Prose.Words(HelpTopics.Render("workflows"));
+        var readme = Prose.Document("README.md");
+        var architecture = Prose.Document("docs", "architecture.md");
+
+        Assert.Contains(
+            "A question gives only the texts the engine names (question.step, question.kind, question.problem, question.answers, "
+                + "question.record), and so do the status (status.facts, status.question, status.records), a plan update (update.cause, "
+                + "update.since, update.work) and a piece (piece.kind, piece.changed, piece.keep, piece.undo, piece.instead, piece.cause, "
+                + "piece.before); the bar is one text, and so is each run fact (worktree, work, plans, rows, orchestrator, agent, step, os), "
+                + "which a template reads and an expression does not.",
+            help,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A question gives only the texts the engine names (`step`, `kind`, `problem`, `answers`, `record`), and so do the status "
+                + "(`facts`, `question`, `records`), a plan update (`cause`, `since`, `work`) and a piece (`kind`, `changed`, `keep`, `undo`, "
+                + "`instead`, `cause`, `before`); the bar is one text, and so is each run fact (`{worktree}`, `{os}` and the rest), which a "
+                + "template reads and an expression does not.",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A question gives only the texts the engine names (`step`, `kind`, `problem`, `answers`, `record`), and so do the status "
+                + "(`facts`, `question`, `records`), a plan update (`cause`, `since`, `work`) and a piece (`kind`, `changed`, `keep`, `undo`, "
+                + "`instead`, `cause`, `before`) - each list kept once, in `WorkflowExpressions` beside the run's own texts, and read by the "
+                + "typing; the bar is one text, and so is each run fact (`WorkflowExpressions.RunFacts`), which a template reads and an "
+                + "expression does not.",
+            architecture,
+            StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -764,6 +1038,54 @@ public sealed class WorkflowValidationServiceTests
         }
 
         throw new InvalidOperationException($"'{text}' read as JSON.");
+    }
+
+    /// <summary>
+    /// The files a definition names are read for what the definition reads: a reason step's path is typed by the schema
+    /// file the step names, and its prompt's placeholders are read as the step reads, each said at its line.
+    /// </summary>
+    [Fact]
+    public async Task ASchemaAndAPrompt_AreReadForWhatTheDefinitionReads()
+    {
+        using var repository = await RepositoryAsync(new HarnessConfig { Workflows = ["small"] });
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        await WriteAsync(
+            repository,
+            "small",
+            """
+            name: small
+            steps:
+              - name: draft
+                type: reason
+                agent: worker
+                prompt: prompts/work.md
+                outputs: schemas/work.json
+              - name: after
+                type: orient
+                when: 'draft.okk'
+            """,
+            cancellationToken,
+            "agents/worker.md");
+
+        var directory = Path.Combine(repository.Path, ".harness-config", "workflows", "small");
+
+        Directory.CreateDirectory(Path.Combine(directory, "prompts"));
+        Directory.CreateDirectory(Path.Combine(directory, "schemas"));
+        await File.WriteAllTextAsync(Path.Combine(directory, "prompts", "work.md"), "Work on {ghost.title}.\n", cancellationToken);
+        await File.WriteAllTextAsync(
+            Path.Combine(directory, "schemas", "work.json"),
+            """{"type":"object","additionalProperties":false,"properties":{"ok":{"type":"boolean"}}}""",
+            cancellationToken);
+
+        var report = await Service(repository).CheckAsync(repository.Path, "small", cancellationToken);
+
+        Assert.Equal(
+            [
+                $"{Shown("small")}: step 'draft' prompt 'prompts/work.md' line 1 reads 'ghost.title', which no step before 'draft', no input and no param provides",
+                $"{Shown("small")}: 'after.when' reads 'draft.okk', and the schema 'schemas/work.json' of step 'draft' has no property 'okk'",
+            ],
+            report.Lines);
     }
 
     /// <summary>Writes the definition of <paramref name="name"/> and each of <paramref name="files"/> beside it, as their own paths.</summary>

@@ -73,6 +73,14 @@ public sealed record ProcessRequest
     public Action? OnStarted { get; init; }
 
     /// <summary>
+    /// Where a <see cref="Contained"/> child's session is recorded while it runs, so a later run of the tool ends it where
+    /// this process was killed and left it running; <see langword="null"/> where it is recorded nowhere. Written on Linux
+    /// and macOS alone, where a session outlives the process that started it: on Windows the job that holds the child ends
+    /// it with this process, and nothing is recorded. A record that cannot be written is a start that failed.
+    /// </summary>
+    public IContainedSessionRecord? SessionRecord { get; init; }
+
+    /// <summary>
     /// Invoked for each stdout line as it arrives, in addition to capture.
     /// Raised on background threads, so implementations must be thread safe. One that throws is handed no more lines,
     /// and what it threw is raised once the child has gone.
@@ -105,4 +113,25 @@ public sealed record ProcessRequest
 
     /// <summary>Wall clock budget, or <see langword="null"/> for no limit.</summary>
     public TimeSpan? Timeout { get; init; }
+
+    /// <summary>
+    /// Whether the child is contained: what it starts is ended with it, at its own end as at a stop,
+    /// and a signal to this process does not reach it. Held through a container it is in before it
+    /// runs a line of its own - a session and group of its own on Linux and macOS, the job object
+    /// this runner makes and keeps on Windows - by way of the <c>contain-exec</c> step this tool
+    /// starts for it. On Windows everything born in the job ends; on Linux and macOS everything still
+    /// in the child's session, and at a stop in its tree, is asked to end and then made to, and a
+    /// process that made a session of its own away from the child's tree is not reached.
+    /// </summary>
+    public bool Contained { get; init; }
+
+    /// <summary>
+    /// Whether the child starts in a process group of its own on Linux and macOS, apart from the
+    /// terminal: an interruption typed where this process runs is sent to a group, and that group is
+    /// not this child's. On Windows the child starts as any other, whose console of its own already
+    /// keeps an interruption typed at this one's from it. Either way it is stopped as any other child
+    /// is, by its tree, and what it leaves at its own end is left; the session, and a container that
+    /// ends what outlives it, are <see cref="Contained"/>'s to give.
+    /// </summary>
+    public bool ApartFromTerminal { get; init; }
 }

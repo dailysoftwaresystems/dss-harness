@@ -236,6 +236,72 @@ public sealed class CommandPipelineTests : IDisposable
     }
 
     /// <summary>
+    /// What an operation did that every document says (<see cref="IDocumentFacts"/>) is in whatever document it answers
+    /// with, however it ends - its body's own, the stopped form where its body answered without one, where it threw, and
+    /// where it stopped before its body ran - written by the session after the command, so no command can leave it out.
+    /// </summary>
+    [Theory]
+    [InlineData("answered")]
+    [InlineData("refused")]
+    [InlineData("threw")]
+    [InlineData("stopped")]
+    public async Task WhatTheOperationDid_IsInEveryDocumentItAnswersWith_HoweverItEnds(string ending)
+    {
+        static string Stopped(SessionContext context, int code, string summary)
+            => new JsonObject { ["exitCode"] = code, ["summary"] = summary, ["legs"] = new JsonArray() }.ToJsonString();
+
+        var kit = Begin(
+            directory: ending == "stopped" ? Path.Combine(_tree.Path, "not-there") : null,
+            document: DocumentKind.Own,
+            stopped: Stopped);
+
+        kit.Services.Set(typeof(IEnumerable<IDocumentFacts>), new IDocumentFacts[] { new Did(["swept"]), new Did([]) });
+
+        var completion = await kit.Session.RunAsync(
+            (_, _) => ending switch
+            {
+                "answered" => Task.FromResult(CommandOutcome.Ok("done") with { Data = ["""{"exitCode":0,"summary":"done","legs":["a"]}"""], Quiet = true }),
+                "refused" => Task.FromResult(CommandOutcome.Refused("nothing was changed")),
+                _ => throw new HarnessException(HarnessExit.CommandFailed, "git would not answer."),
+            },
+            CancellationToken.None);
+
+        var (code, summary, legs) = ending switch
+        {
+            "answered" => (HarnessExit.Success, "done", new JsonArray("a")),
+            "refused" => (HarnessExit.Refused, "nothing was changed", new JsonArray()),
+            "threw" => (HarnessExit.CommandFailed, "git would not answer.", new JsonArray()),
+            _ => (HarnessExit.UsageError, $"Directory '{Path.Combine(_tree.Path, "not-there")}' does not exist.", new JsonArray()),
+        };
+
+        Assert.Equal(code, completion.ExitCode);
+        Assert.Equal(
+            new JsonObject { ["exitCode"] = code, ["summary"] = summary, ["legs"] = legs, ["did"] = new JsonArray("swept") }.ToJsonString(ReportJson.Options) + kit.Output.NewLine,
+            kit.Output.ToString());
+    }
+
+    /// <summary>
+    /// An operation that did nothing a document says answers with each document exactly as its command wrote it, and one
+    /// that answers with no document has its answer left as it is whatever it did.
+    /// </summary>
+    [Fact]
+    public async Task NothingADocumentSays_LeavesEveryDocumentAsItsCommandWroteIt()
+    {
+        const string Written = """{"exitCode":0,"summary":"done","legs":["a"]}""";
+
+        var quiet = Begin(document: DocumentKind.Own, stopped: (_, exitCode, summary) => $"stopped {exitCode}: {summary}");
+        quiet.Services.Set(typeof(IEnumerable<IDocumentFacts>), new IDocumentFacts[] { new Did([]) });
+        await quiet.Session.RunAsync((_, _) => Task.FromResult(CommandOutcome.Ok("done") with { Data = [Written], Quiet = true }), CancellationToken.None);
+
+        var none = Begin();
+        none.Services.Set(typeof(IEnumerable<IDocumentFacts>), new IDocumentFacts[] { new Did(["swept"]) });
+        await none.Session.RunAsync((_, _) => Task.FromResult(CommandOutcome.Ok("done") with { Data = [Written] }), CancellationToken.None);
+
+        Assert.Equal(Written + quiet.Output.NewLine, quiet.Output.ToString());
+        Assert.Equal([Written, "test: OK - done"], Lines(none.Output));
+    }
+
+    /// <summary>
     /// A document says the code the process exits with, a defect its end meets included: where a document is asked for,
     /// the end runs before it is written - the answered document's code made the defect's, its other members as the body
     /// gave them, and a stopped one's too - and the event that says the operation ended still comes last.
@@ -592,8 +658,8 @@ public sealed class CommandPipelineTests : IDisposable
             "PausesOnInterrupt is honoured by the run verbs of an orchestrator run, which this build does not have yet: every interrupt still cancels.",
             Assert.Throws<NotSupportedException>(() => host.Begin(new SessionOptions { Command = "test", PausesOnInterrupt = true })).Message);
         Assert.Equal(
-            "ApartFromTerminal is honoured once a process can be started apart from the terminal (ProcessRequest), which this build cannot do "
-                + "yet: what an operation starts is in reach of an interrupt.",
+            "ApartFromTerminal is honoured once a session hands it to the processes its operation starts (ProcessRequest.ApartFromTerminal), "
+                + "which this build does not do yet: what an operation starts is in reach of an interrupt.",
             Assert.Throws<NotSupportedException>(() => host.Begin(new SessionOptions { Command = "test", ApartFromTerminal = true })).Message);
         Assert.Equal(
             "A front end's own Output is honoured once a front end other than the command line builds an operation's services, which this "
@@ -853,6 +919,14 @@ public sealed class CommandPipelineTests : IDisposable
         /// <summary>Begins an operation of this kit's own host: a step of the operation the kit's session runs.</summary>
         internal Kit Step(OperationId parent, string command = "step")
             => new(command, defers: true, parent: parent, verbose: false, directory: null, beginsRun: false, document: DocumentKind.None, stopped: null, owner: _owner, sharedHost: Host);
+    }
+
+    /// <summary>What an operation did, as a document says it: <c>did</c>, holding each thing, where it did any.</summary>
+    private sealed class Did(string[] things) : IDocumentFacts
+    {
+        public bool HasAny => things.Length > 0;
+
+        public void WriteInto(JsonObject document) => document["did"] = new JsonArray([.. things.Select(thing => (JsonNode?)thing)]);
     }
 
     /// <summary>

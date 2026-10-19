@@ -69,16 +69,16 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `delete-worktree <name> [--force]` | Remove a worktree and everything under it, its copies on hosts, and the copies kept in each - the mutation workers in `.mutations`, and on this machine the leg copies in `.legs`; refuses one holding work that would be lost, a locked one, one whose evidence directories hold measurements, or one with a copy in it that a sweep or a run still holds or that cannot be removed, without `--force` |
 | `list-worktree [--hosts] [--json]` | List existing worktrees with the commit each was made from, the copies hosts keep of them, and the copies left by worktrees that are gone; `--hosts` also asks each host what it keeps, and how large each copy is |
 | `create-orchestrator <o> --model <id> [--parallel N]` | Create an orchestrator under `.orchestrators`; `--parallel` (4 unless given) is the most agents with a worktree at once |
-| `create-agent <o> <a> --model <id> [--empty]` | Create an agent: its record, its worktree at `<worktrees.root>/<o>/<a>`, and its seed, the main tree's uncommitted state handed to it |
+| `create-agent <o> <a> --model <id> [--empty \| --no-worktree]` | Create an agent: its record, its worktree at `<worktrees.root>/<o>/<a>`, and its seed, the main tree's uncommitted state handed to it; `--no-worktree` makes the engine's own kind, a record and two directories that read the main tree and record no session - a person has no use for one by hand |
 | `seed-agent <o> <a> [--empty] [--force]` | Seed a live agent again, with every path the main tree holds otherwise than the agent shares it, committed or not; refused over changes of its own without `--force`; a file written after it was weighed stops it, exit 21, never written over |
 | `refresh-agent <o> <a> [<path>... \| --all] [--except <path>]... [--stale <path>]... [--merge <path>]... [--apply] [--json]` | Copy into a live agent every path under the paths - the anchor registries' directory by default, anywhere in the tree with `--all` - that the main tree holds otherwise than the agent shares it, committed or not, recorded as handed to it; a path the agent already holds as the main tree does is recorded as shared; refused over a path the agent changed, naming each, unless `--except` leaves it as the agent changed it, `--stale` hands it the main tree's copy where the main tree's history holds the agent's very bytes at that path, or `--merge` writes a clean three-way merge of the two into its worktree as its change, the path recorded as handed the main tree's copy; the arm registry both changed is merged by arm, unasked, and taken where the result reads as a registry; a file the agent's session wrote after it was weighed stops it, exit 21, never written over |
 | `rebase-agent <o> <a> [--apply] [--json] [--merge <path>] [--settled <path>]` | Move a live agent's base to the main tree's HEAD: what the main tree committed since comes in as git holds it, its own changes and what it was handed stay; a path both changed is refused with what a three-way merge of it gives, unless `--merge` names it and its merge is clean - written into the worktree as the agent's own change on the new base - or `--settled` keeps the copy reconciled by hand; the arm registry is merged by arm, unasked, and taken where the result reads as a registry; refused over anything of its own what comes in would go over, a file renamed in case alone over the agent's copy at its old name, or its deletion of it, among it; a file the agent's session wrote after it was weighed stops it, exit 21, never written over; run again after one that stopped part way - the command its last words name - it finishes it |
 | `fold-agent <o> <a> [--apply] [--json] [--merge <path>] [--settled <path>] [--new <ID>] [--accept-lost <ID>:<cell>] [--accept-over <ID>:<cell>]` | Fold an agent's own work into the main tree and apply the rows it filed, every refusal named before anything is written and the rows all or nothing; a path both trees changed is refused with what a three-way merge of it gives, and a clean merge written into both trees only where `--merge` names it - the arm registry is merged by arm, unasked, and taken where the result reads as a registry; a path reconciled in the main tree by hand and named with `--settled` is handed to the agent as the main tree holds it and recorded as shared; a row is made only where `--new` names it, and a cell that does not keep its stored text written only where `--accept-lost` names it; a row an earlier fold applied is weighed cell by cell against what the registries took since - their change kept where the agent made none, and a cell both changed otherwise written only where `--accept-over` names it; a rename of case alone the agent made is refused, saying to `git mv -f` it in the main tree, and once made there is weighed against the base's file under its old name; its worktree is kept |
-| `delete-agent <o> <a> [--apply] [--json] [--merge <path>] [--settled <path>] [--new <ID>] [--accept-lost <ID>:<cell>] [--accept-over <ID>:<cell>] [--discard-uncommitted]` | Fold what is left and apply its rows, keep its evidence and transcripts, then remove its worktree and its copies on hosts |
+| `delete-agent <o> <a> [--apply] [--json] [--merge <path>] [--settled <path>] [--new <ID>] [--accept-lost <ID>:<cell>] [--accept-over <ID>:<cell>] [--discard-uncommitted]` | Fold what is left and apply its rows, keep its evidence and transcripts, then remove its worktree and its copies on hosts; an agent with no worktree is marked deleted in one write, nothing folded and no transcript looked for |
 | `list-orchestrator [<o>] [--json]` | List orchestrators, their agents and where each stands |
 | `validate-workflow [<workflow>] [--json]` | Check the workflows `workflows` in config.json declares: that each yml definition reads, holds and names files that are there (`help workflows`). Nothing is run |
 | `export-workflow <workflow> --to <dir> [--shipped] [--json]` | Copy a workflow - its yml and every file it names - into `<dir>/<workflow>/`: a declared one once it holds (12 where it does not), byte for byte, or with `--shipped` the one this tool ships, to make a version of your own. Refused (13) where that folder is there; a file that cannot be written takes back what was written |
-| `delete-orchestrator <o> [--delete-evidence]` | Delete an orchestrator once every agent of it is deleted and nothing is left below its directory under the worktrees root - no worktree, and no directory with a `.git` of its own, each named and refused (13) until then; its agents' evidence and transcripts go only with `--delete-evidence` |
+| `delete-orchestrator <o> [--delete-evidence]` | Delete an orchestrator once no agent of it stands in the way - a live one with no worktree goes with it - and nothing is left below its directory under the worktrees root - no worktree, and no directory with a `.git` of its own, each named and refused (13) until then; its agents' evidence, transcripts, steps and sessions go only with `--delete-evidence` |
 | `check-root-litter` | Report files left loose at the root of the checkout, ignored ones included |
 | `write-anchor <id> --priority P --trigger TEXT` | Add an anchor: to the pending registry, or to done when closed |
 | `set-anchor <id>` | Change an anchor; changing its status moves it between registries |
@@ -90,7 +90,7 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `check-ci-legs` | Report each CI leg, separating a real failure from a budget overrun, by the job and step names `ci` declares (`help ci`) |
 | `legs [--legs a,b]` | Measure the hosts and show where each leg can run, or why it cannot |
 | `install-missing-tools [--legs a,b] [--dry-run]` | Install or update what each configured leg's host is missing; `--dry-run` names each command and runs none |
-| `update-tool [--wait] [--tool-path <directory>]` | Update this machine's installed DssHarness to the newest release, only while no other `dssharness` process runs here: refused naming each (13), or waited for with `--wait`; on Windows run it from beside the installed tool, as above (`help legs`) |
+| `update-tool [--wait] [--tool-path <directory>]` | Update this machine's installed DssHarness to the newest release, only while no other `dssharness` process runs here: refused naming each (13), or waited for with `--wait`; refused while another update changes the same directory (13, with `--wait` or not); on Windows run it from beside the installed tool, as above (`help legs`) |
 | `sync` | Put a host's copy of this tree in step with it, deletions included: each worktree has a copy of its own; `--dry-run` lists what it would write and delete and exits as the sync would; `--pull <path>` instead brings a file back from it, or every file below a directory named with a `/` at its end |
 | `build [--legs a,b] [--time]` | Build every selected leg, in its own variant-keyed build directory |
 | `test [--legs a,b] [--time] [--set-up]` | Build and test every selected leg, with a witness for each verdict; `--set-up` brings up the set-ups its test invocation names around each leg's work, on the machine that runs it, and down after (`help setups`) |
@@ -209,6 +209,7 @@ in `config.json`.
 .harness-config/config.json                  tracked; the whole contract
 .harness-config/workflows/<name>/<name>.yml  tracked; one directory per workflow, its definition
 .harness-config/workflows/<name>/...         tracked; every file that definition names - its agents, prompts, schemas
+.harness-config/workflows/.env/              contents ignored, .gitkeep tracked; kept for the agent clients' keys and settings, which this build does not read yet
 .harness-config/runner/actions/<name>/<name>.yml   tracked; one directory per action
 .harness-config/runner/actions/<name>/...          tracked; whatever its steps run
 .harness-config/runner/.env/                 contents ignored, .gitkeep tracked
@@ -223,6 +224,10 @@ in `config.json`.
 .orchestrators/<o>/plans/<name>/             ignored; its plans, and each agent's
 .orchestrators/<o>/work/<agent>/             ignored; an agent's scratch and task files
 .orchestrators/<o>/agents/<agent>/           ignored; an agent's record, seed, the bytes it shares, rows, the rows applied, kept evidence
+.orchestrators/<o>/agents/<agent>/steps/<instance>/   ignored; one step the agent runs, or that runs in or for its worktree: everything of the step, its handoff.md where one stopped it
+.orchestrators/<o>/agents/<agent>/sessions/<id>/      ignored; API clients only: one conversation with the provider, in the provider's own form
+.orchestrators/<o>/steps/<instance>/         ignored; one step of a run that no agent owns, the create-agent that makes an agent included
+.orchestrators/<o>/.../<instance>/children/<session>.json   ignored; in either kind of step, Linux and macOS: a session a contained child of the step leads while it runs, ended by the next command over the orchestrator where the process that started it was killed
 .mutations/                                  contents ignored, .gitkeep tracked; the tree's mutation workers, in every tree
 .mutations/<key><mark>-<n>/                  ignored; a worker, a repository of its own, and its claim beside it
 .legs/                                       contents ignored, .gitkeep tracked; the copies of the tree its legs work in, in every tree
@@ -449,10 +454,27 @@ starts. A file that cannot be written takes back what was written before it, wit
 made, so no folder is left with part of a workflow in it - or the refusal says why it could not.
 
 This build checks workflow definitions - the shape of every key, every step, input, param and
-output an expression names, every file the definition points at - and refuses (12) naming each
+output an expression, a template or a prompt names, every path typed by the schema or the built-in
+output that holds it, every operator and every key held to what it takes (a `when` a boolean, a
+`forEach` a list), every file the definition points at - and refuses (12) naming each
 problem, without running anything, as a `config.json` that does not hold is refused. A
 `config.json` that declares no workflow has nothing to check and is refused (13), saying how to
-declare the implementation one. The engine that runs workflows is the next thing the tool grows. Run `dssharness help workflows` for the whole of it.
+declare the implementation one. It holds a definition to the configuration too: a `run` step whose
+runner, or a runner its run checks name, writes the tree (`writesTree`) names with `in` the
+create-agent step whose worktree it works in; the agents a run makes, `a` and a number up to the
+workflow's `maxInstances`, fit `worktrees.maxNameLength`; and a commit step gives a value for every
+variable `commit.template` requires and none for one it does not declare - with no template, a
+`message` and no `variables`. What only a prompt reads stands where its agent is asked it:
+`{recommendations}` in a reason step's prompt and the advisor's, `{question.*}` in the advisor's
+alone, `{status.*}` in the reporter's two - `{status.question}` in its `askPrompt` alone -
+`{update.*}` in the prompts of the step that plans an update and of the steps of its scope, and
+`{piece.*}` in a step of the work-item group; the advisor's and the reporter's prompts read no step
+by name, and a pull request's `body`, which the engine fills and no agent reads, reads what a
+template key reads and no skill. A question gives only the texts the engine names (`step`, `kind`,
+`problem`, `answers`, `record`), and so do the status (`facts`, `question`, `records`), a plan
+update (`cause`, `since`, `work`) and a piece (`kind`, `changed`, `keep`, `undo`, `instead`,
+`cause`, `before`); the bar is one text, and so is each run fact (`{worktree}`, `{os}` and the
+rest), which a template reads and an expression does not. The engine that runs workflows is the next thing the tool grows. Run `dssharness help workflows` for the whole of it.
 
 ## Anchors
 

@@ -27,13 +27,14 @@ public interface IOrchestratorService : IUseCase
     Task<CommandOutcome> CreateAsync(string startDirectory, string name, string model, int? parallel, string? session, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Deletes an orchestrator, once none of its agents is live or closed and no worktree is left below its directory
-    /// under the worktrees root. The evidence and transcripts its agents kept go with it only with
-    /// <paramref name="deleteEvidence"/>.
+    /// Deletes an orchestrator, once none of its agents with a worktree is live or closed and no worktree is left below its
+    /// directory under the worktrees root; an agent with no worktree holds nothing but records, and goes with it whatever
+    /// its state. The evidence, transcripts, steps and sessions its agents kept - each agent's, of either kind, deleted or
+    /// not - go with it only with <paramref name="deleteEvidence"/>.
     /// </summary>
     /// <param name="startDirectory">A directory in the repository.</param>
     /// <param name="name">The orchestrator's name.</param>
-    /// <param name="deleteEvidence">Whether the evidence and transcripts its agents kept may go with it.</param>
+    /// <param name="deleteEvidence">Whether the evidence, transcripts, steps and sessions its agents kept may go with it.</param>
     /// <param name="cancellationToken">Stops it.</param>
     Task<CommandOutcome> DeleteAsync(string startDirectory, string name, bool deleteEvidence, CancellationToken cancellationToken = default);
 
@@ -63,6 +64,7 @@ public interface IOrchestratorService : IUseCase
 /// <param name="worktrees">The worktrees there are, for the listing.</param>
 /// <param name="store">The records.</param>
 /// <param name="log">The logs.</param>
+/// <param name="sessions">Ends what a killed process left of an orchestrator's contained children, first in every command over it.</param>
 /// <param name="clock">When an orchestrator is created.</param>
 public sealed class OrchestratorService(
     IHarnessContextLoader contextLoader,
@@ -73,6 +75,7 @@ public sealed class OrchestratorService(
     IWorktreeService worktrees,
     OrchestrationStore store,
     OrchestrationLog log,
+    ChildSessions sessions,
     TimeProvider clock) : IOrchestratorService
 {
     /// <summary>The command that creates one.</summary>
@@ -92,6 +95,7 @@ public sealed class OrchestratorService(
     private readonly IWorktreeService _worktrees = worktrees;
     private readonly OrchestrationStore _store = store;
     private readonly OrchestrationLog _log = log;
+    private readonly ChildSessions _sessions = sessions;
     private readonly TimeProvider _clock = clock;
 
     public Task<CommandOutcome> CreateAsync(
@@ -134,6 +138,9 @@ public sealed class OrchestratorService(
         }
 
         var orchestrator = OrchestratorLayout.Of(layout, name);
+
+        // Before anything else of it is read: what a killed process left running of its steps' contained children.
+        await _sessions.SweepAsync(orchestrator, CreateCommand).ConfigureAwait(false);
 
         // Everything an orchestrator keeps is machine-local: a record, a log, a transcript committed by `git add -A` would
         // travel to every clone. init keeps the directory in git and everything made in it out.
@@ -242,6 +249,11 @@ public sealed class OrchestratorService(
         var context = await MainTree.LoadAsync(_contextLoader, _platform, startDirectory, cancellationToken).ConfigureAwait(false);
         var layout = context.Layout;
         var orchestrator = OrchestratorLayout.Of(layout, name);
+
+        // Before anything else of it is read, and before its records can go with it: what a killed process left running
+        // of its steps' contained children.
+        await _sessions.SweepAsync(orchestrator, DeleteCommand).ConfigureAwait(false);
+
         var worktreesDirectory = layout.WorktreesDirectoryUnder(context.Config.Worktrees.Root);
         var group = WorktreeAddress.Plain(name).PathUnder(worktreesDirectory);
 
@@ -269,7 +281,11 @@ public sealed class OrchestratorService(
                     + "Nothing was changed.");
             }
 
-            var open = agents.Where(agent => agent.Record!.State != AgentStates.Deleted).Select(agent => agent.Name).ToList();
+            // An agent that reads the main tree holds nothing but records: it does not stand in the way, and goes with
+            // the orchestrator. What it kept of the steps that ran as it and of its sessions is counted below with every
+            // agent's, under the guard --delete-evidence gives. What git lists below is refused on its own below, so the
+            // open agents are asked of the records alone.
+            var open = OrchestrationRules.OpenAgents(name, agents, []);
 
             if (open.Count > 0)
             {
@@ -292,15 +308,21 @@ public sealed class OrchestratorService(
                     $"Orchestrator '{name}' was not deleted: {WorktreeInspector.SaidUnrecorded(below.Unrecorded)}. Nothing was changed.");
             }
 
-            var kept = agents.Select(agent => (agent.Name, Evidence: Files(orchestrator.EvidenceDirectory(agent.Name)), Transcripts: Files(orchestrator.TranscriptsDirectory(agent.Name))))
-                .Where(agent => agent.Evidence + agent.Transcripts > 0)
+            // What an agent kept is its evidence and its Claude transcripts, and the steps that ran as it and its
+            // conversations with an API client - a step's stored stream is its transcript - whatever its kind and state.
+            var kept = agents.Select(agent => new KeptOf(
+                    agent.Name,
+                    Files(orchestrator.EvidenceDirectory(agent.Name)),
+                    Files(orchestrator.TranscriptsDirectory(agent.Name)),
+                    Files(orchestrator.AgentStepsDirectory(agent.Name)),
+                    Files(orchestrator.AgentSessionsDirectory(agent.Name))))
+                .Where(agent => agent.Evidence + agent.Transcripts + agent.Steps + agent.Sessions > 0)
                 .ToList();
 
             if (kept.Count > 0 && !deleteEvidence)
             {
                 return CommandOutcome.Refused(
-                    $"Orchestrator '{name}' was not deleted, because it keeps {ReportText.Counted(kept.Sum(agent => agent.Evidence), "evidence file")} and "
-                    + $"{ReportText.Counted(kept.Sum(agent => agent.Transcripts), "transcript file")} of its agents {string.Join(", ", kept.Select(agent => $"'{agent.Name}'"))}. "
+                    $"Orchestrator '{name}' was not deleted, because it keeps {KeptOf.Said(kept)} of its agents {string.Join(", ", kept.Select(agent => $"'{agent.Name}'"))}. "
                     + "Copy out what you need, or pass --delete-evidence to delete them with it. Nothing was changed.");
             }
 
@@ -312,12 +334,21 @@ public sealed class OrchestratorService(
                     + $"{OrchestrationReports.Line(DeleteCommand, name, deleteEvidence ? "--delete-evidence" : string.Empty)} run again finishes it.");
             }
 
+            // Every agent left is deleted, or has no worktree and was not: each is counted as what it is.
+            var deleted = agents.Count(agent => agent.Record!.State == AgentStates.Deleted);
+            var reading = agents.Count - deleted;
+            string[] went =
+            [
+                .. deleted == 0 ? [] : new[] { ReportText.Counted(deleted, "deleted agent") },
+                .. reading == 0 ? [] : new[] { $"{ReportText.Counted(reading, "agent")} with no worktree, not deleted" },
+            ];
+
             return CommandOutcome.Ok(
                 $"deleted orchestrator '{name}'",
                 [
                     $"removed {orchestrator.Directory}",
-                    .. agents.Count == 0 ? [] : new[] { $"with the history of {ReportText.Counted(agents.Count, "deleted agent")}" },
-                    .. kept.Count == 0 ? [] : new[] { $"and {ReportText.Counted(kept.Sum(agent => agent.Evidence), "evidence file")} and {ReportText.Counted(kept.Sum(agent => agent.Transcripts), "transcript file")}" },
+                    .. went.Length == 0 ? [] : new[] { $"with the history of {string.Join(" and ", went)}" },
+                    .. kept.Count == 0 ? [] : new[] { $"and {KeptOf.Said(kept)}" },
                 ]);
         });
 
@@ -454,6 +485,12 @@ public sealed class OrchestratorService(
             return CommandOutcome.Refused(OrchestrationReports.NoOrchestrator(name));
         }
 
+        // Before anything else of each is read: what a killed process left running of its steps' contained children.
+        foreach (var orchestrator in orchestrators)
+        {
+            await _sessions.SweepAsync(orchestrator, ListCommand).ConfigureAwait(false);
+        }
+
         var listed = await _worktrees.ListAsync(layout.MainCheckoutRoot, cancellationToken).ConfigureAwait(false);
         var inventory = new List<OrchestratorInventory>();
 
@@ -476,11 +513,15 @@ public sealed class OrchestratorService(
     /// <summary>
     /// One agent as the listing reports it: where its worktree is, from its own record - the worktrees root it was made
     /// under - and whether anything is there, asked of that path; for a record that does not read, the configured root.
+    /// An agent that reads the main tree has no worktree, so it names none.
     /// </summary>
     private AgentInventory Inventory(HarnessLayout layout, string configuredRoot, OrchestratorLayout orchestrator, AgentEntry agent)
     {
-        var path = agent.Record?.WorktreePath(layout) ?? WorktreeAddress.Nested(orchestrator.Name, agent.Name).PathUnder(layout.WorktreesDirectoryUnder(configuredRoot));
-        return new AgentInventory(agent, WorktreeExists(path), path, Evidence(orchestrator, agent.Name), Files(orchestrator.TranscriptsDirectory(agent.Name)));
+        var path = agent.Record is { Reads: true }
+            ? null
+            : agent.Record?.WorktreePath(layout) ?? WorktreeAddress.Nested(orchestrator.Name, agent.Name).PathUnder(layout.WorktreesDirectoryUnder(configuredRoot));
+
+        return new AgentInventory(agent, path is not null && WorktreeExists(path), path, Evidence(orchestrator, agent.Name), Files(orchestrator.TranscriptsDirectory(agent.Name)));
     }
 
     /// <summary>Whether anything is at an agent's worktree path; a path that cannot be looked at is said to be there, never gone.</summary>
@@ -507,6 +548,38 @@ public sealed class OrchestratorService(
     private int Files(string directory)
         => _fileSystem.DirectoryExists(directory) ? _fileSystem.EnumerateFiles(directory, recursive: true).Count() : 0;
 
+    /// <summary>
+    /// The files one agent kept that delete-orchestrator deletes only with --delete-evidence, by what they are.
+    /// </summary>
+    /// <param name="Name">The agent.</param>
+    /// <param name="Evidence">Its kept evidence's files.</param>
+    /// <param name="Transcripts">Its kept Claude transcripts' files.</param>
+    /// <param name="Steps">The files of the steps that ran as it.</param>
+    /// <param name="Sessions">The files of its conversations with an API client.</param>
+    private sealed record KeptOf(string Name, int Evidence, int Transcripts, int Steps, int Sessions)
+    {
+        /// <summary>
+        /// What <paramref name="kept"/> hold between them: the one wording of the refusal and the detail. Evidence and
+        /// transcripts are always named, as they always were; steps and sessions only where there are any, so an
+        /// orchestrator whose agents kept none says what it always said.
+        /// </summary>
+        /// <param name="kept">The agents that keep any.</param>
+        public static string Said(IReadOnlyList<KeptOf> kept)
+        {
+            var steps = kept.Sum(agent => agent.Steps);
+            var sessions = kept.Sum(agent => agent.Sessions);
+            string[] said =
+            [
+                ReportText.Counted(kept.Sum(agent => agent.Evidence), "evidence file"),
+                ReportText.Counted(kept.Sum(agent => agent.Transcripts), "transcript file"),
+                .. steps == 0 ? [] : new[] { ReportText.Counted(steps, "step file") },
+                .. sessions == 0 ? [] : new[] { ReportText.Counted(sessions, "session file") },
+            ];
+
+            return $"{string.Join(", ", said[..^1])} and {said[^1]}";
+        }
+    }
+
 
 }
 
@@ -526,13 +599,13 @@ public sealed record OrchestratorInventory(
 /// <summary>One agent, as list-orchestrator reports it.</summary>
 /// <param name="Entry">Its directory's record, or why it has none that reads.</param>
 /// <param name="WorktreeExists">Whether anything is at its worktree's path.</param>
-/// <param name="WorktreePath">Where its worktree is, or was: under the worktrees root it was made under.</param>
+/// <param name="WorktreePath">Where its worktree is, or was: under the worktrees root it was made under; null where it reads the main tree and has none.</param>
 /// <param name="Evidence">The evidence directories kept for it, relative to its directory.</param>
 /// <param name="Transcripts">How many transcript files are kept for it.</param>
 public sealed record AgentInventory(
     AgentEntry Entry,
     bool WorktreeExists,
-    string WorktreePath,
+    string? WorktreePath,
     IReadOnlyList<string> Evidence,
     int Transcripts);
 

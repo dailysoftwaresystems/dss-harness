@@ -7,6 +7,7 @@ using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
+using DssHarness.Core.Yaml;
 using YamlDotNet.Core;
 using YamlDotNet.RepresentationModel;
 
@@ -45,11 +46,9 @@ public interface IActionFileParser
 /// <inheritdoc cref="IActionFileParser"/>
 /// <remarks>
 /// <para>
-/// Parsed through YamlDotNet's representation model rather than its serialiser. The serialiser
-/// would reach a typed object faster and lose the two things this file needs most: the position of
-/// the key that was wrong, and the fact that a key was not recognised at all. A silently ignored
-/// key is a rule nobody applied, and the configuration reader elsewhere in this repository refuses
-/// one for the same reason.
+/// Parsed through the one YAML reader, <see cref="YamlReading"/>, which owns the reasons it reads
+/// YamlDotNet's representation model rather than a serialiser: the position of the key that was
+/// wrong, and the fact that a key was not recognised at all.
 /// </para>
 /// <para>
 /// Every problem in a file is collected and reported together. Fixing one error only to be shown
@@ -118,7 +117,10 @@ public sealed class ActionFileParser(
         ArgumentNullException.ThrowIfNull(text);
 
         var problems = new List<string>();
-        var root = LoadRoot(text, problems);
+        var root = YamlReading.Root(
+            text,
+            "an action file holds one, so that nothing has to decide which of them a runner ran",
+            problems);
 
         if (root is null)
         {
@@ -133,7 +135,7 @@ public sealed class ActionFileParser(
 
         foreach (var (keyNode, valueNode) in root.Children)
         {
-            var key = KnownKeyOf(keyNode, FileKeys, "top-level key", problems);
+            var key = YamlReading.KnownKey(keyNode, FileKeys, "top-level key", problems);
 
             if (key is null)
             {
@@ -143,11 +145,11 @@ public sealed class ActionFileParser(
             switch (key)
             {
                 case "name":
-                    name = RequireScalar(valueNode, "name", problems);
+                    name = YamlReading.RequireScalar(valueNode, "name", problems);
                     break;
 
                 case "description":
-                    description = RequireScalar(valueNode, "description", problems);
+                    description = YamlReading.RequireScalar(valueNode, "description", problems);
                     break;
 
                 case "inputs":
@@ -220,43 +222,6 @@ public sealed class ActionFileParser(
         return lines;
     }
 
-    private static YamlMappingNode? LoadRoot(string text, List<string> problems)
-    {
-        var stream = new YamlStream();
-
-        try
-        {
-            stream.Load(new StringReader(text));
-        }
-        catch (YamlException exception)
-        {
-            problems.Add($"line {exception.Start.Line}, column {exception.Start.Column}: "
-                + $"the file is not valid YAML ({exception.Message}).");
-            return null;
-        }
-
-        if (stream.Documents.Count == 0)
-        {
-            problems.Add("the file is empty.");
-            return null;
-        }
-
-        if (stream.Documents.Count > 1)
-        {
-            problems.Add($"the file holds {stream.Documents.Count} YAML documents; an action file "
-                + "holds one, so that nothing has to decide which of them a runner ran.");
-            return null;
-        }
-
-        if (stream.Documents[0].RootNode is YamlMappingNode mapping)
-        {
-            return mapping;
-        }
-
-        problems.Add(At(stream.Documents[0].RootNode, "the file's top level is not a mapping of keys."));
-        return null;
-    }
-
     /// <param name="node">The <c>inputs</c> mapping.</param>
     /// <param name="owner">
     /// Whose inputs these are, as a problem names them: <c>inputs</c> for the action's own, or a step's,
@@ -267,13 +232,13 @@ public sealed class ActionFileParser(
     {
         if (node is not YamlMappingNode mapping)
         {
-            problems.Add(At(node, $"'{owner}' is not a mapping of name to declaration."));
+            problems.Add(YamlReading.At(node, $"'{owner}' is not a mapping of name to declaration."));
             yield break;
         }
 
         foreach (var (keyNode, valueNode) in mapping.Children)
         {
-            var inputName = KeyOf(keyNode, problems);
+            var inputName = YamlReading.KeyOf(keyNode, problems);
 
             if (inputName is null)
             {
@@ -282,7 +247,7 @@ public sealed class ActionFileParser(
 
             if (valueNode is not YamlMappingNode declaration)
             {
-                problems.Add(At(valueNode, $"{Named(owner, inputName)} is not a mapping; it declares "
+                problems.Add(YamlReading.At(valueNode, $"{Named(owner, inputName)} is not a mapping; it declares "
                     + $"'{string.Join("', '", InputKeys)}'."));
                 continue;
             }
@@ -293,7 +258,7 @@ public sealed class ActionFileParser(
 
             foreach (var (declarationKeyNode, declarationValueNode) in declaration.Children)
             {
-                var key = KnownKeyOf(declarationKeyNode, InputKeys, $"key of {Named(owner, inputName)}", problems);
+                var key = YamlReading.KnownKey(declarationKeyNode, InputKeys, $"key of {Named(owner, inputName)}", problems);
 
                 if (key is null)
                 {
@@ -303,16 +268,16 @@ public sealed class ActionFileParser(
                 switch (key)
                 {
                     case "default":
-                        fallback = RequireScalar(declarationValueNode, $"{owner}.{inputName}.default", problems);
+                        fallback = YamlReading.RequireScalar(declarationValueNode, $"{owner}.{inputName}.default", problems);
                         break;
 
                     case "required":
-                        required = RequireBoolean(declarationValueNode, $"{owner}.{inputName}.required", problems)
+                        required = YamlReading.RequireBoolean(declarationValueNode, $"{owner}.{inputName}.required", problems)
                             ?? false;
                         break;
 
                     case "description":
-                        inputDescription = RequireScalar(
+                        inputDescription = YamlReading.RequireScalar(
                             declarationValueNode,
                             $"{owner}.{inputName}.description",
                             problems);
@@ -338,13 +303,13 @@ public sealed class ActionFileParser(
     {
         if (node is not YamlSequenceNode sequence)
         {
-            problems.Add(At(node, "'steps' is not a sequence."));
+            problems.Add(YamlReading.At(node, "'steps' is not a sequence."));
             yield break;
         }
 
         if (sequence.Children.Count == 0)
         {
-            problems.Add(At(node, "'steps' is empty; an action file that runs nothing is a file "
+            problems.Add(YamlReading.At(node, "'steps' is empty; an action file that runs nothing is a file "
                 + "whose runner reports success having done no work."));
             yield break;
         }
@@ -368,7 +333,7 @@ public sealed class ActionFileParser(
             // other, and '--manual-step' could not say which it meant.
             if (earlier.FirstOrDefault(declared => string.Equals(declared.Name, step.Name, StringComparison.Ordinal) && declared.Manual != step.Manual) is { } other)
             {
-                problems.Add(At(child, $"step '{step.Name}' is {(step.Manual ? "manual" : "not manual")}, and a step declared before it "
+                problems.Add(YamlReading.At(child, $"step '{step.Name}' is {(step.Manual ? "manual" : "not manual")}, and a step declared before it "
                     + $"by that name is {(other.Manual ? "manual" : "not")}: a run that names no step would run one of them and "
                     + "not the other. Give them names of their own, or make both manual or neither."));
             }
@@ -382,7 +347,7 @@ public sealed class ActionFileParser(
     {
         if (node is not YamlMappingNode mapping)
         {
-            problems.Add(At(node, "a step is not a mapping of keys."));
+            problems.Add(YamlReading.At(node, "a step is not a mapping of keys."));
             return null;
         }
 
@@ -411,7 +376,7 @@ public sealed class ActionFileParser(
 
         foreach (var (keyNode, valueNode) in mapping.Children)
         {
-            var key = KnownKeyOf(keyNode, StepKeys, "step key", problems);
+            var key = YamlReading.KnownKey(keyNode, StepKeys, "step key", problems);
 
             if (key is null)
             {
@@ -421,22 +386,22 @@ public sealed class ActionFileParser(
             switch (key)
             {
                 case "name":
-                    name = RequireScalar(valueNode, "a step's name", problems);
+                    name = YamlReading.RequireScalar(valueNode, "a step's name", problems);
                     break;
 
                 case "uses":
                     usesNode = valueNode;
-                    uses = RequireScalar(valueNode, "a step's uses", problems);
+                    uses = YamlReading.RequireScalar(valueNode, "a step's uses", problems);
                     break;
 
                 case "ref":
                     referenceNode = valueNode;
-                    reference = RequireScalar(valueNode, "a step's ref", problems);
+                    reference = YamlReading.RequireScalar(valueNode, "a step's ref", problems);
                     break;
 
                 case "run":
                     runNode = valueNode;
-                    run = RequireScalar(valueNode, "a step's run", problems);
+                    run = YamlReading.RequireScalar(valueNode, "a step's run", problems);
                     break;
 
                 case "workingDirectory":
@@ -497,7 +462,7 @@ public sealed class ActionFileParser(
                     break;
 
                 case "continueOnError":
-                    continueOnError = RequireBoolean(valueNode, "a step's continueOnError", problems) ?? false;
+                    continueOnError = YamlReading.RequireBoolean(valueNode, "a step's continueOnError", problems) ?? false;
                     break;
 
                 default:
@@ -507,7 +472,7 @@ public sealed class ActionFileParser(
 
         if (string.IsNullOrWhiteSpace(name))
         {
-            problems.Add(At(node, "a step has no 'name'; a step names its own log file, and two "
+            problems.Add(YamlReading.At(node, "a step has no 'name'; a step names its own log file, and two "
                 + "unnamed steps would write one file, the second overwriting the first's evidence."));
             name = string.Empty;
         }
@@ -516,7 +481,7 @@ public sealed class ActionFileParser(
             // A step's name becomes a directory under the action's build directory as well as a log
             // file's name. Everything a path cannot carry is already replaced, but a name that is
             // only dots survives that and means 'the directory above' to every file system there is.
-            problems.Add(At(node, $"a step named '{name}' has no name a directory can carry; a step "
+            problems.Add(YamlReading.At(node, $"a step named '{name}' has no name a directory can carry; a step "
                 + "writes into a directory of its own, and this one would name the directory above "
                 + "it."));
         }
@@ -534,7 +499,7 @@ public sealed class ActionFileParser(
         // that must have it first names it under 'needs'.
         if (action != PredefinedAction.None && manual)
         {
-            problems.Add(At(node, $"step '{name}' is '{PredefinedActions.Spell(action)}', which cannot be manual: the "
+            problems.Add(YamlReading.At(node, $"step '{name}' is '{PredefinedActions.Spell(action)}', which cannot be manual: the "
                 + "harness performs it to settle what later steps read. A manual step that must have it first "
                 + "names it under 'needs'."));
         }
@@ -544,14 +509,14 @@ public sealed class ActionFileParser(
         // on an exit code alone.
         if (action == PredefinedAction.None && manual && successPattern is null)
         {
-            problems.Add(At(node, $"step '{name}' is manual and declares no 'successPattern'. A manual step is "
+            problems.Add(YamlReading.At(node, $"step '{name}' is manual and declares no 'successPattern'. A manual step is "
                 + "witnessed like any other: it runs only when a run names it, and a line of its own output is "
                 + "what says it did the work it was named for."));
         }
 
         if (action != PredefinedAction.Checkout && reference is not null)
         {
-            problems.Add(At(referenceNode ?? node, $"'ref' applies only to '{PredefinedActions.Checkout}'."));
+            problems.Add(YamlReading.At(referenceNode ?? node, $"'ref' applies only to '{PredefinedActions.Checkout}'."));
         }
 
         // A predefined action is performed by the harness, not started as a child process, so nothing
@@ -562,7 +527,7 @@ public sealed class ActionFileParser(
         {
             foreach (var keyNode in mapping.Children.Keys.OfType<YamlScalarNode>().Where(key => key.Value is { } read && RunBlockKeys.Contains(read, StringComparer.Ordinal)))
             {
-                problems.Add(At(keyNode, $"'{keyNode.Value}' applies only to a step's 'run' block; '{PredefinedActions.Spell(action)}' "
+                problems.Add(YamlReading.At(keyNode, $"'{keyNode.Value}' applies only to a step's 'run' block; '{PredefinedActions.Spell(action)}' "
                     + "is performed by the harness rather than run as a program, so nothing reads it."));
             }
         }
@@ -610,13 +575,13 @@ public sealed class ActionFileParser(
     {
         if (node is not YamlSequenceNode sequence)
         {
-            problems.Add(At(node, $"step '{name}' 'needs' is a list of the steps declared before it that run first."));
+            problems.Add(YamlReading.At(node, $"step '{name}' 'needs' is a list of the steps declared before it that run first."));
             return [];
         }
 
         if (sequence.Children.Count == 0)
         {
-            problems.Add(At(node, $"step '{name}' 'needs' names no step. Leave the key out for a step that needs none."));
+            problems.Add(YamlReading.At(node, $"step '{name}' 'needs' names no step. Leave the key out for a step that needs none."));
             return [];
         }
 
@@ -625,14 +590,14 @@ public sealed class ActionFileParser(
 
         foreach (var item in sequence.Children)
         {
-            if (RequireScalar(item, $"a step '{name}' needs", problems) is not { Length: > 0 } needed)
+            if (YamlReading.RequireScalar(item, $"a step '{name}' needs", problems) is not { Length: > 0 } needed)
             {
                 continue;
             }
 
             if (needs.Contains(needed, StringComparer.Ordinal))
             {
-                problems.Add(At(item, $"step '{name}' names '{needed}' under 'needs' more than once."));
+                problems.Add(YamlReading.At(item, $"step '{name}' names '{needed}' under 'needs' more than once."));
                 continue;
             }
 
@@ -642,7 +607,7 @@ public sealed class ActionFileParser(
             // starts: itself, or one declared after it, would have to run before it had.
             if (earlier.FirstOrDefault(step => string.Equals(step.Name, needed, StringComparison.Ordinal)) is not { } step)
             {
-                problems.Add(At(item, string.Equals(needed, name, StringComparison.Ordinal)
+                problems.Add(YamlReading.At(item, string.Equals(needed, name, StringComparison.Ordinal)
                     ? $"step '{name}' needs itself; a step can need only one declared before it."
                     : $"step '{name}' needs '{needed}', and no step declared before it has that name: steps run in "
                         + "the order declared, so a step can need only one declared before it. "
@@ -654,7 +619,7 @@ public sealed class ActionFileParser(
             // step would have that run run it too - the very thing 'manual' says a plain run never does.
             if (!manual && step.Manual)
             {
-                problems.Add(At(item, $"step '{name}' runs in every run of the action and needs '{needed}', which is "
+                problems.Add(YamlReading.At(item, $"step '{name}' runs in every run of the action and needs '{needed}', which is "
                     + $"manual: a run that names no step would have to run '{needed}' too. Make '{name}' manual, or "
                     + $"'{needed}' not."));
             }
@@ -673,7 +638,7 @@ public sealed class ActionFileParser(
 
             if (unmet.Count > 0)
             {
-                problems.Add(At(item, $"step '{name}' needs '{needed}', which does not run on {string.Join(" or ", unmet)}: "
+                problems.Add(YamlReading.At(item, $"step '{name}' needs '{needed}', which does not run on {string.Join(" or ", unmet)}: "
                     + $"a leg there would run '{name}' without it. Name {string.Join(" and ", unmet)} in '{needed}''s runOn, "
                     + $"or leave {(unmet.Count == 1 ? "it" : "them")} out of '{name}''s."));
             }
@@ -702,7 +667,7 @@ public sealed class ActionFileParser(
             return;
         }
 
-        problems.Add(At(
+        problems.Add(YamlReading.At(
             node,
             $"an input named '{name}' is a name this tool already fills in, so a run line naming "
             + $"'{{{name}}}' would get this tool's value while INPUT_{name.ToUpperInvariant()} carried "
@@ -727,7 +692,7 @@ public sealed class ActionFileParser(
             return;
         }
 
-        problems.Add(At(
+        problems.Add(YamlReading.At(
             node,
             $"an input named '{name}' is not a name a run line can write in braces, so '{{{name}}}' would "
             + $"reach its program as written: a name {LegPathNames.NameRule}. Give the input another name."));
@@ -743,13 +708,13 @@ public sealed class ActionFileParser(
 
         if (node is not YamlSequenceNode sequence)
         {
-            problems.Add(At(node, $"a step's 'runOn' is a list of the operating systems it runs on: {available}."));
+            problems.Add(YamlReading.At(node, $"a step's 'runOn' is a list of the operating systems it runs on: {available}."));
             return [];
         }
 
         if (sequence.Children.Count == 0)
         {
-            problems.Add(At(
+            problems.Add(YamlReading.At(
                 node,
                 "a step's 'runOn' names no operating system, so the step would never run. Leave the key "
                 + "out for a step every leg runs."));
@@ -760,14 +725,14 @@ public sealed class ActionFileParser(
 
         foreach (var item in sequence.Children)
         {
-            if (RequireScalar(item, "an operating system in runOn", problems) is not { Length: > 0 } system)
+            if (YamlReading.RequireScalar(item, "an operating system in runOn", problems) is not { Length: > 0 } system)
             {
                 continue;
             }
 
             if (!PlatformNames.OperatingSystems.Contains(system, StringComparer.Ordinal))
             {
-                problems.Add(At(item, $"'{system}' is not an operating system runOn can name. Available: {available}."));
+                problems.Add(YamlReading.At(item, $"'{system}' is not an operating system runOn can name. Available: {available}."));
                 continue;
             }
 
@@ -795,7 +760,7 @@ public sealed class ActionFileParser(
     {
         if (node is not YamlSequenceNode sequence)
         {
-            problems.Add(At(node, "a step's 'outputs' is a list of paths the step produces."));
+            problems.Add(YamlReading.At(node, "a step's 'outputs' is a list of paths the step produces."));
             return [];
         }
 
@@ -803,7 +768,7 @@ public sealed class ActionFileParser(
 
         foreach (var item in sequence.Children)
         {
-            if (RequireScalar(item, "a step's output", problems) is not { Length: > 0 } path)
+            if (YamlReading.RequireScalar(item, "a step's output", problems) is not { Length: > 0 } path)
             {
                 continue;
             }
@@ -813,7 +778,7 @@ public sealed class ActionFileParser(
             if (PlatformPaths.IsRootedOnAnyPlatform(normalised)
                 || normalised.Split('/').Any(segment => segment is ".." or "." or ""))
             {
-                problems.Add(At(
+                problems.Add(YamlReading.At(
                     item,
                     $"a step's output '{path}' is not a path inside the step's build directory, {{stepBuild}}; an "
                     + "output is something the step wrote where the harness put it, without '.' or "
@@ -839,7 +804,7 @@ public sealed class ActionFileParser(
         // as another.
         if (uses is not null && hasRun)
         {
-            problems.Add(At(step, "a step declares both 'uses' and 'run'; it does one or the other."));
+            problems.Add(YamlReading.At(step, "a step declares both 'uses' and 'run'; it does one or the other."));
             return PredefinedAction.None;
         }
 
@@ -847,7 +812,7 @@ public sealed class ActionFileParser(
         {
             if (!hasRun)
             {
-                problems.Add(At(step, "a step declares neither 'uses' nor 'run', so it does nothing."));
+                problems.Add(YamlReading.At(step, "a step declares neither 'uses' nor 'run', so it does nothing."));
             }
 
             return PredefinedAction.None;
@@ -860,7 +825,7 @@ public sealed class ActionFileParser(
             return action.Value;
         }
 
-        problems.Add(At(
+        problems.Add(YamlReading.At(
             usesNode ?? step,
             $"'{uses}' is not a predefined action. Available: '{string.Join("', '", PredefinedActions.All)}'."));
 
@@ -873,7 +838,7 @@ public sealed class ActionFileParser(
 
         if (lines.Count == 0)
         {
-            problems.Add(At(node, "a step's 'run' holds no command; every line is blank or a comment."));
+            problems.Add(YamlReading.At(node, "a step's 'run' holds no command; every line is blank or a comment."));
             return [];
         }
 
@@ -907,20 +872,20 @@ public sealed class ActionFileParser(
     {
         if (node is not YamlMappingNode mapping)
         {
-            problems.Add(At(node, "a step's 'env' is not a mapping of name to value."));
+            problems.Add(YamlReading.At(node, "a step's 'env' is not a mapping of name to value."));
             return;
         }
 
         foreach (var (keyNode, valueNode) in mapping.Children)
         {
-            var key = KeyOf(keyNode, problems);
+            var key = YamlReading.KeyOf(keyNode, problems);
 
             if (key is null)
             {
                 continue;
             }
 
-            var value = RequireScalar(valueNode, $"env.{key}", problems);
+            var value = YamlReading.RequireScalar(valueNode, $"env.{key}", problems);
 
             if (value is null)
             {
@@ -929,7 +894,7 @@ public sealed class ActionFileParser(
 
             if (!env.TryAdd(key, value))
             {
-                problems.Add(At(keyNode, $"'env.{key}' is set twice; nothing can say which value "
+                problems.Add(YamlReading.At(keyNode, $"'env.{key}' is set twice; nothing can say which value "
                     + "the step would have run with."));
             }
         }
@@ -955,7 +920,7 @@ public sealed class ActionFileParser(
     /// </remarks>
     private static string? ReadWorkingDirectory(YamlNode node, List<string> problems)
     {
-        var path = RequireScalar(node, "a step's workingDirectory", problems);
+        var path = YamlReading.RequireScalar(node, "a step's workingDirectory", problems);
 
         if (path is null)
         {
@@ -966,7 +931,7 @@ public sealed class ActionFileParser(
         // a step must not mean two different directories on two machines.
         if (path.Length == 0 || PlatformPaths.IsRootedOnAnyPlatform(path))
         {
-            problems.Add(At(node, $"a step's 'workingDirectory' is '{path}', which is an absolute "
+            problems.Add(YamlReading.At(node, $"a step's 'workingDirectory' is '{path}', which is an absolute "
                 + "path; it names a directory under the step's own root, so that a step runs where "
                 + "its 'workingDirectoryRoot' says it does."));
             return null;
@@ -974,7 +939,7 @@ public sealed class ActionFileParser(
 
         if (PlatformPaths.ClimbsOut(path))
         {
-            problems.Add(At(node, $"a step's 'workingDirectory' is '{path}', which climbs out of "
+            problems.Add(YamlReading.At(node, $"a step's 'workingDirectory' is '{path}', which climbs out of "
                 + "the step's own root with '..'; it names a directory under that root, so that a "
                 + "step runs where its 'workingDirectoryRoot' says it does."));
             return null;
@@ -996,7 +961,7 @@ public sealed class ActionFileParser(
     /// </remarks>
     private static bool ReadFlag(YamlNode node, string key, List<string> problems)
     {
-        var value = RequireScalar(node, $"a step's {key}", problems);
+        var value = YamlReading.RequireScalar(node, $"a step's {key}", problems);
 
         if (value is null)
         {
@@ -1008,13 +973,13 @@ public sealed class ActionFileParser(
             return flag;
         }
 
-        problems.Add(At(node, $"'{value}' is not a value for {key}. Available: 'true', 'false'."));
+        problems.Add(YamlReading.At(node, $"'{value}' is not a value for {key}. Available: 'true', 'false'."));
         return false;
     }
 
     private static WorkingDirectoryRoot ReadWorkingDirectoryRoot(YamlNode node, List<string> problems)
     {
-        var value = RequireScalar(node, "a step's workingDirectoryRoot", problems);
+        var value = YamlReading.RequireScalar(node, "a step's workingDirectoryRoot", problems);
 
         if (value is null)
         {
@@ -1026,7 +991,7 @@ public sealed class ActionFileParser(
             return root;
         }
 
-        problems.Add(At(
+        problems.Add(YamlReading.At(
             node,
             $"'{value}' is not a working directory root. Available: "
             + $"'{string.Join("', '", WorkingDirectoryRoots.All)}'."));
@@ -1036,7 +1001,7 @@ public sealed class ActionFileParser(
 
     private static string? ReadPattern(YamlNode node, List<string> problems)
     {
-        var pattern = RequireScalar(node, "a step's successPattern", problems);
+        var pattern = YamlReading.RequireScalar(node, "a step's successPattern", problems);
 
         if (pattern is null)
         {
@@ -1048,7 +1013,7 @@ public sealed class ActionFileParser(
             // An empty pattern matches everything, so a step declaring one would be witnessed by
             // nothing while appearing to be witnessed. Refused where the file is read, as the
             // phase runner refuses one read from config.json.
-            problems.Add(At(node, "a step's 'successPattern' is empty; an empty pattern matches any "
+            problems.Add(YamlReading.At(node, "a step's 'successPattern' is empty; an empty pattern matches any "
                 + "output, which is a witness that proves nothing."));
             return null;
         }
@@ -1059,7 +1024,7 @@ public sealed class ActionFileParser(
         }
         catch (ArgumentException exception)
         {
-            problems.Add(At(node, $"'successPattern' does not compile: {exception.Message}"));
+            problems.Add(YamlReading.At(node, $"'successPattern' does not compile: {exception.Message}"));
             return null;
         }
 
@@ -1068,7 +1033,7 @@ public sealed class ActionFileParser(
 
     private static int? ReadStallSeconds(YamlNode node, List<string> problems)
     {
-        var text = RequireScalar(node, "a step's stallSeconds", problems);
+        var text = YamlReading.RequireScalar(node, "a step's stallSeconds", problems);
 
         if (text is null)
         {
@@ -1077,75 +1042,18 @@ public sealed class ActionFileParser(
 
         if (!int.TryParse(text, System.Globalization.CultureInfo.InvariantCulture, out var seconds))
         {
-            problems.Add(At(node, $"'stallSeconds' is '{text}', which is not a whole number of seconds."));
+            problems.Add(YamlReading.At(node, $"'stallSeconds' is '{text}', which is not a whole number of seconds."));
             return null;
         }
 
         if (seconds < 0)
         {
-            problems.Add(At(node, $"'stallSeconds' is {seconds}; a stall bound is never negative, "
+            problems.Add(YamlReading.At(node, $"'stallSeconds' is {seconds}; a stall bound is never negative, "
                 + "and zero already means no bound."));
             return null;
         }
 
         return seconds;
-    }
-
-    private static string? KeyOf(YamlNode node, List<string> problems)
-    {
-        if (node is YamlScalarNode { Value: { } value })
-        {
-            return value;
-        }
-
-        problems.Add(At(node, "a key is not a plain name."));
-        return null;
-    }
-
-    private static string? RequireScalar(YamlNode node, string what, List<string> problems)
-    {
-        if (node is YamlScalarNode { Value: { } value })
-        {
-            return value;
-        }
-
-        problems.Add(At(node, $"'{what}' is not a single value."));
-        return null;
-    }
-
-    private static bool? RequireBoolean(YamlNode node, string what, List<string> problems)
-    {
-        var text = RequireScalar(node, what, problems);
-
-        if (text is null)
-        {
-            return null;
-        }
-
-        if (bool.TryParse(text, out var value))
-        {
-            return value;
-        }
-
-        problems.Add(At(node, $"'{what}' is '{text}', which is not true or false."));
-        return null;
-    }
-
-    /// <summary>
-    /// The key <paramref name="node"/> names, when <paramref name="known"/> lists it. Any other is a
-    /// problem added here, before a reader looks at it.
-    /// </summary>
-    private static string? KnownKeyOf(YamlNode node, IReadOnlyList<string> known, string what, List<string> problems)
-    {
-        var key = KeyOf(node, problems);
-
-        if (key is null || known.Contains(key, StringComparer.Ordinal))
-        {
-            return key;
-        }
-
-        problems.Add(At(node, $"'{key}' is not a {what}. Known: '{string.Join("', '", known)}'."));
-        return null;
     }
 
     /// <summary>
@@ -1154,9 +1062,6 @@ public sealed class ActionFileParser(
     /// </summary>
     private static UnreachableException Unread(string key)
         => new($"'{key}' is a key action files take, and nothing reads it.");
-
-    private static string At(YamlNode node, string message)
-        => $"line {node.Start.Line}, column {node.Start.Column}: {message}";
 
     private static HarnessException Refuse(string path, IReadOnlyList<string> problems)
     {

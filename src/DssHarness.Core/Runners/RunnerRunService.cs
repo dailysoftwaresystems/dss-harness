@@ -1317,7 +1317,7 @@ public sealed class RunnerRunService(
             // Judged as it will start rather than as written: a secret a name fills in - a value
             // given with --input, or held in the runner's .env too - reaches the argument list all
             // the same.
-            if (HoldsASecret(values, [program, .. arguments]))
+            if (values.HoldsASecret([program, .. arguments]))
             {
                 // Deliberately without quoting the argument: a refusal that named the value would
                 // be the leak it exists to prevent.
@@ -1357,11 +1357,6 @@ public sealed class RunnerRunService(
             + $"{string.Join("; ", building.Select(cause => cause.Reason))} - so nothing was run: unbuilt, it would read "
             + "whatever the last build left there.");
     }
-
-    /// <summary>Whether any element of <paramref name="command"/> holds a secret value.</summary>
-    private static bool HoldsASecret(ActionValues values, IReadOnlyList<string> command)
-        => values.SecretNames.Count > 0
-            && command.Any(argument => !string.Equals(values.Redact(argument), argument, StringComparison.Ordinal));
 
     /// <summary>
     /// Wipes the directories a runner declares as its own, before any step runs.

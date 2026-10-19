@@ -288,6 +288,7 @@ public sealed class OrchestratorServiceTests
                 kit.Harness.ProcessContext),
             kit.Harness.OrchestrationStore,
             kit.Harness.OrchestrationLog,
+            kit.Harness.SessionsOver(fileSystem),
             TimeProvider.System);
 
     /// <summary>A mutation worker as a sync makes one: marked as the harness's, a repository of its own, holding a file.</summary>
@@ -341,7 +342,7 @@ public sealed class OrchestratorServiceTests
         using var temp = new TempDirectory();
         var kit = await OrchestrationKit.PrepareAsync(temp);
         var stuck = new StuckDirectoryFileSystem(kit.Harness.FileSystem, kit.Layout.LogsDirectory);
-        var service = new OrchestratorService(kit.Harness.ContextLoader, kit.Harness.GitClient, stuck, kit.Harness.Platform, kit.Harness.Output, kit.Harness.WorktreeService, kit.Harness.OrchestrationStore, kit.Harness.OrchestrationLog, TimeProvider.System);
+        var service = new OrchestratorService(kit.Harness.ContextLoader, kit.Harness.GitClient, stuck, kit.Harness.Platform, kit.Harness.Output, kit.Harness.WorktreeService, kit.Harness.OrchestrationStore, kit.Harness.OrchestrationLog, kit.Harness.ChildSessions, TimeProvider.System);
 
         var stopped = await service.DeleteAsync(kit.Main, "o1", deleteEvidence: false, Token);
 
@@ -362,7 +363,7 @@ public sealed class OrchestratorServiceTests
         var kit = await OrchestrationKit.PrepareAsync(temp);
         Directory.CreateDirectory(kit.Worktrees);
         var git = new InterceptingGitClient(kit.Harness.GitClient) { ListWorktreesFailure = new HarnessException(HarnessExit.CommandFailed, "Could not list the worktrees: broken") };
-        var service = new OrchestratorService(kit.Harness.ContextLoader, git, kit.Harness.FileSystem, kit.Harness.Platform, kit.Harness.Output, kit.Harness.WorktreeService, kit.Harness.OrchestrationStore, kit.Harness.OrchestrationLog, TimeProvider.System);
+        var service = new OrchestratorService(kit.Harness.ContextLoader, git, kit.Harness.FileSystem, kit.Harness.Platform, kit.Harness.Output, kit.Harness.WorktreeService, kit.Harness.OrchestrationStore, kit.Harness.OrchestrationLog, kit.Harness.ChildSessions, TimeProvider.System);
 
         var failure = await Assert.ThrowsAsync<HarnessException>(() => service.DeleteAsync(kit.Main, "o1", deleteEvidence: false, Token));
 
@@ -397,7 +398,7 @@ public sealed class OrchestratorServiceTests
         Assert.True((await kit.DeleteAsync("ag", apply: true, discard: true)).Succeeded);
         OrchestrationKit.Write(kit.Layout.AgentDirectory("ag"), "notes/handoff.md", "done\n");
         var stuck = new StuckDirectoryFileSystem(kit.Harness.FileSystem, Path.Combine(kit.Layout.AgentDirectory("ag"), "notes"));
-        var service = new OrchestratorService(kit.Harness.ContextLoader, kit.Harness.GitClient, stuck, kit.Harness.Platform, kit.Harness.Output, kit.Harness.WorktreeService, kit.Harness.OrchestrationStore, kit.Harness.OrchestrationLog, TimeProvider.System);
+        var service = new OrchestratorService(kit.Harness.ContextLoader, kit.Harness.GitClient, stuck, kit.Harness.Platform, kit.Harness.Output, kit.Harness.WorktreeService, kit.Harness.OrchestrationStore, kit.Harness.OrchestrationLog, kit.Harness.ChildSessions, TimeProvider.System);
 
         var stopped = await service.DeleteAsync(kit.Main, "o1", deleteEvidence: true, Token);
 
@@ -418,7 +419,7 @@ public sealed class OrchestratorServiceTests
         var kit = await OrchestrationKit.PrepareAsync(temp);
         Directory.CreateDirectory(kit.Worktrees);
         var stuck = new StuckDirectoryFileSystem(kit.Harness.FileSystem, kit.Worktrees);
-        var service = new OrchestratorService(kit.Harness.ContextLoader, kit.Harness.GitClient, stuck, kit.Harness.Platform, kit.Harness.Output, kit.Harness.WorktreeService, kit.Harness.OrchestrationStore, kit.Harness.OrchestrationLog, TimeProvider.System);
+        var service = new OrchestratorService(kit.Harness.ContextLoader, kit.Harness.GitClient, stuck, kit.Harness.Platform, kit.Harness.Output, kit.Harness.WorktreeService, kit.Harness.OrchestrationStore, kit.Harness.OrchestrationLog, kit.Harness.ChildSessions, TimeProvider.System);
 
         var deleted = await service.DeleteAsync(kit.Main, "o1", deleteEvidence: false, Token);
 

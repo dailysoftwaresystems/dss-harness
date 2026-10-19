@@ -142,6 +142,7 @@ public interface IAgentService : IUseCase
 /// <param name="transcripts">Finds and keeps an agent's Claude transcripts.</param>
 /// <param name="store">The records.</param>
 /// <param name="log">The logs.</param>
+/// <param name="sessions">Ends what a killed process left of an orchestrator's contained children, first in every command over it.</param>
 /// <param name="clock">When things happen.</param>
 /// <param name="processContext">This process's current directory, read per call: where a verb was typed, when none is named.</param>
 public sealed class AgentService(
@@ -161,6 +162,7 @@ public sealed class AgentService(
     ClaudeTranscripts transcripts,
     OrchestrationStore store,
     OrchestrationLog log,
+    ChildSessions sessions,
     TimeProvider clock,
     IProcessContext processContext) : IAgentService
 {
@@ -198,12 +200,13 @@ public sealed class AgentService(
     private readonly ClaudeTranscripts _transcripts = transcripts;
     private readonly OrchestrationStore _store = store;
     private readonly OrchestrationLog _log = log;
+    private readonly ChildSessions _sessions = sessions;
     private readonly TimeProvider _clock = clock;
     private readonly IProcessContext _processContext = processContext;
     private readonly AgentFold _fold = new(gitClient, fileSystem, permissions, platform);
     private readonly AgentEvidence _evidence = new(fileSystem, platform);
 
-    public async Task<CommandOutcome> CreateAsync(
+    public Task<CommandOutcome> CreateAsync(
         string startDirectory,
         string orchestrator,
         string agent,
@@ -211,13 +214,44 @@ public sealed class AgentService(
         bool empty,
         string? session,
         CancellationToken cancellationToken = default)
+        => CreateAsync(startDirectory, orchestrator, agent, model, empty, session, noWorktree: false, cancellationToken);
+
+    /// <summary>
+    /// Creates an agent, of either kind: with a worktree of its own, or - where <paramref name="noWorktree"/> is set -
+    /// reading the main tree, which the engine makes for a read-only reason step and nothing else does.
+    /// </summary>
+    private async Task<CommandOutcome> CreateAsync(
+        string startDirectory,
+        string orchestrator,
+        string agent,
+        string model,
+        bool empty,
+        string? session,
+        bool noWorktree,
+        CancellationToken cancellationToken)
     {
+        if (noWorktree && empty)
+        {
+            return CommandOutcome.Usage(
+                "--empty hands an agent's worktree nothing of the main tree's uncommitted state, and an agent made with "
+                + "--no-worktree has no worktree to hand anything to. Give one or the other. Nothing was changed.");
+        }
+
+        // An agent with no worktree records no session, and deleting it looks for no transcript: the engine, which alone
+        // makes one, hands it none.
+        if (noWorktree && session is not null)
+        {
+            return CommandOutcome.Usage(
+                "--session records the Claude session whose transcripts delete-agent keeps, and an agent made with "
+                + "--no-worktree records none, so deleting it looks for none. Give one or the other. Nothing was changed.");
+        }
+
         if ((Shape(orchestrator, agent) ?? OrchestrationRules.ModelProblem(model) ?? OrchestrationRules.SessionProblem(session)) is { } shape)
         {
             return CommandOutcome.Usage(shape);
         }
 
-        var (context, layout, _) = await OrchestratorAsync(startDirectory, orchestrator, cancellationToken).ConfigureAwait(false);
+        var (context, layout, _) = await OrchestratorAsync(startDirectory, orchestrator, CreateCommand, cancellationToken).ConfigureAwait(false);
 
         if (!WorktreeName.Validate(agent, context.Config.Worktrees.MaxNameLength).TryGetName(out _, out var length))
         {
@@ -226,12 +260,16 @@ public sealed class AgentService(
 
         if (_store.ReadAgent(layout, agent) is { } existing)
         {
-            return Again(layout, existing, model, empty, session);
+            return Again(layout, existing, model, empty, session, noWorktree);
         }
 
         var main = context.Layout.MainCheckoutRoot;
         var address = WorktreeAddress.Nested(orchestrator, agent);
-        var listed = await _worktrees.ListAsync(main, cancellationToken).ConfigureAwait(false);
+
+        // git's worktrees are not listed for an agent with no worktree: it counts against no limit, and no worktree is made.
+        IReadOnlyList<WorktreeListing> listed = noWorktree
+            ? []
+            : await _worktrees.ListAsync(main, cancellationToken).ConfigureAwait(false);
         var now = _clock.GetUtcNow();
 
         // Counted and taken in one step, under the orchestrator's own lock, from its record as it is then: two agents made
@@ -246,6 +284,29 @@ public sealed class AgentService(
             if (_fileSystem.DirectoryExists(layout.AgentDirectory(agent)))
             {
                 return CommandOutcome.Refused($"'{layout.AgentDirectory(agent)}' is there already, and no record in it names an agent. Nothing was created.");
+            }
+
+            if (noWorktree)
+            {
+                // One step under the lock, and the agent is made: its two directories - which are all an agent gets
+                // outside a worktree, and nothing a re-run refuses, being not its own directory - and then its record,
+                // the one write. Nothing else is made: no worktree, no hold, nothing handed over, and it counts
+                // against no limit, the limit being a limit on worktrees.
+                _fileSystem.CreateDirectory(layout.WorkDirectory(agent));
+                _fileSystem.CreateDirectory(layout.PlansDirectory(agent));
+
+                _store.WriteAgent(layout, new AgentRecord
+                {
+                    Kind = AgentRecord.KindName,
+                    Name = agent,
+                    Orchestrator = orchestrator,
+                    Model = model,
+                    CreatedAt = now,
+                    Access = AgentRecord.AccessRead,
+                    State = AgentStates.Live,
+                });
+
+                return null;
             }
 
             var open = OrchestrationRules.OpenAgents(orchestrator, _store.Agents(layout), listed.Select(worktree => worktree.Name));
@@ -277,6 +338,14 @@ public sealed class AgentService(
         if (refused is not null)
         {
             return _store.ReadOrchestrator(layout) is null ? refused : _log.Record(layout, orchestrator, CreateCommand, refused);
+        }
+
+        if (noWorktree)
+        {
+            // Its record and its two directories are written; the log line is the last of it.
+            return _log.Record(layout, agent, CreateCommand, CommandOutcome.Ok(
+                $"Agent '{agent}' of '{orchestrator}' was created with no worktree: it reads the main tree, and writes only '{layout.WorkDirectory(agent)}'",
+                [$"record {layout.AgentRecordFile(agent)}", layout.WorkDirectory(agent), layout.PlansDirectory(agent)]));
         }
 
         // Until its worktree is made, the agent's directory holds only its place, which every way out before then gives
@@ -450,8 +519,11 @@ public sealed class AgentService(
             : $"{OrchestrationReports.DeleteAgentLine(orchestrator, agent, "--apply --discard-uncommitted")} drops it; nothing else can finish it, "
                 + "since its record names no commit its worktree was made from.";
 
-    /// <summary>What running create-agent again does: records the session, and nothing else.</summary>
-    private CommandOutcome Again(OrchestratorLayout layout, AgentRecord existing, string model, bool empty, string? session)
+    /// <summary>
+    /// What running create-agent again does: records the session, and nothing else - and nothing at all for an agent with no
+    /// worktree, which records none.
+    /// </summary>
+    private CommandOutcome Again(OrchestratorLayout layout, AgentRecord existing, string model, bool empty, string? session, bool noWorktree)
     {
         if (existing.State == AgentStates.Deleted)
         {
@@ -460,15 +532,32 @@ public sealed class AgentService(
                 + "an agent's name is never used twice. Choose another name.");
         }
 
+        // The two kinds of agent are two agents: the option that makes one is never the one that answers for the other.
+        if (noWorktree && !existing.Reads)
+        {
+            return CommandOutcome.Refused($"{Agent(existing)} has a worktree: an agent with no worktree is another agent. Nothing was changed.");
+        }
+
+        if (!noWorktree && existing.Reads)
+        {
+            return CommandOutcome.Refused($"{Agent(existing)} has no worktree: an agent with one is another agent. Nothing was changed.");
+        }
+
+        // One with no worktree records no session, so run again there is nothing create-agent records of it: no session
+        // reaches here beside --no-worktree.
         if (!string.Equals(existing.Model, model, StringComparison.Ordinal) || empty)
         {
             return CommandOutcome.Refused(
-                $"{Agent(existing)} exists, created for model '{existing.Model}'. Run again, create-agent records only a session (--session); "
-                + $"{OrchestrationReports.Line(SeedCommand, existing.Orchestrator, existing.Name)} seeds it again. Nothing was changed.");
+                $"{Agent(existing)} exists, created for model '{existing.Model}'. "
+                + (existing.Reads
+                    ? "Run again, create-agent changes nothing of an agent with no worktree. Nothing was changed."
+                    : $"Run again, create-agent records only a session (--session); {OrchestrationReports.Line(SeedCommand, existing.Orchestrator, existing.Name)} "
+                        + "seeds it again. Nothing was changed."));
         }
 
-        // An agent whose making stopped part way is said to be one, never "already as asked".
-        if (existing.State == AgentStates.Live && MakingUnfinished(existing, _store.ReadSeed(layout, existing.Name)) is { } unfinished)
+        // An agent whose making stopped part way is said to be one, never "already as asked"; one that reads the main
+        // tree has no making that can stop, its record being all there is of it.
+        if (!existing.Reads && existing.State == AgentStates.Live && MakingUnfinished(existing, _store.ReadSeed(layout, existing.Name)) is { } unfinished)
         {
             return CommandOutcome.Refused($"{Agent(existing)} exists, and making it did not finish: {unfinished}.");
         }
@@ -498,7 +587,7 @@ public sealed class AgentService(
             return CommandOutcome.Usage(shape);
         }
 
-        var at = await LiveAgentAsync(startDirectory, orchestrator, agent, cancellationToken).ConfigureAwait(false);
+        var at = await LiveAgentAsync(startDirectory, orchestrator, agent, SeedCommand, cancellationToken).ConfigureAwait(false);
 
         return at.Refusal ?? _log.Record(at.Layout!, agent, SeedCommand, await SeedLiveAsync(at, empty, force, cancellationToken).ConfigureAwait(false));
     }
@@ -662,7 +751,7 @@ public sealed class AgentService(
             return Answered(CommandOutcome.Usage(shape), json);
         }
 
-        var at = await LiveAgentAsync(startDirectory, orchestrator, agent, cancellationToken).ConfigureAwait(false);
+        var at = await LiveAgentAsync(startDirectory, orchestrator, agent, RefreshCommand, cancellationToken).ConfigureAwait(false);
 
         if (at.Refusal is { } refusal)
         {
@@ -1003,7 +1092,7 @@ public sealed class AgentService(
             return Answered(CommandOutcome.Usage(shape), json);
         }
 
-        var at = await LiveAgentAsync(startDirectory, orchestrator, agent, cancellationToken).ConfigureAwait(false);
+        var at = await LiveAgentAsync(startDirectory, orchestrator, agent, RebaseCommand, cancellationToken).ConfigureAwait(false);
 
         if (at.Refusal is { } refusal)
         {
@@ -1181,7 +1270,7 @@ public sealed class AgentService(
 
             var details = new List<string>(RebaseLines(plan, applied: true));
 
-            if (await WorktreeService.WriteBaseCommitAsync(_gitClient, main, record.Worktree, to, CancellationToken.None).ConfigureAwait(false) is { } unrecorded)
+            if (await WorktreeService.WriteBaseCommitAsync(_gitClient, main, record.Worktree!, to, CancellationToken.None).ConfigureAwait(false) is { } unrecorded)
             {
                 details.Add($"its base is recorded in its record, and could not be in git's record of the worktree: {unrecorded.TrimEnd('.')}");
             }
@@ -1413,7 +1502,7 @@ public sealed class AgentService(
             return Answered(CommandOutcome.Usage(shape), json);
         }
 
-        var at = await LiveAgentAsync(startDirectory, orchestrator, agent, cancellationToken).ConfigureAwait(false);
+        var at = await LiveAgentAsync(startDirectory, orchestrator, agent, FoldCommand, cancellationToken).ConfigureAwait(false);
 
         if (at.Refusal is { } refusal)
         {
@@ -1527,7 +1616,7 @@ public sealed class AgentService(
                 json);
         }
 
-        var found = await FindAsync(startDirectory, orchestrator, agent, cancellationToken).ConfigureAwait(false);
+        var found = await FindAsync(startDirectory, orchestrator, agent, DeleteCommand, cancellationToken).ConfigureAwait(false);
 
         if (found.Refusal is { } refusal)
         {
@@ -1562,6 +1651,11 @@ public sealed class AgentService(
                 + "directory is kept as its history.");
         }
 
+        if (record.Reads)
+        {
+            return DeleteReadingAsync(context, layout, record, allowances, apply, discardUncommitted, json);
+        }
+
         var (path, moved) = WorktreeOf(context, record);
 
         if (moved is not null)
@@ -1584,6 +1678,64 @@ public sealed class AgentService(
         return record.State == AgentStates.Closed
             ? await FinishAsync(target, allowances, apply, json, met, cancellationToken).ConfigureAwait(false)
             : await CloseAsync(target, allowances, apply, discardUncommitted, json, met, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Deleting an agent that reads the main tree: one write, live to deleted, which is the path the states already have
+    /// for an agent whose worktree was never made. Nothing is folded and no worktree is removed, because it has neither,
+    /// and no transcript is looked for, because it records no session; its directory stays, as every deleted agent's does.
+    /// </summary>
+    private CommandOutcome DeleteReadingAsync(
+        HarnessContext context,
+        OrchestratorLayout layout,
+        AgentRecord record,
+        FoldAllowances allowances,
+        bool apply,
+        bool discard,
+        bool json)
+    {
+        // --discard-uncommitted and the allowances act on the changes in a worktree and on what a fold would write, and
+        // this agent has neither: each is said to have nothing to act on, never silently ignored.
+        var nothing = new List<string>();
+
+        if (discard)
+        {
+            nothing.Add("--discard-uncommitted discards the changes in an agent's worktree, and this agent has none");
+        }
+
+        if (allowances.Given.Count > 0)
+        {
+            nothing.Add("the allowances let a fold write, and there is nothing of this agent to fold");
+        }
+
+        string[] lines = [$"record {layout.AgentRecordFile(record.Name)}", TranscriptsPlan(record), .. nothing];
+
+        if (!apply)
+        {
+            // The line that does it leaves out the options that have nothing to act on, so none of them reads as doing
+            // something.
+            var tail = nothing.Count == 0 ? "pass --apply to do it" : $"{OrchestrationReports.DeleteAgentLine(record.Orchestrator, record.Name)} does it";
+
+            return Dry(
+                json,
+                context.Layout,
+                DeleteCommand,
+                CommandOutcome.Ok(
+                    $"dry run: deleting {Lower(Agent(record))} folds nothing and removes no worktree - it reads the main tree, and has neither - "
+                    + $"and marks it deleted; {tail}",
+                    lines),
+                RequestStanding.Sound);
+        }
+
+        _store.UpdateAgent(
+            layout,
+            record.Name,
+            current => current with { State = AgentStates.Deleted, DeletedAt = _clock.GetUtcNow(), Abandoned = false });
+
+        // Unlogged here, as every delete path's apply is: the caller logs it once.
+        return CommandOutcome.Ok(
+            $"deleted {Lower(Agent(record))}, which read the main tree: nothing was folded and no worktree removed, and its directory is kept as its history",
+            lines);
     }
 
     /// <summary>
@@ -2826,7 +2978,8 @@ public sealed class AgentService(
     /// <param name="record">The agent's record.</param>
     /// <param name="seed">Its seed, or null where it was never seeded.</param>
     private static string? MakingUnfinished(AgentRecord record, SeedRecord? seed)
-        => record.Base is null
+        => record.Reads ? null
+        : record.Base is null
             ? $"it records no commit its worktree was made from, so nothing of it can be measured; "
                 + $"{OrchestrationReports.DeleteAgentLine(record.Orchestrator, record.Name, "--apply --discard-uncommitted")} drops it"
             : seed is null
@@ -2845,24 +2998,39 @@ public sealed class AgentService(
             .Distinct(StringComparer.Ordinal)];
     }
 
-    /// <summary>The orchestrator named, in the main checkout's context; refused where it has no record.</summary>
+    /// <summary>
+    /// The orchestrator named, in the main checkout's context, once what a killed process left running of its steps'
+    /// contained children is ended - every command on an orchestrator's agents starts here; refused where it has no record.
+    /// </summary>
+    /// <param name="startDirectory">Where the command was typed.</param>
+    /// <param name="orchestrator">The orchestrator's name.</param>
+    /// <param name="command">The command, which the sweep's lines name.</param>
+    /// <param name="cancellationToken">Stops the search for the repository.</param>
     private async Task<(HarnessContext Context, OrchestratorLayout Layout, OrchestratorRecord Record)> OrchestratorAsync(
         string startDirectory,
         string orchestrator,
+        string command,
         CancellationToken cancellationToken)
     {
         var context = await MainTree.LoadAsync(_contextLoader, _platform, startDirectory, cancellationToken).ConfigureAwait(false);
         var layout = OrchestratorLayout.Of(context.Layout, orchestrator);
 
-        return _store.ReadOrchestrator(layout) is { } record
-            ? (context, layout, record)
-            : throw new HarnessException(HarnessExit.Refused, OrchestrationReports.NoOrchestrator(orchestrator));
+        if (_store.ReadOrchestrator(layout) is not { } record)
+        {
+            throw new HarnessException(HarnessExit.Refused, OrchestrationReports.NoOrchestrator(orchestrator));
+        }
+
+        // Before anything else of it is read: what a killed process left running of its steps' contained children. What
+        // it ended, every document this command answers with says, whatever it goes on to meet (EndedChildSessions).
+        await _sessions.SweepAsync(layout, command).ConfigureAwait(false);
+
+        return (context, layout, record);
     }
 
     /// <summary>The agent named, of the orchestrator named, with its record: every command on an existing agent starts here.</summary>
-    private async Task<AgentAt> FindAsync(string startDirectory, string orchestrator, string agent, CancellationToken cancellationToken)
+    private async Task<AgentAt> FindAsync(string startDirectory, string orchestrator, string agent, string command, CancellationToken cancellationToken)
     {
-        var (context, layout, _) = await OrchestratorAsync(startDirectory, orchestrator, cancellationToken).ConfigureAwait(false);
+        var (context, layout, _) = await OrchestratorAsync(startDirectory, orchestrator, command, cancellationToken).ConfigureAwait(false);
 
         return _store.ReadAgent(layout, agent) is { } record
             ? new AgentAt(null, context, layout, record)
@@ -2870,9 +3038,9 @@ public sealed class AgentService(
     }
 
     /// <summary>A live agent whose worktree git records as its own, and whose making finished: what seeding, refreshing and folding work on.</summary>
-    private async Task<AgentAt> LiveAgentAsync(string startDirectory, string orchestrator, string agent, CancellationToken cancellationToken)
+    private async Task<AgentAt> LiveAgentAsync(string startDirectory, string orchestrator, string agent, string command, CancellationToken cancellationToken)
     {
-        var found = await FindAsync(startDirectory, orchestrator, agent, cancellationToken).ConfigureAwait(false);
+        var found = await FindAsync(startDirectory, orchestrator, agent, command, cancellationToken).ConfigureAwait(false);
 
         if (found.Refusal is not null)
         {
@@ -2888,6 +3056,14 @@ public sealed class AgentService(
                     ? $"{Agent(record)} is closed: its deletion began, and it is never seeded, refreshed or folded again. "
                         + $"{OrchestrationReports.DeleteAgentLine(orchestrator, agent)} finishes deleting it."
                     : $"{Agent(record)} was deleted at {OrchestrationReports.Moment(record.DeletedAt!.Value)}."));
+        }
+
+        // An agent that reads the main tree is never seeded, refreshed, rebased or folded, and git is asked nothing about
+        // it - only the repository was found, as every command finds it: this one refusal is every verb's.
+        if (record.Reads)
+        {
+            return new AgentAt(CommandOutcome.Refused(
+                $"{Agent(record)} has no worktree: it reads the main tree, and there is nothing of it to seed, refresh, rebase or fold."));
         }
 
         var (path, moved) = WorktreeOf(context, record);
@@ -2915,12 +3091,13 @@ public sealed class AgentService(
 
     /// <summary>
     /// Where an agent's worktree is: under the worktrees root it was made under, which the configuration must still name,
-    /// since delete-worktree looks for it under the root the configuration names. Why not, where it does not.
+    /// since delete-worktree looks for it under the root the configuration names. Why not, where it does not. An agent
+    /// that reads the main tree has no worktree, and no caller of this asks for one.
     /// </summary>
     private static (string Path, string? Moved) WorktreeOf(HarnessContext context, AgentRecord record)
     {
         var configured = PathPatterns.Normalize(context.Config.Worktrees.Root);
-        var path = record.WorktreePath(context.Layout);
+        var path = record.WorktreePath(context.Layout)!;
 
         return string.Equals(configured, record.WorktreesRoot, StringComparison.Ordinal)
             ? (path, null)
@@ -3266,10 +3443,16 @@ public sealed class AgentService(
         return (lines, kept.Failed);
     }
 
+    /// <summary>
+    /// What deleting an agent says of its transcripts before it looks: whose it looks for, or that it looks for none - and
+    /// how one is recorded, save for an agent with no worktree, which never records one.
+    /// </summary>
     private static string TranscriptsPlan(AgentRecord record)
-        => record.Session is null
-            ? $"no Claude session is recorded for it, so no transcript is looked for; {OrchestrationReports.Line(CreateCommand, record.Orchestrator, record.Name, "--model", record.Model, "--session", "<id>")} records one"
-            : $"transcripts: session {record.Session}'s, where Claude Code keeps them";
+        => record.Session is not null
+            ? $"transcripts: session {record.Session}'s, where Claude Code keeps them"
+            : record.Reads
+                ? "no Claude session is recorded for it - an agent with no worktree records none - so no transcript is looked for"
+                : $"no Claude session is recorded for it, so no transcript is looked for; {OrchestrationReports.Line(CreateCommand, record.Orchestrator, record.Name, "--model", record.Model, "--session", "<id>")} records one";
 
     private static string EvidenceLine(EvidenceKept kept, string destination)
         => (kept.Kept.Count == 0 ? "its evidence roots held nothing to keep" : $"kept {ReportText.Counted(kept.Kept.Count, "evidence file")} in '{destination}', each proved")
@@ -3481,7 +3664,15 @@ public sealed class AgentService(
         ArgumentNullException.ThrowIfNull(request);
 
         return UseCaseResult<AgentCreated>.From(
-            await CreateAsync(request.StartDirectory, request.Orchestrator, request.Agent, request.Model, request.Empty, request.Session, cancellationToken).ConfigureAwait(false));
+            await CreateAsync(
+                request.StartDirectory,
+                request.Orchestrator,
+                request.Agent,
+                request.Model,
+                request.Empty,
+                request.Session,
+                request.NoWorktree,
+                cancellationToken).ConfigureAwait(false));
     }
 
     /// <inheritdoc cref="IAgentService.SeedAsync(AgentSeedRequest, CancellationToken)"/>

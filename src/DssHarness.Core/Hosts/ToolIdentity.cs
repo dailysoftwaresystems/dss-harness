@@ -57,6 +57,22 @@ public static class ToolPackage
     /// <summary>Longest installing or updating the tool may take, which includes downloading it.</summary>
     public static readonly TimeSpan ChangeBudget = TimeSpan.FromMinutes(10);
 
+    /// <summary>Where dotnet keeps a user's global tools, below that user's home directory, a directory at a time.</summary>
+    private static readonly string[] GlobalTools = [".dotnet", "tools"];
+
+    /// <summary>
+    /// The directory the tool is kept in on this machine, which installing or updating it writes: the one
+    /// <paramref name="toolPath"/> names, or this user's global tools.
+    /// </summary>
+    /// <param name="toolPath">The directory the tool is kept in, or <see langword="null"/> for this user's global tools.</param>
+    /// <param name="home">This user's home directory.</param>
+    public static string KeptIn(string? toolPath, string home)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(home);
+
+        return toolPath ?? Path.Combine([home, .. GlobalTools]);
+    }
+
     /// <summary>How <c>dotnet tool</c> is told where the tool is kept.</summary>
     private static string[] Kept(string? toolPath) => toolPath is null ? ["--global"] : ["--tool-path", toolPath];
 
@@ -68,7 +84,7 @@ public static class ToolPackage
     {
         var program = windowsHost ? Command + ".exe" : Command;
 
-        return shell == RemoteShell.Cmd ? $@".dotnet\tools\{program}" : $".dotnet/tools/{program}";
+        return string.Join(shell == RemoteShell.Cmd ? '\\' : '/', [.. GlobalTools, program]);
     }
 }
 

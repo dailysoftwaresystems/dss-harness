@@ -96,8 +96,9 @@ public static class WorkflowTemplates
 
     /// <summary>
     /// The implementation workflow's definition, read back from this build's own embedded set, parsed and held to
-    /// <see cref="WorkflowValidator"/>'s rules as for a configuration with no <c>commit.template</c>. What only a
-    /// repository can answer - its files, its legs and runners - is <c>validate-workflow</c>'s to check there.
+    /// <see cref="WorkflowValidator"/>'s rules as for a configuration with no <c>commit.template</c>, its paths typed by
+    /// the embedded schemas and its prompts' placeholders checked. What only a repository can answer - that its files
+    /// are there, its legs and runners - is <c>validate-workflow</c>'s to check there.
     /// </summary>
     /// <exception cref="HarnessException">
     /// This build's own embedded set is broken: a file is missing, or the definition does not hold.
@@ -133,7 +134,9 @@ public static class WorkflowTemplates
                 $"this build's implementation workflow names itself '{parsed.Name}'; it is '{ShippedWorkflowName}'");
         }
 
-        if (WorkflowValidator.Validate(parsed, hasCommitTemplate: false) is [_, ..] problems) // As for a config with no commit.template: each commit step writes its message.
+        // As for a config with no commit.template: each commit step writes its message. The files are the build's own, so
+        // every path is typed by the schema that holds it and every prompt's placeholder is checked.
+        if (WorkflowValidator.Validate(parsed, hasCommitTemplate: false, TextOf) is [_, ..] problems)
         {
             var detail = string.Join(Environment.NewLine, problems.Select(problem => "  - " + problem));
 

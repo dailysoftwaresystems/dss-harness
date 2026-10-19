@@ -139,7 +139,10 @@ public static class PathPatterns
     /// A leading <c>./</c> and a trailing separator are not counted: every reading of a path here
     /// drops them first. Refused rather than read past: the same spelling is read elsewhere as written
     /// - init writes the worktrees root into <c>.gitignore</c> as given - so tidying it here would only
-    /// make the two disagree.
+    /// make the two disagree. The one spelling rule of both matchers, this one and
+    /// <see cref="GlobPattern"/>'s. A <c>..</c> segment is no misspelling here: a path that climbs out
+    /// is refused by the rule that owns that (<see cref="Platform.PlatformPaths.ClimbsOut"/>), which
+    /// each reader asks for itself.
     /// </remarks>
     public static string? Misspelling(string? path) => MisspellingOf(Normalize(path));
 

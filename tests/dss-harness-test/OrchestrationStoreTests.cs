@@ -115,6 +115,80 @@ public sealed class OrchestrationStoreTests
     }
 
     /// <summary>
+    /// A record that says it reads the main tree holds none of what a worktree's record does, nor a session, and a record
+    /// that says nothing - which is every record an older tool wrote - holds all of it: each is refused where it is not
+    /// so. An <c>access</c> that names no kind of agent is refused on any record, never read as the default kind.
+    /// </summary>
+    [Theory]
+    [InlineData("worktree", "it reads the main tree, and records the worktree 'o1/ag'")]
+    [InlineData("worktrees root", "it reads the main tree, and records the worktrees root 'wt'")]
+    [InlineData("base", "it reads the main tree, and records the base")]
+    [InlineData("a move of its base", "it reads the main tree, and records a move of a base to")]
+    [InlineData("what a move of its base was told", "it reads the main tree, and records what a move of a base was told")]
+    [InlineData("what a move of its base removed", "it reads the main tree, and records what a move of a base removed")]
+    [InlineData("a session", "it reads the main tree, and records the session 'sess1'")]
+    [InlineData("an access no agent has", "its access is 'banana', and an agent's is 'read' or 'write'")]
+    [InlineData("closed with no closing", "it is closed, and records no closing, or records a deletion")]
+    public async Task ARecordThatReads_HoldingAnyOfAWorktreeRecordsMembers_IsRefused(string what, string why)
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateReadingAgentAsync("ag");
+        var file = kit.Layout.AgentRecordFile("ag");
+        var text = File.ReadAllText(file);
+
+        File.WriteAllText(file, what switch
+        {
+            "worktree" => text.Replace("{", "{\n  \"worktree\": \"o1/ag\",", StringComparison.Ordinal),
+            "worktrees root" => text.Replace("{", "{\n  \"worktreesRoot\": \"wt\",", StringComparison.Ordinal),
+            "base" => text.Replace("{", "{\n  \"base\": \"0123456789abcdef0123456789abcdef01234567\",", StringComparison.Ordinal),
+            "a move of its base" => text.Replace("{", "{\n  \"moving\": \"0123456789abcdef0123456789abcdef01234567\",", StringComparison.Ordinal),
+            "what a move of its base was told" => text.Replace("{", "{\n  \"movingWith\": [ \"--merge\", \"a.txt\" ],", StringComparison.Ordinal),
+            "what a move of its base removed" => text.Replace("{", "{\n  \"movingRemoved\": [ \"a.txt\" ],", StringComparison.Ordinal),
+            "a session" => text.Replace("{", "{\n  \"session\": \"sess1\",", StringComparison.Ordinal),
+            "closed with no closing" => text.Replace("\"state\": \"live\"", "\"state\": \"closed\"", StringComparison.Ordinal),
+            _ => text.Replace("\"access\": \"read\"", "\"access\": \"banana\"", StringComparison.Ordinal),
+        });
+
+        Assert.NotEqual(text, File.ReadAllText(file));
+
+        var refused = Assert.Throws<HarnessException>(() => kit.Harness.OrchestrationStore.ReadAgent(kit.Layout, "ag"));
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(why, refused.Message);
+    }
+
+    /// <summary>
+    /// A record that does not say it reads the main tree names its worktree and the root it was made under, which were
+    /// members of the type before there was another kind and are now its own to require.
+    /// </summary>
+    [Theory]
+    [InlineData("worktree", "it records no worktree, and an agent that does not read the main tree has one of its own")]
+    [InlineData("worktrees root", "it records no worktrees root, and an agent that does not read the main tree was made under one")]
+    public async Task ARecordThatWrites_MissingItsWorktreeOrItsRoot_IsRefused(string what, string why)
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync("ag");
+        var file = kit.Layout.AgentRecordFile("ag");
+        var record = kit.Record("ag");
+        var text = File.ReadAllText(file);
+
+        File.WriteAllText(file, what switch
+        {
+            "worktree" => text.Replace($"  \"worktree\": \"{record.Worktree}\",\n", string.Empty, StringComparison.Ordinal),
+            _ => text.Replace($"  \"worktreesRoot\": \"{record.WorktreesRoot}\",\n", string.Empty, StringComparison.Ordinal),
+        });
+
+        Assert.NotEqual(text, File.ReadAllText(file));
+
+        var refused = Assert.Throws<HarnessException>(() => kit.Harness.OrchestrationStore.ReadAgent(kit.Layout, "ag"));
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(why, refused.Message);
+    }
+
+    /// <summary>
     /// A record copied from another agent's directory names that agent, and is refused where it is kept: every command
     /// on it acts on the name its record gives, and would act on the other agent.
     /// </summary>

@@ -55,6 +55,22 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
     /// </summary>
     public const string WorkflowAgentsDirectoryName = "agents";
 
+    /// <summary>
+    /// Name of the credential slot inside the workflows directory, beside the workflows' own
+    /// directories: a directory of dotenv files holding the agent clients' keys and settings for
+    /// every workflow of the repository, whose contents are gitignored and whose placeholder is
+    /// tracked.
+    /// </summary>
+    /// <remarks>
+    /// No workflow can be given the slot's name: the name rule refuses it, as it refuses every name
+    /// that starts with a dot (<see cref="Orchestration.Flow.WorkflowName.Problem"/>). Nor is the slot
+    /// ever read as a workflow, since nothing lists the workflows directory to find one: each is read
+    /// by the name <c>config.json</c> declares, from <see cref="WorkflowDirectory"/>. The one listing
+    /// of the directory, the files <c>init</c> counts as kept in git, counts the slot's placeholder,
+    /// which the harness keeps in git as it keeps every placeholder.
+    /// </remarks>
+    public const string WorkflowsEnvSlotName = ".env";
+
     /// <summary>Name of the directory holding runner action files. Tracked by git.</summary>
     public const string RunnerActionsDirectoryName = "actions";
 
@@ -191,6 +207,60 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
     }
 
     /// <summary>
+    /// The credential slots that hold connection data, relative to the harness directory: one
+    /// directory per ssh host and one per WSL distribution. With <see cref="ValueSlots"/>, the one
+    /// list of the credential slots, which every list naming them is made from.
+    /// </summary>
+    private static readonly string[] ConnectionDataSlots = [SshItemsDirectoryName, WslDistrosDirectoryName];
+
+    /// <summary>
+    /// The credential slots that hold values, relative to the harness directory with forward
+    /// separators: the runner's two, and the agent clients' key slot.
+    /// </summary>
+    private static readonly string[] ValueSlots =
+    [
+        RunnerDirectoryName + "/" + RunnerEnvDirectoryName,
+        RunnerDirectoryName + "/" + RunnerSecretsDirectoryName,
+        WorkflowsDirectoryName + "/" + WorkflowsEnvSlotName,
+    ];
+
+    /// <summary>
+    /// The credential slots, relative to a tree's root with forward separators: the two
+    /// connection-data slots, the runner's two value slots, and the agent clients' key slot. What
+    /// each holds is gitignored, so a worktree holds none of it and each slot is named as a path
+    /// the tree's movers never take: the ignore block is a rule a repository can edit away, and a
+    /// planted <c>.env</c> folded back could redirect a key. <c>init</c> writes its ignore rules from
+    /// this list, and its placeholders are among <see cref="PlaceholderDirectories"/>.
+    /// </summary>
+    public static IReadOnlyList<string> SecretSlots { get; } =
+        [.. ConnectionDataSlots.Concat(ValueSlots).Select(slot => DirectoryName + "/" + slot)];
+
+    /// <summary>
+    /// Where the tool's own state is, relative to a tree's root with forward separators: the root
+    /// slots (<see cref="RootSlots"/>) and what it keeps under the harness directory - its runs,
+    /// its hosts' copies record, its mutation record, a worker's dependency sources, the run lock
+    /// and a synced copy's marker. One list, from the names this layout already holds, so whatever
+    /// refuses a write to the tool's own state reads the layout and not a list of its own: a place
+    /// the layout gains joins this the day it is added.
+    /// </summary>
+    /// <param name="worktreesRoot">The configured worktrees root.</param>
+    public static IReadOnlyList<string> StatePaths(string worktreesRoot)
+    {
+        ArgumentNullException.ThrowIfNull(worktreesRoot);
+
+        return
+        [
+            .. RootSlots(worktreesRoot),
+            RunsDirectoryRelative,
+            HostCopiesDirectoryRelative,
+            MutationRecordDirectoryRelative,
+            DependencySourcesDirectoryRelative,
+            DirectoryName + "/" + LockFileName,
+            DirectoryName + "/" + SyncedCopyMarkerName,
+        ];
+    }
+
+    /// <summary>
     /// Where the copy kept under <paramref name="name"/> in the slot <paramref name="slot"/> of <paramref name="tree"/>
     /// is: <c>&lt;tree&gt;/&lt;slot&gt;/&lt;name&gt;</c>, joined by the separator the tree's own path is spelt with, so a
     /// tree another machine keeps names its copies as that machine spells a path.
@@ -214,7 +284,9 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
 
     /// <summary>
     /// The directories under <see cref="DirectoryName"/> that carry a <see cref="GitKeepFileName"/>,
-    /// relative to it: the two connection-data slots, the actions, and the two value slots.
+    /// relative to it with this machine's separator: the two connection-data slots, the actions,
+    /// the two value slots and the agent clients' key slot - every credential slot of
+    /// <see cref="SecretSlots"/>, and the actions directory among them.
     /// </summary>
     /// <remarks>
     /// Every tree tracks them, a worktree's included, so a clone of any branch arrives with each
@@ -223,11 +295,9 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
     /// </remarks>
     public static IReadOnlyList<string> PlaceholderDirectories { get; } =
     [
-        SshItemsDirectoryName,
-        WslDistrosDirectoryName,
+        .. ConnectionDataSlots,
         Path.Combine(RunnerDirectoryName, RunnerActionsDirectoryName),
-        Path.Combine(RunnerDirectoryName, RunnerEnvDirectoryName),
-        Path.Combine(RunnerDirectoryName, RunnerSecretsDirectoryName),
+        .. ValueSlots.Select(slot => slot.Replace('/', Path.DirectorySeparatorChar)),
     ];
 
     /// <summary>
@@ -312,6 +382,16 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
 
     /// <summary>The WSL distributions directory, resolved against the main checkout for the same reason.</summary>
     public string WslDistrosDirectory => Path.Combine(MainHarnessDirectory, WslDistrosDirectoryName);
+
+    /// <summary>
+    /// The agent clients' credential slot, resolved against the main checkout: its contents are
+    /// gitignored, so a worktree holds none of them, and a key a machine is given is one every tree
+    /// of that repository on it can use.
+    /// </summary>
+    public string WorkflowsEnvSlot => Path.Combine(
+        MainHarnessDirectory,
+        WorkflowsDirectoryName,
+        WorkflowsEnvSlotName);
 
     /// <summary>One ssh host's directory, holding its <c>.env</c>, its key and its known hosts.</summary>
     /// <param name="item">The item name, as <c>sshItems</c> declares it.</param>
@@ -407,6 +487,12 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
     /// refusal name it, whichever machine reads it.
     /// </summary>
     public const string WorkflowsDirectoryRelative = DirectoryName + "/" + WorkflowsDirectoryName;
+
+    /// <summary>
+    /// The agent clients' credential slot, relative to a tree root, with forward separators: how the
+    /// layout topic spells it, whichever machine reads it.
+    /// </summary>
+    public const string WorkflowsEnvSlotRelative = WorkflowsDirectoryRelative + "/" + WorkflowsEnvSlotName;
 
     /// <summary>The host copies' record directory, relative to the main checkout's root, with forward separators.</summary>
     public const string HostCopiesDirectoryRelative = DirectoryName + "/" + HostCopiesDirectoryName;

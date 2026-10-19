@@ -68,7 +68,7 @@ them.
 | `Runners` | Predefined runners and action files (`RunnerRunService`, `ActionFileParser`) |
 | `Runs` | Leg runs, remote runs, `clean` (`LegRunService`, `RemoteLegRunner`, `CleanService`) |
 | `SetUps` | `up`/`down` and a run's `--set-up`: lines, shared holds, bringing up around a leg (`SetUpService`, `SetUpHolds`, `LegSetUps`) |
-| `Secrets` | Host connection data and its permission checks (`HostSecretsStore`, `DotEnvFile`) |
+| `Secrets` | Host connection data and its permission checks, and the dotenv readers (`HostSecretsStore`, `ItemEnvironment`, `DotEnvFile`, `DotEnvDirectories`) |
 | `Sync` | Syncing a tree to hosts (`SyncService`, `SyncManifest`, `HostCopies`) |
 | `Testing` | `test` and ctest (`TestService`, `TestInvocationResolver`) |
 | `Tools` | `install-missing-tools` (`IToolProvisionService`), which judges each tool by the host's own survey (`IHostInspector`) |

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Platform;
@@ -275,6 +276,30 @@ public sealed class ConfigStoreTests
 
         Assert.Contains("cannot contain null", exception.Message, StringComparison.Ordinal);
         Assert.Contains("line 3", exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A null item is refused in a list of every shape the serializer reads into a list - the concrete one and each
+    /// interface it answers to - by the configuration's options and the state files' alike, and a list without one is
+    /// read whole: a record declares its lists read-only, and a refusal that reached the concrete list alone would read
+    /// a null into a list every reader trusts holds none.
+    /// </summary>
+    [Theory]
+    [InlineData(typeof(List<string>))]
+    [InlineData(typeof(IReadOnlyList<string>))]
+    [InlineData(typeof(IReadOnlyCollection<string>))]
+    [InlineData(typeof(IList<string>))]
+    [InlineData(typeof(ICollection<string>))]
+    [InlineData(typeof(IEnumerable<string>))]
+    public void ANullItem_IsRefused_InAListOfEveryShape(Type shape)
+    {
+        foreach (var options in new[] { JsonConfigOptions.Default, JsonStateFile.Options })
+        {
+            var refused = Assert.Throws<JsonException>(() => JsonSerializer.Deserialize("""["a", null]""", shape, options));
+
+            Assert.Equal("Item 1 of a list is null; a list in this file cannot contain null.", refused.Message);
+            Assert.Equal(["a", "b"], Assert.IsAssignableFrom<IEnumerable<string>>(JsonSerializer.Deserialize("""["a", "b"]""", shape, options)));
+        }
     }
 
     [Fact]
@@ -635,6 +660,38 @@ public sealed class ConfigStoreTests
         var exception = LoadInvalid(json);
 
         Assert.Contains(expected, exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A configured path that climbs out of the tree is refused as outside it, and every other problem it has is said
+    /// beside that, in the order the file is checked, as released: a '*' the list does not understand, a doubled
+    /// separator. A '..' alone is said once - it is no misspelling to the lists' spelling rule - and a rule that left
+    /// a climbing entry unchecked to keep it so dropped every other reason with it.
+    /// </summary>
+    [Theory]
+    [InlineData(
+        """{ "sync": { "exclude": ["../cache/*"] } }""",
+        "sync.exclude entry '../cache/*' must be a relative path inside the tree, without '..'",
+        "sync.exclude names '../cache/*', which holds '*', which is only understood as a leading '**/' meaning that name at any depth")]
+    [InlineData(
+        """{ "worktrees": { "root": "../a//b" } }""",
+        "worktrees.root entry '../a//b' must be a relative path inside the tree, without '..'",
+        "worktrees.root names '../a//b', which holds a '.' segment or a doubled separator, which the file system reads past and a comparison of paths never does; write '../a/b'")]
+    [InlineData(
+        """{ "mutations": { "registry": "../t//arms.registry" } }""",
+        "mutations.registry entry '../t//arms.registry' must be a relative path inside the tree, without '..'",
+        "mutations.registry names '../t//arms.registry', which holds a '.' segment or a doubled separator, which the file system reads past and a comparison of paths never does; write '../t/arms.registry'")]
+    [InlineData(
+        """{ "sync": { "exclude": ["../outside"] } }""",
+        "sync.exclude entry '../outside' must be a relative path inside the tree, without '..'")]
+    public void Load_RefusesAPathThatClimbsOut_WithEveryOtherProblemItHas(string json, params string[] problems)
+    {
+        var exception = LoadInvalid(json);
+        const string Listed = "  - ";
+
+        Assert.Equal(
+            problems,
+            exception.Message.Split(Environment.NewLine).Where(line => line.StartsWith(Listed, StringComparison.Ordinal)).Select(line => line[Listed.Length..]));
     }
 
     /// <summary>

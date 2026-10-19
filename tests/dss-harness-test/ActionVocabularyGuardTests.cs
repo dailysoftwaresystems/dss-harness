@@ -97,6 +97,62 @@ public sealed class ActionVocabularyGuardTests
         Assert.Contains("nothing here can fill in", refusal.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A prompt's closed check takes exactly the names its caller fills in and knows none of a
+    /// leg's own: in a prompt <c>{os}</c> is this machine's, from the engine's own values, and
+    /// <c>{buildDir}</c> is a name nothing fills there - both leg names that
+    /// <see cref="LegPathNames.RefuseUnknown"/> reads as known, which is why this is not it.
+    /// </summary>
+    [Fact]
+    public void APromptsCheck_RefusesALegNameNothingFills_WhileRefuseUnknownAcceptsIt()
+    {
+        var refused = Assert.Throws<HarnessException>(
+            () => LegPathNames.RefuseUnfilled(
+                "the {os} of {item.title}, beside {buildDir}",
+                "prompt 'prompts/implement.md'",
+                ["item.title"]));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refused.ExitCode);
+        Assert.Equal(
+            "prompt 'prompts/implement.md' names '{os}', which nothing here can fill in. "
+                + "The names are {item.title}.",
+            refused.Message);
+
+        // The same text reads clean against the leg's own vocabulary, which is the point: the two
+        // checks own different vocabularies, and neither stands in for the other.
+        LegPathNames.RefuseUnknown(
+            "the {os} of {item.title}, beside {buildDir}",
+            "prompt 'prompts/implement.md'",
+            PlaceholderPolicy.Refuse,
+            extra: ["item.title"]);
+    }
+
+    /// <summary>A prompt naming nothing but what its caller fills in reads clean, and an empty vocabulary refuses everything.</summary>
+    [Fact]
+    public void APromptsCheck_PassesWhatItsCallerFills_AndRefusesEverythingWhereNothingIs()
+    {
+        LegPathNames.RefuseUnfilled(
+            "{item.done} for {run.ran}",
+            "the step's prompt",
+            ["item.done", "run.ran"]);
+
+        var refused = Assert.Throws<HarnessException>(
+            () => LegPathNames.RefuseUnfilled("{os}", "the step's prompt", Array.Empty<string>()));
+
+        Assert.Equal(
+            "the step's prompt names '{os}', which nothing here can fill in. No name can be filled in here.",
+            refused.Message);
+
+        // With more than one filled name, the message lists them all, in the order given.
+        var listed = Assert.Throws<HarnessException>(
+            () => LegPathNames.RefuseUnfilled("{item.done} and {missing}", "the step's prompt", ["item.done", "run.ran"]));
+
+        Assert.Equal(
+            "the step's prompt names '{missing}', which nothing here can fill in. "
+                + "The names are {item.done}, {run.ran}.",
+            listed.Message);
+    }
+
     /// <summary>And the same name is filled in where something does supply it.</summary>
     [Fact]
     public void ANameCarryingAnUnderscore_IsFilledInWhenSomethingSuppliesIt()

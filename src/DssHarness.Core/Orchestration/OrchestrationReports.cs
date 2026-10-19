@@ -69,6 +69,7 @@ public static class OrchestrationReports
 
         return record.State switch
         {
+            AgentStates.Live when record.Reads => $"{record.Name}  live, reads the main tree (no worktree){kept}",
             AgentStates.Live when !agent.WorktreeExists => $"{record.Name}  live, and its worktree is gone from '{agent.WorktreePath}'{kept}",
             AgentStates.Live => $"{record.Name}  live at '{agent.WorktreePath}', base {Base(record.Base)}{Session(record.Session)}{kept}",
             AgentStates.Closed => $"{record.Name}  closed at {Moment(record.Closing!.At)}{abandoned}, and its removal did not finish{(agent.WorktreeExists ? $": its worktree is still at '{agent.WorktreePath}'" : string.Empty)}{kept}",
@@ -132,7 +133,7 @@ public static class OrchestrationReports
             evidence.Add(Path.Combine(layout.AgentDirectory(name), directory));
         }
 
-        return new JsonObject
+        var node = new JsonObject
         {
             ["name"] = record.Name,
             ["state"] = record.State,
@@ -156,6 +157,14 @@ public static class OrchestrationReports
             ["evidence"] = evidence,
             ["transcripts"] = agent.Transcripts == 0 ? null : layout.TranscriptsDirectory(name),
         };
+
+        // The kind of agent is named where it is the rarer one, so an agent with a worktree's node is what it always was.
+        if (record.Reads)
+        {
+            node["access"] = record.Access;
+        }
+
+        return node;
     }
 
     /// <summary>What a fold would write, merge, remove and leave out - or did - every path it weighed in exactly one list.</summary>

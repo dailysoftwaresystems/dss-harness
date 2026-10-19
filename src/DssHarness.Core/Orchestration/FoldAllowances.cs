@@ -67,27 +67,28 @@ public sealed record FoldAllowances
     /// <see cref="AnchorRowCell.Form"/> - for <see cref="AnchorBatchRequest.AcceptLostOption"/>, a prose cell; for
     /// <see cref="AnchorBatchRequest.AcceptOverOption"/>, any of a row's five; <see langword="null"/> where nothing is.
     /// </summary>
-    public string? Problem()
+    /// <param name="spelling">Whose words the refusal names each option in: the command line's flags, or a workflow step's keys.</param>
+    public string? Problem(OptionSpelling spelling = OptionSpelling.Flag)
     {
-        if (PathsProblem(Merge, Settled) is { } paths)
+        if (PathsProblem(Merge, Settled, spelling) is { } paths)
         {
             return paths;
         }
 
         if (New.Select(AnchorRowCell.IdProblem).FirstOrDefault(problem => problem is not null) is { } id)
         {
-            return $"{AnchorBatchRequest.NewOption} {id}.";
+            return $"{spelling.Spell(AnchorBatchRequest.NewOption)} {id}.";
         }
 
         if (AcceptLost.FirstOrDefault(cell => AnchorRowCell.Parse(cell) is not { IsProse: true }) is { } cell)
         {
-            return $"{AnchorBatchRequest.AcceptLostOption} '{cell}' is not {AnchorRowCell.Form}, where the id is an anchor's and the cell is "
+            return $"{spelling.Spell(AnchorBatchRequest.AcceptLostOption)} '{cell}' is not {AnchorRowCell.Form}, where the id is an anchor's and the cell is "
                 + $"{string.Join(", ", AnchorCellNames.Text)}.";
         }
 
         if (AcceptOver.FirstOrDefault(cell => AnchorRowCell.Parse(cell) is null) is { } over)
         {
-            return $"{AnchorBatchRequest.AcceptOverOption} '{over}' is not {AnchorRowCell.Form}, where the id is an anchor's and the cell is "
+            return $"{spelling.Spell(AnchorBatchRequest.AcceptOverOption)} '{over}' is not {AnchorRowCell.Form}, where the id is an anchor's and the cell is "
                 + $"{string.Join(", ", AnchorCellNames.All)}.";
         }
 
@@ -109,10 +110,11 @@ public sealed record FoldAllowances
     /// </summary>
     /// <param name="merge">The paths named to be merged.</param>
     /// <param name="settled">The paths named as settled by hand.</param>
-    public static string? PathsProblem(IReadOnlyList<string> merge, IReadOnlyList<string> settled)
-        => OrchestrationRules.PathsProblem(merge, MergeOption)
-            ?? OrchestrationRules.PathsProblem(settled, SettledOption)
-            ?? OrchestrationRules.NamedTwiceProblem((MergeOption, merge, MergeDoes), (SettledOption, settled, SettledDoes));
+    /// <param name="spelling">Whose words the refusal names each option in: the command line's flags, or a workflow step's keys.</param>
+    public static string? PathsProblem(IReadOnlyList<string> merge, IReadOnlyList<string> settled, OptionSpelling spelling = OptionSpelling.Flag)
+        => OrchestrationRules.PathsProblem(merge, spelling.Spell(MergeOption))
+            ?? OrchestrationRules.PathsProblem(settled, spelling.Spell(SettledOption))
+            ?? OrchestrationRules.NamedTwiceProblem((spelling.Spell(MergeOption), merge, MergeDoes), (spelling.Spell(SettledOption), settled, SettledDoes));
 
     /// <summary>The arguments that name <paramref name="merge"/> and <paramref name="settled"/> again, each path once, as a command line takes them.</summary>
     /// <param name="merge">The paths named to be merged.</param>

@@ -138,8 +138,10 @@ public sealed class CommandSession : IAsyncDisposable
                         outcome = DefectiveEnd(outcome);
                     }
 
-                    // Its body answers with its document exactly where a stop would: the stopped form read once, here.
-                    var stopped = _stopped is not null && outcome.Data.Count == 0 ? _stopped(Context(), outcome.ExitCode, outcome.Message) : null;
+                    // Its body answers with its document exactly where a stop would: the stopped form read once, here. Either
+                    // says what the operation did that every document says.
+                    outcome = outcome.Data.Count == 0 ? outcome : outcome with { Data = [.. outcome.Data.Select(Documented)] };
+                    var stopped = _stopped is not null && outcome.Data.Count == 0 ? Documented(_stopped(Context(), outcome.ExitCode, outcome.Message)) : null;
                     _output.Publish(new CommandReported(_options.Command, outcome, stopped));
 
                     completion = new(outcome.ExitCode, outcome, Run);
@@ -284,8 +286,9 @@ public sealed class CommandSession : IAsyncDisposable
         if (options.ApartFromTerminal)
         {
             throw new NotSupportedException(
-                $"{nameof(SessionOptions.ApartFromTerminal)} is honoured once a process can be started apart from the terminal "
-                + $"({nameof(Processes.ProcessRequest)}), which this build cannot do yet: what an operation starts is in reach of an interrupt.");
+                $"{nameof(SessionOptions.ApartFromTerminal)} is honoured once a session hands it to the processes its operation starts "
+                + $"({nameof(Processes.ProcessRequest)}.{nameof(Processes.ProcessRequest.ApartFromTerminal)}), which this build does not do yet: "
+                + "what an operation starts is in reach of an interrupt.");
         }
 
         if (frontEnd?.Output is not null || frontEnd?.Prompt is not null)
@@ -454,7 +457,7 @@ public sealed class CommandSession : IAsyncDisposable
     private async Task<CommandCompletion> StopAsync(int exitCode, string message)
     {
         var said = await EndedDefectiveAsync().ConfigureAwait(false) ? HarnessExit.InternalError : exitCode;
-        var document = _stopped is not null ? _stopped(Context(), said, message) : null;
+        var document = _stopped is not null ? Documented(_stopped(Context(), said, message)) : null;
         _output.Publish(new CommandFailed(_options.Command, exitCode, message, Defect: false, StoppedDocument: document));
         return new(exitCode, null, Run);
     }
@@ -467,7 +470,7 @@ public sealed class CommandSession : IAsyncDisposable
     {
         var meaning = KnownCauses.Meaning(exception);
         var said = await EndedDefectiveAsync().ConfigureAwait(false) ? HarnessExit.InternalError : meaning.ExitCode;
-        var document = _stopped is not null ? _stopped(Context(), said, meaning.Message) : null;
+        var document = _stopped is not null ? Documented(_stopped(Context(), said, meaning.Message)) : null;
         var trace = meaning.Defect ? _output.Shown(exception.ToString()) : null;
 
         _output.Publish(new CommandFailed(_options.Command, meaning.ExitCode, meaning.Message, meaning.Defect, trace, document));
@@ -475,6 +478,53 @@ public sealed class CommandSession : IAsyncDisposable
     }
 
     private SessionContext Context() => new(_options, Id, Run, _output);
+
+    /// <summary>
+    /// <paramref name="document"/> as the operation answers with it: with what it did that every document it answers with
+    /// says (<see cref="IDocumentFacts"/>) written into its root where there is any - its own document's and the stopped
+    /// form's alike, however the operation ended, so no command answers without it - and exactly as written otherwise: where
+    /// the operation answers with no document, where it did nothing a document says, and where the root is no object, which
+    /// has no member to hold it.
+    /// </summary>
+    /// <param name="document">A document the operation answers with, as its command wrote it.</param>
+    private string Documented(string document)
+    {
+        if (_options.Document == DocumentKind.None)
+        {
+            return document;
+        }
+
+        // Asked of the operation's own services, which hold what it alone did; a provider that registers none says nothing.
+        var facts = (_services.GetService(typeof(IEnumerable<IDocumentFacts>)) as IEnumerable<IDocumentFacts> ?? []).Where(fact => fact.HasAny).ToList();
+
+        if (facts.Count == 0)
+        {
+            return document;
+        }
+
+        JsonObject root;
+
+        try
+        {
+            if (JsonNode.Parse(document) is not JsonObject parsed)
+            {
+                return document;
+            }
+
+            root = parsed;
+        }
+        catch (JsonException)
+        {
+            return document;
+        }
+
+        foreach (var fact in facts)
+        {
+            fact.WriteInto(root);
+        }
+
+        return root.ToJsonString(ReportJson.Options);
+    }
 
     /// <summary>
     /// A defect an operation's handed end met, said on that operation's own output, carried to the operation it was

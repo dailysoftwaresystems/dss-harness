@@ -125,6 +125,24 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The layout topic names the agent clients' key slot, in the workflows directory beside the
+    /// workflows' own: init creates its placeholder and ignores what it holds, nothing this build
+    /// runs reads it yet, and no workflow may take its name.
+    /// </summary>
+    [Fact]
+    public async Task LayoutTopic_NamesTheAgentClientsKeySlot()
+    {
+        var result = HelpText.Of("layout");
+        var prose = Prose.Words(result.StandardOutput);
+
+        Assert.Contains(
+            ".harness-config/workflows/.env/ contents ignored; kept for the agent clients' keys and settings, which this build "
+                + "does not read yet; no workflow may be named .env",
+            prose,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The verdicts topic says what becomes of a build stopped from outside, which is stopped rather than failed - but for
     /// one the harness stopped for hanging, or under another build tool - and of a run killed before it finished, which
     /// reaches no verdict and says nothing itself: the next run in its tree on that machine says it was abandoned, and
@@ -1713,6 +1731,13 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
+            "Two updates of one place never change it together: the change holds a machine-wide lock on the directory the tool is kept in, "
+            + "and an update that finds it held - two run beside the installed tool are each the program dotnet, and neither counts the "
+            + $"other - changes nothing and is refused ({HarnessExit.Refused}), with {ToolUpdateService.WaitOption} or without, since it "
+            + "read the machine before the other changed it.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
             "Once the update has begun this command does not stop it, interrupted or not, and reads back what it left: it says the update done only once "
             + $"the tool is listed as that release, and a failure with what dotnet said and what is listed since, or why that is not known "
             + $"({HarnessExit.CommandFailed}).",
@@ -2235,7 +2260,7 @@ public sealed partial class HelpTests
         Assert.Contains("a file changed or new since is work, left for you", text, StringComparison.Ordinal);
         Assert.Contains("one not found is said, and one found and not kept stops it before anything is closed", text, StringComparison.Ordinal);
         Assert.Contains("A path this process cannot look at is never read as absent: the fold fails, nothing written.", text, StringComparison.Ordinal);
-        Assert.Contains("it removes the record last, so one that stops part way finishes when run again", text, StringComparison.Ordinal);
+        Assert.Contains("It removes the record last, so one that stops part way finishes when run again.", text, StringComparison.Ordinal);
         Assert.Contains("Seeding again hands besides every path the main tree holds otherwise than the agent shares it, committed or not.", text, StringComparison.Ordinal);
         Assert.Contains(
             "a symbolic link the main tree committed is named and never handed, and so is a submodule's entry. A file the main tree turned into a "
@@ -2285,7 +2310,8 @@ public sealed partial class HelpTests
 
     /// <summary>
     /// The orchestrators topic says that delete-orchestrator refuses while a directory below the orchestrator's holds a
-    /// .git of its own that git records no worktree at, as it does while a worktree is left there.
+    /// .git of its own that git records no worktree at, as it does while a worktree is left there, and that an agent with
+    /// no worktree never stands in its way.
     /// </summary>
     [Fact]
     public async Task OrchestratorsTopic_SaysDeleteOrchestratorRefuses_WhileADirectoryGitRecordsNoWorktreeAtIsBelowIt()
@@ -2293,10 +2319,93 @@ public sealed partial class HelpTests
         var result = HelpText.Of("agents");
 
         Assert.Contains(
-            "delete-orchestrator deletes the orchestrator once every agent of it is deleted and no worktree is left below its "
-                + "directory, nor any directory holding a .git of its own that git records no worktree at - until then it refuses "
-                + $"({HarnessExit.Refused}), naming each - and the evidence and transcripts its agents kept only with --delete-evidence;",
+            "delete-orchestrator deletes the orchestrator once every agent of it with a worktree is deleted and no worktree is left "
+                + "below its directory, nor any directory holding a .git of its own that git records no worktree at - until then it "
+                + $"refuses ({HarnessExit.Refused}), naming each - and the evidence, transcripts, steps and sessions its agents kept, "
+                + "whatever their kind or state, only with --delete-evidence; an agent with no worktree holds nothing but records, "
+                + "and goes with it, deleted or not.",
             Prose.Words(result.StandardOutput),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The orchestrators topic says what an agent with no worktree is to the verbs a person types: never open, so the
+    /// limit leaves it out; nothing recorded of it when create-agent runs again; no session, --session beside
+    /// --no-worktree refused; and a deletion that is one write, saying what has nothing to act on.
+    /// </summary>
+    [Fact]
+    public async Task OrchestratorsTopic_SaysWhatTheVerbsDoWithAnAgentWithNoWorktree()
+    {
+        var text = Prose.Words(HelpText.Of("agents").StandardOutput);
+
+        foreach (var said in new[]
+        {
+            "It records no session - --session beside --no-worktree is a usage error - and delete-agent marks it deleted in one "
+                + "write, folding nothing, removing no worktree and looking for no transcript; --discard-uncommitted and the "
+                + "allowances have nothing to act on there, and it says so.",
+            $"--parallel, {OrchestratorRecord.DefaultParallel} unless given, is the most open agents at once - every agent with a "
+                + "worktree not yet deleted, and every worktree git lists below the orchestrator's directory: create-agent refuses "
+                + "the next, naming them, and list-orchestrator counts them. An agent with no worktree is never open. Run again, "
+                + "create-orchestrator changes only the limit and the session, and create-agent records only the session, and "
+                + "nothing of an agent with no worktree;",
+        })
+        {
+            Assert.Contains(said, text, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// The layout topic names where a run keeps a step no agent owns, and where an agent keeps its steps - a step's
+    /// handoff among them - and its conversations with an API client, each from the layout's own names.
+    /// </summary>
+    [Fact]
+    public async Task LayoutTopic_NamesWhereARunsStepsAndAnAgentsStepsAndSessionsAre()
+    {
+        var result = HelpText.Of("layout");
+        var agent = $"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.AgentsDirectoryName}/<agent>";
+
+        foreach (var said in new[]
+        {
+            $"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.StepsDirectoryName}/<instance>/ ignored; one step of a "
+                + "run that no agent owns, the create-agent that makes an agent included",
+            $"{agent}/{OrchestratorLayout.StepsDirectoryName}/<instance>/ ignored; one step the agent runs, or that runs in or for "
+                + $"its worktree: everything of the step, its {OrchestratorLayout.HandoffFileName} where one stopped it",
+            $"{agent}/{OrchestratorLayout.SessionsDirectoryName}/<id>/ ignored; API clients only: one conversation with the "
+                + "provider, in the provider's own form",
+        })
+        {
+            Assert.Contains(said, Prose.Words(result.StandardOutput), StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// The orchestrators and layout topics say where a step's contained child's session is recorded, and that every command
+    /// over an orchestrator first ends what a killed process left of them - and on which systems - from the layout's own names.
+    /// </summary>
+    [Fact]
+    public void OrchestratorsTopic_SaysWhatAKilledProcessLeftRunning_IsEndedByTheNextCommand()
+    {
+        var orchestrators = Prose.Words(HelpText.Of("orchestrators").StandardOutput);
+        var layout = Prose.Words(HelpText.Of("layout").StandardOutput);
+        var record = $"<step>/{OrchestratorLayout.ChildrenDirectoryName}/<session>{OrchestratorLayout.ChildExtension}";
+
+        Assert.Contains($"{record} in either kind of step, on Linux and macOS: a session a contained child of the step leads while it runs", orchestrators, StringComparison.Ordinal);
+        Assert.Contains(
+            "What a killed process left running. On Linux and macOS a contained child of a step leads a session of its own, "
+            + $"which nothing ends when the process that started it is killed, so it is recorded in its step's {OrchestratorLayout.ChildrenDirectoryName}/ "
+            + "while it runs and the record taken back once that process ends it. Every command over an orchestrator - the three "
+            + "orchestrator commands and each agent command - first ends each recorded session whose starter has gone, as a stop "
+            + "ends one (SIGTERM, then SIGKILL five seconds later), removes its record, and says so in a line, and in the document's "
+            + "ended where it answers with --json. A session whose starter still runs is left; one whose id a later process "
+            + "carries ends nothing, and its record goes; a record that does not read as one is said and left; a starter on another "
+            + "machine is never taken to have gone. Windows records nothing: a job ends a contained child with the process that "
+            + "started it.",
+            orchestrators,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"{record} ignored; in either kind of step, on Linux and macOS: a session a contained child of the step leads while it "
+            + "runs, ended by the next command over the orchestrator where its starter was killed",
+            layout,
             StringComparison.Ordinal);
     }
 
@@ -2670,10 +2779,24 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
 
+        // What an expression's reads are typed by, and what each operator, each key and the run's own standing take: the
+        // statuses are the code's one list of them, so the sentence cannot name another.
+        Assert.Contains(
+            "every path it reads is typed by what holds it - a reason step's schema, the output a built-in type answers, the "
+                + "engine's facts of a step, the run's own names - and every operator takes what it says: !, && and || a boolean, == and != "
+                + "no list and no object, any a list and a test that yields a boolean. A when, an until and a blocking yield a boolean, and "
+                + "a forEach and a key that takes a list a list; how the run stands without its always steps "
+                + $"({string.Join(", ", WorkflowExpressions.RunStatuses.Select(status => $"run.{status}"))}) is read by an always step "
+                + "alone. A placeholder in braces - '{step.member}' - in a template key reads the same names, typed the same way, as one in "
+                + "a prompt does; one in any other key is refused, and a pull request's base reads nothing but the run's inputs and "
+                + "run.name, the same for every pull request.",
+            prose,
+            StringComparison.Ordinal);
+
         // The refusals' codes are the ones the command answers with, held here so the sentence cannot drift from them.
         Assert.Contains(
-            "'dssharness validate-workflow' checks the definition - the shape of every key, every name an expression or a template key "
-                + "reads, every file the definition names; a prompt's own placeholders are not read yet - and refuses "
+            "'dssharness validate-workflow' checks the definition - the shape of every key, every name an expression, a template key "
+                + "or a prompt reads, every file the definition names - and refuses "
                 + $"({HarnessExit.ConfigInvalid}) naming each problem, without running anything, as a "
                 + "config.json that does not hold is refused. Where config.json declares no workflow there is nothing to check, and it "
                 + $"is refused ({HarnessExit.Refused}), saying that \"workflows\": [\"{WorkflowTemplates.ShippedWorkflowName}\"] "

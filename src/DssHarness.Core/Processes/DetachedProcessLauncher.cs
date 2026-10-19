@@ -82,7 +82,7 @@ public sealed class DetachedProcessLauncher : IDetachedProcessLauncher
     /// The program that is this tool, and what it is given before its own command line: nothing for the tool's
     /// own executable, and the tool's assembly for a runtime hosting it, as a build from source runs.
     /// </summary>
-    private static (string Program, IReadOnlyList<string> Prefix) Self()
+    internal static (string Program, IReadOnlyList<string> Prefix) Self()
     {
         var program = Environment.ProcessPath ?? throw new ProgramStartException("dssharness", "this process does not know the program it runs as.");
 

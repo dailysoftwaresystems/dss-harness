@@ -23,7 +23,7 @@ public static class WorkflowKeys
         new("maxOpenAgents", "agents with a worktree a run has open at once; absent, maxReasoningAgents"),
         new("maxRetries", "retries an incomplete step is given, and a reasoning step whose agent failed, on each model it may use; absent, 3"),
         new("backoffSeconds", $"seconds a reasoning step waits before it is tried again, twice as long before each later try, at most {WorkflowStep.MostBackoffSeconds}; absent, {WorkflowStep.DefaultBackoffSeconds}"),
-        new("maxInstances", "the most step instances a run may have; absent, 5000"),
+        new("maxInstances", $"the most step instances a run may have; absent, {WorkflowDefinition.DefaultMaxInstances}"),
         new("pushCheckpoints", "push checkpoint commits as they are made; absent, the final push alone"),
         new("handoffSeconds", "how long a paused reasoning step is given to write its handoff; absent, 180"),
         new("budget", "what a whole run's reasoning may cost, and the reserve that pauses the run first") { Keys = Budget },
@@ -42,7 +42,7 @@ public static class WorkflowKeys
     /// <summary>What the <c>recover</c> section takes.</summary>
     public static IReadOnlyList<KeyDescription> Recover =>
     [
-        new("steps", "the recovery's own steps, taking the keys the flow's steps take; they read the step that failed as source, and see every step of the flow") { Required = true },
+        new("steps", $"the recovery's own steps; each {ConfigKeys.TakesKeysOf(typeof(WorkflowStep))}, reads the step that failed as source, and sees every step of the flow") { Required = true },
         new("onSuccess", "where the run goes once the recovery's steps are done: failed-step, the step that gave it its failure, which runs again from where it stopped") { Required = true },
         new("onFailure", "what a failure inside the recovery does once its steps' retries are spent: pause, a person is asked, or stop - never recover, since no step calls itself") { Required = true },
         new("maxVisits", $"how often the recovery may take the failures of one step in one scope, from 1 to {FlowRecover.MostVisits}; absent, the engine's bound of {FlowRecover.MostVisits} visits of one step in one scope; past it the run asks (recoveryBound), with the advisor's recommended fix"),
@@ -120,8 +120,8 @@ public static class WorkflowKeys
     /// <summary>What the <c>amend</c> section takes.</summary>
     public static IReadOnlyList<KeyDescription> Amend =>
     [
-        new("input", "the input that holds the request; absent, the workflow's first text input"),
-        new("changedAnswerMinutes", "how long the last answer a person gave can be changed for"),
+        new("input", "the text input an amendment adds to; absent, a run takes no amended request; at least one of input and changedAnswerMinutes"),
+        new("changedAnswerMinutes", "how long the last answer a person gave can be changed for, from 1 to 60 minutes; absent, an answer is never changed"),
         new("before", "the step past which nothing is planned again"),
         new("step", "the step that plans the update, by its path from the flow's root") { Required = true },
         new("then", "the step the updated plan goes to next, beside the step that planned it"),

@@ -79,6 +79,13 @@ public sealed class OwnProgram : IOwnProgram
 /// Versions only move up, to the newest release nuget.org lists, from nuget.org alone
 /// (<see cref="ToolPackage.Source"/>), and an update is said done only once the tool is listed as that release.
 /// </para>
+/// <para>
+/// Two copies run beside the installed tool are each the program <c>dotnet</c>, so neither counts the other, and both
+/// would change the same directory at once: the change is made under the machine-wide lock on the directory the tool is
+/// kept in (<see cref="ProgramUpdate.TryHold"/>), and an update that finds it held changes nothing and is refused,
+/// whether it was asked to wait or not: it read what is installed before the other changed it, and once waited it would
+/// only make that change again.
+/// </para>
 /// </remarks>
 public sealed class ToolUpdateService(
     IProcessTable processes,
@@ -118,6 +125,9 @@ public sealed class ToolUpdateService(
     private readonly IHostPlatform _platform = platform;
     private readonly IHarnessOutput _output = output;
     private readonly Func<TimeSpan, CancellationToken, Task> _wait = wait ?? Task.Delay;
+
+    /// <summary>The parts of the update sequence every program's updater shares, run over this service's own collaborators.</summary>
+    private readonly ProgramUpdate _updates = new(processRunner, platform);
 
     /// <summary>
     /// The command that updates the installed tool from a copy of the newest release run beside it, as a refusal names
@@ -190,7 +200,7 @@ public sealed class ToolUpdateService(
 
         var move = installed is null ? $"{ToolPackage.Id} {target} was not installed in {kept}" : $"{ToolPackage.Id} in {kept} was not updated from {installed} to {target}";
         var table = await _processes.ReadAsync(cancellationToken).ConfigureAwait(false);
-        var running = Running(table);
+        var running = _updates.Running(table, one => IsTheTool(one.Name), _process.CurrentId);
 
         if (_platform.Current == PlatformId.Windows && IsTheTool(_program.Path))
         {
@@ -227,7 +237,7 @@ public sealed class ToolUpdateService(
                     [.. running.Select(one => "  " + Describe(one)), "Run again once each has ended."]);
             }
 
-            if (StartedThis(table, running) is { } parent)
+            if (_updates.StartedThis(table, running, _process.CurrentId) is { } parent)
             {
                 return new CommandOutcome(
                     HarnessExit.Refused,
@@ -240,7 +250,7 @@ public sealed class ToolUpdateService(
             await WaitAsync(moving, running, cancellationToken).ConfigureAwait(false);
         }
 
-        return await ChangeAsync(request, kept, installed, target.ToString()).ConfigureAwait(false);
+        return await ChangeAsync(request, kept, move, installed, target.ToString()).ConfigureAwait(false);
     }
 
     /// <summary>What a refusal over running processes ends with.</summary>
@@ -290,19 +300,34 @@ public sealed class ToolUpdateService(
         return (null, $"{unanswered} so nothing was changed: {holds}");
     }
 
-    /// <summary>Installs the tool, or updates it, and says so once it is listed as the release it was moved to.</summary>
+    /// <summary>
+    /// Installs the tool, or updates it, and says so once it is listed as the release it was moved to; or, where another
+    /// update of the place the tool is kept holds its lock, changes nothing and says so.
+    /// </summary>
     /// <remarks>
     /// Never stopped by this command once it has begun, nor is the reading of what it left: an update cut off part way
     /// leaves a machine with no tool, or half of one, and a command that then says nothing of which. An interruption
     /// that reaches dotnet itself, as one typed at a terminal can, is read back as any failure is. dotnet has its own bound
     /// (<see cref="ToolPackage.ChangeBudget"/>), and the command line waits for this as for any command past its point
-    /// of no return (<see cref="PointOfNoReturn"/>).
+    /// of no return (<see cref="PointOfNoReturn"/>). The lock is taken before anything is said or loaded: an update
+    /// refused by it has begun nothing.
     /// </remarks>
-    private async Task<CommandOutcome> ChangeAsync(ToolUpdateRequest request, string kept, string? installed, string target)
+    private async Task<CommandOutcome> ChangeAsync(ToolUpdateRequest request, string kept, string move, string? installed, string target)
     {
         var (verb, doing, did) = installed is null
             ? ("install", $"installing {ToolPackage.Id} {target} in {kept}", $"installed {ToolPackage.Id} {target} in {kept}")
             : ("update", $"updating {ToolPackage.Id} in {kept} from {installed} to {target}", $"updated {ToolPackage.Id} in {kept} from {installed} to {target}");
+
+        using var held = _updates.TryHold(ToolPackage.KeptIn(request.ToolPath, _platform.HomeDirectory));
+
+        if (held is null)
+        {
+            return new CommandOutcome(
+                HarnessExit.Refused,
+                $"{move}: another update is changing {kept} on this machine, and two at once would each write over what the "
+                + "other is writing. Nothing was changed.",
+                ["Run again once it has ended."]);
+        }
 
         // Where this process is the installed tool, its files are about to be replaced under it.
         if (IsTheTool(_program.Path))
@@ -312,33 +337,42 @@ public sealed class ToolUpdateService(
 
         _output.Info(CommandName, doing);
 
-        var change = await _processRunner
-            .RunAsync(
+        var change = await _updates
+            .ChangeAsync(
+                held,
                 new ProcessRequest
                 {
                     FileName = HostInspector.DotnetProgram,
                     Arguments = ToolPackage.ChangeArguments(verb, target, request.ToolPath),
                     Timeout = ToolPackage.ChangeBudget,
                 },
-                CancellationToken.None)
+                ListRequest(request.ToolPath),
+                listing => HostProbes.TryReadToolVersion(listing, ToolPackage.Id, out var release)
+                    ? ListedRelease.Read(release)
+                    : ListedRelease.Unreadable)
             .ConfigureAwait(false);
 
-        // What the machine now runs, in dotnet's own listing - or why that is not known, in dotnet's own words.
-        var listing = await ListAsync(request, CancellationToken.None).ConfigureAwait(false);
-        string? now = null;
-        var unknown = !listing.Succeeded
+        var (ran, listing, reading) = change;
+        var now = reading.Release;
+
+        // What the machine now runs, in dotnet's own listing - or why that is not known, in dotnet's own words. A
+        // listing read whole that does not hold the tool says so: that is what the machine now runs.
+        string? unknown = !listing.Succeeded
             ? HostProbes.Failure("its tools could not be listed", listing)
-            : HostProbes.TryReadToolVersion(listing.StandardOutput, ToolPackage.Id, out now) ? null : "what dotnet listed is not something this build reads";
+            : !reading.Readable ? "what dotnet listed is not something this build reads" : null;
         var listed = now is null ? "not listed there" : $"listed there as {now}";
         var since = unknown is null ? $"it is {listed} since" : $"what is listed there since is not known: {unknown}";
 
-        if (!change.Succeeded)
+        if (!ran.Succeeded)
         {
-            var started = Running(await _processes.ReadAsync(CancellationToken.None).ConfigureAwait(false));
+            var started = _updates.Running(
+                await _processes.ReadAsync(CancellationToken.None).ConfigureAwait(false),
+                one => IsTheTool(one.Name),
+                _process.CurrentId);
 
             return new CommandOutcome(
                 HarnessExit.CommandFailed,
-                HostProbes.Failure($"{doing} failed", change),
+                HostProbes.Failure($"{doing} failed", ran),
                 [
                     .. Named($"{Count(started, "started")} on this machine while it ran, which is what stops an update:", started),
                     unknown is null ? $"{ToolPackage.Id} is {listed} since." : $"What is listed there since is not known: {unknown.TrimEnd('.')}.",
@@ -363,7 +397,10 @@ public sealed class ToolUpdateService(
             await _wait(LooksEvery, cancellationToken).ConfigureAwait(false);
 
             waited += LooksEvery;
-            running = Running(await _processes.ReadAsync(cancellationToken).ConfigureAwait(false));
+            running = _updates.Running(
+                await _processes.ReadAsync(cancellationToken).ConfigureAwait(false),
+                one => IsTheTool(one.Name),
+                _process.CurrentId);
 
             if (running.Count > 0 && waited >= SaidAgainEvery)
             {
@@ -376,35 +413,15 @@ public sealed class ToolUpdateService(
     }
 
     private Task<ProcessResult> ListAsync(ToolUpdateRequest request, CancellationToken cancellationToken)
-        => _processRunner.RunAsync(
-            new ProcessRequest
-            {
-                FileName = HostInspector.DotnetProgram,
-                Arguments = ToolPackage.ListArguments(request.ToolPath),
-                Timeout = ListBudget,
-            },
-            cancellationToken);
+        => _processRunner.RunAsync(ListRequest(request.ToolPath), cancellationToken);
 
-    /// <summary>Every DssHarness <paramref name="table"/> lists but this process, by the name of its program, in the order of their ids.</summary>
-    private IReadOnlyList<SampledProcess> Running(ProcessTableReading table)
-        => [.. table.Processes.Where(one => one.Id != _process.CurrentId && IsTheTool(one.Name)).OrderBy(one => one.Id)];
-
-    /// <summary>The nearest of <paramref name="running"/> that started this process, through whatever it started in between, or <see langword="null"/>.</summary>
-    private SampledProcess? StartedThis(ProcessTableReading table, IReadOnlyList<SampledProcess> running)
+    /// <summary>The one request that lists what is installed, wherever the update reads it: before it begins, and since it changed.</summary>
+    private static ProcessRequest ListRequest(string? toolPath) => new()
     {
-        var parents = table.Processes.GroupBy(one => one.Id).ToDictionary(group => group.Key, group => group.First().ParentId);
-        var seen = new HashSet<int>();
-
-        for (var at = parents.GetValueOrDefault(_process.CurrentId); at is { } id && seen.Add(id); at = parents.GetValueOrDefault(id))
-        {
-            if (running.FirstOrDefault(one => one.Id == id) is { } parent)
-            {
-                return parent;
-            }
-        }
-
-        return null;
-    }
+        FileName = HostInspector.DotnetProgram,
+        Arguments = ToolPackage.ListArguments(toolPath),
+        Timeout = ListBudget,
+    };
 
     /// <summary>Whether <paramref name="program"/>, a path or a bare name, is the tool's own command, as a host's process listing is read.</summary>
     private static bool IsTheTool(string? program)

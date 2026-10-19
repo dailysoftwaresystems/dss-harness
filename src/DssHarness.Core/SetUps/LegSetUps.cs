@@ -369,7 +369,7 @@ public sealed class LegSetUps(ISetUpService setUps, SetUpHolds holds, PhaseRunne
 
             return result.Passed
                 ? null
-                : $"'{line.Line}' {(result.Stalled ? "stalled" : $"exited {result.ExitCode}")}; its log is '{log}{PhaseLogs.Extension}' among the leg's records";
+                : $"'{line.Line}' {(result.Stopped == PhaseStop.Silence ? "stalled" : $"exited {result.ExitCode}")}; its log is '{log}{PhaseLogs.Extension}' among the leg's records";
         }
         catch (ProgramStartException ex)
         {

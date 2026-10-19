@@ -48,9 +48,9 @@ internal static class Ninja
     /// The verdict of <paramref name="phase"/>, a build ninja ran that did not pass, where ninja did not end it for a
     /// failure: <see cref="LegVerdict.Stopped"/>, naming the exit code and whether ninja said it was interrupted or said
     /// nothing; <see langword="null"/> where ninja said anything of its own that is a reason a build ends - a step that
-    /// failed, an error, a failure - or the phase exited 0 or stalled: its own verdict stands then. And
-    /// <see cref="LegVerdict.Unmeasured"/> where what the build printed could not be read back from its log, so nothing
-    /// tells the two apart.
+    /// failed, an error, a failure - or the phase exited 0 or a bound of the harness's stopped it: its own verdict stands
+    /// then. And <see cref="LegVerdict.Unmeasured"/> where what the build printed could not be read back from its log, so
+    /// nothing tells the two apart.
     /// </summary>
     /// <param name="phase">The build phase.</param>
     /// <param name="program">
@@ -68,7 +68,7 @@ internal static class Ninja
     {
         ArgumentNullException.ThrowIfNull(phase);
 
-        if (phase.ExitCode == 0 || phase.Stalled)
+        if (phase.ExitCode == 0 || phase.Stopped != PhaseStop.None)
         {
             return null;
         }
