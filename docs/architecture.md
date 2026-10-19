@@ -1245,7 +1245,11 @@ recovery, the step it was in the way of running again after), `list` (added, pro
 `validate-workflow` checks a declared workflow, or every one declared: the file's shape, every key
 against the table that owns it (`WorkflowStepTypes`, which the parser reads exactly and `help
 workflows` lists from, so what is listed is what is read), every step, input, param and output an
-expression or a template names, every question kind an answer names, and every file the
+expression or a template names - a step looked up from where the reader is (`FlowScope`) and one
+that has ended before the reader runs: never a group's member in the group's own `when`, by bare
+name or by path, nor the group around the reader, and the iteration before (`previous`) only
+inside a repeat, where a step nested deeper than a bare name reaches is read by its path - every question
+kind an answer names, and every file the
 definition points at, beside the definition that names it - a runner or a leg no configuration
 declares is said the same way, as is a definition that cannot be read, and a workflow whose
 directory leads out of the workflows directory, or whose definition out of its own directory, once

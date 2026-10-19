@@ -171,6 +171,12 @@ public static class WorkflowValidator
 
         internal IReadOnlyList<string> Problems => _problems;
 
+        /// <summary>
+        /// The place of a read made once every step may have run - an output's <c>from</c>, read when the run has ended,
+        /// and a plan update's <c>scope</c>, read when the update stands: after every step, so every step is behind it.
+        /// </summary>
+        private const int AfterEveryStep = int.MaxValue;
+
         /// <summary>One step, placed in the flow: the group it is declared in is <paramref name="Parent"/>, none at the top level.</summary>
         private sealed record Entry(WorkflowStep Step, string Path, int Order, Entry? Parent)
         {
@@ -1147,7 +1153,7 @@ public static class WorkflowValidator
                 }
 
                 // The updated plan is written once everything may have run: nothing is behind the scope's own reads.
-                Expression(planner with { Order = int.MaxValue }, amend.Scope, "amend.scope");
+                Expression(planner with { Order = AfterEveryStep }, amend.Scope, "amend.scope");
 
                 if (amend.Then is not null && Sibling(planner, amend.Then) is null)
                 {
@@ -1188,7 +1194,7 @@ public static class WorkflowValidator
 
                 // An output is read when the run has ended, at the flow's top level: the whole flow is behind it. It is
                 // named as the file names the key, 'outputs.<name>.from'.
-                Expression(new Entry(new WorkflowStep { Name = output.Name }, $"outputs.{output.Name}", int.MaxValue, null), output.From, "from");
+                Expression(new Entry(new WorkflowStep { Name = output.Name }, $"outputs.{output.Name}", AfterEveryStep, null), output.From, "from");
             }
         }
 
@@ -1436,11 +1442,13 @@ public static class WorkflowValidator
 
                 case "previous":
                     {
-                        // The iteration before this one: readable inside a repeat group, whose own
-                        // until is read once an iteration has ended, and whose members name one
-                        // another as the iteration before theirs. The step it names is found as a
-                        // bare name is, from where it is read, and is one the repeat holds.
-                        var repeated = RepeatAround(entry);
+                        // The iteration before this one: readable inside a repeat group, whose loop's
+                        // own keys (within) are read once an iteration has ended, and whose members
+                        // name one another as the iteration before theirs. A repeat group's other
+                        // keys are read before its first iteration, so only a group around it
+                        // answers for them. The step it names is found as a bare name is, from where
+                        // it is read, and is one the repeat holds.
+                        var repeated = RepeatAround(within ? entry : entry.Parent);
 
                         if (repeated is null)
                         {
@@ -1453,7 +1461,13 @@ public static class WorkflowValidator
                                 && _byPath.GetValueOrDefault(named.Path) is { } held
                                 && repeated.Owns(held)))
                         {
-                            _problems.Add($"'{what}' reads '{read.Whole}', and '{segments[1]}' is no step of the group '{repeated.Path}' repeats");
+                            // A step the repeat holds deeper than a bare name reaches from here is read by its path
+                            // from the repeat's own members, which every reader inside it sees by bare name.
+                            var deeper = FlowScope.Inside(segments[1], _definition, repeated.Path);
+
+                            _problems.Add(deeper is []
+                                ? $"'{what}' reads '{read.Whole}', and '{segments[1]}' is no step of the group '{repeated.Path}' repeats"
+                                : $"'{what}' reads '{read.Whole}', and '{segments[1]}' is a step of the group '{repeated.Path}' repeats, nested deeper than a bare name reaches from here: read {string.Join(" or ", deeper.Select(found => $"'previous.{found.Path[(repeated.Path.Length + 1)..]}'"))}");
                         }
 
                         return;
@@ -1517,10 +1531,20 @@ public static class WorkflowValidator
                     }
 
                     // Where a name is, FlowScope says; whether the step it finds is there to be read, this check: one
-                    // declared before the reader, or one of a group's own members that its loop reads.
-                    if (located is not { } resolved || !(resolved.Step.Order < entry.Order || entry.Owns(resolved.Step)))
+                    // declared before the reader, or one of a group's own members where the key is its loop's own
+                    // (within), read once an iteration has ended. Every other key of a group - its when, its forEach - is
+                    // read before any member has run, by bare name and by path alike.
+                    if (located is not { } resolved || !(resolved.Step.Order < entry.Order || (within && entry.Owns(resolved.Step))))
                     {
                         _problems.Add($"'{what}' reads '{read.Whole}', which no step before '{entry.Path}', no input and no param provides");
+                        return;
+                    }
+
+                    // A group around the reader is declared before it, and has not ended while it runs: it is not
+                    // upstream of it. A read made once every step may have run is made after the group's end too.
+                    if (entry.Order != AfterEveryStep && resolved.Step.Owns(entry))
+                    {
+                        _problems.Add($"'{what}' reads '{read.Whole}', and '{resolved.Step.Path}' is not upstream of it: '{resolved.Step.Path}' holds '{entry.Path}', and has not ended while it runs");
                         return;
                     }
 
@@ -1639,9 +1663,9 @@ public static class WorkflowValidator
 
         /// <summary>
         /// The nearest group <paramref name="entry"/> is part of that repeats - itself, or one holding it - whose
-        /// iteration before this one <c>previous</c> names.
+        /// iteration before this one <c>previous</c> names; none where <paramref name="entry"/> is none, above the top level.
         /// </summary>
-        private Entry? RepeatAround(Entry entry)
+        private Entry? RepeatAround(Entry? entry)
         {
             for (var scope = entry; scope is not null; scope = scope.Parent)
             {
@@ -1706,7 +1730,8 @@ public static class WorkflowValidator
 
             if (step.OnPreExisting is { } named)
             {
-                var triage = _entries.FirstOrDefault(other => other.ParentPath is null && other != _recover && other.Step.Name == named);
+                // A step of the flow's top level, found as every name a sibling only is.
+                var triage = FlowScope.SiblingOf(named, _definition, scope: null);
 
                 if (triage is null)
                 {
@@ -1739,7 +1764,9 @@ public static class WorkflowValidator
                 _problems.Add($"{where} is raised by a pre-existing issue and also depends on '{first}'; a raised step waits for the issue it is given and for nothing else");
             }
 
-            if (_entries.FirstOrDefault(other => other.Step.DependsOn.Contains(step.Name, StringComparer.Ordinal) && other.ParentPath == entry.ParentPath) is { } waiting)
+            // What waits for it names it under dependsOn, found as a dependency is: the sibling of that name, the first
+            // declared where siblings share one.
+            if (_entries.FirstOrDefault(other => other.Step.DependsOn.Any(name => ReferenceEquals(Sibling(other, name), entry))) is { } waiting)
             {
                 _problems.Add($"{where} is raised by a pre-existing issue, and '{waiting.Path}' depends on it; a raised step is never scheduled, so nothing waits for it");
             }

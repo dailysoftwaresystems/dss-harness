@@ -3,7 +3,7 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <summary>
 /// Where the names of a workflow's steps live: how a name is looked up - among siblings, then the scopes around it
 /// - which names are looked up that way and which name a sibling only, what a group's member is called from outside
-/// it, how a step's name is spelt, and what a step may not be named.
+/// it, where inside a group a step of a name is, how a step's name is spelt, and what a step may not be named.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -151,6 +151,29 @@ public static class FlowScope
         }
 
         return (step, [.. names.Skip(next)]);
+    }
+
+    /// <summary>
+    /// Every step named <paramref name="name"/> declared anywhere inside the group at <paramref name="group"/> - one of
+    /// its members, or one nested deeper in a group among them - with its path, in declaration order. A bare name read
+    /// inside the group reaches a member of a scope around the reader and no deeper; this is how a refusal says where
+    /// the step it did not reach is, and so by what path it is read.
+    /// </summary>
+    /// <param name="name">The bare name, as written.</param>
+    /// <param name="definition">The workflow, as it was read.</param>
+    /// <param name="group">The path of the group looked in, as <see cref="Located.Path"/> spells it.</param>
+    public static IReadOnlyList<Located> Inside(string name, WorkflowDefinition definition, string group)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentException.ThrowIfNullOrWhiteSpace(group);
+
+        return
+        [
+            .. Declared(definition)
+                .Where(declared => declared.Path.StartsWith(group + ".", StringComparison.Ordinal)
+                    && string.Equals(declared.Step.Name, name, StringComparison.Ordinal))
+                .Select(declared => new Located(declared.Path, declared.Step)),
+        ];
     }
 
     /// <summary>

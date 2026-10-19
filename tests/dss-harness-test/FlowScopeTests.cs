@@ -166,6 +166,47 @@ public sealed class FlowScopeTests
     }
 
     /// <summary>
+    /// Where inside a group a step of a name is - one of its members, or one nested deeper, wherever a bare name reaches
+    /// it or not - every one of them with its path, in declaration order; nothing outside the group, and nothing in a
+    /// group whose path merely begins the same.
+    /// </summary>
+    [Fact]
+    public void WhereInsideAGroupAStepOfANameIs_EveryOneWithItsPath()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: correctness
+                type: orient
+              - name: rounds
+                repeat:
+                  until: a.correctness.ok
+                  maxIterations: 3
+                steps:
+                  - name: a
+                    steps:
+                      - name: correctness
+                        type: orient
+                  - name: b
+                    steps:
+                      - name: deep
+                        steps:
+                          - name: correctness
+                            type: orient
+              - name: rounds-two
+                steps:
+                  - name: correctness
+                    type: orient
+            """);
+
+        Assert.Equal(
+            ["rounds.a.correctness", "rounds.b.deep.correctness"],
+            FlowScope.Inside("correctness", definition, "rounds").Select(found => found.Path));
+        Assert.Equal(["rounds.b"], FlowScope.Inside("b", definition, "rounds").Select(found => found.Path));
+        Assert.Empty(FlowScope.Inside("ghost", definition, "rounds"));
+    }
+
+    /// <summary>
     /// The recovery's own steps are a scope of their own: they see each other, then the flow's top level by bare name
     /// and its members by their paths; nothing of the flow sees them by bare name.
     /// </summary>

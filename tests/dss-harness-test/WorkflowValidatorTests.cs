@@ -172,6 +172,51 @@ public sealed class WorkflowValidatorTests
     }
 
     /// <summary>
+    /// What waits for a raised step is found as every dependency is (<c>FlowScope</c>): <c>dependsOn</c> names the
+    /// sibling of that name, the first declared where siblings share one. Beside a scheduled step of the same name, a
+    /// raised one declared after it is waited for by nothing - only the shared name is refused - and a reasoning step
+    /// sends its issues to the first of the two, which says no raised.
+    /// </summary>
+    [Fact]
+    public void WhatWaitsForARaisedStep_IsFoundAsADependencyIs()
+    {
+        Assert.Equal(
+            [
+                "two steps of 'the flow's root' are named 'triage-issue'; what depends on it, or reads it, could only ever mean one of them",
+                "step 'triage' says onPreExisting: 'triage-issue', which says no raised: preExisting; the step that triages a reported issue is raised by it, never scheduled",
+            ],
+            Problems(
+                """
+                name: default
+                steps:
+                  - name: triage
+                    type: reason
+                    agent: planner
+                    prompt: prompts/plan.md
+                    outputs: schemas/plan.json
+                    onPreExisting: triage-issue
+                  - name: triage-issue
+                    type: orient
+                  - name: triage-issue
+                    type: reason
+                    agent: pre-existing-triage
+                    prompt: prompts/pre-existing.md
+                    outputs: schemas/pre-existing.json
+                    raised: preExisting
+                    onAddress: recover
+                  - name: after
+                    type: orient
+                    dependsOn: [triage-issue]
+                recover:
+                  onSuccess: failed-step
+                  onFailure: pause
+                  steps:
+                    - name: diagnose
+                      type: orient
+                """));
+    }
+
+    /// <summary>
     /// V51: a raised step is raised one way - never also by another step's ending, never always - and no handler sends the
     /// run to it; it reads the issue it is given and the step that reported it, as the recovery does.
     /// </summary>
@@ -929,6 +974,42 @@ public sealed class WorkflowValidatorTests
                   whenChangeScope: replan
                   whenRemoveScope: replan
                 """));
+    }
+
+    /// <summary>
+    /// A plan update's scope is read once the update stands, when its planner and what its then set going have come to
+    /// rest: every step is behind it, the group around its planner among them, which a step of the group could not
+    /// read while it runs.
+    /// </summary>
+    [Fact]
+    public void APlanUpdatesScope_ReadsTheGroupAroundItsPlanner()
+    {
+        Assert.Empty(Problems(
+            """
+            name: default
+            inputs:
+              - name: request
+            steps:
+              - name: planning
+                gather: [scope]
+                steps:
+                  - name: replan
+                    type: reason
+                    agent: planner
+                    prompt: prompts/update.md
+                    outputs: schemas/update.json
+                  - name: check
+                    type: orient
+                    dependsOn: [replan]
+            amend:
+              input: request
+              step: planning.replan
+              then: check
+              scope: 'planning.scope'
+              whenAddScope: planning.check
+              whenChangeScope: planning.check
+              whenRemoveScope: planning.check
+            """));
     }
 
     /// <summary>
@@ -2252,9 +2333,12 @@ public sealed class WorkflowValidatorTests
     /// <summary>
     /// Every name a read starts with is looked up from where the reader is (<c>FlowScope</c>): a sibling block's member
     /// by the block's bare name from inside a group, a recovery step's sibling from inside the recovery, a repeat's own
-    /// members from within its loop. Nothing else is: a member of a group from outside it by bare name, a member
-    /// nested deeper than a loop's own - now or in the iteration before - a group's member in the group's when, read
-    /// before any member ran, and a forEach's member from outside it, which would be one of many.
+    /// members from within its loop, and a member nested deeper in it, in the iteration before, by its path from the
+    /// repeat's members. Nothing else is: a member of a group from outside it by bare name, a member nested deeper than
+    /// a loop's own - now, or in the iteration before by bare name, which the refusal says the path of - a group's
+    /// member in the group's when, by bare name or by path, read before any member ran, the iteration before in a
+    /// repeat group's own when, read before its first, the group around the reader, which has not ended while the
+    /// reader runs, and a forEach's member from outside it, which would be one of many.
     /// </summary>
     [Fact]
     public void EveryRead_IsLookedUpFromWhereTheReaderIs()
@@ -2277,11 +2361,15 @@ public sealed class WorkflowValidatorTests
                     when: review.correctness.ok
               - name: rounds
                 repeat:
-                  until: 'audit.clean && outer.review.correctness.ok'
+                  until: 'audit.clean && outer.review.correctness.ok && previous.check.soundness.ok'
                   maxIterations: 3
                 steps:
                   - name: audit
                     type: orient
+                  - name: check
+                    steps:
+                      - name: soundness
+                        type: orient
             recover:
               onSuccess: failed-step
               onFailure: pause
@@ -2297,8 +2385,11 @@ public sealed class WorkflowValidatorTests
         Assert.Equal(
             [
                 "'gate.when' reads 'inner.ok', which no step before 'gate', no input and no param provides",
+                "'gate.when' reads 'gate.inner.ok', which no step before 'gate', no input and no param provides",
+                "'gate.inner.when' reads 'gate.outcome', and 'gate' is not upstream of it: 'gate' holds 'gate.inner', and has not ended while it runs",
+                "'rounds.when' reads 'previous.audit.ok', whose 'previous' names the iteration of a repeat group before this one, and no group holding 'rounds' runs one",
                 "'rounds.repeat.until' reads 'correctness.ok', which no step before 'rounds', no input and no param provides",
-                "'rounds.repeat.until' reads 'previous.correctness.ok', and 'correctness' is no step of the group 'rounds' repeats",
+                "'rounds.repeat.until' reads 'previous.correctness.ok', and 'correctness' is a step of the group 'rounds' repeats, nested deeper than a bare name reaches from here: read 'previous.review.correctness'",
                 "'after.when' reads 'items.verify.ok', and 'items' runs a forEach: read from outside it, a member is one of many, and nothing says which",
                 "'after.when' reads 'inner.ok', which no step before 'after', no input and no param provides",
             ],
@@ -2313,11 +2404,13 @@ public sealed class WorkflowValidatorTests
                       - name: verify
                         type: orient
                   - name: gate
-                    when: inner.ok
+                    when: 'inner.ok || gate.inner.ok'
                     steps:
                       - name: inner
                         type: orient
+                        when: 'gate.outcome'
                   - name: rounds
+                    when: 'previous.audit.ok'
                     repeat:
                       until: 'correctness.ok || audit.ok || previous.correctness.ok'
                       maxIterations: 3
