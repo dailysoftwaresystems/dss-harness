@@ -122,7 +122,7 @@ public sealed class OrchestratorServiceTests
         var kept = await kit.Harness.OrchestratorService.DeleteAsync(kit.Main, "o1", deleteEvidence: false, Token);
 
         Assert.Equal(HarnessExit.Refused, kept.ExitCode);
-        Assert.Contains("because it keeps 1 evidence file(s), 0 transcript file(s), 0 step file(s) and 0 session file(s) of its agents 'ag'", kept.Message);
+        Assert.Contains("because it keeps 1 evidence file(s) and 0 transcript file(s) of its agents 'ag'", kept.Message);
 
         var deleted = await kit.Harness.OrchestratorService.DeleteAsync(kit.Main, "o1", deleteEvidence: true, Token);
 

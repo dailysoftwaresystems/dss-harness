@@ -5,6 +5,8 @@ using DssHarness.Core.Execution;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Output;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Processes;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Secrets;
 using DssHarness.Core.Sync;
@@ -35,6 +37,28 @@ public sealed class CompositionRootTests
         Assert.NotNull(provider.GetRequiredService<IHarnessContextLoader>());
         Assert.NotNull(provider.GetRequiredService<IWorkflowValidationService>());
         Assert.NotNull(provider.GetRequiredService<IWorkflowExportService>());
+    }
+
+    /// <summary>
+    /// The process runner and the process table resolve from the root, each once and within a bound: the machine's table
+    /// is built over the runner, so a runner the root built with a table of the root's would be a runner waiting on
+    /// itself, and every command that runs a program would hang before its first line rather than fail.
+    /// </summary>
+    [Fact]
+    public async Task TheProcessRunnerAndTable_ResolveFromTheRoot_WithoutWaitingOnEachOther()
+    {
+        using var provider = new ServiceCollection()
+            .AddDssHarness(new SessionOptions { Command = "test" }, OperationId.New())
+            .BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true });
+
+        var resolved = Task.Run(
+            () => (provider.GetRequiredService<IProcessRunner>(), provider.GetRequiredService<IProcessTable>()),
+            TestContext.Current.CancellationToken);
+
+        var (runner, table) = await resolved.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.IsType<ProcessRunner>(runner);
+        Assert.NotNull(table);
     }
 
     /// <summary>

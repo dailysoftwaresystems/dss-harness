@@ -9,7 +9,7 @@ using Microsoft.Win32.SafeHandles;
 namespace DssHarness.Core.Processes;
 
 /// <inheritdoc cref="IProcessRunner"/>
-public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions filePermissions, string? containThrough = null, IProcessTable? processTable = null)
+public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions filePermissions, string? containThrough = null)
     : IProcessRunner
 {
     /// <summary>ENOENT on Linux and macOS, ERROR_FILE_NOT_FOUND on Windows.</summary>
@@ -75,7 +75,22 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// What a contained child's session is read from on Linux and macOS: the machine's own, read through this runner where
     /// the system is asked through a program - or a table a test gives in its place.
     /// </summary>
-    private IProcessTable? _processTable = processTable;
+    private IProcessTable? _processTable;
+
+    /// <summary>
+    /// A runner reading <paramref name="processTable"/> in place of the machine's own table: a test's. Not the public
+    /// constructor's, because the container builds this runner from that one, and the machine's table is itself built
+    /// over this runner - a table asked of the container there would be a runner waiting on itself.
+    /// </summary>
+    /// <param name="platform">The system this runs on.</param>
+    /// <param name="filePermissions">How the system says a file may be run.</param>
+    /// <param name="containThrough">The tool that starts a contained child, as the public constructor takes it.</param>
+    /// <param name="processTable">The table a contained child's session is read from.</param>
+    internal ProcessRunner(IHostPlatform platform, IFilePermissions filePermissions, string? containThrough, IProcessTable processTable)
+        : this(platform, filePermissions, containThrough)
+    {
+        _processTable = processTable;
+    }
 
     /// <summary>
     /// The variable a program is looked up on. Spelled once: on Windows the environment a child is

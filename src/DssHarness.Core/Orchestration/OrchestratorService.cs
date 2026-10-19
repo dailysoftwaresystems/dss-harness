@@ -541,13 +541,26 @@ public sealed class OrchestratorService(
     /// <param name="Sessions">The files of its conversations with an API client.</param>
     private sealed record KeptOf(string Name, int Evidence, int Transcripts, int Steps, int Sessions)
     {
-        /// <summary>What <paramref name="kept"/> hold between them, every kind named: the one wording of the refusal and the detail.</summary>
+        /// <summary>
+        /// What <paramref name="kept"/> hold between them: the one wording of the refusal and the detail. Evidence and
+        /// transcripts are always named, as they always were; steps and sessions only where there are any, so an
+        /// orchestrator whose agents kept none says what it always said.
+        /// </summary>
         /// <param name="kept">The agents that keep any.</param>
         public static string Said(IReadOnlyList<KeptOf> kept)
-            => $"{ReportText.Counted(kept.Sum(agent => agent.Evidence), "evidence file")}, "
-                + $"{ReportText.Counted(kept.Sum(agent => agent.Transcripts), "transcript file")}, "
-                + $"{ReportText.Counted(kept.Sum(agent => agent.Steps), "step file")} and "
-                + ReportText.Counted(kept.Sum(agent => agent.Sessions), "session file");
+        {
+            var steps = kept.Sum(agent => agent.Steps);
+            var sessions = kept.Sum(agent => agent.Sessions);
+            string[] said =
+            [
+                ReportText.Counted(kept.Sum(agent => agent.Evidence), "evidence file"),
+                ReportText.Counted(kept.Sum(agent => agent.Transcripts), "transcript file"),
+                .. steps == 0 ? [] : new[] { ReportText.Counted(steps, "step file") },
+                .. sessions == 0 ? [] : new[] { ReportText.Counted(sessions, "session file") },
+            ];
+
+            return $"{string.Join(", ", said[..^1])} and {said[^1]}";
+        }
     }
 
 

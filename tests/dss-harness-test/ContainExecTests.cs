@@ -845,7 +845,9 @@ public sealed class ContainExecTests
     /// process table unless <paramref name="table"/> is given in its place.
     /// </summary>
     private static ProcessRunner ContainingRunner(IProcessTable? table = null)
-        => new(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram, table);
+        => table is null
+            ? new(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram)
+            : new(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram, table);
 
     /// <summary>
     /// Starts <paramref name="program"/> directly and then through the step, contained or apart from the terminal, and
