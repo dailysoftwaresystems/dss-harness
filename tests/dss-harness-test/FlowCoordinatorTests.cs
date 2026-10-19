@@ -1279,14 +1279,15 @@ public sealed class FlowCoordinatorTests
                 options: [stay, go]
             """);
         var runner = new FakeRunner();
-        var holding = runner.Hold("holding");
         var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
-        var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
-        holding.Ask("pause", "what now?", "stay", "go");
-        var end = await session;
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
+        // A pause step asks and asks only: no runner is asked, and the run waits on its question.
         Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Empty(runner.Started);
+        Assert.Equal("pause", coordinator.Questions.Single().Kind);
+        Assert.Equal("what now?", coordinator.Questions.Single().Problem);
         Assert.False(coordinator.TryAnswer("q9", "stay", out var unknown));
         Assert.Equal("'q9' is not a question this run leaves open", unknown);
         Assert.False(coordinator.TryAnswer("q1", "leave", out var problem));

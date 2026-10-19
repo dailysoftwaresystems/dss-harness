@@ -1,20 +1,9 @@
 using System.Text.Json.Nodes;
 using DssHarness.Core.Execution;
+using DssHarness.Core.Orchestration;
 using DssHarness.Core.Results;
 
 namespace DssHarness.Core.Orchestration.Flow;
-
-/// <summary>
-/// One question a run raises, in memory while it is open: what was asked, of which step, with the answers it takes.
-/// The run's one file of questions and answers - and the answers a configuration gives beforehand - come with the run
-/// on disk; this is the question itself, as the coordinator holds it.
-/// </summary>
-/// <param name="Id">The question's id (<c>q1</c>, <c>q2</c>, in the order raised).</param>
-/// <param name="Kind">The kind of question it is, one of <see cref="WorkflowValidator.QuestionKinds"/>.</param>
-/// <param name="Instance">The instance that asks it, by its id.</param>
-/// <param name="Problem">What the question says: the problem, in the engine's own words.</param>
-/// <param name="Options">The answers it takes, spelled as the kind spells them.</param>
-public sealed record FlowQuestion(string Id, string Kind, string Instance, string Problem, IReadOnlyList<string> Options);
 
 /// <summary>One answer a question was given, and what it carried beside it.</summary>
 /// <param name="Question">The question's id.</param>
@@ -85,6 +74,23 @@ public interface IFlowRunEvents
     void LegEnded(string leg);
 }
 
+/// <summary>
+/// What a fold family step's dry run stood, as its runner reports it over the verbs' own facts: the consents it lacks
+/// by kind with what it named, or its refusal - for paths whose three-way merge conflicts alone, or with anything else
+/// among its reasons, which fails the step.
+/// </summary>
+/// <param name="Standing">What the dry run wants of its caller.</param>
+/// <param name="Consents">Each consent the request lacks, by kind, in the order the dry run named them.</param>
+/// <param name="Named">What the dry run named: the rows, the cells or the paths each consent is about.</param>
+/// <param name="Refusals">Each reason the request stands refused for, by kind, where it stands refused.</param>
+/// <param name="Summary">The dry run's own summary, the line it ended on.</param>
+public sealed record FlowDryRun(
+    RequestStanding Standing,
+    IReadOnlyList<ConsentKind> Consents,
+    IReadOnlyList<string> Named,
+    IReadOnlyList<RefusalKind> Refusals,
+    string Summary);
+
 /// <summary>How one step's run ended, as its runner reports it to the coordinator.</summary>
 /// <remarks>
 /// A leg step reports each leg's verdict on its own, and never the command's own exit code as the verdicts: the
@@ -117,6 +123,31 @@ public sealed record FlowStepResult
     /// <summary>The typed cause, where the exit code alone cannot say which kind of refusal it was.</summary>
     public OutcomeCause Cause { get; init; }
 
+    /// <summary>
+    /// The step's dry run stood short of applying: it lacks a consent, or it stands refused for conflicting merges
+    /// alone, and the coordinator raises the question for it. Never set together with an ending.
+    /// </summary>
+    public FlowDryRun? DryRun { get; init; }
+
+    /// <summary>
+    /// A reason step reached a limit of its own - <c>turns</c>, <c>budget</c>, <c>truncated</c> or <c>context</c> -
+    /// which asks and is no failure; <see langword="null"/> for every other result. Never set together with an ending.
+    /// </summary>
+    public string? Limit { get; init; }
+
+    /// <summary>What the limit's question says was spent against it, where the runner reports one.</summary>
+    public string? LimitDetail { get; init; }
+
+    /// <summary>
+    /// A wait for checks found none (<c>none</c>), found them still running (<c>pending</c>) or found one that ended
+    /// neither green nor red (<c>unsettled</c>): each asks and is no failure; <see langword="null"/> for every other
+    /// result. Never set together with an ending.
+    /// </summary>
+    public string? Checks { get; init; }
+
+    /// <summary>What the wait's question says of what it found, where the runner reports it.</summary>
+    public string? ChecksDetail { get; init; }
+
     /// <summary>A result for a step that ended: passed or not, with its code.</summary>
     public static FlowStepResult Ended(bool passed, int exit, string? error = null, JsonNode? output = null)
         => new() { Asked = null, Passed = passed, Exit = exit, Error = error, Output = output };
@@ -124,4 +155,16 @@ public sealed record FlowStepResult
     /// <summary>A result for a step that asks: no ending, the question open.</summary>
     public static FlowStepResult Asking(FlowQuestion question)
         => new() { Asked = question, Passed = false, Exit = HarnessExit.Incomplete };
+
+    /// <summary>A result for a fold family step whose dry run stood short of applying.</summary>
+    public static FlowStepResult Standing(FlowDryRun dryRun)
+        => new() { Asked = null, Passed = false, Exit = HarnessExit.Refused, DryRun = dryRun };
+
+    /// <summary>A result for a reason step at a limit of its own.</summary>
+    public static FlowStepResult AtLimit(string limit, string? detail = null)
+        => new() { Asked = null, Passed = false, Exit = HarnessExit.CommandFailed, Limit = limit, LimitDetail = detail };
+
+    /// <summary>A result for a wait for checks that came to nothing it could end on.</summary>
+    public static FlowStepResult Found(string checks, string? detail = null)
+        => new() { Asked = null, Passed = false, Exit = HarnessExit.CommandFailed, Checks = checks, ChecksDetail = detail };
 }

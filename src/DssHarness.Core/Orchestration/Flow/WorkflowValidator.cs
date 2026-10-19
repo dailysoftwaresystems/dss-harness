@@ -66,8 +66,12 @@ public static class WorkflowValidator
         ["checksPending"] = ["more", "accept", "fail", "abort"],
     };
 
-    /// <summary>The answers after which the same question can come again, and so are given a counted number of times.</summary>
-    private static readonly IReadOnlyList<string> GoesOn = ["more", "retry", "compact"];
+    /// <summary>
+    /// The answers after which the same question can come again, and so are given a counted number of times. The
+    /// engine and this check read the one list: a <c>times</c> a configuration gives is counted by the engine that
+    /// gives the answer.
+    /// </summary>
+    public static readonly IReadOnlyList<string> GoesOn = ["more", "retry", "compact"];
 
     /// <summary>The answers that end the matter, which alone may follow a counted one as its <c>then</c>.</summary>
     private static readonly IReadOnlyList<string> Ends = ["accept", "allow", "merge", "stay", "skip", "fail", "abort"];

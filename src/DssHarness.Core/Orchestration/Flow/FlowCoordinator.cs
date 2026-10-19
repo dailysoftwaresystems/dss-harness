@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json.Nodes;
 using System.Threading.Channels;
 using DssHarness.Core.Execution;
@@ -99,6 +100,12 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
     /// <summary>Whether the run passed this failure over (<c>onFailure: continue</c>), so what depends on it runs on its output as Missing.</summary>
     public bool PassedOver { get; internal set; }
 
+    /// <summary>
+    /// The kind of the question whose <c>fail</c> answer ended this step, where one did: the engine's fact
+    /// <c>&lt;step&gt;.question</c>, which a handler reads. <see langword="null"/> for every other ending.
+    /// </summary>
+    public string? EndedByQuestion { get; internal set; }
+
     /// <summary>Whether this step runs in the always phase: it says <c>always</c>, or a group around it does.</summary>
     public bool IsAlways { get; internal set; }
 
@@ -150,9 +157,8 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
 /// with the slices that own them.
 /// </para>
 /// <para>
-/// What is not here, by the plan's own order: the questions a configuration answers beforehand and each question
-/// kind's own machinery (the next slice), the safe pause, the hard stop and the budget, the handlers an ending raises
-/// (<c>on</c>, <c>then</c>, and the visits a redirect sends the run back for), a repeat's <c>rounds</c> and
+/// What is not here, by the plan's own order: the safe pause, the hard stop and the budget, the handlers an ending
+/// raises (<c>on</c>, <c>then</c>, and the visits a redirect sends the run back for), a repeat's <c>rounds</c> and
 /// <c>blocking</c>, and the recovery. A workflow that asks this coordinator to run either of the last two is refused
 /// loudly when the run meets it, never quietly misplayed.
 /// </para>
@@ -177,11 +183,14 @@ public sealed class FlowCoordinator
     private readonly List<Wake> _wakes = [];
     private readonly Dictionary<string, FlowInstance> _agentsOpen = new(StringComparer.Ordinal);
     private readonly Dictionary<string, int> _declarationOrder = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, int> _answerSpent = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _answerWhere = new(StringComparer.Ordinal);
 
     private Scope _top = null!;
     private bool _stopping;
     private bool _alwaysPhase;
     private bool _inSession;
+    private bool _answeredAtOnce;
     private int _questionsRaised;
     private FlowSessionEnd? _last;
     private Task<Message>? _pending;
@@ -246,7 +255,7 @@ public sealed class FlowCoordinator
 
     /// <summary>
     /// Drives the run until nothing more can run: a session. A session ends done, failed, or paused on an open
-    /// question; a paused run goes on when a question is answered (<see cref="TryAnswer"/>) and this is called again.
+    /// question; a paused run goes on when a question is answered (<see cref="TryAnswer(string, string, out string?)"/>) and this is called again.
     /// </summary>
     /// <param name="cancellationToken">Stops the waiting; nothing of the run is changed by a cancellation.</param>
     public async Task<FlowSessionEnd> RunAsync(CancellationToken cancellationToken)
@@ -269,13 +278,31 @@ public sealed class FlowCoordinator
             {
                 Progress();
 
+                if (_answeredAtOnce)
+                {
+                    // A configuration answered a question this pass raised, in the place of a person: its answer has
+                    // already changed the graph, so the loop goes round again rather than wait on what asked.
+                    _answeredAtOnce = false;
+                    continue;
+                }
+
                 var started = Admit();
 
-                // Anything to wait for: a step in flight, a retry's time coming, or a completion still unread. Where
-                // nothing runs, nothing is due and this pass started nothing, no step the run has left can ever start
-                // - one held behind a limit that nothing will free among them - and the session ends rather than wait
-                // for it; what never started is NotRun.
-                if (_created.Any(instance => instance.State is FlowInstanceState.Running) || _wakes.Count > 0 || started > 0)
+                if (_answeredAtOnce)
+                {
+                    // A pause step this pass started asked and was answered at once, or its question could not be
+                    // filled and it failed: either way the graph changed inside Admit, and what follows from it has
+                    // yet to be drawn - so the loop goes round again rather than end over work it never ran.
+                    _answeredAtOnce = false;
+                    continue;
+                }
+
+                // Anything to wait for: a step in flight - a leaf, for a group is only bookkeeping over its members
+                // and a group whose member waits on a question can run nothing until it is answered - a retry's time
+                // coming, or a completion still unread. Where nothing runs, nothing is due and this pass started
+                // nothing, no step the run has left can ever start - one held behind a limit that nothing will free
+                // among them - and the session ends rather than wait for it; what never started is NotRun.
+                if (_created.Any(instance => instance.State is FlowInstanceState.Running && !instance.Step.IsGroup) || _wakes.Count > 0 || started > 0)
                 {
                     await WaitNextAsync(cancellationToken).ConfigureAwait(false);
                     continue;
@@ -299,16 +326,29 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// Answers a question the run asked: the answer must name an open question and be one it takes. What an answer
-    /// does is the question's own: <c>retry</c> runs the step again, <c>skip</c> ends it skipped, <c>more</c> gives a
-    /// loop one more iteration, <c>accept</c> takes an ending as it stands, <c>abort</c> ends the run failed - and a
-    /// step that asked is asked again with the answer among what it is given.
+    /// Answers a question the run asked: the answer must name an open question and be one it takes - <c>abort</c> is
+    /// always taken. What an answer does is the question's own: <c>retry</c> runs the step again as a new attempt,
+    /// <c>skip</c> ends it skipped, <c>more</c> gives a loop one more iteration, <c>accept</c> takes an ending as it
+    /// stands, <c>fail</c> ends the step failed with the question's kind, <c>abort</c> ends the run - and a step that
+    /// asked is asked again with the answer among what it is given.
     /// </summary>
     /// <param name="question">The question's id.</param>
     /// <param name="answer">The answer, spelled as the question's options spell it.</param>
     /// <param name="problem">Why the answer was not taken, where it was not.</param>
     /// <returns>Whether the answer was taken.</returns>
     public bool TryAnswer(string question, string answer, out string? problem)
+        => TryAnswer(question, answer, null, out problem);
+
+    /// <summary>
+    /// Answers a question the run asked, with the text an answer can carry: a <c>pause</c> step's option that names
+    /// one in its <c>text</c> needs it, and an option that names none refuses it. <c>abort</c> is always taken.
+    /// </summary>
+    /// <param name="question">The question's id.</param>
+    /// <param name="answer">The answer, spelled as the question's options spell it.</param>
+    /// <param name="text">The text given with the answer, where it takes one.</param>
+    /// <param name="problem">Why the answer was not taken, where it was not.</param>
+    /// <returns>Whether the answer was taken.</returns>
+    public bool TryAnswer(string question, string answer, string? text, out string? problem)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(question);
         ArgumentException.ThrowIfNullOrWhiteSpace(answer);
@@ -321,9 +361,23 @@ public sealed class FlowCoordinator
 
         var asked = _questions.First(asking => asking.Id == question);
 
-        if (!asked.Options.Contains(answer, StringComparer.Ordinal))
+        if (!asked.Options.Contains(answer, StringComparer.Ordinal) && answer != "abort")
         {
             problem = $"'{answer}' is not one of the answers '{question}' takes: {string.Join(", ", asked.Options)}";
+            return false;
+        }
+
+        var needsText = asked.Kind == "pause" && _answerable[question].Step.Text.Contains(answer, StringComparer.Ordinal);
+
+        if (needsText && string.IsNullOrWhiteSpace(text))
+        {
+            problem = $"'{answer}' is an answer '{question}' takes with a text; give one";
+            return false;
+        }
+
+        if (!needsText && !string.IsNullOrWhiteSpace(text) && asked.Kind != "ask")
+        {
+            problem = $"'{answer}' is an answer '{question}' takes with no text; give none";
             return false;
         }
 
@@ -333,6 +387,30 @@ public sealed class FlowCoordinator
         var instance = _answerable[question];
         _ = _answerable.Remove(question);
 
+        ApplyAnswer(instance, asked, answer, string.IsNullOrWhiteSpace(text) ? null : text, by: null);
+
+        return true;
+    }
+
+    /// <summary>
+    /// Applies one answer to the question that waits on it, recording who gave it: a person (a caller of
+    /// <see cref="TryAnswer(string, string, out string?)"/>) or the configuration, which answered the kind beforehand where <paramref name="by"/>
+    /// says so. The question's own kind says what the answer does.
+    /// </summary>
+    private void ApplyAnswer(FlowInstance instance, FlowQuestion asked, string answer, string? text, string? by)
+    {
+        asked._given.Add(new FlowAnswerEntry(answer, text, by ?? "person", by is null ? null : _answerWhere[asked.Id]));
+        asked.State = "answered";
+
+        if (answer == "abort" && asked.Kind is not ("failure" or "loopBound"))
+        {
+            // abort is taken for any question, and ends the run as a hard stop does.
+            _stopping = true;
+            _failed.Add(instance);
+            End(instance, FlowInstanceState.Failed, HarnessExit.CommandFailed, "the run was aborted by the answer to its question");
+            return;
+        }
+
         switch (asked.Kind)
         {
             case "failure":
@@ -341,15 +419,54 @@ public sealed class FlowCoordinator
             case "loopBound":
                 AnswerLoopBound(instance, answer);
                 break;
+            case "pause":
+                AnswerPause(instance, answer, text);
+                break;
             default:
-                // A step's own question: the step is asked again, with the answer among what it is given, in the same
-                // attempt.
-                instance._answers.Add(new FlowAnswerGiven(question, answer));
+                AnswerTheKind(instance, asked, answer);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Answers a question of a kind a step's own work raises - a fold's consents, a reason step's limits, a wait for
+    /// checks. <c>retry</c> runs the step again as a new attempt; <c>more</c>, <c>accept</c>, <c>allow</c>,
+    /// <c>merge</c>, <c>stay</c> and <c>compact</c> hand the answer to the runner in the same attempt;
+    /// <c>skip</c> ends the step skipped; <c>fail</c> ends it failed with the question's kind.
+    /// </summary>
+    private void AnswerTheKind(FlowInstance instance, FlowQuestion asked, string answer)
+    {
+        switch (answer)
+        {
+            case "retry":
+                instance.Attempt++;
+                instance.State = FlowInstanceState.NotStarted;
+                instance.Exit = null;
+                instance.Error = null;
+                instance.EndedByQuestion = null;
+                break;
+            case "skip":
+                End(instance, FlowInstanceState.Skipped, instance.Exit, instance.Error);
+                instance.SkippedBecause = "skipped by the answer to its question";
+                break;
+            case "fail":
+                instance.EndedByQuestion = asked.Kind;
+                End(instance, FlowInstanceState.Failed, FlowQuestions.FailCodeOf(asked.Kind), asked.Problem);
+                HandleFailure(instance);
+                break;
+            default:
+                instance._answers.Add(new FlowAnswerGiven(asked.Id, answer));
                 instance.State = FlowInstanceState.NotStarted;
                 break;
         }
+    }
 
-        return true;
+    /// <summary>Answers a <c>pause</c> step's question: the step ends done, its answer - and the text an option took - its
+    /// output, which the steps after it read as any output.</summary>
+    private void AnswerPause(FlowInstance instance, string answer, string? text)
+    {
+        instance.Output = new JsonObject { ["answer"] = answer, ["text"] = text };
+        End(instance, FlowInstanceState.Done, null, null);
     }
 
     /// <summary>
@@ -365,6 +482,7 @@ public sealed class FlowCoordinator
                 instance.State = FlowInstanceState.NotStarted;
                 instance.Exit = null;
                 instance.Error = null;
+                instance.EndedByQuestion = null;
                 break;
             case "skip":
                 End(instance, FlowInstanceState.Skipped, instance.Exit, instance.Error);
@@ -768,15 +886,21 @@ public sealed class FlowCoordinator
                 continue;
             }
 
-            Start(instance, claims);
-            started++;
+            if (Start(instance, claims))
+            {
+                started++;
+            }
         }
 
         return started;
     }
 
-    /// <summary>Runs one admitted instance: its runner is asked as a task, and what it answers is posted to the channel.</summary>
-    private void Start(FlowInstance instance, IReadOnlyList<FlowClaim> claims)
+    /// <summary>
+    /// Runs one admitted instance: its runner is asked as a task, and what it answers is posted to the channel. A
+    /// <c>pause</c> step asks no runner at all - the engine asks its question itself - so it answers that nothing of
+    /// the step is in flight.
+    /// </summary>
+    private bool Start(FlowInstance instance, IReadOnlyList<FlowClaim> claims)
     {
         instance.State = FlowInstanceState.Running;
         instance.HeldClaims.Clear();
@@ -785,7 +909,30 @@ public sealed class FlowCoordinator
         instance.CopiesMade.Clear();
         instance.TreeLegsEnded.Clear();
 
+        if (instance.Step.Type == "pause")
+        {
+            // A pause step asks and asks only: the engine fills its question from the same names an expression reads,
+            // and no runner is asked. A question that cannot be filled fails the step, as any step its template
+            // breaks. Either way the graph changed where the loop was admitting, so it goes round again.
+            Release(instance);
+            _answeredAtOnce = true;
+
+            if (Filled(instance, instance.Step.Question ?? string.Empty, out var problem) is { } question)
+            {
+                _ = Ask(instance, "pause", question, FlowQuestions.OptionsOf("pause", instance.Step));
+            }
+            else
+            {
+                End(instance, FlowInstanceState.Failed, HarnessExit.ConfigInvalid, Unreadable("question", instance.Id, problem!));
+                HandleFailure(instance);
+            }
+
+            return false;
+        }
+
         _ = AskRunner();
+
+        return true;
 
         async Task AskRunner()
         {
@@ -826,6 +973,54 @@ public sealed class FlowCoordinator
             // admitted again, against the limits and the claims as they then are, when it is answered.
             Release(instance);
             _ = Ask(instance, asking.Kind, asking.Problem, asking.Options);
+            return;
+        }
+
+        if (result.DryRun is { } dry)
+        {
+            // A fold family step's dry run stood short of applying: a consent it lacks raises the question its kind
+            // names, one at a time, a person's first; a refusal for conflicting merges alone raises foldConflicts,
+            // for a conflict is never answered merge; any other refusal fails the step, refused.
+            Release(instance);
+
+            if (dry.Standing == RequestStanding.NeedsConsent && dry.Consents.Count > 0)
+            {
+                var consent = FlowQuestions.FirstOf(dry.Consents);
+                var kind = ConsentNameOf(consent);
+                _ = Ask(instance, kind, $"'{instance.Id}' was not applied: it lacks what nobody gave ({kind}): {dry.Summary}", FlowQuestions.OptionsOf(kind, instance.Step));
+            }
+            else if (dry.Standing == RequestStanding.Refused && dry.Refusals.Count > 0 && dry.Refusals.All(reason => reason == RefusalKind.Conflict))
+            {
+                _ = Ask(
+                    instance,
+                    "foldConflicts",
+                    $"'{instance.Id}' was refused: paths both trees changed conflict in their three-way merge: {string.Join(", ", dry.Named)}",
+                    FlowQuestions.OptionsOf("foldConflicts", instance.Step));
+            }
+            else
+            {
+                End(instance, FlowInstanceState.Failed, HarnessExit.Refused, dry.Summary);
+                HandleFailure(instance);
+            }
+
+            return;
+        }
+
+        if (result.Limit is { } limit)
+        {
+            // A reason step at a limit of its own asks and is no failure. Its question is raised however the step's
+            // onFailure reads, for the step has not failed.
+            Release(instance);
+            var kind = FlowQuestions.LimitKindOf(limit);
+            _ = Ask(instance, kind, $"'{instance.Id}' reached its {limit}{(result.LimitDetail is { } detail ? $" ({detail})" : string.Empty)}", FlowQuestions.OptionsOf(kind, instance.Step));
+            return;
+        }
+
+        if (result.Checks is { } found)
+        {
+            Release(instance);
+            var kind = FlowQuestions.ChecksKindOf(found);
+            _ = Ask(instance, kind, $"'{instance.Id}' found what it cannot end on: {result.ChecksDetail ?? found}", FlowQuestions.OptionsOf(kind, instance.Step));
             return;
         }
 
@@ -975,7 +1170,7 @@ public sealed class FlowCoordinator
                     instance,
                     "failure",
                     $"'{instance.Id}' failed ({instance.Exit}): {instance.Error ?? "its work ended failed"}. What does the run do?",
-                    instance.Step.Skippable == true ? ["retry", "abort", "skip"] : ["retry", "abort"]);
+                    FlowQuestions.OptionsOf("failure", instance.Step));
                 break;
             case WorkflowStep.Recover:
                 throw new HarnessException(HarnessExit.InternalError, "this engine does not run a workflow's recovery; it is not built into the coordinator yet");
@@ -986,15 +1181,96 @@ public sealed class FlowCoordinator
         }
     }
 
-    /// <summary>Raises a question on <paramref name="instance"/>, pausing it: it holds nothing while it waits, and only what depends on it is blocked.</summary>
+    /// <summary>
+    /// Raises a question on <paramref name="instance"/>, pausing it: it holds nothing while it waits, and only what
+    /// depends on it is blocked. A configuration that answered the kind beforehand - the nearest <c>answers</c> that
+    /// names it, and never a kind only a person answers - is given its answer at once, in the place of a person: the
+    /// step is never paused for it, and the answer is recorded on the question as every answer is, saying where it was
+    /// configured.
+    /// </summary>
     private string Ask(FlowInstance instance, string kind, string problem, IReadOnlyList<string> options)
     {
         var id = $"q{++_questionsRaised}";
-        _questions.Add(new FlowQuestion(id, kind, instance.Id, problem, options));
+        var asked = new FlowQuestion(id, kind, instance.Id, problem, options);
+        _questions.Add(asked);
+
+        if (ConfiguredFor(instance, kind) is { } configured)
+        {
+            var (entry, where) = configured;
+            var place = FlowQuestions.PlaceOf(kind, instance);
+            var key = $"{kind}|{place}";
+            var given = _answerSpent.GetValueOrDefault(key);
+
+            // An answer that lets the same thing go on is given a counted number of times and no more; an answer that
+            // ends the matter is given whenever the question comes, for it ends it.
+            var answer = WorkflowValidator.GoesOn.Contains(entry.Answer, StringComparer.Ordinal)
+                ? given < (entry.Times ?? 1)
+                    ? Give(entry.Answer)
+                    : entry.Then is { } then ? then : null
+                : entry.Answer;
+
+            if (answer is { } atOnce)
+            {
+                _answerWhere[id] = where;
+                _answeredAtOnce = true;
+                ApplyAnswer(instance, asked, atOnce, null, by: "configuration");
+                return id;
+            }
+
+            string Give(string answer)
+            {
+                _answerSpent[key] = given + 1;
+                return answer;
+            }
+        }
+
         _open.Add(id);
         _answerable.Add(id, instance);
         instance.State = FlowInstanceState.Paused;
         return id;
+    }
+
+    /// <summary>
+    /// The configured answer a question of <paramref name="kind"/> on <paramref name="instance"/> is given at once:
+    /// the nearest <c>answers</c> that names the kind - the step's own, then each group around it from the inside out,
+    /// then the workflow's - and none where the kind is a person's alone, or answered by the step's own key
+    /// (<c>failure</c> by <c>onFailure</c>, <c>ask</c> by <c>ask</c>), or a <c>pause</c> step answered anywhere but on
+    /// the step itself and never one that says <c>person</c>, or the run's budget answered anywhere but on the
+    /// workflow.
+    /// </summary>
+    private (FlowAnswer Entry, string Where)? ConfiguredFor(FlowInstance instance, string kind)
+    {
+        if (FlowQuestions.PersonsKinds.Contains(kind, StringComparer.Ordinal) || kind is "failure" or "ask")
+        {
+            return null;
+        }
+
+        if (kind == "pause")
+        {
+            return instance.Step.Person is true
+                ? null
+                : instance.Step.Answers.TryGetValue(kind, out var own) ? (own, $"step '{instance.Step.Name}'") : null;
+        }
+
+        if (kind == "runBudget")
+        {
+            return _definition.Answers.TryGetValue(kind, out var run) ? (run, "the orchestrator's answers") : null;
+        }
+
+        if (instance.Step.Answers.TryGetValue(kind, out var nearest))
+        {
+            return (nearest, $"step '{instance.Step.Name}'");
+        }
+
+        for (var at = instance.DeclaredScope; at is not null; at = at.Parent)
+        {
+            if (at.Group?.Answers.TryGetValue(kind, out var group) == true)
+            {
+                return (group, $"group '{at.Group.Name}'");
+            }
+        }
+
+        return _definition.Answers.TryGetValue(kind, out var orchestrator) ? (orchestrator, "the orchestrator's answers") : null;
     }
 
     /// <summary>Ends <paramref name="instance"/> and gives back what it held.</summary>
@@ -1428,7 +1704,7 @@ public sealed class FlowCoordinator
         };
         merged["code"] = instance.Exit;
         merged["error"] = instance.Error;
-        merged["question"] = null;
+        merged["question"] = instance.EndedByQuestion;
         merged["latest"] = instance.Output?.DeepClone();
         merged["assumptions"] = new JsonArray();
 
@@ -1546,13 +1822,24 @@ public sealed class FlowCoordinator
         group.Output = gathered;
     }
 
-    /// <summary>Evaluates a boolean expression of <paramref name="scope"/>: an unreadable one says why, in <paramref name="problem"/>, and yields false.</summary>
+    /// <summary>
+    /// Evaluates a boolean expression of <paramref name="scope"/>: an unreadable one - one whose reading throws, or
+    /// one that reads nothing at all - says why, in <paramref name="problem"/>, and yields false.
+    /// </summary>
     private FlowValue Evaluate(string expression, Scope scope, out string? problem)
     {
         try
         {
+            var value = FlowExpression.Parse(expression).Evaluate(path => Read(path, scope));
+
+            if (value.IsMissing)
+            {
+                problem = $"'{expression}' reads nothing";
+                return FlowValue.Of(false);
+            }
+
             problem = null;
-            return FlowExpression.Parse(expression).Evaluate(path => Read(path, scope));
+            return value;
         }
         catch (UnresolvedReadException unreadable)
         {
@@ -1561,17 +1848,24 @@ public sealed class FlowCoordinator
         }
     }
 
-    /// <summary>Says an unreadable expression the way a step's record keeps it: which expression of which instance could not be read, and why.</summary>
-    private static string Unreadable(string key, string instance, string problem)
-        => $"expression '{key}' of '{instance}': {problem}";
-
-    /// <summary>Evaluates a list-yielding expression of <paramref name="scope"/>: a <c>forEach</c>'s work items, or why it could not be read.</summary>
+    /// <summary>
+    /// Evaluates a list-yielding expression of <paramref name="scope"/>: a <c>forEach</c>'s work items, or why it
+    /// could not be read - one whose reading throws, or one that reads nothing at all.
+    /// </summary>
     private IReadOnlyList<FlowValue> EvaluateList(string expression, Scope scope, out string? problem)
     {
         try
         {
+            var value = FlowExpression.Parse(expression).Evaluate(path => Read(path, scope));
+
+            if (value.IsMissing)
+            {
+                problem = $"'{expression}' reads nothing";
+                return [];
+            }
+
             problem = null;
-            return [.. FlowExpression.Parse(expression).Evaluate(path => Read(path, scope)).AsList(expression).Select(item => FlowValue.Of(item))];
+            return [.. value.AsList(expression).Select(item => FlowValue.Of(item))];
         }
         catch (UnresolvedReadException unreadable)
         {
@@ -1579,6 +1873,106 @@ public sealed class FlowCoordinator
             return [];
         }
     }
+
+    /// <summary>
+    /// Fills a template of <paramref name="instance"/>'s step - a pause step's question - by the one grammar: a brace
+    /// doubled stands for one, and any other name in braces is read by the same roots an expression reads. A name that
+    /// reads nothing says why, in <paramref name="problem"/>, and fills nothing.
+    /// </summary>
+    private string? Filled(FlowInstance instance, string template, out string? problem)
+    {
+        var filled = new StringBuilder(template.Length);
+        var at = 0;
+
+        while (at < template.Length)
+        {
+            if (template[at..].StartsWith("{{", StringComparison.Ordinal))
+            {
+                // A doubled brace stands for one.
+                filled.Append('{');
+                at += 2;
+                continue;
+            }
+
+            if (template[at] != '{')
+            {
+                var next = template.IndexOf('{', at);
+
+                if (next < 0)
+                {
+                    filled.Append(template[at..]);
+                    break;
+                }
+
+                filled.Append(template[at..next]);
+                at = next;
+                continue;
+            }
+
+            var close = template.IndexOf('}', at);
+
+            if (close < 0)
+            {
+                problem = $"'{template[at..]}' is no name in braces";
+                return null;
+            }
+
+            var name = template[(at + 1)..close];
+
+            // The grammar every template is read by: the name may say how its value is written, after '|', and the
+            // filler fills the value and not the writing of it; whitespace around the name is nothing.
+            name = name.Split('|', 2)[0].Trim();
+
+            if (name.Length == 0)
+            {
+                problem = $"'{{{template[(at + 1)..close]}}}' is no name in braces";
+                return null;
+            }
+
+            try
+            {
+                var value = FlowExpression.Parse(name).Evaluate(path => Read(path, instance.DeclaredScope!));
+
+                if (value.IsMissing)
+                {
+                    problem = $"'{{{name}}}' reads nothing";
+                    return null;
+                }
+
+                filled.Append(value.AsTemplateText());
+            }
+            catch (UnresolvedReadException unreadable)
+            {
+                problem = $"'{{{name}}}': {unreadable.Message}";
+                return null;
+            }
+            catch (ArgumentException notWhole)
+            {
+                problem = $"'{{{name}}}': {notWhole.Message}";
+                return null;
+            }
+
+            at = close + 1;
+        }
+
+        problem = null;
+        return filled.ToString();
+    }
+
+    /// <summary>The question kind a consent a fold's dry run lacks is named by.</summary>
+    private static string ConsentNameOf(ConsentKind consent)
+        => consent switch
+        {
+            ConsentKind.FoldNewRows => "foldNewRows",
+            ConsentKind.FoldLostRows => "foldLostRows",
+            ConsentKind.FoldOverCells => "foldOverCells",
+            ConsentKind.FoldTwoChanges => "foldTwoChanges",
+            _ => throw new ArgumentOutOfRangeException(nameof(consent), consent, "a consent no fold's question is named by"),
+        };
+
+    /// <summary>Says an unreadable expression the way a step's record keeps it: which expression of which instance could not be read, and why.</summary>
+    private static string Unreadable(string key, string instance, string problem)
+        => $"expression '{key}' of '{instance}': {problem}";
 
     /// <summary>Whether a step runs in the always phase: it says <c>always</c>, or a group around it does.</summary>
     private static bool IsAlways(WorkflowStep declaration, Scope scope)
