@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using DssHarness.Core.FileSystem;
@@ -84,15 +85,24 @@ public sealed record PhaseRequest
     public ChildInput? StandardInput { get; init; }
 
     /// <summary>
-    /// Invoked for each line of either stream as it is kept - masked, written to the log and read by
-    /// the witness - for a reader that takes each line as one answer and keeps what it needs of them
-    /// itself. Each stream's lines arrive in their order and the two streams interleave as the child
-    /// wrote them; raised on background threads, so implementations must be thread safe.
+    /// Invoked for each line of either stream once it is kept - masked, written to the log and read
+    /// by the witness - for a reader that takes each line as one answer and keeps what it needs of
+    /// them itself. Each stream's lines arrive in the order the child wrote them, but nothing orders
+    /// one stream's against the other's: each stream is read on a thread of its own, and a line of
+    /// one may arrive before, after or at the same time as a line of the other, so implementations
+    /// must be thread safe.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Unless <see cref="WholeLines"/> is declared, a line longer than
     /// <see cref="ProcessRunner.LongestLine"/> characters arrives in pieces of at most that many,
     /// never held whole.
+    /// </para>
+    /// <para>
+    /// A callback that throws is handed no more lines, and the phase goes on without it: every line
+    /// is still logged, read by the witness and counted against the silence bound, and the log ends
+    /// with its exit line. What the callback raised first is raised once the phase has ended.
+    /// </para>
     /// </remarks>
     public Action<string>? OnLine { get; init; }
 
@@ -209,6 +219,7 @@ public sealed class PhaseRunner(
         // how a slow launch reads as a hung command.
         var clock = new StallClock();
         var reading = new Reading(success, timings);
+        var callback = new LineCallback(request.OnLine);
 
         // Where the child's own lines begin: what is above is the header this run wrote, and a header
         // that echoes the command line contains the pattern whenever the command does.
@@ -237,8 +248,10 @@ public sealed class PhaseRunner(
             }
 
             // The line is kept, and this is where a reader that takes each line as one answer sees it:
-            // masked, as the log holds it, and after it is kept.
-            request.OnLine?.Invoke(line);
+            // masked, as the log holds it, and after it is kept. What the reader raises is kept for
+            // the end of the phase, never let through to the runner, which would hand this handler -
+            // the log, the witness and the silence clock with it - no more lines of the stream.
+            callback.Hand(line);
 
             // Progress is one line per leg transition, not a stream of child output; the child's own
             // output is echoed only when it was asked for. Echoed, it says which leg and phase wrote
@@ -278,7 +291,7 @@ public sealed class PhaseRunner(
         };
 
         var startedUtc = _wallClock.GetUtcNow();
-        var result = await RunBoundedAsync(processRequest, request.StallSeconds, clock, cancellationToken).ConfigureAwait(false);
+        var (result, stopped) = await RunBoundedAsync(processRequest, request.StallSeconds, clock, cancellationToken).ConfigureAwait(false);
         var wall = _wallClock.GetUtcNow() - startedUtc;
 
         // Both readings cover the same window, so what they disagree by is the clock's own movement:
@@ -299,11 +312,15 @@ public sealed class PhaseRunner(
             log.WriteLine(exit);
         }
 
+        // Now that the log is whole, its exit line included: a reader's failure is its own, and the
+        // record of the phase it was reading is kept all the same.
+        callback.RaiseFailure();
+
         return new PhaseResult(
             Leg: request.Leg,
             Phase: request.Phase,
             ExitCode: result.ExitCode,
-            Stalled: result.TimedOut,
+            Stopped: stopped,
             StallSeconds: request.StallSeconds,
             Witnessed: success is null ? null : reading.Witnessed(request.SuccessPattern!),
             Duration: result.Duration,
@@ -324,11 +341,19 @@ public sealed class PhaseRunner(
 
     /// <summary>
     /// Runs the child, stopping it when it goes <paramref name="stallSeconds"/> without a line on
-    /// either stream. The bound is enforced through a source of this method's own, so a hung phase
-    /// and a run the operator interrupted stay distinguishable: the first comes back as a stopped
-    /// phase to be reported, the second is raised and ends the leg.
+    /// either stream, and says which bound stopped it, if one did. The bound is enforced through a
+    /// source of this method's own, so a hung phase and a run the operator interrupted stay
+    /// distinguishable: the first comes back as a stopped phase to be reported, the second is raised
+    /// and ends the leg.
     /// </summary>
-    private async Task<ProcessResult> RunBoundedAsync(
+    /// <remarks>
+    /// Which bound stopped the child is read from the bounds themselves, never from how the runner
+    /// reported the stop: the silence bound where this method's own source fired - it fires only once
+    /// the child has been quiet that long - and otherwise the wall-clock bound the request carries,
+    /// which is the only other bound that stops a child the caller did not give up on. Where both pass
+    /// in one moment the silence bound is named, and that is true too.
+    /// </remarks>
+    private async Task<(ProcessResult Result, PhaseStop Stopped)> RunBoundedAsync(
         ProcessRequest request,
         int stallSeconds,
         StallClock clock,
@@ -336,7 +361,9 @@ public sealed class PhaseRunner(
     {
         if (stallSeconds <= 0)
         {
-            return await _processRunner.RunAsync(request, cancellationToken).ConfigureAwait(false);
+            var unbounded = await _processRunner.RunAsync(request, cancellationToken).ConfigureAwait(false);
+
+            return (unbounded, unbounded.TimedOut ? PhaseStop.WallClock : PhaseStop.None);
         }
 
         using var stall = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -346,14 +373,20 @@ public sealed class PhaseRunner(
 
         try
         {
-            return await _processRunner.RunAsync(request, stall.Token).ConfigureAwait(false);
+            var result = await _processRunner.RunAsync(request, stall.Token).ConfigureAwait(false);
+
+            return (
+                result,
+                !result.TimedOut ? PhaseStop.None
+                : stall.IsCancellationRequested ? PhaseStop.Silence
+                : PhaseStop.WallClock);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             // The bound fired, and the runner stopped the child and its descendants. The exit code
             // is meaningless, which is what a stopped phase reports; the lines the child wrote
             // before it went quiet were kept as they arrived.
-            return new ProcessResult(-1, string.Empty, string.Empty, clock.Elapsed, TimedOut: true);
+            return (new ProcessResult(-1, string.Empty, string.Empty, clock.Elapsed, TimedOut: true), PhaseStop.Silence);
         }
         finally
         {
@@ -464,6 +497,45 @@ public sealed class PhaseRunner(
         {
             throw new HarnessException(HarnessExit.ConfigInvalid, $"'{pattern}' is not {what}: {ex.Message}", ex);
         }
+    }
+
+    /// <summary>
+    /// Hands each kept line to a phase's line callback, and keeps what the callback raised: one that fails is handed no
+    /// more lines, and the first thing it raised is raised once the phase has ended.
+    /// </summary>
+    /// <remarks>
+    /// Caught here, inside the handler the process runner calls, because that handler is also what keeps the log, reads
+    /// the witness and tells the silence clock the child spoke. Let through, a failure made the runner hand the handler
+    /// no more lines of that stream: the log stopped where the callback did and never got its exit line, the witness
+    /// read nothing more, and a child still talking was timed as silent.
+    /// </remarks>
+    /// <param name="onLine">The phase's line callback, or <see langword="null"/> where it declares none.</param>
+    private sealed class LineCallback(Action<string>? onLine)
+    {
+        private ExceptionDispatchInfo? _failed;
+
+        /// <summary>Hands <paramref name="line"/> on, unless the callback has already failed; called from both streams' threads.</summary>
+        public void Hand(string line)
+        {
+            if (onLine is null || Volatile.Read(ref _failed) is not null)
+            {
+                return;
+            }
+
+            try
+            {
+                onLine(line);
+            }
+            catch (Exception ex)
+            {
+                // The first failure is the one raised: the two streams' threads may both fail, and the
+                // later says nothing the first did not.
+                Interlocked.CompareExchange(ref _failed, ExceptionDispatchInfo.Capture(ex), null);
+            }
+        }
+
+        /// <summary>Raises what the callback raised first, where it raised anything.</summary>
+        public void RaiseFailure() => Volatile.Read(ref _failed)?.Throw();
     }
 
     /// <summary>

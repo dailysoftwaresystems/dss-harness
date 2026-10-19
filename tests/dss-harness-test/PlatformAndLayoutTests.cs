@@ -117,7 +117,7 @@ public sealed class HarnessLayoutTests
         Assert.Equal(Path.Combine(mainHarness, "wslDistros"), layout.WslDistrosDirectory);
         Assert.Equal(Path.Combine(mainHarness, "runner", ".env"), layout.RunnerEnvDirectory);
         Assert.Equal(Path.Combine(mainHarness, "runner", ".secrets"), layout.RunnerSecretsDirectory);
-        Assert.Equal(Path.Combine(mainHarness, "orchestrators", ".env"), layout.OrchestratorsEnvSlot);
+        Assert.Equal(Path.Combine(mainHarness, "workflows", ".env"), layout.WorkflowsEnvSlot);
         Assert.Equal(Path.Combine(mainHarness, "lock.json"), layout.LockFile);
     }
 

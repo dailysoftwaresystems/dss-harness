@@ -170,7 +170,9 @@ internal sealed class ArmTestRunner(PhaseRunner phaseRunner, IFileSystem fileSys
 
         var steppedBy = SteppedBy();
 
-        if (phase.Stalled)
+        // Hung only where the silence bound stopped it. The phase declares no wall-clock bound of its own: the arm's bound
+        // is the timer above, whose stop never reaches here.
+        if (phase.Stopped == PhaseStop.Silence)
         {
             return new ArmRunResult(ArmRun.Hung(phase.StallSeconds), phase.Duration) { SteppedBy = steppedBy };
         }

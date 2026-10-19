@@ -9,7 +9,7 @@ namespace DssHarness.Tests;
 public sealed class LegGuardsTests
 {
     private static readonly PhaseResult Passed = new(
-        "leg", "step", ExitCode: 0, Stalled: false, StallSeconds: 0, Witnessed: null,
+        "leg", "step", ExitCode: 0, Stopped: PhaseStop.None, StallSeconds: 0, Witnessed: null,
         Duration: TimeSpan.Zero, ClockDrift: TimeSpan.Zero, ClockStepped: false,
         Timings: [], LogFile: "log", Output: PhaseOutput.Empty);
 

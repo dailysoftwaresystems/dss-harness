@@ -638,6 +638,26 @@ public sealed class ConfigStoreTests
     }
 
     /// <summary>
+    /// A configured path that climbs out of the tree is one problem, refused as outside it: the
+    /// spelling rule its '..' also breaks - the one the agent clients' patterns share with these
+    /// lists - is asked of a configured path only once it is inside the tree, so no entry is
+    /// refused twice.
+    /// </summary>
+    [Theory]
+    [InlineData("""{ "sync": { "exclude": ["../outside"] } }""", "../outside")]
+    [InlineData("""{ "sync": { "neverTransfer": ["a/../b"] } }""", "a/../b")]
+    [InlineData("""{ "lineEndings": { "exclude": ["../x"] } }""", "../x")]
+    [InlineData("""{ "worktrees": { "root": "../trees" } }""", "../trees")]
+    [InlineData("""{ "mutations": { "registry": "../arms.registry" } }""", "../arms.registry")]
+    public void Load_RefusesAPathThatClimbsOut_AsOneProblem(string json, string entry)
+    {
+        var exception = LoadInvalid(json);
+
+        Assert.Single(exception.Message.Split(Environment.NewLine), line => line.Contains($"'{entry}'", StringComparison.Ordinal));
+        Assert.Contains($"entry '{entry}' must be a relative path inside the tree, without '..'", exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A worktrees root or a sync path spelled with a '.' segment or a doubled separator inside it is
     /// compared as written - by sync's lists, and by init's ignore rule for the root - and so would
     /// withhold and ignore nothing it names: refused, with the one spelling to write.

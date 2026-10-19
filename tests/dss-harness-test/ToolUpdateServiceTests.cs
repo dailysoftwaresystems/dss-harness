@@ -308,6 +308,56 @@ public sealed class ToolUpdateServiceTests
     }
 
     /// <summary>
+    /// What is listed since an update is told apart as dotnet's own listing tells it, whether dotnet called the update
+    /// done or not: a listing read whole that does not hold the tool says it is not listed there - which is what the
+    /// machine now runs - and a listing this build cannot read leaves what is listed not known. The two were once said as
+    /// one, and a tool gone from a listing read whole was said not to be known.
+    /// </summary>
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    public async Task AToolGoneFromAListingReadWhole_IsSaidNotListed_AndAListingNotRead_IsSaidNotKnown(bool changed, bool unread)
+    {
+        var kit = new Kit(installed: "0.6.12", newest: "0.6.13");
+        const string NotListed = "not listed there since";
+        const string NotKnown = "hat is listed there since is not known: what dotnet listed is not something this build reads";
+
+        if (unread)
+        {
+            var banner = new ProcessResult(0, "Welcome to .NET!\n", string.Empty, TimeSpan.Zero, TimedOut: false);
+
+            kit.Dotnet.Running = ran => kit.Dotnet.List = ran.Contains(" update ", StringComparison.Ordinal) ? banner : kit.Dotnet.List;
+        }
+        else
+        {
+            kit.Dotnet.Listed = ["0.6.12", null];
+        }
+
+        if (!changed)
+        {
+            kit.Dotnet.Change = new ProcessResult(1, string.Empty, "Access is denied.\n", TimeSpan.Zero, TimedOut: false);
+        }
+
+        var outcome = await kit.Service().RunAsync(new ToolUpdateRequest(), Token);
+
+        Assert.Equal(HarnessExit.CommandFailed, outcome.ExitCode);
+
+        if (changed)
+        {
+            Assert.Equal(
+                $"dotnet said it updated DssHarness in {Global} from 0.6.12 to 0.6.13, and {(unread ? $"w{NotKnown}" : $"it is {NotListed}")}",
+                outcome.Message);
+        }
+        else
+        {
+            Assert.Equal($"updating DssHarness in {Global} from 0.6.12 to 0.6.13 failed (exit 1): Access is denied.", outcome.Message);
+            Assert.Equal([unread ? $"W{NotKnown}." : $"DssHarness is {NotListed}."], outcome.Details);
+        }
+    }
+
+    /// <summary>
     /// A feed that does not say which release is newest leaves nothing to move the tool to, and nothing is changed, with
     /// why it did not - unless the copy running is itself a release newer than the installed one, which is then the
     /// release it is moved to, and said to be, with why the feed named none: the tool is moved to a release nobody

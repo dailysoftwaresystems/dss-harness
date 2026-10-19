@@ -54,7 +54,7 @@ public sealed class NinjaTests
         Leg: "linux-x86_64-debug",
         Phase: "build",
         ExitCode: exitCode,
-        Stalled: stalled,
+        Stopped: stalled ? PhaseStop.Silence : PhaseStop.None,
         StallSeconds: stalled ? 60 : 0,
         Witnessed: null,
         Duration: TimeSpan.Zero,

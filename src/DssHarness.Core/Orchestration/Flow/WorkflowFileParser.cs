@@ -3,7 +3,6 @@ using DssHarness.Core.Configuration;
 using DssHarness.Core.Output;
 using DssHarness.Core.Results;
 using DssHarness.Core.Yaml;
-using YamlDotNet.Core;
 using YamlDotNet.RepresentationModel;
 
 namespace DssHarness.Core.Orchestration.Flow;
@@ -15,7 +14,8 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <para>
 /// Parsed through the one YAML reader, <see cref="YamlReading"/>, which owns the reasons it reads
 /// YamlDotNet's representation model rather than a serialiser: the position of the key that was
-/// wrong, and the fact that a key was not recognised at all.
+/// wrong, and the fact that a key was not recognised at all. It holds a workflow file to the bounds
+/// this reader asks of it (<see cref="Bounds"/>) before the file is read into nodes.
 /// </para>
 /// <para>
 /// Every problem in a file is collected and reported together, each with the line and column it was
@@ -41,6 +41,16 @@ public static class WorkflowFileParser
     /// </summary>
     public const int MaxYamlDepth = 64;
 
+    /// <summary>
+    /// What a workflow file's YAML is held to before it is read into nodes, by the one reader: no alias - <c>*name</c>,
+    /// a merge key's included - which repeats a part of the file by reference, and so lets a few hundred bytes stand for
+    /// millions of steps; and no nesting past <see cref="MaxYamlDepth"/>, which reading into nodes would recurse through.
+    /// </summary>
+    private static readonly YamlBounds Bounds = new(
+        MaxYamlDepth,
+        "a definition writes each of its steps out, so that what it says is what it reads",
+        $"no definition does, and steps themselves nest at most {MaxDepth}");
+
     /// <summary>Top-level keys a workflow file takes.</summary>
     private static readonly IReadOnlyList<string> FileKeys = KeyDescription.Names(WorkflowKeys.File);
 
@@ -56,12 +66,11 @@ public static class WorkflowFileParser
         ArgumentNullException.ThrowIfNull(text);
 
         var problems = new List<string>();
-        var root = !Bounded(text, problems)
-            ? null
-            : YamlReading.Root(
-                text,
-                "a workflow's definition holds one, so that nothing has to decide which of them a run ran",
-                problems);
+        var root = YamlReading.Root(
+            text,
+            "a workflow's definition holds one, so that nothing has to decide which of them a run ran",
+            problems,
+            Bounds);
 
         if (root is null)
         {
@@ -1175,52 +1184,6 @@ public static class WorkflowFileParser
         }
 
         return answers;
-    }
-
-    /// <summary>
-    /// Walks the file's YAML as a stream of events, before any of it is read into nodes, and refuses what no definition
-    /// holds and what could exhaust the reader: an alias - <c>*name</c>, a merge key's included - which repeats a part
-    /// of the file by reference, and so lets a few hundred bytes stand for millions of steps; and nesting past
-    /// <see cref="MaxYamlDepth"/>, which reading into nodes would recurse through.
-    /// </summary>
-    /// <returns>Whether the file may be read into nodes.</returns>
-    private static bool Bounded(string text, List<string> problems)
-    {
-        var parser = new Parser(new StringReader(text));
-        var depth = 0;
-
-        try
-        {
-            while (parser.MoveNext())
-            {
-                switch (parser.Current)
-                {
-                    case YamlDotNet.Core.Events.AnchorAlias alias:
-                        problems.Add($"line {alias.Start.Line}, column {alias.Start.Column}: the alias '*{alias.Value}' repeats a part of the file by reference; a definition writes each of its steps out, so that what it says is what it reads.");
-                        return false;
-
-                    case YamlDotNet.Core.Events.MappingStart or YamlDotNet.Core.Events.SequenceStart:
-                        if (++depth > MaxYamlDepth)
-                        {
-                            problems.Add($"line {parser.Current.Start.Line}, column {parser.Current.Start.Column}: the file nests more than {MaxYamlDepth} levels deep; no definition does, and steps themselves nest at most {MaxDepth}.");
-                            return false;
-                        }
-
-                        break;
-
-                    case YamlDotNet.Core.Events.MappingEnd or YamlDotNet.Core.Events.SequenceEnd:
-                        depth--;
-                        break;
-                }
-            }
-        }
-        catch (YamlException)
-        {
-            // What is not YAML at all is said where the file is read into nodes, with the reader's own words.
-            return true;
-        }
-
-        return true;
     }
 
     /// <summary>

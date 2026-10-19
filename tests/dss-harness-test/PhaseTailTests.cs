@@ -121,7 +121,7 @@ public sealed class PhaseTailTests
             "native",
             phase,
             exitCode,
-            Stalled: false,
+            Stopped: PhaseStop.None,
             StallSeconds: 0,
             Witnessed: null,
             TimeSpan.FromSeconds(1),

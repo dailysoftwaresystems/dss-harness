@@ -125,8 +125,9 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
-    /// The layout topic names the agent clients' key slot, beside the runner's two value slots:
-    /// init creates its placeholder, and what it holds is read against the main checkout.
+    /// The layout topic names the agent clients' key slot, in the workflows directory beside the
+    /// workflows' own: init creates its placeholder and ignores what it holds, nothing this build
+    /// runs reads it yet, and no workflow may take its name.
     /// </summary>
     [Fact]
     public async Task LayoutTopic_NamesTheAgentClientsKeySlot()
@@ -134,9 +135,9 @@ public sealed partial class HelpTests
         var result = HelpText.Of("layout");
         var prose = Prose.Words(result.StandardOutput);
 
-        Assert.Contains($"{HarnessLayout.OrchestratorsEnvSlotRelative}/", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains(
-            "the agent clients' keys and settings, read against the main checkout",
+            ".harness-config/workflows/.env/ contents ignored; kept for the agent clients' keys and settings, which this build "
+                + "does not read yet; no workflow may be named .env",
             prose,
             StringComparison.Ordinal);
     }

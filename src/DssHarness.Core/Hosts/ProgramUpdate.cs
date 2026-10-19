@@ -3,14 +3,45 @@ using DssHarness.Core.Processes;
 
 namespace DssHarness.Core.Hosts;
 
+/// <summary>
+/// What a machine's listing of what is installed says of one program: that it could not be read,
+/// that the program is not in it, or the release it is installed at. The three are never one:
+/// a program the listing reads as absent is a fact, and a listing nobody could read is none.
+/// </summary>
+public sealed record ListedRelease
+{
+    private ListedRelease(bool readable, string? release)
+    {
+        Readable = readable;
+        Release = release;
+    }
+
+    /// <summary>A listing that failed, or said nothing the reader recognises: what is installed is not known.</summary>
+    public static ListedRelease Unreadable { get; } = new(readable: false, release: null);
+
+    /// <summary>A listing that was read, and does not hold the program.</summary>
+    public static ListedRelease Absent { get; } = new(readable: true, release: null);
+
+    /// <summary>Whether the listing could be read, whatever it said of the program.</summary>
+    public bool Readable { get; }
+
+    /// <summary>The release the listing says is installed, or <see langword="null"/> where it holds none or could not be read.</summary>
+    public string? Release { get; }
+
+    /// <summary>A listing that was read: the program installed at <paramref name="release"/>, or absent where that is <see langword="null"/>.</summary>
+    /// <param name="release">The release the listing names, or <see langword="null"/> where it names none.</param>
+    public static ListedRelease Read(string? release) => release is null ? Absent : new(readable: true, release);
+}
+
 /// <summary>What running a program's change left installed, as the machine's own listing says.</summary>
 /// <param name="Ran">How the change itself ended.</param>
 /// <param name="Listed">The listing read since the change ran.</param>
-/// <param name="ReleaseNow">
-/// The release the listing says is installed, or <see langword="null"/> where the listing failed or
-/// said nothing this reader recognises.
+/// <param name="Now">
+/// What that listing says is installed: <see cref="ListedRelease.Unreadable"/> where the listing
+/// failed or said nothing the reader recognises, <see cref="ListedRelease.Absent"/> where it was read
+/// and holds no such program, and the release it names otherwise.
 /// </param>
-public sealed record ProgramChange(ProcessResult Ran, ProcessResult Listed, string? ReleaseNow);
+public sealed record ProgramChange(ProcessResult Ran, ProcessResult Listed, ListedRelease Now);
 
 /// <summary>
 /// The parts of an installed program's update that are no program's own: which of the machine's
@@ -22,8 +53,9 @@ public sealed record ProgramChange(ProcessResult Ran, ProcessResult Listed, stri
 /// <para>
 /// The change is run with no token to stop it and the reading of what it left the same way: an
 /// update cut off part way leaves a machine with no program, or half of one, and a command that
-/// then says nothing of which. Each request carries its own bound, so a machine that never answers
-/// ends the change rather than holding it for good.
+/// then says nothing of which. Each request carries its own bound - one that carries none is
+/// refused before anything runs - so a machine that never answers ends the change rather than
+/// holding it for good.
 /// </para>
 /// <para>
 /// The words of each refusal stay with the program's own updater, which knows what the program is
@@ -72,16 +104,33 @@ public sealed class ProgramUpdate(IProcessRunner processRunner)
     /// back the same way through <paramref name="listSince"/> and <paramref name="readRelease"/>.
     /// </summary>
     /// <param name="change">The request that changes what is installed; its own bound is its budget.</param>
-    /// <param name="listSince">The request that lists what is installed since the change.</param>
-    /// <param name="readRelease">The release a listing says is installed, or <see langword="null"/> where it says none.</param>
+    /// <param name="listSince">The request that lists what is installed since the change; its own bound is its budget.</param>
+    /// <param name="readRelease">
+    /// What a listing that ran says of the program: the release it names, that the program is absent
+    /// from it, or that it is not something the reader can read.
+    /// </param>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="change"/> or <paramref name="listSince"/> carries no bound: neither can be stopped
+    /// once begun, so one with none would hold the change for good on a machine that never answers.
+    /// </exception>
     public async Task<ProgramChange> ChangeAsync(
         ProcessRequest change,
         ProcessRequest listSince,
-        Func<string, string?> readRelease)
+        Func<string, ListedRelease> readRelease)
     {
         ArgumentNullException.ThrowIfNull(change);
         ArgumentNullException.ThrowIfNull(listSince);
         ArgumentNullException.ThrowIfNull(readRelease);
+
+        if (change.Timeout is null)
+        {
+            throw new ArgumentException("A change is run never stopped, so it carries a bound of its own.", nameof(change));
+        }
+
+        if (listSince.Timeout is null)
+        {
+            throw new ArgumentException("A listing since a change is run never stopped, so it carries a bound of its own.", nameof(listSince));
+        }
 
         var ran = await _processRunner.RunAsync(change, CancellationToken.None).ConfigureAwait(false);
         var listed = await _processRunner.RunAsync(listSince, CancellationToken.None).ConfigureAwait(false);
@@ -89,6 +138,6 @@ public sealed class ProgramUpdate(IProcessRunner processRunner)
         return new ProgramChange(
             ran,
             listed,
-            listed.Succeeded ? readRelease(listed.StandardOutput) : null);
+            listed.Succeeded ? readRelease(listed.StandardOutput) : ListedRelease.Unreadable);
     }
 }

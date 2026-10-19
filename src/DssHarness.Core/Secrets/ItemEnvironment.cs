@@ -97,10 +97,11 @@ public sealed class ItemEnvironment(IFileSystem fileSystem, IFilePermissions fil
         // on the machine can read has already been shared. Asked only of the keys declared secret
         // and only where the file holds one, because an address, a user name and a port are not
         // secrets, and refusing a world-readable file that holds only those would demand a
-        // permission change for nothing.
+        // permission change for nothing. A secret key written blank holds none - an optional one
+        // means the item declares none, as the key says - so it demands nothing either.
         foreach (var key in expected.Where(key => key.Secret))
         {
-            if (values.ContainsKey(key.Name) && !_filePermissions.IsPrivate(file))
+            if (values.TryGetValue(key.Name, out var held) && held.Length > 0 && !_filePermissions.IsPrivate(file))
             {
                 return (null, $"other users can read '{shown}', and it holds {holdsPrefix} {key.Name}; {protect}");
             }

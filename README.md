@@ -209,6 +209,7 @@ in `config.json`.
 .harness-config/config.json                  tracked; the whole contract
 .harness-config/workflows/<name>/<name>.yml  tracked; one directory per workflow, its definition
 .harness-config/workflows/<name>/...         tracked; every file that definition names - its agents, prompts, schemas
+.harness-config/workflows/.env/              contents ignored, .gitkeep tracked; kept for the agent clients' keys and settings, which this build does not read yet
 .harness-config/runner/actions/<name>/<name>.yml   tracked; one directory per action
 .harness-config/runner/actions/<name>/...          tracked; whatever its steps run
 .harness-config/runner/.env/                 contents ignored, .gitkeep tracked

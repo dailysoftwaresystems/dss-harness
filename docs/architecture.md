@@ -318,8 +318,11 @@ worktrees where nothing withholds or ignores them, and an entry would protect no
 orchestrators directory, `.orchestrators`, for the slots every tree keeps its own copies in,
 `.mutations` for a sweep's workers and `.legs` for the copies its legs work in, and for the harness
 directories a person fills by hand
-— `sshItems`, `wslDistros`, `runner/.env`, `runner/.secrets` — so a clone arrives with each
-directory in place. A configuration `init` writes names `.worktrees` as the root; one that names
+— the credential slots `sshItems`, `wslDistros`, `runner/.env`, `runner/.secrets` and
+`workflows/.env`, which is kept for the agent clients' keys and settings and which this build
+does not read yet — so a clone arrives with each directory in place. `init` writes the
+credential slots' rules and placeholders from the one list of them (`HarnessLayout.SecretSlots`),
+and no workflow may be named `.env`. A configuration `init` writes names `.worktrees` as the root; one that names
 none keeps `.harness-config/worktrees`, so worktrees made before stay where they are. The root
 was ignored whole, with no placeholder, and the costs of this shape were measured then and are
 accepted now: a directory holding a tracked file never reads as ignored itself, so `git
@@ -349,7 +352,7 @@ file it names, or a name inside the directory it rules on - and `git check-ignor
 says which rule decides each of those paths in the tree. A rule deciding one against the block is
 named as the rule git follows: it undoes the block there, whether it is a re-include after the
 block, a nested `.gitignore`, or a whole-directory rule such as `.env` - which takes the
-`runner/.env` directory, from which git re-includes no placeholder. The same paths are then asked of
+`runner/.env` and `workflows/.env` directories, from which git re-includes no placeholder. The same paths are then asked of
 the tree's own `.gitignore` with the block blanked out, in a scratch repository holding nothing
 else; a hand-written rule that would decide one the other way, where the tree's answer is the
 block's, is named as doing nothing there - but only where nothing the harness keeps in git rests
@@ -1584,8 +1587,10 @@ is not dependable on such a host.
   prompt fails with ssh's own reason instead of waiting, and `connectTimeoutSeconds` and
   `keepAliveSeconds` bound a dead link. An `.env` other users can change is refused, because
   whoever can change it can send the harness somewhere else; a key other users can read, ssh
-  ignores, so it is refused too. Both are checked before connecting, and reported with the
-  command that fixes them. Per-host files also confine that risk: one world-writable shared
+  ignores, so it is refused too; and an `.env` other users can read that holds a `SUDO_PASSWORD`
+  is refused, as a credential already shared - one written blank holds none, declares none, and
+  is no reason to refuse. Each is checked before connecting, and reported with the command that
+  fixes it. Per-host files also confine that risk: one world-writable shared
   configuration file threatened every host at once.
 - **Names that resolve.** A host reached by an mDNS `.local` name on a DHCP network fails a
   lookup as a matter of course, and a name each ssh call looks up afresh is one each call can fail

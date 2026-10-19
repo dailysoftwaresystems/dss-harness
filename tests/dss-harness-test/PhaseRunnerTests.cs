@@ -28,7 +28,7 @@ public sealed class PhaseRunnerTests
         Assert.True(result.Witnessed);
         Assert.True(result.Passed);
         Assert.Equal(LegVerdict.Passed, result.Verdict().Verdict);
-        Assert.False(result.Stalled);
+        Assert.Equal(PhaseStop.None, result.Stopped);
     }
 
     /// <summary>
@@ -109,9 +109,9 @@ public sealed class PhaseRunnerTests
             Child("stream", temp.Combine("test.log"), temp.Combine("never")) with { StallSeconds = 1 },
             TestContext.Current.CancellationToken);
 
-        Assert.True(result.Stalled, "the phase went quiet and was not stopped");
+        Assert.Equal(PhaseStop.Silence, result.Stopped);
         Assert.False(result.Passed);
-        Assert.Contains("hung", result.Verdict().Detail, StringComparison.Ordinal);
+        Assert.Equal((LegVerdict.Failed, "build hung: no output for 1s"), (result.Verdict().Verdict, result.Verdict().Detail));
 
         // The claim without a clock in it: the phase was told to stop rather than left to finish on
         // its own. Had the bound never fired, the runner would have run its thirty seconds out and
@@ -136,7 +136,7 @@ public sealed class PhaseRunnerTests
             Child("stream", temp.Combine("mute.log"), temp.Combine("never")) with { StallSeconds = 1 },
             TestContext.Current.CancellationToken);
 
-        Assert.True(result.Stalled, "a child that said nothing at all was never bounded");
+        Assert.Equal(PhaseStop.Silence, result.Stopped);
         Assert.True(mute.Stopped, "the bound fired and the phase was not actually stopped");
     }
 
@@ -158,7 +158,7 @@ public sealed class PhaseRunnerTests
             Child("echo-args", temp.Combine("slow.log")) with { StallSeconds = 1 },
             TestContext.Current.CancellationToken);
 
-        Assert.False(result.Stalled, "the time spent starting the child was counted as the child being quiet");
+        Assert.Equal(PhaseStop.None, result.Stopped);
         Assert.Equal(0, result.ExitCode);
     }
 
@@ -182,7 +182,7 @@ public sealed class PhaseRunnerTests
             Child("echo-args", temp.Combine("never-starts.log")) with { StallSeconds = 1 },
             TestContext.Current.CancellationToken);
 
-        Assert.True(result.Stalled, "a phase whose child never started was never bounded");
+        Assert.Equal(PhaseStop.Silence, result.Stopped);
         Assert.True(result.Duration < TimeSpan.FromSeconds(30), $"it was bounded, but only after {result.Duration}");
     }
 
@@ -210,7 +210,7 @@ public sealed class PhaseRunnerTests
             Child("echo-args", temp.Combine("paced.log")) with { StallSeconds = 3 },
             TestContext.Current.CancellationToken);
 
-        Assert.False(result.Stalled, "output was flowing and the phase was stopped anyway");
+        Assert.Equal(PhaseStop.None, result.Stopped);
         Assert.Equal(0, result.ExitCode);
         Assert.True(result.Duration >= TimeSpan.FromSeconds(3), $"the phase ran for only {result.Duration}");
     }
@@ -225,7 +225,7 @@ public sealed class PhaseRunnerTests
             Child("sleep", temp.Combine("sleep.log"), "300") with { StallSeconds = 0 },
             TestContext.Current.CancellationToken);
 
-        Assert.False(result.Stalled);
+        Assert.Equal(PhaseStop.None, result.Stopped);
         Assert.Equal(0, result.ExitCode);
     }
 
@@ -547,12 +547,16 @@ public sealed class PhaseRunnerTests
     }
 
     /// <summary>
-    /// A phase that declares a wall-clock bound of its own is stopped by it even with a silence
-    /// bound in force that never fires: a child that says nothing and never ends is bounded by what
-    /// asked for it, not by a guess about how long its work should take.
+    /// A phase that declares a wall-clock bound of its own is stopped by it, with a silence bound in
+    /// force that never fires or with none, and is said to have passed that bound - never to have
+    /// hung, which a phase stopped by its clock while a silence bound stood beside it was once said
+    /// to: a child that says nothing and never ends is bounded by what asked for it, not by a guess
+    /// about how long its work should take.
     /// </summary>
-    [Fact]
-    public async Task APhaseThatDeclaresAWallClockBound_IsStoppedByIt()
+    [Theory]
+    [InlineData(60)]
+    [InlineData(0)]
+    public async Task APhaseThatDeclaresAWallClockBound_IsStoppedByIt_AndSaysThatBound(int stallSeconds)
     {
         using var temp = new TempDirectory();
         var factory = new HarnessFactory();
@@ -562,15 +566,74 @@ public sealed class PhaseRunnerTests
             {
                 Timeout = TimeSpan.FromSeconds(2),
 
-                // A silence bound far past the wall-clock one, so the test proves it is the
-                // wall-clock bound that stops the child and not the silence machinery.
-                StallSeconds = 60,
+                // Where one is given, a silence bound far past the wall-clock one, so the test proves
+                // it is the wall-clock bound that stops the child and not the silence machinery.
+                StallSeconds = stallSeconds,
             },
             TestContext.Current.CancellationToken);
 
-        Assert.True(result.Stalled, "a child asleep for thirty seconds was not stopped by a two-second bound");
+        Assert.Equal(PhaseStop.WallClock, result.Stopped);
         Assert.False(result.Passed);
+        Assert.Equal(
+            (LegVerdict.Failed, "build passed its own wall-clock bound and was stopped"),
+            (result.Verdict().Verdict, result.Verdict().Detail));
         Assert.True(result.Duration < TimeSpan.FromSeconds(20), $"the bound took {result.Duration} to fire");
+    }
+
+    /// <summary>
+    /// A phase's verdict names the bound that stopped it, whatever else was in force: the silence
+    /// bound as a hang, with its seconds, and the phase's own clock as that - with a silence bound
+    /// beside it or without one - so a phase stopped by its clock is never said to have hung.
+    /// </summary>
+    [Theory]
+    [InlineData(PhaseStop.Silence, 60, "build hung: no output for 60s")]
+    [InlineData(PhaseStop.WallClock, 60, "build passed its own wall-clock bound and was stopped")]
+    [InlineData(PhaseStop.WallClock, 0, "build passed its own wall-clock bound and was stopped")]
+    public void AStoppedPhasesVerdict_NamesTheBoundThatStoppedIt(PhaseStop stopped, int stallSeconds, string detail)
+    {
+        var phase = new PhaseResult(
+            "win-msvc-release", "build", -1, stopped, stallSeconds, null, TimeSpan.Zero, TimeSpan.Zero, false, [], "build.log", PhaseOutput.Of(string.Empty));
+
+        Assert.Equal(ReachedVerdict.Of(LegVerdict.Failed, detail), phase.Verdict());
+    }
+
+    /// <summary>
+    /// A line callback that throws stops none of what the phase keeps: every line is still logged -
+    /// and so read by the witness and counted against the silence bound, which each line is as it is
+    /// logged - the log ends with its exit line, and what the callback raised first is raised once
+    /// the phase has ended. Let through, it stopped the log where the callback failed and left it
+    /// without its exit line, the witness and the silence clock stopped with it.
+    /// </summary>
+    [Fact]
+    public async Task ALineCallbackThatThrows_LeavesTheLogWhole_AndIsRaisedOnceThePhaseHasEnded()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var log = temp.Combine("callback.log");
+        var lines = new ScriptedLines(("first", false), ("second", false), ("third", true));
+        var handed = 0;
+
+        var raised = await Assert.ThrowsAsync<InvalidOperationException>(() => new PhaseRunner(lines, factory.FileSystem, factory.Output).RunAsync(
+            Child("exit", log) with
+            {
+                OnLine = line =>
+                {
+                    handed++;
+                    throw new InvalidOperationException($"the reader could not take '{line}'");
+                },
+            },
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal("the reader could not take 'first'", raised.Message);
+
+        // Handed the first line alone: a callback that failed is handed nothing more.
+        Assert.Equal(1, handed);
+        Assert.True(lines.Finished, "the child was not left to end");
+
+        var kept = await File.ReadAllLinesAsync(log, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["first", "second", "third"], kept[3..^1]);
+        Assert.StartsWith("# exit 0 after ", kept[^1], StringComparison.Ordinal);
     }
 
     /// <summary>

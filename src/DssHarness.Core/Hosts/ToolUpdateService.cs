@@ -324,15 +324,19 @@ public sealed class ToolUpdateService(
                     Timeout = ToolPackage.ChangeBudget,
                 },
                 ListRequest(request.ToolPath),
-                listing => HostProbes.TryReadToolVersion(listing, ToolPackage.Id, out var release) ? release : null)
+                listing => HostProbes.TryReadToolVersion(listing, ToolPackage.Id, out var release)
+                    ? ListedRelease.Read(release)
+                    : ListedRelease.Unreadable)
             .ConfigureAwait(false);
 
-        var (ran, listing, now) = change;
+        var (ran, listing, reading) = change;
+        var now = reading.Release;
 
-        // What the machine now runs, in dotnet's own listing - or why that is not known, in dotnet's own words.
+        // What the machine now runs, in dotnet's own listing - or why that is not known, in dotnet's own words. A
+        // listing read whole that does not hold the tool says so: that is what the machine now runs.
         string? unknown = !listing.Succeeded
             ? HostProbes.Failure("its tools could not be listed", listing)
-            : now is null ? "what dotnet listed is not something this build reads" : null;
+            : !reading.Readable ? "what dotnet listed is not something this build reads" : null;
         var listed = now is null ? "not listed there" : $"listed there as {now}";
         var since = unknown is null ? $"it is {listed} since" : $"what is listed there since is not known: {unknown}";
 

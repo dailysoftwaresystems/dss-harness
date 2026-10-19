@@ -25,13 +25,6 @@ namespace DssHarness.Core.Orchestration.Flow;
 public static class WorkflowName
 {
     /// <summary>
-    /// The name the workflows directory keeps for the slot a run's keys are to be read from,
-    /// <c>workflows/.env/</c>, beside the workflows' own directories: a name, never a workflow's
-    /// files, and no workflow may take it.
-    /// </summary>
-    public const string ReservedSlotName = ".env";
-
-    /// <summary>
     /// What is wrong with <paramref name="name"/> as a workflow's name, or <see langword="null"/>
     /// when nothing is.
     /// </summary>
@@ -62,7 +55,11 @@ public static class WorkflowName
                 + $"runs on; a workflow is named in one word, as '{Expected("<name>")}'";
         }
 
-        if (string.Equals(name, ReservedSlotName, StringComparison.Ordinal))
+        // The workflows directory keeps this name for the agent clients' key slot, beside the
+        // workflows' own directories (HarnessLayout.WorkflowsEnvSlotName): a slot, never a workflow's
+        // files. Said for itself, ahead of the rule on a leading dot that refuses it as well, so the
+        // reason given is the one that holds.
+        if (string.Equals(name, HarnessLayout.WorkflowsEnvSlotName, StringComparison.Ordinal))
         {
             return $"'{name}' is the name the workflows directory keeps for the slot the run's keys "
                 + "are read from; call the workflow something else, as "

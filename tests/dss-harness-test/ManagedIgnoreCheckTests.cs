@@ -171,7 +171,7 @@ public sealed class ManagedIgnoreCheckTests
     [InlineData("", "", "")]
     [InlineData("!/.harness-config/sshItems/\n", "/.harness-config/*", ".harness-config/sshItems/.gitkeep")]
     [InlineData("!/.harness-config/runner/.env/\n", "/.harness-config/runner/*", ".harness-config/runner/.env/.gitkeep")]
-    [InlineData("!/.harness-config/orchestrators/.env/\n", "/.harness-config/orchestrators/*", ".harness-config/orchestrators/.env/.gitkeep")]
+    [InlineData("!/.harness-config/workflows/\n", "/.harness-config/*", ".harness-config/workflows/.env/.gitkeep")]
     public async Task AnAllowlistsReIncludeOfASlot_IsLeftAlone_ForThePlaceholderRestsOnIt(string removed, string taking, string placeholder)
     {
         var (findings, _) = await FindAsync(before: removed.Length > 0 ? Allowlist.Replace(removed, string.Empty, StringComparison.Ordinal) : Allowlist);
@@ -217,7 +217,7 @@ public sealed class ManagedIgnoreCheckTests
                 ".harness-config/wslDistros/.gitkeep",
                 ".harness-config/runner/.env/.gitkeep",
                 ".harness-config/runner/.secrets/.gitkeep",
-                ".harness-config/orchestrators/.env/.gitkeep",
+                ".harness-config/workflows/.env/.gitkeep",
             ],
             ignoresAll.Paths);
 
@@ -274,7 +274,7 @@ public sealed class ManagedIgnoreCheckTests
     public async Task AReIncludeTheTreesOtherIgnoreFilesMakeNeeded_IsNeverNamed(bool infoExclude)
     {
         var (findings, _) = await FindAsync(
-            before: "!/.harness-config/runner/.env/\n!/.harness-config/orchestrators/.env/\n",
+            before: "!/.harness-config/runner/.env/\n!/.harness-config/workflows/.env/\n",
             excluded: ".env\n",
             inInfoExclude: infoExclude);
 
@@ -301,7 +301,7 @@ public sealed class ManagedIgnoreCheckTests
         Assert.Contains(".harness-config/config.json", kept);
         Assert.Contains(".harness-config/runner/actions/.gitkeep", kept);
         Assert.Contains(".harness-config/sshItems/.gitkeep", kept);
-        Assert.Contains(".harness-config/orchestrators/.env/.gitkeep", kept);
+        Assert.Contains(".harness-config/workflows/.env/.gitkeep", kept);
         Assert.Contains($"{WorktreeSettings.DefaultRoot}/.gitkeep", kept);
         Assert.Contains(".orchestrators/.gitkeep", kept);
         Assert.Contains($".harness-config/runner/actions/{ManagedIgnoreRule.AnyDirectoryName}/{ManagedIgnoreRule.AnyName}", kept);
@@ -373,7 +373,7 @@ public sealed class ManagedIgnoreCheckTests
                 ".harness-config/wslDistros/.gitkeep",
                 ".harness-config/runner/.env/.gitkeep",
                 ".harness-config/runner/.secrets/.gitkeep",
-                ".harness-config/orchestrators/.env/.gitkeep",
+                ".harness-config/workflows/.env/.gitkeep",
             ],
             conflict.Paths);
     }
@@ -414,7 +414,7 @@ public sealed class ManagedIgnoreCheckTests
         Assert.True(conflict.Wins);
         Assert.True(conflict.Ignores);
         Assert.Equal(2, conflict.Line);
-        Assert.Equal([".harness-config/runner/.env/.gitkeep", ".harness-config/orchestrators/.env/.gitkeep"], conflict.Paths);
+        Assert.Equal([".harness-config/runner/.env/.gitkeep", ".harness-config/workflows/.env/.gitkeep"], conflict.Paths);
     }
 
     /// <summary>
@@ -772,7 +772,7 @@ public sealed class ManagedIgnoreCheckTests
         var token = TestContext.Current.CancellationToken;
 
         await harness.InitializeGitRepositoryAsync(temp.Path, token);
-        temp.WriteFile(".gitignore", "!/.harness-config/runner/.env/\n!/.harness-config/orchestrators/.env/\n");
+        temp.WriteFile(".gitignore", "!/.harness-config/runner/.env/\n!/.harness-config/workflows/.env/\n");
         await harness.InitService.InitializeAsync(temp.Path, token);
 
         if (setToNothing)
@@ -801,7 +801,7 @@ public sealed class ManagedIgnoreCheckTests
         if (setToNothing)
         {
             Assert.Equal(
-                ["!/.harness-config/runner/.env/", "!/.harness-config/orchestrators/.env/"],
+                ["!/.harness-config/runner/.env/", "!/.harness-config/workflows/.env/"],
                 [.. findings.Conflicts.Select(conflict => conflict.Pattern)]);
             Assert.All(findings.Conflicts, conflict => Assert.False(conflict.Wins));
         }
@@ -847,12 +847,13 @@ public sealed class ManagedIgnoreCheckTests
     /// <summary>
     /// An allowlist as a repository writes one: everything under .harness-config excluded, and each
     /// directory it keeps in git re-included - the slots the block keeps a placeholder in among them -
-    /// with the runner's own contents excluded again, so its slots rest on their re-includes too.
+    /// with the runner's own contents excluded again, so its slots rest on their re-includes too, and
+    /// the workflows directory kept whole, the agent clients' key slot with it.
     /// </summary>
     private const string Allowlist = "/.harness-config/*\n!/.harness-config/sshItems/\n!/.harness-config/wslDistros/\n"
         + "!/.harness-config/runner/\n/.harness-config/runner/*\n!/.harness-config/runner/actions/\n"
         + "!/.harness-config/runner/.env/\n!/.harness-config/runner/.secrets/\n"
-        + "!/.harness-config/orchestrators/\n/.harness-config/orchestrators/*\n!/.harness-config/orchestrators/.env/\n";
+        + "!/.harness-config/workflows/\n";
 
     private static ManagedIgnoreCheck Check(HarnessFactory harness) => new(harness.GitClient, harness.FileSystem, harness.Platform, harness.Output);
 

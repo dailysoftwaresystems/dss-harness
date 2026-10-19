@@ -54,7 +54,7 @@ public sealed class TreeFloorTests
             ".harness-config/wslDistros",
             ".harness-config/runner/.env",
             ".harness-config/runner/.secrets",
-            ".harness-config/orchestrators/.env",
+            ".harness-config/workflows/.env",
         ],
         HarnessLayout.SecretSlots);
     }

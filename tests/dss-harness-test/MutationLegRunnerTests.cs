@@ -4341,12 +4341,12 @@ public sealed class MutationLegRunnerTests
 
             var stepped = Stepped(request);
             IReadOnlyList<PhaseResult> phases = verdict.Verdict == LegVerdict.Failed
-                ? [new PhaseResult(request.Leg, CMakeAdapter.BuildPhase, 1, false, 0, null, TimeSpan.Zero, stepped ? TimeSpan.FromSeconds(90) : TimeSpan.Zero, stepped, [], Path.Combine(directory, "build.log"), Output(request) ?? PhaseOutput.Of($"[1/2] Building CXX object {SiteObject}\nFAILED: {SiteObject}\nerror: depth is no integer\n"))]
+                ? [new PhaseResult(request.Leg, CMakeAdapter.BuildPhase, 1, PhaseStop.None, 0, null, TimeSpan.Zero, stepped ? TimeSpan.FromSeconds(90) : TimeSpan.Zero, stepped, [], Path.Combine(directory, "build.log"), Output(request) ?? PhaseOutput.Of($"[1/2] Building CXX object {SiteObject}\nFAILED: {SiteObject}\nerror: depth is no integer\n"))]
                 : [];
 
             if (verdict.Verdict == LegVerdict.Passed && stepped)
             {
-                phases = [new PhaseResult(request.Leg, CMakeAdapter.BuildPhase, 0, false, 0, null, TimeSpan.Zero, TimeSpan.FromSeconds(90), true, [], Path.Combine(directory, "build.log"), PhaseOutput.Of("built"))];
+                phases = [new PhaseResult(request.Leg, CMakeAdapter.BuildPhase, 0, PhaseStop.None, 0, null, TimeSpan.Zero, TimeSpan.FromSeconds(90), true, [], Path.Combine(directory, "build.log"), PhaseOutput.Of("built"))];
             }
 
             return new BuildResult(verdict, directory, phases, RebuiltFromClean(request), null);

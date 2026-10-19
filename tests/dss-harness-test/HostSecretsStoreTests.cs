@@ -298,25 +298,34 @@ public sealed class HostSecretsStoreTests
         var problem = kind == "ssh"
             ? fixture.Store.ReadSshItem(fixture.Layout, Item).Problem
             : fixture.Store.ReadWslItem(fixture.Layout, Item).Problem;
+        var slot = kind == "ssh" ? "sshItems" : "wslDistros";
 
-        Assert.Contains(
-            $"other users can read '.harness-config/{(kind == "ssh" ? "sshItems" : "wslDistros")}/{Item}/.env', "
-                + "and it holds this host's SUDO_PASSWORD; make it private with: chmod 600",
-            problem,
-            StringComparison.Ordinal);
+        Assert.Equal(
+            $"other users can read '.harness-config/{slot}/{Item}/.env', and it holds this host's SUDO_PASSWORD; "
+                + $"make it private with: chmod 600 '{repository.Combine(".harness-config", slot, Item, ".env")}'",
+            problem);
     }
 
     /// <summary>
     /// A key the item declares optional may be written blank: it means none, and no refusal comes of
-    /// it - a host whose superuser needs no password is not made to tighten a file that already
-    /// holds no credential worth reading.
+    /// it - not even where other users can read the file, which then holds no credential worth
+    /// reading: a host whose superuser needs no password is not made to tighten a file for nothing.
     /// </summary>
-    [Fact]
-    public void AnOptionalKeyWrittenBlank_MeansNone_IsNoRefusal_AndHandsOnNoCredential()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AnOptionalKeyWrittenBlank_MeansNone_IsNoRefusal_AndHandsOnNoCredential(bool readableByOthers)
     {
         using var repository = new TempDirectory();
         var fixture = new Fixture(repository);
         fixture.WriteSshItem(Item, "ADDRESS=host.invalid\nUSER=harness\nSUDO_PASSWORD=\n");
+
+        if (readableByOthers)
+        {
+            fixture.Permissions
+                .IsPrivate(Arg.Is<string>(path => path.EndsWith(".env", StringComparison.Ordinal)))
+                .Returns(false);
+        }
 
         var read = fixture.Store.ReadSshItem(fixture.Layout, Item);
 

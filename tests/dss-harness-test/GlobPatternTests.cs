@@ -105,8 +105,8 @@ public sealed class GlobPatternTests
     }
 
     /// <summary>
-    /// Backslashes, a leading <c>./</c> and trailing separators are normalised away, so a pattern
-    /// written one way matches a path written the other.
+    /// Backslashes are read as separators and a leading <c>./</c> or separator on a path is read
+    /// past, so a pattern written one way matches a path written the other.
     /// </summary>
     [Fact]
     public void APatternOrPathSpeltWithTheOtherSeparator_MatchesAllTheSame()
@@ -145,8 +145,12 @@ public sealed class GlobPatternTests
         // A misspelling the file system would read past is refused by the one spelling rule this
         // shares with the configured path lists: a pattern that looks right and matches nothing is
         // a rule that silently protects nothing.
-        Assert.StartsWith("holds a '.' segment or a doubled separator", GlobPattern.Problem("a//b"));
-        Assert.StartsWith("holds a '.' segment or a doubled separator", GlobPattern.Problem("a/./b"));
+        Assert.Equal(
+            "holds a '.' segment or a doubled separator, which the file system reads past and a comparison of paths never does; write 'a/b'",
+            GlobPattern.Problem("a//b"));
+        Assert.Equal(
+            "holds a '.' segment or a doubled separator, which the file system reads past and a comparison of paths never does; write 'a/b'",
+            GlobPattern.Problem("a/./b"));
 
         Assert.Null(GlobPattern.Problem("[a]/x"));
         Assert.Null(GlobPattern.Problem("**"));
@@ -215,5 +219,131 @@ public sealed class GlobPatternTests
 
         Assert.True(pattern.Matches("docs/a"));
         Assert.False(pattern.Matches("docs/ab"));
+    }
+
+    /// <summary>
+    /// A trailing separator anchors nothing, as gitignore reads it - only a leading or middle one
+    /// does - and says the pattern names a directory: <c>build/</c> matches what is beneath a
+    /// <c>build</c> at any depth, and never a path whose last segment is <c>build</c>, which is all
+    /// a rule asked about a path can know is not a directory. The rules are handed to a client as its
+    /// own deny rules, which read the pattern so.
+    /// </summary>
+    [Fact]
+    public void ATrailingSeparator_AnchorsNothing_AndMatchesOnlyWhatIsBeneathADirectory()
+    {
+        var directory = GlobPattern.Parse("build/");
+
+        Assert.True(directory.Matches("build/out.o"));
+        Assert.True(directory.Matches("src/build/out.o"));
+        Assert.True(directory.Matches("src/build/obj/out.o"));
+        Assert.False(directory.Matches("build"));
+        Assert.False(directory.Matches("src/build"));
+        Assert.False(directory.Matches("src/rebuild/out.o"));
+
+        // A middle separator anchors it, the trailing one still naming a directory.
+        var rooted = GlobPattern.Parse("src/build/");
+
+        Assert.True(rooted.Matches("src/build/out.o"));
+        Assert.False(rooted.Matches("src/build"));
+        Assert.False(rooted.Matches("lib/src/build/out.o"));
+    }
+
+    /// <summary>
+    /// A pattern's spelling reads back as the same matcher, so a rule rendered from it means what the
+    /// pattern meant: anchoring and a trailing separator survive, where joining the segments alone
+    /// once made <c>/docs</c> read as <c>docs</c> - a name at any depth.
+    /// </summary>
+    [Theory]
+    [InlineData("/docs", "/docs")]
+    [InlineData("./docs", "/docs")]
+    [InlineData("docs", "docs")]
+    [InlineData("build/", "build/")]
+    [InlineData("/build/", "/build/")]
+    [InlineData(@"src\build\", "src/build/")]
+    [InlineData("/**", "/**")]
+    [InlineData("**/cache", "**/cache")]
+    [InlineData(".github/**", ".github/**")]
+    public void APatternsSpelling_ReadsBackAsTheSameMatcher(string pattern, string spelled)
+    {
+        var once = GlobPattern.Parse(pattern);
+        var twice = GlobPattern.Parse(once.ToString());
+
+        Assert.Equal(spelled, once.ToString());
+        Assert.Equal(spelled, twice.ToString());
+
+        foreach (var path in new[] { "docs", "docs/a.md", "en/docs", "en/docs/a.md", "build", "build/x", "src/build/x", ".github/ci.yml", "a/cache/x" })
+        {
+            Assert.Equal(once.Matches(path), twice.Matches(path));
+        }
+    }
+
+    /// <summary>
+    /// A misspelling is asked of the pattern as written, by the one spelling rule the configured
+    /// lists are held to, so a pattern refused there is refused here: <c>././x</c> once passed, read
+    /// past one <c>./</c> at a time. A <c>..</c> segment is refused by the same rule, since no path a
+    /// pattern is matched against holds one; and the root alone, which no path in it is.
+    /// </summary>
+    [Fact]
+    public void AMisspelledPattern_IsRefusedByTheOneSpellingRuleBothMatchersShare()
+    {
+        const string Dotted = "holds a '.' segment or a doubled separator, which the file system reads past and a comparison of paths never does; write 'x'";
+        const string Climbing = "holds a '..' segment, which no path inside the tree holds, so it would name nothing; name the path from the tree's root";
+
+        Assert.Equal(Dotted, GlobPattern.Problem("././x"));
+        Assert.Equal(Dotted, PathPatterns.Problem("././x"));
+        Assert.Equal(Climbing, GlobPattern.Problem("../x/**"));
+        Assert.Equal(Climbing, GlobPattern.Problem("a/../b"));
+        Assert.Equal(Climbing, PathPatterns.Misspelling(".."));
+
+        foreach (var root in new[] { ".", "./", "/." })
+        {
+            Assert.Equal("is '.', the root itself, which no path in it is; write '**' for everything beneath it", GlobPattern.Problem(root));
+        }
+    }
+
+    /// <summary>
+    /// A path is compared by the case rule of the tree it is in: folded, where the tree's file system
+    /// folds case - <c>Docs/README.MD</c> is <c>docs/readme.md</c> there - and exact where it does
+    /// not, with <c>?</c> and <c>*</c> matching as ever.
+    /// </summary>
+    [Fact]
+    public void APathInATreeThatFoldsCase_IsMatchedFolded_AndOnlyThere()
+    {
+        var pattern = GlobPattern.Parse("docs/*.md");
+
+        Assert.True(pattern.Matches("Docs/README.MD", StringComparison.OrdinalIgnoreCase));
+        Assert.False(pattern.Matches("Docs/README.MD"));
+        Assert.False(pattern.Matches("Docs/README.MD", StringComparison.Ordinal));
+        Assert.True(GlobPattern.Parse("**/Cach?").Matches("src/CACHE/x", StringComparison.OrdinalIgnoreCase));
+        Assert.False(GlobPattern.Parse("**/Cach?").Matches("src/CACHE/x"));
+
+        var refused = Assert.Throws<ArgumentException>(() => pattern.Matches("docs/a.md", StringComparison.InvariantCultureIgnoreCase));
+
+        Assert.Equal("comparison", refused.ParamName);
+    }
+
+    /// <summary>
+    /// A path that is not spelled as the tree's owner spells one - the root alone, a <c>.</c> or
+    /// <c>..</c> segment, a doubled separator - is the caller's mistake, refused rather than matched
+    /// or missed: <c>docs/../secrets/key</c> once read as no match of <c>secrets/**</c>, which is the
+    /// one path it names.
+    /// </summary>
+    [Theory]
+    [InlineData("/")]
+    [InlineData(".")]
+    [InlineData("./")]
+    [InlineData("docs/../secrets/key")]
+    [InlineData("../secrets/key")]
+    [InlineData("secrets//key")]
+    [InlineData("secrets/./key")]
+    public void APathNotSpelledAsTheTreeSpellsOne_IsRefused_NeverMatchedOrMissed(string path)
+    {
+        var refused = Assert.Throws<ArgumentException>(() => GlobPattern.Parse("secrets/**").Matches(path));
+
+        Assert.Equal("relativePath", refused.ParamName);
+        Assert.Equal(
+            $"'{path}' is not a path inside the tree spelled as its owner spells one: it is the root alone, or holds a '.' or '..' "
+                + "segment or a doubled separator (Parameter 'relativePath')",
+            refused.Message);
     }
 }

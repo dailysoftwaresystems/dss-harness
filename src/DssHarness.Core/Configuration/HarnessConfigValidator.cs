@@ -213,7 +213,7 @@ public static partial class HarnessConfigValidator
 
         // Compared as written wherever it is read - by sync's withheld list, by init's ignore rule - so a
         // spelling the file system reads past would leave its worktrees neither withheld nor ignored.
-        if (Repository.PathPatterns.Misspelling(worktrees.Root) is { } misspelled)
+        if (!PlatformPaths.ClimbsOut(worktrees.Root) && Repository.PathPatterns.Misspelling(worktrees.Root) is { } misspelled)
         {
             problems.Add($"worktrees.root names '{worktrees.Root}', which {misspelled}");
         }
@@ -305,7 +305,7 @@ public static partial class HarnessConfigValidator
 
             RequireRelativePaths([path], setting, problems);
 
-            if (Repository.PathPatterns.Misspelling(path) is { } misspelled)
+            if (!PlatformPaths.ClimbsOut(path) && Repository.PathPatterns.Misspelling(path) is { } misspelled)
             {
                 problems.Add($"{setting} names '{path}', which {misspelled}");
             }
@@ -2326,14 +2326,16 @@ public static partial class HarnessConfigValidator
     }
 
     /// <summary>
-    /// Records a problem for every sync entry that would match nothing it looks like it matches.
+    /// Records a problem for every sync entry that would match nothing it looks like it matches. One
+    /// that climbs out of the tree is left to <see cref="RequireRelativePaths"/>, which every caller
+    /// asks first: one entry, one problem.
     /// </summary>
     /// <param name="patterns">The entries, as written.</param>
     /// <param name="setting">What to call the setting in the problem.</param>
     /// <param name="problems">Where problems are collected.</param>
     private static void CheckPathPatterns(IReadOnlyList<string>? patterns, string setting, List<string> problems)
     {
-        foreach (var pattern in patterns ?? [])
+        foreach (var pattern in (patterns ?? []).Where(pattern => pattern is null || !PlatformPaths.ClimbsOut(pattern)))
         {
             if (Repository.PathPatterns.Problem(pattern) is { } problem)
             {
