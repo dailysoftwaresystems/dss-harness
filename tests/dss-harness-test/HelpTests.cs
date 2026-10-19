@@ -1731,6 +1731,13 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
+            "Two updates of one place never change it together: the change holds a machine-wide lock on the directory the tool is kept in, "
+            + "and an update that finds it held - two run beside the installed tool are each the program dotnet, and neither counts the "
+            + $"other - changes nothing and is refused ({HarnessExit.Refused}), with {ToolUpdateService.WaitOption} or without, since it "
+            + "read the machine before the other changed it.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
             "Once the update has begun this command does not stop it, interrupted or not, and reads back what it left: it says the update done only once "
             + $"the tool is listed as that release, and a failure with what dotnet said and what is listed since, or why that is not known "
             + $"({HarnessExit.CommandFailed}).",

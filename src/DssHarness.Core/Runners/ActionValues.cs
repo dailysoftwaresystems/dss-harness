@@ -213,20 +213,11 @@ public sealed class ActionValues : ILineMask
 /// Reads the values an action reads from the runner's two value directories.
 /// </summary>
 /// <remarks>
-/// <para>
 /// <c>.harness-config/runner/.env</c> and <c>.harness-config/runner/.secrets</c> are each a
-/// directory of dotenv files rather than a single file, so one repository can hold several
-/// unrelated sets and a machine can be given only the ones it needs. Every file in a directory is
-/// merged.
-/// </para>
-/// <para>
-/// A name defined twice is refused rather than letting the later file win. Silent precedence over a
-/// set of files whose order is a directory listing is a rule nobody can read off the files: the
-/// value that reached a run would depend on a file name, and renaming a file would change what ran
-/// without changing anything a reviewer looks at. That holds across the two directories too — a
+/// directory of dotenv files, read by the one rule for such a directory (<see cref="DotEnvDirectories"/>):
+/// every file merged, a name defined twice refused. The two are read as one set of names, since a
 /// name in both would leave <see cref="ActionValues.Redact(string?)"/> masking one value while the
 /// run used the other.
-/// </para>
 /// </remarks>
 public sealed class ActionValuesReader(IFileSystem fileSystem, IHarnessOutput output)
 {
@@ -252,13 +243,11 @@ public sealed class ActionValuesReader(IFileSystem fileSystem, IHarnessOutput ou
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        var problems = new List<string>();
-        var origins = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        var secrets = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
-        Merge(envDirectory, values, origins, problems, cancellationToken);
-        Merge(secretsDirectory, secrets, origins, problems, cancellationToken);
+        var directories = new DotEnvDirectories(_fileSystem);
+        var values = directories.Read(envDirectory, cancellationToken);
+        var secrets = directories.Read(secretsDirectory, cancellationToken);
+        var origins = directories.Origins;
+        var problems = new List<string>(directories.Problems);
 
         // A plain value is one a run line can name, so one named like a name this tool fills in is
         // refused, as an input so named is: a run line naming it got this tool's value, or this one
@@ -286,91 +275,5 @@ public sealed class ActionValuesReader(IFileSystem fileSystem, IHarnessOutput ou
             $"read {ReportText.Counted(values.Count, "value")} and {ReportText.Counted(secrets.Count, "secret")} for this action");
 
         return Task.FromResult(new ActionValues(values, secrets));
-    }
-
-    /// <summary>
-    /// The definitions one dotenv file holds, every problem it has reported together with the line
-    /// it was found at.
-    /// </summary>
-    /// <remarks>
-    /// Read through the one <c>NAME=value</c> line scanner (<see cref="DotEnvFile.Scan"/>). This
-    /// reader feeds a command's environment, so it is the stricter of the two: a line that defines
-    /// nothing is a problem named by its line, and a name with whitespace in it is not a name at
-    /// all.
-    /// </remarks>
-    /// <param name="text">The file's contents.</param>
-    /// <param name="path">Where it came from, quoted in any problem.</param>
-    /// <param name="problems">Collects what was wrong with the file.</param>
-    public static IReadOnlyList<KeyValuePair<string, string>> ParseDotEnv(
-        string text,
-        string path,
-        List<string> problems)
-    {
-        ArgumentNullException.ThrowIfNull(text);
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        ArgumentNullException.ThrowIfNull(problems);
-
-        var entries = new List<KeyValuePair<string, string>>();
-
-        foreach (var line in DotEnvFile.Scan(text))
-        {
-            if (line.Name is not { } name)
-            {
-                problems.Add(line.Fault == DotEnvLineFault.NoEquals
-                    ? $"'{path}' line {line.Number}: no '=', so nothing is defined here."
-                    : $"'{path}' line {line.Number}: the name before '=' is empty.");
-                continue;
-            }
-
-            if (name.Any(char.IsWhiteSpace))
-            {
-                problems.Add($"'{path}' line {line.Number}: '{name}' is not a name; "
-                    + "an environment variable's name holds no spaces.");
-                continue;
-            }
-
-            entries.Add(new KeyValuePair<string, string>(name, line.Value!));
-        }
-
-        return entries;
-    }
-
-    private void Merge(
-        string directory,
-        Dictionary<string, string> target,
-        Dictionary<string, string> origins,
-        List<string> problems,
-        CancellationToken cancellationToken)
-    {
-        if (!_fileSystem.DirectoryExists(directory))
-        {
-            // Both directories are gitignored, so a fresh clone has neither. An action that needs a
-            // value it did not get is refused where the value is used, with the name it wanted.
-            return;
-        }
-
-        // Ordered so that "defined twice" names the same two files whatever order the file system
-        // enumerated them in, which is what makes the refusal reproducible.
-        var files = _fileSystem
-            .EnumerateFiles(directory, recursive: false)
-            .OrderBy(file => Path.GetFileName(file), StringComparer.Ordinal);
-
-        foreach (var file in files)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            foreach (var (name, value) in ParseDotEnv(_fileSystem.ReadAllText(file), file, problems))
-            {
-                if (origins.TryGetValue(name, out var first))
-                {
-                    problems.Add($"'{name}' is defined in '{first}' and again in '{file}'; "
-                        + "nothing can say which value a run used.");
-                    continue;
-                }
-
-                origins[name] = file;
-                target[name] = value;
-            }
-        }
     }
 }

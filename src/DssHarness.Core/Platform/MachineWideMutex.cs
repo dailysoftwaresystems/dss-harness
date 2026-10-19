@@ -11,9 +11,10 @@ namespace DssHarness.Core.Platform;
 /// <remarks>
 /// A named mutex is the lock .NET offers on Windows, Linux and macOS alike, and everything here that
 /// must serialise a read-decide-write across processes takes one: the anchor registries, the run
-/// lock, the log owner. One implementation, because the two things that go wrong with a mutex — a
-/// name that two different subjects share, and an abandoned one read as a failure — go wrong the
-/// same way wherever it is used, and a second copy would only fix one of them.
+/// lock, the log owner, the change of an installed program. One implementation, because the two
+/// things that go wrong with a mutex — a name that two different subjects share, and an abandoned
+/// one read as a failure — go wrong the same way wherever it is used, and a second copy would only
+/// fix one of them.
 /// </remarks>
 public static class MachineWideMutex
 {
@@ -156,6 +157,27 @@ public static class MachineWideMutex
             () => Stopwatch.GetElapsedTime(started));
     }
 
+    /// <summary>
+    /// Takes the mutex <paramref name="name"/> where nobody holds it, for work that awaits while it holds it; or
+    /// <see langword="null"/> at once where another holds it.
+    /// </summary>
+    /// <param name="name">The name, from <see cref="NameFor"/>.</param>
+    /// <param name="subject">What is being locked, named in a refusal to open it.</param>
+    /// <returns>The hold, which lets the mutex go when it is disposed, from whichever thread disposes it.</returns>
+    /// <exception cref="HarnessException">The mutex could not be opened, as <see cref="Open(string, string)"/> says.</exception>
+    /// <remarks>
+    /// A mutex is released by the thread that took it, and work that awaits may go on on another, so the hold keeps
+    /// a thread of its own that takes the mutex, waits to be let go, and releases it (<see cref="MachineWideHold"/>).
+    /// A mutex whose holder ended holding it is taken, as <see cref="Wait(Mutex, TimeSpan)"/> takes one.
+    /// </remarks>
+    public static MachineWideHold? TryHold(string name, string subject)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentException.ThrowIfNullOrWhiteSpace(subject);
+
+        return MachineWideHold.TryTake(() => Open(name, subject));
+    }
+
     /// <summary>Waits through <paramref name="waitFor"/>, for as long as <paramref name="timeout"/> allows by <paramref name="elapsed"/>.</summary>
     /// <param name="waitFor">Waits for the mutex for at most the time it is given, and says whether it was taken.</param>
     /// <param name="timeout">How long to wait.</param>
@@ -178,6 +200,127 @@ public static class MachineWideMutex
             if (elapsed() >= timeout)
             {
                 return false;
+            }
+        }
+    }
+}
+
+/// <summary>
+/// A machine-wide mutex held for work that awaits: taken and released by a thread of the hold's own, which keeps it until
+/// the hold is disposed.
+/// </summary>
+/// <remarks>
+/// A mutex belongs to the thread that took it, which alone can release it, and the continuation of an await may run on any
+/// thread: a mutex taken before an await and released after it is released by a thread that does not hold it, which
+/// throws and leaves the mutex held until the process ends. So the thread that takes it here does nothing else, and
+/// releases it when it is let go. It is a background thread, so a process that ends holding the mutex is not kept
+/// alive by it: the system then passes the mutex on as one its holder ended holding, and the next to wait takes it.
+/// </remarks>
+public sealed class MachineWideHold : IDisposable
+{
+    private readonly Thread _holder;
+    private readonly ManualResetEventSlim _letGo;
+    private int _released;
+
+    private MachineWideHold(Thread holder, ManualResetEventSlim letGo)
+    {
+        _holder = holder;
+        _letGo = letGo;
+    }
+
+    /// <summary>Whether the hold has been let go, after which it guards nothing.</summary>
+    public bool Released => Volatile.Read(ref _released) != 0;
+
+    /// <summary>Lets the mutex go, and returns once it has been released.</summary>
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _released, 1) != 0)
+        {
+            return;
+        }
+
+        _letGo.Set();
+        _holder.Join();
+        _letGo.Dispose();
+    }
+
+    /// <summary>
+    /// Opens a mutex through <paramref name="open"/> on a thread of its own and takes it where nobody holds it; or
+    /// <see langword="null"/> where another does.
+    /// </summary>
+    /// <param name="open">Opens the mutex, refusing as <see cref="MachineWideMutex.Open(string, string)"/> does.</param>
+    /// <exception cref="HarnessException">The mutex could not be opened.</exception>
+    internal static MachineWideHold? TryTake(Func<Mutex> open)
+    {
+        ArgumentNullException.ThrowIfNull(open);
+
+        var taken = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var letGo = new ManualResetEventSlim();
+        var holder = new Thread(() => Hold(open, taken, letGo))
+        {
+            IsBackground = true,
+            Name = "machine-wide hold",
+        };
+
+        holder.Start();
+
+        try
+        {
+            if (taken.Task.GetAwaiter().GetResult())
+            {
+                return new MachineWideHold(holder, letGo);
+            }
+        }
+        catch
+        {
+            holder.Join();
+            letGo.Dispose();
+            throw;
+        }
+
+        holder.Join();
+        letGo.Dispose();
+
+        return null;
+    }
+
+    /// <summary>
+    /// The holding thread: opens the mutex, says whether it took it, and where it did, keeps it until it is let go.
+    /// </summary>
+    private static void Hold(Func<Mutex> open, TaskCompletionSource<bool> taken, ManualResetEventSlim letGo)
+    {
+        Mutex mutex;
+
+        try
+        {
+            mutex = open();
+        }
+        catch (Exception ex)
+        {
+            taken.SetException(ex);
+            return;
+        }
+
+        using (mutex)
+        {
+            bool held;
+
+            try
+            {
+                held = MachineWideMutex.Wait(mutex, TimeSpan.Zero);
+            }
+            catch (Exception ex)
+            {
+                taken.SetException(ex);
+                return;
+            }
+
+            taken.SetResult(held);
+
+            if (held)
+            {
+                letGo.Wait();
+                mutex.ReleaseMutex();
             }
         }
     }

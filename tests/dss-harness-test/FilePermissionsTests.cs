@@ -106,7 +106,7 @@ public sealed class FilePermissionsTests
 
     /// <summary>Allows <paramref name="rights"/> on <paramref name="path"/> to every user of the machine.</summary>
     [SupportedOSPlatform("windows")]
-    private static void Grant(string path, FileSystemRights rights)
+    internal static void Grant(string path, FileSystemRights rights)
     {
         var file = new FileInfo(path);
         var security = file.GetAccessControl();

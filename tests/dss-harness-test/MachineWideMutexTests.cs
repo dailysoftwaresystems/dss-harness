@@ -187,6 +187,47 @@ public sealed class MachineWideMutexTests
         Assert.True(takenNext, "the mutex was still held once it was let go: it had been taken twice");
     }
 
+    /// <summary>
+    /// A hold, for work that awaits while it holds the mutex, keeps every other holder out until it is let go, and is let
+    /// go from whichever thread lets it go: a mutex is released by the thread that took it, and the work's last await may
+    /// end on any thread. Let go twice, it is let go once.
+    /// </summary>
+    [Fact]
+    public void AHold_KeepsEveryOtherOutUntilLetGo_FromWhicheverThreadLetsItGo()
+    {
+        var name = MachineWideMutex.NameFor("test", [Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))], ignoreCase: true);
+        var hold = MachineWideMutex.TryHold(name, "a test's subject");
+        Exception? letGo = null;
+
+        Assert.NotNull(hold);
+        Assert.Null(MachineWideMutex.TryHold(name, "a test's subject"));
+
+        var other = new Thread(() =>
+        {
+            try
+            {
+                hold.Dispose();
+            }
+            catch (Exception ex)
+            {
+                letGo = ex;
+            }
+        });
+
+        other.Start();
+        other.Join();
+
+        Assert.Null(letGo);
+        Assert.True(hold.Released);
+
+        hold.Dispose();
+
+        using var next = MachineWideMutex.TryHold(name, "a test's subject");
+
+        Assert.NotNull(next);
+        Assert.False(next.Released);
+    }
+
     /// <summary>A mutex another user holds is refused at once: no retry makes it this user's.</summary>
     [Fact]
     public void AMutexAnotherUserHolds_IsRefusedAtOnce()

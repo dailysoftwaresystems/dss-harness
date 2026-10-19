@@ -19,8 +19,9 @@ namespace DssHarness.Core.Secrets;
 /// <para>
 /// The one <c>NAME=value</c> line scanner this tool has: every reader of a file of this shape reads
 /// through <see cref="Scan"/>, so two files written the same way cannot be read two ways. What a
-/// reader does with a line that defines nothing is the reader's own - this one skips it, and the
-/// runner's values directory reports it with its line number.
+/// reader does with a line that defines nothing is the reader's own - this one skips it, and a
+/// directory of these, as the runner's values are kept (<see cref="DotEnvDirectories"/>), reports it
+/// with its line number.
 /// </para>
 /// </remarks>
 public static class DotEnvFile

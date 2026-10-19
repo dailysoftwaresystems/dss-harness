@@ -1861,9 +1861,17 @@ DssHarness is told by the name of its program, as a host's is, so a build from s
 beside the installed tool is counted: wrongly, and safely. On macOS that name is read from a
 listing of its own (`ps -o comm=`), since the path of a program may hold a space and the listing
 that carries the command line does not say where the program ends: named by the first word of its
-line, a tool kept under a volume called `My Disk` was a process called `My`, and not counted. What
-is left open is the moment between the last look and the update, in which a command just started
-can still stop it: the failure then names that command.
+line, a tool kept under a volume called `My Disk` was a process called `My`, and not counted. Two
+updates of one place never change it together: the change and the reading of what it left hold a
+machine-wide lock named for the directory the tool is kept in (`ProgramUpdate.TryHold`, a
+`MachineWideMutex` held by a thread of its own, since the change is awaited and a mutex is let go
+only by the thread that took it). Two copies run beside the installed tool are each the program
+`dotnet`, so neither counts the other, and an update that finds the lock held changes nothing and
+is refused (exit 13), with `--wait` or without: it read the machine before the other changed it,
+and waiting would only make the change again over that reading. A lock whose holder was killed
+holding it is taken by the next update, which reads what was left as it reads anything installed.
+What is left open is the moment between the last look and the update, in which a command just
+started can still stop it: the failure then names that command.
 
 Both ends must be the same build, so before anything runs on a host:
 
@@ -3701,8 +3709,10 @@ sibling directory whose name merely starts the same way is outside, not inside.
   default - and for a secret, the environment. The guard against a secret in an argument list
   reads each argument as it will start, so a secret a name fills in is refused as one written out.
 - Values come from `.harness-config/runner/.env` and `.harness-config/runner/.secrets`, each a
-  directory of files. A value that came from `.secrets` never reaches a log, an argument list or
-  an error message.
+  directory of files, read by the one rule for a directory of dotenv files (`DotEnvDirectories`):
+  every file merged, and a name defined twice - in two files, in one file, or in both directories,
+  its case ignored - refused, as is a line that defines nothing, with its line. A value that came
+  from `.secrets` never reaches a log, an argument list or an error message.
 - An unknown key, at the top level or on a step, is an error, as it is in `config.json`: a
   silently ignored key is a rule nobody applied.
 - A step that performs a predefined action runs no program, so a key only a run block reads —

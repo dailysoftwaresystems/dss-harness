@@ -98,6 +98,99 @@ public sealed class ToolUpdateServiceTests
     }
 
     /// <summary>
+    /// Two updates of one place at once make one change. Two copies run beside the installed tool are each the program
+    /// dotnet, so neither counts the other as a running DssHarness; the second, finding the place's machine-wide lock held
+    /// while the first's change runs, changes nothing, says nothing of updating, and is refused - asked to wait or not,
+    /// since what it would wait for is a change it read the machine before. The first goes on to its end, and lets the
+    /// lock go: the next update takes it.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TwoUpdatesOfOnePlaceAtOnce_MakeOneChange_TheSecondRefusedWhileTheFirstsRuns(bool wait)
+    {
+        var first = new Kit(installed: "0.6.12", newest: "0.6.13");
+        var second = new Kit(installed: "0.6.12", newest: "0.6.13", home: first.Home);
+        var changing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        first.Dotnet.Changing = () =>
+        {
+            changing.SetResult();
+            return finish.Task;
+        };
+
+        var updating = Task.Run(() => first.Service().RunAsync(new ToolUpdateRequest(), Token), Token);
+
+        await changing.Task.WaitAsync(Token);
+
+        var refused = await second.Service().RunAsync(new ToolUpdateRequest(wait), Token);
+
+        finish.SetResult();
+
+        var updated = await updating;
+
+        Assert.Equal(
+            (HarnessExit.Refused,
+                $"DssHarness in {Global} was not updated from 0.6.12 to 0.6.13: another update is changing {Global} on this machine, and "
+                + "two at once would each write over what the other is writing. Nothing was changed."),
+            (refused.ExitCode, refused.Message));
+        Assert.Equal(["Run again once it has ended."], refused.Details);
+        Assert.Equal(["dotnet tool list --global --format json"], second.Dotnet.Ran);
+        Assert.Empty(second.Said());
+        Assert.False(second.Program.LoadedWhole);
+        Assert.Equal(TimeSpan.Zero, second.Waited);
+
+        Assert.Equal(
+            (HarnessExit.Success, $"updated DssHarness in {Global} from 0.6.12 to 0.6.13, and it is listed there as 0.6.13 since"),
+            (updated.ExitCode, updated.Message));
+        Assert.Equal(
+            [
+                "dotnet tool list --global --format json",
+                $"dotnet tool update --global DssHarness --version 0.6.13 --source {Source}",
+                "dotnet tool list --global --format json",
+            ],
+            first.Dotnet.Ran);
+
+        var next = new Kit(installed: "0.6.12", newest: "0.6.13", home: first.Home);
+
+        Assert.Equal(HarnessExit.Success, (await next.Service().RunAsync(new ToolUpdateRequest(), Token)).ExitCode);
+    }
+
+    /// <summary>
+    /// The lock is the place's the tool is kept in, not the tool's: an update of a tool kept in a directory of its own
+    /// runs beside one under way in this user's global tools, which it shares no file with.
+    /// </summary>
+    [Fact]
+    public async Task AnUpdateOfAnotherPlace_RunsBesideOneUnderWay()
+    {
+        var first = new Kit(installed: "0.6.12", newest: "0.6.13");
+        var other = new Kit(installed: "0.6.12", newest: "0.6.13", home: first.Home);
+        var changing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var toolPath = Path.Combine(first.Home, "own-tools");
+
+        first.Dotnet.Changing = () =>
+        {
+            changing.SetResult();
+            return finish.Task;
+        };
+
+        var updating = Task.Run(() => first.Service().RunAsync(new ToolUpdateRequest(), Token), Token);
+
+        await changing.Task.WaitAsync(Token);
+
+        var beside = await other.Service().RunAsync(new ToolUpdateRequest(ToolPath: toolPath), Token);
+
+        finish.SetResult();
+
+        Assert.Equal(
+            (HarnessExit.Success, $"updated DssHarness in '{toolPath}' from 0.6.12 to 0.6.13, and it is listed there as 0.6.13 since"),
+            (beside.ExitCode, beside.Message));
+        Assert.Equal(HarnessExit.Success, (await updating).ExitCode);
+    }
+
+    /// <summary>
     /// An update beside a DssHarness that is running is refused with nothing changed, naming each by its process and what
     /// it was asked - never the command asking, though it is a DssHarness too, nor a program of another name.
     /// </summary>
@@ -563,9 +656,21 @@ public sealed class ToolUpdateServiceTests
         => new(id, 1, "dssharness", null, string.Join(' ', ["dssharness", .. arguments]));
 
     /// <summary>The service, with everything it asks of the machine scripted.</summary>
-    private sealed class Kit(string? installed, string? newest, PlatformId platform = PlatformId.Linux, string program = "/usr/share/dotnet/dotnet", string running = "0.6.12")
+    private sealed class Kit(
+        string? installed,
+        string? newest,
+        PlatformId platform = PlatformId.Linux,
+        string program = "/usr/share/dotnet/dotnet",
+        string running = "0.6.12",
+        string? home = null)
     {
         private readonly HarnessFactory _harness = new();
+
+        /// <summary>
+        /// This user's home, under which the global tools are kept and locked: one no other kit shares unless a test
+        /// gives it, so no two tests - nor two runs of this suite - contend for one lock unasked.
+        /// </summary>
+        public string Home { get; } = home ?? Path.Combine(TestHost.TemporaryRoot, "home-" + Guid.NewGuid().ToString("N"));
 
         public ScriptedDotnet Dotnet { get; } = new(installed, newest);
 
@@ -588,7 +693,7 @@ public sealed class ToolUpdateServiceTests
                 new RunningToolDouble(running),
                 _harness.Identity,
                 Program,
-                HostDoubles.Platform(platform),
+                HostDoubles.Platform(platform, home: Home),
                 _harness.Output,
                 (span, _) =>
                 {
@@ -643,9 +748,12 @@ public sealed class ToolUpdateServiceTests
         /// <summary>Called with each command as it starts.</summary>
         public Action<string>? Running { get; set; }
 
+        /// <summary>What an install or an update waits for before it answers, where a test holds it part way.</summary>
+        public Func<Task>? Changing { get; set; }
+
         public string? FindExecutable(string command) => command;
 
-        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default)
+        public async Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default)
         {
             var ran = string.Join(' ', [request.FileName, .. request.Arguments]);
 
@@ -655,18 +763,23 @@ public sealed class ToolUpdateServiceTests
 
             if (!ran.Contains(" list ", StringComparison.Ordinal))
             {
-                return Task.FromResult(Change);
+                if (Changing is not null)
+                {
+                    await Changing();
+                }
+
+                return Change;
             }
 
             if (List is not null)
             {
-                return Task.FromResult(List);
+                return List;
             }
 
             var version = Listed[Math.Min(_listed++, Listed.Length - 1)];
             var data = version is null ? string.Empty : $$"""{"packageId":"dssharness","version":"{{version}}","commands":["dssharness"]}""";
 
-            return Task.FromResult(new ProcessResult(0, $$"""{"version":1,"data":[{{data}}]}""", string.Empty, TimeSpan.Zero, TimedOut: false));
+            return new ProcessResult(0, $$"""{"version":1,"data":[{{data}}]}""", string.Empty, TimeSpan.Zero, TimedOut: false);
         }
     }
 
