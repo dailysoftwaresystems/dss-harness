@@ -810,6 +810,43 @@ public sealed class WorkflowValidationServiceTests
     }
 
     /// <summary>
+    /// The help, the README and the architecture say what the engine gives under a question, the status, a plan update
+    /// and a piece - the help from the lists the typing reads - and that the bar and each run fact are one text, which
+    /// no expression reads.
+    /// </summary>
+    [Fact]
+    public void TheHelpTheReadmeAndTheArchitecture_SayWhatTextsTheEngineGivesAPrompt()
+    {
+        var help = Prose.Words(HelpTopics.Render("workflows"));
+        var readme = Prose.Document("README.md");
+        var architecture = Prose.Document("docs", "architecture.md");
+
+        Assert.Contains(
+            "A question gives only the texts the engine names (question.step, question.kind, question.problem, question.answers, "
+                + "question.record), and so do the status (status.facts, status.question, status.records), a plan update (update.cause, "
+                + "update.since, update.work) and a piece (piece.kind, piece.changed, piece.keep, piece.undo, piece.instead, piece.cause, "
+                + "piece.before); the bar is one text, and so is each run fact (worktree, work, plans, rows, orchestrator, agent, step, os), "
+                + "which a template reads and an expression does not.",
+            help,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A question gives only the texts the engine names (`step`, `kind`, `problem`, `answers`, `record`), and so do the status "
+                + "(`facts`, `question`, `records`), a plan update (`cause`, `since`, `work`) and a piece (`kind`, `changed`, `keep`, `undo`, "
+                + "`instead`, `cause`, `before`); the bar is one text, and so is each run fact (`{worktree}`, `{os}` and the rest), which a "
+                + "template reads and an expression does not.",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A question gives only the texts the engine names (`step`, `kind`, `problem`, `answers`, `record`), and so do the status "
+                + "(`facts`, `question`, `records`), a plan update (`cause`, `since`, `work`) and a piece (`kind`, `changed`, `keep`, `undo`, "
+                + "`instead`, `cause`, `before`) - each list kept once, in `WorkflowExpressions` beside the run's own texts, and read by the "
+                + "typing; the bar is one text, and so is each run fact (`WorkflowExpressions.RunFacts`), which a template reads and an "
+                + "expression does not.",
+            architecture,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A workflow's directory that is a link out of the repository is refused before a word of it is read, though every
     /// file it names is beside its definition there: the files a definition names are held to its directory, so the
     /// directory is held to the workflows directory, once its links are followed, as an action's file is.

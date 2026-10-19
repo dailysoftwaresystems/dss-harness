@@ -469,7 +469,11 @@ alone, `{status.*}` in the reporter's two - `{status.question}` in its `askPromp
 `{update.*}` in the prompts of the step that plans an update and of the steps of its scope, and
 `{piece.*}` in a step of the work-item group; the advisor's and the reporter's prompts read no step
 by name, and a pull request's `body`, which the engine fills and no agent reads, reads what a
-template key reads and no skill. The engine that runs workflows is the next thing the tool grows. Run `dssharness help workflows` for the whole of it.
+template key reads and no skill. A question gives only the texts the engine names (`step`, `kind`,
+`problem`, `answers`, `record`), and so do the status (`facts`, `question`, `records`), a plan
+update (`cause`, `since`, `work`) and a piece (`kind`, `changed`, `keep`, `undo`, `instead`,
+`cause`, `before`); the bar is one text, and so is each run fact (`{worktree}`, `{os}` and the
+rest), which a template reads and an expression does not. The engine that runs workflows is the next thing the tool grows. Run `dssharness help workflows` for the whole of it.
 
 ## Anchors
 

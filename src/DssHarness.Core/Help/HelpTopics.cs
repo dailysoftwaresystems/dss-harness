@@ -2993,6 +2993,10 @@ public static class HelpTopics
             + "askPrompt alone - {update.<name>} in the prompts of the step that plans an update and of the steps of its scope, and "
             + "{piece.<name>} in a step of the work-item group; the advisor's and the reporter's prompts read no step by name, and a pull "
             + "request's body, which the engine fills and no agent reads, reads what a template key reads and no skill. "
+            + $"A question gives only the texts the engine names ({Under("question", WorkflowExpressions.QuestionTexts)}), and so do the "
+            + $"status ({Under("status", WorkflowExpressions.StatusTexts)}), a plan update ({Under("update", WorkflowExpressions.UpdateTexts)}) "
+            + $"and a piece ({Under("piece", WorkflowExpressions.PieceTexts)}); the bar is one text, and so is each run fact "
+            + $"({string.Join(", ", WorkflowExpressions.RunFacts)}), which a template reads and an expression does not. "
             + $"'{ToolPackage.Command} validate-workflow' checks the definition - the shape of every key, every name an expression, a "
             + "template key or a prompt reads, every file the definition names - and "
             + $"refuses ({HarnessExit.ConfigInvalid}) naming each problem, without running anything, as a "
@@ -3000,6 +3004,8 @@ public static class HelpTopics
             + $"refused ({HarnessExit.Refused}), saying that \"workflows\": [\"{WorkflowTemplates.ShippedWorkflowName}\"] declares the one init writes.");
 
         return builder.ToString();
+
+        static string Under(string root, IReadOnlyList<string> texts) => string.Join(", ", texts.Select(text => $"{root}.{text}"));
     }
 
     private static string RenderLayout()

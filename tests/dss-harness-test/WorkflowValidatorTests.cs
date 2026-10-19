@@ -1320,6 +1320,17 @@ public sealed class WorkflowValidatorTests
     }
 
     /// <summary>
+    /// <see cref="Amended"/> with an advisor, a reporter and a pull request whose body is a file: every prompt the engine
+    /// asks an agent with, and the one template it fills from a file.
+    /// </summary>
+    private static readonly string AmendedAndAsked = Amended
+        .Replace(
+            "steps:\n  - name: intake",
+            "advisor:\n  agent: advisor\n  prompt: prompts/recommend.md\n  tier: best\nreporter:\n  agent: reporter\n  statusPrompt: prompts/status.md\n  askPrompt: prompts/ask.md\nsteps:\n  - name: intake",
+            StringComparison.Ordinal)
+        .Replace("amend:\n", "  - name: pr\n    type: pull-request\n    dependsOn: [items]\n    title: 'done'\n    body: prompts/body.md\namend:\n", StringComparison.Ordinal);
+
+    /// <summary>
     /// V43, V44, V45 and V46 in a prompt, each said at the line it first stands on: a reason step's prompt reads the bar,
     /// a plan update where it is the step that plans one or a step of its scope, and a piece where it is a step of the
     /// work-item group; the advisor's prompt reads a question and the bar, the reporter's two the status - the person's
@@ -1329,12 +1340,7 @@ public sealed class WorkflowValidatorTests
     [Fact]
     public void APrompt_ReadsWhatOnlyAPromptReads_WhereItsAgentIsAskedIt()
     {
-        var definition = Amended
-            .Replace(
-                "steps:\n  - name: intake",
-                "advisor:\n  agent: advisor\n  prompt: prompts/recommend.md\n  tier: best\nreporter:\n  agent: reporter\n  statusPrompt: prompts/status.md\n  askPrompt: prompts/ask.md\nsteps:\n  - name: intake",
-                StringComparison.Ordinal)
-            .Replace("amend:\n", "  - name: pr\n    type: pull-request\n    dependsOn: [items]\n    title: 'done'\n    body: prompts/body.md\namend:\n", StringComparison.Ordinal);
+        var definition = AmendedAndAsked;
 
         var files = new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -1425,6 +1431,46 @@ public sealed class WorkflowValidatorTests
                     outputs: schemas/plan.json
                 """,
                 new Dictionary<string, string>(StringComparer.Ordinal) { ["prompts/plan.md"] = "Plan.\n", ["prompts/replan.md"] = "Again, for {update.cause}.\n" }));
+    }
+
+    /// <summary>
+    /// What only some prompts read is typed by what the engine gives under it: a question, the status, a plan update and
+    /// a piece each give the texts part 04 names and nothing else, and the bar is one text, as each run fact is - a run
+    /// fact being text a template reads and no value for an expression.
+    /// </summary>
+    [Fact]
+    public void WhatOnlySomePromptsRead_IsTypedByTheTextsTheEngineGives()
+    {
+        var definition = AmendedAndAsked.Replace(
+            "  - name: verify\n        type: orient\n        dependsOn: [implement]\n",
+            "  - name: verify\n        type: orient\n        dependsOn: [implement]\n        when: \"os == 'linux' && piece.kind == 'added'\"\n",
+            StringComparison.Ordinal);
+
+        var files = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["prompts/intake.md"] = "Bar: {recommendations}\n{recommendations.extra}\nIn {worktree}, {worktree.path}\n",
+            ["prompts/plan.md"] = "Update: {update.cause}, {update.since}, {update.work}\n{update.reason}\n{update}\n",
+            ["prompts/implement.md"] = "Piece: {piece.kind} {piece.changed} {piece.keep} {piece.undo} {piece.instead} {piece.cause} {piece.before}\n{piece.kinds}\n{piece.before.x}\n",
+            ["prompts/recommend.md"] = "On {question.step} {question.kind} {question.problem} {question.answers} {question.record}\n{question.answer}\n",
+            ["prompts/status.md"] = "Facts: {status.facts}, {status.records}\n{status.fact}\n",
+            ["prompts/ask.md"] = "Asked: {status.question}\n",
+        };
+
+        const string Update = "a plan update is update.cause, update.since, update.work, and nothing else";
+
+        Assert.Equal(
+            [
+                "step 'intake' prompt 'prompts/intake.md' line 2 reads 'recommendations.extra', and the bar for a recommendation says 'recommendations' is a text, which has no property 'extra'",
+                "step 'intake' prompt 'prompts/intake.md' line 3 reads 'worktree.path', and the run says 'worktree' is a text, which has no property 'path'",
+                $"step 'planning.plan' prompt 'prompts/plan.md' line 2 reads 'update.reason', and {Update}",
+                $"step 'planning.plan' prompt 'prompts/plan.md' line 3 reads 'update', and {Update}",
+                "step 'items.implement' prompt 'prompts/implement.md' line 2 reads 'piece.kinds', and a piece is piece.kind, piece.changed, piece.keep, piece.undo, piece.instead, piece.cause, piece.before, and nothing else",
+                "step 'items.implement' prompt 'prompts/implement.md' line 3 reads 'piece.before.x', and a piece says 'piece.before' is a text, which has no property 'x'",
+                "'items.verify.when' reads 'os', which is a run fact, text a template reads, not a value for an expression: an expression reads the run by run.<name>",
+                "advisor prompt 'prompts/recommend.md' line 2 reads 'question.answer', and a question is question.step, question.kind, question.problem, question.answers, question.record, and nothing else",
+                "reporter statusPrompt 'prompts/status.md' line 2 reads 'status.fact', and the status is status.facts, status.question, status.records, and nothing else",
+            ],
+            Problems(definition, files));
     }
 
     /// <summary>

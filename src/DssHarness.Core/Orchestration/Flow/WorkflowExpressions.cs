@@ -26,6 +26,12 @@ namespace DssHarness.Core.Orchestration.Flow;
 public static class WorkflowExpressions
 {
     /// <summary>
+    /// The run facts a template reads, each one text with nothing under it; none is a value for an expression, of whose
+    /// run's own names <c>run</c> is the one root.
+    /// </summary>
+    public static readonly IReadOnlyList<string> RunFacts = ["worktree", "work", "plans", "rows", "orchestrator", "agent", "step", "os"];
+
+    /// <summary>
     /// The words a read can start with that name no step: the run's own names - what it was given, where in its loops
     /// and handlers it is, what it knows of itself - the functions an expression calls, and the run facts a template
     /// reads. A step may be named none of them (<see cref="ReservedNames"/>), so that no read is ever between two answers.
@@ -34,7 +40,7 @@ public static class WorkflowExpressions
     [
         "input", "param", "run", "carried", "previous", "source", "issue", "item", "it", "index", "iteration", "visit",
         "recover", "skill", "recommendations", "update", "piece", "status", "question", "empty", "any",
-        "worktree", "work", "plans", "rows", "orchestrator", "agent", "step", "os",
+        .. RunFacts,
     ];
 
     /// <summary>
@@ -90,6 +96,32 @@ public static class WorkflowExpressions
 
     /// <summary>The texts after <c>carried</c>: the same three of what one commit carries, for its message and its variables alone.</summary>
     public static IReadOnlyList<string> CarriedTexts { get; } = ["ran", "notRun", "red"];
+
+    /// <summary>
+    /// The texts after <c>question</c>, in the advisor's prompt: the question it recommends on - the step that asks, its
+    /// kind, the problem as the engine states it, each answer with what it does, and what the run stored of the steps it
+    /// is about.
+    /// </summary>
+    public static IReadOnlyList<string> QuestionTexts { get; } = ["step", "kind", "problem", "answers", "record"];
+
+    /// <summary>
+    /// The texts after <c>status</c>, in the reporter's prompts: the engine's facts about the run, the person's question,
+    /// and where the run's records are.
+    /// </summary>
+    public static IReadOnlyList<string> StatusTexts { get; } = ["facts", "question", "records"];
+
+    /// <summary>
+    /// The texts after <c>update</c>, in the prompts of the step that plans a plan update and of the steps of its scope:
+    /// what raised it, what has run since, and the work of the run with what to call each piece by.
+    /// </summary>
+    public static IReadOnlyList<string> UpdateTexts { get; } = ["cause", "since", "work"];
+
+    /// <summary>
+    /// The texts after <c>piece</c>, in a step of the work-item group: the piece of a plan update its work item is carried
+    /// out for - its kind, what it changes, keeps, takes back and does instead - what raised the update, and the state
+    /// the work starts from.
+    /// </summary>
+    public static IReadOnlyList<string> PieceTexts { get; } = ["kind", "changed", "keep", "undo", "instead", "cause", "before"];
 
     /// <summary>The literals an identifier can be without naming anything.</summary>
     private static readonly IReadOnlyList<string> Literals = ["true", "false", "null"];

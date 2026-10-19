@@ -1298,6 +1298,11 @@ prompt and the advisor's, `{question.*}` in the advisor's alone, `{status.*}` in
 update and of the steps of its scope, and `{piece.*}` in a step of the work-item group; the
 advisor's and the reporter's prompts are read too, and read no step by name, and a pull request's
 `body`, which the engine fills and no agent reads, reads what a template key reads and no skill.
+A question gives only the texts the engine names (`step`, `kind`, `problem`, `answers`, `record`),
+and so do the status (`facts`, `question`, `records`), a plan update (`cause`, `since`, `work`) and
+a piece (`kind`, `changed`, `keep`, `undo`, `instead`, `cause`, `before`) - each list kept once, in
+`WorkflowExpressions` beside the run's own texts, and read by the typing; the bar is one text, and so
+is each run fact (`WorkflowExpressions.RunFacts`), which a template reads and an expression does not.
 A `pushCheckpoints` with no push step that is a checkpoint, two handlers one ending raises that
 both name a `then`, a fallback that is its agent's own model or is named twice, a gathered name
 given twice, named for an engine's fact or for a member, `times` or `then` beside a `pause`

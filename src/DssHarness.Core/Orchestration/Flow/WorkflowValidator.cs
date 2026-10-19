@@ -2604,10 +2604,10 @@ public static class WorkflowValidator
         /// What a path from <paramref name="root"/> through <paramref name="steps"/> yields, read from where
         /// <paramref name="entry"/> sits, its name already found by <see cref="CheckRead"/>: a step's output by its
         /// schema, the engine's facts of a step, an input or a param as a text, the work item of the nearest
-        /// <c>forEach</c>, the step a handler's <c>source</c> names, the iteration before, and the run's own names.
-        /// Where nothing holds the path, <paramref name="report"/> is told why and it may be anything; the names this
-        /// check does not type - a skill, the bar, a question's, an update's, a piece's, a status's, an issue, the run
-        /// facts a prompt reads, and a <c>source</c> in the recovery - may be anything.
+        /// <c>forEach</c>, the step a handler's <c>source</c> names, the iteration before, and the run's own names - the
+        /// texts of a question, the status, a plan update and a piece, the bar and the run facts among them. Where nothing
+        /// holds the path, <paramref name="report"/> is told why and it may be anything; the names this check does not
+        /// type - a skill, an issue, and a <c>source</c> in the recovery - may be anything.
         /// </summary>
         private JsonSchemaSubset.Reading Reading(
             Entry entry,
@@ -2641,6 +2641,21 @@ public static class WorkflowValidator
 
                 case "carried":
                     return CarriedReading(steps, template, said);
+
+                case "question" or "status" or "update" or "piece":
+                    return TextsReading(root, steps, said);
+
+                case "recommendations":
+                    return said.Walked(JsonSchemaSubset.Reading.Of("string"), root, steps, "the bar for a recommendation");
+
+                case var fact when WorkflowExpressions.RunFacts.Contains(fact, StringComparer.Ordinal):
+                    if (!template)
+                    {
+                        said.RefusedAs("which is a run fact, text a template reads, not a value for an expression: an expression reads the run by run.<name>");
+                        return JsonSchemaSubset.Reading.Anything;
+                    }
+
+                    return said.Walked(JsonSchemaSubset.Reading.Of("string"), root, steps, "the run");
 
                 case "previous":
                     {
@@ -2755,6 +2770,33 @@ public static class WorkflowValidator
 
             said.Refused($"the run has no '{name}': an expression reads {values}, and a template {texts} too");
             return JsonSchemaSubset.Reading.Anything;
+        }
+
+        /// <summary>
+        /// The roots whose texts the engine gives by name - a question, the status, a plan update and a piece - each with
+        /// what a refusal calls it and the texts it gives (<see cref="WorkflowExpressions"/> owns each list).
+        /// </summary>
+        private static readonly IReadOnlyDictionary<string, (string Owner, IReadOnlyList<string> Texts)> TextsUnder =
+            new Dictionary<string, (string Owner, IReadOnlyList<string> Texts)>(StringComparer.Ordinal)
+            {
+                ["question"] = ("a question", WorkflowExpressions.QuestionTexts),
+                ["status"] = ("the status", WorkflowExpressions.StatusTexts),
+                ["update"] = ("a plan update", WorkflowExpressions.UpdateTexts),
+                ["piece"] = ("a piece", WorkflowExpressions.PieceTexts),
+            };
+
+        /// <summary>What a read of a question, the status, a plan update or a piece yields: one of the texts it gives, and nothing else.</summary>
+        private static JsonSchemaSubset.Reading TextsReading(string root, IReadOnlyList<FlowExpression.Segment> steps, Subject said)
+        {
+            var (owner, texts) = TextsUnder[root];
+
+            if (steps is not [{ Key: { } name }, ..] || !texts.Contains(name, StringComparer.Ordinal))
+            {
+                said.Refused($"{owner} is {string.Join(", ", texts.Select(text => $"{root}.{text}"))}, and nothing else");
+                return JsonSchemaSubset.Reading.Anything;
+            }
+
+            return said.Walked(JsonSchemaSubset.Reading.Of("string"), $"{root}.{name}", steps.Skip(1), owner);
         }
 
         /// <summary>What a read of what a commit carries yields: a text for the commit's message and its variables, and nothing else.</summary>
