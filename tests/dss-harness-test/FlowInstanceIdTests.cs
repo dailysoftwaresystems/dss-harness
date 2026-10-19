@@ -73,18 +73,45 @@ public sealed class FlowInstanceIdTests
         => Assert.Equal(problem, FlowInstanceId.Problem(id));
 
     /// <summary>
-    /// A segment carries one mark at most, whichever order two would be written in: no spelling is given to a
-    /// repeat's iteration within a later visit, and none is guessed at.
+    /// A visit holds its iterations or items, so a segment's visit is written first, outer to inner: a repeat run
+    /// again (<c>rounds+2#1</c>) and a forEach expanded anew (<c>items+2[0]</c>, <c>items+2@0</c> on disk) are well
+    /// formed, and say their directory and back again.
     /// </summary>
     [Theory]
-    [InlineData("fix#2+2")]
-    [InlineData("fix+2#1")]
-    [InlineData("items[1]+2")]
-    public void ASegmentWithTwoMarks_IsRefused(string id)
-        => Assert.Equal($"'{id}': a segment of an id is a step's name, with at most one mark after it", FlowInstanceId.Problem(id));
+    [InlineData("rounds+2#1", "rounds+2#1")]
+    [InlineData("items+2[0]", "items+2@0")]
+    [InlineData("rounds+3#2.items+2[1].fix+2#1.review.correctness", "rounds+3#2.items+2@1.fix+2#1.review.correctness")]
+    public void AVisitHoldingAnIterationOrAnItem_IsWrittenFirst_AndSaysItsDirectory(string id, string directory)
+    {
+        Assert.Null(FlowInstanceId.Problem(id));
+        Assert.Equal(directory, FlowInstanceId.DirectoryOf(id));
+        Assert.Equal(id, FlowInstanceId.IdOf(directory));
+    }
+
+    /// <summary>The other order is refused, naming the right one, so no instance is ever named two ways.</summary>
+    [Theory]
+    [InlineData("rounds#1+2", "'rounds#1+2': a visit is written before the iteration or item it holds: 'rounds+2#1'")]
+    [InlineData("items[0]+2", "'items[0]+2': a visit is written before the iteration or item it holds: 'items+2[0]'")]
+    public void AVisitWrittenAfterWhatItHolds_IsRefused_NamingTheRightOrder(string id, string problem)
+        => Assert.Equal(problem, FlowInstanceId.Problem(id));
+
+    /// <summary>A mark written twice, or an iteration beside an item, names no instance, and is refused.</summary>
+    [Theory]
+    [InlineData("fix+2+3")]
+    [InlineData("rounds#1#2")]
+    [InlineData("items[0][1]")]
+    [InlineData("fix#1[0]")]
+    [InlineData("fix+2#1+3")]
+    [InlineData("items[1]x")]
+    public void AMarkWrittenTwice_IsRefused(string id)
+        => Assert.Equal(
+            $"'{id}': a segment of an id is a step's name, then at most a visit (+n) and an iteration (#n) or an item ([n]), in that order",
+            FlowInstanceId.Problem(id));
 
     /// <summary>A segment's name is spelt as a step's is, to its end: one that ends in a line's end is no step's name.</summary>
     [Fact]
     public void ASegmentEndingInANewLine_IsNoStepsName()
-        => Assert.Equal("'verify\n': a segment of an id is a step's name, with at most one mark after it", FlowInstanceId.Problem("verify\n"));
+        => Assert.Equal(
+            "'verify\n': a segment of an id is a step's name, then at most a visit (+n) and an iteration (#n) or an item ([n]), in that order",
+            FlowInstanceId.Problem("verify\n"));
 }

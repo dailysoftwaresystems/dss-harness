@@ -15,10 +15,16 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// directory names.
 /// </para>
 /// <para>
+/// A segment carries at most two marks, in one order: its visit first, then the iteration or the item that visit
+/// holds, outer to inner - a <c>repeat</c> run again is <c>rounds+2#1</c>, a <c>forEach</c> expanded anew
+/// <c>items+2[0]</c> (<c>items+2@0</c> on disk). The other order (<c>rounds#1+2</c>) is refused naming the right one,
+/// and a mark written twice (<c>+2+3</c>, <c>#1#2</c>), or an iteration beside an item, is refused.
+/// </para>
+/// <para>
 /// Pure text rules, nothing more: the scheduler that counts the iterations, items and visits is its own, and this
-/// class only owns how one of its instances is said. A segment carries one mark at most; its name is spelt as a
-/// step's is (<see cref="FlowScope.IsWellFormedName"/>) and its count as an index is
-/// (<see cref="WorkflowExpressions.WholeNumber"/>), each rule written once.
+/// class only owns how one of its instances is said. A segment's name is spelt as a step's is
+/// (<see cref="FlowScope.IsWellFormedName"/>) and each count as an index is (<see cref="WorkflowExpressions.WholeNumber"/>),
+/// each rule written once.
 /// </para>
 /// </remarks>
 public static class FlowInstanceId
@@ -29,7 +35,8 @@ public static class FlowInstanceId
 
     /// <summary>
     /// Why <paramref name="id"/> is not an instance id, or <see langword="null"/> where it is: a segment is not a
-    /// step's name, or an iteration, item or visit is written where nothing takes it or counted from nowhere.
+    /// step's name, an iteration, item or visit is written where nothing takes it or counted from nowhere, or a
+    /// segment's marks are written twice or with the visit after what it holds.
     /// </summary>
     /// <param name="id">An id, as written in a run's records.</param>
     public static string? Problem(string id)
@@ -46,58 +53,67 @@ public static class FlowInstanceId
 
         foreach (var segment in id.Split('.'))
         {
-            // One mark at most: an iteration, an item or a visit. A segment that would need two - a repeat's
-            // iteration within a visit after its first - is given no spelling here, and is refused, whichever
-            // order its marks are written in, rather than read one way or the other.
-            var shape = $"'{segment}': a segment of an id is a step's name, with at most one mark after it";
-            var name = segment;
-            char mark = '\0';
-            var written = string.Empty;
-
-            var hash = segment.IndexOf('#');
-
-            if (hash > 0)
+            if (SegmentProblem(segment) is { } problem)
             {
-                (name, mark, written) = (segment[..hash], '#', segment[(hash + 1)..]);
-
-                // A mark after the count is a second one; a sign before it is a count written another way.
-                if (written.IndexOfAny(['#', '[', '+']) > 0)
-                {
-                    return shape;
-                }
+                return problem;
             }
-            else if (segment.Contains('[') || segment.EndsWith(']'))
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Why one segment is not a step's name with the marks it may carry - a visit, then an iteration or an item - or
+    /// <see langword="null"/> where it is.
+    /// </summary>
+    private static string? SegmentProblem(string segment)
+    {
+        var shape = $"'{segment}': a segment of an id is a step's name, then at most a visit (+n) and an iteration (#n) or an item ([n]), in that order";
+        var first = segment.IndexOfAny(Marks);
+        var name = first < 0 ? segment : segment[..first];
+
+        if (!FlowScope.IsWellFormedName(name))
+        {
+            return shape;
+        }
+
+        var marks = new List<(char Mark, string Written)>();
+
+        for (var at = first; at >= 0 && at < segment.Length;)
+        {
+            var mark = segment[at];
+
+            if (mark == '[')
             {
-                var open = segment.IndexOf('[');
-                var close = open < 0 ? -1 : segment.IndexOf(']', open);
+                var close = segment.IndexOf(']', at + 1);
 
-                if (close >= 0 && close < segment.Length - 1)
-                {
-                    return shape;
-                }
-
-                if (open <= 0 || !segment.EndsWith(']'))
+                if (close < 0)
                 {
                     return $"'{segment}': an item is written [n], an index from 0";
                 }
 
-                (name, mark, written) = (segment[..open], '[', segment[(open + 1)..^1]);
+                marks.Add(('[', segment[(at + 1)..close]));
+                at = close + 1;
             }
-            else if (segment.IndexOf('+') is var plus && plus > 0)
+            else if (mark is '#' or '+')
             {
-                (name, mark, written) = (segment[..plus], '+', segment[(plus + 1)..]);
-            }
+                // The count runs to the next mark; the character after this one is always the count's, so a sign
+                // written there is a count written another way, never a second mark.
+                var next = at + 2 > segment.Length ? -1 : segment.IndexOfAny(Marks, at + 2);
+                var end = next < 0 ? segment.Length : next;
 
-            if (!FlowScope.IsWellFormedName(name))
+                marks.Add((mark, segment[(at + 1)..end]));
+                at = end;
+            }
+            else
             {
+                // Anything after an item's closing bracket that starts no mark.
                 return shape;
             }
+        }
 
-            if (mark == '\0')
-            {
-                continue;
-            }
-
+        foreach (var (mark, written) in marks)
+        {
             if (WorkflowExpressions.WholeNumber(written) is not { } count)
             {
                 return mark switch
@@ -119,12 +135,24 @@ public static class FlowInstanceId
             }
         }
 
-        return null;
+        return marks switch
+        {
+            [] or [_] or [('+', _), (not '+', _)] => null,
+
+            // A visit holds its iterations or items, so it is written first: the other order is refused, naming the right one.
+            [(not '+' and var inner, var held), ('+', var visit)] =>
+                $"'{segment}': a visit is written before the iteration or item it holds: '{name}+{visit}{(inner == '#' ? $"#{held}" : $"[{held}]")}'",
+            _ => shape,
+        };
     }
+
+    /// <summary>The characters that begin a mark: a visit's, an iteration's and an item's.</summary>
+    private static readonly char[] Marks = ['+', '#', '['];
 
     /// <summary>
     /// The id as it names a directory of the run's store: the same text, with each item's brackets written
-    /// <c>@</c>. The id is not checked here; <see cref="Problem"/> owns that refusal.
+    /// <c>@</c> - an item is a segment's last mark, so <c>items+2[0]</c> is <c>items+2@0</c>. The id is not checked
+    /// here; <see cref="Problem"/> owns that refusal.
     /// </summary>
     /// <param name="id">An id, as written in a run's records.</param>
     public static string DirectoryOf(string id)
