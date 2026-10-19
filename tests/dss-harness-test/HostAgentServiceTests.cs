@@ -1194,6 +1194,7 @@ public sealed class HostAgentServiceTests
     [InlineData(HostExecService.CommandName)]
     [InlineData(HostAgentProtocol.CommandName)]
     [InlineData(HoldAwakeService.CommandName)]
+    [InlineData(ContainExec.CommandName)]
     public async Task Run_RefusesToPassTheWorkOnToAnotherHost(string command)
     {
         using var temp = new TempDirectory();

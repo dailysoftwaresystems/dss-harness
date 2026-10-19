@@ -284,8 +284,9 @@ public sealed class CommandSession : IAsyncDisposable
         if (options.ApartFromTerminal)
         {
             throw new NotSupportedException(
-                $"{nameof(SessionOptions.ApartFromTerminal)} is honoured once a process can be started apart from the terminal "
-                + $"({nameof(Processes.ProcessRequest)}), which this build cannot do yet: what an operation starts is in reach of an interrupt.");
+                $"{nameof(SessionOptions.ApartFromTerminal)} is honoured once a session hands it to the processes its operation starts "
+                + $"({nameof(Processes.ProcessRequest)}.{nameof(Processes.ProcessRequest.ApartFromTerminal)}), which this build does not do yet: "
+                + "what an operation starts is in reach of an interrupt.");
         }
 
         if (frontEnd?.Output is not null || frontEnd?.Prompt is not null)

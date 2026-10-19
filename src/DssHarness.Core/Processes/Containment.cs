@@ -1,57 +1,149 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Platform;
 using Microsoft.Win32.SafeHandles;
 
 namespace DssHarness.Core.Processes;
 
 /// <summary>
 /// The calls containment is made of, below the platform seam: the C library's session, group,
-/// signal and exec calls on Linux and macOS, and the job objects and process creation of Windows.
-/// Each side is called only where that system runs.
+/// signal and exec calls on Linux and macOS, and the job objects, process creation and console
+/// signals of Windows.
+/// Each side is called only where that system runs, and the choice between them is made here and
+/// nowhere above.
 /// </summary>
 internal static class Containment
 {
-    /// <summary>
-    /// Makes this process the leader of a new session and process group of its own, on Linux and
-    /// macOS: no terminal reaches into a session of one's own, and the group is what a whole end
-    /// is signalled through.
-    /// </summary>
-    /// <returns>Whether the session was made; <see langword="false"/> where the process already leads a group.</returns>
-    public static bool StartSession()
-        => Posix.Calls().StartSession() != -1;
+    /// <summary>How often a wait for an ending looks again.</summary>
+    private static readonly TimeSpan GraceSlice = TimeSpan.FromMilliseconds(20);
 
     /// <summary>
-    /// Puts this process in a process group of its own, on Linux and macOS, within the session it
-    /// is in: an interruption typed at the terminal goes to a group, and this one is not that group.
+    /// Why the step cannot give the containment asked for on this system, or <see langword="null"/>
+    /// where it can: full containment on Windows is the job object the engine made and names, and
+    /// a job object is Windows' alone.
     /// </summary>
-    /// <returns>Whether the group was made.</returns>
-    public static bool JoinOwnGroup()
-        => Posix.Calls().JoinGroup() == 0;
-
-    /// <summary>
-    /// Signals a whole process group, as a contained child is ended: asked to end first, and every
-    /// member still standing once <paramref name="grace"/> is spent is killed.
-    /// </summary>
-    /// <param name="groupId">The group, by the process id of its leader.</param>
-    /// <param name="grace">How long the asking signal is given to be obeyed.</param>
-    public static void EndGroup(int groupId, TimeSpan grace)
+    /// <param name="job">The job named, if one was.</param>
+    /// <param name="group">Whether the group alone was asked for.</param>
+    public static string? Refusal(string? job, bool group)
     {
-        Posix.Calls().SignalGroup(groupId, Posix.AskToEnd);
-        StillStanding(groupId, grace);
-        Posix.Calls().SignalGroup(groupId, Posix.Kill);
+        if (OperatingSystem.IsWindows())
+        {
+            return job is null && !group
+                ? $"contain-exec was asked for full containment with no '{ContainExec.JobOption}': on Windows that is a job object, named by the process runner that made it."
+                : null;
+        }
+
+        return job is not null
+            ? $"contain-exec was asked for the job object '{job}', which only Windows has: on Linux and macOS full containment is a session of its own, asked for with no option."
+            : null;
     }
 
-    /// <summary>Replaces this process with <paramref name="program"/>, on Linux and macOS, under the same process id.</summary>
+    /// <summary>
+    /// Places this process where it is asked to be contained, then becomes the program there (Linux
+    /// and macOS) or starts it there and waits for it (Windows), saying on <paramref name="status"/>
+    /// how far it got.
+    /// </summary>
+    /// <param name="job">The Windows job object to join, for full containment there.</param>
+    /// <param name="group">Whether the group alone is asked for, apart from the terminal within the session.</param>
     /// <param name="program">The program, by its resolved path.</param>
-    /// <param name="arguments">Its arguments, the first named to it as itself.</param>
+    /// <param name="arguments">The program's arguments.</param>
+    /// <param name="status">The channel the process runner reads the start from.</param>
+    /// <param name="error">Where a failure of the step after the program started is said.</param>
+    /// <returns>
+    /// The program's own exit code on Windows; on Linux and macOS no return where the program was
+    /// become. <see cref="ContainExec.Failed"/> where the step failed, the failure said on the channel.
+    /// </returns>
+    public static int Place(string? job, bool group, string program, IReadOnlyList<string> arguments, ContainExec.StartStatus status, TextWriter error)
+        => OperatingSystem.IsWindows()
+            ? PlaceOnWindows(job, program, arguments, status, error)
+            : PlaceOnPosix(group, program, arguments, status);
+
+    /// <summary>
+    /// Ends a contained child's whole session on Linux and macOS: every process in it, and while the
+    /// child stands every one in its tree, is asked to end - the group as one, each member outside
+    /// the group on its own - and every one still standing once they have all gone or
+    /// <paramref name="grace"/> is spent is killed.
+    /// </summary>
+    /// <param name="leader">The child, which leads the session and the group by its own process id.</param>
+    /// <param name="read">Reads the machine's process table.</param>
+    /// <param name="grace">How long the asking signal is given to be obeyed.</param>
     /// <remarks>
-    /// The containment made above holds, and nothing of this process is left to keep, hand over or
-    /// end. Of a success there is no return; the number that comes back is the failure the C
-    /// library reports, for the caller to say.
+    /// <para>
+    /// The members are read before anything is signalled. A member that ends first takes nothing
+    /// with it from the session, whose id every process it started keeps when it is handed to
+    /// another parent - but it takes its children out of its tree, and a stop that walked the tree
+    /// after asking found nothing left to walk: a test under <c>timeout</c>, which moves itself to a
+    /// group of its own, outlived the stop and held the output the run was waiting to read to its
+    /// end. The tree is read beside the session for what left the session while still the child's.
+    /// </para>
+    /// <para>
+    /// What is killed at the end is read again, so what was started while the members were being
+    /// asked goes too; a process the first reading found is killed only where the second finds it
+    /// under the same id and start, so an id given to another process meanwhile is left alone. A
+    /// session with nothing in it is not read again, nor signalled. A process that left
+    /// both the session and the tree - a daemon that made a session of its own and whose parent
+    /// has gone - is reached by nothing here.
+    /// </para>
     /// </remarks>
-    /// <returns>The failure number, where the program could not be become.</returns>
-    public static int Become(string program, IReadOnlyList<string> arguments)
-        => Posix.Calls().Become(program, [program, .. arguments]);
+    public static async Task EndSessionAsync(int leader, Func<CancellationToken, Task<ProcessTableReading>> read, TimeSpan grace)
+    {
+        ArgumentNullException.ThrowIfNull(read);
+
+        var calls = Posix.Calls();
+        var members = Members(await read(CancellationToken.None).ConfigureAwait(false), leader);
+
+        if (members.Count == 0 && calls.SignalGroup(leader, 0) == -1)
+        {
+            return;
+        }
+
+        calls.SignalGroup(leader, Posix.AskToEnd);
+
+        foreach (var member in members.Where(member => calls.GroupOf(member.Id) != leader))
+        {
+            calls.Signal(member.Id, Posix.AskToEnd);
+        }
+
+        // The signal with no number asks nothing and reports everything: a group or a process it
+        // cannot signal is one that has ended.
+        for (var waited = TimeSpan.Zero;
+             waited < grace && !(calls.SignalGroup(leader, 0) == -1 && members.All(member => calls.Signal(member.Id, 0) == -1));
+             waited += GraceSlice)
+        {
+            await Task.Delay(GraceSlice).ConfigureAwait(false);
+        }
+
+        calls.SignalGroup(leader, Posix.Kill);
+
+        // Known by id and start alone: a process handed to another parent, or one that became
+        // another program, is still the one the first reading found.
+        var again = await read(CancellationToken.None).ConfigureAwait(false);
+        var known = members.Select(member => (member.Id, member.StartedUtc)).ToHashSet();
+
+        foreach (var member in again.Processes.Where(process => known.Contains((process.Id, process.StartedUtc)) || calls.SessionOf(process.Id) == leader))
+        {
+            calls.Signal(member.Id, Posix.Kill);
+        }
+    }
+
+    /// <summary>
+    /// Every process of <paramref name="reading"/> in the session <paramref name="leader"/> leads, and
+    /// while the leader stands every one in its tree: the leader itself among them.
+    /// </summary>
+    /// <remarks>
+    /// The tree is read only while its root is still the session's leader. One that has ended is no
+    /// one's parent - what it started was handed on - and its id may already be another process's,
+    /// whose tree this run never started.
+    /// </remarks>
+    private static List<SampledProcess> Members(ProcessTableReading reading, int leader)
+    {
+        var calls = Posix.Calls();
+        var byId = reading.Processes.GroupBy(process => process.Id).ToDictionary(same => same.Key, same => same.First());
+        var stands = calls.SessionOf(leader) == leader;
+
+        return [.. byId.Values.Where(process => calls.SessionOf(process.Id) == leader || (stands && ProcessSampler.InHarnessTree(process, byId, leader)))];
+    }
 
     /// <summary>
     /// The job object a contained run is held in on Windows, named so the process the engine starts
@@ -59,6 +151,7 @@ internal static class Containment
     /// </summary>
     /// <param name="name">The job's name, unique to this run of this tool.</param>
     /// <returns>The job's one lasting handle, held by whoever made the job.</returns>
+    /// <exception cref="Win32Exception">The job could not be made or given its limit.</exception>
     public static SafeWaitHandle CreateJob(string name)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
@@ -70,9 +163,9 @@ internal static class Containment
             throw new Win32Exception(Marshal.GetLastPInvokeError());
         }
 
-        // Every member ends when the last handle closes, so what a killed engine leaves behind
-        // ends with it however it left it: the handle this returns is disposed by the run that
-        // made it, and by the engine's own end.
+        // Every member ends when the last handle closes, so what a killed engine leaves behind on
+        // Windows ends with it however it left it: the handle this returns is disposed by the run
+        // that made it, and by the engine's own end.
         var extended = new Windows.JobObjectExtendedLimitInformation
         {
             Basic = new() { LimitFlags = Windows.KillOnJobClose },
@@ -88,16 +181,96 @@ internal static class Containment
         return job;
     }
 
+    /// <summary>Ends every process in <paramref name="job"/> at once, on Windows: the container's own stop.</summary>
+    /// <param name="job">The job, held by whoever made it.</param>
+    public static void Terminate(SafeWaitHandle job)
+        => _ = Windows.TerminateJobObject(job, exitCode: unchecked((uint)-1));
+
+    /// <summary>
+    /// The Linux and macOS half of the step: a session and group of its own, or the group alone,
+    /// then the program become under the same process id - tried again while the file is busy, as
+    /// any start is - and the failure said where it could not be.
+    /// </summary>
+    private static int PlaceOnPosix(bool group, string program, IReadOnlyList<string> arguments, ContainExec.StartStatus status)
+    {
+        var calls = Posix.Calls();
+
+        if (group ? calls.JoinGroup() != 0 : calls.StartSession() == -1)
+        {
+            status.Failed(group ? ContainExec.Stage.Group : ContainExec.Stage.Session, Marshal.GetLastPInvokeError());
+            return ContainExec.Failed;
+        }
+
+        // Said before the program is become, which closes the channel: a channel closed after this
+        // line and nothing more is a program that is running.
+        status.Placed();
+
+        try
+        {
+            ProcessRunner.StartWhileBusy(() => throw new Win32Exception(calls.Become(program, [program, .. arguments])));
+        }
+        catch (Win32Exception ex)
+        {
+            status.Failed(ContainExec.Stage.Start, ex.NativeErrorCode);
+        }
+
+        return ContainExec.Failed;
+    }
+
+    /// <summary>
+    /// The Windows half of the step: the job joined where one is named, the program started in a
+    /// process group of its own, the start said, and the program waited for with no console signal
+    /// ending the step before it.
+    /// </summary>
+    private static int PlaceOnWindows(string? job, string program, IReadOnlyList<string> arguments, ContainExec.StartStatus status, TextWriter error)
+    {
+        if (job is { } named && !JoinJob(named, out var why))
+        {
+            status.Failed(ContainExec.Stage.Job, why);
+            return ContainExec.Failed;
+        }
+
+        SafeWaitHandle started;
+
+        try
+        {
+            started = StartInOwnGroup(program, arguments);
+        }
+        catch (Win32Exception ex)
+        {
+            status.Failed(ContainExec.Stage.Start, ex.NativeErrorCode);
+            return ContainExec.Failed;
+        }
+
+        using (started)
+        {
+            status.Placed();
+            status.Dispose();
+
+            // The step stands in for the program and ends when it does: an interruption sent to its
+            // console reaches the program by the program's own group, where it reaches it at all.
+            Windows.IgnoreInterruptions();
+
+            try
+            {
+                return Wait(started);
+            }
+            catch (Win32Exception ex)
+            {
+                error.WriteLine($"contain-exec could not learn how '{program}', which it started, ended: {ex.Message}");
+                return ContainExec.Failed;
+            }
+        }
+    }
+
     /// <summary>
     /// Whether this process joined the job <paramref name="name"/> names, on Windows, so that
     /// everything it starts is born in it.
     /// </summary>
     /// <param name="name">The job's name, as the engine that made it gave it.</param>
-    /// <param name="why">Why it could not be joined, where it was not; said by the caller.</param>
-    public static bool JoinJob(string name, out int why)
+    /// <param name="why">Why it could not be joined, where it was not.</param>
+    private static bool JoinJob(string name, out int why)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(name);
-
         var job = Windows.OpenJobObjectW(Windows.JobAllAccess, inheritHandle: false, name);
 
         if (job.IsInvalid)
@@ -123,22 +296,12 @@ internal static class Containment
         }
     }
 
-    /// <summary>Ends every process in <paramref name="job"/> at once, on Windows: the container's own stop.</summary>
-    /// <param name="job">The job, held by whoever made it.</param>
-    public static void Terminate(SafeWaitHandle job)
-        => _ = Windows.TerminateJobObject(job, exitCode: unchecked((uint)-1));
-
     /// <summary>
     /// Starts <paramref name="program"/> on Windows in a process group of its own, inheriting this
     /// process's standard streams, and hands its handle back to wait on.
     /// </summary>
-    /// <param name="program">The program, by its resolved path.</param>
-    /// <param name="arguments">Its arguments.</param>
-    /// <returns>The started process, not waited for here.</returns>
-    public static SafeWaitHandle StartInOwnGroup(string program, IReadOnlyList<string> arguments)
+    private static SafeWaitHandle StartInOwnGroup(string program, IReadOnlyList<string> arguments)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(program);
-
         // The streams this process was given are what the program reads and writes: they are the
         // process runner's own pipes, handed through, so the one owner of reading a child's output
         // keeps reading the child it read before.
@@ -176,38 +339,18 @@ internal static class Containment
     }
 
     /// <summary>Waits for <paramref name="process"/> to end and says how it ended.</summary>
-    /// <param name="process">The process, as <see cref="StartInOwnGroup"/> started it.</param>
     /// <returns>The process's own exit code.</returns>
-    public static int Wait(SafeWaitHandle process)
+    /// <exception cref="Win32Exception">The wait, or the reading of the exit code, failed: the step's own failure, never the program's code.</exception>
+    private static int Wait(SafeWaitHandle process)
     {
-        if (Windows.WaitForSingleObject(process, Windows.WaitForever) == Windows.WaitFailed)
+        if (Windows.WaitForSingleObject(process, Windows.WaitForever) == Windows.WaitFailed
+            || !Windows.GetExitCodeProcess(process, out var code))
         {
             throw new Win32Exception(Marshal.GetLastPInvokeError());
         }
 
-        return Windows.GetExitCodeProcess(process, out var code) ? unchecked((int)code) : -1;
+        return unchecked((int)code);
     }
-
-    /// <summary>Whether a signal has been obeyed by every member of <paramref name="groupId"/> once <paramref name="grace"/> is spent.</summary>
-    /// <param name="groupId">The group, by the process id of its leader.</param>
-    /// <param name="grace">How long to keep asking.</param>
-    private static void StillStanding(int groupId, TimeSpan grace)
-    {
-        // The signal with no number asks nothing and reports everything: a group it cannot signal
-        // is a group with nothing left in it.
-        for (var waited = TimeSpan.Zero; waited < grace; waited += GraceSlice)
-        {
-            if (Posix.Calls().SignalGroup(groupId, 0) == -1)
-            {
-                return;
-            }
-
-            Thread.Sleep(GraceSlice);
-        }
-    }
-
-    /// <summary>How often a wait for an ending looks again.</summary>
-    private static readonly TimeSpan GraceSlice = TimeSpan.FromMilliseconds(20);
 
     /// <summary>How the C library is reached, bound once: the session, group, signal and exec calls.</summary>
     private sealed class Posix
@@ -227,6 +370,8 @@ internal static class Containment
         private readonly JoinGroupFunction _joinGroup;
         private readonly SignalFunction _signal;
         private readonly BecomeFunction _become;
+        private readonly IdOfFunction _sessionOf;
+        private readonly IdOfFunction _groupOf;
 
         private Posix(IntPtr library)
         {
@@ -234,6 +379,8 @@ internal static class Containment
             _joinGroup = Bound<JoinGroupFunction>(library, "setpgid");
             _signal = Bound<SignalFunction>(library, "kill");
             _become = Bound<BecomeFunction>(library, "execvp");
+            _sessionOf = Bound<IdOfFunction>(library, "getsid");
+            _groupOf = Bound<IdOfFunction>(library, "getpgid");
         }
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl, SetLastError = true)]
@@ -248,7 +395,10 @@ internal static class Containment
         [UnmanagedFunctionPointer(CallingConvention.Cdecl, SetLastError = true)]
         private delegate int BecomeFunction([MarshalAs(UnmanagedType.LPUTF8Str)] string program, IntPtr arguments);
 
-        /// <summary>The calls, bound; on any Linux or macOS there is a C library holding all four.</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl, SetLastError = true)]
+        private delegate int IdOfFunction(int process);
+
+        /// <summary>The calls, bound; on any Linux or macOS there is a C library holding all six.</summary>
         public static Posix Calls()
         {
             if (_bound is { } bound)
@@ -278,37 +428,58 @@ internal static class Containment
         /// <summary>The group of its own; 0 where it was made.</summary>
         public int JoinGroup() => _joinGroup(0, 0);
 
-        /// <summary>Signals a whole group (by negating its leader's id), as the C library's <c>kill</c> does.</summary>
+        /// <summary>Signals a whole group (by negating its leader's id), as the C library's <c>kill</c> does; -1 where nothing could be signalled.</summary>
         public int SignalGroup(int groupId, int signal) => _signal(-groupId, signal);
 
+        /// <summary>Signals one process; -1 where it could not be signalled.</summary>
+        public int Signal(int process, int signal) => _signal(process, signal);
+
+        /// <summary>The session <paramref name="process"/> is in, by its leader's id; -1 where it cannot be told.</summary>
+        public int SessionOf(int process) => _sessionOf(process);
+
+        /// <summary>The group <paramref name="process"/> is in, by its leader's id; -1 where it cannot be told.</summary>
+        public int GroupOf(int process) => _groupOf(process);
+
         /// <summary>
-        /// Becomes the program - by its path where one is given, and by the PATH the child is given
-        /// where only a name is; of a success there is no return, so this is the failure number.
+        /// Becomes the program by its path, its own name first among <paramref name="arguments"/>;
+        /// of a success there is no return, so this is the failure number the C library reports.
         /// </summary>
         public int Become(string program, IReadOnlyList<string> arguments)
         {
-            // The program's own name first, and nothing after the last: the array the C library
-            // reads is ended by a null pointer. Never freed, and never read again by this code: of
-            // a success this process is the program, and of a failure this process is ending.
+            // The array the C library reads is ended by a null pointer. Read by nothing once the
+            // program is become, and freed where it could not be, before it is tried again.
             var spelled = new IntPtr[arguments.Count + 1];
-
-            for (var index = 0; index < arguments.Count; index++)
-            {
-                spelled[index] = Marshal.StringToHGlobalAnsi(arguments[index]);
-            }
-
             var plain = Marshal.AllocHGlobal(spelled.Length * IntPtr.Size);
 
-            for (var index = 0; index < spelled.Length; index++)
+            try
             {
-                Marshal.WriteIntPtr(plain, index * IntPtr.Size, spelled[index]);
-            }
+                for (var index = 0; index < arguments.Count; index++)
+                {
+                    spelled[index] = Marshal.StringToCoTaskMemUTF8(arguments[index]);
+                }
 
-            return _become(program, plain);
+                for (var index = 0; index < spelled.Length; index++)
+                {
+                    Marshal.WriteIntPtr(plain, index * IntPtr.Size, spelled[index]);
+                }
+
+                _ = _become(program, plain);
+
+                return Marshal.GetLastPInvokeError();
+            }
+            finally
+            {
+                foreach (var argument in spelled.Where(argument => argument != IntPtr.Zero))
+                {
+                    Marshal.FreeCoTaskMem(argument);
+                }
+
+                Marshal.FreeHGlobal(plain);
+            }
         }
     }
 
-    /// <summary>The Windows side: job objects, and one process started in a group of its own.</summary>
+    /// <summary>The Windows side: job objects, one process started in a group of its own, and the console's signals.</summary>
     private static class Windows
     {
         /// <summary>The limit flag that ends a job's members when its last handle closes.</summary>
@@ -341,8 +512,30 @@ internal static class Containment
         /// <summary>The wait that failed.</summary>
         public const uint WaitFailed = unchecked((uint)-1);
 
+        /// <summary>The console's interruption, Ctrl+C.</summary>
+        private const uint Interrupt = 0;
+
+        /// <summary>The console's break, Ctrl+Break.</summary>
+        private const uint Break = 1;
+
+        /// <summary>
+        /// The handler that takes the console's interruption and break as dealt with, held for the
+        /// life of the process so the collector never frees what the console calls.
+        /// </summary>
+        private static readonly ConsoleSignalHandler Ignored = signal => signal is Interrupt or Break;
+
+        /// <summary>A console signal's handler: whether it dealt with the signal, so none after it is asked.</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Winapi)]
+        private delegate bool ConsoleSignalHandler(uint signal);
+
         /// <summary>The handle this process was given for <paramref name="standard"/>.</summary>
         public static IntPtr Standard(int standard) => GetStdHandle(standard);
+
+        /// <summary>
+        /// Takes every interruption and break sent to this process's console as dealt with: handlers
+        /// are asked from the last added, so the ones the command line added before are never asked.
+        /// </summary>
+        public static void IgnoreInterruptions() => _ = SetConsoleCtrlHandler(Ignored, add: true);
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, ExactSpelling = true)]
         [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
@@ -387,6 +580,11 @@ internal static class Containment
         [DllImport("kernel32.dll", SetLastError = true, ExactSpelling = true)]
         [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
         internal static extern IntPtr GetStdHandle(int standard);
+
+        [DllImport("kernel32.dll", SetLastError = true, ExactSpelling = true)]
+        [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool SetConsoleCtrlHandler(ConsoleSignalHandler handler, [MarshalAs(UnmanagedType.Bool)] bool add);
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, ExactSpelling = true)]
         [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]

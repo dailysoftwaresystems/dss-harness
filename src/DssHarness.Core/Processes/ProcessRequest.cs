@@ -107,18 +107,23 @@ public sealed record ProcessRequest
     public TimeSpan? Timeout { get; init; }
 
     /// <summary>
-    /// Whether the child is contained: what it starts is ended with it, and a signal to this process
-    /// does not reach it. Held through a container it is in before it runs a line of its own - a
-    /// session and group of its own on Linux and macOS, the job object this runner makes and keeps on
-    /// Windows - by way of the <c>contain-exec</c> step this tool starts for it.
+    /// Whether the child is contained: what it starts is ended with it, at its own end as at a stop,
+    /// and a signal to this process does not reach it. Held through a container it is in before it
+    /// runs a line of its own - a session and group of its own on Linux and macOS, the job object
+    /// this runner makes and keeps on Windows - by way of the <c>contain-exec</c> step this tool
+    /// starts for it. On Windows everything born in the job ends; on Linux and macOS everything still
+    /// in the child's session, and at a stop in its tree, is asked to end and then made to, and a
+    /// process that made a session of its own away from the child's tree is not reached.
     /// </summary>
     public bool Contained { get; init; }
 
     /// <summary>
-    /// Whether the child starts in a process group of its own, apart from the terminal: an
-    /// interruption typed where this process runs is sent to a group, and that group is not this
-    /// child's. The session, and a container that ends what outlives it, are
-    /// <see cref="Contained"/>'s to give.
+    /// Whether the child starts in a process group of its own on Linux and macOS, apart from the
+    /// terminal: an interruption typed where this process runs is sent to a group, and that group is
+    /// not this child's. On Windows the child starts as any other, whose console of its own already
+    /// keeps an interruption typed at this one's from it. Either way it is stopped as any other child
+    /// is, by its tree, and what it leaves at its own end is left; the session, and a container that
+    /// ends what outlives it, are <see cref="Contained"/>'s to give.
     /// </summary>
     public bool ApartFromTerminal { get; init; }
 }

@@ -51,7 +51,8 @@ which operating system it runs on and builds what differs by it. Everything abov
 on `IHostPlatform`, `IFilePermissions`, `IProcessTable`, `IProcessRunner` and `IFileSystem`.
 Below that seam a few primitives ask the runtime for one fact each, where nothing else is
 asked - `PhysicalFileSystem`, `ProcessRunner`, `DetachedProcessLauncher`, `Containment` (the
-session, group and job-object calls containment is made of, read by `ContainExec`), `UserState`,
+session, group, signal and job-object calls containment is made of, and the choice between them
+that `ContainExec` places a child through), `UserState`,
 `WslDiskImages`, `CMakeToolchainReader`, `ProcessContext` (the process's current directory) and the
 command that holds a host awake.
 
@@ -111,19 +112,36 @@ program a leg's configuration names by a relative path is read from the director
 starts in - a step's working directory, the test runner's - never from wherever the harness was
 started: for a leg on a worktree those are different copies of the same file.
 
-A request can ask for a child **contained**: a stopped one and what it started end together, what
-a killed engine leaves behind ends with it, and a signal to the harness does not reach it. A
-process has to be where it is contained before it runs a line of its
-own, and `Process.Start` offers no moment between a child's making and its start on any system, so
-the runner - the one owner of processes - starts a contained child through a copy of this tool that
-puts itself there first: the hidden `contain-exec` command, which on Linux and macOS makes itself
-the leader of a new session and process group (`setsid`) and then becomes the program (`execvp`,
-under the same process id), and on Windows joins the named job object the engine made - one whose
-members end when its last handle closes - and starts the program in a process group of its own,
-handing the streams it was given on to it. The group alone, apart from the terminal but within the
-session, is the lesser level a request asks for by name (`ApartFromTerminal`): an interruption
-typed at the harness's terminal is sent to a group, and that group is not the child's. No leg is
-contained: a `build`, `test` or `run` typed by hand starts its legs as it always has.
+A request can ask for a child **contained**: what it started ends with it, at its own end as at a
+stop, and a signal to the harness does not reach it. A process has to be where it is contained
+before it runs a line of its own, and `Process.Start` offers no moment between a child's making
+and its start on any system, so the runner - the one owner of processes - starts a contained child
+through a copy of this tool that puts itself there first: the hidden `contain-exec` command, which
+on Linux and macOS makes itself the leader of a new session and process group (`setsid`) and then
+becomes the program (`execvp`, under the same process id), and on Windows joins the named job
+object the runner made and starts the program in a process group of its own, handing the streams
+it was given on to it. On Windows the job is ended as the child ends or is stopped, and every
+member goes with it; and since its members also end when its last handle closes, what a killed
+engine leaves behind ends with it there. On Linux and macOS the runner ends the child's session as
+the child ends or is stopped - every process still in it, and at a stop every one still in the
+child's tree, read before anything is signalled, asked to end with SIGTERM, and whatever still
+stands five seconds later killed - and the output is read for five seconds more at most: a process
+that made a session of its own away from the child's tree is not reached, and nothing waits for
+what it holds. Nothing ends a contained child there when the engine itself is killed: it runs on
+until something ends it.
+
+Whether the program started is said on a channel of the runner's own (`--status`), never in the
+program's streams or an exit code a program could give too: a program that cannot start is
+reported as one that never ran (`ExecutableNotFoundException`, `ProgramStartException`, worded as
+for any other start, a program being written tried again as any start is), and the child is said
+to have started (`OnStarted`) only once the step has placed it. The group alone, apart from the
+terminal but within the session, is the lesser level a request asks for by name
+(`ApartFromTerminal`), and only Linux and macOS start a child through the step for it: an
+interruption typed at the harness's terminal is sent to a group, and that group is not the child's.
+On Windows such a child starts as any other, since a child started with no window already has a
+console of its own that an interruption typed at the harness's never reaches. A child apart from
+the terminal is stopped by its process tree, as any other, and what it leaves at its own end is
+left. No leg is contained: a `build`, `test` or `run` typed by hand starts its legs as it always has.
 
 ### Paths come from git
 

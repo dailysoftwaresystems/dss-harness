@@ -30,9 +30,15 @@ internal static class ContainExecCommand
         {
             Description = "Start the program in a process group of its own, apart from the terminal.",
         };
+        var status = new Option<string>(ContainExec.StatusOption)
+        {
+            Description = "The channel the process runner reads whether the program started from.",
+            HelpName = "channel",
+        };
 
         command.Options.Add(job);
         command.Options.Add(group);
+        command.Options.Add(status);
 
         // The program and its arguments are everything after '--', handed on as they are given:
         // this command owns no word of theirs.
@@ -48,11 +54,12 @@ internal static class ContainExecCommand
                 return Task.FromResult(HarnessExit.UsageError);
             }
 
-            // Said in the error stream the step's own failures are said in, and nowhere else: the
+            // A refusal of its own command line is said in the error stream and nowhere else: the
             // streams it was given belong to the program it starts.
             return Task.FromResult(ContainExec.Run(
                 parseResult.GetValue(job),
                 parseResult.GetValue(group),
+                parseResult.GetValue(status),
                 tokens[0],
                 tokens.Skip(1).ToArray(),
                 Console.Error));

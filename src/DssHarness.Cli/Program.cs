@@ -3,11 +3,15 @@ using DssHarness.Cli;
 using DssHarness.Cli.Commands;
 using DssHarness.Core.Execution;
 using DssHarness.Core.Hosts;
+using DssHarness.Core.Processes;
 using DssHarness.Core.Repository;
 
 // Command selection and dependency wiring only. Every behaviour lives in a service
 // in DssHarness.Core, which is a library precisely so that nothing can accumulate here.
-using var consoleEncoding = ConsoleEncoding.UseUtf8();
+// The step that places a contained child leaves the console as it found it: on Windows the
+// program it starts shares that console, and a code page set here would change how the
+// program writes its output from how it writes it started as any other child.
+using var consoleEncoding = args is [ContainExec.CommandName, ..] ? null : ConsoleEncoding.UseUtf8();
 
 var root = new RootCommand(
     $"{ToolPackage.Id} - cross-platform repository harness. Run '{ToolPackage.Command} help' for reference material.");

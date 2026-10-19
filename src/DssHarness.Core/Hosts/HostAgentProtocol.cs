@@ -98,9 +98,11 @@ public static class HostAgentProtocol
 
     /// <summary>
     /// Commands a host is never asked to run. A host that passed the work on to another host would leave
-    /// the machine that asked unable to say where anything ran.
+    /// the machine that asked unable to say where anything ran; and the step that places a contained child
+    /// is the process runner's own, which run inside the agent would become the program in its place.
     /// </summary>
-    public static IReadOnlyList<string> NotForwardable { get; } = [CommandName, HostExecService.CommandName, Execution.HoldAwakeService.CommandName];
+    public static IReadOnlyList<string> NotForwardable { get; } =
+        [CommandName, HostExecService.CommandName, Execution.HoldAwakeService.CommandName, Processes.ContainExec.CommandName];
 
     /// <summary>Whether <paramref name="command"/> is one a host is never asked to run, in whatever case it is typed.</summary>
     public static bool IsNotForwardable(string command) => NotForwardable.Contains(command, StringComparer.OrdinalIgnoreCase);

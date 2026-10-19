@@ -37,6 +37,19 @@ internal static class TestChild
             "print-ids" => PrintIds(standardOutput),
             "spawn-orphan" => SpawnOrphan(standardOutput, arguments),
             "spawn-orphan-and-sleep" => SpawnOrphanAndSleep(standardOutput, arguments),
+            "spawn-holder" => SpawnHolder(standardOutput, arguments),
+            "spawn-orphan-holder" => SpawnOrphanHolder(standardOutput, arguments),
+            "own-group-and-sleep" => OwnGroupAndSleep(arguments),
+            "own-session-and-sleep" => OwnSessionAndSleep(arguments),
+            "ignore-term-and-sleep" => IgnoreTermAndSleep(arguments),
+            "note-term-and-sleep" => NoteTermAndSleep(standardOutput, arguments),
+            "say-and-exit" => SayAndExit(standardOutput, standardError, arguments),
+            "say-pid-and-sleep" => SayPidAndSleep(standardOutput, arguments),
+            "say-pid-then" => SayPidThen(standardOutput, arguments),
+            "contain-and-wait" => ContainAndWait(standardOutput, arguments),
+            "interrupt-own-console" => InterruptOwnConsole(standardOutput),
+            "print-code-page" => PrintCodePage(standardOutput),
+            "print-parent" => PrintParent(standardOutput),
             "stream" => Stream(standardOutput, standardError, arguments),
             "flood" => Flood(standardOutput, arguments),
             "flood-error" => Flood(standardError, arguments),
@@ -287,19 +300,23 @@ internal static class TestChild
     /// containment ends reads, since the sleeper's parent is gone and only the container it was
     /// born in can reach it. On Windows the sleeper inherits no handle: were it to hold the pipe
     /// this process writes to, whoever reads that pipe would wait for the sleeper's own end.
+    /// The sleeper is <c>sleep</c> unless <c>arguments[1]</c> names another behaviour, which is
+    /// given the milliseconds and every argument after it.
     /// </summary>
     private static int SpawnOrphan(TextWriter output, string[] arguments)
     {
         var milliseconds = arguments.Length > 0 ? arguments[0] : "300000";
+        var mode = arguments.Length > 1 ? arguments[1] : "sleep";
+        string[] passed = [milliseconds, .. arguments.Skip(2)];
 
         if (OperatingSystem.IsWindows())
         {
-            var commandLine = $"\"{TestHost.DotnetExecutable}\" exec \"{TestHost.AssemblyPath}\" {milliseconds}";
+            var commandLine = $"\"{TestHost.DotnetExecutable}\" exec \"{TestHost.AssemblyPath}\" {Core.Processes.DetachedProcessLauncher.CommandLine(passed)}";
             var startup = new StartupInfo { Size = System.Runtime.InteropServices.Marshal.SizeOf<StartupInfo>() };
 
             // The mode travels in the environment the sleeper inherits; set here and taken back at
             // once, it is in the sleeper's and in no other's.
-            Environment.SetEnvironmentVariable(TestHost.ChildModeVariable, "sleep");
+            Environment.SetEnvironmentVariable(TestHost.ChildModeVariable, mode);
 
             try
             {
@@ -337,8 +354,13 @@ internal static class TestChild
 
         start.ArgumentList.Add("exec");
         start.ArgumentList.Add(TestHost.AssemblyPath);
-        start.ArgumentList.Add(milliseconds);
-        start.Environment[TestHost.ChildModeVariable] = "sleep";
+
+        foreach (var argument in passed)
+        {
+            start.ArgumentList.Add(argument);
+        }
+
+        start.Environment[TestHost.ChildModeVariable] = mode;
 
         using var sleeper = Process.Start(start)
             ?? throw new InvalidOperationException("The sleeper did not start.");
@@ -406,6 +428,8 @@ internal static class TestChild
     /// group, writes the sleeper's process id, and goes on sleeping: a stop that reaches the group
     /// ends the sleeper with this process, where a stop that walks the tree cannot - the middle is
     /// gone, the sleeper is no one's child, and the group is the only thing that holds them both.
+    /// <c>arguments[2]</c> and after, where given, name the sleeper's behaviour and its arguments,
+    /// as <c>spawn-orphan</c> takes them.
     /// </summary>
     private static int SpawnOrphanAndSleep(TextWriter output, string[] arguments)
     {
@@ -422,6 +446,12 @@ internal static class TestChild
         start.ArgumentList.Add("exec");
         start.ArgumentList.Add(TestHost.AssemblyPath);
         start.ArgumentList.Add(milliseconds);
+
+        foreach (var argument in arguments.Skip(2))
+        {
+            start.ArgumentList.Add(argument);
+        }
+
         start.Environment[TestHost.ChildModeVariable] = "spawn-orphan";
 
         using var middle = Process.Start(start)
@@ -445,6 +475,314 @@ internal static class TestChild
 
     [System.Runtime.InteropServices.DllImport("libc")]
     private static extern int getsid(int process);
+
+    [System.Runtime.InteropServices.DllImport("libc")]
+    private static extern int setpgid(int process, int group);
+
+    [System.Runtime.InteropServices.DllImport("libc")]
+    private static extern int setsid();
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true, ExactSpelling = true)]
+    [System.Runtime.InteropServices.DefaultDllImportSearchPaths(System.Runtime.InteropServices.DllImportSearchPath.System32)]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool GenerateConsoleCtrlEvent(uint signal, uint group);
+
+    /// <summary>
+    /// Starts a holder - this assembly as the behaviour <c>arguments[2]</c> names, given every
+    /// argument after it - that inherits this process's own streams, writes its process id once it
+    /// stands where it puts itself, and then exits or sleeps as <c>arguments[0]</c> says, for the
+    /// milliseconds <c>arguments[1]</c> gives: what a test of containment reads, since the holder
+    /// keeps the pipes whoever started this process reads, and that reading ends only with it.
+    /// </summary>
+    private static int SpawnHolder(TextWriter output, string[] arguments)
+    {
+        using var holder = StartInheriting(arguments[2], arguments[3..]);
+
+        // A holder that leaves this group or session is named once it has, so a test acting on
+        // its id acts on a process that stands apart.
+        var apart = Until(() => arguments[2] switch
+        {
+            "own-group-and-sleep" => getpgid(holder.Id) == holder.Id,
+            "own-session-and-sleep" => getsid(holder.Id) == holder.Id,
+            _ => true,
+        });
+
+        if (!apart)
+        {
+            return 96;
+        }
+
+        output.Write($"holder={holder.Id}\n");
+
+        if (string.Equals(arguments[0], "sleep", StringComparison.Ordinal))
+        {
+            Thread.Sleep(int.Parse(arguments[1], CultureInfo.InvariantCulture));
+        }
+
+        return 0;
+    }
+
+    /// <summary>
+    /// Starts, through a middle that exits once it has started it, a holder of this process's own
+    /// streams, writes <c>orphaned</c> once the middle has gone, and sleeps for the milliseconds
+    /// <c>arguments[0]</c> gives: the holder is no one's child, so no walk of this process's tree
+    /// reaches it, and the pipes it keeps are the ones whoever started this process reads.
+    /// </summary>
+    private static int SpawnOrphanHolder(TextWriter output, string[] arguments)
+    {
+        var milliseconds = arguments.Length > 0 ? arguments[0] : "300000";
+
+        using (var middle = StartInheriting("spawn-holder", ["exit", "0", "sleep", milliseconds]))
+        {
+            middle.WaitForExit();
+        }
+
+        output.Write("orphaned\n");
+        Thread.Sleep(int.Parse(milliseconds, CultureInfo.InvariantCulture));
+
+        return 0;
+    }
+
+    /// <summary>Moves to a process group of its own, as <c>timeout</c> does, and sleeps; the group call is the C library's.</summary>
+    private static int OwnGroupAndSleep(string[] arguments)
+    {
+        if (OperatingSystem.IsWindows() || setpgid(0, 0) != 0)
+        {
+            return 98;
+        }
+
+        Thread.Sleep(int.Parse(arguments[0], CultureInfo.InvariantCulture));
+        return 0;
+    }
+
+    /// <summary>Makes a session of its own, as a daemon does, and sleeps; the session call is the C library's.</summary>
+    private static int OwnSessionAndSleep(string[] arguments)
+    {
+        if (OperatingSystem.IsWindows() || setsid() == -1)
+        {
+            return 98;
+        }
+
+        Thread.Sleep(int.Parse(arguments[0], CultureInfo.InvariantCulture));
+        return 0;
+    }
+
+    /// <summary>
+    /// Refuses the signal that asks it to end, writes the file <c>arguments[1]</c> names once it
+    /// does, and sleeps for the milliseconds <c>arguments[0]</c> gives: only the signal that cannot
+    /// be refused ends it, and the file says when a test may send the other.
+    /// </summary>
+    private static int IgnoreTermAndSleep(string[] arguments)
+    {
+        using var refusing = System.Runtime.InteropServices.PosixSignalRegistration.Create(
+            System.Runtime.InteropServices.PosixSignal.SIGTERM,
+            context => context.Cancel = true);
+
+        File.WriteAllText(arguments[1], "ready");
+        Thread.Sleep(int.Parse(arguments[0], CultureInfo.InvariantCulture));
+
+        return 0;
+    }
+
+    /// <summary>
+    /// Writes <c>asked</c> into the file <c>arguments[0]</c> names when it is asked to end, and then
+    /// ends as asked; writes <c>ready</c> once it listens, and sleeps for the milliseconds
+    /// <c>arguments[1]</c> gives.
+    /// </summary>
+    private static int NoteTermAndSleep(TextWriter output, string[] arguments)
+    {
+        using var noting = System.Runtime.InteropServices.PosixSignalRegistration.Create(
+            System.Runtime.InteropServices.PosixSignal.SIGTERM,
+            _ => File.WriteAllText(arguments[0], "asked"));
+
+        output.Write("ready\n");
+        Thread.Sleep(int.Parse(arguments[1], CultureInfo.InvariantCulture));
+
+        return 0;
+    }
+
+    /// <summary>Writes <c>arguments[0]</c> on standard output and <c>arguments[1]</c> on standard error, each as a line, and exits with the code <c>arguments[2]</c> gives.</summary>
+    private static int SayAndExit(TextWriter output, TextWriter error, string[] arguments)
+    {
+        output.Write(arguments[0] + "\n");
+        error.Write(arguments[1] + "\n");
+
+        return int.Parse(arguments[2], CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>Writes its own process id and sleeps for the milliseconds <c>arguments[0]</c> gives.</summary>
+    private static int SayPidAndSleep(TextWriter output, string[] arguments)
+    {
+        output.Write($"pid={Environment.ProcessId}\n");
+        Thread.Sleep(int.Parse(arguments[0], CultureInfo.InvariantCulture));
+
+        return 0;
+    }
+
+    /// <summary>Writes its own process id, then does what the behaviour <c>arguments[0]</c> names with the arguments after it.</summary>
+    private static int SayPidThen(TextWriter output, string[] arguments)
+    {
+        output.Write($"pid={Environment.ProcessId}\n");
+
+        return Run(arguments[0], arguments[1..]);
+    }
+
+    /// <summary>
+    /// Starts two sleepers through a process runner of its own, which starts contained children
+    /// through the tool <c>arguments[0]</c> names - one contained, one as children always were -
+    /// writes its own id and both of theirs on one line, and waits for them: what a test that signals this
+    /// process's own group reads, since the one started as always is in that group and the
+    /// contained one is not.
+    /// </summary>
+    private static int ContainAndWait(TextWriter output, string[] arguments)
+    {
+        var runner = new Core.Processes.ProcessRunner(new Core.Platform.HostPlatform(), Core.Platform.FilePermissionsFactory.Create(), arguments[0]);
+        var containedId = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var ordinaryId = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var contained = runner.RunAsync(Saying(containedId) with { Contained = true });
+        var ordinary = runner.RunAsync(Saying(ordinaryId));
+
+        if (Task.WhenAny(Task.WhenAll(containedId.Task, ordinaryId.Task), contained, ordinary).GetAwaiter().GetResult() is not Task<string[]>)
+        {
+            return 95;
+        }
+
+        output.Write($"parent={Environment.ProcessId} contained={containedId.Task.Result} ordinary={ordinaryId.Task.Result}\n");
+        Task.WaitAll(contained, ordinary);
+
+        return 0;
+
+        Core.Processes.ProcessRequest Saying(TaskCompletionSource<string> id) => TestHost.ChildRequest("say-pid-and-sleep", arguments[1]) with
+        {
+            OnOutputLine = line =>
+            {
+                if (line.StartsWith("pid=", StringComparison.Ordinal))
+                {
+                    id.TrySetResult(line["pid=".Length..]);
+                }
+            },
+        };
+    }
+
+    /// <summary>
+    /// Sends the console's interruption to every process of the console it runs in, itself among
+    /// them, and writes whether it was interrupted: a process in a group of its own on Windows has
+    /// that interruption turned off, and one that shares its starter's group has it as its starter
+    /// does. The console calls are Windows'.
+    /// </summary>
+    private static int InterruptOwnConsole(TextWriter output)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return 98;
+        }
+
+        using var reached = new ManualResetEventSlim();
+        using var listening = System.Runtime.InteropServices.PosixSignalRegistration.Create(
+            System.Runtime.InteropServices.PosixSignal.SIGINT,
+            context =>
+            {
+                context.Cancel = true;
+                reached.Set();
+            });
+
+        if (!GenerateConsoleCtrlEvent(0, 0))
+        {
+            output.Write($"not sent: {System.Runtime.InteropServices.Marshal.GetLastPInvokeError()}\n");
+            return 97;
+        }
+
+        output.Write(reached.Wait(TimeSpan.FromSeconds(3)) ? "interrupted\n" : "not interrupted\n");
+
+        return 0;
+    }
+
+    /// <summary>Writes the code page its console's output is written in, as the runtime reads it.</summary>
+    private static int PrintCodePage(TextWriter output)
+    {
+        output.Write($"{Console.OutputEncoding.CodePage}\n");
+        return 0;
+    }
+
+    /// <summary>
+    /// Writes the process id of the process that started it: on Linux and macOS as the C library
+    /// tells it, and on Windows as the process's own basic information records it.
+    /// </summary>
+    private static int PrintParent(TextWriter output)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            output.Write($"parent={getppid()}\n");
+            return 0;
+        }
+
+        var information = default(BasicInformation);
+
+        if (NtQueryInformationProcess(GetCurrentProcess(), 0, ref information, System.Runtime.InteropServices.Marshal.SizeOf<BasicInformation>(), out _) != 0)
+        {
+            return 97;
+        }
+
+        output.Write($"parent={information.InheritedFromUniqueProcessId}\n");
+        return 0;
+    }
+
+    [System.Runtime.InteropServices.DllImport("libc")]
+    private static extern int getppid();
+
+    [System.Runtime.InteropServices.DllImport("ntdll.dll", ExactSpelling = true)]
+    [System.Runtime.InteropServices.DefaultDllImportSearchPaths(System.Runtime.InteropServices.DllImportSearchPath.System32)]
+    private static extern int NtQueryInformationProcess(IntPtr process, int informationClass, ref BasicInformation information, int length, out int returned);
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", ExactSpelling = true)]
+    [System.Runtime.InteropServices.DefaultDllImportSearchPaths(System.Runtime.InteropServices.DllImportSearchPath.System32)]
+    private static extern IntPtr GetCurrentProcess();
+
+    /// <summary>PROCESS_BASIC_INFORMATION: what Windows records of a process, the id of the one that started it among it.</summary>
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct BasicInformation
+    {
+        public IntPtr ExitStatus;
+        public IntPtr PebBaseAddress;
+        public IntPtr AffinityMask;
+        public IntPtr BasePriority;
+        public IntPtr UniqueProcessId;
+        public IntPtr InheritedFromUniqueProcessId;
+    }
+
+    /// <summary>Starts this assembly as <paramref name="mode"/>, inheriting this process's own streams.</summary>
+    private static Process StartInheriting(string mode, string[] arguments)
+    {
+        var start = new ProcessStartInfo(TestHost.DotnetExecutable) { UseShellExecute = false };
+
+        start.ArgumentList.Add("exec");
+        start.ArgumentList.Add(TestHost.AssemblyPath);
+
+        foreach (var argument in arguments)
+        {
+            start.ArgumentList.Add(argument);
+        }
+
+        start.Environment[TestHost.ChildModeVariable] = mode;
+
+        return Process.Start(start) ?? throw new InvalidOperationException($"'{mode}' did not start.");
+    }
+
+    /// <summary>Whether <paramref name="condition"/> came to hold within thirty seconds, looking again every twenty milliseconds.</summary>
+    private static bool Until(Func<bool> condition)
+    {
+        for (var waited = TimeSpan.Zero; waited < TimeSpan.FromSeconds(30); waited += TimeSpan.FromMilliseconds(20))
+        {
+            if (condition())
+            {
+                return true;
+            }
+
+            Thread.Sleep(TimeSpan.FromMilliseconds(20));
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// Writes one line, then waits for the parent to prove it received that line while

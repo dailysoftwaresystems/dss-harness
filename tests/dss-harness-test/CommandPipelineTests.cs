@@ -592,8 +592,8 @@ public sealed class CommandPipelineTests : IDisposable
             "PausesOnInterrupt is honoured by the run verbs of an orchestrator run, which this build does not have yet: every interrupt still cancels.",
             Assert.Throws<NotSupportedException>(() => host.Begin(new SessionOptions { Command = "test", PausesOnInterrupt = true })).Message);
         Assert.Equal(
-            "ApartFromTerminal is honoured once a process can be started apart from the terminal (ProcessRequest), which this build cannot do "
-                + "yet: what an operation starts is in reach of an interrupt.",
+            "ApartFromTerminal is honoured once a session hands it to the processes its operation starts (ProcessRequest.ApartFromTerminal), "
+                + "which this build does not do yet: what an operation starts is in reach of an interrupt.",
             Assert.Throws<NotSupportedException>(() => host.Begin(new SessionOptions { Command = "test", ApartFromTerminal = true })).Message);
         Assert.Equal(
             "A front end's own Output is honoured once a front end other than the command line builds an operation's services, which this "
