@@ -1,3 +1,4 @@
+using System.Text.Json;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Platform;
@@ -275,6 +276,30 @@ public sealed class ConfigStoreTests
 
         Assert.Contains("cannot contain null", exception.Message, StringComparison.Ordinal);
         Assert.Contains("line 3", exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A null item is refused in a list of every shape the serializer reads into a list - the concrete one and each
+    /// interface it answers to - by the configuration's options and the state files' alike, and a list without one is
+    /// read whole: a record declares its lists read-only, and a refusal that reached the concrete list alone would read
+    /// a null into a list every reader trusts holds none.
+    /// </summary>
+    [Theory]
+    [InlineData(typeof(List<string>))]
+    [InlineData(typeof(IReadOnlyList<string>))]
+    [InlineData(typeof(IReadOnlyCollection<string>))]
+    [InlineData(typeof(IList<string>))]
+    [InlineData(typeof(ICollection<string>))]
+    [InlineData(typeof(IEnumerable<string>))]
+    public void ANullItem_IsRefused_InAListOfEveryShape(Type shape)
+    {
+        foreach (var options in new[] { JsonConfigOptions.Default, JsonStateFile.Options })
+        {
+            var refused = Assert.Throws<JsonException>(() => JsonSerializer.Deserialize("""["a", null]""", shape, options));
+
+            Assert.Equal("Item 1 of a list is null; a list in this file cannot contain null.", refused.Message);
+            Assert.Equal(["a", "b"], Assert.IsAssignableFrom<IEnumerable<string>>(JsonSerializer.Deserialize("""["a", "b"]""", shape, options)));
+        }
     }
 
     [Fact]

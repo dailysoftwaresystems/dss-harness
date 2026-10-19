@@ -78,18 +78,33 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     private IProcessTable? _processTable;
 
     /// <summary>
-    /// A runner reading <paramref name="processTable"/> in place of the machine's own table: a test's. Not the public
-    /// constructor's, because the container builds this runner from that one, and the machine's table is itself built
-    /// over this runner - a table asked of the container there would be a runner waiting on itself.
+    /// Makes the job object a contained child on Windows is held in, by the name the runner gave it: the system's own - or
+    /// a maker a test gives in its place, which learns the name only here and can arrange, before it asks the system,
+    /// what makes the system refuse the job.
+    /// </summary>
+    private readonly Func<string, SafeWaitHandle> _makeJob = Containment.CreateJob;
+
+    /// <summary>
+    /// A runner reading <paramref name="processTable"/> in place of the machine's own table, or making its jobs with
+    /// <paramref name="makeJob"/>: a test's. Not the public constructor's, because the container builds this runner from
+    /// that one, and the machine's table is itself built over this runner - a table asked of the container there would be
+    /// a runner waiting on itself.
     /// </summary>
     /// <param name="platform">The system this runs on.</param>
     /// <param name="filePermissions">How the system says a file may be run.</param>
     /// <param name="containThrough">The tool that starts a contained child, as the public constructor takes it.</param>
-    /// <param name="processTable">The table a contained child's session is read from.</param>
-    internal ProcessRunner(IHostPlatform platform, IFilePermissions filePermissions, string? containThrough, IProcessTable processTable)
+    /// <param name="processTable">The table a contained child's session is read from; <see langword="null"/> for the machine's own.</param>
+    /// <param name="makeJob">What makes a contained child's job on Windows, by its name; <see langword="null"/> for the system's own.</param>
+    internal ProcessRunner(
+        IHostPlatform platform,
+        IFilePermissions filePermissions,
+        string? containThrough,
+        IProcessTable? processTable,
+        Func<string, SafeWaitHandle>? makeJob = null)
         : this(platform, filePermissions, containThrough)
     {
         _processTable = processTable;
+        _makeJob = makeJob ?? Containment.CreateJob;
     }
 
     /// <summary>
@@ -588,11 +603,11 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     }
 
     /// <summary>The job a contained child on Windows is held in, or the reason it could not be made as the start's failure.</summary>
-    private static SafeWaitHandle MadeJob(string name, string requested, string resolved)
+    private SafeWaitHandle MadeJob(string name, string requested, string resolved)
     {
         try
         {
-            return Containment.CreateJob(name);
+            return _makeJob(name);
         }
         catch (Win32Exception ex)
         {
@@ -618,7 +633,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// macOS the whole path of the socket it is, in this process's temporary directory - the step
     /// reads its own from the environment the child is given, which a request may change.
     /// </summary>
-    private static string StatusName(bool windows)
+    internal static string StatusName(bool windows)
     {
         var name = $"dssharness-{Guid.NewGuid():N}"[..27];
 

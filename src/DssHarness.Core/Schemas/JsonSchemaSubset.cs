@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
@@ -14,13 +15,14 @@ namespace DssHarness.Core.Schemas;
 /// <remarks>
 /// <para>
 /// What a schema may say: <c>type</c> (object, array, string, integer, number, boolean, null, or one of those
-/// with null as <c>["t","null"]</c>), <c>properties</c> and <c>required</c>, <c>additionalProperties: false</c> -
-/// which every object holds - <c>items</c>, a scalar <c>enum</c> and <c>const</c>, <c>anyOf</c>, a local
-/// non-recursive <c>$ref</c> to one of the <c>$defs</c> the root holds, <c>description</c>, <c>title</c> and
-/// <c>default</c>, <c>minItems</c> and <c>maxItems</c>, the three <c>format</c>s that are checked (RFC 3339's
-/// date-time and full-date, and a uuid written in its hyphenated form) and an ECMA-262 <c>pattern</c>, read within
-/// one second. Anything else is refused where the definition is checked, naming the place in the schema that says
-/// it. Each key is said of its own type alone - <c>properties</c>, <c>required</c> and
+/// with null as <c>["t","null"]</c>; an integer is any number with no fraction, <c>7.0</c> among them),
+/// <c>properties</c> and <c>required</c>, <c>additionalProperties: false</c> - which every object holds -
+/// <c>items</c>, a scalar <c>enum</c> and <c>const</c>, <c>anyOf</c>, a local non-recursive <c>$ref</c> to one of
+/// the <c>$defs</c> the root holds, <c>description</c>, <c>title</c> and <c>default</c>, <c>minItems</c> and
+/// <c>maxItems</c>, the three <c>format</c>s that are checked (RFC 3339's date-time and full-date, and a uuid written
+/// in its hyphenated form) and an ECMA-262 <c>pattern</c> - refused where .NET, which runs it, would read it
+/// otherwise - read within one second. Anything else is refused where the definition is checked, naming the place
+/// in the schema that says it. Each key is said of its own type alone - <c>properties</c>, <c>required</c> and
 /// <c>additionalProperties</c> of an object, <c>items</c> and the bounds of an array, <c>format</c> and
 /// <c>pattern</c> of a string - so a schema that names properties says an object, and closes it. A <c>$ref</c>
 /// stands alone, beside nothing but words that say nothing of a document - and, at the root, the
@@ -284,20 +286,10 @@ public static class JsonSchemaSubset
 
                     break;
 
-                case "minItems":
-                    if (value is not JsonValue number || number.GetValueKind() != JsonValueKind.Number
-                        || !number.TryGetValue<int>(out var minItems) || minItems < 0)
+                case "minItems" or "maxItems":
+                    if (Count(value) is null)
                     {
-                        problems.Add($"{at}.minItems: is not a whole number from 0");
-                    }
-
-                    break;
-
-                case "maxItems":
-                    if (value is not JsonValue most || most.GetValueKind() != JsonValueKind.Number
-                        || !most.TryGetValue<int>(out var maxItems) || maxItems < 0)
-                    {
-                        problems.Add($"{at}.maxItems: is not a whole number from 0");
+                        problems.Add($"{at}.{key}: is not a whole number from 0");
                     }
 
                     break;
@@ -569,12 +561,12 @@ public static class JsonSchemaSubset
 
         if (document is JsonArray list)
         {
-            if (said["minItems"] is JsonValue minimum && minimum.TryGetValue<int>(out var least) && list.Count < least)
+            if (Count(said["minItems"]) is { } least && list.Count < least)
             {
                 problems.Add($"{at}: holds {list.Count} item{(list.Count == 1 ? string.Empty : "s")} and at least {least} {(least == 1 ? "is" : "are")} asked");
             }
 
-            if (said["maxItems"] is JsonValue most && most.TryGetValue<int>(out var cap) && list.Count > cap)
+            if (Count(said["maxItems"]) is { } cap && list.Count > cap)
             {
                 problems.Add($"{at}: holds {list.Count} item{(list.Count == 1 ? string.Empty : "s")} and at most {cap} {(cap == 1 ? "is" : "are")} taken");
             }
@@ -646,7 +638,7 @@ public static class JsonSchemaSubset
                 "array" => document is JsonArray,
                 "string" => document is JsonValue value && value.GetValueKind() == JsonValueKind.String,
                 "boolean" => document is JsonValue value && value.GetValueKind() is JsonValueKind.True or JsonValueKind.False,
-                "integer" => document is JsonValue value && value.GetValueKind() == JsonValueKind.Number && value.TryGetValue(out long _),
+                "integer" => document is JsonValue value && value.GetValueKind() == JsonValueKind.Number && IsWhole(value.ToJsonString()),
                 "number" => document is JsonValue value && value.GetValueKind() == JsonValueKind.Number,
                 _ => false,
             };
@@ -668,6 +660,58 @@ public static class JsonSchemaSubset
 
         return article + type.Replace("+", " or ", StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// Whether a JSON number is whole - an integer as JSON Schema means one, any number with no fraction, so <c>7.0</c>
+    /// and <c>1.5e1</c> are and <c>7.5</c> is not - read from its digits as written, so no number is rounded into a
+    /// whole one or out of one however many digits it has, and none is too large to be one.
+    /// </summary>
+    /// <param name="number">The number as JSON writes it.</param>
+    private static bool IsWhole(string number)
+    {
+        var exponentAt = number.AsSpan().IndexOfAny('e', 'E');
+        var significand = exponentAt < 0 ? number : number[..exponentAt];
+        var point = significand.IndexOf('.', StringComparison.Ordinal);
+        var fraction = point < 0 ? string.Empty : significand[(point + 1)..];
+        var digits = ((point < 0 ? significand : significand[..point]).TrimStart('-') + fraction).TrimStart('0');
+
+        if (digits.Length == 0)
+        {
+            return true;
+        }
+
+        var exponent = 0L;
+
+        if (exponentAt >= 0
+            && !long.TryParse(number.AsSpan(exponentAt + 1), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out exponent))
+        {
+            // An exponent no long holds outweighs every digit written: it carries them all before the point, or leaves
+            // them all after it.
+            return number[exponentAt + 1] != '-';
+        }
+
+        // The value is its digits times ten to the exponent less the fraction's length: whole where the zeros that end
+        // the digits make up for every place that power leaves after the point.
+        var trailing = digits.Length - digits.TrimEnd('0').Length;
+
+        return exponent >= fraction.Length - trailing;
+    }
+
+    /// <summary>
+    /// A count as a schema writes one - a whole number from 0, <c>2</c> and <c>2.0</c> alike - or <see langword="null"/>
+    /// where the value is none, or more than a list holds: the one reading both checks share, so a bound the subset
+    /// check passes is one the document check holds a document to.
+    /// </summary>
+    /// <param name="value">What the schema says the count is.</param>
+    private static int? Count(JsonNode? value)
+        => value is JsonValue number
+            && number.GetValueKind() == JsonValueKind.Number
+            && number.ToJsonString() is var text
+            && IsWhole(text)
+            && decimal.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var count)
+            && count is >= 0m and <= int.MaxValue
+                ? (int)count
+                : null;
 
     /// <summary>
     /// Whether a format's text holds: an RFC 3339 date-time or full-date, or a uuid in its hyphenated form - the
@@ -820,23 +864,46 @@ public static class JsonSchemaSubset
     /// ECMAScript mode, where <c>\d</c> and <c>\w</c> are ASCII; with its end anchor <c>$</c> made the end of the
     /// text alone, where .NET would also take the place before a final line feed; with <c>.</c> taking no line
     /// terminator, where .NET takes all but the line feed; with <c>\s</c> and <c>\S</c> ECMA-262's white space and
-    /// its complement, in a class or out, where .NET takes ASCII's; with a class closed at its first <c>]</c>,
-    /// <c>[]</c> the empty class and a <c>[</c> within it a character, where .NET reads class subtraction; and
-    /// refusing the groups ECMA-262 does not write - inline options, comments, atomic and conditional groups -
-    /// since they change what <c>$</c> and <c>.</c> mean. .NET's own escapes - <c>\A</c>, <c>\Z</c>, <c>\z</c>,
-    /// <c>\G</c>, <c>\p{...}</c> - are still read as .NET reads them.
+    /// its complement, in a class or out, where .NET takes ASCII's; and with a class closed at its first <c>]</c>,
+    /// <c>[]</c> the empty class and a <c>[</c> within it a character, where .NET reads class subtraction.
     /// </summary>
+    /// <remarks>
+    /// What .NET reads one way and ECMA-262 another, where no such rewriting gives ECMA-262's meaning, is refused: a
+    /// pattern that means one thing here and another to whoever else reads the schema is one nobody can rely on. So
+    /// are the groups ECMA-262 does not write - inline options, comments, atomic and conditional groups - since they
+    /// change what <c>$</c> and <c>.</c> mean; .NET's own escapes - the anchors <c>\A</c>, <c>\Z</c>, <c>\z</c> and
+    /// <c>\G</c> outside a class, and in a class or out the categories <c>\p{..}</c> and <c>\P{..}</c>, the bell
+    /// <c>\a</c> and the escape character <c>\e</c> - which ECMA-262 reads as the letter escaped; .NET's spellings
+    /// of a backreference beside ECMA-262's <c>\k&lt;name&gt;</c> - <c>\k'name'</c>, <c>\&lt;name&gt;</c>,
+    /// <c>\'name'</c> and a group's number in angle brackets - which ECMA-262 reads as characters or refuses; and a
+    /// backreference by number that the two read apart, .NET counting the named groups after every other and taking
+    /// <c>\12</c>, where there are fewer than twelve groups, as <c>\1</c> and a <c>2</c>, where ECMA-262 takes the
+    /// character it codes. The escapes are refused rather than read as ECMA-262 reads them: nobody writes <c>\A</c>
+    /// to mean the letter, and ECMA-262 read with its <c>u</c> flag, as a provider may read a schema's patterns,
+    /// refuses each of them - or, for <c>\p{..}</c>, reads the category .NET does.
+    /// </remarks>
     /// <param name="pattern">The pattern as the schema writes it.</param>
     /// <param name="problem">Why it cannot be read; <see langword="null"/> where it can.</param>
     private static Regex? ReadPattern(string pattern, out string? problem)
     {
         var read = new StringBuilder(pattern.Length);
 
+        // Each capturing group in the order it opens, and whether it is named; and each backreference by number, as
+        // written - held to the groups once all of them are known, since a reference can come before its group.
+        var named = new List<bool>();
+        var numbered = new List<string>();
+
         for (var index = 0; index < pattern.Length; index++)
         {
             switch (pattern[index])
             {
                 case '\\':
+                    if (EscapeNotEcma(pattern.AsSpan(index + 1), inClass: false) is { } dotnet)
+                    {
+                        problem = ReadApart(dotnet);
+                        return null;
+                    }
+
                     // An escape is copied whole, so the character it escapes is never read as an anchor or a dot;
                     // a control escape takes the character after its 'c' as well, and white space is ECMA-262's,
                     // where .NET's ECMAScript mode takes ASCII's alone.
@@ -849,6 +916,18 @@ public static class JsonSchemaSubset
                         break;
                     }
 
+                    if (escaped is >= '1' and <= '9')
+                    {
+                        var digits = index + 2;
+
+                        while (digits < pattern.Length && char.IsAsciiDigit(pattern[digits]))
+                        {
+                            digits++;
+                        }
+
+                        numbered.Add(pattern[index..digits]);
+                    }
+
                     var escape = escaped == 'c' ? 3 : 2;
 
                     read.Append(pattern, index, Math.Min(escape, pattern.Length - index));
@@ -856,7 +935,13 @@ public static class JsonSchemaSubset
                     break;
 
                 case '[':
-                    index = CopyClass(pattern, index, read);
+                    index = CopyClass(pattern, index, read, out problem);
+
+                    if (problem is not null)
+                    {
+                        return null;
+                    }
+
                     break;
 
                 case '(' when index + 1 < pattern.Length && pattern[index + 1] == '?':
@@ -866,6 +951,17 @@ public static class JsonSchemaSubset
                         return null;
                     }
 
+                    // A lookbehind is no group; anything else '(?<' opens that the check above takes is a named one.
+                    if (pattern.AsSpan(index + 2) is ['<', not ('=' or '!'), ..])
+                    {
+                        named.Add(true);
+                    }
+
+                    read.Append('(');
+                    break;
+
+                case '(':
+                    named.Add(false);
                     read.Append('(');
                     break;
 
@@ -881,6 +977,12 @@ public static class JsonSchemaSubset
                     read.Append(pattern[index]);
                     break;
             }
+        }
+
+        if (numbered.FirstOrDefault(reference => CountedApart(reference, named)) is { } apart)
+        {
+            problem = ReadApart(apart);
+            return null;
         }
 
         try
@@ -904,10 +1006,17 @@ public static class JsonSchemaSubset
     /// is ECMA-262's white space, and a class holding <c>\S</c> - whose ECMA-262 meaning no list of .NET class
     /// members spells - is written as the choice between its other members and every character but white space,
     /// or, negated, as white space its other members do not hold. Within a class
-    /// <c>$</c> and <c>.</c> are characters, so nothing else in it is rewritten.
+    /// <c>$</c> and <c>.</c> are characters, so nothing else in it is rewritten; an escape .NET reads otherwise there
+    /// is refused, as <see cref="ReadPattern"/> says.
     /// </summary>
-    private static int CopyClass(string pattern, int index, StringBuilder read)
+    /// <param name="pattern">The pattern.</param>
+    /// <param name="index">Where the class opens.</param>
+    /// <param name="read">The pattern as .NET is to read it, the class appended.</param>
+    /// <param name="problem">Why the class cannot be read; <see langword="null"/> where it can.</param>
+    private static int CopyClass(string pattern, int index, StringBuilder read, out string? problem)
     {
+        problem = null;
+
         if (index + 1 < pattern.Length && pattern[index + 1] == ']')
         {
             read.Append("(?!)");
@@ -924,6 +1033,12 @@ public static class JsonSchemaSubset
         {
             if (pattern[index] == '\\' && index + 1 < pattern.Length)
             {
+                if (EscapeNotEcma(pattern.AsSpan(index + 1), inClass: true) is { } dotnet)
+                {
+                    problem = ReadApart(dotnet);
+                    return index;
+                }
+
                 switch (pattern[++index])
                 {
                     case 's':
@@ -984,6 +1099,75 @@ public static class JsonSchemaSubset
 
         return rest.IsEmpty ? string.Empty : rest[..1].ToString();
     }
+
+    /// <summary>
+    /// The escape at the head of <paramref name="rest"/> - what follows a backslash - as written, where .NET reads it
+    /// one way and ECMA-262 another, or <see langword="null"/> where the two read it alike or .NET cannot read it at all.
+    /// </summary>
+    /// <param name="rest">The pattern from the character after the backslash.</param>
+    /// <param name="inClass">Whether the escape is within a class, where .NET reads the anchors' letters and the
+    /// backreferences' characters as ECMA-262 does.</param>
+    private static string? EscapeNotEcma(ReadOnlySpan<char> rest, bool inClass)
+    {
+        switch (rest)
+        {
+            case ['p' or 'P' or 'a' or 'e', ..]:
+            case ['A' or 'Z' or 'z' or 'G', ..] when !inClass:
+                return $@"\{rest[0]}";
+
+            case ['k', '\'' or '<', ..] or ['<' or '\'', ..] when !inClass:
+                var opens = rest[0] == 'k' ? 1 : 0;
+                var close = rest[opens] == '<' ? '>' : '\'';
+                var name = rest[(opens + 1)..];
+                var length = name.IndexOf(close);
+
+                // Read as .NET reads a reference: a name or a number up to its closing mark. ECMA-262's own is
+                // \k<name>, by a name alone; anything else .NET either reads as ECMA-262 does or cannot read.
+                if (length < 1
+                    || (!IsIdentifier(name[..length], dollar: false) && !IsDigits(name[..length]))
+                    || (opens == 1 && close == '>' && !char.IsAsciiDigit(name[0])))
+                {
+                    return null;
+                }
+
+                return $@"\{rest[..(opens + length + 2)]}";
+
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>
+    /// Whether a backreference by number, as written - a backslash and its digits - reaches one group in .NET and
+    /// another, or a character, in ECMA-262: .NET counts the groups with no name first and the named ones after them
+    /// where ECMA-262 counts every group in the order it opens, and where the number is more than the groups there are,
+    /// .NET takes as many of its digits as name a group, where ECMA-262 takes them all as the code of a character.
+    /// </summary>
+    /// <param name="reference">The backreference as written.</param>
+    /// <param name="named">Each capturing group in the order it opens, and whether it is named.</param>
+    private static bool CountedApart(string reference, IReadOnlyList<bool> named)
+    {
+        var digits = reference.AsSpan(1);
+
+        if (!int.TryParse(digits, NumberStyles.None, CultureInfo.InvariantCulture, out var number) || number > named.Count)
+        {
+            return digits.Length > 1 && digits[0] - '0' <= named.Count;
+        }
+
+        // Ordered stably, so the groups with no name keep their order ahead of the named ones, which keep theirs.
+        var counted = Enumerable.Range(0, named.Count).OrderBy(group => named[group]).ToList();
+
+        return counted[number - 1] != number - 1;
+    }
+
+    /// <summary>Why a pattern holding <paramref name="written"/> is refused: the two dialects read it apart.</summary>
+    /// <param name="written">What the pattern writes, as it writes it.</param>
+    private static string ReadApart(string written)
+        => $"'{written}' means one thing to .NET and another to ECMA-262, the dialect a pattern is written in";
+
+    /// <summary>Whether text is ASCII digits alone, at least one.</summary>
+    private static bool IsDigits(ReadOnlySpan<char> text)
+        => !text.IsEmpty && !text.ContainsAnyExceptInRange('0', '9');
 
     /// <summary>
     /// A member of a path: <c>.name</c> where the name is an identifier, and <c>["a.b"]</c>, written as JSON,

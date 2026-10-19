@@ -313,6 +313,51 @@ public sealed class AgentStreamTests
     }
 
     /// <summary>
+    /// A null item is refused in every list an event or the result holds, read back by the options each was written
+    /// with - through a line of the stored stream and through <c>result.json</c> - as it is in a list of the
+    /// configuration: a record declares its lists read-only, and a refusal that reached only the concrete list would
+    /// read a null back where every reader trusts there is none. Each list is found by its member's own type, a list
+    /// within a list's item among them, so one added later is held to it without being named.
+    /// </summary>
+    [Fact]
+    public void ANullItem_IsRefusedInEveryListALineOrTheResultHolds()
+    {
+        var refused = new List<string>();
+
+        foreach (var kind in typeof(AgentEvent).GetCustomAttributes<JsonDerivedTypeAttribute>())
+        {
+            var line = JsonSerializer.SerializeToNode((AgentEvent)Sample(kind.DerivedType, Fill.Everything)!, JsonStateFile.LineOptions)!;
+
+            foreach (var (path, broken) in WithANullItem(line, kind.DerivedType, (string)kind.TypeDiscriminator!))
+            {
+                var read = Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<AgentEvent>(broken, JsonStateFile.LineOptions));
+
+                Assert.Equal("Item 1 of a list is null; a list in this file cannot contain null.", read.Message);
+                refused.Add(path);
+            }
+        }
+
+        var result = JsonSerializer.SerializeToNode((AgentRunResult)Sample(typeof(AgentRunResult), Fill.Everything)!, JsonStateFile.Options)!;
+
+        foreach (var (path, broken) in WithANullItem(result, typeof(AgentRunResult), AgentRunner.ResultFileName))
+        {
+            var read = Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<AgentRunResult>(broken, JsonStateFile.Options));
+
+            Assert.Equal("Item 1 of a list is null; a list in this file cannot contain null.", read.Message);
+            refused.Add(path);
+        }
+
+        // Every list there is was found: a walk that found none would pass having held nothing.
+        Assert.Equal(
+            [
+                "sessionStarted.tools", "sessionStarted.skills", "assistantMessage.calls", "outputRepair.problems",
+                "personAsked.questions", "personAsked.questions[0].choices", "result.json.usage.perModel", "result.json.assumptions",
+                "result.json.questions", "result.json.questions[0].choices", "result.json.served", "result.json.files",
+            ],
+            refused);
+    }
+
+    /// <summary>
     /// Each model's part of a run's usage is written by its names and read back as it was: a pair the serializer cannot
     /// name is written as nothing at all, and the usage of every model that served would be lost.
     /// </summary>
@@ -500,6 +545,51 @@ public sealed class AgentStreamTests
 
         return made;
     }
+
+    /// <summary>
+    /// The document <paramref name="node"/> belongs to, written as a <paramref name="type"/> at <paramref name="path"/>,
+    /// once for each list of items that are no value of their own that the type's members hold there: where the list
+    /// is, and the whole document with a null item put at the list's end. A list's items, and an object a member holds,
+    /// are walked by their own types.
+    /// </summary>
+    private static IEnumerable<(string Path, string Broken)> WithANullItem(JsonNode node, Type type, string path)
+    {
+        foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        {
+            var name = JsonNamingPolicy.CamelCase.ConvertName(property.Name);
+            var at = $"{path}.{name}";
+
+            if (node[name] is JsonArray list && ItemOf(property.PropertyType) is { IsValueType: false } item)
+            {
+                list.Add(null);
+                yield return (at, node.Root.ToJsonString());
+                list.RemoveAt(list.Count - 1);
+
+                foreach (var (index, one) in list.Index())
+                {
+                    foreach (var within in one is JsonObject ? WithANullItem(one, item, $"{at}[{index}]") : [])
+                    {
+                        yield return within;
+                    }
+                }
+            }
+            else if (node[name] is JsonObject inner)
+            {
+                foreach (var within in WithANullItem(inner, Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType, at))
+                {
+                    yield return within;
+                }
+            }
+        }
+    }
+
+    /// <summary>The item type of a sequence other than text, or <see langword="null"/> where the type is none.</summary>
+    private static Type? ItemOf(Type type)
+        => type == typeof(string)
+            ? null
+            : type.GetInterfaces().Append(type)
+                .FirstOrDefault(one => one.IsGenericType && one.GetGenericTypeDefinition() == typeof(IEnumerable<>))?
+                .GetGenericArguments()[0];
 
     /// <summary>Whether a member that may be absent is left null, as <paramref name="fill"/> says of its kind.</summary>
     private static bool Absent(NullabilityState state, Type type, Fill fill)

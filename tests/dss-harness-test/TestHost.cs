@@ -31,6 +31,12 @@ internal static class TestHost
     /// <summary>This test assembly, which doubles as the child process.</summary>
     internal static string AssemblyPath => typeof(TestHost).Assembly.Location;
 
+    /// <summary>
+    /// The program the build makes beside this test assembly, started by its whole path: the same child, for a test that
+    /// needs a program no lookup on a PATH finds, and whose mode the environment it is given selects.
+    /// </summary>
+    internal static string AssemblyProgram => Path.ChangeExtension(AssemblyPath, OperatingSystem.IsWindows() ? ".exe" : null);
+
     [ModuleInitializer]
     internal static void Initialize()
     {

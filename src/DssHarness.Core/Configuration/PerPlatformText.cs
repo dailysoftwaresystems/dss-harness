@@ -136,7 +136,7 @@ public sealed record PerPlatformWords(string Entry, string Value, string Names, 
 /// </summary>
 /// <remarks>
 /// Read with the caller's reader rather than through <c>JsonSerializer.Deserialize</c>, for the reason
-/// <see cref="NonNullListConverter{TItem}"/> and <see cref="CaseInsensitiveDictionaryConverter{TValue}"/> give: a copy
+/// <see cref="NonNullListConverter{TList, TItem}"/> and <see cref="CaseInsensitiveDictionaryConverter{TValue}"/> give: a copy
 /// scoped to the value reports a problem at a line counted from the value's own start instead of from the top of the
 /// file.
 /// </remarks>

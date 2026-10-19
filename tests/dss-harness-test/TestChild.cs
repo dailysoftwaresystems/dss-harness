@@ -18,6 +18,9 @@ internal static class TestChild
     /// </summary>
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
 
+    /// <summary>What the stand-in for a step that reaches no channel says on its error stream.</summary>
+    internal const string ReachedNothing = "the step reached no channel";
+
     internal static int Run(string mode, string[] arguments)
     {
         using var standardOutput = new StreamWriter(Console.OpenStandardOutput(), Utf8NoBom) { AutoFlush = true };
@@ -44,6 +47,7 @@ internal static class TestChild
             "ignore-term-and-sleep" => IgnoreTermAndSleep(arguments),
             "note-term-and-sleep" => NoteTermAndSleep(standardOutput, arguments),
             "say-and-exit" => SayAndExit(standardOutput, standardError, arguments),
+            "step-reaching-nothing" => StepReachingNothing(standardError),
             "say-pid-and-sleep" => SayPidAndSleep(standardOutput, arguments),
             "say-pid-then" => SayPidThen(standardOutput, arguments),
             "contain-and-wait" => ContainAndWait(standardOutput, arguments),
@@ -608,6 +612,17 @@ internal static class TestChild
         error.Write(arguments[1] + "\n");
 
         return int.Parse(arguments[2], CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// Stands in for the step that places a contained child, taking its command line and reaching no channel: says so on
+    /// standard error and ends with the step's own code, starting nothing.
+    /// </summary>
+    private static int StepReachingNothing(TextWriter error)
+    {
+        error.Write(ReachedNothing + "\n");
+
+        return Core.Processes.ContainExec.Failed;
     }
 
     /// <summary>Writes its own process id and sleeps for the milliseconds <c>arguments[0]</c> gives.</summary>

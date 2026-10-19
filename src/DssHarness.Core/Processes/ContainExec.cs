@@ -97,6 +97,22 @@ public static class ContainExec
     /// <param name="error">Where a refusal of the step's own command line is said.</param>
     /// <returns>The program's own exit code, or <see cref="Failed"/> where the step did not start it.</returns>
     public static int Run(string? job, bool group, string? status, string program, IReadOnlyList<string> arguments, TextWriter error)
+        => Run(job, group, status, program, arguments, error, ReachBound);
+
+    /// <summary>
+    /// The step as <see cref="Run(string?, bool, string?, string, IReadOnlyList{string}, TextWriter)"/> runs it, waiting
+    /// <paramref name="reachBound"/> to reach its channel: a test's bound, shorter than the step's own, so that a channel
+    /// never reached is given up within a test's time.
+    /// </summary>
+    /// <param name="job">The name of the Windows job object to join, for full containment there.</param>
+    /// <param name="group">Whether a process group of one's own is the containment asked for, apart from the terminal alone.</param>
+    /// <param name="status">The name of the channel the process runner reads the start from.</param>
+    /// <param name="program">The program, by its resolved path.</param>
+    /// <param name="arguments">The program's arguments.</param>
+    /// <param name="error">Where a refusal of the step's own command line is said.</param>
+    /// <param name="reachBound">How long the step waits to reach the channel.</param>
+    /// <returns>The program's own exit code, or <see cref="Failed"/> where the step did not start it.</returns>
+    internal static int Run(string? job, bool group, string? status, string program, IReadOnlyList<string> arguments, TextWriter error, TimeSpan reachBound)
     {
         ArgumentNullException.ThrowIfNull(program);
         ArgumentNullException.ThrowIfNull(arguments);
@@ -138,7 +154,7 @@ public static class ContainExec
 
         try
         {
-            channel = StartStatus.Reach(status);
+            channel = StartStatus.Reach(status, reachBound);
         }
         catch (Exception ex) when (ex is IOException or TimeoutException or UnauthorizedAccessException)
         {
@@ -211,14 +227,18 @@ public static class ContainExec
             _pipe = pipe;
         }
 
-        /// <summary>Reaches the channel <paramref name="name"/> names, which only this user's processes can open.</summary>
-        public static StartStatus Reach(string name)
+        /// <summary>
+        /// Reaches the channel <paramref name="name"/> names, which only this user's processes can open, within
+        /// <paramref name="bound"/>.
+        /// </summary>
+        /// <exception cref="TimeoutException">The channel was not reached within the bound.</exception>
+        public static StartStatus Reach(string name, TimeSpan bound)
         {
             var pipe = new NamedPipeClientStream(".", name, PipeDirection.Out, PipeOptions.CurrentUserOnly);
 
             try
             {
-                pipe.Connect(ReachBound);
+                pipe.Connect(bound);
                 return new StartStatus(pipe);
             }
             catch

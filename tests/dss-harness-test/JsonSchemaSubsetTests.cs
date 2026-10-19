@@ -418,14 +418,47 @@ public sealed class JsonSchemaSubsetTests
             JsonSchemaSubset.Problems(Schema("""{"type":"array","maxItems":1}"""), JsonNode.Parse("[1,2]")));
     }
 
-    /// <summary>An integer is a whole number: one with a fraction is refused.</summary>
-    [Fact]
-    public void ANumberWithAFraction_IsNotAnInteger()
+    /// <summary>
+    /// An integer is any number with no fraction, as JSON Schema means one: <c>7.0</c> is one, and so is a number written
+    /// with an exponent that leaves no fraction, or one too large for any machine number; one with a fraction is refused,
+    /// however far down its fraction lies.
+    /// </summary>
+    [Theory]
+    [InlineData("7", true)]
+    [InlineData("7.0", true)]
+    [InlineData("-0.0", true)]
+    [InlineData("1.5e1", true)]
+    [InlineData("100E-2", true)]
+    [InlineData("1e400", true)]
+    [InlineData("123456789012345678901234567890", true)]
+    [InlineData("7.5", false)]
+    [InlineData("1.25e1", false)]
+    [InlineData("150e-2", false)]
+    [InlineData("1e-400", false)]
+    [InlineData("1.0000000000000000000000000000001", false)]
+    public void AnInteger_IsAnyNumberWithNoFraction(string number, bool holds)
     {
-        var schema = Schema("""{"type":"integer"}""");
+        var problems = JsonSchemaSubset.Problems(Schema("""{"type":"integer"}"""), JsonNode.Parse(number));
 
-        Assert.Empty(JsonSchemaSubset.Problems(schema, JsonNode.Parse("7")));
-        Assert.Equal(["$: 7.5 is not an integer"], JsonSchemaSubset.Problems(schema, JsonNode.Parse("7.5")));
+        Assert.Equal(holds ? [] : [$"$: {number} is not an integer"], problems);
+    }
+
+    /// <summary>
+    /// A count - <c>minItems</c>, <c>maxItems</c> - is a whole number from 0 however it is written: <c>2.0</c> is two,
+    /// both where the schema is checked and where a document is held to it, and a fraction or a number below 0 is
+    /// refused where the schema says it.
+    /// </summary>
+    [Fact]
+    public void ACount_IsAWholeNumberFromNought_HoweverItIsWritten()
+    {
+        var schema = Schema("""{"type":"array","minItems":2.0,"maxItems":3e0}""");
+
+        Assert.Empty(JsonSchemaSubset.Problems(schema, JsonNode.Parse("[1,2]")));
+        Assert.Equal(["$: holds 1 item and at least 2 are asked"], JsonSchemaSubset.Problems(schema, JsonNode.Parse("[1]")));
+        Assert.Equal(["$: holds 4 items and at most 3 are taken"], JsonSchemaSubset.Problems(schema, JsonNode.Parse("[1,2,3,4]")));
+        Assert.Equal(
+            ["$.minItems: is not a whole number from 0", "$.maxItems: is not a whole number from 0"],
+            JsonSchemaSubset.SubsetProblems(JsonNode.Parse("""{"type":"array","minItems":2.5,"maxItems":-1}""")!));
     }
 
     /// <summary>
@@ -530,6 +563,11 @@ public sealed class JsonSchemaSubsetTests
     [InlineData(@"^[^ \S]$", " ", "\" \"")]
     [InlineData(@"^[a-z-[aeiou]]$", "b]", null)]
     [InlineData(@"^[a-z-[aeiou]]$", "b", "\"b\"")]
+    [InlineData(@"^[\A\Z\z\G]+$", "AZzG", null)]
+    [InlineData(@"^a\<b$", "a<b", null)]
+    [InlineData(@"^(a)(?<x>b)\1$", "aba", null)]
+    [InlineData(@"^(?<x>a)\1\k<x>$", "aaa", null)]
+    [InlineData(@"^(a)\2$", "a\u0002", null)]
     public void APattern_IsReadAsEcma262ReadsIt(string pattern, string text, string? refused)
     {
         var schema = new JsonObject { ["type"] = "string", ["pattern"] = pattern };
@@ -556,6 +594,41 @@ public sealed class JsonSchemaSubsetTests
         IReadOnlyList<string> expected = problem is null ? [] : [problem];
 
         Assert.Equal(expected, JsonSchemaSubset.SubsetProblems(schema));
+    }
+
+    /// <summary>
+    /// What .NET, which runs a pattern, reads one way and ECMA-262 another is refused where the schema says it, rather
+    /// than read either way: .NET's anchors outside a class, its categories, bell and escape character in a class or
+    /// out, its spellings of a backreference beside ECMA-262's <c>\k&lt;name&gt;</c>, and a backreference by number
+    /// that reaches another group in each - .NET counting the named groups last - or that .NET reads as a group and a
+    /// digit where ECMA-262 reads the character it codes. What both read alike is read
+    /// (<see cref="APattern_IsReadAsEcma262ReadsIt"/>).
+    /// </summary>
+    [Theory]
+    [InlineData(@"\Aabc", @"\A")]
+    [InlineData(@"abc\Z", @"\Z")]
+    [InlineData(@"abc\z", @"\z")]
+    [InlineData(@"\Gabc", @"\G")]
+    [InlineData(@"^\p{L}+$", @"\p")]
+    [InlineData(@"^\P{L}+$", @"\P")]
+    [InlineData(@"^[\p{L}]+$", @"\p")]
+    [InlineData(@"^[^\P{Lu}]$", @"\P")]
+    [InlineData(@"^\a$", @"\a")]
+    [InlineData(@"^[\e]$", @"\e")]
+    [InlineData(@"^(?<x>a)\k'x'$", @"\k'x'")]
+    [InlineData(@"^(?<x>a)\<x>$", @"\<x>")]
+    [InlineData(@"^(?<x>a)\'x'$", @"\'x'")]
+    [InlineData(@"^(a)\k<1>$", @"\k<1>")]
+    [InlineData(@"^(?<x>a)(b)\1$", @"\1")]
+    [InlineData(@"^(a)\12$", @"\12")]
+    [InlineData(@"^\2(?<x>a)(b)$", @"\2")]
+    public void APatternDotNetReadsOtherwise_IsRefusedWhereTheSchemaIs(string pattern, string written)
+    {
+        var schema = new JsonObject { ["type"] = "string", ["pattern"] = pattern };
+
+        Assert.Equal(
+            [$"$.pattern: '{written}' means one thing to .NET and another to ECMA-262, the dialect a pattern is written in"],
+            JsonSchemaSubset.SubsetProblems(schema));
     }
 
     /// <summary>

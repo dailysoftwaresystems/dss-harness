@@ -28,6 +28,12 @@ namespace DssHarness.Core.Agents;
 /// client that threw has its failure raised after both are written. A record that could not be written stops the run,
 /// and its result says so.
 /// </para>
+/// <para>
+/// A run that never began is recorded as one, in the step's own directory: its stream's two ends and a
+/// <c>result.json</c> saying <see cref="AgentRunStatus.NotStarted"/> and why. A step that was not started is a step of
+/// the run all the same - its record says it was not, and for which of the three reasons - and the result and every
+/// exit name where the step's records are, which a step left without any would not have.
+/// </para>
 /// </remarks>
 /// <param name="clients">The clients registered, one of which works each step.</param>
 /// <param name="fileSystem">The file system the step's records are kept on.</param>

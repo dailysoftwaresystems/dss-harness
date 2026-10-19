@@ -783,6 +783,97 @@ public sealed class ContainExecTests
             (refused.ExitCode, refused.StandardError));
     }
 
+    /// <summary>
+    /// On Windows a contained child whose job object cannot be made is a program that never ran, the system's reason said
+    /// as any start's failure is: nothing is started outside the container it was to have. The job is made to fail as the
+    /// system fails it, by an object of another kind holding the job's name.
+    /// </summary>
+    [Fact]
+    public async Task AContainedChildWhoseJobCannotBeMade_OnWindows_NeverRuns_SayingWhy()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "a job object is Windows' own; on Linux and macOS the step makes the child's session itself, and AProgramThatCannotStart_StartedThroughTheStep_IsOneThatNeverRan_ForTheSystemsReason holds what fails there.");
+
+        // ERROR_INVALID_HANDLE: what the system answers a job asked for under a name an object of another kind holds.
+        const int NameHeldByAnotherKind = 6;
+
+        using var temp = new TempDirectory();
+        var written = temp.Combine("written");
+        var started = false;
+        var runner = new ProcessRunner(
+            new HostPlatform(),
+            FilePermissionsFactory.Create(),
+            CliRunner.CliProgram,
+            processTable: null,
+            makeJob: name =>
+            {
+                using var holder = new Mutex(initiallyOwned: false, name);
+                return Containment.CreateJob(name);
+            });
+
+        var raised = await Assert.ThrowsAsync<ProgramStartException>(() => runner.RunAsync(
+            ByItsPath("write-file", written, "ran") with { Contained = true, OnStarted = () => started = true },
+            TestContext.Current.CancellationToken).WaitAsync(LongBound, TestContext.Current.CancellationToken));
+
+        Assert.Equal(TestHost.AssemblyProgram, raised.FileName);
+        Assert.Equal(
+            $"'{TestHost.AssemblyProgram}' could not be started: the job object that would contain it could not be made: {new Win32Exception(NameHeldByAnotherKind).Message}",
+            raised.Message);
+        Assert.Equal(NameHeldByAnotherKind, Assert.IsType<Win32Exception>(raised.InnerException).NativeErrorCode);
+        Assert.False(started, "a program whose container could not be made was said to have started");
+        Assert.False(File.Exists(written), "a program whose container could not be made ran");
+    }
+
+    /// <summary>
+    /// The step waits for its channel no longer than its bound: a channel it cannot reach - nobody listens on it - ends
+    /// the step with its own code, saying so on its error stream, once the bound is spent. The step's own bound is thirty
+    /// seconds; a shorter one stands in for it here.
+    /// </summary>
+    [Fact]
+    public void TheStep_GivesUpAChannelItCannotReach_OnceItsBoundIsSpent()
+    {
+        var channel = ProcessRunner.StatusName(OperatingSystem.IsWindows());
+        var bound = TimeSpan.FromMilliseconds(300);
+        using var error = new StringWriter();
+        var waited = Stopwatch.StartNew();
+
+        var code = ContainExec.Run(job: null, group: true, channel, CliRunner.CliProgram, ["--version"], error, bound);
+
+        waited.Stop();
+
+        Assert.Equal(
+            (ContainExec.Failed, $"contain-exec could not reach the channel '{channel}' it says the start on: The operation has timed out.{Environment.NewLine}"),
+            (code, error.ToString()));
+
+        // Waited for as long as the bound, and given up then: never for the step's own thirty seconds. The wait counts the
+        // bound by the system's tick, which can end it a few milliseconds before a stopwatch says the bound is spent.
+        Assert.InRange(waited.Elapsed, bound - TimeSpan.FromMilliseconds(50), bound + TimeSpan.FromSeconds(10));
+    }
+
+    /// <summary>
+    /// A step that ends without reaching its channel said nothing of the start: the run is a program that never ran,
+    /// said with the step's own code and the first line of its error stream - never read as the program's end, and never
+    /// said to have started.
+    /// </summary>
+    [Fact]
+    public async Task AStepThatEndsWithoutReachingItsChannel_IsAStartThatFailed_SayingWhatTheStepSaid()
+    {
+        var started = false;
+
+        // This assembly's program stands in for the step, and the environment the step hands on selects what it does.
+        var runner = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create(), TestHost.AssemblyProgram);
+
+        var raised = await Assert.ThrowsAsync<ProgramStartException>(() => runner.RunAsync(
+            ByItsPath("step-reaching-nothing") with { Contained = true, OnStarted = () => started = true },
+            TestContext.Current.CancellationToken).WaitAsync(LongBound, TestContext.Current.CancellationToken));
+
+        Assert.Equal(TestHost.AssemblyProgram, raised.FileName);
+        Assert.Equal(
+            $"'{TestHost.AssemblyProgram}' could not be started: contain-exec ended with {ContainExec.Failed} before it started it: {TestChild.ReachedNothing}",
+            raised.Message);
+        Assert.Null(raised.InnerException);
+        Assert.False(started, "a program whose step reached no channel was said to have started");
+    }
+
     /// <summary>Runs one child behaviour, contained or apart, and reads the ids it printed.</summary>
     private static async Task<(Dictionary<string, int> Ids, ProcessResult Result)> RunChild(string mode, bool contained = false, bool apart = false)
     {
@@ -878,6 +969,13 @@ public sealed class ContainExecTests
     /// <summary>A request that runs this assembly as a child, as the process tests do.</summary>
     private static ProcessRequest Child(string mode, params string[] arguments)
         => TestHost.ChildRequest(mode, arguments);
+
+    /// <summary>
+    /// A request that runs this assembly as a child through the program the build makes beside it, named by its whole
+    /// path: what a refusal says of the program is then the path the request gave, with no lookup between.
+    /// </summary>
+    private static ProcessRequest ByItsPath(string mode, params string[] arguments)
+        => TestHost.ChildRequest(mode, arguments) with { FileName = TestHost.AssemblyProgram, Arguments = arguments };
 
     /// <summary>
     /// A file that is there and is no program this system starts: on Windows text under a program's extension, which is

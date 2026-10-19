@@ -301,7 +301,7 @@ public sealed class ArmVerdictRecordTests : IDisposable
     [InlineData("""{ "format": 1, "leg": "native", "arms": { "charge": [ { "verdict": "passed", "run": "r1", "at": "2026-10-12T14:58:11Z", "sweptIn": "the main checkout", "key": "k1" } ] }, "tables": {} }""", "it holds an entry of arm 'charge' with the key 'k1' and nothing it was judged on")]
     [InlineData(DamagedBuilt, "it holds an entry of arm 'charge' whose target 'lib_tests' is named by no digest")]
     [InlineData(DamagedRunRead, "it holds an entry of arm 'charge' whose run-time read 'data/golden.txt' is named by no hash")]
-    [InlineData(DamagedCompiler, "it holds an entry of arm 'charge' with a compiler that is no compiler")]
+    [InlineData(DamagedCompiler, "it holds what no build of DssHarness writes - another build wrote it, or a hand changed it")]
     [InlineData(DamagedRows, "it holds what no build of DssHarness writes - another build wrote it, or a hand changed it")]
     [InlineData(DamagedHost, "it holds what no build of DssHarness writes - another build wrote it, or a hand changed it")]
     [InlineData(DamagedSettings, "it holds what no build of DssHarness writes - another build wrote it, or a hand changed it")]
@@ -354,7 +354,7 @@ public sealed class ArmVerdictRecordTests : IDisposable
         + """{ "judge": 2, "rows": { "a": "rows" }, "texts": {}, "sites": {}, "built": {}, "compilers": [], "developerEnvironment": null, "settings": null, "runReads": {}, "host": "local" }"""
         + EntryTail;
 
-    /// <summary>An entry with a compiler that is no compiler: <c>"compilers": [null]</c>.</summary>
+    /// <summary>An entry with a compiler that is no compiler: <c>"compilers": [null]</c> - refused as what no build writes, its own reader letting no null into a list.</summary>
     private const string DamagedCompiler = EntryHead
         + """{ "judge": 2, "rows": { "a": "rows" }, "texts": {}, "sites": {}, "built": {}, "compilers": [null], "developerEnvironment": null, "settings": { "build": "b", "run": "r", "judge": "j" }, "runReads": {}, "host": "local" }"""
         + EntryTail;

@@ -699,7 +699,9 @@ public sealed class AgentRunnerTests
 
     /// <summary>
     /// Where no client can be taken, the run never began and the configuration is why: a record of the step exists all
-    /// the same, its two ends saying so.
+    /// the same - its stream's two ends and a <c>result.json</c> saying it was not started and why - since a step that
+    /// was not started is a step of the run whose record says so, and the result names where the step's records are.
+    /// Nothing else is written there but the stream's claim.
     /// </summary>
     [Fact]
     public async Task WhereNoClientCanBeTaken_TheRunNeverBegan_SayingTheConfiguration()
@@ -718,9 +720,35 @@ public sealed class AgentRunnerTests
         Assert.Empty(result.Served);
         Assert.Empty(result.Assumptions);
 
+        // The stream's writer leaves its claim beside it, as every writer of an appended record does.
+        Assert.Equal(
+            [AgentRunner.ResultFileName, StoredStream.FileName, StoredStream.FileName + PhysicalAppendFile.ClaimSuffix],
+            Directory.EnumerateFileSystemEntries(StepDirectory(temp)).Select(Path.GetFileName).Order(StringComparer.Ordinal));
         Assert.Equal(["runStarted", "runFinished"], Lines(temp).Select(LineKind));
         Assert.Equal("""{"kind":"runFinished","status":"NotStarted","error":"No agent client named 'not-there' is registered."}""", WithoutWhenAndWhere(Lines(temp)[^1]));
-        Assert.Equal(AgentRunStatus.NotStarted, ReadResult(temp).Status);
+        Assert.Equal(
+            """
+            {
+              "status": "NotStarted",
+              "notStartedBecause": "ConfigurationWrong",
+              "model": "model-x",
+              "turns": 0,
+              "toolCalls": 0,
+              "duration": "00:00:00",
+              "denials": 0,
+              "filesWritten": 0,
+              "webRequests": 0,
+              "compactions": 0,
+              "retries": 0,
+              "error": "No agent client named 'not-there' is registered.",
+              "assumptions": [],
+              "questions": [],
+              "served": [],
+              "files": []
+            }
+
+            """,
+            File.ReadAllText(ResultFile(temp)));
     }
 
     /// <summary>
