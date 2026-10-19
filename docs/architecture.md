@@ -734,8 +734,10 @@ record an older tool wrote and what the tool still writes for one, so those reco
 engine makes one for a read-only reason step, and nothing else does - the option's help says a person has no use for
 one by hand. It counts against no limit, the limit being a limit on worktrees: `OrchestrationRules.OpenAgents` leaves
 it out, and so do list-orchestrator's open agents and delete-orchestrator's way, since a live one holds nothing but
-records and goes with the orchestrator. It is never seeded, refreshed, rebased or folded - each refuses, exit 13,
-before anything is asked of git - and deleting it is one write, `live` to `deleted`, the path the states already have
+records and goes with the orchestrator; what every agent's directory keeps of the steps that ran as it and of its
+sessions with an API client is counted with its evidence and transcripts, and goes only with `--delete-evidence`,
+whatever the agent's kind or state. It is never seeded, refreshed, rebased or folded - each refuses, exit 13, once the
+repository is found and before git is asked anything about the agent - and deleting it is one write, `live` to `deleted`, the path the states already have
 for an agent whose worktree was never made; its directory stays, as every deleted agent's does. It records no session:
 `--session` beside `--no-worktree` is a usage error, and such an agent's record that names one does not read
 (`AgentRecord.Problem`), so deleting it says no session is recorded and looks for no transcript, and keeps no evidence

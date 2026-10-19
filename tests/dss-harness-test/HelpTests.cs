@@ -2314,8 +2314,9 @@ public sealed partial class HelpTests
         Assert.Contains(
             "delete-orchestrator deletes the orchestrator once every agent of it with a worktree is deleted and no worktree is left "
                 + "below its directory, nor any directory holding a .git of its own that git records no worktree at - until then it "
-                + $"refuses ({HarnessExit.Refused}), naming each - and the evidence and transcripts its agents kept only with "
-                + "--delete-evidence; an agent with no worktree holds nothing but records, and goes with it, deleted or not.",
+                + $"refuses ({HarnessExit.Refused}), naming each - and the evidence, transcripts, steps and sessions its agents kept, "
+                + "whatever their kind or state, only with --delete-evidence; an agent with no worktree holds nothing but records, "
+                + "and goes with it, deleted or not.",
             Prose.Words(result.StandardOutput),
             StringComparison.Ordinal);
     }

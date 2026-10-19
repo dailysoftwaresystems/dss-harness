@@ -263,7 +263,7 @@ public sealed class AgentService(
         var main = context.Layout.MainCheckoutRoot;
         var address = WorktreeAddress.Nested(orchestrator, agent);
 
-        // Nothing of git is asked for an agent with no worktree: it counts against no limit, and no worktree is made.
+        // git's worktrees are not listed for an agent with no worktree: it counts against no limit, and no worktree is made.
         IReadOnlyList<WorktreeListing> listed = noWorktree
             ? []
             : await _worktrees.ListAsync(main, cancellationToken).ConfigureAwait(false);
@@ -3040,8 +3040,8 @@ public sealed class AgentService(
                     : $"{Agent(record)} was deleted at {OrchestrationReports.Moment(record.DeletedAt!.Value)}."));
         }
 
-        // An agent that reads the main tree is never seeded, refreshed, rebased or folded, and nothing of git is asked
-        // of it: this one refusal is every verb's.
+        // An agent that reads the main tree is never seeded, refreshed, rebased or folded, and git is asked nothing about
+        // it - only the repository was found, as every command finds it: this one refusal is every verb's.
         if (record.Reads)
         {
             return new AgentAt(CommandOutcome.Refused(

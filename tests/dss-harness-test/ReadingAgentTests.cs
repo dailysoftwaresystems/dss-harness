@@ -82,7 +82,7 @@ public sealed class ReadingAgentTests
     }
 
     /// <summary>
-    /// It counts against no limit, and nothing of git is asked for it: beside an orchestrator's last open place it is
+    /// It counts against no limit, and git's worktrees are not listed for it: beside an orchestrator's last open place it is
     /// made, where one more with a worktree is refused - and that refusal names the worktree agent alone, so the open
     /// agents leave the reader out.
     /// </summary>
@@ -189,16 +189,18 @@ public sealed class ReadingAgentTests
     }
 
     /// <summary>
-    /// Every verb that works a worktree refuses it with the one sentence that is all four of them, before anything is
-    /// asked of git: the service's git fails any call, so a guard that let one through first would fail the verb rather
-    /// than refuse it - and counts the calls besides, so one caught on the way is still seen.
+    /// Every verb that works a worktree refuses it with the one sentence that is all four of them, before git is asked
+    /// anything about the agent: the service's own git, which every question about an agent goes through, fails any
+    /// call, so a guard that let one through first would fail the verb rather than refuse it - and counts the calls
+    /// besides, so one caught on the way is still seen. Finding the repository, as every command does first, asks the
+    /// harness's own git, which this test leaves as it is.
     /// </summary>
     [Theory]
     [InlineData("seed")]
     [InlineData("refresh")]
     [InlineData("rebase")]
     [InlineData("fold")]
-    public async Task EveryVerbThatWorksAWorktree_RefusesIt_BeforeAnythingOfGit(string verb)
+    public async Task EveryVerbThatWorksAWorktree_RefusesIt_BeforeGitIsAskedAboutTheAgent(string verb)
     {
         using var temp = new TempDirectory();
         var kit = await OrchestrationKit.PrepareAsync(temp);
@@ -414,6 +416,48 @@ public sealed class ReadingAgentTests
         Assert.Equal("deleted orchestrator 'o1'", deleted.Message);
         Assert.Equal(
             [$"removed {kit.Layout.Directory}", "with the history of 1 deleted agent(s) and 1 agent(s) with no worktree, not deleted"],
+            deleted.Details);
+        Assert.False(Directory.Exists(kit.Layout.Directory));
+    }
+
+    /// <summary>
+    /// What the steps that ran as an agent and its sessions left in its directory is kept as its evidence and transcripts
+    /// are - a step's stored stream is its transcript - whatever its kind and state: deleting its orchestrator without
+    /// --delete-evidence is refused, naming each agent that keeps any and changing nothing, and with it they go, counted.
+    /// </summary>
+    [Fact]
+    public async Task ItsStepsAndSessions_AreKeptUntilDeleteEvidence_LiveOrDeleted()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateReadingAgentAsync("a7");
+        await kit.CreateReadingAgentAsync("a8");
+        Assert.True((await kit.DeleteAsync("a8", apply: true)).Succeeded);
+        var step = Path.Combine(kit.Layout.AgentStepDirectory("a7", "s1"), "stream.jsonl");
+        var session = Path.Combine(kit.Layout.AgentSessionDirectory("a8", "c1"), "conversation.json");
+        OrchestrationKit.Write(kit.Layout.AgentStepDirectory("a7", "s1"), "stream.jsonl", "{}\n");
+        OrchestrationKit.Write(kit.Layout.AgentSessionDirectory("a8", "c1"), "conversation.json", "{}\n");
+
+        var refused = await kit.Harness.OrchestratorService.DeleteAsync(kit.Main, OrchestrationKit.Orchestrator, deleteEvidence: false, Token);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal(
+            "Orchestrator 'o1' was not deleted, because it keeps 0 evidence file(s), 0 transcript file(s), 1 step file(s) and 1 session "
+                + "file(s) of its agents 'a7', 'a8'. Copy out what you need, or pass --delete-evidence to delete them with it. Nothing was changed.",
+            refused.Message);
+        Assert.True(File.Exists(step));
+        Assert.True(File.Exists(session));
+        Assert.Equal(AgentStates.Live, kit.Record("a7").State);
+
+        var deleted = await kit.Harness.OrchestratorService.DeleteAsync(kit.Main, OrchestrationKit.Orchestrator, deleteEvidence: true, Token);
+
+        Assert.Equal(HarnessExit.Success, deleted.ExitCode);
+        Assert.Equal(
+            [
+                $"removed {kit.Layout.Directory}",
+                "with the history of 1 deleted agent(s) and 1 agent(s) with no worktree, not deleted",
+                "and 0 evidence file(s), 0 transcript file(s), 1 step file(s) and 1 session file(s)",
+            ],
             deleted.Details);
         Assert.False(Directory.Exists(kit.Layout.Directory));
     }

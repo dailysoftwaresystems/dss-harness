@@ -144,7 +144,7 @@ internal static class DeleteOrchestratorCommand
 
     private static readonly Option<bool> DeleteEvidenceOption = new("--delete-evidence")
     {
-        Description = "Delete the evidence and transcripts its agents kept with it, which it refuses to delete otherwise.",
+        Description = "Delete the evidence, transcripts, steps and sessions its agents kept with it, which it refuses to delete otherwise.",
     };
 
     internal static Command Create()

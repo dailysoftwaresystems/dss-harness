@@ -29,11 +29,12 @@ public interface IOrchestratorService : IUseCase
     /// <summary>
     /// Deletes an orchestrator, once none of its agents with a worktree is live or closed and no worktree is left below its
     /// directory under the worktrees root; an agent with no worktree holds nothing but records, and goes with it whatever
-    /// its state. The evidence and transcripts its agents kept go with it only with <paramref name="deleteEvidence"/>.
+    /// its state. The evidence, transcripts, steps and sessions its agents kept - each agent's, of either kind, deleted or
+    /// not - go with it only with <paramref name="deleteEvidence"/>.
     /// </summary>
     /// <param name="startDirectory">A directory in the repository.</param>
     /// <param name="name">The orchestrator's name.</param>
-    /// <param name="deleteEvidence">Whether the evidence and transcripts its agents kept may go with it.</param>
+    /// <param name="deleteEvidence">Whether the evidence, transcripts, steps and sessions its agents kept may go with it.</param>
     /// <param name="cancellationToken">Stops it.</param>
     Task<CommandOutcome> DeleteAsync(string startDirectory, string name, bool deleteEvidence, CancellationToken cancellationToken = default);
 
@@ -270,8 +271,9 @@ public sealed class OrchestratorService(
             }
 
             // An agent that reads the main tree holds nothing but records: it does not stand in the way, and goes with
-            // the orchestrator. It keeps no evidence, having no worktree, and no transcript, having no session. What git
-            // lists below is refused on its own below, so the open agents are asked of the records alone.
+            // the orchestrator. What it kept of the steps that ran as it and of its sessions is counted below with every
+            // agent's, under the guard --delete-evidence gives. What git lists below is refused on its own below, so the
+            // open agents are asked of the records alone.
             var open = OrchestrationRules.OpenAgents(name, agents, []);
 
             if (open.Count > 0)
@@ -295,15 +297,21 @@ public sealed class OrchestratorService(
                     $"Orchestrator '{name}' was not deleted: {WorktreeInspector.SaidUnrecorded(below.Unrecorded)}. Nothing was changed.");
             }
 
-            var kept = agents.Select(agent => (agent.Name, Evidence: Files(orchestrator.EvidenceDirectory(agent.Name)), Transcripts: Files(orchestrator.TranscriptsDirectory(agent.Name))))
-                .Where(agent => agent.Evidence + agent.Transcripts > 0)
+            // What an agent kept is its evidence and its Claude transcripts, and the steps that ran as it and its
+            // conversations with an API client - a step's stored stream is its transcript - whatever its kind and state.
+            var kept = agents.Select(agent => new KeptOf(
+                    agent.Name,
+                    Files(orchestrator.EvidenceDirectory(agent.Name)),
+                    Files(orchestrator.TranscriptsDirectory(agent.Name)),
+                    Files(orchestrator.AgentStepsDirectory(agent.Name)),
+                    Files(orchestrator.AgentSessionsDirectory(agent.Name))))
+                .Where(agent => agent.Evidence + agent.Transcripts + agent.Steps + agent.Sessions > 0)
                 .ToList();
 
             if (kept.Count > 0 && !deleteEvidence)
             {
                 return CommandOutcome.Refused(
-                    $"Orchestrator '{name}' was not deleted, because it keeps {ReportText.Counted(kept.Sum(agent => agent.Evidence), "evidence file")} and "
-                    + $"{ReportText.Counted(kept.Sum(agent => agent.Transcripts), "transcript file")} of its agents {string.Join(", ", kept.Select(agent => $"'{agent.Name}'"))}. "
+                    $"Orchestrator '{name}' was not deleted, because it keeps {KeptOf.Said(kept)} of its agents {string.Join(", ", kept.Select(agent => $"'{agent.Name}'"))}. "
                     + "Copy out what you need, or pass --delete-evidence to delete them with it. Nothing was changed.");
             }
 
@@ -329,7 +337,7 @@ public sealed class OrchestratorService(
                 [
                     $"removed {orchestrator.Directory}",
                     .. went.Length == 0 ? [] : new[] { $"with the history of {string.Join(" and ", went)}" },
-                    .. kept.Count == 0 ? [] : new[] { $"and {ReportText.Counted(kept.Sum(agent => agent.Evidence), "evidence file")} and {ReportText.Counted(kept.Sum(agent => agent.Transcripts), "transcript file")}" },
+                    .. kept.Count == 0 ? [] : new[] { $"and {KeptOf.Said(kept)}" },
                 ]);
         });
 
@@ -522,6 +530,25 @@ public sealed class OrchestratorService(
 
     private int Files(string directory)
         => _fileSystem.DirectoryExists(directory) ? _fileSystem.EnumerateFiles(directory, recursive: true).Count() : 0;
+
+    /// <summary>
+    /// The files one agent kept that delete-orchestrator deletes only with --delete-evidence, by what they are.
+    /// </summary>
+    /// <param name="Name">The agent.</param>
+    /// <param name="Evidence">Its kept evidence's files.</param>
+    /// <param name="Transcripts">Its kept Claude transcripts' files.</param>
+    /// <param name="Steps">The files of the steps that ran as it.</param>
+    /// <param name="Sessions">The files of its conversations with an API client.</param>
+    private sealed record KeptOf(string Name, int Evidence, int Transcripts, int Steps, int Sessions)
+    {
+        /// <summary>What <paramref name="kept"/> hold between them, every kind named: the one wording of the refusal and the detail.</summary>
+        /// <param name="kept">The agents that keep any.</param>
+        public static string Said(IReadOnlyList<KeptOf> kept)
+            => $"{ReportText.Counted(kept.Sum(agent => agent.Evidence), "evidence file")}, "
+                + $"{ReportText.Counted(kept.Sum(agent => agent.Transcripts), "transcript file")}, "
+                + $"{ReportText.Counted(kept.Sum(agent => agent.Steps), "step file")} and "
+                + ReportText.Counted(kept.Sum(agent => agent.Sessions), "session file");
+    }
 
 
 }
