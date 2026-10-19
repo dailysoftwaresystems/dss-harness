@@ -1292,6 +1292,12 @@ it; `whenAddScope` names a step declared directly in a `forEach` group - the wor
 no wiring of their own and which no other step names; and the work-item group expands from the
 `items` of a `validate-plan` step it waits for. `piece` is read only in that group, and what only a
 prompt reads - `recommendations`, `question`, `status`, `update`, a skill - by no step's own key.
+What only a prompt reads stands where its agent is asked it: `{recommendations}` in a reason step's
+prompt and the advisor's, `{question.*}` in the advisor's alone, `{status.*}` in the reporter's two -
+`{status.question}` in its `askPrompt` alone - `{update.*}` in the prompts of the step that plans an
+update and of the steps of its scope, and `{piece.*}` in a step of the work-item group; the
+advisor's and the reporter's prompts are read too, and read no step by name, and a pull request's
+`body`, which the engine fills and no agent reads, reads what a template key reads and no skill.
 A `pushCheckpoints` with no push step that is a checkpoint, two handlers one ending raises that
 both name a `then`, a fallback that is its agent's own model or is named twice, a gathered name
 given twice, named for an engine's fact or for a member, `times` or `then` beside a `pause`

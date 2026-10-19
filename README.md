@@ -463,7 +463,13 @@ runner, or a runner its run checks name, writes the tree (`writesTree`) names wi
 create-agent step whose worktree it works in; the agents a run makes, `a` and a number up to the
 workflow's `maxInstances`, fit `worktrees.maxNameLength`; and a commit step gives a value for every
 variable `commit.template` requires and none for one it does not declare - with no template, a
-`message` and no `variables`. The engine that runs workflows is the next thing the tool grows. Run `dssharness help workflows` for the whole of it.
+`message` and no `variables`. What only a prompt reads stands where its agent is asked it:
+`{recommendations}` in a reason step's prompt and the advisor's, `{question.*}` in the advisor's
+alone, `{status.*}` in the reporter's two - `{status.question}` in its `askPrompt` alone -
+`{update.*}` in the prompts of the step that plans an update and of the steps of its scope, and
+`{piece.*}` in a step of the work-item group; the advisor's and the reporter's prompts read no step
+by name, and a pull request's `body`, which the engine fills and no agent reads, reads what a
+template key reads and no skill. The engine that runs workflows is the next thing the tool grows. Run `dssharness help workflows` for the whole of it.
 
 ## Anchors
 

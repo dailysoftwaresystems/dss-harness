@@ -1227,7 +1227,8 @@ public sealed class WorkflowValidatorTests
     /// <summary>
     /// V47: where a workflow takes plan updates, the work-item group expands from the items of a validate-plan step beside
     /// it that it waits for, directly or through others - the check the items an update places in a round are checked by
-    /// with the round's own. Without an amend block a forEach expands from whatever it reads.
+    /// with the round's own. A forEach refused for itself - yielding what is no list, reading a name nothing provides - is
+    /// said once, for that. Without an amend block a forEach expands from whatever it reads.
     /// </summary>
     [Fact]
     public void TheWorkItemGroup_ExpandsFromTheItemsOfACheckItWaitsFor()
@@ -1236,10 +1237,14 @@ public sealed class WorkflowValidatorTests
             ["group 'items' expands from 'planning.plan.latest.items', which no validate-plan step checked: with an amend block the work items of a round are checked together with those an update places in it, by the check the group expands from"],
             Problems(Amended.Replace("forEach: 'item-check.items'", "forEach: 'planning.plan.latest.items'", StringComparison.Ordinal)));
 
-        // An expression that reads nothing expands from no check either.
+        // One defect, said once: what is no list, and a name nothing provides, are refused for what they are.
         Assert.Equal(
-            ["group 'items' expands from 'true', which no validate-plan step checked: with an amend block the work items of a round are checked together with those an update places in it, by the check the group expands from"],
+            ["'items.forEach' yields a boolean, where a list is read: the group runs its steps once for each of its items"],
             Problems(Amended.Replace("forEach: 'item-check.items'", "forEach: 'true'", StringComparison.Ordinal)));
+
+        Assert.Equal(
+            ["'items.forEach' reads 'nothing.items', which no step before 'items', no input and no param provides"],
+            Problems(Amended.Replace("forEach: 'item-check.items'", "forEach: 'nothing.items'", StringComparison.Ordinal)));
 
         Assert.Equal(
             ["group 'items' expands from 'item-check.items', and waits for 'item-check' neither directly nor through the steps it depends on: the work items it runs are the ones that check checked, once it has ended"],
@@ -1312,6 +1317,114 @@ public sealed class WorkflowValidatorTests
                     dependsOn: [orient]
                     message: '{status.question} {update.cause}'
                 """));
+    }
+
+    /// <summary>
+    /// V43, V44, V45 and V46 in a prompt, each said at the line it first stands on: a reason step's prompt reads the bar,
+    /// a plan update where it is the step that plans one or a step of its scope, and a piece where it is a step of the
+    /// work-item group; the advisor's prompt reads a question and the bar, the reporter's two the status - the person's
+    /// question in the askPrompt alone - and none of the three a step by name or a skill; a pull request's body, which
+    /// the engine fills and no agent reads, reads what a step's own keys read, and no skill.
+    /// </summary>
+    [Fact]
+    public void APrompt_ReadsWhatOnlyAPromptReads_WhereItsAgentIsAskedIt()
+    {
+        var definition = Amended
+            .Replace(
+                "steps:\n  - name: intake",
+                "advisor:\n  agent: advisor\n  prompt: prompts/recommend.md\n  tier: best\nreporter:\n  agent: reporter\n  statusPrompt: prompts/status.md\n  askPrompt: prompts/ask.md\nsteps:\n  - name: intake",
+                StringComparison.Ordinal)
+            .Replace("amend:\n", "  - name: pr\n    type: pull-request\n    dependsOn: [items]\n    title: 'done'\n    body: prompts/body.md\namend:\n", StringComparison.Ordinal);
+
+        var files = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["prompts/intake.md"] = "Bar: {recommendations}\nUse {skill.notes}.\n{update.cause}\n{question.kind}\n{status.facts}\n{piece.kind}\n",
+            ["prompts/plan.md"] = "Bar: {recommendations}\nUpdate: {update.cause}, {update.work}\n",
+            ["prompts/plan-update.md"] = "Since: {update.since}\n",
+            ["prompts/implement.md"] = "Piece: {piece.kind}\n",
+            ["prompts/redo.md"] = "Before: {piece.before}\nWork: {update.work}\n",
+            ["prompts/body.md"] = "Ran: {run.ran}\nBar: {recommendations}\nUse {skill.notes}.\n{update.cause}\n",
+            ["prompts/recommend.md"] = "On {question.kind} at {question.step}: {question.record}\nFor {input.request}, by {recommendations}\n{status.facts}\n{planning.plan.summary}\n{skill.notes}\n",
+            ["prompts/status.md"] = "Facts: {status.facts}\nAsked: {status.question}\n{recommendations}\n{intake.summary}\n",
+            ["prompts/ask.md"] = "Asked: {status.question}, by {status.records}\n{question.kind}\n",
+        };
+
+        const string Bar = "the repository's bar for a recommendation is text for an agent, and only a reason step's prompt and the advisor's read it";
+        const string Update = "a plan update is told to an agent, and only the prompts of the step that plans it and of the steps of its scope read one";
+        const string Skill = "a skill is text for an agent, and only a reason step's prompt takes one";
+
+        Assert.Equal(
+            [
+                $"step 'intake' prompt 'prompts/intake.md' line 3 reads 'update.cause': {Update}",
+                "step 'intake' prompt 'prompts/intake.md' line 4 reads 'question.kind': only the advisor's prompt reads a question",
+                "step 'intake' prompt 'prompts/intake.md' line 5 reads 'status.facts': only the reporter's prompts read the status",
+                "step 'intake' prompt 'prompts/intake.md' line 6 reads 'piece.kind', whose 'piece' is the part of a plan update a work item carries, and 'intake' is no step of the work-item group 'items'",
+                $"step 'items.redo' prompt 'prompts/redo.md' line 2 reads 'update.work': {Update}",
+                $"step 'pr' body 'prompts/body.md' line 2 reads 'recommendations': {Bar}",
+                $"step 'pr' body 'prompts/body.md' line 3 names {{skill.notes}}: {Skill}",
+                $"step 'pr' body 'prompts/body.md' line 4 reads 'update.cause': {Update}",
+                "advisor prompt 'prompts/recommend.md' line 3 reads 'status.facts': only the reporter's prompts read the status",
+                "advisor prompt 'prompts/recommend.md' line 4 reads 'planning.plan.summary': the advisor's prompt reads no step by name; what the run stored of the steps a question is about is {question.record}",
+                $"advisor prompt 'prompts/recommend.md' line 5 names {{skill.notes}}: {Skill}",
+                "reporter statusPrompt 'prompts/status.md' line 2 reads 'status.question': the status is the tool's own question, and no person wrote one",
+                $"reporter statusPrompt 'prompts/status.md' line 3 reads 'recommendations': {Bar}",
+                "reporter statusPrompt 'prompts/status.md' line 4 reads 'intake.summary': the reporter's prompts read no step by name; the run's directory, {status.records}, is all the reporter reads",
+                "reporter askPrompt 'prompts/ask.md' line 2 reads 'question.kind': only the advisor's prompt reads a question",
+            ],
+            Problems(definition, files));
+
+        Assert.Empty(Problems(definition));
+    }
+
+    /// <summary>
+    /// V44: the scope of a step that plans an update at the top level is the flow, every step of which reads the update
+    /// in its prompts - but the recovery, whose steps are no step of it.
+    /// </summary>
+    [Fact]
+    public void APlanUpdate_PlannedAtTheTopLevel_IsReadByEveryPromptOfTheFlow_ButTheRecoverys()
+    {
+        var definition = Amended
+            .Replace("      - name: plan-update\n        type: reason\n        resume: plan\n        prompt: prompts/plan-update.md\n        outputs: schemas/plan.json\n", string.Empty, StringComparison.Ordinal)
+            .Replace("  - name: item-check\n", "  - name: plan-update\n    type: reason\n    resume: intake\n    prompt: prompts/plan-update.md\n    outputs: schemas/intake.json\n  - name: item-check\n", StringComparison.Ordinal)
+            .Replace("  step: planning.plan-update\n  then: check\n  scope: 'plan.latest.scope'", "  step: plan-update\n  then: item-check\n  scope: 'planning.plan.latest.scope'", StringComparison.Ordinal)
+            .Replace("  - name: gate\n    type: orient\n", "  - name: gate\n    type: orient\n    onFailure: recover\n", StringComparison.Ordinal)
+            + "\nrecover:\n  onSuccess: failed-step\n  onFailure: pause\n  steps:\n    - name: mend\n      type: reason\n      agent: fixer\n      prompt: prompts/mend.md\n      outputs: schemas/mend.json\n";
+
+        var files = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["prompts/intake.md"] = "Update: {update.cause}\n",
+            ["prompts/redo.md"] = "Work: {update.work}\n",
+            ["prompts/mend.md"] = "Update: {update.cause}\n",
+        };
+
+        Assert.Equal(
+            ["step 'recover.mend' prompt 'prompts/mend.md' line 1 reads 'update.cause': a plan update is told to an agent, and only the prompts of the step that plans it and of the steps of its scope read one"],
+            Problems(definition, files));
+    }
+
+    /// <summary>V44: a workflow with no amend block takes no plan update, so no prompt of it reads one.</summary>
+    [Fact]
+    public void APlanUpdate_IsReadByNoPrompt_OfAWorkflowThatTakesNone()
+    {
+        Assert.Equal(
+            ["step 'replan' prompt 'prompts/replan.md' line 1 reads 'update.cause': a plan update is told to an agent, and the workflow takes none: it declares no amend block"],
+            Problems(
+                """
+                name: default
+                steps:
+                  - name: plan
+                    type: reason
+                    agent: planner
+                    prompt: prompts/plan.md
+                    outputs: schemas/plan.json
+                  - name: replan
+                    type: reason
+                    dependsOn: [plan]
+                    resume: plan
+                    prompt: prompts/replan.md
+                    outputs: schemas/plan.json
+                """,
+                new Dictionary<string, string>(StringComparer.Ordinal) { ["prompts/plan.md"] = "Plan.\n", ["prompts/replan.md"] = "Again, for {update.cause}.\n" }));
     }
 
     /// <summary>

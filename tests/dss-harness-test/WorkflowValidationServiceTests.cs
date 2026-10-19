@@ -772,6 +772,44 @@ public sealed class WorkflowValidationServiceTests
     }
 
     /// <summary>
+    /// The help, the README and the architecture say where what only a prompt reads stands - each name in the prompts of
+    /// the agent asked it - that the advisor's and the reporter's prompts read no step by name, and that a pull request's
+    /// body reads what a template key reads.
+    /// </summary>
+    [Fact]
+    public void TheHelpTheReadmeAndTheArchitecture_SayWhereWhatOnlyAPromptReadsStands()
+    {
+        var help = Prose.Words(HelpTopics.Render("workflows"));
+        var readme = Prose.Document("README.md");
+        var architecture = Prose.Document("docs", "architecture.md");
+
+        Assert.Contains(
+            "What only a prompt reads stands where its agent is asked it: {recommendations} in a reason step's prompt and the advisor's, "
+                + "{question.<name>} in the advisor's alone, {status.<name>} in the reporter's two - {status.question} in its askPrompt alone - "
+                + "{update.<name>} in the prompts of the step that plans an update and of the steps of its scope, and {piece.<name>} in a step of "
+                + "the work-item group; the advisor's and the reporter's prompts read no step by name, and a pull request's body, which the "
+                + "engine fills and no agent reads, reads what a template key reads and no skill.",
+            help,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "What only a prompt reads stands where its agent is asked it: `{recommendations}` in a reason step's prompt and the advisor's, "
+                + "`{question.*}` in the advisor's alone, `{status.*}` in the reporter's two - `{status.question}` in its `askPrompt` alone - "
+                + "`{update.*}` in the prompts of the step that plans an update and of the steps of its scope, and `{piece.*}` in a step of the "
+                + "work-item group; the advisor's and the reporter's prompts read no step by name, and a pull request's `body`, which the engine "
+                + "fills and no agent reads, reads what a template key reads and no skill.",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "What only a prompt reads stands where its agent is asked it: `{recommendations}` in a reason step's prompt and the advisor's, "
+                + "`{question.*}` in the advisor's alone, `{status.*}` in the reporter's two - `{status.question}` in its `askPrompt` alone - "
+                + "`{update.*}` in the prompts of the step that plans an update and of the steps of its scope, and `{piece.*}` in a step of the "
+                + "work-item group; the advisor's and the reporter's prompts are read too, and read no step by name, and a pull request's "
+                + "`body`, which the engine fills and no agent reads, reads what a template key reads and no skill.",
+            architecture,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A workflow's directory that is a link out of the repository is refused before a word of it is read, though every
     /// file it names is beside its definition there: the files a definition names are held to its directory, so the
     /// directory is held to the workflows directory, once its links are followed, as an action's file is.

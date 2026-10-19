@@ -171,6 +171,12 @@ public static class WorkflowValidator
         /// </summary>
         private Entry? _recover;
 
+        /// <summary>
+        /// The groups whose <c>forEach</c> was refused for itself - not written whole, reading a name nothing provides, or
+        /// yielding what is no list - which no later rule reads again.
+        /// </summary>
+        private readonly HashSet<string> _refusedForEach = new(StringComparer.Ordinal);
+
         internal Check(WorkflowDefinition definition, bool hasCommitTemplate, Func<string, string?>? files)
         {
             _definition = definition;
@@ -189,6 +195,7 @@ public static class WorkflowValidator
             Checkpoints();
             SharedEndings();
             Fallbacks();
+            AgentPrompts();
             Outputs();
             PullRequests();
         }
@@ -774,7 +781,14 @@ public static class WorkflowValidator
 
             if (step.ForEach is not null)
             {
+                var before = _problems.Count;
+
                 Expression(entry, step.ForEach, "forEach");
+
+                if (_problems.Count > before)
+                {
+                    _refusedForEach.Add(entry.Path);
+                }
             }
         }
 
@@ -1442,9 +1456,10 @@ public static class WorkflowValidator
 
         /// <summary>
         /// Checks one read - of an expression or of a template - against the steps, inputs and params
-        /// the definition declares.
+        /// the definition declares, and the names only some prompts read against the text it is read in
+        /// (<paramref name="readIn"/>).
         /// </summary>
-        private void CheckRead(Entry entry, WorkflowExpressions.Read read, string what, bool within = false)
+        private void CheckRead(Entry entry, WorkflowExpressions.Read read, string what, bool within = false, ReadIn readIn = ReadIn.Key)
         {
             var segments = read.Names;
 
@@ -1549,11 +1564,23 @@ public static class WorkflowValidator
                     return;
 
                 case "skill":
-                    _problems.Add($"'{what}' names a skill, and a skill's text is a prompt's alone; the step's own keys read the run's names, never a skill");
+                    // A reason step's prompt takes a skill's text; whether the skill is there is the check of the skills.
+                    if (readIn == ReadIn.StepPrompt)
+                    {
+                        return;
+                    }
+
+                    _problems.Add(readIn == ReadIn.Key
+                        ? $"'{what}' names a skill, and a skill's text is a prompt's alone; the step's own keys read the run's names, never a skill"
+                        : $"'{what}' names {{{read.Whole}}}: a skill is text for an agent, and only a reason step's prompt takes one");
                     return;
 
                 case "recommendations" or "question" or "status" or "update":
-                    _problems.Add($"'{what}' reads '{read.Whole}': {PromptsAlone[read.Root]}");
+                    if (PromptAloneUnread(entry, read, readIn) is { } unread)
+                    {
+                        _problems.Add($"'{what}' reads '{read.Whole}': {unread}");
+                    }
+
                     return;
 
                 case "piece":
@@ -1881,7 +1908,8 @@ public static class WorkflowValidator
 
         /// <summary>
         /// The roots of the run's own names that only a prompt reads, each with why: a step's own keys - its templates and
-        /// its expressions - read none of them. Where a prompt may name one is the check of the prompt's own text.
+        /// its expressions - and a pull request's body, which the engine fills and no agent reads, read none of them; each
+        /// prompt reads those <see cref="PromptAloneUnread"/> says.
         /// </summary>
         private static readonly IReadOnlyDictionary<string, string> PromptsAlone = new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -1895,6 +1923,63 @@ public static class WorkflowValidator
             // V44.
             ["update"] = "a plan update is told to an agent, and only the prompts of the step that plans it and of the steps of its scope read one",
         };
+
+        /// <summary>V45: why the reporter's status prompt reads no question.</summary>
+        private const string NoStatusQuestion = "the status is the tool's own question, and no person wrote one";
+
+        /// <summary>
+        /// Why <paramref name="read"/>, of a root only a prompt reads (<see cref="PromptsAlone"/>), is not read in the text
+        /// <paramref name="readIn"/> says, or <see langword="null"/> where it is: the bar in a reason step's prompt and
+        /// the advisor's (V43); a question in the advisor's alone (V43); the status in the reporter's two, and the
+        /// person's question in its askPrompt alone (V45); a plan update in the prompts of the step that plans it and of
+        /// the steps of its scope (V44).
+        /// </summary>
+        private string? PromptAloneUnread(Entry entry, WorkflowExpressions.Read read, ReadIn readIn)
+            => (read.Root, readIn) switch
+            {
+                ("recommendations", ReadIn.StepPrompt or ReadIn.AdvisorPrompt) => null,
+                ("question", ReadIn.AdvisorPrompt) => null,
+                ("status", ReadIn.AskPrompt) => null,
+                ("status", ReadIn.StatusPrompt) => read.Names is [_, "question", ..] ? NoStatusQuestion : null,
+                ("update", ReadIn.StepPrompt) => UpdateUnread(entry),
+                _ => PromptsAlone[read.Root],
+            };
+
+        /// <summary>
+        /// V44: why a reason step's prompt reads no plan update, or <see langword="null"/> where it does - a prompt of the
+        /// step that plans one or of a step of its scope, the group that step is declared in; at the top level, every
+        /// step of the flow. Where amend.step names no step, or one in the recovery, it was refused already, and no
+        /// prompt is held to it.
+        /// </summary>
+        private string? UpdateUnread(Entry entry)
+        {
+            if (_definition.Amend is not { } amend)
+            {
+                return "a plan update is told to an agent, and the workflow takes none: it declares no amend block";
+            }
+
+            if (_byPath.GetValueOrDefault(amend.Step) is not { } planner || InRecovery(planner))
+            {
+                return null;
+            }
+
+            return InRecovery(entry) || (planner.Parent is { } scope && !scope.Owns(entry)) ? PromptsAlone["update"] : null;
+        }
+
+        /// <summary>
+        /// The text a placeholder is read in, which says which of the names only some prompts read it may name: a step's
+        /// own key, a reason step's <c>prompt</c> or <c>resumePrompt</c>, a pull request's <c>body</c>, the advisor's
+        /// prompt, or one of the reporter's two.
+        /// </summary>
+        private enum ReadIn
+        {
+            Key,
+            StepPrompt,
+            Body,
+            AdvisorPrompt,
+            StatusPrompt,
+            AskPrompt,
+        }
 
         /// <summary>
         /// V43: the advisor recommends on the questions the engine raises itself, and two kinds are none of them: an agent
@@ -2295,13 +2380,14 @@ public static class WorkflowValidator
         /// V47: where a workflow takes plan updates, the work-item group expands from the <c>items</c> of a
         /// <c>validate-plan</c> step declared beside it, which it waits for, directly or through the steps it depends on:
         /// the work items of a round are checked together with those an update places in it, by the check the group
-        /// expands from. A <c>forEach</c> that is not written whole was refused already, and is read for nothing more.
+        /// expands from. A <c>forEach</c> refused for itself already - not written whole, reading a name nothing provides
+        /// or yielding what is no list - is read for nothing more: one defect is said once.
         /// </summary>
         private void ExpandsFromACheck(Entry group)
         {
             var forEach = group.Step.ForEach!;
 
-            if (WorkflowExpressions.SyntaxProblem(forEach) is not null)
+            if (_refusedForEach.Contains(group.Path))
             {
                 return;
             }
@@ -2497,12 +2583,12 @@ public static class WorkflowValidator
             }
         }
 
-        /// <summary>Checks one placeholder of a template, and types it where the definition holds its name.</summary>
-        private void TemplateRead(Entry entry, WorkflowExpressions.Read read, string what)
+        /// <summary>Checks one placeholder of a template, read in what <paramref name="readIn"/> says, and types it where the definition holds its name.</summary>
+        private void TemplateRead(Entry entry, WorkflowExpressions.Read read, string what, ReadIn readIn = ReadIn.Key)
         {
             var before = _problems.Count;
 
-            CheckRead(entry, read, what);
+            CheckRead(entry, read, what, readIn: readIn);
 
             if (_problems.Count == before)
             {
@@ -2889,67 +2975,122 @@ public static class WorkflowValidator
         /// <summary>
         /// Checks every placeholder of the files a step is asked with - a reason step's <c>prompt</c> and
         /// <c>resumePrompt</c>, a pull request's <c>body</c> - against what the step can read from where it sits, each
-        /// said at the line it first stands on: a name nothing provides, a path no schema holds, and in a
-        /// <c>prompt</c>, which the first iteration is asked with too, the iteration before. A skill a prompt names is
-        /// looked for by whoever reads the skills.
+        /// said at the line it first stands on: a name nothing provides, a path no schema holds, a name only another
+        /// prompt reads, and in a <c>prompt</c>, which the first iteration is asked with too, the iteration before. A
+        /// skill a reason step's prompt names is looked for by whoever reads the skills; a body is a template the engine
+        /// fills and no agent reads, and reads what a step's own keys read.
         /// </summary>
         private void Prompts(Entry entry)
         {
-            if (_files is null)
-            {
-                return;
-            }
-
             var step = entry.Step;
             var asked = new[]
             {
-                ("prompt", step.Type == "reason" ? step.Prompt : null),
-                ("resumePrompt", step.Type == "reason" ? step.ResumePrompt : null),
-                ("body", step.Type == "pull-request" ? step.Body : null),
+                ("prompt", step.Type == "reason" ? step.Prompt : null, ReadIn.StepPrompt),
+                ("resumePrompt", step.Type == "reason" ? step.ResumePrompt : null, ReadIn.StepPrompt),
+                ("body", step.Type == "pull-request" ? step.Body : null, ReadIn.Body),
             };
 
-            foreach (var (key, file) in asked)
+            foreach (var (key, file, readIn) in asked)
             {
-                if (file is null || _files(file) is not { } text)
+                if (file is null)
                 {
-                    continue;
-                }
-
-                var where = $"step '{entry.Path}' {key} '{file}'";
-
-                if (WorkflowExpressions.TemplateSyntaxProblem(text) is { } broken)
-                {
-                    _problems.Add($"{where} is not written whole: {broken}, and nothing it reads past there would be checked");
                     continue;
                 }
 
                 var what = $"{entry.Path}.{key}";
-                var seen = new HashSet<string>(StringComparer.Ordinal);
-                var lines = text.Split('\n');
 
-                for (var line = 0; line < lines.Length; line++)
+                Placeholders($"step '{entry.Path}' {key} '{file}'", file, what, (read, at) =>
                 {
-                    foreach (var read in WorkflowExpressions.TemplateReads(lines[line]).Where(read => read.Root != "skill" && seen.Add(read.Whole)))
+                    if (read.Root == "previous" && key == "prompt")
                     {
-                        var at = $"{where} line {line + 1}";
+                        _problems.Add($"{at} reads '{read.Whole}': a prompt is what the first iteration is asked with too, which has none before it; the iteration before is read in a resumePrompt");
+                        return;
+                    }
 
-                        if (read.Root == "previous" && key == "prompt")
+                    TemplateRead(entry, read, what, readIn);
+                });
+            }
+        }
+
+        /// <summary>
+        /// V43 and V45: the advisor's prompt and the reporter's two are checked as a step's are, from no place in the flow
+        /// - they are asked about the run, and are run in none of it - so none of them reads a step by name.
+        /// </summary>
+        private void AgentPrompts()
+        {
+            if (_definition.Advisor is { } advisor)
+            {
+                AgentPrompt("advisor", "prompt", advisor.Prompt, ReadIn.AdvisorPrompt, "the advisor's prompt reads no step by name; what the run stored of the steps a question is about is {question.record}");
+            }
+
+            if (_definition.Reporter is { } reporter)
+            {
+                const string Unnamed = "the reporter's prompts read no step by name; the run's directory, {status.records}, is all the reporter reads";
+
+                AgentPrompt("reporter", "statusPrompt", reporter.StatusPrompt, ReadIn.StatusPrompt, Unnamed);
+                AgentPrompt("reporter", "askPrompt", reporter.AskPrompt, ReadIn.AskPrompt, Unnamed);
+            }
+        }
+
+        /// <summary>
+        /// Checks one prompt of the advisor's or the reporter's, <paramref name="agent"/>'s <paramref name="key"/>: a read
+        /// of the run's own names as a step's is, from the top of the flow after every step, and a read of a step by name
+        /// refused for <paramref name="unnamed"/>.
+        /// </summary>
+        private void AgentPrompt(string agent, string key, string file, ReadIn readIn, string unnamed)
+        {
+            var asked = new Entry(new WorkflowStep { Name = agent }, agent, AfterEveryStep, null);
+            var what = $"{agent}.{key}";
+
+            Placeholders($"{agent} {key} '{file}'", file, what, (read, at) =>
+            {
+                if (WorkflowExpressions.IsRoot(read.Root))
+                {
+                    TemplateRead(asked, read, what, readIn);
+                }
+                else
+                {
+                    _problems.Add($"{at} reads '{read.Whole}': {unnamed}");
+                }
+            });
+        }
+
+        /// <summary>
+        /// Checks each placeholder of <paramref name="file"/> once by <paramref name="check"/>, said at the line it first
+        /// stands on (<paramref name="where"/> and the line): a refusal that names <paramref name="what"/>, the key it is
+        /// read in, names the file and the line instead. A file not written whole is refused for it and read no further;
+        /// without the files, none is read.
+        /// </summary>
+        private void Placeholders(string where, string file, string what, Action<WorkflowExpressions.Read, string> check)
+        {
+            if (_files?.Invoke(file) is not { } text)
+            {
+                return;
+            }
+
+            if (WorkflowExpressions.TemplateSyntaxProblem(text) is { } broken)
+            {
+                _problems.Add($"{where} is not written whole: {broken}, and nothing it reads past there would be checked");
+                return;
+            }
+
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var lines = text.Split('\n');
+
+            for (var line = 0; line < lines.Length; line++)
+            {
+                foreach (var read in WorkflowExpressions.TemplateReads(lines[line]).Where(read => seen.Add(read.Whole)))
+                {
+                    var at = $"{where} line {line + 1}";
+                    var before = _problems.Count;
+
+                    check(read, at);
+
+                    for (var index = before; index < _problems.Count; index++)
+                    {
+                        if (_problems[index].StartsWith($"'{what}' ", StringComparison.Ordinal))
                         {
-                            _problems.Add($"{at} reads '{read.Whole}': a prompt is what the first iteration is asked with too, which has none before it; the iteration before is read in a resumePrompt");
-                            continue;
-                        }
-
-                        // A read's refusal names the key it is read in; a prompt's names the file and the line instead.
-                        var before = _problems.Count;
-
-                        TemplateRead(entry, read, what);
-
-                        for (var index = before; index < _problems.Count; index++)
-                        {
-                            if (_problems[index].StartsWith($"'{what}' ", StringComparison.Ordinal))
-                            {
-                                _problems[index] = at + _problems[index][$"'{what}'".Length..];
-                            }
+                            _problems[index] = at + _problems[index][$"'{what}'".Length..];
                         }
                     }
                 }
