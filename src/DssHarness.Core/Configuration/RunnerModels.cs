@@ -133,6 +133,16 @@ public sealed class RunnerConfig
     [Description("set-ups its legs bring up before their work and down after it, when the run says --set-up: each a name, "
         + "or { \"name\": ..., \"with\": { input: value } }")]
     public List<SetUpUse>? SetUp { get; init; }
+
+    /// <summary>
+    /// The runners this runner's run checks name, each once however many checks name it, as the first names it: what a
+    /// run of this runner may run too, within its legs' own work, and so what is held to the same rules where it works.
+    /// </summary>
+    public IReadOnlyList<string> RunCheckRunners()
+        => [.. ExpectedExceptions
+            .SelectMany(entry => entry.RunChecks)
+            .Select(check => check.PredefinedRunner)
+            .Distinct(StringComparer.OrdinalIgnoreCase)];
 }
 
 /// <summary>One phase of a runner.</summary>

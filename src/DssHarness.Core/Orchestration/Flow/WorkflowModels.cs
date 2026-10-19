@@ -51,6 +51,9 @@ public sealed record WorkflowDefinition(
     IReadOnlyList<WorkflowStep> Steps,
     string Path)
 {
+    /// <summary>The most step instances a run may have where the file says nothing (<c>maxInstances</c>).</summary>
+    public const int DefaultMaxInstances = 5_000;
+
     /// <summary>The inputs, by name, as a prompt or a template reads them.</summary>
     public IReadOnlyDictionary<string, FlowInput> InputsByName
         => new Dictionary<string, FlowInput>(Inputs.Select(input => new KeyValuePair<string, FlowInput>(input.Name, input)), StringComparer.Ordinal);

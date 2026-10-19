@@ -2929,6 +2929,15 @@ public static class HelpTopics
         builder.AppendLine("pre-existing-issues.json, shown at the end. Where a workflow has such a step, every other");
         builder.AppendLine("reasoning step names it, so no issue is lost.");
         builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "validate-workflow holds a definition to the config.json it is checked under too: a run step whose runner, or a runner "
+            + "its run checks name, writes the tree (writesTree) names with in the create-agent step whose worktree it works in, since "
+            + "the run reads its definition in the main tree and folds into it; the agents a run makes, named "
+            + $"'{OrchestrationRules.GeneratedAgentPrefix}' and a number that grows to the workflow's maxInstances, fit "
+            + "worktrees.maxNameLength; and a commit step gives a value for every variable commit.template requires and none for one "
+            + "it does not declare - or, where none is declared, a message and no variables.");
+        builder.AppendLine();
         builder.AppendLine("The keys of the file and of every step are listed below, generated from the tables the");
         builder.AppendLine("reader itself reads, so what is listed is what is read.");
         builder.AppendLine();

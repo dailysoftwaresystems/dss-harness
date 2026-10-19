@@ -456,7 +456,12 @@ This build checks workflow definitions - the shape of every key, every step, inp
 output an expression names, every file the definition points at - and refuses (12) naming each
 problem, without running anything, as a `config.json` that does not hold is refused. A
 `config.json` that declares no workflow has nothing to check and is refused (13), saying how to
-declare the implementation one. The engine that runs workflows is the next thing the tool grows. Run `dssharness help workflows` for the whole of it.
+declare the implementation one. It holds a definition to the configuration too: a `run` step whose
+runner, or a runner its run checks name, writes the tree (`writesTree`) names with `in` the
+create-agent step whose worktree it works in; the agents a run makes, `a` and a number up to the
+workflow's `maxInstances`, fit `worktrees.maxNameLength`; and a commit step gives a value for every
+variable `commit.template` requires and none for one it does not declare - with no template, a
+`message` and no `variables`. The engine that runs workflows is the next thing the tool grows. Run `dssharness help workflows` for the whole of it.
 
 ## Anchors
 

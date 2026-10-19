@@ -285,6 +285,23 @@ public static class WorkflowStepTypes
     /// </remarks>
     public static StepType? Find(string type) => All.FirstOrDefault(known => string.Equals(known.Type, type, StringComparison.Ordinal));
 
+    /// <summary>
+    /// Whether <paramref name="step"/> makes an agent when it runs, which the run names itself
+    /// (<see cref="OrchestrationRules.GeneratedAgentPrefix"/> and a number): a create-agent step, and a reason step that
+    /// reads and begins work of its own. A reason step that writes works in the agent its <c>in</c> names, and one that
+    /// goes on with another's work in that step's agent.
+    /// </summary>
+    /// <param name="step">A step of a workflow.</param>
+    public static bool MakesAgent(WorkflowStep step)
+    {
+        ArgumentNullException.ThrowIfNull(step);
+
+        return step.Type == "create-agent"
+            || (step.Type == "reason"
+                && step.Access != "write"
+                && (step.Resume is null || string.Equals(step.Resume, step.Name, StringComparison.Ordinal)));
+    }
+
     /// <summary>The keys <paramref name="type"/>'s steps take, spelled as the file spells them.</summary>
     /// <param name="type">A step type.</param>
     public static IReadOnlyList<string> KeysOf(StepType type)

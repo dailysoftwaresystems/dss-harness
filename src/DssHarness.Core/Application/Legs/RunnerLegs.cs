@@ -147,10 +147,7 @@ public sealed class RunnerLegs(
         // runs it, as it always was, rather than refusing a run whose checks may never run.
         var checks = new List<(string Name, RunnerConfig Runner, ActionFile? Action, bool Unread)>();
 
-        foreach (var check in runner.ExpectedExceptions
-            .SelectMany(entry => entry.RunChecks)
-            .Select(check => check.PredefinedRunner)
-            .Distinct(StringComparer.OrdinalIgnoreCase))
+        foreach (var check in runner.RunCheckRunners())
         {
             var checkRunner = RunnerSelection.Resolve(harness.Config, check);
 

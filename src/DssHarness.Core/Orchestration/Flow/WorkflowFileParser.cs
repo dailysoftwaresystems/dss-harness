@@ -338,6 +338,9 @@ public static class WorkflowFileParser
         var prompt = RequireScalarIn(keys, "advisor.prompt", problems);
         var kinds = StringListIn(keys, "advisor.kinds", problems) ?? [];
 
+        // V43: the kinds an advisor recommends for, read as every kind where the key is left out.
+        RefuseGivenEmpty(keys, "advisor.kinds", "name the kinds it recommends for", "every kind", problems);
+
         if (agent is null || prompt is null)
         {
             return null;
@@ -673,6 +676,36 @@ public static class WorkflowFileParser
     }
 
     /// <summary>
+    /// The keys of the amend block that no step and no block a step holds takes: met on a step, each is a plan update's
+    /// key written in the wrong place.
+    /// </summary>
+    private static readonly IReadOnlyList<string> PlanUpdateKeys =
+    [
+        .. KeyDescription.Names(WorkflowKeys.Amend).Except(
+            [
+                .. KeyDescription.Names(WorkflowStepTypes.Common),
+                .. KeyDescription.Names(WorkflowStepTypes.Group),
+                .. WorkflowStepTypes.AllKeys,
+                .. KeyDescription.Names(WorkflowStepTypes.OnKeys),
+                .. KeyDescription.Names(WorkflowStepTypes.RepeatKeys),
+                .. KeyDescription.Names(WorkflowStepTypes.AllowKeys),
+                .. KeyDescription.Names(WorkflowStepTypes.PreAnswerKeys),
+                .. KeyDescription.Names(WorkflowStepTypes.QuoteKeys),
+                .. KeyDescription.Names(WorkflowStepTypes.AnswerKeys),
+            ],
+            StringComparer.Ordinal),
+    ];
+
+    /// <summary>
+    /// V44: everything about a plan update is said by the workflow's amend block, and no step carries a key of one - so
+    /// such a key met on a step is refused saying where it belongs, where any other unknown key lists those a step takes.
+    /// </summary>
+    private static string? PlanUpdateKey(string key)
+        => PlanUpdateKeys.Contains(key, StringComparer.Ordinal)
+            ? "it is a key of amend, at the top of the file, the one place a plan update is said"
+            : null;
+
+    /// <summary>
     /// Reads one step, at <paramref name="depth"/> levels of nesting: a typed step, or a group
     /// holding steps of its own.
     /// </summary>
@@ -684,7 +717,7 @@ public static class WorkflowFileParser
             yield break;
         }
 
-        var keys = CollectKeys(mapping, "a step", [.. KeyDescription.Names(WorkflowStepTypes.Common), .. KeyDescription.Names(WorkflowStepTypes.Group), .. WorkflowStepTypes.AllKeys], problems);
+        var keys = CollectKeys(mapping, "a step", [.. KeyDescription.Names(WorkflowStepTypes.Common), .. KeyDescription.Names(WorkflowStepTypes.Group), .. WorkflowStepTypes.AllKeys], problems, PlanUpdateKey);
         // A name or a type written as a list or a mapping is refused naming the key, never read as one left out.
         var nameNode = keys.FirstOrDefault(entry => entry.Key == "name").Value;
         var name = nameNode is null ? null : YamlReading.ScalarOf(nameNode);
@@ -1209,9 +1242,15 @@ public static class WorkflowFileParser
     /// <summary>
     /// One mapping's keys, read once: a key no list names is refused here, before any reader looks at its value, and so is
     /// a key written twice - YAML refuses one only where both are written alike, and one tagged apart (<c>!!str</c>) would
-    /// otherwise be read in place of nothing.
+    /// otherwise be read in place of nothing. A key <paramref name="belongsElsewhere"/> places is refused saying where it
+    /// goes, in place of every key the mapping takes.
     /// </summary>
-    private static List<(string Key, YamlNode Value)> CollectKeys(YamlMappingNode mapping, string what, IReadOnlyList<string> known, List<string> problems)
+    private static List<(string Key, YamlNode Value)> CollectKeys(
+        YamlMappingNode mapping,
+        string what,
+        IReadOnlyList<string> known,
+        List<string> problems,
+        Func<string, string?>? belongsElsewhere = null)
     {
         var keys = new List<(string Key, YamlNode Value)>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -1233,7 +1272,9 @@ public static class WorkflowFileParser
 
             if (!known.Contains(key, StringComparer.Ordinal))
             {
-                problems.Add(YamlReading.At(keyNode, $"'{key}' is not a key of {what}. Known: '{string.Join("', '", known)}'."));
+                problems.Add(YamlReading.At(keyNode, belongsElsewhere?.Invoke(key) is { } where
+                    ? $"'{key}' is not a key of {what}; {where}."
+                    : $"'{key}' is not a key of {what}. Known: '{string.Join("', '", known)}'."));
                 continue;
             }
 

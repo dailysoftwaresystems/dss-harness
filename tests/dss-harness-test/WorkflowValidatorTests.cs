@@ -928,6 +928,8 @@ public sealed class WorkflowValidatorTests
             [
                 "amend.before names 'stage.inner', which is a step inside the group 'stage'; a change is planned again only while the flow's own stages still have a step to plan it",
                 "amend.then names 'inner', which is no step declared beside 'replan'",
+                "amend names neither input nor changedAnswerMinutes; at least one is named - the text input an amendment adds to, or the minutes the last answer can be changed for - and neither has a default",
+                "amend.whenAddScope names 'replan', which is declared directly in no forEach group: a work item is built by a step of the group that runs once for each, the work-item group",
             ],
             Problems(
                 """
@@ -956,6 +958,8 @@ public sealed class WorkflowValidatorTests
             [
                 "amend.before names 'nowhere', which is no step of the flow",
                 "amend.step names 'planning.replan', which is no step of the flow",
+                "amend names neither input nor changedAnswerMinutes; at least one is named - the text input an amendment adds to, or the minutes the last answer can be changed for - and neither has a default",
+                "amend.whenAddScope names 'replan', which is declared directly in no forEach group: a work item is built by a step of the group that runs once for each, the work-item group",
             ],
             Problems(
                 """
@@ -1001,15 +1005,560 @@ public sealed class WorkflowValidatorTests
                   - name: check
                     type: orient
                     dependsOn: [replan]
+              - name: item-check
+                type: validate-plan
+                dependsOn: [planning]
+                items: 'planning.replan.items'
+              - name: items
+                dependsOn: [item-check]
+                forEach: 'item-check.items'
+                steps:
+                  - name: build
+                    type: orient
             amend:
               input: request
               step: planning.replan
               then: check
               scope: 'planning.scope'
-              whenAddScope: planning.check
-              whenChangeScope: planning.check
-              whenRemoveScope: planning.check
+              whenAddScope: items.build
+              whenChangeScope: items.build
+              whenRemoveScope: items.build
             """));
+    }
+
+    /// <summary>
+    /// A workflow that takes plan updates whole: a planner beside the plan it goes on with, a work-item group expanding
+    /// from the items of the check it waits for through another step, and an alternative beside the step that builds an
+    /// item. The tests of the amend block change one thing of it at a time.
+    /// </summary>
+    private const string Amended = """
+        name: default
+        inputs:
+          - name: request
+          - name: notes
+            kind: file
+        steps:
+          - name: intake
+            type: reason
+            agent: triage
+            prompt: prompts/intake.md
+            outputs: schemas/intake.json
+          - name: planning
+            steps:
+              - name: plan
+                type: reason
+                agent: planner
+                prompt: prompts/plan.md
+                outputs: schemas/plan.json
+              - name: check
+                type: validate-plan
+                dependsOn: [plan]
+                items: 'plan.latest.items'
+              - name: plan-update
+                type: reason
+                resume: plan
+                prompt: prompts/plan-update.md
+                outputs: schemas/plan.json
+          - name: item-check
+            type: validate-plan
+            dependsOn: [planning]
+            items: 'planning.plan.latest.items'
+          - name: gate
+            type: orient
+            dependsOn: [item-check]
+          - name: items
+            dependsOn: [gate]
+            forEach: 'item-check.items'
+            steps:
+              - name: item-agent
+                type: create-agent
+                agent: implementer
+              - name: implement
+                type: reason
+                agent: implementer
+                access: write
+                in: item-agent
+                dependsOn: [item-agent]
+                when: "piece.kind != 'removed'"
+                prompt: prompts/implement.md
+                outputs: schemas/implement.json
+              - name: redo
+                type: reason
+                agent: implementer
+                access: write
+                in: item-agent
+                prompt: prompts/redo.md
+                outputs: schemas/implement.json
+              - name: verify
+                type: orient
+                dependsOn: [implement]
+        amend:
+          input: request
+          changedAnswerMinutes: 1
+          step: planning.plan-update
+          then: check
+          scope: 'plan.latest.scope'
+          whenAddScope: items.implement
+          whenChangeScope: items.redo
+          whenRemoveScope: items.implement
+        """;
+
+    /// <summary>
+    /// V44: a plan update is taken for an amended request, for a changed answer, or both - so the amend block names at
+    /// least one of input and changedAnswerMinutes, neither having a default - and an amendment adds words to a text input.
+    /// </summary>
+    [Fact]
+    public void APlanUpdate_IsTakenForAnAmendmentOrAChangedAnswer_IntoATextInput()
+    {
+        Assert.Empty(Problems(Amended));
+        Assert.Empty(Problems(Amended.Replace("  input: request\n", string.Empty, StringComparison.Ordinal)));
+        Assert.Empty(Problems(Amended.Replace("  changedAnswerMinutes: 1\n", string.Empty, StringComparison.Ordinal)));
+
+        Assert.Equal(
+            ["amend names neither input nor changedAnswerMinutes; at least one is named - the text input an amendment adds to, or the minutes the last answer can be changed for - and neither has a default"],
+            Problems(Amended.Replace("  input: request\n  changedAnswerMinutes: 1\n", string.Empty, StringComparison.Ordinal)));
+
+        Assert.Equal(
+            ["amend.input names 'notes', a file input; an amendment adds words to the request, which a text input holds"],
+            Problems(Amended.Replace("input: request", "input: notes", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// V44: the step that plans an update is raised by an update alone, in the newest instance of its scope - so it is
+    /// one step, in no forEach and no always group; it says no on, when, dependsOn or maxVisits; it goes on with the work
+    /// of a step beside it; and its then never sends the run back to itself, which would be it calling itself.
+    /// </summary>
+    [Fact]
+    public void TheStepThatPlansAnUpdate_IsOneStep_RaisedByAnUpdateAlone()
+    {
+        Assert.Equal(
+            [
+                "amend.step names 'planning.plan-update', which says when, dependsOn: the step that plans an update is raised by an update alone - never by an ending, never passed by, waiting for nothing and counted against no bound",
+                "amend.step sends the run back to itself (amend.then: plan-update), and so calls itself; a step never does - one that is to run again after it failed says retries",
+            ],
+            Problems(Amended
+                .Replace("resume: plan\n        prompt", "resume: plan\n        dependsOn: [check]\n        when: 'check.ok'\n        prompt", StringComparison.Ordinal)
+                .Replace("then: check", "then: plan-update", StringComparison.Ordinal)));
+
+        // One of many, going on with a step outside its own scope.
+        Assert.Equal(
+            [
+                "amend.step names 'items.replan', which is inside the forEach 'items': the step that plans an update is one step, not one of many",
+                "amend.step names 'items.replan', which goes on with 'intake', and 'intake' is not declared beside it: the step that plans an update goes on with the work of a step of its own scope",
+            ],
+            Problems(Amended
+                .Replace(
+                    "        dependsOn: [implement]\n",
+                    "        dependsOn: [implement]\n      - name: replan\n        type: reason\n        resume: intake\n        prompt: prompts/plan-update.md\n        outputs: schemas/intake.json\n",
+                    StringComparison.Ordinal)
+                .Replace("  step: planning.plan-update\n  then: check\n  scope: 'plan.latest.scope'", "  step: items.replan\n  scope: 'replan.latest.scope'", StringComparison.Ordinal)));
+
+        Assert.Equal(
+            ["amend.step names 'wrap.replan', which is inside the always group 'wrap': the step that plans an update is raised while the run works, and an always group runs once, at the session's end"],
+            Problems(Amended
+                .Replace(
+                    "amend:\n",
+                    "  - name: wrap\n    always: true\n    steps:\n      - name: replan\n        type: reason\n        agent: planner\n        prompt: prompts/plan.md\n        outputs: schemas/plan.json\namend:\n",
+                    StringComparison.Ordinal)
+                .Replace("  step: planning.plan-update\n  then: check\n  scope: 'plan.latest.scope'", "  step: wrap.replan\n  scope: 'replan.latest.scope'", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// V46: whenAddScope names the step that builds a work item - declared directly in a forEach group, outside every
+    /// always group, and no handler, since it begins its instance's work.
+    /// </summary>
+    [Fact]
+    public void TheStepThatBuildsAWorkItem_BeginsAnInstanceOfAForEachGroup_WhileTheRunWorks()
+    {
+        Assert.Equal(
+            [
+                "amend.whenAddScope names 'items.retry', which is inside the always group 'items': a work item is built while the run works, and an always group runs once, at the session's end",
+                "amend.whenAddScope names 'items.retry', a handler raised by 'implement': the step that builds a work item begins its instance's work, and a handler is raised by another step's ending",
+            ],
+            Problems(Amended
+                .Replace("    dependsOn: [gate]\n", "    dependsOn: [gate]\n    always: true\n", StringComparison.Ordinal)
+                .Replace(
+                    "        dependsOn: [implement]\n",
+                    "        dependsOn: [implement]\n      - name: retry\n        type: reason\n        agent: implementer\n        access: write\n        in: item-agent\n        on:\n          step: implement\n          outcome: failure\n        prompt: prompts/implement.md\n        outputs: schemas/implement.json\n",
+                    StringComparison.Ordinal)
+                .Replace("whenAddScope: items.implement", "whenAddScope: items.retry", StringComparison.Ordinal)
+                .Replace("whenRemoveScope: items.implement", "whenRemoveScope: items.retry", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// V46: whenChangeScope and whenRemoveScope each name the step that builds a work item or an alternative beside it, of
+    /// its type, that runs in its place - with its dependencies and under its name - so the alternative says no
+    /// dependsOn, when, on, resume or always of its own, and no other step names it.
+    /// </summary>
+    [Fact]
+    public void TheStepsThatCarryAnUpdate_AreAlternativesAtOnePlace_NamedByTheBuildersName()
+    {
+        Assert.Equal(
+            [
+                "amend.whenChangeScope names 'planning.plan', which is not declared beside 'items.implement': the three are alternatives at one place of one forEach group",
+                "amend.whenRemoveScope names 'items.undo', a orient step, and 'items.implement' is a reason step: an alternative runs in that step's place, and is of its type",
+                "amend.whenRemoveScope names 'items.undo', which says dependsOn, when: it runs in the place of 'implement', with that step's dependencies, and begins the work of its instance",
+                "step 'items.after-undo' is raised by 'undo': 'undo' runs in the place of 'implement', and is named by that step's name",
+                "step 'items.after-undo' sends the run to 'undo': 'undo' runs in the place of 'implement', and is named by that step's name",
+                "step 'items.verify' depends on 'undo': 'undo' runs in the place of 'implement', and is named by that step's name",
+            ],
+            Problems(Amended
+                .Replace(
+                    "      - name: verify\n        type: orient\n        dependsOn: [implement]\n",
+                    "      - name: undo\n        type: orient\n        dependsOn: [item-agent]\n        when: 'item.ok'\n      - name: after-undo\n        type: orient\n        on:\n          step: undo\n          outcome: failure\n        then: undo\n      - name: verify\n        type: orient\n        dependsOn: [implement, undo]\n",
+                    StringComparison.Ordinal)
+                .Replace("whenChangeScope: items.redo", "whenChangeScope: planning.plan", StringComparison.Ordinal)
+                .Replace("whenRemoveScope: items.implement", "whenRemoveScope: items.undo", StringComparison.Ordinal)));
+
+        // A step that goes on with an alternative's work names it too.
+        Assert.Equal(
+            ["step 'items.mend' resumes 'redo': 'redo' runs in the place of 'implement', and is named by that step's name"],
+            Problems(Amended.Replace(
+                "        dependsOn: [implement]\n",
+                "        dependsOn: [implement]\n      - name: mend\n        type: reason\n        resume: redo\n        on:\n          step: verify\n          outcome: failure\n        prompt: prompts/mend.md\n        outputs: schemas/implement.json\n",
+                StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// V47: where a workflow takes plan updates, the work-item group expands from the items of a validate-plan step beside
+    /// it that it waits for, directly or through others - the check the items an update places in a round are checked by
+    /// with the round's own. Without an amend block a forEach expands from whatever it reads.
+    /// </summary>
+    [Fact]
+    public void TheWorkItemGroup_ExpandsFromTheItemsOfACheckItWaitsFor()
+    {
+        Assert.Equal(
+            ["group 'items' expands from 'planning.plan.latest.items', which no validate-plan step checked: with an amend block the work items of a round are checked together with those an update places in it, by the check the group expands from"],
+            Problems(Amended.Replace("forEach: 'item-check.items'", "forEach: 'planning.plan.latest.items'", StringComparison.Ordinal)));
+
+        // An expression that reads nothing expands from no check either.
+        Assert.Equal(
+            ["group 'items' expands from 'true', which no validate-plan step checked: with an amend block the work items of a round are checked together with those an update places in it, by the check the group expands from"],
+            Problems(Amended.Replace("forEach: 'item-check.items'", "forEach: 'true'", StringComparison.Ordinal)));
+
+        Assert.Equal(
+            ["group 'items' expands from 'item-check.items', and waits for 'item-check' neither directly nor through the steps it depends on: the work items it runs are the ones that check checked, once it has ended"],
+            Problems(Amended.Replace("    dependsOn: [gate]\n    forEach", "    dependsOn: [planning]\n    forEach", StringComparison.Ordinal)));
+
+        Assert.Empty(Problems(
+            """
+            name: default
+            steps:
+              - name: plan
+                type: reason
+                agent: planner
+                prompt: prompts/plan.md
+                outputs: schemas/plan.json
+              - name: items
+                dependsOn: [plan]
+                forEach: 'plan.latest.items'
+                steps:
+                  - name: build
+                    type: orient
+            """));
+    }
+
+    /// <summary>
+    /// V46: a piece is the part of a plan update one instance of the work-item group carries, so only a step of that group
+    /// reads it - not a step outside it, and nothing in a workflow that has no such group.
+    /// </summary>
+    [Fact]
+    public void APiece_IsReadOnlyByAStepOfTheWorkItemGroup()
+    {
+        Assert.Equal(
+            ["'outside.when' reads 'piece.kind', whose 'piece' is the part of a plan update a work item carries, and 'outside' is no step of the work-item group 'items'"],
+            Problems(Amended.Replace("amend:\n", "  - name: outside\n    type: orient\n    when: \"piece.kind == 'added'\"\namend:\n", StringComparison.Ordinal)));
+
+        Assert.Equal(
+            ["'alone.when' reads 'piece.kind', whose 'piece' is the part of a plan update a work item carries, and the workflow has no work-item group: amend.whenAddScope names the step of a forEach group that builds one"],
+            Problems(
+                """
+                name: default
+                steps:
+                  - name: alone
+                    type: orient
+                    when: "piece.kind == 'added'"
+                """));
+    }
+
+    /// <summary>
+    /// V43, V44 and V45: what only a prompt reads - the repository's bar for a recommendation, the advisor's question, the
+    /// reporter's status and a plan update - no step's own key reads, in a template or in an expression.
+    /// </summary>
+    [Fact]
+    public void WhatOnlyAPromptReads_IsReadByNoStepsKey()
+    {
+        Assert.Equal(
+            [
+                "'orient.when' reads 'recommendations': the repository's bar for a recommendation is text for an agent, and only a reason step's prompt and the advisor's read it",
+                "'orient.when' reads 'question.kind': only the advisor's prompt reads a question",
+                "'save.message' reads 'status.question': only the reporter's prompts read the status",
+                "'save.message' reads 'update.cause': a plan update is told to an agent, and only the prompts of the step that plans it and of the steps of its scope read one",
+            ],
+            Problems(
+                """
+                name: default
+                steps:
+                  - name: orient
+                    type: orient
+                    when: "!empty(recommendations) && question.kind == 'loopBound'"
+                  - name: save
+                    type: commit
+                    dependsOn: [orient]
+                    message: '{status.question} {update.cause}'
+                """));
+    }
+
+    /// <summary>
+    /// V43: the advisor recommends on the questions the engine raises itself - never on an agent's own, which carries its
+    /// own recommendation, nor on the run's budget at its reserve, when nothing more is spent on reasoning.
+    /// </summary>
+    [Fact]
+    public void TheAdvisor_RecommendsNeitherOnAnAgentsQuestionNorOnTheRunsBudget()
+    {
+        const string Advised = """
+            name: default
+            advisor:
+              agent: advisor
+              prompt: prompts/recommend.md
+              tier: best
+              kinds: [ask, loopBound, runBudget]
+            steps:
+              - name: orient
+                type: orient
+            """;
+
+        Assert.Equal(
+            [
+                "advisor is to recommend for 'ask': an agent that asks gives its own recommendation",
+                "advisor is to recommend for 'runBudget': a run at its budget's reserve spends nothing more on reasoning, and the advisor reasons",
+            ],
+            Problems(Advised));
+        Assert.Empty(Problems(Advised.Replace("[ask, loopBound, runBudget]", "[loopBound, failure]", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// V31: pushCheckpoints pushes the checkpoint commits as they are made, so a workflow that sets it with no push step
+    /// that is a checkpoint says something nothing would do; one with such a step, or that leaves it false, holds.
+    /// </summary>
+    [Fact]
+    public void PushCheckpoints_WithNoPushStepThatIsACheckpoint_IsRefused()
+    {
+        const string Flow = """
+            name: default
+            pushCheckpoints: true
+            steps:
+              - name: save
+                type: commit
+                message: 'work'
+              - name: send
+                type: push
+                dependsOn: [save]
+            """;
+
+        Assert.Equal(["the workflow sets pushCheckpoints, and none of its push steps is a checkpoint: the key would change nothing"], Problems(Flow));
+        Assert.Empty(Problems(Flow + "\n    checkpoint: true"));
+        Assert.Empty(Problems(Flow.Replace("pushCheckpoints: true", "pushCheckpoints: false", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// V36: two handlers of one source that one ending could raise never both name a then - the run can go to one step.
+    /// Every ending is weighed: a success, a failure with any code, the codes two failures share, an end, which is either,
+    /// and an end with codes, which is a failure with one of them alone. A handler that names no then sends nothing.
+    /// </summary>
+    [Fact]
+    public void TwoHandlersOneEndingRaises_NeverBothNameAThen()
+    {
+        Assert.Equal(
+            [
+                "steps 'fix' and 'report' are both raised when 'build' fails with 20 or 21, and both name a then: the run can go to one step",
+                "steps 'report' and 'note' are both raised when 'build' fails with 30, and both name a then: the run can go to one step",
+                "steps 'report' and 'cheer' are both raised when 'build' succeeds, and both name a then: the run can go to one step",
+            ],
+            Problems(
+                """
+                name: default
+                steps:
+                  - name: build
+                    type: build
+                  - name: fix
+                    type: orient
+                    on: { step: build, outcome: failure, codes: [20, 21] }
+                    then: build
+                  - name: report
+                    type: orient
+                    on: { step: build, outcome: end }
+                    then: build
+                  - name: note
+                    type: orient
+                    on: { step: build, outcome: failure, codes: [30] }
+                    then: build
+                  - name: cheer
+                    type: orient
+                    on: { step: build, outcome: success }
+                    then: build
+                  - name: quiet
+                    type: orient
+                    on: { step: build, outcome: failure }
+                """));
+
+        Assert.Equal(
+            ["steps 'first' and 'second' are both raised when 'build' fails, and both name a then: the run can go to one step"],
+            Problems(
+                """
+                name: default
+                steps:
+                  - name: build
+                    type: build
+                  - name: first
+                    type: orient
+                    on: { step: build, outcome: failure }
+                    then: build
+                  - name: second
+                    type: orient
+                    on: { step: build, outcome: failure }
+                    then: build
+                  - name: coded-end
+                    type: orient
+                    on: { step: build, outcome: end, codes: [5] }
+                  - name: cheer
+                    type: orient
+                    on: { step: build, outcome: success }
+                    then: build
+                """));
+    }
+
+    /// <summary>
+    /// V38's halves the definition alone answers: a fallback is a model gone on with in place of the agent's own, so of a
+    /// reasoning step, the advisor and the reporter it is never that model and never named twice.
+    /// </summary>
+    [Fact]
+    public void AFallback_IsNeverTheAgentsOwnModel_NorNamedTwice()
+    {
+        Assert.Equal(
+            [
+                "step 'think' falls back to 'm4', which is its own model: a fallback is a model gone on with in its place",
+                "step 'think' falls back to 'm5' twice",
+                "advisor falls back to 'm1', which is its own model: a fallback is a model gone on with in its place",
+                "advisor falls back to 'm2' twice",
+                "reporter falls back to 'm3' twice",
+            ],
+            Problems(
+                """
+                name: default
+                advisor:
+                  agent: advisor
+                  prompt: prompts/recommend.md
+                  model: m1
+                  fallback: [m1, m2, m2]
+                reporter:
+                  agent: reporter
+                  statusPrompt: prompts/status.md
+                  askPrompt: prompts/ask.md
+                  fallback: [m3, m3]
+                steps:
+                  - name: think
+                    type: reason
+                    agent: thinker
+                    model: m4
+                    fallback: [m5, m4, m5]
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                """));
+
+        Assert.Empty(Problems(
+            """
+            name: default
+            steps:
+              - name: think
+                type: reason
+                agent: thinker
+                model: m4
+                fallback: [m5, m6]
+                prompt: prompts/think.md
+                outputs: schemas/think.json
+            """));
+    }
+
+    /// <summary>
+    /// V39: what a block gathers is read after its name as its members are, so each name is gathered once, and none is
+    /// one of the engine's facts of a step or the name of a member, which that path would read in its place.
+    /// </summary>
+    [Fact]
+    public void ABlocksGatheredNames_AreEachOnce_AndNeitherAFactNorAMember()
+    {
+        Assert.Equal(
+            [
+                "group 'review' gathers 'findings' twice; a block gathers one list of each name",
+                "group 'review' gathers 'code', which after a step's name is one of the engine's own facts of it (outcome, code, error, question, latest, assumptions): 'review.code' would read that fact and the gathered list at once. Gather it under another name",
+                "group 'review' gathers 'correctness', the name of one of its members: 'review.correctness' would read that member and the gathered list at once. Gather it under another name",
+            ],
+            Problems(
+                """
+                name: default
+                steps:
+                  - name: review
+                    gather: [findings, code, findings, correctness]
+                    steps:
+                      - name: correctness
+                        type: orient
+                      - name: tests
+                        type: orient
+                """));
+    }
+
+    /// <summary>
+    /// V40: a pause step's answer is one of its options, given once each time the step asks - never counted, so never
+    /// given times or a then; an answer that is just the option holds.
+    /// </summary>
+    [Fact]
+    public void APauseStepsAnswer_IsGivenOnce_NeverCountedNorFollowed()
+    {
+        const string Paused = """
+            name: default
+            steps:
+              - name: ask
+                type: pause
+                question: go on?
+                options: [continue, again]
+                answers:
+                  pause:
+                    answer: again
+                    times: 2
+                    then: continue
+            """;
+
+        Assert.Equal(
+            [
+                "step 'ask' answers 'pause' with again 2 times; times count an answer after which the same question can come again - more, retry or compact - and a pause step's answer ends the matter",
+                "step 'ask' answers 'pause' then continue; then is what is answered once the counted answers are spent, and a pause step's answer is never counted",
+            ],
+            Problems(Paused));
+        Assert.Empty(Problems(Paused.Replace("\n        times: 2\n        then: continue", string.Empty, StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// V30, where the configuration declares no commit template: the step's message is the commit's, and variables, which
+    /// fill a template's placeholders, would be read by nothing. Under a template the validation service holds them to the
+    /// variables it declares.
+    /// </summary>
+    [Fact]
+    public void ACommitStepsVariables_WithNoTemplate_AreRefused()
+    {
+        const string Variables = """
+            name: default
+            steps:
+              - name: save
+                type: commit
+                message: 'work'
+                variables:
+                  type: feat
+            """;
+
+        Assert.Equal(
+            ["step 'save' gives variables and the configuration declares no commit.template; variables fill a template's placeholders, and with none its message is the commit's and they would be read by nothing"],
+            Problems(Variables));
+        Assert.Empty(WorkflowValidator.Validate(Parse(Variables), hasCommitTemplate: true));
     }
 
     /// <summary>
@@ -1658,6 +2207,7 @@ public sealed class WorkflowValidatorTests
                 "step 'loop.think': askRounds must be from 1 to 5, found 6",
                 "step 'loop.think': backoffSeconds must be from 1 to 900, found 0",
                 "step 'loop.think' names a model and a tier: the model would be used and the tier never read",
+                "amend.whenAddScope names 'loop.think', which is declared directly in no forEach group: a work item is built by a step of the group that runs once for each, the work-item group",
             ],
             problems);
 
@@ -1682,6 +2232,7 @@ public sealed class WorkflowValidatorTests
                 "group 'rounds': repeat.blockersLimitRounds must be from 1 to 20, found 0",
                 "amend.changedAnswerMinutes must be from 1 to 60, found 61",
                 "amend.maxAddedIterations must be from 0 to 10, found 11",
+                "amend.whenAddScope names 'replan', which is declared directly in no forEach group: a work item is built by a step of the group that runs once for each, the work-item group",
             ],
             Problems(
                 """
@@ -2032,6 +2583,7 @@ public sealed class WorkflowValidatorTests
                 "step 'stage.to-report' sends the run to 'report', an always step, which runs once at the session's end and is never gone back to",
                 "step 'stage.to-waiter' sends the run to 'waiter', which depends on 'stage', the group the handler is in: it waits for that group, and would start no sooner",
                 "step 'closing.mend' sends the run to 'check' from inside the always group 'closing'; an always group runs once, at the session's end, and is never gone back over",
+                "steps 'stage.to-report' and 'stage.to-waiter' are both raised when 'build' fails with 2, and both name a then: the run can go to one step",
             ],
             problems);
     }

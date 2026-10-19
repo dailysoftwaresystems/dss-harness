@@ -591,6 +591,51 @@ public sealed class WorkflowFileParserTests
     }
 
     /// <summary>
+    /// V43: the kinds an advisor recommends for are given not empty - an advisor that names none recommends for every
+    /// kind, which kinds given empty would never be read as.
+    /// </summary>
+    [Fact]
+    public void AnAdvisorsKindsGivenEmpty_AreRefusedRatherThanReadAsEveryKind()
+    {
+        Assert.Equal(
+            ["line 5, column 10: 'advisor.kinds' is given empty, which is never read as every kind: name the kinds it recommends for, or leave the key out for every kind."],
+            Problems(
+                """
+                name: default
+                advisor:
+                  agent: advisor
+                  prompt: prompts/recommend.md
+                  kinds: []
+                steps:
+                  - name: orient
+                    type: orient
+                """));
+    }
+
+    /// <summary>
+    /// V44: everything about a plan update is said by the workflow's amend block, and no step carries a key of one: such a
+    /// key on a step is refused saying where it belongs, where any other key a step does not take lists those it does.
+    /// </summary>
+    [Fact]
+    public void APlanUpdatesKeyOnAStep_IsRefusedSayingItIsAmends()
+    {
+        Assert.Equal(
+            [
+                "line 5, column 5: 'whenAddScope' is not a key of a step; it is a key of amend, at the top of the file, the one place a plan update is said.",
+                "line 6, column 5: 'changedAnswerMinutes' is not a key of a step; it is a key of amend, at the top of the file, the one place a plan update is said.",
+            ],
+            Problems(
+                """
+                name: default
+                steps:
+                  - name: replan
+                    type: orient
+                    whenAddScope: items.build
+                    changedAnswerMinutes: 1
+                """));
+    }
+
+    /// <summary>
     /// A key that takes a list written out or an expression reads a scalar as the expression and a sequence as the
     /// list, and nothing else is read of it here.
     /// </summary>

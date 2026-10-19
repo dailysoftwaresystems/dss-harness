@@ -20,7 +20,9 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <see cref="WorkflowFileParser"/>; this adds what only the repository can answer: that the file
 /// is where the configuration says it is, that the workflow's directory, its definition and the
 /// files the definition names are the repository's own, inside the workflow's directory, and that
-/// the legs and runners it names are declared.
+/// what the definition asks of the configuration holds: the legs and runners it names are
+/// declared, a runner that writes the tree works in an agent's worktree, a commit step fills the
+/// commit template, and the agents a run makes are named within the worktrees' bound.
 /// </remarks>
 public interface IWorkflowValidationService
 {
@@ -236,7 +238,10 @@ public sealed class WorkflowValidationService(
 
     /// <summary>
     /// What only the repository can answer: that the files the definition names are in the
-    /// workflow's own directory, and that the legs and runners it names are declared.
+    /// workflow's own directory, that the legs and runners it names are declared, that a runner
+    /// that writes the tree works in an agent's worktree, that its commit steps fill the
+    /// configuration's commit template, and that the agents it makes are named within
+    /// <c>worktrees.maxNameLength</c>.
     /// </summary>
     private IReadOnlyList<string> Files(WorkflowDefinition definition, string directory, string name, HarnessConfig config)
     {
@@ -262,13 +267,8 @@ public sealed class WorkflowValidationService(
                 problems.Add($"{where} runs '{step.Runner}': " + DeclaredName.NotDeclared(step.Runner, "predefinedRunners", config.PredefinedRunners.Keys));
             }
 
-            if (step.Runner is not null
-                && step.In is null
-                && config.PredefinedRunners.TryGetValue(step.Runner, out var runner)
-                && runner.WritesTree)
-            {
-                problems.Add($"{where} runs '{step.Runner}', which writes the tree, and names no 'in'; a runner that changes files works in an agent's worktree, never in the main tree");
-            }
+            problems.AddRange(WritesTheMainTree(step, where, config));
+            problems.AddRange(CommitVariables(step, where, config.Commit));
 
             // A leg set is named where a leg is, as --legs takes one.
             foreach (var leg in step.Legs.Where(leg => !config.Legs.ContainsKey(leg) && !config.LegSets.ContainsKey(leg)))
@@ -279,7 +279,86 @@ public sealed class WorkflowValidationService(
             }
         }
 
+        Add(problems, GeneratedAgentNames(definition, config.Worktrees));
         return problems;
+    }
+
+    /// <summary>
+    /// V24: a run step whose runner writes the tree (<c>writesTree</c>) - the step's own, or one its run checks name,
+    /// which runs within the step's legs - works in an agent's worktree, named with <c>in</c>, and never on the main
+    /// tree: the run reads its definition there and folds into it, so what such a step wrote under the other steps would
+    /// change what they read. A runner nobody declared is refused beside this, by name.
+    /// </summary>
+    private static IEnumerable<string> WritesTheMainTree(WorkflowStep step, string where, HarnessConfig config)
+    {
+        if (step.Runner is null || step.In is not null || !config.PredefinedRunners.TryGetValue(step.Runner, out var runner))
+        {
+            yield break;
+        }
+
+        const string OnTheMainTree = "on the main tree: the run reads its definition there and folds into it, so a runner "
+            + "that writes works in an agent's worktree. Name the create-agent step with 'in'";
+
+        if (runner.WritesTree)
+        {
+            yield return $"{where} runs '{step.Runner}', which writes the tree (writesTree), {OnTheMainTree}";
+        }
+
+        foreach (var check in runner.RunCheckRunners())
+        {
+            if (config.PredefinedRunners.TryGetValue(check, out var checkRunner) && checkRunner.WritesTree)
+            {
+                yield return $"{where} runs '{step.Runner}', whose run check '{check}' writes the tree (writesTree), {OnTheMainTree}";
+            }
+        }
+    }
+
+    /// <summary>
+    /// V30, where config.json declares a <c>commit.template</c>: a commit step gives a value for every variable the
+    /// template requires, and none for a variable <c>commit.variables</c> does not declare, which nothing would fill in.
+    /// A name is matched as the configuration matches the template's placeholders, whatever its case. Where no template
+    /// is declared the validator holds the step to its message and no variables, from what the configuration says.
+    /// </summary>
+    private static IEnumerable<string> CommitVariables(WorkflowStep step, string where, CommitConfig commit)
+    {
+        if (step.Type != "commit" || commit.Template is null)
+        {
+            yield break;
+        }
+
+        foreach (var (name, _) in commit.Variables.Where(variable => variable.Value.Required))
+        {
+            if (DeclaredName.In(step.Variables.Keys, name) is null)
+            {
+                yield return $"{where} is a commit step and gives no value for '{name}', which commit.template requires: add it under the step's variables";
+            }
+        }
+
+        foreach (var given in step.Variables.Keys.Where(given => DeclaredName.In(commit.Variables.Keys, given) is null))
+        {
+            yield return $"{where} is a commit step and gives a value for '{given}', which commit.variables does not declare: the template is filled with the variables it declares, and this one would be read by nothing";
+        }
+    }
+
+    /// <summary>
+    /// V27: the names a run gives the agents it makes fit <c>worktrees.maxNameLength</c>, as every agent's name must when
+    /// it is made - the letter and a number that grows to the workflow's most step instances, one agent made by each
+    /// at the most. A workflow none of whose steps makes an agent names none.
+    /// </summary>
+    private static string? GeneratedAgentNames(WorkflowDefinition definition, WorktreeSettings worktrees)
+    {
+        if (!WorkflowFiles.Steps(definition).Any(entry => WorkflowStepTypes.MakesAgent(entry.Step)))
+        {
+            return null;
+        }
+
+        var longest = OrchestrationRules.LongestGeneratedAgentName(definition.MaxInstances ?? WorkflowDefinition.DefaultMaxInstances);
+        var digits = longest - OrchestrationRules.GeneratedAgentPrefix.Length;
+
+        return longest > worktrees.MaxNameLength
+            ? $"the workflow creates agents, whose generated names ('{OrchestrationRules.GeneratedAgentPrefix}' and up to {digits} digit{(digits == 1 ? string.Empty : "s")}) "
+                + $"are {longest} characters, and worktrees.maxNameLength is {worktrees.MaxNameLength}"
+            : null;
     }
 
     private static void Add(List<string> problems, string? problem)

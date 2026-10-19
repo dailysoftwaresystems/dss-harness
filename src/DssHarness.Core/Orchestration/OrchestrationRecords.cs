@@ -454,6 +454,18 @@ public static partial class OrchestrationRules
         return null;
     }
 
+    /// <summary>The letter every agent a run makes is named with, before its number: <c>a1</c>, <c>a2</c> and up.</summary>
+    public const string GeneratedAgentPrefix = "a";
+
+    /// <summary>
+    /// The longest name a run that may have <paramref name="mostInstances"/> step instances gives an agent it makes: the
+    /// letter and the digits of that bound. Each agent is made by one step instance and numbered one past the highest
+    /// number given before, from 1, so no run numbers one past its most instances.
+    /// </summary>
+    /// <param name="mostInstances">The most step instances the run may have (<c>maxInstances</c>).</param>
+    public static int LongestGeneratedAgentName(int mostInstances)
+        => GeneratedAgentPrefix.Length + Math.Max(mostInstances, 1).ToString(System.Globalization.CultureInfo.InvariantCulture).Length;
+
     /// <summary>What is wrong with an agent's name beside its orchestrator's: never the same, since the two would share a log and a plans directory.</summary>
     /// <param name="orchestrator">The orchestrator's name.</param>
     /// <param name="agent">The agent's name.</param>

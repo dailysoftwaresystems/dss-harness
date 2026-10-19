@@ -166,6 +166,9 @@ public static class WorkflowValidator
             WorkflowAnswers();
             Steps();
             Amend();
+            Checkpoints();
+            SharedEndings();
+            Fallbacks();
             Outputs();
         }
 
@@ -276,6 +279,8 @@ public static class WorkflowValidator
                 {
                     _problems.Add($"advisor.kinds names {string.Join(", ", unknown.Select(kind => $"'{kind}'"))}, which {IsAre(unknown.Count)} no question kind. Known: {string.Join(", ", QuestionKinds.Select(kind => $"'{kind}'"))}.");
                 }
+
+                AdvisorKinds(advisor);
             }
         }
 
@@ -485,6 +490,8 @@ public static class WorkflowValidator
                             _problems.Add($"{where} names no message and the configuration declares no commit.template; one of the two writes the commit's message");
                         }
 
+                        CommitVariablesWithoutATemplate(entry);
+
                         Within(entry.Step.TimeoutMinutes, 1, 240, $"{where}: timeoutMinutes");
                         break;
 
@@ -684,6 +691,8 @@ public static class WorkflowValidator
             {
                 _problems.Add($"{where} gathers and loops; gather is a block's, which runs its steps once and gathers what they wrote into one list");
             }
+
+            GatherNames(entry);
 
             if (step.Repeat is { } repeat)
             {
@@ -1183,6 +1192,8 @@ public static class WorkflowValidator
 
             Within(amend.ChangedAnswerMinutes, 1, 60, "amend.changedAnswerMinutes");
             Within(amend.MaxAddedIterations, 0, 10, "amend.maxAddedIterations");
+
+            PlanUpdateRules(amend);
         }
 
         private void Outputs()
@@ -1246,6 +1257,10 @@ public static class WorkflowValidator
                     else if (!owner.Step.Options.Contains(answer.Answer, StringComparer.Ordinal))
                     {
                         _problems.Add($"{where} answers 'pause' with '{answer.Answer}', which is not one of the options the step offers");
+                    }
+                    else
+                    {
+                        PauseAnswerGivenOnce(answer, where);
                     }
 
                     return;
@@ -1494,6 +1509,14 @@ public static class WorkflowValidator
 
                 case "skill":
                     _problems.Add($"'{what}' names a skill, and a skill's text is a prompt's alone; the step's own keys read the run's names, never a skill");
+                    return;
+
+                case "recommendations" or "question" or "status" or "update":
+                    _problems.Add($"'{what}' reads '{read.Whole}': {PromptsAlone[read.Root]}");
+                    return;
+
+                case "piece":
+                    PieceRead(entry, read, what);
                     return;
 
                 case "source":
@@ -1814,5 +1837,505 @@ public static class WorkflowValidator
         }
 
         private static string IsAre(int count) => count == 1 ? "is" : "are";
+
+        /// <summary>
+        /// The roots of the run's own names that only a prompt reads, each with why: a step's own keys - its templates and
+        /// its expressions - read none of them. Where a prompt may name one is the check of the prompt's own text.
+        /// </summary>
+        private static readonly IReadOnlyDictionary<string, string> PromptsAlone = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            // V43.
+            ["recommendations"] = "the repository's bar for a recommendation is text for an agent, and only a reason step's prompt and the advisor's read it",
+            ["question"] = "only the advisor's prompt reads a question",
+
+            // V45.
+            ["status"] = "only the reporter's prompts read the status",
+
+            // V44.
+            ["update"] = "a plan update is told to an agent, and only the prompts of the step that plans it and of the steps of its scope read one",
+        };
+
+        /// <summary>
+        /// V43: the advisor recommends on the questions the engine raises itself, and two kinds are none of them: an agent
+        /// that asks gives its own recommendation with its question, and a run at its budget's reserve spends nothing more
+        /// on reasoning, which the advisor is.
+        /// </summary>
+        private void AdvisorKinds(FlowAdvisor advisor)
+        {
+            if (advisor.Kinds.Contains("ask", StringComparer.Ordinal))
+            {
+                _problems.Add("advisor is to recommend for 'ask': an agent that asks gives its own recommendation");
+            }
+
+            if (advisor.Kinds.Contains("runBudget", StringComparer.Ordinal))
+            {
+                _problems.Add("advisor is to recommend for 'runBudget': a run at its budget's reserve spends nothing more on reasoning, and the advisor reasons");
+            }
+        }
+
+        /// <summary>
+        /// V39: what a block gathers is read after its name as its members are - <c>review.findings</c> - so each name is
+        /// gathered once, and is neither one of the engine's facts of a step nor the name of a member, either of which
+        /// that path would read in its place.
+        /// </summary>
+        private void GatherNames(Entry entry)
+        {
+            var where = $"group '{entry.Path}'";
+
+            foreach (var twice in entry.Step.Gather.GroupBy(name => name, StringComparer.Ordinal).Where(group => group.Count() > 1).Select(group => group.Key))
+            {
+                _problems.Add($"{where} gathers '{twice}' twice; a block gathers one list of each name");
+            }
+
+            foreach (var name in entry.Step.Gather.Distinct(StringComparer.Ordinal))
+            {
+                if (WorkflowExpressions.StepFacts.Contains(name, StringComparer.Ordinal))
+                {
+                    _problems.Add($"{where} gathers '{name}', which after a step's name is one of the engine's own facts of it ({string.Join(", ", WorkflowExpressions.StepFacts)}): '{entry.Path}.{name}' would read that fact and the gathered list at once. Gather it under another name");
+                }
+                else if (entry.Step.Steps.Any(member => string.Equals(member.Name, name, StringComparison.Ordinal)))
+                {
+                    _problems.Add($"{where} gathers '{name}', the name of one of its members: '{entry.Path}.{name}' would read that member and the gathered list at once. Gather it under another name");
+                }
+            }
+        }
+
+        /// <summary>
+        /// V30, where the configuration declares no commit template: the step's message is the commit's, and variables,
+        /// which fill a template's placeholders, would be read by nothing. Where it declares one, the validation service
+        /// holds the step's variables to the ones the template declares, from the configuration itself.
+        /// </summary>
+        private void CommitVariablesWithoutATemplate(Entry entry)
+        {
+            if (!_hasCommitTemplate && entry.Step.Variables.Count > 0)
+            {
+                _problems.Add($"step '{entry.Path}' gives variables and the configuration declares no commit.template; variables fill a template's placeholders, and with none its message is the commit's and they would be read by nothing");
+            }
+        }
+
+        /// <summary>
+        /// V40: an answer to a pause step is one of its options, given once each time the step asks - never counted, as an
+        /// answer after which the same question can come again is, and so never given <c>times</c> or a <c>then</c>.
+        /// </summary>
+        private void PauseAnswerGivenOnce(FlowAnswer answer, string where)
+        {
+            if (answer.Times is not null)
+            {
+                _problems.Add($"{where} answers 'pause' with {answer.Answer} {answer.Times} times; times count an answer after which the same question can come again - more, retry or compact - and a pause step's answer ends the matter");
+            }
+
+            if (answer.Then is not null)
+            {
+                _problems.Add($"{where} answers 'pause' then {answer.Then}; then is what is answered once the counted answers are spent, and a pause step's answer is never counted");
+            }
+        }
+
+        /// <summary>
+        /// V31: <c>pushCheckpoints</c> pushes the checkpoint commits as they are made, so a workflow that says it and has
+        /// no push step that is a checkpoint says something nothing would do.
+        /// </summary>
+        private void Checkpoints()
+        {
+            if (_definition.PushCheckpoints is true && !_entries.Any(entry => entry.Step is { Type: "push", Checkpoint: true }))
+            {
+                _problems.Add("the workflow sets pushCheckpoints, and none of its push steps is a checkpoint: the key would change nothing");
+            }
+        }
+
+        /// <summary>
+        /// V36: two handlers of one source that one ending could raise never both name a <c>then</c>: both are raised, and
+        /// the run can go to one step only, so which it went to would be nobody's choice.
+        /// </summary>
+        private void SharedEndings()
+        {
+            var redirecting = _entries.Where(entry => entry.Step is { On: not null, Then: not null }).ToList();
+
+            for (var first = 0; first < redirecting.Count; first++)
+            {
+                for (var second = first + 1; second < redirecting.Count; second++)
+                {
+                    var (one, other) = (redirecting[first], redirecting[second]);
+
+                    // A handler's source is a sibling, so two handlers of one source are declared beside each other.
+                    if (string.Equals(one.ParentPath, other.ParentPath, StringComparison.Ordinal)
+                        && string.Equals(one.Step.On!.Step, other.Step.On!.Step, StringComparison.Ordinal)
+                        && SharedEnding(one.Step.On, other.Step.On) is { } ending)
+                    {
+                        _problems.Add($"steps '{one.Path}' and '{other.Path}' are both raised when '{one.Step.On.Step}' {ending}, and both name a then: the run can go to one step");
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// The ending of one source that raises both <paramref name="one"/> and <paramref name="other"/>, in words - that it
+        /// succeeds, that it fails, or that it fails with the codes both answer to - or <see langword="null"/> where no
+        /// ending raises both. A step that ended done ended with 0, so an <c>end</c> that names codes is raised by a failure
+        /// with one of them alone.
+        /// </summary>
+        private static string? SharedEnding(FlowOn one, FlowOn other)
+        {
+            static bool BySuccess(FlowOn on) => on.Outcome == "success" || (on.Outcome == "end" && on.Codes.Count == 0);
+            static bool ByFailure(FlowOn on) => on.Outcome is "failure" or "end";
+
+            if (BySuccess(one) && BySuccess(other))
+            {
+                return "succeeds";
+            }
+
+            if (!ByFailure(one) || !ByFailure(other))
+            {
+                return null;
+            }
+
+            if (one.Codes.Count == 0 && other.Codes.Count == 0)
+            {
+                return "fails";
+            }
+
+            IReadOnlyList<int> shared = one.Codes.Count == 0
+                ? [.. other.Codes.Distinct()]
+                : [.. one.Codes.Distinct().Where(code => other.Codes.Count == 0 || other.Codes.Contains(code))];
+
+            return shared switch
+            {
+                [] => null,
+                [var code] => $"fails with {code}",
+                _ => $"fails with {string.Join(", ", shared.SkipLast(1))} or {shared[^1]}",
+            };
+        }
+
+        /// <summary>
+        /// V38's halves the definition alone can answer, for each agent it runs - a reasoning step, the advisor and the
+        /// reporter: a fallback is a model gone on with in place of the agent's own, so it is never that model, and never
+        /// named twice. What a tier, a model and a fallback resolve to is the configuration's providers' to say.
+        /// </summary>
+        private void Fallbacks()
+        {
+            foreach (var entry in _entries.Where(entry => entry.Step.Type == "reason"))
+            {
+                FallbackRules(entry.Step.Model, entry.Step.Fallback, $"step '{entry.Path}'");
+            }
+
+            if (_definition.Advisor is { } advisor)
+            {
+                FallbackRules(advisor.Model, advisor.Fallback, "advisor");
+            }
+
+            if (_definition.Reporter is { } reporter)
+            {
+                FallbackRules(reporter.Model, reporter.Fallback, "reporter");
+            }
+        }
+
+        private void FallbackRules(string? model, IReadOnlyList<string> fallback, string where)
+        {
+            if (model is not null && fallback.Contains(model, StringComparer.Ordinal))
+            {
+                _problems.Add($"{where} falls back to '{model}', which is its own model: a fallback is a model gone on with in its place");
+            }
+
+            foreach (var twice in fallback.GroupBy(entry => entry, StringComparer.Ordinal).Where(group => group.Count() > 1).Select(group => group.Key))
+            {
+                _problems.Add($"{where} falls back to '{twice}' twice");
+            }
+        }
+
+        /// <summary>
+        /// The work-item group: the <c>forEach</c> group the step <c>amend.whenAddScope</c> names is declared directly in,
+        /// one instance of which builds each work item; <see langword="null"/> where the workflow has no amend block, or its
+        /// whenAddScope names no step of the flow declared so.
+        /// </summary>
+        private Entry? WorkItemGroup()
+            => _definition.Amend is { } amend
+                && _byPath.GetValueOrDefault(amend.WhenAddScope) is { Parent: { Step.ForEach: not null } group }
+                && !InRecovery(group)
+                    ? group
+                    : null;
+
+        /// <summary>
+        /// V46: <c>piece</c> is the part of a plan update one instance of the work-item group carries, so only a step of
+        /// that group reads it; outside it, and in a workflow with no such group, no piece is there to read.
+        /// </summary>
+        private void PieceRead(Entry entry, WorkflowExpressions.Read read, string what)
+        {
+            if (WorkItemGroup() is not { } group)
+            {
+                _problems.Add($"'{what}' reads '{read.Whole}', whose 'piece' is the part of a plan update a work item carries, and the workflow has no work-item group: amend.whenAddScope names the step of a forEach group that builds one");
+            }
+            else if (!group.Owns(entry))
+            {
+                _problems.Add($"'{what}' reads '{read.Whole}', whose 'piece' is the part of a plan update a work item carries, and '{entry.Path}' is no step of the work-item group '{group.Path}'");
+            }
+        }
+
+        /// <summary>
+        /// What the amend block says beyond each step it names being there: that it takes an amended request or a changed
+        /// answer, from a text input (V44); that the step that plans an update is one step, raised by an update alone
+        /// (V44); and that the three steps that carry its pieces are alternatives at one place of the work-item group,
+        /// which expands from the items of the check it waits for (V46, V47). A step of the recovery, already refused for
+        /// it, is held to nothing more.
+        /// </summary>
+        private void PlanUpdateRules(FlowAmend amend)
+        {
+            if (amend.Input is null && amend.ChangedAnswerMinutes is null)
+            {
+                _problems.Add("amend names neither input nor changedAnswerMinutes; at least one is named - the text input an amendment adds to, or the minutes the last answer can be changed for - and neither has a default");
+            }
+            else if (amend.Input is { } named && _definition.InputsByName.TryGetValue(named, out var input) && input.Kind != FlowInput.TextKind)
+            {
+                _problems.Add($"amend.input names '{named}', a {input.Kind} input; an amendment adds words to the request, which a text input holds");
+            }
+
+            if (_byPath.GetValueOrDefault(amend.Step) is { } planner && !InRecovery(planner))
+            {
+                PlannerRules(amend, planner);
+            }
+
+            if (_byPath.GetValueOrDefault(amend.WhenAddScope) is { } builder && !InRecovery(builder))
+            {
+                WorkItemRules(amend, builder);
+            }
+        }
+
+        /// <summary>
+        /// V44: the step that plans an update is raised as a handler is, by an update alone, in the newest instance of its
+        /// scope - so one step, in no <c>forEach</c> and no <c>always</c> group; never raised by an ending, passed by,
+        /// waiting or counted against a bound; going on with the work of a step of its own scope; and never sending the
+        /// run back to itself.
+        /// </summary>
+        private void PlannerRules(FlowAmend amend, Entry planner)
+        {
+            var named = $"amend.step names '{amend.Step}'";
+
+            if (GroupAround(planner, group => group.ForEach is not null) is { } many)
+            {
+                _problems.Add($"{named}, which is inside the forEach '{many.Path}': the step that plans an update is one step, not one of many");
+            }
+
+            if (AlwaysAround(planner) is { } always)
+            {
+                _problems.Add($"{named}, which is inside the always group '{always.Path}': the step that plans an update is raised while the run works, and an always group runs once, at the session's end");
+            }
+
+            var step = planner.Step;
+            IReadOnlyList<string> raisedOtherwise =
+            [
+                .. new (string Key, bool Says)[] { ("on", step.On is not null), ("when", step.When is not null), ("dependsOn", step.DependsOn.Count > 0), ("maxVisits", step.MaxVisits is not null) }
+                    .Where(key => key.Says)
+                    .Select(key => key.Key),
+            ];
+
+            if (raisedOtherwise.Count > 0)
+            {
+                _problems.Add($"{named}, which says {string.Join(", ", raisedOtherwise)}: the step that plans an update is raised by an update alone - never by an ending, never passed by, waiting for nothing and counted against no bound");
+            }
+
+            // A resume nothing declares is the reason step's own refusal; one that reaches a step around the planner's
+            // scope is this one's.
+            if (step.Resume is { } resumed && Sibling(planner, resumed) is null && Scope(planner, resumed) is not null)
+            {
+                _problems.Add($"{named}, which goes on with '{resumed}', and '{resumed}' is not declared beside it: the step that plans an update goes on with the work of a step of its own scope");
+            }
+
+            if (amend.Then is { } then && string.Equals(then, step.Name, StringComparison.Ordinal))
+            {
+                _problems.Add(CallsItself("amend.step", $"sends the run back to itself (amend.then: {then})"));
+            }
+        }
+
+        /// <summary>
+        /// V46 and V47: <c>whenAddScope</c> names the step that builds a work item, declared directly in a <c>forEach</c>
+        /// group - the work-item group - outside every <c>always</c> group, and no handler. <c>whenChangeScope</c> and
+        /// <c>whenRemoveScope</c> each name that step or an alternative beside it, of its type, which runs in its place: with
+        /// its dependencies, and named by its name, so the alternative says none of its own and no other step names it.
+        /// The group expands from the items of a <c>validate-plan</c> step beside it, which it waits for, so the work items
+        /// an update places in a round are checked with the round's own.
+        /// </summary>
+        private void WorkItemRules(FlowAmend amend, Entry builder)
+        {
+            if (builder.Parent is not { Step.ForEach: not null } group)
+            {
+                _problems.Add($"amend.whenAddScope names '{amend.WhenAddScope}', which is declared directly in no forEach group: a work item is built by a step of the group that runs once for each, the work-item group");
+                return;
+            }
+
+            if (AlwaysAround(builder) is { } always)
+            {
+                _problems.Add($"amend.whenAddScope names '{amend.WhenAddScope}', which is inside the always group '{always.Path}': a work item is built while the run works, and an always group runs once, at the session's end");
+            }
+
+            if (builder.Step.On is { } on)
+            {
+                _problems.Add($"amend.whenAddScope names '{amend.WhenAddScope}', a handler raised by '{on.Step}': the step that builds a work item begins its instance's work, and a handler is raised by another step's ending");
+            }
+
+            var alternatives = new List<Entry>();
+
+            foreach (var (key, named) in new[] { ("whenChangeScope", amend.WhenChangeScope), ("whenRemoveScope", amend.WhenRemoveScope) })
+            {
+                // A step that is not there, or a step of the recovery, was refused by name already.
+                if (_byPath.GetValueOrDefault(named) is not { } alternative || InRecovery(alternative) || ReferenceEquals(alternative, builder))
+                {
+                    continue;
+                }
+
+                if (!string.Equals(alternative.ParentPath, builder.ParentPath, StringComparison.Ordinal))
+                {
+                    _problems.Add($"amend.{key} names '{named}', which is not declared beside '{amend.WhenAddScope}': the three are alternatives at one place of one forEach group");
+                    continue;
+                }
+
+                if (!alternatives.Contains(alternative))
+                {
+                    alternatives.Add(alternative);
+                    AlternativeRules(alternative, builder, $"amend.{key} names '{named}'");
+                }
+            }
+
+            ExpandsFromACheck(group);
+        }
+
+        /// <summary>
+        /// An alternative to the step that builds a work item runs in its place in an instance: of its type, with its
+        /// dependencies and under its name, beginning the instance's work - so it says no dependsOn, when, on, resume or
+        /// always of its own, and no other step names it.
+        /// </summary>
+        private void AlternativeRules(Entry alternative, Entry builder, string named)
+        {
+            var step = alternative.Step;
+
+            if (!string.Equals(step.Type, builder.Step.Type, StringComparison.Ordinal))
+            {
+                _problems.Add($"{named}, {KindOf(step)}, and '{builder.Path}' is {KindOf(builder.Step)}: an alternative runs in that step's place, and is of its type");
+            }
+
+            IReadOnlyList<string> ownWiring =
+            [
+                .. new (string Key, bool Says)[] { ("dependsOn", step.DependsOn.Count > 0), ("when", step.When is not null), ("on", step.On is not null), ("resume", step.Resume is not null), ("always", step.Always is true) }
+                    .Where(key => key.Says)
+                    .Select(key => key.Key),
+            ];
+
+            if (ownWiring.Count > 0)
+            {
+                _problems.Add($"{named}, which says {string.Join(", ", ownWiring)}: it runs in the place of '{builder.Step.Name}', with that step's dependencies, and begins the work of its instance");
+            }
+
+            var why = $"'{step.Name}' runs in the place of '{builder.Step.Name}', and is named by that step's name";
+
+            foreach (var other in _entries.Where(other => !ReferenceEquals(other, alternative) && !ReferenceEquals(other, _recover)))
+            {
+                var where = other.Step.IsGroup ? $"group '{other.Path}'" : $"step '{other.Path}'";
+
+                if (other.Step.DependsOn.Any(name => ReferenceEquals(Sibling(other, name), alternative)))
+                {
+                    _problems.Add($"{where} depends on '{step.Name}': {why}");
+                }
+
+                if (other.Step.Resume is { } resumed && ReferenceEquals(Scope(other, resumed), alternative))
+                {
+                    _problems.Add($"{where} resumes '{step.Name}': {why}");
+                }
+
+                if (other.Step.On is { } on && ReferenceEquals(Sibling(other, on.Step), alternative))
+                {
+                    _problems.Add($"{where} is raised by '{step.Name}': {why}");
+                }
+
+                if (other.Step.Then is { } then && ReferenceEquals(Scope(other, then), alternative))
+                {
+                    _problems.Add($"{where} sends the run to '{step.Name}': {why}");
+                }
+            }
+        }
+
+        /// <summary>
+        /// V47: where a workflow takes plan updates, the work-item group expands from the <c>items</c> of a
+        /// <c>validate-plan</c> step declared beside it, which it waits for, directly or through the steps it depends on:
+        /// the work items of a round are checked together with those an update places in it, by the check the group
+        /// expands from. A <c>forEach</c> that is not written whole was refused already, and is read for nothing more.
+        /// </summary>
+        private void ExpandsFromACheck(Entry group)
+        {
+            var forEach = group.Step.ForEach!;
+
+            if (WorkflowExpressions.SyntaxProblem(forEach) is not null)
+            {
+                return;
+            }
+
+            var reads = WorkflowExpressions.ReadsOf(forEach);
+
+            if (reads.Count == 0)
+            {
+                _problems.Add(UncheckedItems(group, forEach));
+            }
+
+            foreach (var read in reads)
+            {
+                if (WorkflowExpressions.IsRoot(read.Root)
+                    || Resolve(group, read, within: false) is not { Step.Step.Type: "validate-plan", After: ["items"] } found
+                    || read.Whole.Contains('[', StringComparison.Ordinal)
+                    || !string.Equals(found.Step.ParentPath, group.ParentPath, StringComparison.Ordinal))
+                {
+                    _problems.Add(UncheckedItems(group, read.Whole));
+                }
+                else if (!WaitsFor(group, found.Step))
+                {
+                    _problems.Add($"group '{group.Path}' expands from '{read.Whole}', and waits for '{found.Step.Step.Name}' neither directly nor through the steps it depends on: the work items it runs are the ones that check checked, once it has ended");
+                }
+            }
+        }
+
+        private static string UncheckedItems(Entry group, string read)
+            => $"group '{group.Path}' expands from '{read}', which no validate-plan step checked: with an amend block the work items of a round are checked together with those an update places in it, by the check the group expands from";
+
+        /// <summary>
+        /// Whether <paramref name="waiter"/> waits for <paramref name="awaited"/>, a step declared beside it: depends on it,
+        /// or on a step that does, however many steps along.
+        /// </summary>
+        private bool WaitsFor(Entry waiter, Entry awaited)
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var waiting = new Queue<Entry>([waiter]);
+
+            while (waiting.TryDequeue(out var next))
+            {
+                foreach (var name in next.Step.DependsOn)
+                {
+                    if (Sibling(next, name) is not { } dependency || !seen.Add(dependency.Path))
+                    {
+                        continue;
+                    }
+
+                    if (ReferenceEquals(dependency, awaited))
+                    {
+                        return true;
+                    }
+
+                    waiting.Enqueue(dependency);
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>The nearest group around <paramref name="entry"/> - never the step itself - that <paramref name="holds"/> says of, or <see langword="null"/>.</summary>
+        private static Entry? GroupAround(Entry entry, Func<WorkflowStep, bool> holds)
+        {
+            for (var scope = entry.Parent; scope is not null; scope = scope.Parent)
+            {
+                if (holds(scope.Step))
+                {
+                    return scope;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>What a step is, as a refusal says it: a group, or a step of its type.</summary>
+        private static string KindOf(WorkflowStep step) => step.IsGroup ? "a group" : $"a {step.Type} step";
     }
 }

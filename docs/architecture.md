@@ -1263,6 +1263,25 @@ file. This build checks workflow definitions and
 does not run them: the engine that runs them - the coordinator, the agents, the steps over the
 services the tool already has - is the next thing the tool grows.
 
+A definition is held to the `config.json` it is checked under as well: a `run` step whose runner -
+or a runner its run checks name - says `writesTree` names with `in` the create-agent step whose
+worktree it works in, since the run reads its definition in the main tree and folds into it; the
+agents a run makes, named `a` and a number that grows to the workflow's `maxInstances`, fit
+`worktrees.maxNameLength`; and a commit step gives a value for every variable `commit.template`
+requires and none for one it does not declare - or, with no template, a `message` and no
+`variables`. Within the definition, the `amend` block takes an amended request into a text
+`input`, a changed answer (`changedAnswerMinutes`) or both; its `step` is one step, outside every
+`forEach` and `always` group, raised by an update alone and going on with the work of a step beside
+it; `whenAddScope` names a step declared directly in a `forEach` group - the work-item group - and
+`whenChangeScope` and `whenRemoveScope` that step or alternatives of its type beside it, which say
+no wiring of their own and which no other step names; and the work-item group expands from the
+`items` of a `validate-plan` step it waits for. `piece` is read only in that group, and what only a
+prompt reads - `recommendations`, `question`, `status`, `update`, a skill - by no step's own key.
+A `pushCheckpoints` with no push step that is a checkpoint, two handlers one ending raises that
+both name a `then`, a fallback that is its agent's own model or is named twice, a gathered name
+given twice, named for an engine's fact or for a member, `times` or `then` beside a `pause`
+answer, and an advisor whose `kinds` are given empty or name `ask` or `runBudget` are each refused.
+
 `export-workflow <workflow> --to <dir>` is a use case of Core (`WorkflowExportService`): it copies
 a workflow - its yml and every file it names, the one list `validate-workflow` and `init` read
 (`WorkflowFiles`), and no other - into `<dir>/<workflow>/`, a folder of its own that must not be
