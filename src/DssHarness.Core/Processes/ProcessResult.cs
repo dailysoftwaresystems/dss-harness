@@ -24,6 +24,13 @@ public sealed record ProcessResult(
     /// </summary>
     public string? BeatLost { get; init; }
 
+    /// <summary>
+    /// What a contained child's container could not reach when it was ended - at the child's own end or at a stop -
+    /// and why, or <see langword="null"/> where it reached everything it holds: a session ended on Linux or macOS
+    /// without the process table it is read from ends the child's group and nothing outside it.
+    /// </summary>
+    public string? Uncontained { get; init; }
+
     /// <summary>True only when the process ran to completion and reported success.</summary>
     public bool Succeeded => !TimedOut && ExitCode == 0;
 

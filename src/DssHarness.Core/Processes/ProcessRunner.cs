@@ -9,7 +9,7 @@ using Microsoft.Win32.SafeHandles;
 namespace DssHarness.Core.Processes;
 
 /// <inheritdoc cref="IProcessRunner"/>
-public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions filePermissions, string? containThrough = null)
+public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions filePermissions, string? containThrough = null, IProcessTable? processTable = null)
     : IProcessRunner
 {
     /// <summary>ENOENT on Linux and macOS, ERROR_FILE_NOT_FOUND on Windows.</summary>
@@ -71,8 +71,11 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     private readonly IHostPlatform _platform = platform;
     private readonly IFilePermissions _filePermissions = filePermissions;
 
-    /// <summary>What a contained child's session is read from on Linux and macOS, read through this runner where the system is asked through a program.</summary>
-    private IProcessTable? _processTable;
+    /// <summary>
+    /// What a contained child's session is read from on Linux and macOS: the machine's own, read through this runner where
+    /// the system is asked through a program - or a table a test gives in its place.
+    /// </summary>
+    private IProcessTable? _processTable = processTable;
 
     /// <summary>
     /// The variable a program is looked up on. Spelled once: on Windows the environment a child is
@@ -282,6 +285,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         }
 
         var stopped = false;
+        string? uncontained = null;
 
         if (status is not null)
         {
@@ -299,7 +303,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             catch (OperationCanceledException) when (timeoutSource.IsCancellationRequested)
             {
                 stopped = true;
-                await StopAsync(request, job, process).ConfigureAwait(false);
+                uncontained = await StopAsync(request, job, process).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -342,7 +346,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
                 // contained child is ended through its container, which reaches what detached itself
                 // from its parent as surely as what did not.
                 stopped = true;
-                await StopAsync(request, job, process).ConfigureAwait(false);
+                uncontained = await StopAsync(request, job, process).ConfigureAwait(false);
             }
         }
 
@@ -355,7 +359,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             // What a contained child starts is ended with it, at its own end as at a stop: a
             // leftover holding the output - a server started in the background, a build's node -
             // would otherwise keep the reading below from ever ending.
-            await EndContainerAsync(job, process).ConfigureAwait(false);
+            uncontained = await EndContainerAsync(job, process).ConfigureAwait(false);
         }
 
         // No beat is written to a child that has gone.
@@ -390,7 +394,11 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
         if (stopped && cancellationToken.IsCancellationRequested)
         {
-            throw new OperationCanceledException(cancellationToken);
+            // What the stop could not reach is said where the stop is: a caller that gave up is
+            // handed no result to read it from.
+            throw uncontained is null
+                ? new OperationCanceledException(cancellationToken)
+                : new OperationCanceledException($"The run was stopped, and {uncontained}.", cancellationToken);
         }
 
         return new ProcessResult(
@@ -401,6 +409,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             TimedOut: stopped)
         {
             BeatLost = beatLost,
+            Uncontained = uncontained,
         };
     }
 
@@ -412,17 +421,20 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// <param name="request">The child's request, saying whether it was contained.</param>
     /// <param name="job">The job holding a contained child on Windows, or <see langword="null"/>.</param>
     /// <param name="process">The child.</param>
-    private async Task StopAsync(ProcessRequest request, SafeWaitHandle? job, Process process)
+    /// <returns>What the container could not reach, or <see langword="null"/> where it reached all it holds.</returns>
+    private async Task<string?> StopAsync(ProcessRequest request, SafeWaitHandle? job, Process process)
     {
-        if (request.Contained)
+        try
         {
-            await EndContainerAsync(job, process).ConfigureAwait(false);
+            return request.Contained ? await EndContainerAsync(job, process).ConfigureAwait(false) : null;
         }
-
-        // The tree as well: a stop that lands in the moment before the child joined its container
-        // reaches nothing through the container, and the child itself must still go, or the wait
-        // that follows would never end.
-        KillTree(process);
+        finally
+        {
+            // The tree as well, whatever ending the container met: a stop that lands in the moment
+            // before the child joined its container reaches nothing through the container, and the
+            // child itself must still go, or the wait that follows would never end.
+            KillTree(process);
+        }
     }
 
     /// <summary>
@@ -432,12 +444,13 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// </summary>
     /// <param name="job">The job holding the child on Windows, or <see langword="null"/> elsewhere.</param>
     /// <param name="process">The child, which leads its session on Linux and macOS under its own id.</param>
-    private Task EndContainerAsync(SafeWaitHandle? job, Process process)
+    /// <returns>What could not be reached, or <see langword="null"/> where all the container holds was.</returns>
+    private Task<string?> EndContainerAsync(SafeWaitHandle? job, Process process)
     {
         if (job is not null)
         {
             Containment.Terminate(job);
-            return Task.CompletedTask;
+            return Task.FromResult<string?>(null);
         }
 
         _processTable ??= ProcessTableFactory.Create(_platform, this);

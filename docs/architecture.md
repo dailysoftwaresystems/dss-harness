@@ -118,7 +118,9 @@ before it runs a line of its own, and `Process.Start` offers no moment between a
 and its start on any system, so the runner - the one owner of processes - starts a contained child
 through a copy of this tool that puts itself there first: the hidden `contain-exec` command, which
 on Linux and macOS makes itself the leader of a new session and process group (`setsid`) and then
-becomes the program (`execvp`, under the same process id), and on Windows joins the named job
+becomes the program by its whole path (`execv`, under the same process id - never `execvp`, which
+runs a file with no interpreter line under `/bin/sh` where any other start refuses it), and on
+Windows joins the named job
 object the runner made and starts the program in a process group of its own, handing the streams
 it was given on to it. On Windows the job is ended as the child ends or is stopped, and every
 member goes with it; and since its members also end when its last handle closes, what a killed
@@ -127,8 +129,12 @@ the child ends or is stopped - every process still in it, and at a stop every on
 child's tree, read before anything is signalled, asked to end with SIGTERM, and whatever still
 stands five seconds later killed - and the output is read for five seconds more at most: a process
 that made a session of its own away from the child's tree is not reached, and nothing waits for
-what it holds. Nothing ends a contained child there when the engine itself is killed: it runs on
-until something ends it.
+what it holds. A process table that cannot be read - macOS's is read through `ps`, which a session
+that has used up every process it may start leaves unable to start - takes nothing from the stop:
+the group is still asked and then killed by its id, which needs no table, the tree is still ended,
+and what went unreached is said in the result (`ProcessResult.Uncontained`), or in the
+cancellation where the caller gave up. Nothing ends a contained child there when the engine itself
+is killed: it runs on until something ends it.
 
 Whether the program started is said on a channel of the runner's own (`--status`), never in the
 program's streams or an exit code a program could give too: a program that cannot start is

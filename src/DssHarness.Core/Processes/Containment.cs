@@ -68,6 +68,13 @@ internal static class Containment
     /// <param name="leader">The child, which leads the session and the group by its own process id.</param>
     /// <param name="read">Reads the machine's process table.</param>
     /// <param name="grace">How long the asking signal is given to be obeyed.</param>
+    /// <returns>
+    /// What could not be reached, and why, or <see langword="null"/> where the session was read
+    /// each time it was looked for. A table that cannot be read - on macOS it is read through
+    /// <c>ps</c>, which a session that has used up every process it may start leaves unable to start -
+    /// ends nothing less than the group: the group is signalled by its id, which needs no table, and
+    /// only what left it goes unreached.
+    /// </returns>
     /// <remarks>
     /// <para>
     /// The members are read before anything is signalled. A member that ends first takes nothing
@@ -86,16 +93,17 @@ internal static class Containment
     /// has gone - is reached by nothing here.
     /// </para>
     /// </remarks>
-    public static async Task EndSessionAsync(int leader, Func<CancellationToken, Task<ProcessTableReading>> read, TimeSpan grace)
+    public static async Task<string?> EndSessionAsync(int leader, Func<CancellationToken, Task<ProcessTableReading>> read, TimeSpan grace)
     {
         ArgumentNullException.ThrowIfNull(read);
 
         var calls = Posix.Calls();
-        var members = Members(await read(CancellationToken.None).ConfigureAwait(false), leader);
+        var (first, unread) = await ReadAsync(read).ConfigureAwait(false);
+        var members = first is null ? [] : Members(first, leader);
 
         if (members.Count == 0 && calls.SignalGroup(leader, 0) == -1)
         {
-            return;
+            return unread is null ? null : Unreached(unread, "its group had already ended");
         }
 
         calls.SignalGroup(leader, Posix.AskToEnd);
@@ -116,16 +124,56 @@ internal static class Containment
 
         calls.SignalGroup(leader, Posix.Kill);
 
+        if (unread is not null)
+        {
+            return Unreached(unread, "its group was ended");
+        }
+
+        var (again, unreadAgain) = await ReadAsync(read).ConfigureAwait(false);
+
+        if (again is null)
+        {
+            // Still a member of the session is still one of the run's, whoever its parent: only what
+            // left the session can no longer be told from another process under the same id.
+            foreach (var member in members.Where(member => calls.SessionOf(member.Id) == leader))
+            {
+                calls.Signal(member.Id, Posix.Kill);
+            }
+
+            return $"the process table could not be read again once the contained child's session had been asked to end ({unreadAgain}): "
+                + "its group and what the first reading found still in the session were ended, and what was started meanwhile outside the group, "
+                + "and what of its tree had left the session, was not reached";
+        }
+
         // Known by id and start alone: a process handed to another parent, or one that became
         // another program, is still the one the first reading found.
-        var again = await read(CancellationToken.None).ConfigureAwait(false);
         var known = members.Select(member => (member.Id, member.StartedUtc)).ToHashSet();
 
         foreach (var member in again.Processes.Where(process => known.Contains((process.Id, process.StartedUtc)) || calls.SessionOf(process.Id) == leader))
         {
             calls.Signal(member.Id, Posix.Kill);
         }
+
+        return null;
     }
+
+    /// <summary>The process table, or why it could not be read: a reading that fails takes nothing from the stop it was taken for.</summary>
+    private static async Task<(ProcessTableReading? Reading, string? Unread)> ReadAsync(Func<CancellationToken, Task<ProcessTableReading>> read)
+    {
+        try
+        {
+            return (await read(CancellationToken.None).ConfigureAwait(false), null);
+        }
+        catch (Exception ex) when (ex is ProgramStartException or IOException or UnauthorizedAccessException or Win32Exception)
+        {
+            return (null, ex.Message);
+        }
+    }
+
+    /// <summary>What a session ended without its table did not reach, and why.</summary>
+    private static string Unreached(string why, string ended)
+        => $"the process table could not be read to end the contained child's session ({why}): {ended}, "
+            + "and what it started outside the group was not reached";
 
     /// <summary>
     /// Every process of <paramref name="reading"/> in the session <paramref name="leader"/> leads, and
@@ -378,7 +426,9 @@ internal static class Containment
             _startSession = Bound<StartSessionFunction>(library, "setsid");
             _joinGroup = Bound<JoinGroupFunction>(library, "setpgid");
             _signal = Bound<SignalFunction>(library, "kill");
-            _become = Bound<BecomeFunction>(library, "execvp");
+            // Not execvp: given a file with no interpreter line, that runs it under /bin/sh where a
+            // start made any other way fails, and the program is always a whole path by now.
+            _become = Bound<BecomeFunction>(library, "execv");
             _sessionOf = Bound<IdOfFunction>(library, "getsid");
             _groupOf = Bound<IdOfFunction>(library, "getpgid");
         }
@@ -441,8 +491,9 @@ internal static class Containment
         public int GroupOf(int process) => _groupOf(process);
 
         /// <summary>
-        /// Becomes the program by its path, its own name first among <paramref name="arguments"/>;
-        /// of a success there is no return, so this is the failure number the C library reports.
+        /// Becomes the program by its whole path, its own name first among <paramref name="arguments"/>,
+        /// with nothing looked up and nothing run in its place; of a success there is no return, so
+        /// this is the failure number the C library reports.
         /// </summary>
         public int Become(string program, IReadOnlyList<string> arguments)
         {

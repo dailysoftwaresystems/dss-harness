@@ -126,6 +126,14 @@ public static class ContainExec
             return Failed;
         }
 
+        if (!Path.IsPathFullyQualified(program))
+        {
+            // Nothing is looked up here: a name would be found on a PATH the process runner never
+            // chose, and started by rules no other start follows.
+            error.WriteLine($"contain-exec was given '{program}', which is no whole path; the process runner names every program by its whole path.");
+            return Failed;
+        }
+
         StartStatus channel;
 
         try

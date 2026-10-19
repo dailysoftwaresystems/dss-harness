@@ -174,23 +174,34 @@ public sealed class ContainExecTests
         Assert.SkipWhen(!contained && OperatingSystem.IsWindows(), "on Windows a child apart from the terminal starts as any other, whose failures to start ProcessRunnerTests hold.");
 
         using var temp = new TempDirectory();
-        var program = NotAProgram(temp);
-        var started = false;
 
-        // The number the system refuses this file with, as a start made here directly hears it.
-        var direct = await Assert.ThrowsAsync<ProgramStartException>(() => ContainingRunner().RunAsync(
-            new ProcessRequest { FileName = program },
-            TestContext.Current.CancellationToken).WaitAsync(LongBound, TestContext.Current.CancellationToken));
-        var refused = Assert.IsType<Win32Exception>(direct.InnerException).NativeErrorCode;
+        await NeverRunsAsADirectStartDoesNot(NotAProgram(temp), contained);
+    }
 
-        var raised = await Assert.ThrowsAsync<ProgramStartException>(() => ContainingRunner().RunAsync(
-            new ProcessRequest { FileName = program, Contained = contained, ApartFromTerminal = !contained, OnStarted = () => started = true },
-            TestContext.Current.CancellationToken).WaitAsync(LongBound, TestContext.Current.CancellationToken));
+    /// <summary>
+    /// An executable file with no interpreter line started through the step fails as a start made
+    /// directly fails, for the system's reason, on Linux and macOS: the step becomes the program by
+    /// its whole path and nothing else, where the C library's PATH-searching call would have run the
+    /// file under <c>/bin/sh</c> and so started, contained, what no other start starts.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AnExecutableWithNoInterpreterLine_StartedThroughTheStep_IsOneThatNeverRan_AsADirectStartIs(bool contained)
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "an interpreter line, and a shell run in its place, are Linux's and macOS's.");
 
-        Assert.Equal(program, raised.FileName);
-        Assert.Equal($"'{program}' could not be started: {new Win32Exception(refused).Message}", raised.Message);
-        Assert.Equal(refused, Assert.IsType<Win32Exception>(raised.InnerException).NativeErrorCode);
-        Assert.False(started, "a program that never ran was said to have started");
+        using var temp = new TempDirectory();
+        var program = temp.Combine("no-interpreter-line");
+        File.WriteAllText(program, "exit 0\n");
+
+        // Always so past the skip above, which the platform analyser does not read.
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(program, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        await NeverRunsAsADirectStartDoesNot(program, contained);
     }
 
     /// <summary>
@@ -460,6 +471,94 @@ public sealed class ContainExecTests
     }
 
     /// <summary>
+    /// A contained child that ends of itself on Linux or macOS where the process table cannot be
+    /// read - on macOS it is read through <c>ps</c>, which a session that has used up its processes
+    /// leaves unable to start - still has its group ended, which needs no table, and the run ends
+    /// as the child did, saying what was not reached: never in the table's failure.
+    /// </summary>
+    [Fact]
+    public async Task AContainedChildsGroup_IsEndedAtItsOwnEnd_WhereTheTableCannotBeRead_AndTheRunSaysWhatWasNotReached()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "the session is read from the process table on Linux and macOS; Windows ends the job, which needs none.");
+
+        var holder = 0;
+
+        try
+        {
+            var result = await ContainingRunner(UnreadableTable.Raising).RunAsync(
+                Child("spawn-holder", "exit", "0", "sleep", "300000") with
+                {
+                    Contained = true,
+                    OnOutputLine = line => holder = Id(line, "holder=") ?? holder,
+                },
+                TestContext.Current.CancellationToken).WaitAsync(LongBound, TestContext.Current.CancellationToken);
+
+            Assert.Equal((0, false), (result.ExitCode, result.TimedOut));
+            Assert.Equal(UnreadableTable.Unreached("its group was ended"), result.Uncontained);
+            Assert.True(AwaitGone(holder), $"the holder {holder} in the child's group outlived the child's end");
+        }
+        finally
+        {
+            TryEnding(holder);
+        }
+    }
+
+    /// <summary>
+    /// A contained child stopped on Linux or macOS where the process table cannot be read is stopped
+    /// all the same: its group - an orphan in it among them - is asked to end and then made to, and
+    /// the stop says what was not reached instead of failing with the table.
+    /// </summary>
+    [Fact]
+    public async Task AContainedChild_StoppedWhereTheTableCannotBeRead_IsStoppedWithItsGroup_AndTheStopSaysWhatWasNotReached()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "the session is read from the process table on Linux and macOS; Windows ends the job, which needs none.");
+
+        var orphan = 0;
+
+        try
+        {
+            var (raised, _) = await RunAndStopOn(
+                Child("spawn-orphan-and-sleep", "300000", "300000") with { Contained = true },
+                line => (orphan = Id(line, "orphan=") ?? orphan) != 0,
+                ContainingRunner(UnreadableTable.Raising));
+
+            Assert.Equal($"The run was stopped, and {UnreadableTable.Unreached("its group was ended")}.", Assert.IsType<OperationCanceledException>(raised).Message);
+            Assert.True(AwaitGone(orphan), $"the orphan {orphan} in the stopped child's group outlived the stop");
+        }
+        finally
+        {
+            TryEnding(orphan);
+        }
+    }
+
+    /// <summary>
+    /// A stop ends the child by its tree whatever ending its container met: a container whose end
+    /// fails in a way nothing foresaw still leaves the child itself ended, so the wait for it ends.
+    /// </summary>
+    [Fact]
+    public async Task AContainedChild_IsEndedByItsTree_WhereEndingItsContainerFails()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "the session is read from the process table on Linux and macOS; Windows ends the job, which needs none.");
+
+        var child = 0;
+
+        try
+        {
+            var (raised, _) = await RunAndStopOn(
+                Child("say-pid-and-sleep", "300000") with { Contained = true },
+                line => (child = Id(line, "pid=") ?? child) != 0,
+                ContainingRunner(new UnreadableTable(new InvalidOperationException("nothing foresaw this"))));
+
+            Assert.Equal("nothing foresaw this", Assert.IsType<InvalidOperationException>(raised).Message);
+            Assert.True(AwaitGone(child), $"the child {child} outlived a stop whose container's end failed");
+        }
+        finally
+        {
+            TryEnding(child);
+        }
+    }
+
+    /// <summary>
     /// What left both a contained child's session and its tree - a daemon that made a session of
     /// its own and whose parent has gone - is reached by nothing, and holds the run's output no
     /// longer than the bound: the run ends once the bound is spent, with the output read so far.
@@ -630,6 +729,15 @@ public sealed class ContainExecTests
             (unsaid.ExitCode, unsaid.StandardError));
         Assert.Equal(string.Empty, unsaid.StandardOutput);
 
+        var named = await CliRunner.RunAsync(
+            [ContainExec.CommandName, ContainExec.GroupOption, ContainExec.StatusOption, "a-channel", ContainExec.Separator, "dotnet", "--version"],
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            (ContainExec.Failed, "contain-exec was given 'dotnet', which is no whole path; the process runner names every program by its whole path."
+                + Environment.NewLine),
+            (named.ExitCode, named.StandardError));
+
         var help = await CliRunner.RunAsync(["--help"], TestContext.Current.CancellationToken);
 
         Assert.DoesNotContain(ContainExec.CommandName, help.StandardOutput, StringComparison.Ordinal);
@@ -707,12 +815,12 @@ public sealed class ContainExecTests
     /// it cover the starts before that line, which a slow machine spends more than any short bound on.
     /// </summary>
     /// <returns>What the run raised, and how long it took to end once it was stopped.</returns>
-    private static async Task<(Exception? Raised, TimeSpan SinceStop)> RunAndStopOn(ProcessRequest request, Func<string, bool> stopOn)
+    private static async Task<(Exception? Raised, TimeSpan SinceStop)> RunAndStopOn(ProcessRequest request, Func<string, bool> stopOn, ProcessRunner? runner = null)
     {
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         var since = new Stopwatch();
 
-        var raised = await Record.ExceptionAsync(() => ContainingRunner().RunAsync(
+        var raised = await Record.ExceptionAsync(() => (runner ?? ContainingRunner()).RunAsync(
             request with
             {
                 Timeout = LongBound,
@@ -732,9 +840,38 @@ public sealed class ContainExecTests
         return (raised, since.Elapsed);
     }
 
-    /// <summary>The process runner, starting contained children through the tool the build makes.</summary>
-    private static ProcessRunner ContainingRunner()
-        => new(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram);
+    /// <summary>
+    /// The process runner, starting contained children through the tool the build makes, and reading the machine's own
+    /// process table unless <paramref name="table"/> is given in its place.
+    /// </summary>
+    private static ProcessRunner ContainingRunner(IProcessTable? table = null)
+        => new(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram, table);
+
+    /// <summary>
+    /// Starts <paramref name="program"/> directly and then through the step, contained or apart from the terminal, and
+    /// holds the second to the first: a program that never ran either way, for the same reason the system gave, said as
+    /// any start says it - never the step's own exit code, which a program could end with too - and never said to have
+    /// started.
+    /// </summary>
+    private static async Task NeverRunsAsADirectStartDoesNot(string program, bool contained)
+    {
+        var started = false;
+
+        // The number the system refuses this file with, as a start made here directly hears it.
+        var direct = await Assert.ThrowsAsync<ProgramStartException>(() => ContainingRunner().RunAsync(
+            new ProcessRequest { FileName = program },
+            TestContext.Current.CancellationToken).WaitAsync(LongBound, TestContext.Current.CancellationToken));
+        var refused = Assert.IsType<Win32Exception>(direct.InnerException).NativeErrorCode;
+
+        var raised = await Assert.ThrowsAsync<ProgramStartException>(() => ContainingRunner().RunAsync(
+            new ProcessRequest { FileName = program, Contained = contained, ApartFromTerminal = !contained, OnStarted = () => started = true },
+            TestContext.Current.CancellationToken).WaitAsync(LongBound, TestContext.Current.CancellationToken));
+
+        Assert.Equal(program, raised.FileName);
+        Assert.Equal($"'{program}' could not be started: {new Win32Exception(refused).Message}", raised.Message);
+        Assert.Equal(refused, Assert.IsType<Win32Exception>(raised.InnerException).NativeErrorCode);
+        Assert.False(started, "a program that never ran was said to have started");
+    }
 
     /// <summary>A request that runs this assembly as a child, as the process tests do.</summary>
     private static ProcessRequest Child(string mode, params string[] arguments)
@@ -851,6 +988,24 @@ public sealed class ContainExecTests
     /// <summary>This process's own session, on Linux and macOS.</summary>
     [System.Runtime.InteropServices.DllImport("libc")]
     private static extern int getsid(int process);
+
+    /// <summary>A process table that cannot be read, raising what it is given on every reading.</summary>
+    private sealed class UnreadableTable(Exception raised) : IProcessTable
+    {
+        /// <summary>What a table read through a <c>ps</c> that cannot start raises, as the process runner words it.</summary>
+        private const string PsNotStarted = "'ps' could not be started: Resource temporarily unavailable";
+
+        /// <summary>A table whose program could not start, as macOS's does in a session that has used up its processes.</summary>
+        public static UnreadableTable Raising => new(new ProgramStartException("ps", PsNotStarted));
+
+        /// <summary>What a session ended without this table says it did not reach, <paramref name="ended"/> said of its group.</summary>
+        public static string Unreached(string ended)
+            => $"the process table could not be read to end the contained child's session ({PsNotStarted}): {ended}, "
+                + "and what it started outside the group was not reached";
+
+        public Task<ProcessTableReading> ReadAsync(CancellationToken cancellationToken = default)
+            => Task.FromException<ProcessTableReading>(raised);
+    }
 
     private static int GetGroupOfThisProcess() => getpgid(0);
 
