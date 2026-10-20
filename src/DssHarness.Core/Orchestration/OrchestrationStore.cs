@@ -1,6 +1,7 @@
 using System.Text.Json;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Output;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
@@ -33,6 +34,24 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
 
     /// <summary>What the record of an agent's applied rows is, as its refusals and <see cref="RecordWritten"/> name it.</summary>
     public const string AppliedRowsKind = "the record of an agent's applied rows";
+
+    /// <summary>What a run's state in one file is, as its refusals and <see cref="RecordWritten"/> name it.</summary>
+    public const string FlowKind = "the run's state in one file";
+
+    /// <summary>What a run's status is, as its refusals and <see cref="RecordWritten"/> name it.</summary>
+    public const string WorkflowStatusKind = "the run's status";
+
+    /// <summary>What a run's pre-existing issues are, as its refusals and <see cref="RecordWritten"/> name it.</summary>
+    public const string PreExistingIssuesKind = "the run's pre-existing issues";
+
+    /// <summary>What a step's own record is, as its refusals and <see cref="RecordWritten"/> name it.</summary>
+    public const string StepRecordKind = "a step's own record";
+
+    /// <summary>What a run's owner is, as its refusals and <see cref="RecordWritten"/> name it.</summary>
+    public const string OwnerKind = "the run's owner";
+
+    /// <summary>What a run's frozen definition is, as its refusals and <see cref="RecordWritten"/> name it.</summary>
+    public const string DefinitionKind = "the orchestrator entry as it ran";
 
     /// <summary>How long one read-decide-write waits for another process's.</summary>
     private static readonly TimeSpan Window = TimeSpan.FromSeconds(30);
@@ -209,6 +228,132 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
     {
         ArgumentNullException.ThrowIfNull(orchestrator);
         return MachineWideFile.Update(orchestrator.RecordFile, Window, work);
+    }
+
+    /// <summary>The run's state in one file, or null where the run holds none.</summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    /// <exception cref="HarnessException">The file cannot be read as one (<see cref="HarnessExit.Refused"/>).</exception>
+    public Flow.FlowFile? ReadFlow(OrchestratorLayout orchestrator)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+        return Read<Flow.FlowFile>(orchestrator.FlowFile, FlowKind, file => file.Problem());
+    }
+
+    /// <summary>Writes the run's state in one file.</summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    /// <param name="file">The state, which must be one.</param>
+    public void WriteFlow(OrchestratorLayout orchestrator, Flow.FlowFile file)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+        ArgumentNullException.ThrowIfNull(file);
+        Write(orchestrator.FlowFile, FlowKind, file, file.Problem());
+    }
+
+    /// <summary>The run's status, or null where the run holds none.</summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    /// <exception cref="HarnessException">The status cannot be read as one (<see cref="HarnessExit.Refused"/>).</exception>
+    public WorkflowStatus? ReadWorkflowStatus(OrchestratorLayout orchestrator)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+        return Read<WorkflowStatus>(orchestrator.WorkflowStatusFile, WorkflowStatusKind, status => status.Problem());
+    }
+
+    /// <summary>Writes the run's status.</summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    /// <param name="status">The status, which must be one.</param>
+    public void WriteWorkflowStatus(OrchestratorLayout orchestrator, WorkflowStatus status)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+        ArgumentNullException.ThrowIfNull(status);
+        Write(orchestrator.WorkflowStatusFile, WorkflowStatusKind, status, status.Problem());
+    }
+
+    /// <summary>The run's pre-existing issues, or null where the run holds none.</summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    /// <exception cref="HarnessException">The file cannot be read as one (<see cref="HarnessExit.Refused"/>).</exception>
+    public PreExistingIssuesFile? ReadPreExistingIssues(OrchestratorLayout orchestrator)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+        return Read<PreExistingIssuesFile>(orchestrator.PreExistingIssuesFile, PreExistingIssuesKind, issues => issues.Problem());
+    }
+
+    /// <summary>Writes the run's pre-existing issues.</summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    /// <param name="issues">The issues, which must be one.</param>
+    public void WritePreExistingIssues(OrchestratorLayout orchestrator, PreExistingIssuesFile issues)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+        ArgumentNullException.ThrowIfNull(issues);
+        Write(orchestrator.PreExistingIssuesFile, PreExistingIssuesKind, issues, issues.Problem());
+    }
+
+    /// <summary>One step's own record, wherever the run keeps it, or null where the step's directory holds none.</summary>
+    /// <param name="recordFile">The record's path, as <see cref="OrchestratorLayout"/> spells it.</param>
+    /// <exception cref="HarnessException">The record cannot be read as one (<see cref="HarnessExit.Refused"/>).</exception>
+    public FlowStepRecord? ReadStepRecord(string recordFile)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(recordFile);
+        return Read<FlowStepRecord>(recordFile, StepRecordKind, record => record.Problem());
+    }
+
+    /// <summary>Writes one step's own record, wherever the run keeps it.</summary>
+    /// <param name="recordFile">The record's path, as <see cref="OrchestratorLayout"/> spells it.</param>
+    /// <param name="record">The record, which must be one.</param>
+    public void WriteStepRecord(string recordFile, FlowStepRecord record)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(recordFile);
+        ArgumentNullException.ThrowIfNull(record);
+        Write(recordFile, StepRecordKind, record, record.Problem());
+    }
+
+    /// <summary>The run's owner, or null where none is recorded.</summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    /// <exception cref="HarnessException">The owner cannot be read as one (<see cref="HarnessExit.Refused"/>).</exception>
+    public RunOwner? ReadOwner(OrchestratorLayout orchestrator)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+        return Read<RunOwner>(orchestrator.OwnerFile, OwnerKind, owner => owner.Problem());
+    }
+
+    /// <summary>Writes the run's owner.</summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    /// <param name="owner">The owner, which must be one.</param>
+    public void WriteOwner(OrchestratorLayout orchestrator, RunOwner owner)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+        ArgumentNullException.ThrowIfNull(owner);
+        Write(orchestrator.OwnerFile, OwnerKind, owner, owner.Problem());
+    }
+
+    /// <summary>Removes the run's owner, where the run holds one.</summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    public void RemoveOwner(OrchestratorLayout orchestrator)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+
+        if (_fileSystem.KindOf(orchestrator.OwnerFile) == PathKind.File)
+        {
+            _fileSystem.DeleteFile(orchestrator.OwnerFile);
+        }
+    }
+
+    /// <summary>The orchestrator entry as it ran, frozen, or null where the run holds none.</summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    /// <exception cref="HarnessException">The entry cannot be read as one (<see cref="HarnessExit.Refused"/>).</exception>
+    public WorkflowDefinition? ReadDefinition(OrchestratorLayout orchestrator)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+        return Read<WorkflowDefinition>(orchestrator.DefinitionFile, DefinitionKind, _ => null);
+    }
+
+    /// <summary>Writes the orchestrator entry as it ran, frozen.</summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    /// <param name="definition">The definition, as it ran.</param>
+    public void WriteDefinition(OrchestratorLayout orchestrator, WorkflowDefinition definition)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+        ArgumentNullException.ThrowIfNull(definition);
+        Write(orchestrator.DefinitionFile, DefinitionKind, definition, null);
     }
 
     private T? Read<T>(string path, string what, Func<T, string?> problemOf)

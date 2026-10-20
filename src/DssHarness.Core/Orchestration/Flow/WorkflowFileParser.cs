@@ -216,6 +216,12 @@ public static class WorkflowFileParser
         return problems.Count == 0
             ? new WorkflowDefinition(
                 name!,
+                answers,
+                inputs,
+                parameters,
+                outputs,
+                steps ?? [],
+                path,
                 description,
                 maxReasoningAgents,
                 maxParallelProcesses,
@@ -228,13 +234,7 @@ public static class WorkflowFileParser
                 recommendations,
                 advisor,
                 reporter,
-                amend,
-                answers,
-                inputs,
-                parameters,
-                outputs,
-                steps ?? [],
-                path)
+                amend)
             {
                 Recover = recover,
                 BackoffSeconds = backoffSeconds,

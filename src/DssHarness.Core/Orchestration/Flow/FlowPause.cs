@@ -15,11 +15,12 @@ public sealed record FlowPauseRequest(string Cause, bool All)
 
 /// <summary>
 /// The handoff a reason step stopped while reasoning leaves: its text - the agent's own account where it answered,
-/// the engine's from what it holds where it did not - and who wrote it.
+/// the engine's from what it holds where it did not - who wrote it, and why the engine wrote one where it did.
 /// </summary>
 /// <param name="Text">The handoff's text, as the step's next attempt is given it.</param>
 /// <param name="By">Who wrote it: <c>agent</c> or <c>engine</c>.</param>
-public sealed record FlowHandoff(string Text, string By);
+/// <param name="Why">Why the engine wrote it, where it did: the bound the handoff turn was given, the run stopped, or the engine's process ended.</param>
+public sealed record FlowHandoff(string Text, string By, string? Why = null);
 
 /// <summary>
 /// What a run's reasoning has spent against its budget: what the clients reported in tokens and dollars, and the time
@@ -54,6 +55,9 @@ public sealed class FlowPauseState
 
     /// <summary>When the pause began.</summary>
     public DateTimeOffset BeganAt { get; internal init; }
+
+    /// <summary>When the pause completed - its last handoff written and everything it left running recorded; null while it records.</summary>
+    public DateTimeOffset? CompletedAt { get; internal set; }
 
     /// <summary>Every step that handed off, in the order the handoffs were written, by instance id.</summary>
     public IReadOnlyList<string> Handoffs => _handoffs;

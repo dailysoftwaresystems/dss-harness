@@ -93,6 +93,12 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
     /// <summary>Which attempt of this visit has run: 1 for the first, one more for each retry.</summary>
     public int Attempt { get; internal set; } = 1;
 
+    /// <summary>When this instance's work last began; null until it has.</summary>
+    public DateTimeOffset? StartedAt { get; internal set; }
+
+    /// <summary>When this instance ended; null until it has.</summary>
+    public DateTimeOffset? FinishedAt { get; internal set; }
+
     /// <summary>The step's output, as later steps read it; <see langword="null"/> where it wrote none.</summary>
     public JsonNode? Output { get; internal set; }
 
@@ -119,6 +125,18 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
 
     /// <summary>The handoff a safe pause wrote when it stopped this step, where one did; <see langword="null"/> otherwise.</summary>
     public FlowHandoff? Handoff { get; internal set; }
+
+    /// <summary>The id of the question this instance waits on, where one is open; <see langword="null"/> otherwise.</summary>
+    public string? WaitingQuestion { get; internal set; }
+
+    /// <summary>Whether a resume brought this instance in as it stood: what it left Running is a crash's own, for nothing else runs between two sessions.</summary>
+    internal bool FromResume;
+
+    /// <summary>The agent this step works in - the one its <c>in</c> or <c>of</c> names, made by its create-agent - where it names one.</summary>
+    public string? Agent { get; internal set; }
+
+    /// <summary>The agent a create-agent step made, as its output names it; null for every other step.</summary>
+    public string? Made { get; internal set; }
 
     /// <summary>Cancels what this instance's runner runs: a safe pause that stops machine steps and a hard stop cancel it.</summary>
     internal CancellationTokenSource? Stoppable;
@@ -225,6 +243,11 @@ public sealed class FlowCoordinator
     private int _questionsRaised;
     private FlowSessionEnd? _last;
     private Task<Message>? _pending;
+    private IFlowRecords? _records;
+    private FlowResumeState? _resume;
+    private bool _replaying;
+    private int _sessions;
+    private DateTimeOffset? _endedAt;
 
     /// <summary>Starts a run of <paramref name="definition"/> over <paramref name="runner"/>.</summary>
     /// <param name="definition">The workflow, as it was read.</param>
@@ -232,13 +255,17 @@ public sealed class FlowCoordinator
     /// <param name="runnerFacts">What the engine asks of the runners a workflow names.</param>
     /// <param name="clock">How the run waits: every retry waits by this.</param>
     /// <param name="inputs">The values the run is started with, by input name.</param>
+    /// <param name="records">Records the run on disk at every change, in the run's own order; null for a run that holds nothing.</param>
+    /// <param name="resume">The state a killed or stopped run left, to go on with; null for a run that begins.</param>
     /// <exception cref="HarnessException">An input the run needs is missing, or a value is outside the ones its input takes.</exception>
     public FlowCoordinator(
         WorkflowDefinition definition,
         IFlowStepRunner runner,
         IFlowRunnerFacts runnerFacts,
         TimeProvider? clock = null,
-        IReadOnlyDictionary<string, string>? inputs = null)
+        IReadOnlyDictionary<string, string>? inputs = null,
+        IFlowRecords? records = null,
+        FlowResumeState? resume = null)
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(runner);
@@ -249,10 +276,17 @@ public sealed class FlowCoordinator
         _runnerFacts = runnerFacts;
         _clock = clock ?? TimeProvider.System;
         _inputs = StartValues(definition, inputs);
+        _records = records;
 
         foreach (var (path, _) in FlowScope.Declared(definition))
         {
             _declarationOrder.Add(path, _declarationOrder.Count);
+        }
+
+        if (resume is { } state)
+        {
+            _resume = state;
+            Replay(state);
         }
     }
 
@@ -434,6 +468,8 @@ public sealed class FlowCoordinator
         _alwaysPhase = false;
         _stopApplied = false;
         _pause = null;
+        _endedAt = null;
+        _sessions++;
 
         try
         {
@@ -448,20 +484,59 @@ public sealed class FlowCoordinator
             // What a pause or a stop stopped, runs again: a new attempt of its visit, as a retry is, its handoff
             // spent. What the pause left owed - the policies of failures recorded while it recorded what it left
             // running - is made now, at the resume, before anything else runs.
-            foreach (var stopped in _created.Where(instance => instance.State is FlowInstanceState.Stopped).ToList())
+            foreach (var stopped in _created.Where(instance => instance.State is FlowInstanceState.Stopped
+                    || instance.State is FlowInstanceState.Running && instance.FromResume).ToList())
             {
+                var was = stopped.State;
+
+                if (was is FlowInstanceState.Running)
+                {
+                    Release(stopped);
+                }
+
+                if (stopped.Step.Type == "reason" && stopped.Handoff is null)
+                {
+                    // The attempt before was cut off and left no handoff - a crash ended the engine, or a stop ended
+                    // the run - so the engine writes one, for the next attempt is told what the cut-off one had done,
+                    // on every client and after every kind of stop.
+                    var why = was is FlowInstanceState.Running ? "the engine's process ended" : "the run was stopped";
+
+                    stopped.Handoff = new FlowHandoff(
+                        $"Written by the engine: {why}; attempt {stopped.Attempt.ToString(System.Globalization.CultureInfo.InvariantCulture)} was cut off.",
+                        "engine",
+                        why);
+                    Record(FlowChangeKind.Handoff, stopped, detail: why);
+                }
+
                 stopped.State = FlowInstanceState.NotStarted;
                 stopped.Exit = null;
                 stopped.Error = null;
-                stopped.Handoff = null;
                 stopped.EndedByQuestion = null;
                 stopped.Attempt++;
+                stopped.FromResume = false;
+                Record(FlowChangeKind.Step, stopped, from: was, to: FlowInstanceState.NotStarted, attempt: stopped.Attempt);
             }
 
             foreach (var owed in _owedFailures.ToList())
             {
                 _ = _owedFailures.Remove(owed);
                 HandleFailure(owed);
+            }
+
+            // The session is recorded where a run's records are: begun, or taken up from one another left.
+            Record(
+                _sessions == 1 ? FlowChangeKind.SessionBegan : FlowChangeKind.Resumed,
+                detail: _resume is null ? null : $"taken up from a run state holding {_resume.File.Steps.Count} steps");
+
+            // A resume beside an open question is not refused where something can run; it is refused only where
+            // nothing can until the question is answered.
+            if (_resume is not null
+                && NextIds().Count == 0
+                && _created.FirstOrDefault(instance => instance.State is FlowInstanceState.Paused && instance.WaitingQuestion is not null) is { } held)
+            {
+                throw new HarnessException(
+                    HarnessExit.Refused,
+                    $"nothing of this run can run until the question of step '{held.Id}' is answered; answer-orchestrator answers it");
             }
 
             while (true)
@@ -557,6 +632,7 @@ public sealed class FlowCoordinator
         _pausing = true;
         _pauseRequest = null;
         _pause = new FlowPauseState(request.Cause, request.All, _clock.GetUtcNow());
+        Record(FlowChangeKind.PauseBegan, detail: $"{request.Cause}{(request.All ? ", all" : string.Empty)}");
 
         if (request.Cause == "budget")
         {
@@ -626,10 +702,15 @@ public sealed class FlowCoordinator
 
                 instance.Handoff = accounts[at].Text is { Length: > 0 } written
                     ? new FlowHandoff(written, "agent")
-                    : new FlowHandoff($"Written by the engine: the agent gave no account before its handoff turn's {bound} s bound", "engine");
+                    : new FlowHandoff($"Written by the engine: the agent gave no account before its handoff turn's {bound} s bound", "engine", $"the agent gave no account before its handoff turn's {bound.ToString(System.Globalization.CultureInfo.InvariantCulture)} s bound");
                 _pause._handoffs.Add(instance.Id);
+                Record(FlowChangeKind.Handoff, instance, detail: instance.Handoff.By);
             }
         }
+
+        // The pause is complete: its last handoff written, and everything it left running recorded as it ended.
+        _pause.CompletedAt = _clock.GetUtcNow();
+        Record(FlowChangeKind.PauseCompleted, detail: $"{_pause._handoffs.Count} handoff(s)");
     }
 
     /// <summary>One reason step's handoff turn: the agent's account where it gives one, and what the turn spent.</summary>
@@ -843,6 +924,11 @@ public sealed class FlowCoordinator
         var instance = _answerable[question];
         _ = _answerable.Remove(question);
 
+        if (instance is not null)
+        {
+            instance.WaitingQuestion = null;
+        }
+
         if (asked.Kind == "runBudget")
         {
             // The budget's question is the run's alone: more allows each amount once again and the run goes on at the
@@ -863,6 +949,7 @@ public sealed class FlowCoordinator
         }
 
         ApplyAnswer(instance!, asked, answer, string.IsNullOrWhiteSpace(text) ? null : text, by: null);
+        Record(FlowChangeKind.Step, instance, from: FlowInstanceState.Paused, detail: $"'{asked.Id}' answered '{answer}'");
 
         return true;
     }
@@ -1413,12 +1500,21 @@ public sealed class FlowCoordinator
     /// </summary>
     private bool Start(FlowInstance instance, IReadOnlyList<FlowClaim> claims)
     {
+        var was = instance.State;
+
+        // The handoff is spent where the attempt is given it: its text goes to the runner, and the file is removed -
+        // the step's own record says it holds no handoff now, and the record is the truth.
+        var handoff = instance.Handoff;
+        instance.Handoff = null;
+
         instance.State = FlowInstanceState.Running;
+        instance.StartedAt ??= _clock.GetUtcNow();
         instance.HeldClaims.Clear();
         instance.HeldClaims.AddRange(claims);
         instance.LegsInCopies.Clear();
         instance.CopiesMade.Clear();
         instance.TreeLegsEnded.Clear();
+        Record(FlowChangeKind.Step, instance, from: was, to: FlowInstanceState.Running, attempt: instance.Attempt);
 
         if (instance.Step.Type == "pause")
         {
@@ -1470,7 +1566,8 @@ public sealed class FlowCoordinator
                         instance.Index,
                         instance.Iteration,
                         [.. instance._answers],
-                        new RunEvents(this, instance, attempt)),
+                        new RunEvents(this, instance, attempt),
+                        handoff?.Text),
                     token).ConfigureAwait(false);
 
                 _ = _messages.Writer.TryWrite(new Message(instance, result, null, Attempt: attempt));
@@ -1557,6 +1654,13 @@ public sealed class FlowCoordinator
         instance.Legs = result.Legs;
         instance.RedLegs = FlowLegVerdicts.OfClass(result.Legs, FlowLegClass.Red);
         instance.Output = result.Output;
+
+        // The agent a create-agent step made, as its output names it: the one every step that names the step with in
+        // or of works in, and the one whose directory those steps keep theirs in.
+        if (instance.Step.Type == "create-agent" && passed && result.Output?["agent"]?.GetValue<string>() is { Length: > 0 } agent)
+        {
+            instance.Made = agent;
+        }
 
         // An incomplete step is run again by the table's row for its code, capped by its retries: a reasoning step is
         // never retried at step level, for its client owns its transient errors. A pause under way starts no retry:
@@ -1774,6 +1878,8 @@ public sealed class FlowCoordinator
         _open.Add(id);
         _answerable.Add(id, instance);
         instance.State = FlowInstanceState.Paused;
+        instance.WaitingQuestion = id;
+        Record(FlowChangeKind.Step, instance, from: FlowInstanceState.Running, to: FlowInstanceState.Paused, attempt: instance.Attempt, detail: kind);
         return id;
     }
 
@@ -1823,12 +1929,16 @@ public sealed class FlowCoordinator
     /// <summary>Ends <paramref name="instance"/> and gives back what it held.</summary>
     private void End(FlowInstance instance, FlowInstanceState state, int? exit, string? error)
     {
+        var was = instance.State;
+
         instance.State = state;
         instance.Exit ??= exit;
         instance.Error ??= error;
+        instance.FinishedAt ??= _clock.GetUtcNow();
         Release(instance);
         instance.Stoppable?.Dispose();
         instance.Stoppable = null;
+        Record(FlowChangeKind.Step, instance, from: was, to: state, attempt: instance.Attempt);
 
         if (instance.Step.Type == "create-agent" && state == FlowInstanceState.Done)
         {
@@ -1926,7 +2036,12 @@ public sealed class FlowCoordinator
             _answerable.Add(question.Id, null);
         }
 
-        if (_open.Count == 0 && !_pausing)
+        var waiting = _created
+            .Where(instance => instance.State is FlowInstanceState.Paused && instance.WaitingQuestion is not null)
+            .Select(instance => instance.WaitingQuestion!)
+            .ToList();
+
+        if (_open.Count == 0 && waiting.Count == 0 && !_pausing)
         {
             foreach (var instance in _created.Where(instance => instance.State is FlowInstanceState.NotStarted).ToList())
             {
@@ -1939,7 +2054,7 @@ public sealed class FlowCoordinator
         var status = _hardStop ? FlowRunStatus.Stopped
             : _pausing ? FlowRunStatus.Paused
             : _stopping || _failed.Count > 0 ? FlowRunStatus.Failed
-            : open.Count > 0 ? FlowRunStatus.Paused
+            : open.Count > 0 || waiting.Count > 0 ? FlowRunStatus.Paused
             : FlowRunStatus.Done;
         var summary = status switch
         {
@@ -1952,8 +2067,11 @@ public sealed class FlowCoordinator
             FlowRunStatus.Failed => _failed.Count == 1
                 ? $"failed; 1 step failed: {_failed[0].Id}"
                 : $"failed; {_failed.Count} steps failed: {string.Join(", ", _failed.Select(instance => instance.Id))}",
-            _ => $"paused; waiting on {string.Join(", ", open.Select(question => question.Id))}",
+            _ => $"paused; waiting on {string.Join(", ", open.Count > 0 ? open.Select(question => question.Id) : waiting)}",
         };
+
+        _endedAt = _clock.GetUtcNow();
+        Record(FlowChangeKind.SessionEnded, detail: summary);
 
         return new FlowSessionEnd(
             status,
@@ -2105,6 +2223,8 @@ public sealed class FlowCoordinator
         {
             scope.GroupInstance = instance;
         }
+
+        Record(FlowChangeKind.Step, instance, to: state, attempt: instance.Attempt);
 
         return instance;
     }
@@ -2648,6 +2768,337 @@ public sealed class FlowCoordinator
         }
 
         return values;
+    }
+
+    /// <summary>Records one change of the run where its records are, whole: the snapshot is the run as it stands, and the records own the order they are written in.</summary>
+    private void Record(FlowChangeKind kind, FlowInstance? instance = null, FlowInstanceState? from = null, FlowInstanceState? to = null, int? attempt = null, string? detail = null)
+    {
+        if (_records is null || _replaying)
+        {
+            // A run that holds nothing writes nothing, and the replay of a taken-up run writes nothing step by step:
+            // the resume's own record, made once at its entry, says what was taken up.
+            return;
+        }
+
+        _records.Write(
+            kind,
+            Snapshot(),
+            instance?.Id,
+            from?.ToString(),
+            to?.ToString(),
+            attempt,
+            detail);
+    }
+
+    /// <summary>The run whole, as its records read it: every instance with its state and what it waits on, what runs next, and the run's own standing.</summary>
+    private FlowSnapshot Snapshot()
+    {
+        var waiting = new List<string>(_open);
+
+        foreach (var instance in _created.Where(instance => instance.State is FlowInstanceState.Paused && instance.WaitingQuestion is not null))
+        {
+            if (!waiting.Contains(instance.WaitingQuestion!, StringComparer.Ordinal))
+            {
+                waiting.Add(instance.WaitingQuestion!);
+            }
+        }
+
+        return new FlowSnapshot(
+            Status,
+            _endedAt,
+            _spent,
+            _budgetGranted,
+            _pause,
+            [.. _created.Select(SnapshotStepOf)],
+            NextIds(),
+            waiting);
+    }
+
+    /// <summary>One instance, as its records read it.</summary>
+    private FlowSnapshotStep SnapshotStepOf(FlowInstance instance)
+        => new(
+            instance.Id,
+            instance.Path,
+            instance.Step.Type,
+            instance.Step.IsGroup,
+            instance.State,
+            instance.Attempt,
+            1,
+            instance.StartedAt,
+            instance.FinishedAt,
+            instance.Exit,
+            instance.Error,
+            instance.SkippedBecause,
+            instance.NotRunBecause,
+            instance.PassedOver,
+            _failed.Contains(instance),
+            instance.EndedByQuestion,
+            WorksInOf(instance),
+            instance.Made,
+            instance.State is FlowInstanceState.Paused ? instance.WaitingQuestion : null,
+            instance.Handoff,
+            instance.Output?.DeepClone(),
+            instance.Item,
+            instance.Index,
+            instance.Iteration,
+            [.. instance._answers],
+            WaitsOnOf(instance));
+
+    /// <summary>The agent this step works in: the one its <c>in</c> or <c>of</c> names, made by its create-agent; null for the create-agent itself and every step that names none.</summary>
+    private string? WorksInOf(FlowInstance instance)
+    {
+        if (instance.Step.Type == "create-agent"
+            || instance.Step.In is null && instance.Step.Of is null)
+        {
+            return null;
+        }
+
+        return CreateStepOf(instance, instance.Step.In ?? instance.Step.Of!)?.Made;
+    }
+
+    /// <summary>What one instance waits on, where it waits: a dependency, a claim, a counter, a question, the resume.</summary>
+    private List<string> WaitsOnOf(FlowInstance instance)
+    {
+        var waits = new List<string>();
+
+        switch (instance.State)
+        {
+            case FlowInstanceState.Paused:
+                if (instance.WaitingQuestion is { } waiting)
+                {
+                    waits.Add(waiting);
+                }
+
+                break;
+
+            case FlowInstanceState.Stopped:
+                waits.Add("resume");
+                break;
+
+            case FlowInstanceState.NotStarted when !instance.Step.IsGroup:
+                foreach (var name in instance.Step.DependsOn)
+                {
+                    if (instance.DeclaredScope?.Members.TryGetValue(name, out var dependency) is not true
+                        || dependency.State is not (FlowInstanceState.Done or FlowInstanceState.Skipped) && !(dependency.State is FlowInstanceState.Failed && dependency.PassedOver))
+                    {
+                        waits.Add(name);
+                    }
+                }
+
+                if (instance.Step.Alone == true && _created.Any(running => running.State is FlowInstanceState.Running))
+                {
+                    waits.Add("quiet");
+                }
+
+                var claims = FlowClaims.Of(instance.Step, _runnerFacts);
+
+                if (claims.Any(claim => HeldClaims([]).Any(claim.Conflicts)))
+                {
+                    waits.Add("claim");
+                }
+                else if (!CountersAllow(instance))
+                {
+                    waits.Add(instance.Step.Type switch
+                    {
+                        "reason" => "reasoning agents",
+                        "build" or "test" or "run" or "check-mutations" => "parallel processes",
+                        "create-agent" => "open agents",
+                        _ => "a counter",
+                    });
+                }
+
+                break;
+        }
+
+        return waits;
+    }
+
+    /// <summary>The steps that would start now, in the order they would start: the same walk admission makes, deciding nothing.</summary>
+    private List<string> NextIds()
+    {
+        var next = new List<string>();
+        var reserved = new List<FlowClaim>();
+
+        foreach (var instance in _created
+            .Where(instance => instance.State is FlowInstanceState.NotStarted && !instance.Step.IsGroup)
+            .OrderBy(instance => _declarationOrder.GetValueOrDefault(instance.Path, int.MaxValue))
+            .ThenBy(instance => instance.Id, StringComparer.Ordinal))
+        {
+            if (_pausing && !_alwaysPhase || _hardStop)
+            {
+                break;
+            }
+
+            if (_pausing && instance.IsAlways && instance.Step.Type == "reason")
+            {
+                continue;
+            }
+
+            if (_stopping && !instance.IsAlways)
+            {
+                continue;
+            }
+
+            if (instance.Step.Alone == true && _created.Any(running => running.State is FlowInstanceState.Running))
+            {
+                continue;
+            }
+
+            if (instance.Step.Alone != true && _created.Any(running => running.State is FlowInstanceState.Running && running.Step.Alone == true))
+            {
+                continue;
+            }
+
+            var claims = FlowClaims.Of(instance.Step, _runnerFacts);
+
+            if (claims.Any(claim => HeldClaims(reserved).Any(claim.Conflicts)))
+            {
+                reserved.AddRange(claims);
+                continue;
+            }
+
+            if (!CountersAllow(instance))
+            {
+                continue;
+            }
+
+            next.Add(instance.Id);
+        }
+
+        return next;
+    }
+
+    /// <summary>
+    /// Rebuilds the run's graph from the state a taken-up run left: every scope re-expanded to the items and iterations
+    /// its records name, every instance set as its own record reads it, and the run's spend, its budget and its pause
+    /// restored. The replay writes nothing: the resume's own record, made once at its entry, says what was taken up.
+    /// </summary>
+    /// <param name="resume">The state a killed or stopped run left.</param>
+    private void Replay(FlowResumeState resume)
+    {
+        _replaying = true;
+
+        try
+        {
+            var top = NewScope(string.Empty, string.Empty, null, null, FlowValue.Missing, null, null, null);
+            _top = top;
+
+            var scopes = new Dictionary<string, Scope>(StringComparer.Ordinal) { [string.Empty] = top };
+
+            foreach (var record in resume.File.Steps
+                .OrderBy(step => step.Instance.Count(character => character == '.') + 1)
+                .ThenBy(step => step.Instance, StringComparer.Ordinal))
+            {
+                var lastDot = record.Instance.LastIndexOf('.');
+                var parentPrefix = lastDot < 0 ? string.Empty : record.Instance[..lastDot];
+                var segment = lastDot < 0 ? record.Instance : record.Instance[(lastDot + 1)..];
+                var declaring = scopes[parentPrefix];
+                var name = segment.Split(['[', '#', '+'], 2)[0];
+                var declaration = DeclarationsOf(declaring).FirstOrDefault(declared => declared.Name == name)
+                    ?? throw new HarnessException(
+                        HarnessExit.Refused,
+                        $"'{record.Instance}' names no step of the definition among '{(declaring.Id.Length == 0 ? "the flow" : declaring.Id)}'; the run's state and the definition do not agree, and a record is never guessed at");
+
+                FlowInstance instance;
+
+                if (declaration.IsGroup && !string.Equals(segment, name, StringComparison.Ordinal))
+                {
+                    // One item or iteration of a loop: its scope is made against the loop's own declaring scope, as
+                    // the loop's expansion made it, with the item and the index or the iteration the record holds.
+                    var outerId = parentPrefix.Length == 0 ? name : $"{parentPrefix}.{name}";
+
+                    if (_instances.TryGetValue(outerId, out var outer) && outer.Step == declaration)
+                    {
+                        var scope = record.Index is { } index
+                            ? NewScope($"{outer.Id}[{index.ToString(System.Globalization.CultureInfo.InvariantCulture)}]", PathOf(declaring, declaration), declaring, declaration, record.Item is { } item ? FlowValue.Of(item.DeepClone()) : FlowValue.Missing, index, null, outer)
+                            : NewScope($"{outer.Id}#{record.Iteration?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "1"}", PathOf(declaring, declaration), declaring, declaration, FlowValue.Missing, null, record.Iteration, outer);
+
+                        outer.Children.Add(scope);
+                        scopes[scope.Id] = scope;
+                        instance = Create(scope, declaration, StateOf(record), scope.Id);
+                    }
+                    else
+                    {
+                        throw new HarnessException(
+                            HarnessExit.Refused,
+                            $"'{record.Instance}' is an instance of a loop the run's state holds no whole record of ('{outerId}'); the run's state and the definition do not agree, and a record is never guessed at");
+                    }
+                }
+                else if (declaration.IsGroup && declaration.ForEach is null && declaration.Repeat is null)
+                {
+                    // A block: its own scope holds its members, keyed by its instance's id.
+                    declaring.Instantiated.Add(declaration.Name);
+                    instance = Create(declaring, declaration, StateOf(record));
+
+                    if (instance.State is not (FlowInstanceState.Failed or FlowInstanceState.Skipped or FlowInstanceState.NotRun))
+                    {
+                        instance.OwnScope = NewScope(instance.Id, PathOf(declaring, declaration), declaring, declaration, FlowValue.Missing, null, null, null);
+                        instance.OwnScope.OwnGroupInstance = instance;
+                        scopes[instance.Id] = instance.OwnScope;
+                    }
+                }
+                else
+                {
+                    if (string.Equals(segment, name, StringComparison.Ordinal))
+                    {
+                        // The declaration is drawn in its scope again, for the resume holds what it made.
+                        declaring.Instantiated.Add(declaration.Name);
+                    }
+
+                    instance = Create(declaring, declaration, StateOf(record));
+                }
+
+                Apply(instance, record, resume);
+            }
+
+            _spent.Usd = resume.File.Spent.Usd;
+            _spent.Tokens = resume.File.Spent.Tokens;
+            _spent.Minutes = resume.File.Spent.Minutes;
+            _budgetGranted = resume.File.BudgetGranted;
+
+            if (resume.File.Pause is { } pause && pause.CompletedAt is not null)
+            {
+                _pause = new FlowPauseState(pause.Cause, pause.All, pause.At) { CompletedAt = pause.CompletedAt };
+
+                foreach (var id in pause.Handoffs)
+                {
+                    _pause._handoffs.Add(id);
+                }
+            }
+        }
+        finally
+        {
+            _replaying = false;
+        }
+
+        static FlowInstanceState StateOf(FlowStepRecord record)
+            => Enum.TryParse<FlowInstanceState>(record.State, out var state) ? state : FlowInstanceState.NotStarted;
+
+        void Apply(FlowInstance instance, FlowStepRecord record, FlowResumeState from)
+        {
+            instance.State = StateOf(record);
+            instance.Attempt = record.Attempt;
+            instance.Exit = record.Exit;
+            instance.Error = record.Error;
+            instance.SkippedBecause = record.SkippedBecause;
+            instance.NotRunBecause = record.NotRunBecause;
+            instance.PassedOver = record.Failure == "passedOver";
+            instance.EndedByQuestion = record.EndedByQuestion;
+            instance.Output = record.Output?.DeepClone();
+            instance.StartedAt = record.StartedAt;
+            instance.FinishedAt = record.FinishedAt;
+            instance.Made = record.Made;
+            instance.WaitingQuestion = record.Question;
+            instance.FromResume = true;
+
+            if (instance.State is FlowInstanceState.Stopped && record.Handoff is { } handoff)
+            {
+                // The handoff the stop left is in the step's own directory; the resume is given it where it is.
+                instance.Handoff = from.Handoffs.TryGetValue(instance.Id, out var text)
+                    ? new FlowHandoff(text, handoff.By, handoff.Why)
+                    : null;
+            }
+        }
     }
 
     /// <summary>One thing the coordinator learns while it waits: a step's ending, or an event of one of its legs.</summary>
