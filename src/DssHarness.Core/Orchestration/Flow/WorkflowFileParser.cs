@@ -332,7 +332,7 @@ public static class WorkflowFileParser
             return null;
         }
 
-        var keys = CollectKeys(mapping, "advisor", KeyDescription.Names(WorkflowKeys.Advisor), problems);
+        var keys = CollectKeys(mapping, "advisor", KeyDescription.Names(WorkflowKeys.Advisor), problems, RetiredAgentKey);
         var read = ReadAgentSelection(keys, "advisor", problems);
         var agent = RequireScalarIn(keys, "advisor.agent", problems);
         var prompt = RequireScalarIn(keys, "advisor.prompt", problems);
@@ -346,7 +346,7 @@ public static class WorkflowFileParser
             return null;
         }
 
-        return new FlowAdvisor(agent, prompt, read.Tier, read.Model, read.Effort, read.Fallback, read.Provider, read.Client, kinds)
+        return new FlowAdvisor(agent, prompt, read.Tier, read.Model, read.Effort, read.Client, kinds)
         {
             Retries = IntIn(keys, "advisor.retries", problems),
             BackoffSeconds = IntIn(keys, "advisor.backoffSeconds", problems),
@@ -361,7 +361,7 @@ public static class WorkflowFileParser
             return null;
         }
 
-        var keys = CollectKeys(mapping, "reporter", KeyDescription.Names(WorkflowKeys.Reporter), problems);
+        var keys = CollectKeys(mapping, "reporter", KeyDescription.Names(WorkflowKeys.Reporter), problems, RetiredAgentKey);
         var read = ReadAgentSelection(keys, "reporter", problems);
         var agent = RequireScalarIn(keys, "reporter.agent", problems);
         var statusPrompt = RequireScalarIn(keys, "reporter.statusPrompt", problems);
@@ -372,7 +372,7 @@ public static class WorkflowFileParser
             return null;
         }
 
-        return new FlowReporter(agent, statusPrompt, askPrompt, read.Tier, read.Model, read.Effort, read.Fallback, read.Provider, read.Client)
+        return new FlowReporter(agent, statusPrompt, askPrompt, read.Tier, read.Model, read.Effort, read.Client)
         {
             Retries = IntIn(keys, "reporter.retries", problems),
             BackoffSeconds = IntIn(keys, "reporter.backoffSeconds", problems),
@@ -380,15 +380,13 @@ public static class WorkflowFileParser
     }
 
     /// <summary>The keys <c>advisor</c> and <c>reporter</c> share: how each picks the model its agent runs on.</summary>
-    private static (string? Tier, string? Model, string? Effort, IReadOnlyList<string> Fallback, string? Provider, string? Client)
+    private static (string? Tier, string? Model, string? Effort, string? Client)
         ReadAgentSelection(List<(string Key, YamlNode Value)> keys, string owner, List<string> problems)
     {
         string? tier = null;
         string? model = null;
         string? effort = null;
-        string? provider = null;
         string? client = null;
-        var fallback = new List<string>();
 
         foreach (var (key, value) in keys)
         {
@@ -404,14 +402,6 @@ public static class WorkflowFileParser
 
                 case "effort":
                     effort = YamlReading.RequireScalar(value, $"{owner}.effort", problems);
-                    break;
-
-                case "fallback":
-                    fallback.AddRange(RequireStringList(value, $"{owner}.fallback", problems));
-                    break;
-
-                case "provider":
-                    provider = YamlReading.RequireScalar(value, $"{owner}.provider", problems);
                     break;
 
                 case "client":
@@ -434,7 +424,7 @@ public static class WorkflowFileParser
             }
         }
 
-        return (tier, model, effort, fallback, provider, client);
+        return (tier, model, effort, client);
     }
 
     private static FlowAmend? ReadAmend(YamlNode node, List<string> problems)
@@ -706,6 +696,18 @@ public static class WorkflowFileParser
             : null;
 
     /// <summary>
+    /// The agent keys a step, the advisor and the reporter took before the configuration owned them: each is refused
+    /// naming what replaced it, so a reader moves the key's meaning instead of deleting its line.
+    /// </summary>
+    private static string? RetiredAgentKey(string key)
+        => key switch
+        {
+            "fallback" => "a fallback is the order of the tier's models in tierConfig",
+            "provider" => "a model's code is listed by one provider, which it names",
+            _ => null,
+        };
+
+    /// <summary>
     /// Reads one step, at <paramref name="depth"/> levels of nesting: a typed step, or a group
     /// holding steps of its own.
     /// </summary>
@@ -717,7 +719,7 @@ public static class WorkflowFileParser
             yield break;
         }
 
-        var keys = CollectKeys(mapping, "a step", [.. KeyDescription.Names(WorkflowStepTypes.Common), .. KeyDescription.Names(WorkflowStepTypes.Group), .. WorkflowStepTypes.AllKeys], problems, PlanUpdateKey);
+        var keys = CollectKeys(mapping, "a step", [.. KeyDescription.Names(WorkflowStepTypes.Common), .. KeyDescription.Names(WorkflowStepTypes.Group), .. WorkflowStepTypes.AllKeys], problems, key => PlanUpdateKey(key) ?? RetiredAgentKey(key));
         // A name or a type written as a list or a mapping is refused naming the key, never read as one left out.
         var nameNode = keys.FirstOrDefault(entry => entry.Key == "name").Value;
         var name = nameNode is null ? null : YamlReading.ScalarOf(nameNode);
@@ -978,8 +980,6 @@ public static class WorkflowFileParser
                     Tier = ScalarIn(keys, $"{where}.tier", problems),
                     Model = ScalarIn(keys, $"{where}.model", problems),
                     Effort = ScalarIn(keys, $"{where}.effort", problems),
-                    Fallback = StringListIn(keys, $"{where}.fallback", problems) ?? [],
-                    Provider = ScalarIn(keys, $"{where}.provider", problems),
                     Client = ScalarIn(keys, $"{where}.client", problems),
                     Prompt = ScalarIn(keys, $"{where}.prompt", problems),
                     ResumePrompt = ScalarIn(keys, $"{where}.resumePrompt", problems),

@@ -151,7 +151,8 @@ public sealed class WorkflowValidationService(
         var problems = new List<string>(WorkflowValidator.Validate(
             definition,
             context.Config.Commit.Template is not null,
-            named => Text(named, directory, name)));
+            named => Text(named, directory, name),
+            DssHarness.Core.Agents.AgentProviders.Resolve(context.Config).Providers));
         problems.AddRange(Files(definition, directory, name, context.Config));
 
         if (problems.Count > 0)

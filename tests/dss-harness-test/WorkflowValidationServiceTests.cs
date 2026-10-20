@@ -1139,13 +1139,63 @@ public sealed class WorkflowValidationServiceTests
         var cancellationToken = TestContext.Current.CancellationToken;
 
         temp.WriteFile("file.txt", "content\n");
-        await harness.InitializeHarnessAsync(
-            temp.Path,
-            cancellationToken,
-            config ?? new HarnessConfig { Workflows = [Default] });
+
+        // The agent sections the workflows resolve their tiers against: as init writes them, so every check runs
+        // under a configuration the caller chose. A test that names its own providers keeps them.
+        var agents = DssHarness.Core.Agents.AgentProviderTemplates.Read();
+        var given = config ?? new HarnessConfig { Workflows = [Default] };
+        var withAgents = new HarnessConfig
+        {
+            Version = given.Version,
+            Defaults = new HarnessDefaults
+            {
+                BuildCores = given.Defaults.BuildCores,
+                TestCores = given.Defaults.TestCores,
+                MaxParallelLegs = given.Defaults.MaxParallelLegs,
+                MaxParallelLegsTotal = given.Defaults.MaxParallelLegsTotal,
+                Project = given.Defaults.Project,
+                Admission = given.Defaults.Admission,
+                StallSeconds = given.Defaults.StallSeconds,
+                DurationWarningFactor = given.Defaults.DurationWarningFactor,
+                ClockStepToleranceMilliseconds = given.Defaults.ClockStepToleranceMilliseconds,
+                ProcessSampleSeconds = given.Defaults.ProcessSampleSeconds,
+                LocalCopy = given.Defaults.LocalCopy,
+                AgentTier = given.Defaults.AgentTier ?? agents.AgentTier,
+            },
+            Toolchains = given.Toolchains,
+            Sanitizers = given.Sanitizers,
+            BuildConfigs = given.BuildConfigs,
+            Projects = given.Projects,
+            Hosts = given.Hosts,
+            Emulators = given.Emulators,
+            DeveloperEnvironments = given.DeveloperEnvironments,
+            Legs = given.Legs,
+            LegSets = given.LegSets,
+            Tools = given.Tools,
+            ToolSearchDirectories = given.ToolSearchDirectories,
+            PredefinedRunners = given.PredefinedRunners,
+            Workflows = given.Workflows,
+            SetUp = given.SetUp,
+            Commit = given.Commit,
+            Sync = given.Sync,
+            Contention = given.Contention,
+            Worktrees = given.Worktrees,
+            Anchors = given.Anchors,
+            Mutations = given.Mutations,
+            SshItems = given.SshItems,
+            WslDistros = given.WslDistros,
+            BuildTimingRegex = given.BuildTimingRegex,
+            RunTimingRegex = given.RunTimingRegex,
+            TestTimingRegex = given.TestTimingRegex,
+            LineEndings = given.LineEndings,
+            Ci = given.Ci,
+            Providers = given.Providers.Count == 0 ? [.. agents.Providers] : given.Providers,
+            TierConfig = given.TierConfig.Count == 0 ? new Dictionary<string, List<string>>(agents.TierConfig, StringComparer.OrdinalIgnoreCase) : given.TierConfig,
+        };
+        await harness.InitializeHarnessAsync(temp.Path, cancellationToken, withAgents);
         await harness.CommitAllAsync(temp.Path, "initial", cancellationToken);
 
-        if (config is null || (config.Workflows ?? []).Contains(Default))
+        if ((withAgents.Workflows ?? []).Contains(Default))
         {
             WorkflowTemplates.EnsureShipped(Path.Combine(temp.Path, ".harness-config", "workflows"), harness.FileSystem);
         }

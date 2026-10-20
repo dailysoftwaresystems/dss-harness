@@ -134,8 +134,6 @@ public sealed record FlowBudget(double? Usd, long? Tokens, double? Minutes, int?
 /// <param name="Tier">A name for a class of model, resolved by the configuration's tiers.</param>
 /// <param name="Model">The model outright, whose provider, key and client follow from it.</param>
 /// <param name="Effort">The effort the model is asked for.</param>
-/// <param name="Fallback">The models to go on with, in order, when the one serving declines or its account is at its limit.</param>
-/// <param name="Provider">The provider, where the model alone does not say it.</param>
 /// <param name="Client">The client, where the provider is reached two ways.</param>
 /// <param name="Kinds">The question kinds this advisor is asked about; every one, where the file says nothing.</param>
 public sealed record FlowAdvisor(
@@ -144,8 +142,6 @@ public sealed record FlowAdvisor(
     string? Tier,
     string? Model,
     string? Effort,
-    IReadOnlyList<string> Fallback,
-    string? Provider,
     string? Client,
     IReadOnlyList<string> Kinds)
 {
@@ -163,8 +159,6 @@ public sealed record FlowAdvisor(
 /// <param name="Tier">A name for a class of model, resolved by the configuration's tiers.</param>
 /// <param name="Model">The model outright, whose provider, key and client follow from it.</param>
 /// <param name="Effort">The effort the model is asked for.</param>
-/// <param name="Fallback">The models to go on with, in order, when the one serving declines or its account is at its limit.</param>
-/// <param name="Provider">The provider, where the model alone does not say it.</param>
 /// <param name="Client">The client, where the provider is reached two ways.</param>
 public sealed record FlowReporter(
     string Agent,
@@ -173,8 +167,6 @@ public sealed record FlowReporter(
     string? Tier,
     string? Model,
     string? Effort,
-    IReadOnlyList<string> Fallback,
-    string? Provider,
     string? Client)
 {
     /// <summary>How often its agent is tried again where it failed, on each model it may use, where the file says.</summary>
@@ -354,12 +346,6 @@ public sealed record WorkflowStep
 
     /// <summary>The effort the model is asked for.</summary>
     public string? Effort { get; init; } = null;
-
-    /// <summary>The models to go on with, in order, when the one serving declines or its account is at its limit.</summary>
-    public IReadOnlyList<string> Fallback { get; init; } = [];
-
-    /// <summary>The provider, where the model alone does not say it.</summary>
-    public string? Provider { get; init; } = null;
 
     /// <summary>The client, where the provider is reached two ways.</summary>
     public string? Client { get; init; } = null;

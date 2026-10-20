@@ -167,6 +167,19 @@ public sealed class HarnessConfig
     /// <summary>Continuous integration: the workflows that carry this repository's legs, and their budget.</summary>
     public CiSettings Ci { get; init; } = new();
 
+    /// <summary>
+    /// The companies whose models the tool reaches: a model's provider, its API's address, its key's name and its
+    /// client, and everything known of the model, are its entry here. Nothing of a model is in the tool's code - a
+    /// config that declares none has no model.
+    /// </summary>
+    public List<AgentProviderConfig> Providers { get; init; } = [];
+
+    /// <summary>
+    /// The tiers - a name for a class of model - each with its models in the order they are tried: a step on the tier
+    /// starts on the first, and the rest are its fallback. A tier is defined here and nowhere else.
+    /// </summary>
+    public Dictionary<string, List<string>> TierConfig { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+
     private static Dictionary<string, TValue> Map<TValue>() => new(StringComparer.OrdinalIgnoreCase);
 }
 
@@ -212,6 +225,13 @@ public sealed class HarnessDefaults
 
     /// <summary>Project used when a command names none.</summary>
     public string? Project { get; init; }
+
+    /// <summary>
+    /// The tier of a step that names neither a tier nor a model, on itself or in its definition, and of a side-task
+    /// that names neither. Nothing is built in: <c>init</c> writes <c>balanced</c>, and where the config names none,
+    /// such a step is refused when the definition is loaded.
+    /// </summary>
+    public string? AgentTier { get; init; }
 
     /// <summary>
     /// The rule heavy legs are admitted by on a machine whose own section declares nothing, and each field such a

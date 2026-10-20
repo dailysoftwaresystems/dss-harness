@@ -145,11 +145,16 @@ public static class WorkflowValidator
     /// is not one the subset reads types nothing. Where no files are given at all, a reason step's output may be
     /// anything and no prompt is read.
     /// </param>
-    public static IReadOnlyList<string> Validate(WorkflowDefinition definition, bool hasCommitTemplate, Func<string, string?>? files)
+    /// <param name="providers">
+    /// The configuration's providers and tiers, resolved; or <see langword="null"/> where the configuration cannot be
+    /// given, which leaves V38's config half unchecked - a definition is never checked against a configuration the
+    /// caller did not choose.
+    /// </param>
+    public static IReadOnlyList<string> Validate(WorkflowDefinition definition, bool hasCommitTemplate, Func<string, string?>? files, DssHarness.Core.Agents.AgentProviders? providers = null)
     {
         ArgumentNullException.ThrowIfNull(definition);
 
-        var check = new Check(definition, hasCommitTemplate, files);
+        var check = new Check(definition, hasCommitTemplate, files, providers);
         return check.Problems;
     }
 
@@ -181,11 +186,12 @@ public static class WorkflowValidator
         /// </summary>
         private readonly HashSet<string> _refusedForEach = new(StringComparer.Ordinal);
 
-        internal Check(WorkflowDefinition definition, bool hasCommitTemplate, Func<string, string?>? files)
+        internal Check(WorkflowDefinition definition, bool hasCommitTemplate, Func<string, string?>? files, DssHarness.Core.Agents.AgentProviders? providers = null)
         {
             _definition = definition;
             _hasCommitTemplate = hasCommitTemplate;
             _files = files;
+            _providers = providers;
 
             DefinitionRules();
             Index(definition.Steps, parent: null);
@@ -198,7 +204,7 @@ public static class WorkflowValidator
             Amend();
             Checkpoints();
             SharedEndings();
-            Fallbacks();
+            Agents();
             AgentPrompts();
             Outputs();
             PullRequests();
@@ -849,7 +855,7 @@ public static class WorkflowValidator
             // none of them, and writes what that step writes.
             if (resumesAnother && ResumedKeys(step) is [_, ..] named)
             {
-                _problems.Add($"{where} resumes '{step.Resume}' and names {string.Join(", ", named)}; a step that goes on with another's work runs in that step's agent, on its model and in its worktree, and names none of agent, provider, client, tier, model, fallback, access, in or writes");
+                _problems.Add($"{where} resumes '{step.Resume}' and names {string.Join(", ", named)}; a step that goes on with another's work runs in that step's agent, on its model and in its worktree, and names none of agent, client, tier, model, access, in or writes");
             }
 
             if (step.ResumePrompt is not null && !resumesItself)
@@ -936,11 +942,9 @@ public static class WorkflowValidator
             => [.. new (string Key, bool Named)[]
                 {
                     ("agent", step.Agent is not null),
-                    ("provider", step.Provider is not null),
                     ("client", step.Client is not null),
                     ("tier", step.Tier is not null),
                     ("model", step.Model is not null),
-                    ("fallback", step.Fallback.Count > 0),
                     ("access", step.Access is not null),
                     ("in", step.In is not null),
                     ("writes", step.Writes is not null),
@@ -2136,40 +2140,118 @@ public static class WorkflowValidator
         }
 
         /// <summary>
-        /// V38's halves the definition alone can answer, for each agent it runs - a reasoning step, the advisor and the
-        /// reporter: a fallback is a model gone on with in place of the agent's own, so it is never that model, and never
-        /// named twice. What a tier, a model and a fallback resolve to is the configuration's providers' to say.
+        /// V38's config half, for each agent the definition runs - a reasoning step, the advisor and the reporter:
+        /// what a step names is resolved against the configuration's providers and tiers, so a model no provider
+        /// lists, a tier nothing defines, an effort a model does not take and a client that does not reach the
+        /// provider are all refused with the step that names them, when the definition is checked.
         /// </summary>
-        private void Fallbacks()
+        private void Agents()
         {
-            foreach (var entry in _entries.Where(entry => entry.Step.Type == "reason"))
+            if (_providers is not { } providers)
             {
-                FallbackRules(entry.Step.Model, entry.Step.Fallback, $"step '{entry.Path}'");
+                return;
+            }
+
+            foreach (var entry in _entries)
+            {
+                if (entry.Step.Type == "reason")
+                {
+                    AgentRules(providers, entry.Step.Tier, entry.Step.Model, entry.Step.Effort, entry.Step.Client, $"workflow '{_definition.Name}' step '{entry.Path}'");
+                }
             }
 
             if (_definition.Advisor is { } advisor)
             {
-                FallbackRules(advisor.Model, advisor.Fallback, "advisor");
+                AgentRules(providers, advisor.Tier, advisor.Model, advisor.Effort, advisor.Client, "advisor");
             }
 
             if (_definition.Reporter is { } reporter)
             {
-                FallbackRules(reporter.Model, reporter.Fallback, "reporter");
+                AgentRules(providers, reporter.Tier, reporter.Model, reporter.Effort, reporter.Client, "reporter");
             }
         }
 
-        private void FallbackRules(string? model, IReadOnlyList<string> fallback, string where)
+        private void AgentRules(DssHarness.Core.Agents.AgentProviders providers, string? tier, string? model, string? effort, string? client, string where)
         {
-            if (model is not null && fallback.Contains(model, StringComparer.Ordinal))
+            if (model is not null)
             {
-                _problems.Add($"{where} falls back to '{model}', which is its own model: a fallback is a model gone on with in its place");
+                if (providers.Of(model) is not { } named)
+                {
+                    _problems.Add($"{where} resolves to model '{model}', which no provider lists. Listed: {string.Join("; ", providers.Providers.Select(provider => $"{provider.Name}: {string.Join(", ", provider.Models.Select(entry => entry.Code))}"))}. Add it to its provider's models under providers");
+                    return;
+                }
+
+                if (client is not null && !ClientReaches(client, named.Provider))
+                {
+                    _problems.Add($"{where} resolves to client '{client}', which does not reach provider '{named.Provider.Name}', whose model '{model}' it names");
+                }
+
+                if (effort is not null && !named.Model.Efforts.Contains(effort, StringComparer.Ordinal))
+                {
+                    _problems.Add($"{where} runs at effort '{effort}', which '{model}' does not take. It takes: {string.Join(", ", named.Model.Efforts)}");
+                }
+                else if (effort is null && named.Model.Efforts is [])
+                {
+                    _problems.Add($"{where} names model '{model}', whose entry takes no efforts");
+                }
+
+                return;
             }
 
-            foreach (var twice in fallback.GroupBy(entry => entry, StringComparer.Ordinal).Where(group => group.Count() > 1).Select(group => group.Key))
+            if (tier is null)
             {
-                _problems.Add($"{where} falls back to '{twice}' twice");
+                // A step that names neither a tier nor a model runs on the configuration's default tier, which nothing
+                // builds in: where the config names none, the step is refused naming the three places it could be said.
+                if (providers.DefaultTier is null)
+                {
+                    _problems.Add($"{where} names neither a tier nor a model, and the configuration's defaults.agentTier names neither either; say one on the step, in its agent definition, or under defaults.agentTier");
+                }
+                else if (providers.ModelsOf(providers.DefaultTier).Count == 0)
+                {
+                    _problems.Add($"{where} names neither a tier nor a model, and defaults.agentTier names '{providers.DefaultTier}', which tierConfig does not define. Defined: {string.Join(", ", providers.Tiers.OrderBy(name => name, StringComparer.Ordinal))}");
+                }
+
+                return;
+            }
+
+            if (providers.HasNoProvidersAtAll)
+            {
+                _problems.Add($"{where} names tier '{tier}' and the config declares no providers and no tierConfig: dssharness list-agent-providers --template prints them as init writes them into a new config, to paste");
+                return;
+            }
+
+            var models = providers.ModelsOf(tier);
+
+            if (models.Count == 0)
+            {
+                _problems.Add($"{where} names tier '{tier}', which tierConfig does not define. Defined: {string.Join(", ", providers.Tiers.OrderBy(name => name, StringComparer.Ordinal))}");
+                return;
+            }
+
+            if (client is not null)
+            {
+                foreach (var (provider, _) in models.Where(entry => !ClientReaches(client, entry.Provider)))
+                {
+                    _problems.Add($"{where} resolves to client '{client}', which does not reach provider '{provider.Name}', whose models serve tier '{tier}'");
+                }
+            }
+
+            if (effort is not null)
+            {
+                // Every model of the tier is checked, the ones this machine cannot use included, since which can be
+                // used is the machine's and the definition is not.
+                foreach (var (_, entry) in models.Where(entry => !entry.Model.Efforts.Contains(effort, StringComparer.Ordinal)))
+                {
+                    _problems.Add($"{where} runs at effort '{effort}', which '{entry.Code}' (tier '{tier}') does not take. It takes: {string.Join(", ", entry.Efforts)}");
+                    return;
+                }
             }
         }
+
+        /// <summary>Whether <paramref name="client"/> is one the tool builds in and reaches <paramref name="provider"/>'s type.</summary>
+        private static bool ClientReaches(string client, DssHarness.Core.Configuration.AgentProviderConfig provider)
+            => DssHarness.Core.Agents.AgentProviders.ClientKinds.FirstOrDefault(kind => string.Equals(kind.Name, client, StringComparison.Ordinal)) is { } kind
+                && string.Equals(kind.ProviderType, provider.Type, StringComparison.Ordinal);
 
         /// <summary>
         /// The work-item group: the <c>forEach</c> group the step <c>amend.whenAddScope</c> names is declared directly in,
@@ -2471,6 +2553,9 @@ public static class WorkflowValidator
 
         /// <summary>The text of a file the definition names, by the path it names it with; <see langword="null"/> where no files are given.</summary>
         private readonly Func<string, string?>? _files;
+
+        /// <summary>The configuration's providers and tiers, where the caller gave them: V38's config half is checked only under a configuration the caller chose.</summary>
+        private readonly DssHarness.Core.Agents.AgentProviders? _providers;
 
         /// <summary>Each reason step's schema as a reading, by the path its <c>outputs</c> names; <see langword="null"/> where it types nothing.</summary>
         private readonly Dictionary<string, JsonSchemaSubset.Reading?> _schemas = new(StringComparer.Ordinal);

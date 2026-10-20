@@ -3003,6 +3003,21 @@ public sealed class ConfigStoreTests
         Assert.Contains("\"CCACHE_DIR\"", exception.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The agent sections of the plan before the configuration owned them are refused naming the sections that
+    /// replaced them, so a reader moves their meaning instead of deleting their lines.
+    /// </summary>
+    [Theory]
+    [InlineData("""{ "agentProviders": [] }""", "agentProviders is no longer read: a provider and its models are declared under providers, and a step names none of it - a model's code is listed by one provider, which it names")]
+    [InlineData("""{ "agentProviders": [{ "name": "anthropic" }] }""", "agentProviders is no longer read: a provider and its models are declared under providers, and a step names none of it - a model's code is listed by one provider, which it names")]
+    [InlineData("""{ "agentTiers": { "best": [] } }""", "agentTiers is no longer read: which models a tier runs on, in the order they are tried, is declared under tierConfig")]
+    public void TheRetiredAgentSections_AreRefusedNamingWhatTookTheirPlace(string json, string expected)
+    {
+        var exception = LoadInvalid(json);
+
+        Assert.Contains(expected, exception.Message, StringComparison.Ordinal);
+    }
+
     /// <summary>An unknown key that was never read is refused as unknown, with nothing said to take its place.</summary>
     [Fact]
     public void AnUnknownKey_IsNotMistakenForARetiredOne()

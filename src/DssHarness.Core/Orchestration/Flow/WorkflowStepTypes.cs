@@ -107,8 +107,6 @@ public static class WorkflowStepTypes
                 new("tier", "a name for a class of model, resolved by the configuration's agent tiers"),
                 new("model", "the model outright, whose provider, key and client follow from it"),
                 new("effort", "the effort the model is asked for"),
-                new("fallback", "models to go on with, in order, when the one serving declines or its account is at its limit"),
-                new("provider", "the provider, where the model alone does not say it"),
                 new("client", "the client, where the provider is reached two ways"),
                 new("prompt", "the prompt file the step is asked with") { Required = true },
                 new("resumePrompt", "the prompt file a step that goes on with its own work (resume names itself) is asked with when it runs again, in place of prompt"),

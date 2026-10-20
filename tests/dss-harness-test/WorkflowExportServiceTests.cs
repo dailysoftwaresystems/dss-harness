@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using DssHarness.Core.Agents;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Help;
@@ -388,7 +389,16 @@ public sealed class WorkflowExportServiceTests
         var harness = new HarnessFactory();
 
         temp.WriteFile("file.txt", "content\n");
-        await harness.InitializeHarnessAsync(temp.Path, Token, new HarnessConfig { Workflows = [Shipped] });
+
+        // The agent sections the shipped workflow resolves its tiers against, as init writes them.
+        var agents = AgentProviderTemplates.Read();
+        await harness.InitializeHarnessAsync(temp.Path, Token, new HarnessConfig
+        {
+            Workflows = [Shipped],
+            Defaults = new HarnessDefaults { AgentTier = agents.AgentTier },
+            Providers = [.. agents.Providers],
+            TierConfig = new Dictionary<string, List<string>>(agents.TierConfig, StringComparer.OrdinalIgnoreCase),
+        });
         await harness.CommitAllAsync(temp.Path, "initial", Token);
         WorkflowTemplates.EnsureShipped(Path.Combine(temp.Path, ".harness-config", "workflows"), harness.FileSystem);
 

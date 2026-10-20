@@ -854,7 +854,7 @@ steps:
     type: reason
     agent: pre-existing-triage
     tier: balanced
-    effort: medium
+    effort: high
     raised: preExisting
     onAddress: recover
     retries: 3

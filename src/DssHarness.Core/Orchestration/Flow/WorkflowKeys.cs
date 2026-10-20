@@ -93,8 +93,6 @@ public static class WorkflowKeys
         new("tier", "a name for a class of model, resolved by the configuration's agent tiers"),
         new("model", "the model outright, whose provider, key and client follow from it"),
         new("effort", "the effort the model is asked for"),
-        new("fallback", "models to go on with, in order, when the one serving declines or its account is at its limit"),
-        new("provider", "the provider, where the model alone does not say it"),
         new("client", "the client, where the provider is reached two ways"),
         new("kinds", "the question kinds this advisor is asked about; absent, every one"),
         new("retries", "how often its agent is tried again where it failed, on each model it may use; absent, maxRetries"),
@@ -112,8 +110,6 @@ public static class WorkflowKeys
         new("tier", "a name for a class of model, resolved by the configuration's agent tiers"),
         new("model", "the model outright, whose provider, key and client follow from it"),
         new("effort", "the effort the model is asked for"),
-        new("fallback", "models to go on with, in order, when the one serving declines or its account is at its limit"),
-        new("provider", "the provider, where the model alone does not say it"),
         new("client", "the client, where the provider is reached two ways"),
     ];
 

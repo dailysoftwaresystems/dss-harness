@@ -48,9 +48,34 @@ internal static class MisplacedKeys
 
         using (document)
         {
-            return [.. Retired(document.RootElement), .. StepKeysOnPhases(document.RootElement)];
+            List<string> keys = [];
+
+            if (RetiredAgentSection(document.RootElement) is { } agent)
+            {
+                keys.Add(agent);
+            }
+
+            keys.AddRange(Retired(document.RootElement));
+            keys.AddRange(StepKeysOnPhases(document.RootElement));
+            return keys;
         }
     }
+
+    /// <summary>
+    /// The agent sections of the plan before 2026-10-19: each is refused naming the section that replaced it, so a
+    /// reader moves its meaning instead of deleting its lines.
+    /// </summary>
+    private const string AgentProviders = "agentProviders";
+
+    /// <summary>As <see cref="AgentProviders"/>, for the tiers.</summary>
+    private const string AgentTiers = "agentTiers";
+
+    private static string? RetiredAgentSection(JsonElement root)
+        => Property(root, AgentProviders) is not null
+            ? $"{AgentProviders} is no longer read: a provider and its models are declared under providers, and a step names none of it - a model's code is listed by one provider, which it names"
+            : Property(root, AgentTiers) is not null
+                ? $"{AgentTiers} is no longer read: which models a tier runs on, in the order they are tried, is declared under tierConfig"
+                : null;
 
     private static IEnumerable<string> Retired(JsonElement root)
         => (Property(root, Exec) is null
