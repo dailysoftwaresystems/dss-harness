@@ -50,7 +50,7 @@ public static class WorkflowValidator
     {
         ["loopBound"] = ["more", "accept", "abort"],
         ["visitBound"] = ["more", "accept", "fail", "abort"],
-        ["recoveryBound"] = ["more", "skip", "abort"],
+        ["recoveryBound"] = ["more", "direct", "skip", "abort"],
         ["openAgents"] = ["retry", "stay", "abort"],
         ["foldNewRows"] = ["allow", "retry", "fail", "abort"],
         ["foldTwoChanges"] = ["merge", "retry", "fail", "abort"],

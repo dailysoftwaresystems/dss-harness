@@ -120,11 +120,14 @@ public static class FlowReports
         ["instance"] = step.Instance,
         ["state"] = step.State,
         ["attempt"] = step.Attempt,
+        ["visit"] = step.Visit,
         ["exit"] = step.Exit,
         ["error"] = step.Error,
         ["skippedBecause"] = step.SkippedBecause,
         ["notRunBecause"] = step.NotRunBecause,
         ["passedOver"] = step.Failure == "passedOver",
+        ["handledBy"] = step.HandledBy,
+        ["leftover"] = step.Leftover?.DeepClone(),
     };
 
     /// <summary>One question as the report's JSON document holds it.</summary>
@@ -158,8 +161,29 @@ public static class FlowReports
         foreach (var step in flow.Steps)
         {
             var said = $"- {step.Instance}: {step.State.ToLower(CultureInfo.InvariantCulture)}";
-            var why = step.SkippedBecause ?? step.NotRunBecause ?? (step.Failure == "passedOver" ? "its failure was passed over (onFailure: continue)" : null) ?? step.Error;
+            var why = step.SkippedBecause ?? step.NotRunBecause
+                ?? (step.Failure == "passedOver" ? "its failure was passed over (onFailure: continue)" : null)
+                ?? (step.HandledBy is not null ? $"its failure was handled by {step.HandledBy}" : null)
+                ?? step.Error;
             text.Add(why is null ? said : $"{said} - {why}");
+        }
+
+        var handled = flow.Steps.Where(step => step.HandledBy is not null).ToList();
+
+        if (handled.Count > 0)
+        {
+            text.Add(string.Empty);
+            text.Add("## Failures a handler took");
+            text.AddRange(handled.Select(step => $"- {step.Step}, by {step.HandledBy}"));
+        }
+
+        var leftover = flow.Steps.Where(step => step.Leftover is not null).ToList();
+
+        if (leftover.Count > 0)
+        {
+            text.Add(string.Empty);
+            text.Add("## What the run's loops left");
+            text.AddRange(leftover.Select(step => $"- {step.Instance}: {FlowValue.Of(step.Leftover!.DeepClone()).AsTemplateText()}"));
         }
 
         if (questions?.Questions.Count > 0)

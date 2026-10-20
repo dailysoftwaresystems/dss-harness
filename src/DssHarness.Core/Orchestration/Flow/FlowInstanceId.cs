@@ -150,6 +150,37 @@ public static class FlowInstanceId
     private static readonly char[] Marks = ['+', '#', '['];
 
     /// <summary>
+    /// Which visit of the step named <paramref name="name"/> the well-formed id <paramref name="id"/> holds: the visit
+    /// of its own segment, from 1 where none is written.
+    /// </summary>
+    /// <param name="id">The instance id, well formed.</param>
+    /// <param name="name">The step's name, the id's last segment's name.</param>
+    public static int VisitOf(string id, string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+
+        var segment = id[(id.LastIndexOf('.') + 1)..];
+
+        if (!segment.StartsWith(name, StringComparison.Ordinal) || segment.Length == name.Length)
+        {
+            return 1;
+        }
+
+        var marks = segment[name.Length..];
+
+        if (marks[0] != '+')
+        {
+            return 1;
+        }
+
+        var end = marks.IndexOfAny(['+', '#', '['], 1);
+        var written = marks[1..(end < 0 ? marks.Length : end)];
+
+        return WorkflowExpressions.WholeNumber(written) is { } visit ? visit : 1;
+    }
+
+    /// <summary>
     /// The id as it names a directory of the run's store: the same text, with each item's brackets written
     /// <c>@</c> - an item is a segment's last mark, so <c>items+2[0]</c> is <c>items+2@0</c>. The id is not checked
     /// here; <see cref="Problem"/> owns that refusal.

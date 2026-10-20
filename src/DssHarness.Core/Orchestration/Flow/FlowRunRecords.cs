@@ -138,6 +138,12 @@ public sealed class WorkflowStatusWriter
             waiting.Insert(0, $"safe pause ({pause.Cause})");
         }
 
+        // The recovery the run is in, where a failure it took is being put right: one instance of the run is at work
+        // on it, and the progress says so.
+        var recovering = snapshot.Steps.Any(step => step.Instance == FlowScope.Recovery || step.Instance.StartsWith(FlowScope.Recovery + "+", StringComparison.Ordinal))
+            && snapshot.Steps.Any(step => (step.Instance == FlowScope.Recovery || step.Instance.StartsWith(FlowScope.Recovery + "+", StringComparison.Ordinal))
+                && step.State is FlowInstanceState.NotStarted or FlowInstanceState.Running or FlowInstanceState.Paused);
+
         return new WorkflowStatus(
             1,
             context.Run,
@@ -149,7 +155,7 @@ public sealed class WorkflowStatusWriter
                 snapshot.Steps.Count,
                 snapshot.Steps.Count(step => step.State is FlowInstanceState.NotStarted),
                 snapshot.Steps.Count(step => step.State is FlowInstanceState.Running),
-                0,
+                recovering ? 1 : 0,
                 snapshot.Steps.Count(step => step.State is FlowInstanceState.Paused),
                 snapshot.Steps.Count(step => step.State is FlowInstanceState.Done),
                 snapshot.Steps.Count(step => step.State is FlowInstanceState.Failed),
@@ -446,7 +452,8 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
             _context.Branch,
             snapshot.Pause is { } pause
                 ? new FlowPauseRecord(pause.Cause, pause.All, pause.BeganAt, [.. pause.Handoffs], pause.CompletedAt)
-                : null);
+                : null,
+            snapshot.Redirect);
     }
 
     /// <summary>One step's own record, from the coordinator's snapshot of it.</summary>
@@ -480,7 +487,12 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
             step.Output?.DeepClone(),
             step.Item.IsMissing ? null : step.Item.ToNode(),
             step.Index,
-            step.Iteration);
+            step.Iteration,
+            step.Handlers,
+            step.HandledBy,
+            step.Leftover?.DeepClone(),
+            step.RaisedBy,
+            step.Direction);
     }
 
     /// <summary>
