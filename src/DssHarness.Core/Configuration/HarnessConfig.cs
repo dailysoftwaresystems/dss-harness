@@ -180,6 +180,13 @@ public sealed class HarnessConfig
     /// </summary>
     public Dictionary<string, List<string>> TierConfig { get; init; } = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Whether a provider's keys are balanced by what each spent in the last seven days, a step starting on the one
+    /// that spent least: off (<c>false</c>) when left out, and <c>init</c> writes none. Refused where it is on and a
+    /// provider with two keys or more lists a model with no price, whose spend could not be counted.
+    /// </summary>
+    public bool? BalanceKeyUsage { get; init; }
+
     private static Dictionary<string, TValue> Map<TValue>() => new(StringComparer.OrdinalIgnoreCase);
 }
 

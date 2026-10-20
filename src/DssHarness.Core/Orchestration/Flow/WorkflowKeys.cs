@@ -92,7 +92,7 @@ public static class WorkflowKeys
         new("prompt", "the prompt file the recommendation is asked with") { Required = true },
         new("tier", "a name for a class of model, resolved by the configuration's agent tiers"),
         new("model", "the model outright, whose provider, key and client follow from it"),
-        new("effort", "the effort the model is asked for"),
+        new("effort", "the effort the model is asked for: one level for every model it may run on, or a map of all and models' codes giving each its own"),
         new("client", "the client, where the provider is reached two ways"),
         new("kinds", "the question kinds this advisor is asked about; absent, every one"),
         new("retries", "how often its agent is tried again where it failed, on each model it may use; absent, maxRetries"),
@@ -109,7 +109,7 @@ public static class WorkflowKeys
         new("backoffSeconds", $"seconds it waits before it is tried again, twice as long before each later try, at most {WorkflowStep.MostBackoffSeconds}; absent, the workflow's backoffSeconds"),
         new("tier", "a name for a class of model, resolved by the configuration's agent tiers"),
         new("model", "the model outright, whose provider, key and client follow from it"),
-        new("effort", "the effort the model is asked for"),
+        new("effort", "the effort the model is asked for: one level for every model it may run on, or a map of all and models' codes giving each its own"),
         new("client", "the client, where the provider is reached two ways"),
     ];
 

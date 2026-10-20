@@ -350,6 +350,7 @@ public static class WorkflowFileParser
         {
             Retries = IntIn(keys, "advisor.retries", problems),
             BackoffSeconds = IntIn(keys, "advisor.backoffSeconds", problems),
+            EffortByModel = read.EffortByModel,
         };
     }
 
@@ -376,17 +377,18 @@ public static class WorkflowFileParser
         {
             Retries = IntIn(keys, "reporter.retries", problems),
             BackoffSeconds = IntIn(keys, "reporter.backoffSeconds", problems),
+            EffortByModel = read.EffortByModel,
         };
     }
 
     /// <summary>The keys <c>advisor</c> and <c>reporter</c> share: how each picks the model its agent runs on.</summary>
-    private static (string? Tier, string? Model, string? Effort, string? Client)
+    private static (string? Tier, string? Model, string? Effort, IReadOnlyDictionary<string, string>? EffortByModel, string? Client)
         ReadAgentSelection(List<(string Key, YamlNode Value)> keys, string owner, List<string> problems)
     {
         string? tier = null;
         string? model = null;
-        string? effort = null;
         string? client = null;
+        (string? Effort, IReadOnlyDictionary<string, string>? ByModel) effort = (null, null);
 
         foreach (var (key, value) in keys)
         {
@@ -401,7 +403,7 @@ public static class WorkflowFileParser
                     break;
 
                 case "effort":
-                    effort = YamlReading.RequireScalar(value, $"{owner}.effort", problems);
+                    effort = ReadEffort(value, $"{owner}.effort", problems);
                     break;
 
                 case "client":
@@ -424,7 +426,52 @@ public static class WorkflowFileParser
             }
         }
 
-        return (tier, model, effort, client);
+        return (tier, model, effort.Effort, effort.ByModel, client);
+    }
+
+    /// <summary>
+    /// One effort, as the file writes it: a single level, for every model the owner may run on, or a map whose keys are
+    /// <c>all</c> and models' codes, giving each model its own - <c>effort: high</c> reads as <c>{all: high}</c>. A map
+    /// with no entry is refused, as a key given nothing.
+    /// </summary>
+    private static (string? Effort, IReadOnlyDictionary<string, string>? ByModel) ReadEffort(YamlNode node, string what, List<string> problems)
+    {
+        if (node is not YamlMappingNode map)
+        {
+            return (YamlReading.RequireScalar(node, what, problems), null);
+        }
+
+        var byModel = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        foreach (var (key, value) in map.Children)
+        {
+            var code = YamlReading.ScalarOf(key);
+            var level = YamlReading.RequireScalar(value, $"{what}.{code ?? "''"}", problems);
+
+            if (level is null)
+            {
+                continue;
+            }
+
+            if (code is null)
+            {
+                problems.Add(YamlReading.At(key, $"'{what}' holds a key that is not one name: a map's keys are all and models' codes"));
+                continue;
+            }
+
+            if (!byModel.TryAdd(code, level))
+            {
+                problems.Add(YamlReading.At(key, $"'{what}' names '{code}' more than once"));
+            }
+        }
+
+        if (byModel.Count == 0)
+        {
+            problems.Add(YamlReading.At(node, $"'{what}' holds no entry; a map of efforts names all or a model's code, each with the level it runs at"));
+            return (null, null);
+        }
+
+        return (null, byModel);
     }
 
     private static FlowAmend? ReadAmend(YamlNode node, List<string> problems)
@@ -974,12 +1021,15 @@ public static class WorkflowFileParser
         switch (type.Type)
         {
             case "reason":
+                var effort = NodeIn(keys, "effort") is { } effortNode ? ReadEffort(effortNode, $"{where}.effort", problems) : (Effort: (string?)null, ByModel: (IReadOnlyDictionary<string, string>?)null);
+
                 step = step with
                 {
                     Agent = ScalarIn(keys, $"{where}.agent", problems),
                     Tier = ScalarIn(keys, $"{where}.tier", problems),
                     Model = ScalarIn(keys, $"{where}.model", problems),
-                    Effort = ScalarIn(keys, $"{where}.effort", problems),
+                    Effort = effort.Effort,
+                    EffortByModel = effort.ByModel,
                     Client = ScalarIn(keys, $"{where}.client", problems),
                     Prompt = ScalarIn(keys, $"{where}.prompt", problems),
                     ResumePrompt = ScalarIn(keys, $"{where}.resumePrompt", problems),
@@ -1006,6 +1056,7 @@ public static class WorkflowFileParser
                 step = step with
                 {
                     Filter = ScalarIn(keys, $"{where}.filter", problems),
+                    FilterWhen = ScalarIn(keys, $"{where}.filterWhen", problems),
                     Exclude = StringListIn(keys, $"{where}.exclude", problems) ?? [],
                     Labels = StringListIn(keys, $"{where}.labels", problems) ?? [],
                     SkipBuild = BooleanIn(keys, $"{where}.skipBuild", problems),

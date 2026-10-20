@@ -90,7 +90,7 @@ public sealed partial class AgentProviders
         }
 
         // A provider's name is listed once; a model's code is listed once, across every provider; a key's variable is
-        // appointed once - for a second key of a company is another provider, with another variable's name.
+        // appointed once - for a second key of a company is a second name in its provider's apiKeyNames.
         foreach (var twice in providers.GroupBy(provider => provider.Name, StringComparer.Ordinal).Where(group => group.Count() > 1))
         {
             var ats = providers.Select((provider, at) => (provider, at)).Where(entry => string.Equals(entry.provider.Name, twice.Key, StringComparison.Ordinal)).Select(entry => entry.at + 1);
@@ -104,9 +104,17 @@ public sealed partial class AgentProviders
             problems.Add($"model '{twice.Key}' is listed by providers '{string.Join("' and '", twice.Select(entry => entry.provider.Name))}': a model's code is listed once, across every provider");
         }
 
-        foreach (var twice in providers.GroupBy(provider => provider.ApiKeyName, StringComparer.Ordinal).Where(group => group.Count() > 1))
+        foreach (var provider in providers)
         {
-            problems.Add($"providers '{string.Join("' and '", twice.Select(provider => provider.Name))}' both appoint '{twice.Key}' for their key: a second key is another variable's name");
+            foreach (var twice in provider.ApiKeyNames.GroupBy(name => name, StringComparer.Ordinal).Where(group => group.Count() > 1))
+            {
+                problems.Add($"provider '{provider.Name}' lists '{twice.Key}' twice in apiKeyNames: each key is listed once");
+            }
+        }
+
+        foreach (var twice in providers.SelectMany(provider => provider.ApiKeyNames.Select(name => (provider, name))).GroupBy(entry => entry.name, StringComparer.Ordinal).Where(group => group.Count() > 1))
+        {
+            problems.Add($"providers '{string.Join("' and '", twice.Select(entry => entry.provider.Name))}' both appoint '{twice.Key}' for a key: a second key is another variable's name");
         }
 
         foreach (var (provider, at) in providers.Select((entry, at) => (entry, at)))
@@ -127,9 +135,14 @@ public sealed partial class AgentProviders
                 problems.Add($"{where} api '{provider.Api}' is no absolute https address; an address is the company's own or a gateway's, and http only for localhost");
             }
 
-            if (!VariableName().IsMatch(provider.ApiKeyName))
+            if (provider.ApiKeyNames.Count == 0)
             {
-                problems.Add($"{where} apiKeyName '{provider.ApiKeyName}' is not a variable's name: [A-Z][A-Z0-9_]*, a name and never a key");
+                problems.Add($"{where} declares no apiKeyNames; a provider's keys are at least one variable's name, in the order they are tried");
+            }
+
+            foreach (var name in provider.ApiKeyNames.Where(name => !VariableName().IsMatch(name)))
+            {
+                problems.Add($"{where} apiKeyNames '{name}' is not a variable's name: [A-Z][A-Z0-9_]*, a name and never a key");
             }
 
             if (provider.Models.Any(model => Priced(model)) && string.IsNullOrWhiteSpace(provider.Currency))
@@ -159,8 +172,32 @@ public sealed partial class AgentProviders
         }
 
         TierRules(config, resolved, problems);
+        BalanceRules(config, problems);
 
         return (problems.Count == 0 ? resolved : null, problems);
+    }
+
+    /// <summary>
+    /// balanceKeyUsage balances a provider's keys by what each spent, so a model with no price could not be counted:
+    /// refused where the switch is on and a provider with two keys or more lists one. A provider with one key has
+    /// nothing to balance and is not refused.
+    /// </summary>
+    private static void BalanceRules(HarnessConfig config, List<string> problems)
+    {
+        if (config.BalanceKeyUsage is not true)
+        {
+            return;
+        }
+
+        foreach (var provider in config.Providers.Where(provider => provider.ApiKeyNames.Count >= 2))
+        {
+            foreach (var model in provider.Models.Where(model => !Priced(model)))
+            {
+                problems.Add(
+                    $"balanceKeyUsage balances the keys of '{provider.Name}' by what each spent, and '{model.Code}' has no price "
+                    + $"(providers '{provider.Name}', model '{model.Code}': priceInputMiss, priceOutput). Price it, or turn balanceKeyUsage off");
+            }
+        }
     }
 
     /// <summary>The provider that lists <paramref name="code"/>, with the model's entry; null where no provider lists it.</summary>
@@ -200,6 +237,13 @@ public sealed partial class AgentProviders
 
     private static void ModelRules(HarnessConfig config, AgentProviderConfig provider, AgentModelConfig model, string where, List<string> problems)
     {
+        // 'all' is the word a step's effort uses for every model it does not name (part 04), so no model may take it
+        // as its code: a step could never name it and every map would mean two things.
+        if (string.Equals(model.Code, "all", StringComparison.Ordinal))
+        {
+            problems.Add("'all' cannot be a model's code: a step's effort uses it for every model it does not name");
+        }
+
         if (model.Efforts.Count == 0)
         {
             problems.Add($"{where} takes no efforts; a model's entry names the efforts it takes, each one of its client's levels");

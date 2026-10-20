@@ -44,11 +44,11 @@ public interface IWorkflowValidationService
 
 /// <summary>What checking one declared workflow found.</summary>
 /// <param name="Name">The workflow, as <c>workflows</c> declares it.</param>
-/// <param name="Lines">One line saying what it is, where it holds; one line for each problem, where it does not.</param>
+/// <param name="Lines">One line saying what it is, where it holds, and one line for each of its agents' models and levels; one line for each problem, where it does not.</param>
 public sealed record WorkflowCheck(string Name, IReadOnlyList<string> Lines)
 {
-    /// <summary>Whether it holds: its one line says so.</summary>
-    public bool Holds => Lines is [var line] && WorkflowValidationReport.Holds(line);
+    /// <summary>Whether it holds: its first line says so, whatever its agents' models and levels add under it.</summary>
+    public bool Holds => Lines is [var line, ..] && WorkflowValidationReport.Holds(line);
 
     /// <summary>
     /// The definition that held, as it was read and checked; <see langword="null"/> where it does not hold. What a command
@@ -148,11 +148,15 @@ public sealed class WorkflowValidationService(
             return new WorkflowCheck(name, [$"{Shown(name)} names itself '{definition.Name}'; a workflow's name is its directory's and its file's, said again in the file so a copied directory cannot pass as the workflow it was copied from"]);
         }
 
+        // The configuration's providers, resolved once: the same resolution checks the definition and says each
+        // agent's models and levels where it holds.
+        var resolved = DssHarness.Core.Agents.AgentProviders.Resolve(context.Config);
+
         var problems = new List<string>(WorkflowValidator.Validate(
             definition,
             context.Config.Commit.Template is not null,
             named => Text(named, directory, name),
-            DssHarness.Core.Agents.AgentProviders.Resolve(context.Config).Providers));
+            resolved.Providers));
         problems.AddRange(Files(definition, directory, name, context.Config));
 
         if (problems.Count > 0)
@@ -160,12 +164,18 @@ public sealed class WorkflowValidationService(
             return new WorkflowCheck(name, [.. problems.Select(problem => $"{Shown(name)}: {problem}")]);
         }
 
-        // The recovery is counted apart: its steps run only where something failed.
+        // The recovery is counted apart: its steps run only where something failed. Under the one line that says the
+        // definition holds, each agent's models and the level each runs at, resolved the same check resolved them.
         var steps = Count(definition.Steps);
         var recovering = definition.Recover is { } recover ? Count(recover.Steps) : 0;
         var reasons = Count([.. definition.Steps, .. definition.Recover?.Steps ?? []], "reason");
         var recovery = definition.Recover is null ? string.Empty : $", {recovering} recovering";
-        return new WorkflowCheck(name, [$"ok {Shown(name)} ({steps} step{(steps == 1 ? string.Empty : "s")}{recovery}, {reasons} reasoning)"])
+        return new WorkflowCheck(
+            name,
+            [
+                $"ok {Shown(name)} ({steps} step{(steps == 1 ? string.Empty : "s")}{recovery}, {reasons} reasoning)",
+                .. WorkflowValidator.ModelLevels(definition, resolved.Providers!),
+            ])
         {
             Definition = definition,
             Directory = directory,

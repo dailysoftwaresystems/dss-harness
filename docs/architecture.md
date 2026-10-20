@@ -1276,7 +1276,7 @@ the output a built-in type answers, which `WorkflowStepTypes` holds, the engine'
 the run's own names, which `WorkflowExpressions` holds), every operator held to what it takes
 (`FlowExpression`: `!`, `&&` and `||` a boolean, `==` and `!=` no list and no object, `any` a list
 and a test that yields a boolean, `??` and `empty(...)` anything) and every key to what it reads (a
-`when`, an `until` and a `blocking` a boolean, a `forEach` and a key that takes a list a list) - a value
+`when`, a test step's `filterWhen`, an `until` and a `blocking` a boolean, a `forEach` and a key that takes a list a list) - a value
 refused only where none its reading allows could be what is taken, so that one that may be null is
 the run's to read. How the run stands without its `always` steps (`run.status`, `run.done` and the
 rest) is read by an `always` step alone; a placeholder stands in a key that is a template and is
@@ -1296,7 +1296,13 @@ has nothing to check, and is refused (13), saying that `"workflows": ["implement
 (`WorkflowValidator`), pure, so the engine can run them at the start of a run without reading a
 file: the text of the schemas and prompts a definition names is handed to it by whoever reads them -
 `validate-workflow` from the repository, and the shipped definition from what this build embeds.
-This build checks workflow definitions and
+Against a configuration's providers it also checks every reason step, the advisor and the reporter
+(V38's config half): the tier is one `tierConfig` defines, the model one a provider lists, the client
+reaches the provider, and each model the step may run on is given a level it takes - one level for
+every model, or a map of `all` and models' codes, each model's resolved on its own, a code the step
+does not run on refused as dead, and a step that goes on with another's work checked against the tier
+it inherits. Where the definition holds, the check says each agent's models and the level each runs
+at, one line apiece under the line that says it holds. This build checks workflow definitions and
 does not run them: the engine that runs them - the coordinator, the agents, the steps over the
 services the tool already has - is the next thing the tool grows.
 

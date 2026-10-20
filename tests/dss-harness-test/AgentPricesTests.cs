@@ -42,7 +42,7 @@ public sealed class AgentPricesTests
     };
 
     private static AgentProviderConfig Provider(AgentModelConfig model, double? searches = null)
-        => new() { Name = "zai", Type = "zai", Api = "https://api", ApiKeyName = "KEY", Client = "glm", Currency = "USD", ReadOn = "2026-10-12", PricePerThousandSearches = searches, Models = [model] };
+        => new() { Name = "zai", Type = "zai", Api = "https://api", ApiKeyNames = ["KEY"], Client = "glm", Currency = "USD", ReadOn = "2026-10-12", PricePerThousandSearches = searches, Models = [model] };
 
     /// <summary>Each kind of token is counted at that kind's price per million: input, cache read, output.</summary>
     [Fact]
@@ -152,8 +152,8 @@ public sealed class AgentModelTests
         var text = AgentProviderTemplates.Text();
 
         Assert.Contains("\"readOn\": \"2026-10-12\"", text, StringComparison.Ordinal);
-        Assert.Contains("\"apiKeyName\": \"ANTHROPIC_API_KEY\"", text, StringComparison.Ordinal);
-        Assert.Contains("\"apiKeyName\": \"ZAI_API_KEY\"", text, StringComparison.Ordinal);
+        Assert.Contains("\"apiKeyNames\": [\"ANTHROPIC_API_KEY\"]", text, StringComparison.Ordinal);
+        Assert.Contains("\"apiKeyNames\": [\"ZAI_API_KEY\"]", text, StringComparison.Ordinal);
         Assert.Contains("\"pricePerThousandSearches\": 10", text, StringComparison.Ordinal);
     }
 
@@ -166,6 +166,7 @@ public sealed class AgentModelTests
         Assert.Equal("balanced", config.Defaults.AgentTier);
         Assert.Equal(2, config.Providers.Count);
         Assert.Equal(4, config.TierConfig.Count);
+        Assert.Null(config.BalanceKeyUsage);
 
         // The shipped workflow resolves under what init writes: every step's tier is defined, every effort taken.
         var (resolved, problems) = AgentProviders.Resolve(config);
@@ -173,5 +174,34 @@ public sealed class AgentModelTests
         Assert.Empty(problems);
         Assert.NotNull(resolved);
         Assert.Empty(WorkflowValidator.Validate(WorkflowTemplates.ShippedDefinition(), hasCommitTemplate: false, files: null, resolved));
+    }
+
+    /// <summary>
+    /// The shipped workflow fails V38 with any one of its <c>glm-5.3: max</c> entries taken out: GLM 5.3 would run at
+    /// the level <c>all</c> gives it, which it does not take, and the refusal names the level to give it.
+    /// </summary>
+    [Fact]
+    public void TheShippedWorkflow_FailsWithAnyOneOfItsGlmMaxEntriesTakenOut()
+    {
+        var (resolved, problems) = AgentProviders.Resolve(DefaultConfigFactory.Create([], "windows", "x64"));
+
+        Assert.Empty(problems);
+
+        var text = WorkflowTemplates.TextOf("implementation.yml");
+        Assert.NotNull(text);
+
+        // The first of the workflow's glm-5.3: max entries - the plan step's, on the tier best - taken out alone.
+        var lines = text.Split('\n');
+        var at = Array.FindIndex(lines, held => held.TrimStart().StartsWith("glm-5.3:", StringComparison.Ordinal));
+
+        Assert.True(at >= 0, "the shipped workflow holds a glm-5.3 effort entry");
+
+        var without = string.Join("\n", lines.Where((_, index) => index != at));
+
+        var parsed = WorkflowFileParser.Parse("implementation.yml", without);
+
+        Assert.Contains(
+            WorkflowValidator.Validate(parsed, hasCommitTemplate: false, files: WorkflowTemplates.TextOf, resolved),
+            problem => problem.EndsWith("step 'planning.plan' runs 'glm-5.3' (tier 'best') at effort 'xhigh', which it does not take. It takes: low, high, max. Give it a level of its own under effort: glm-5.3: max", StringComparison.Ordinal));
     }
 }

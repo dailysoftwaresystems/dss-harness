@@ -133,7 +133,7 @@ public sealed record FlowBudget(double? Usd, long? Tokens, double? Minutes, int?
 /// <param name="Prompt">The prompt file the recommendation is asked with.</param>
 /// <param name="Tier">A name for a class of model, resolved by the configuration's tiers.</param>
 /// <param name="Model">The model outright, whose provider, key and client follow from it.</param>
-/// <param name="Effort">The effort the model is asked for.</param>
+/// <param name="Effort">The effort the model is asked for: one level, or <see langword="null"/> where <see cref="FlowAdvisor.EffortByModel"/> holds the map.</param>
 /// <param name="Client">The client, where the provider is reached two ways.</param>
 /// <param name="Kinds">The question kinds this advisor is asked about; every one, where the file says nothing.</param>
 public sealed record FlowAdvisor(
@@ -150,6 +150,12 @@ public sealed record FlowAdvisor(
 
     /// <summary>The seconds it waits before it is tried again, doubling, where the file says.</summary>
     public int? BackoffSeconds { get; init; } = null;
+
+    /// <summary>
+    /// The effort for each model by its code, where the effort is a map: <c>all</c> gives every model the map does not
+    /// name. One level in <see cref="FlowAdvisor.Effort"/> reads as <c>{all: that level}</c>.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? EffortByModel { get; init; } = null;
 }
 
 /// <summary>The agent that words what a run is doing for a person who asks.</summary>
@@ -158,7 +164,7 @@ public sealed record FlowAdvisor(
 /// <param name="AskPrompt">The prompt file a free question is answered with.</param>
 /// <param name="Tier">A name for a class of model, resolved by the configuration's tiers.</param>
 /// <param name="Model">The model outright, whose provider, key and client follow from it.</param>
-/// <param name="Effort">The effort the model is asked for.</param>
+/// <param name="Effort">The effort the model is asked for: one level, or <see langword="null"/> where <see cref="FlowReporter.EffortByModel"/> holds the map.</param>
 /// <param name="Client">The client, where the provider is reached two ways.</param>
 public sealed record FlowReporter(
     string Agent,
@@ -174,6 +180,12 @@ public sealed record FlowReporter(
 
     /// <summary>The seconds it waits before it is tried again, doubling, where the file says.</summary>
     public int? BackoffSeconds { get; init; } = null;
+
+    /// <summary>
+    /// The effort for each model by its code, where the effort is a map: <c>all</c> gives every model the map does not
+    /// name. One level in <see cref="FlowReporter.Effort"/> reads as <c>{all: that level}</c>.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? EffortByModel { get; init; } = null;
 }
 
 /// <summary>Everything a workflow says about a request amended, or an answer changed, while a run works.</summary>
@@ -344,8 +356,18 @@ public sealed record WorkflowStep
     /// <summary>The model outright, whose provider, key and client follow from it.</summary>
     public string? Model { get; init; } = null;
 
-    /// <summary>The effort the model is asked for.</summary>
+    /// <summary>
+    /// The effort the model is asked for: one level for every model the step may run on, or <see langword="null"/>
+    /// where <see cref="EffortByModel"/> holds a level for each.
+    /// </summary>
     public string? Effort { get; init; } = null;
+
+    /// <summary>
+    /// The effort for each model the step may run on, by its code, where the effort is a map: <c>all</c> gives every
+    /// model the map does not name, and a model named by no entry and by no <c>all</c> runs at its own default.
+    /// <see cref="WorkflowStep.Effort"/> given one level reads as <c>{all: that level}</c>.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? EffortByModel { get; init; } = null;
 
     /// <summary>The client, where the provider is reached two ways.</summary>
     public string? Client { get; init; } = null;
@@ -427,6 +449,12 @@ public sealed record WorkflowStep
 
     /// <summary>The test filter a test step passes on, a template.</summary>
     public string? Filter { get; init; } = null;
+
+    /// <summary>
+    /// An expression that says whether the step's <see cref="Filter"/> is given: where it reads false the step gives no
+    /// filter and every test of its legs runs; absent, the filter is given as written.
+    /// </summary>
+    public string? FilterWhen { get; init; } = null;
 
     /// <summary>The tests a test step leaves out, by name, each a template.</summary>
     public IReadOnlyList<string> Exclude { get; init; } = [];

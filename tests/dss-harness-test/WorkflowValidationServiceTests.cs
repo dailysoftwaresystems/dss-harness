@@ -16,8 +16,9 @@ namespace DssHarness.Tests;
 public sealed class WorkflowValidationServiceTests
 {
     /// <summary>
-    /// The implementation workflow, initialized into a repository and declared in its config, passes its check: the one line
-    /// says what it is, and the outcome says every one checked.
+    /// The implementation workflow, initialized into a repository and declared in its config, passes its check: the one
+    /// line says what it is, and under it each reason step's models and the level each runs at - the plan's own among
+    /// them, xhigh on Fable 5.1 and max on GLM 5.3 - and the outcome says every one checked.
     /// </summary>
     [Fact]
     public async Task TheImplementationWorkflow_InitializedIntoARepository_PassesItsCheck()
@@ -28,7 +29,12 @@ public sealed class WorkflowValidationServiceTests
         var report = await Service(repository).CheckAsync(repository.Path, named: null, cancellationToken);
 
         Assert.True(report.Passed);
-        Assert.Equal($"ok {Shown(Default)} (80 steps, 46 recovering, 46 reasoning)", Assert.Single(report.Lines));
+        Assert.Equal($"ok {Shown(Default)} (80 steps, 46 recovering, 46 reasoning)", report.Lines[0]);
+        Assert.Contains("step 'planning.plan' (best): claude-fable-5-1 at xhigh, glm-5.3 at max", report.Lines);
+        Assert.Contains("step 'intake.triage' (high): claude-opus-5-5 at high, glm-5.3 at high", report.Lines);
+        Assert.All(
+            report.Lines.Skip(1),
+            line => Assert.True(line.StartsWith("step ", StringComparison.Ordinal) || line.StartsWith("advisor ", StringComparison.Ordinal) || line.StartsWith("reporter ", StringComparison.Ordinal), $"a level line: {line}"));
 
         var outcome = WorkflowValidationReports.Render(report, json: false);
 
@@ -117,15 +123,18 @@ public sealed class WorkflowValidationServiceTests
 
         var report = await Service(repository).CheckAsync(repository.Path, named: null, cancellationToken);
 
+        Assert.Equal($"ok {Shown(Default)} (80 steps, 46 recovering, 46 reasoning)", report.Lines[0]);
+        Assert.All(
+            report.Lines.Skip(1).TakeWhile(line => !line.StartsWith(Shown("small"), StringComparison.Ordinal)),
+            line => Assert.True(line.StartsWith("step ", StringComparison.Ordinal) || line.StartsWith("advisor ", StringComparison.Ordinal) || line.StartsWith("reporter ", StringComparison.Ordinal), $"a level line: {line}"));
         Assert.Equal(
             [
-                $"ok {Shown(Default)} (80 steps, 46 recovering, 46 reasoning)",
                 $"{Shown("small")}: 'agents/implementer.md', step 'make''s agent, is not at '.harness-config/workflows/small/agents/implementer.md'; write it there, beside the definition that names it",
                 $"{Shown("small")}: 'agents/worker.md', step 'draft''s agent, is not at '.harness-config/workflows/small/agents/worker.md'; write it there, beside the definition that names it",
                 $"{Shown("small")}: 'prompts/work.md', step 'draft''s prompt, is not at '.harness-config/workflows/small/prompts/work.md'; write it there, beside the definition that names it",
                 $"{Shown("small")}: 'schemas/work.json', step 'draft''s outputs, is not at '.harness-config/workflows/small/schemas/work.json'; write it there, beside the definition that names it",
             ],
-            report.Lines);
+            report.Lines.Skip(1).SkipWhile(line => line.StartsWith("step ", StringComparison.Ordinal) || line.StartsWith("advisor ", StringComparison.Ordinal) || line.StartsWith("reporter ", StringComparison.Ordinal)));
         Assert.Equal([true, false], report.Workflows.Select(workflow => workflow.Holds));
 
         var outcome = WorkflowValidationReports.Render(report, json: false);
@@ -457,12 +466,11 @@ public sealed class WorkflowValidationServiceTests
         var held = new Held(repository.Harness.FileSystem, Path.Combine(repository.Path, ".harness-config", "workflows", "small", "small.yml"), denied);
         var report = await Service(repository, held).CheckAsync(repository.Path, named: null, cancellationToken);
 
-        Assert.Equal(
-            [
-                $"{Shown("small")} could not be read: {Held.Why}",
-                $"ok {Shown(Default)} (80 steps, 46 recovering, 46 reasoning)",
-            ],
-            report.Lines);
+        Assert.Equal($"{Shown("small")} could not be read: {Held.Why}", report.Lines[0]);
+        Assert.Equal($"ok {Shown(Default)} (80 steps, 46 recovering, 46 reasoning)", report.Lines[1]);
+        Assert.All(
+            report.Lines.Skip(2),
+            line => Assert.True(line.StartsWith("step ", StringComparison.Ordinal) || line.StartsWith("advisor ", StringComparison.Ordinal) || line.StartsWith("reporter ", StringComparison.Ordinal), $"a level line: {line}"));
     }
 
     /// <summary>A schema the disk will not give up is a problem naming it, with the disk's reason, as a missing one is.</summary>

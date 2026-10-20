@@ -20,13 +20,14 @@ public sealed class AgentProviderTests
         string client = "glm",
         string currency = "USD",
         string readOn = "2026-10-12",
+        List<string>? keys = null,
         List<AgentModelConfig>? models = null)
         => new()
         {
             Name = name,
             Type = type,
             Api = api,
-            ApiKeyName = key,
+            ApiKeyNames = keys ?? [key],
             Client = client,
             Currency = currency,
             ReadOn = readOn,
@@ -57,10 +58,15 @@ public sealed class AgentProviderTests
         };
 
     /// <summary>The sections resolved over one provider and one tier.</summary>
-    private static (AgentProviders? Providers, IReadOnlyList<string> Problems) Resolve(List<AgentProviderConfig>? providers = null, Dictionary<string, List<string>>? tiers = null, string? agentTier = "balanced")
+    private static (AgentProviders? Providers, IReadOnlyList<string> Problems) Resolve(
+        List<AgentProviderConfig>? providers = null,
+        Dictionary<string, List<string>>? tiers = null,
+        string? agentTier = "balanced",
+        bool? balanceKeyUsage = null)
         => AgentProviders.Resolve(new HarnessConfig
         {
             Defaults = new HarnessDefaults { AgentTier = agentTier },
+            BalanceKeyUsage = balanceKeyUsage,
             Providers = providers ?? [Provider()],
             TierConfig = tiers ?? new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase) { ["balanced"] = ["glm-5.3"] },
         });
@@ -81,9 +87,57 @@ public sealed class AgentProviderTests
 
         Assert.Equal("zai", found.Provider.Name);
         Assert.Equal("https://api.z.ai/api/paas/v4", found.Provider.Api);
-        Assert.Equal("ZAI_API_KEY", found.Provider.ApiKeyName);
+        Assert.Equal(["ZAI_API_KEY"], found.Provider.ApiKeyNames);
         Assert.Equal("glm", found.Provider.Client);
         Assert.Equal(["glm-5.3"], [.. providers.ModelsOf("balanced").Select(entry => entry.Model.Code)]);
+    }
+
+    /// <summary>A provider's keys are a list, in the order they are tried: each listed once, at least one, each a variable's name.</summary>
+    [Fact]
+    public void AProvidersKeys_AreAListTriedInOrder()
+    {
+        var (two, problems) = Resolve([Provider(keys: ["ZAI_API_KEY", "ZAI_API_KEY_TWO"])]);
+
+        Assert.Empty(problems);
+        Assert.Equal(["ZAI_API_KEY", "ZAI_API_KEY_TWO"], two!.Of("glm-5.3")!.Value.Provider.ApiKeyNames);
+
+        var (_, twice) = Resolve([Provider(keys: ["ZAI_API_KEY", "ZAI_API_KEY"])]);
+        One(twice, @"provider 'zai' lists 'ZAI_API_KEY' twice in apiKeyNames: each key is listed once");
+
+        var (_, none) = Resolve([Provider(keys: [])]);
+        One(none, @"providers[0] 'zai' declares no apiKeyNames; a provider's keys are at least one variable's name, in the order they are tried");
+
+        var (_, notAName) = Resolve([Provider(keys: ["zai-key"])]);
+        One(notAName, @"providers[0] 'zai' apiKeyNames 'zai-key' is not a variable's name: [A-Z][A-Z0-9_]*, a name and never a key");
+    }
+
+    /// <summary>'all' is the word a step's effort uses for every model it does not name, so no model may take it as its code.</summary>
+    [Fact]
+    public void TheCodeAll_IsNoModelsCode()
+    {
+        var (_, problems) = Resolve([Provider(models: [Model(code: "all")])],
+            tiers: new(StringComparer.OrdinalIgnoreCase) { ["balanced"] = ["all"] });
+
+        One(problems, @"'all' cannot be a model's code: a step's effort uses it for every model it does not name");
+    }
+
+    /// <summary>balanceKeyUsage is refused where it is on and a provider with two keys or more lists a model with no price; one key is nothing to balance, and off is never refused.</summary>
+    [Fact]
+    public void BalanceKeyUsage_IsRefusedWhereASpendCouldNotBeCounted()
+    {
+        var unpriced = Provider(keys: ["ZAI_API_KEY", "ZAI_API_KEY_TWO"], models: [Model(miss: null, outputPrice: null)]);
+
+        var (_, on) = Resolve([unpriced], balanceKeyUsage: true);
+        One(on, @"balanceKeyUsage balances the keys of 'zai' by what each spent, and 'glm-5.3' has no price (providers 'zai', model 'glm-5.3': priceInputMiss, priceOutput). Price it, or turn balanceKeyUsage off");
+
+        var (_, oneKey) = Resolve([Provider(models: [Model(miss: null, outputPrice: null)])], balanceKeyUsage: true);
+        Assert.Empty(oneKey);
+
+        var (_, off) = Resolve([unpriced], balanceKeyUsage: false);
+        Assert.Empty(off);
+
+        var (_, leftOut) = Resolve([unpriced]);
+        Assert.Empty(leftOut);
     }
 
     /// <summary>A config that declares no providers has no model: a step that needs one is told what to add, and nothing is built in.</summary>
@@ -120,7 +174,7 @@ public sealed class AgentProviderTests
         ],
         tiers: new(StringComparer.OrdinalIgnoreCase) { ["balanced"] = ["glm-5.3", "other"] });
 
-        One(appointed, @"providers 'zai' and 'zai-two' both appoint 'ZAI_API_KEY' for their key: a second key is another variable's name");
+        One(appointed, @"providers 'zai' and 'zai-two' both appoint 'ZAI_API_KEY' for a key: a second key is another variable's name");
     }
 
     /// <summary>A model's code is listed once, across every provider.</summary>
@@ -151,7 +205,7 @@ public sealed class AgentProviderTests
         One(api, @"providers[0] 'zai' api 'api.z.ai' is no absolute https address; an address is the company's own or a gateway's, and http only for localhost");
 
         var (_, key) = Resolve([Provider(key: "zai-key")]);
-        One(key, @"providers[0] 'zai' apiKeyName 'zai-key' is not a variable's name: [A-Z][A-Z0-9_]*, a name and never a key");
+        One(key, @"providers[0] 'zai' apiKeyNames 'zai-key' is not a variable's name: [A-Z][A-Z0-9_]*, a name and never a key");
 
         var (_, none) = Resolve([Provider(models: [])]);
         One(none, @"providers[0] 'zai' declares no models; a provider is the models it lists, and it lists at least one");

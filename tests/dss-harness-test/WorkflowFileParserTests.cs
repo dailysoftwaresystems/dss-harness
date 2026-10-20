@@ -80,6 +80,93 @@ public sealed class WorkflowFileParserTests
     }
 
     /// <summary>
+    /// An effort is one level, for every model the owner may run on, or a map whose keys are <c>all</c> and models'
+    /// codes: the map is read as written, a code twice in it is refused, and a map with no entry is refused as a key
+    /// given nothing - on a step, the advisor and the reporter alike.
+    /// </summary>
+    [Fact]
+    public void AnEffort_IsOneLevelOrAMapOfAllAndModelsCodes()
+    {
+        var step = Parse("""
+            name: x
+            steps:
+              - name: plan
+                type: reason
+                agent: thinker
+                tier: best
+                effort:
+                  all: xhigh
+                  glm-5.3: max
+                prompt: prompts/think.md
+                outputs: schemas/think.json
+            """);
+
+        Assert.NotNull(step);
+        Assert.Null(step!.Steps[0].Effort);
+        Assert.Equal(new Dictionary<string, string>(StringComparer.Ordinal) { ["all"] = "xhigh", ["glm-5.3"] = "max" }, step.Steps[0].EffortByModel);
+
+        // One level reads as one level: the map is null, and effort holds it.
+        var one = Parse("""
+            name: x
+            steps:
+              - name: plan
+                type: reason
+                agent: thinker
+                tier: best
+                effort: high
+                prompt: prompts/think.md
+                outputs: schemas/think.json
+            """);
+
+        Assert.NotNull(one);
+        Assert.Equal("high", one!.Steps[0].Effort);
+        Assert.Null(one.Steps[0].EffortByModel);
+
+        // A code twice in the map, and a map with no entry: each refused, and the advisor takes the same forms.
+        Assert.Equal(
+            [
+                "line 9, column 7: 'plan.effort' names 'glm-5.3' more than once",
+                "line 15, column 11: 'advisor.effort' holds no entry; a map of efforts names all or a model's code, each with the level it runs at",
+            ],
+            Problems(
+                """
+                name: x
+                steps:
+                  - name: plan
+                    type: reason
+                    agent: thinker
+                    effort:
+                      all: high
+                      glm-5.3: max
+                      !!str glm-5.3: low
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                advisor:
+                  agent: advisor
+                  prompt: prompts/recommend.md
+                  effort: {}
+                """));
+    }
+
+    /// <summary>A test step's filterWhen is an expression key: read as written, never a template, and refused where its value is no single one.</summary>
+    [Fact]
+    public void ATestStepsFilterWhen_IsAnExpressionKey()
+    {
+        var step = Parse("""
+            name: x
+            steps:
+              - name: verify
+                type: test
+                filter: '{item.testFilter}'
+                filterWhen: "input.affectedTests == 'on'"
+            """);
+
+        Assert.NotNull(step);
+        Assert.Equal("input.affectedTests == 'on'", step!.Steps[0].FilterWhen);
+        Assert.Equal("{item.testFilter}", step.Steps[0].Filter);
+    }
+
+    /// <summary>
     /// A step is raised by a pre-existing issue and nothing else, and sends one to fix to the recovery and nowhere else:
     /// any other value of raised or onAddress is refused, naming the one it takes.
     /// </summary>

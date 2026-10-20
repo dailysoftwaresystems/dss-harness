@@ -166,6 +166,49 @@ public sealed class FlowCoordinatorTests
         Assert.Equal(["plan", "c-first", "a-second", "items[0].work", "items[1].work"], runner.Started);
     }
 
+    /// <summary>
+    /// A test step's filterWhen, where it reads false, gives the step's runner no filter and fills no template: every
+    /// test of the step's legs runs. Where it reads true, the filter is given as written; absent, it is given too.
+    /// </summary>
+    [Fact]
+    public async Task ATestStepsFilterWhen_GivesTheRunnerNoFilterWhereItReadsFalse()
+    {
+        var definition = Parse("""
+            name: flow
+            inputs:
+              - name: affectedTests
+                options: ['on', 'off']
+                default: 'off'
+            steps:
+              - name: verify
+                type: test
+                filter: 'fast-only'
+                filterWhen: "input.affectedTests == 'on'"
+            """);
+
+        var off = new FakeRunner();
+        _ = await new FlowCoordinator(definition, off, new RunnerFacts(), new JumpingClock()).RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Null(off.Runs.Single().Step.Filter);
+
+        var on = new FakeRunner();
+        _ = await new FlowCoordinator(definition, on, new RunnerFacts(), new JumpingClock(), inputs: new Dictionary<string, string>(StringComparer.Ordinal) { ["affectedTests"] = "on" }).RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("fast-only", on.Runs.Single().Step.Filter);
+
+        var absent = Parse("""
+            name: flow
+            steps:
+              - name: verify
+                type: test
+                filter: 'fast-only'
+            """);
+        var given = new FakeRunner();
+        _ = await new FlowCoordinator(absent, given, new RunnerFacts(), new JumpingClock()).RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("fast-only", given.Runs.Single().Step.Filter);
+    }
+
     /// <summary>A step waits for its dependency until that dependency ends, and then runs.</summary>
     [Fact]
     public async Task AStepWaitsForItsDependency_UntilItEnds()

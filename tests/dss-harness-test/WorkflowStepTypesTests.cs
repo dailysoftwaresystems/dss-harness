@@ -198,7 +198,7 @@ public sealed class WorkflowStepTypesTests
     public void TheKeysHoldingAnExpression_AreOneListEach_AndEachIsAStepsKey()
     {
         Assert.Equal(
-            ["when", "forEach", "repeat.until", "repeat.blocking", "repeat.leftover", "items", "scope", "questions", "preAnswer.when", "preAnswer.quote.text"],
+            ["when", "filterWhen", "forEach", "repeat.until", "repeat.blocking", "repeat.leftover", "items", "scope", "questions", "preAnswer.when", "preAnswer.quote.text"],
             WorkflowStepTypes.ExpressionKeys);
         Assert.Equal(
             ["writes", "within", "paths", "except", "stale", "merge", "rows", "allow.new", "allow.merge"],

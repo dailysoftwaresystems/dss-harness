@@ -3,7 +3,7 @@
   "providers": [
     {
       "name": "anthropic", "type": "anthropic", "api": "https://api.anthropic.com",
-      "apiKeyName": "ANTHROPIC_API_KEY", "client": "claude-code",
+      "apiKeyNames": ["ANTHROPIC_API_KEY"], "client": "claude-code",
       "currency": "USD", "readOn": "2026-10-12",
       "source": "https://platform.claude.com/docs/en/about-claude/pricing",
       "pricePerThousandSearches": 10,
@@ -26,7 +26,7 @@
     },
     {
       "name": "zai", "type": "zai", "api": "https://api.z.ai/api/paas/v4",
-      "apiKeyName": "ZAI_API_KEY", "client": "glm",
+      "apiKeyNames": ["ZAI_API_KEY"], "client": "glm",
       "currency": "USD", "readOn": "2026-10-12", "source": "https://docs.z.ai/guides/overview/pricing",
       "models": [
         { "code": "glm-5.3", "name": "GLM 5.3", "tiers": ["best", "high", "balanced", "fast"],

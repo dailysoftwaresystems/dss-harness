@@ -62,6 +62,7 @@ public static class HelpTopics
         new("worktrees", ["worktree"], "Naming rules, the path budget, and when deleting refuses", RenderWorktrees),
         new("orchestrators", ["orchestrator", "agents", "agent"], "Orchestrators, their agents, and folding an agent's work", RenderOrchestrators),
         new("workflows", ["workflow"], "Workflow definitions: what config.json declares and the yml file defines", RenderWorkflows),
+        new("agent-clients", ["clients", "models"], "Providers, models, tiers and keys in config.json", RenderAgentClients),
         new("anchors", ["anchor"], "Anchor registries and the commands that change them", RenderAnchors),
         new("layout", [], "What init creates, and what git tracks", RenderLayout),
         new("secrets", ["hosts-secrets"], "Where each host's connection data lives", RenderSecrets),
@@ -2332,6 +2333,50 @@ public static class HelpTopics
         return builder.ToString();
     }
 
+    /// <summary>
+    /// The agent sections of config.json: the companies whose models the tool reaches, their keys in the git-ignored
+    /// slot, the tiers a step runs on and the effort forms - said where a person reads them, before the clients that
+    /// reach the companies are built (nothing here runs a step).
+    /// </summary>
+    private static string RenderAgentClients()
+    {
+        var builder = new StringBuilder();
+
+        builder.AppendLine("Agent clients");
+        builder.AppendLine();
+        builder.AppendLine("The companies whose models this tool reaches are declared in config.json, under");
+        builder.AppendLine("providers, and nothing of a model is in the tool's code: a model's entry says what it");
+        builder.AppendLine("takes (its efforts), what it holds (its context and its output) and what it costs (its");
+        builder.AppendLine("prices, with the date they were read); a model's code is listed once across every");
+        builder.AppendLine("provider, so naming a model is enough - its code says its provider, its API's address,");
+        builder.AppendLine("its keys' names and its client.");
+        builder.AppendLine();
+        builder.AppendLine("A provider's keys are a list, apiKeyNames: the names of the variables that hold its");
+        builder.AppendLine($"keys in the git-ignored slot {HarnessLayout.WorkflowsDirectoryRelative}/.env/, at least one, in the");
+        builder.AppendLine("order they are tried - a name and never a key, and a second key of one company is a second");
+        builder.AppendLine("name in the list. A key is chosen when a run starts its steps: the first the slot holds,");
+        builder.AppendLine("unless balanceKeyUsage is on (off unless turned on), where a step starts on the one that");
+        builder.AppendLine("has spent least in the last seven days, counted back from the moment it starts, and its");
+        builder.AppendLine("conversation stays with one account. What a key spent is what the engine counts for each");
+        builder.AppendLine("request served with it, at the configuration's prices, recorded by the key's name in the");
+        builder.AppendLine("repository's records; what the same key spends elsewhere - another repository, another");
+        builder.AppendLine("machine, another tool - is not seen.");
+        builder.AppendLine();
+        builder.AppendLine("The tiers a step runs on are tierConfig's: each tier its models in the order they are");
+        builder.AppendLine("tried, the first serving a step on the tier and the rest its fallback. A step's effort is");
+        builder.AppendLine("its own - one level for every model of its tier, or a map giving each its own: all for the");
+        builder.AppendLine("rest, a model's code for one. Each model's level is checked against what that model takes");
+        builder.AppendLine("when the definition is checked, a level it does not take refused naming the level to give");
+        builder.AppendLine("it instead; validate-workflow says every step's models and levels under the line that says");
+        builder.AppendLine("it holds.");
+        builder.AppendLine();
+        builder.AppendLine("This build checks configurations and definitions against these sections and writes them with");
+        builder.AppendLine($"init (and '{ToolPackage.Command} init' writes the prices it holds, as read on their date); the");
+        builder.AppendLine("clients that reach the companies are what it builds next, and nothing here runs a step.");
+
+        return builder.ToString();
+    }
+
     private static string RenderAnchors()
     {
         var defaults = new AnchorSettings();
@@ -2933,7 +2978,7 @@ public static class HelpTopics
         builder.AppendLine("step is skippable; or abort.");
         builder.AppendLine();
         builder.AppendLine("An issue a reasoning step meets that was there before the run, it reports in its answer");
-        builder.AppendLine("(preExisting) and never fixes itself; onPreExisting names the step of the flow's top level");
+        builder.AppendLine($"(preExisting) and never fixes itself; onPreExisting names the step of the flow's top level");
         builder.AppendLine($"that triages each one. That step says raised: {WorkflowStep.RaisedByPreExisting} - it is raised once per issue and never");
         builder.AppendLine("scheduled, as the recovery is not - and onAddress: recover: it reproduces the issue on the");
         builder.AppendLine("run's base commit, gives the recovery one that is in a step's way, related to the work or");
@@ -2941,6 +2986,16 @@ public static class HelpTopics
         builder.AppendLine("and lists the rest, proven, with a title and a description, in the run's");
         builder.AppendLine("pre-existing-issues.json, shown at the end. Where a workflow has such a step, every other");
         builder.AppendLine("reasoning step names it, so no issue is lost.");
+        builder.AppendLine();
+        builder.AppendLine("A reasoning step names its tier or its model and its effort: one level for every model it");
+        builder.AppendLine("may run on, or a map giving each its own - all for the rest, a model's code for one, so a");
+        builder.AppendLine("step can run its Claude model at xhigh and GLM 5.3 at max, the highest it takes. Each");
+        builder.AppendLine("model's level is checked against what that model takes when the definition is checked");
+        builder.AppendLine("against the configuration's providers ('help agent-clients'), and validate-workflow says");
+        builder.AppendLine("every step's models and levels under the line that says it holds. A test step's filterWhen");
+        builder.AppendLine("is an expression that switches its filter: where it reads false the step gives no filter and");
+        builder.AppendLine("every test of its legs runs, as the shipped verify steps do where the run's input");
+        builder.AppendLine("affectedTests is off (on with --input affectedTests=on, each item tested on its own tests).");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -3197,6 +3252,17 @@ public static class HelpTopics
         builder.AppendLine("  mutations      the mutation arms registry, its texts, the workers a leg sweeps");
         builder.AppendLine("                 with, its test binaries' report, and what each runner reads at");
         builder.AppendLine("                 run time, part of each arm's key ('help mutations')");
+        builder.AppendLine("  providers      the companies whose models the tool reaches, each with its models: a");
+        builder.AppendLine("                 model's API address, its keys' variable names (apiKeyNames, in the");
+        builder.AppendLine("                 order they are tried), its client, its efforts, its sizes and its");
+        builder.AppendLine("                 prices, with the date they were read - nothing of a model is in the");
+        builder.AppendLine("                 tool's code ('help agent-clients')");
+        builder.AppendLine("  tierConfig     each tier's models in the order they are tried: the first serves a");
+        builder.AppendLine("                 step on the tier, the rest are its fallback; defaults.agentTier");
+        builder.AppendLine("                 (balanced, as init writes it) is the tier of a step naming neither");
+        builder.AppendLine("  balanceKeyUsage  off unless turned on: a provider's keys balanced by what each");
+        builder.AppendLine("                 spent in the last seven days, a step starting on the one that spent");
+        builder.AppendLine("                 least");
         builder.AppendLine();
         builder.AppendLine("A list whose absence means every one of what it names, or a set the tool chooses, is");
         builder.AppendLine("refused given empty, as --legs given no name is: a runner's legs and steps; a tool's");

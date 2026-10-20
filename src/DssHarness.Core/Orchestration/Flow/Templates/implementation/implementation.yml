@@ -32,7 +32,7 @@ pushCheckpoints: false
 recommendations: recommendations.md
 advisor:
   agent: advisor
-  tier: best
+  tier: high
   effort: high
   prompt: prompts/recommend.md
   retries: 3
@@ -89,6 +89,10 @@ inputs:
   - name: backlog
     description: A tracked file of work to choose from, and where what the reviews and the audit left is written; empty, there is none.
     default: ''
+  - name: affectedTests
+    description: 'on: each work item is tested on the tests its change affects, the filter its plan names, and every test runs once every item of the round is built. off: every test runs for each item.'
+    options: ['on', 'off']
+    default: 'off'
 steps:
   - name: orient
     type: orient
@@ -117,7 +121,7 @@ steps:
       - name: priority
         type: reason
         agent: prioritizer
-        tier: best
+        tier: high
         effort: high
         when: 'empty(input.request)'
         retries: 3
@@ -129,7 +133,7 @@ steps:
       - name: triage
         type: reason
         agent: triage
-        tier: best
+        tier: high
         effort: high
         ask: true
         dependsOn: [priority]
@@ -161,7 +165,9 @@ steps:
         type: reason
         agent: planner
         tier: best
-        effort: max
+        effort:
+          all: xhigh      # every model of the tier but the ones named below
+          glm-5.3: max    # GLM 5.3, which takes no xhigh
         ask: true
         resume: plan
         retries: 3
@@ -180,8 +186,10 @@ steps:
       - name: plan-audit
         type: reason
         agent: plan-auditor
-        tier: best
-        effort: max
+        tier: high
+        effort:
+          all: xhigh      # every model of the tier but the ones named below
+          glm-5.3: max    # GLM 5.3, which takes no xhigh
         independent: true
         dependsOn: [check]
         retries: 3
@@ -261,7 +269,9 @@ steps:
             type: reason
             agent: implementer
             tier: balanced
-            effort: max
+            effort:
+              all: xhigh      # every model of the tier but the ones named below
+              glm-5.3: max    # GLM 5.3, which takes no xhigh
             access: write
             in: item-agent
             writes: 'item.ownedPaths'
@@ -276,7 +286,9 @@ steps:
             type: reason
             agent: implementer
             tier: balanced
-            effort: max
+            effort:
+              all: xhigh      # every model of the tier but the ones named below
+              glm-5.3: max    # GLM 5.3, which takes no xhigh
             access: write
             in: item-agent
             writes: 'item.ownedPaths'
@@ -290,7 +302,9 @@ steps:
             type: reason
             agent: implementer
             tier: balanced
-            effort: max
+            effort:
+              all: xhigh      # every model of the tier but the ones named below
+              glm-5.3: max    # GLM 5.3, which takes no xhigh
             access: write
             in: item-agent
             writes: 'item.ownedPaths'
@@ -329,6 +343,7 @@ steps:
             type: test
             in: item-agent
             filter: '{item.testFilter}'
+            filterWhen: "input.affectedTests == 'on'"
             dependsOn: [item-blocked]
             when: "orient.hasLegs && (item-blocked.answer ?? 'continue') != 'skip'"
             onFailure: recover
@@ -473,8 +488,10 @@ steps:
                   - name: correctness
                     type: reason
                     agent: reviewer-correctness
-                    tier: best
-                    effort: max
+                    tier: high
+                    effort:
+                      all: xhigh      # every model of the tier but the ones named below
+                      glm-5.3: max    # GLM 5.3, which takes no xhigh
                     independent: true
                     retries: 3
                     backoffSeconds: 30
@@ -485,8 +502,10 @@ steps:
                   - name: errors
                     type: reason
                     agent: reviewer-errors
-                    tier: best
-                    effort: max
+                    tier: high
+                    effort:
+                      all: xhigh      # every model of the tier but the ones named below
+                      glm-5.3: max    # GLM 5.3, which takes no xhigh
                     independent: true
                     when: 'review-scope.errors'
                     retries: 3
@@ -498,8 +517,10 @@ steps:
                   - name: tests
                     type: reason
                     agent: reviewer-tests
-                    tier: best
-                    effort: max
+                    tier: high
+                    effort:
+                      all: xhigh      # every model of the tier but the ones named below
+                      glm-5.3: max    # GLM 5.3, which takes no xhigh
                     independent: true
                     when: 'review-scope.tests'
                     retries: 3
@@ -565,6 +586,7 @@ steps:
                     type: test
                     in: item-agent
                     filter: '{item.testFilter}'
+                    filterWhen: "input.affectedTests == 'on'"
                     dependsOn: [rework]
                     when: 'orient.hasLegs'
                     onFailure: recover
@@ -722,8 +744,10 @@ steps:
       - name: self-audit
         type: reason
         agent: auditor
-        tier: best
-        effort: max
+        tier: high
+        effort:
+          all: xhigh      # every model of the tier but the ones named below
+          glm-5.3: max    # GLM 5.3, which takes no xhigh
         independent: true
         dependsOn: [gate, mutations]
         retries: 3
@@ -881,7 +905,7 @@ recover:
     - name: diagnose
       type: reason
       agent: diagnostician
-      tier: best
+      tier: high
       effort: high
       resume: diagnose
       retries: 3
@@ -926,7 +950,9 @@ recover:
           type: reason
           agent: implementer
           tier: balanced
-          effort: max
+          effort:
+            all: xhigh      # every model of the tier but the ones named below
+            glm-5.3: max    # GLM 5.3, which takes no xhigh
           access: write
           in: item-agent
           writes: 'item.ownedPaths'
@@ -965,6 +991,7 @@ recover:
           type: test
           in: item-agent
           filter: '{item.testFilter}'
+          filterWhen: "input.affectedTests == 'on'"
           dependsOn: [item-blocked]
           when: "orient.hasLegs && (item-blocked.answer ?? 'continue') != 'skip'"
         - name: mend
@@ -1101,8 +1128,10 @@ recover:
                 - name: correctness
                   type: reason
                   agent: reviewer-correctness
-                  tier: best
-                  effort: max
+                  tier: high
+                  effort:
+                    all: xhigh      # every model of the tier but the ones named below
+                    glm-5.3: max    # GLM 5.3, which takes no xhigh
                   independent: true
                   retries: 3
                   backoffSeconds: 30
@@ -1113,8 +1142,10 @@ recover:
                 - name: errors
                   type: reason
                   agent: reviewer-errors
-                  tier: best
-                  effort: max
+                  tier: high
+                  effort:
+                    all: xhigh      # every model of the tier but the ones named below
+                    glm-5.3: max    # GLM 5.3, which takes no xhigh
                   independent: true
                   when: 'review-scope.errors'
                   retries: 3
@@ -1126,8 +1157,10 @@ recover:
                 - name: tests
                   type: reason
                   agent: reviewer-tests
-                  tier: best
-                  effort: max
+                  tier: high
+                  effort:
+                    all: xhigh      # every model of the tier but the ones named below
+                    glm-5.3: max    # GLM 5.3, which takes no xhigh
                   independent: true
                   when: 'review-scope.tests'
                   retries: 3
@@ -1192,6 +1225,7 @@ recover:
                   type: test
                   in: item-agent
                   filter: '{item.testFilter}'
+                  filterWhen: "input.affectedTests == 'on'"
                   dependsOn: [rework]
                   when: 'orient.hasLegs'
                 - name: remend

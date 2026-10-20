@@ -47,8 +47,13 @@ Where a line says that a step left no output, that thing was not read or did not
 
 ## How the tests are run
 
-Each item names the filter that selects its tests. The legs this run tests on, each with its test runner as the
-repository's settings give it, the option a filter is given through, and what the leg leaves out:
+Each item names the filter that selects the tests its change affects: the test classes that test what the item
+changes, the tests it writes among them - or, for a runner that selects tests by name, those tests' names. Write
+test classes, not the classes the item changes: a runner selects tests, and which tests reach a class is not known
+from the class. The engine tests each item on its filter alone where the run's input affectedTests is on (it is
+`{input.affectedTests}`), and every test runs once every item of the round is built; where it is off, every test runs
+for each item, and the filter is kept for a run that turns it on. The legs this run tests on, each with its test
+runner as the repository's settings give it, the option a filter is given through, and what the leg leaves out:
 
 {orient.tests}
 

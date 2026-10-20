@@ -1886,9 +1886,37 @@ public sealed class FlowCoordinator
                     _reasonStarted[instance.Id] = _clock.GetUtcNow();
                 }
 
+                // A test step's filterWhen, read where the step starts, as when is read where it is admitted: false
+                // gives the runner no filter and fills no template, so every test of the step's legs runs; an
+                // unreadable one fails the step as an unreadable when does.
+                var step = instance.Step;
+
+                if (step.Type == "test" && step.FilterWhen is { } filterWhen)
+                {
+                    try
+                    {
+                        var read = Evaluate(filterWhen, instance.DeclaredScope!, out var problem, instance.RaisedBy);
+
+                        if (problem is not null)
+                        {
+                            throw new UnresolvedReadException(problem);
+                        }
+
+                        if (!read.AsBoolean(filterWhen))
+                        {
+                            step = step with { Filter = null };
+                        }
+                    }
+                    catch (Exception unreadable) when (unreadable is UnresolvedReadException or ArgumentException)
+                    {
+                        _ = _messages.Writer.TryWrite(new Message(instance, FlowStepResult.Ended(passed: false, HarnessExit.ConfigInvalid, Unreadable("filterWhen", instance.Id, unreadable.Message)), null, Attempt: attempt));
+                        return;
+                    }
+                }
+
                 var result = await _runner.RunAsync(
                     new FlowStepRun(
-                        instance.Step,
+                        step,
                         instance.Id,
                         attempt,
                         instance.Item,

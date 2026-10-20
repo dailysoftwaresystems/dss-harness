@@ -16,8 +16,11 @@ public sealed class AgentProviderConfig
     /// <summary>The address of its API, an absolute <c>https</c> address (<c>http</c> only for <c>localhost</c>): the company's own or a gateway's.</summary>
     public string Api { get; init; } = string.Empty;
 
-    /// <summary>The name of the variable that holds its key in the slot: <c>[A-Z][A-Z0-9_]*</c>, a name and never a key.</summary>
-    public string ApiKeyName { get; init; } = string.Empty;
+    /// <summary>
+    /// The names of the variables that hold its keys in the slot, at least one, in the order they are tried: each
+    /// <c>[A-Z][A-Z0-9_]*</c>, a name and never a key. A second key of one company is a second name in the list.
+    /// </summary>
+    public List<string> ApiKeyNames { get; init; } = [];
 
     /// <summary>The client its models are reached through, unless a step or a definition names another.</summary>
     public string Client { get; init; } = string.Empty;

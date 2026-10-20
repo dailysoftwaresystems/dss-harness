@@ -149,7 +149,7 @@
           },
           "testFilter": {
             "type": "string",
-            "description": "The filter that selects this item's tests when the engine runs them, written in what each leg's test runner takes after its filter option, as the task lists them; it names only tests that are there or that the item writes. Empty is no filter: every test of each leg runs."
+            "description": "The filter that names the tests this item's change affects - the test classes that test what it changes, the tests it writes among them; for a runner that selects tests by name, their names - written in what each leg's test runner takes after its filter option, as the task lists them; it names only tests that are there or that the item writes. The engine tests the item on it alone where the run's input affectedTests is on, and every test runs once every item of the round is built. Empty is no filter: every test of each leg runs."
           }
         }
       }

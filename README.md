@@ -439,6 +439,15 @@ and lists the rest, proven, with a title and a description, in the run's `pre-ex
 shown in the pull request's body and the handoff. Where a workflow has such a step, every other reasoning step names it, so no issue is lost. This
 build checks that wiring; the engine that raises the triage and writes the list is built next.
 
+A reasoning step's `effort` is one level for every model it may run on, or a map giving each its own -
+`all` for the rest and a model's code for one, so the shipped workflow runs its Claude models at
+`xhigh` and GLM 5.3 at `max`, which is the highest it takes. Each model's level is checked against
+what that model takes, and `validate-workflow` says every step's models and levels under the line
+that says it holds. A `test` step's `filter` names the tests it runs; its `filterWhen` is an
+expression that switches it - where it reads false the step gives no filter and every test of its
+legs runs, as the shipped `verify` steps do where the run's input `affectedTests` is off, each item
+tested on its own tests only where the run turns it on (`--input affectedTests=on`).
+
 ```bash
 dssharness validate-workflow                 # check every declared workflow
 dssharness validate-workflow implementation  # check one

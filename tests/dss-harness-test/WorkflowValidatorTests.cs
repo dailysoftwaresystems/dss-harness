@@ -1675,9 +1675,10 @@ public sealed class WorkflowValidatorTests
                     outputs: schemas/think.json
                 """), hasCommitTemplate: false, files: null, providers));
 
-        // An effort a model of the tier does not take - every model of the tier checked, glm-5.3 among them.
+        // An effort a model of the tier does not take - every model of the tier checked, glm-5.3 among them - with
+        // the level to give it instead: the nearest it takes at or above the one asked.
         Assert.Equal(
-            ["workflow 'default' step 'plan' runs at effort 'medium', which 'glm-5.3' (tier 'balanced') does not take. It takes: low, high, max"],
+            ["workflow 'default' step 'plan' runs at effort 'medium', which 'glm-5.3' (tier 'balanced') does not take. It takes: low, high, max. Give it a level of its own under effort: glm-5.3: high"],
             WorkflowValidator.Validate(Parse("""
                 name: default
                 steps:
@@ -1731,6 +1732,141 @@ public sealed class WorkflowValidatorTests
             """), hasCommitTemplate: false, files: null, providers: null));
     }
 
+    /// <summary>
+    /// An effort given for each model is checked model by model: a level a model does not take is refused naming the
+    /// level to give it instead where the level came from all, a model named by no entry and no all runs at its own
+    /// default, and a step that goes on with another's work names either form against the tier it inherits.
+    /// </summary>
+    [Fact]
+    public void AnEffortForEachModel_IsCheckedModelByModel()
+    {
+        var providers = TwoModels();
+
+        // The map's all gives every model it does not name: glm-5.3 does not take xhigh, and the refusal names the
+        // nearest level it takes at or above the one asked.
+        Assert.Equal(
+            ["workflow 'default' step 'plan' runs 'glm-5.3' (tier 'best') at effort 'xhigh', which it does not take. It takes: low, high, max. Give it a level of its own under effort: glm-5.3: max"],
+            WorkflowValidator.Validate(Parse("""
+                name: default
+                steps:
+                  - name: plan
+                    type: reason
+                    agent: thinker
+                    tier: best
+                    effort:
+                      all: xhigh
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                """), hasCommitTemplate: false, files: null, providers));
+
+        // Where the model's own entry gave the level, the first sentence stands alone: it has a level of its own, and
+        // the level is what is wrong.
+        Assert.Equal(
+            ["workflow 'default' step 'plan' runs 'glm-5.3' (tier 'best') at effort 'medium', which it does not take. It takes: low, high, max"],
+            WorkflowValidator.Validate(Parse("""
+                name: default
+                steps:
+                  - name: plan
+                    type: reason
+                    agent: thinker
+                    tier: best
+                    effort:
+                      all: high
+                      glm-5.3: medium
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                """), hasCommitTemplate: false, files: null, providers));
+
+        // A model named by no entry and no all runs at its own default, and nothing is refused of it.
+        Assert.Empty(WorkflowValidator.Validate(Parse("""
+            name: default
+            steps:
+              - name: plan
+                type: reason
+                agent: thinker
+                tier: best
+                effort:
+                  glm-5.3: max
+                prompt: prompts/think.md
+                outputs: schemas/think.json
+            """), hasCommitTemplate: false, files: null, providers));
+
+        // A step that goes on with another's work names either form, checked against the tier it inherits.
+        Assert.Equal(
+            ["workflow 'default' step 'mend' runs 'glm-5.3' (tier 'best') at effort 'xhigh', which it does not take. It takes: low, high, max. Give it a level of its own under effort: glm-5.3: max"],
+            WorkflowValidator.Validate(Parse("""
+                name: default
+                steps:
+                  - name: implement
+                    type: reason
+                    agent: thinker
+                    tier: best
+                    effort: high
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                  - name: mend
+                    type: reason
+                    resume: implement
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                    effort:
+                      all: xhigh
+                """), hasCommitTemplate: false, files: null, providers));
+
+        // A step that names neither a tier nor a model runs on the configuration's default tier, its models checked
+        // like a named tier's own - here balanced, GLM's alone.
+        Assert.Equal(
+            ["workflow 'default' step 'plan' runs at effort 'medium', which 'glm-5.3' (tier 'balanced') does not take. It takes: low, high, max. Give it a level of its own under effort: glm-5.3: high"],
+            WorkflowValidator.Validate(Parse("""
+                name: default
+                steps:
+                  - name: plan
+                    type: reason
+                    agent: thinker
+                    effort: medium
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                """), hasCommitTemplate: false, files: null, providers));
+    }
+
+    /// <summary>A code under a step's effort that is no model it runs on is refused rather than ignored: a repository that changes its tier then hears which steps still name the old model.</summary>
+    [Fact]
+    public void AnEffortForAModelTheStepDoesNotRunOn_IsRefused()
+    {
+        Assert.Equal(
+            ["workflow 'default' step 'plan' gives an effort to 'glm-5.4', which it does not run on. It runs on: claude-fable-5-1, glm-5.3"],
+            WorkflowValidator.Validate(Parse("""
+                name: default
+                steps:
+                  - name: plan
+                    type: reason
+                    agent: thinker
+                    tier: best
+                    effort:
+                      all: high
+                      glm-5.4: max
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                """), hasCommitTemplate: false, files: null, TwoModels()));
+    }
+
+    /// <summary>A test step's filterWhen is an expression as when is, with the same reads, and must yield a boolean.</summary>
+    [Fact]
+    public void AFilterWhenThatIsNoBoolean_IsRefused()
+    {
+        Assert.Equal(
+            ["'verify.filterWhen' yields a text, where a boolean is read: nothing is read as true or as false but true and false"],
+            WorkflowValidator.Validate(Parse("""
+                name: default
+                inputs:
+                  - name: request
+                steps:
+                  - name: verify
+                    type: test
+                    filterWhen: input.request
+                """), hasCommitTemplate: false, files: null, providers: null));
+    }
+
     /// <summary>One provider, one model, one tier, as the config-half tests spell the configuration.</summary>
     private static AgentProviders? Providers(string? agentTier = "balanced")
     {
@@ -1741,7 +1877,7 @@ public sealed class WorkflowValidatorTests
             [
                 new()
                 {
-                    Name = "zai", Type = "zai", Api = "https://api.z.ai", ApiKeyName = "ZAI_API_KEY", Client = "glm",
+                    Name = "zai", Type = "zai", Api = "https://api.z.ai", ApiKeyNames = ["ZAI_API_KEY"], Client = "glm",
                     Currency = "USD", ReadOn = "2026-10-12",
                     Models =
                     [
@@ -1750,6 +1886,47 @@ public sealed class WorkflowValidatorTests
                 },
             ],
             TierConfig = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase) { ["balanced"] = ["glm-5.3"] },
+        };
+
+        return AgentProviders.Resolve(config).Providers;
+    }
+
+    /// <summary>
+    /// Two companies' models on two tiers, as the effort-by-model tests spell the configuration: Claude's and GLM's on
+    /// best, GLM's alone on balanced - the configuration's default, so a step that inherits a tier is told from one it
+    /// would otherwise run on.
+    /// </summary>
+    private static AgentProviders? TwoModels()
+    {
+        var config = new HarnessConfig
+        {
+            Defaults = new HarnessDefaults { AgentTier = "balanced" },
+            Providers =
+            [
+                new()
+                {
+                    Name = "anthropic", Type = "anthropic", Api = "https://api.anthropic.com", ApiKeyNames = ["ANTHROPIC_API_KEY"], Client = "claude-code",
+                    Currency = "USD", ReadOn = "2026-10-12",
+                    Models =
+                    [
+                        new() { Code = "claude-fable-5-1", Name = "Claude Fable 5.1", Tiers = ["best"], Efforts = ["low", "medium", "high", "xhigh", "max"], ContextTokens = 1_000_000, MaxOutputTokens = 131_072 },
+                    ],
+                },
+                new()
+                {
+                    Name = "zai", Type = "zai", Api = "https://api.z.ai", ApiKeyNames = ["ZAI_API_KEY"], Client = "glm",
+                    Currency = "USD", ReadOn = "2026-10-12",
+                    Models =
+                    [
+                        new() { Code = "glm-5.3", Name = "GLM 5.3", Tiers = ["best", "balanced"], Efforts = ["low", "high", "max"], ContextTokens = 1_000_000, MaxOutputTokens = 131_072 },
+                    ],
+                },
+            ],
+            TierConfig = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["best"] = ["claude-fable-5-1", "glm-5.3"],
+                ["balanced"] = ["glm-5.3"],
+            },
         };
 
         return AgentProviders.Resolve(config).Providers;
@@ -2979,11 +3156,11 @@ public sealed class WorkflowValidatorTests
             [
                 "input 'request' lists 'yes' among its options more than once; an option is one value a run may be started with, and a second says nothing the first did not",
                 "the input 'step' is named with a word a definition reads for its own; name it another way",
-                "the input 'Upper' is not a lower-case word with dashes within",
+                "the input 'Upper' is not a word with a lower-case letter first: letters, digits and dashes within",
                 "param 'rounds' is required and declares a default: a default always supplies the value, so required would never refuse. Give the default, or require the value.",
                 "the param 'os' is named with a word a definition reads for its own; name it another way",
                 "advisor.kinds names 'unboundLoop', which is no question kind. Known: 'loopBound', 'visitBound', 'recoveryBound', 'openAgents', 'foldNewRows', 'foldLostRows', 'foldOverCells', 'foldTwoChanges', 'foldConflicts', 'foldOutside', 'turnLimit', 'truncated', 'stepBudget', 'contextLimit', 'runBudget', 'noChecks', 'checksUnsettled', 'checksPending', 'failure', 'pause', 'ask'.",
-                "the output 'Title' is not a lower-case word with dashes within",
+                "the output 'Title' is not a word with a lower-case letter first: letters, digits and dashes within",
             ],
             problems);
     }

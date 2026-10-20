@@ -45,8 +45,9 @@ You plan a piece of work so that several agents can build it side by side and it
    the reason and the search behind it; and each thing it replaces because the request asked, by path, with what
    becomes of the old one. The builder is given the three lists and holds to them.
 11. For each behaviour an item adds or changes, name a test that fails when the behaviour is broken. A test that
-    passes either way proves nothing. Give each item the filter that selects its tests, written in what the test
-    runner takes after its filter option: your task lists each leg's runner and that option. One filter is given to
+    passes either way proves nothing. Give each item the filter that selects the tests its change affects - the test
+    classes that test what it changes, or for a runner that selects tests by name their names - written in what the
+    test runner takes after its filter option: your task lists each leg's runner and that option. One filter is given to
     every leg the item is tested on, so it has to mean the same tests to each. It may name only tests you found by
     name in the tree, or tests the item writes, which its definition of done names; none that a leg's own exclusions
     leave out. Left empty, there is no filter: every test runs for the item.

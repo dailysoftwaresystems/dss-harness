@@ -3018,6 +3018,20 @@ public sealed class ConfigStoreTests
         Assert.Contains(expected, exception.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The one-name form of a provider's keys, of the plan before 2026-10-20, is refused naming the list that
+    /// replaced it: a reader moves the key's name into the list instead of deleting its line.
+    /// </summary>
+    [Theory]
+    [InlineData("""{ "providers": [{ "name": "zai", "apiKeyName": "ZAI_API_KEY" }] }""", "providers 'zai': 'apiKeyName' is no key of a provider: list its keys under apiKeyNames, in the order they are tried")]
+    [InlineData("""{ "providers": [{ "apiKeyName": "ZAI_API_KEY" }] }""", "providers #1: 'apiKeyName' is no key of a provider: list its keys under apiKeyNames, in the order they are tried")]
+    public void AProvidersOneNameFormOfItsKeys_IsRefusedNamingTheList(string json, string expected)
+    {
+        var exception = LoadInvalid(json);
+
+        Assert.Contains(expected, exception.Message, StringComparison.Ordinal);
+    }
+
     /// <summary>An unknown key that was never read is refused as unknown, with nothing said to take its place.</summary>
     [Fact]
     public void AnUnknownKey_IsNotMistakenForARetiredOne()

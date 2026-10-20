@@ -56,6 +56,7 @@ internal static class MisplacedKeys
             }
 
             keys.AddRange(Retired(document.RootElement));
+            keys.AddRange(RetiredProviderKeys(document.RootElement));
             keys.AddRange(StepKeysOnPhases(document.RootElement));
             return keys;
         }
@@ -109,6 +110,34 @@ internal static class MisplacedKeys
     /// <c>buildConfigs</c>, and read by nothing, so a file naming <c>release</c> there tested only the config each leg names.
     /// </summary>
     private const string TestConfigs = "configs";
+
+    /// <summary>
+    /// The one-name form of a provider's keys, of the plan before 2026-10-20: each provider entry holding it is refused
+    /// naming the list that replaced it, so a reader moves the key's name into the list instead of deleting its line.
+    /// </summary>
+    private const string ApiKeyName = "apiKeyName";
+
+    /// <summary>Every provider entry that still holds the one-name form of its keys.</summary>
+    private static IEnumerable<string> RetiredProviderKeys(JsonElement root)
+    {
+        if (Property(root, "providers") is not { ValueKind: JsonValueKind.Array } providers)
+        {
+            yield break;
+        }
+
+        var position = 0;
+
+        foreach (var provider in providers.EnumerateArray())
+        {
+            position++;
+
+            if (Property(provider, ApiKeyName) is not null)
+            {
+                yield return $"providers {NameOrPlace(provider, position)}: '{ApiKeyName}' is no key of a provider: list its keys "
+                    + "under apiKeyNames, in the order they are tried";
+            }
+        }
+    }
 
     /// <summary>Every test section the file declares - a project's and a leg's - named as a refusal names it.</summary>
     private static IEnumerable<(string Name, JsonElement Test)> TestSections(JsonElement root)
