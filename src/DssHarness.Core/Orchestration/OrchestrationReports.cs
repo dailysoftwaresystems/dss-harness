@@ -13,16 +13,18 @@ public static class OrchestrationReports
 {
     /// <summary>What list-orchestrator reports.</summary>
     /// <param name="orchestrators">The orchestrators listed.</param>
+    /// <param name="steps">Whether to list each step instance of a run, with its state and its attempt.</param>
+    /// <param name="questions">Whether to list every question a run raised and what became of it.</param>
     /// <param name="json">Whether to answer with one JSON document rather than lines.</param>
-    public static CommandOutcome List(IReadOnlyList<OrchestratorInventory> orchestrators, bool json)
+    public static CommandOutcome List(IReadOnlyList<OrchestratorInventory> orchestrators, bool steps, bool questions, bool json)
     {
         ArgumentNullException.ThrowIfNull(orchestrators);
 
         var message = orchestrators.Count == 0 ? "no orchestrators" : ReportText.Counted(orchestrators.Count, "orchestrator");
 
         return json
-            ? CommandOutcome.Ok(message) with { Data = [Document(orchestrators).ToJsonString(ReportJson.Options)], Quiet = true }
-            : CommandOutcome.Ok(message, [.. Lines(orchestrators)]);
+            ? CommandOutcome.Ok(message) with { Data = [Document(orchestrators, steps, questions).ToJsonString(ReportJson.Options)], Quiet = true }
+            : CommandOutcome.Ok(message, [.. Lines(orchestrators, steps, questions)]);
     }
 
     /// <summary>
@@ -32,15 +34,44 @@ public static class OrchestrationReports
     /// </summary>
     /// <param name="exitCode">The code the command exits with.</param>
     /// <param name="summary">The line it ends on.</param>
-    public static string ListStopped(int exitCode, string summary) => ReportJson.Stopped(exitCode, summary, Document([]));
+    public static string ListStopped(int exitCode, string summary) => ReportJson.Stopped(exitCode, summary, Document([], false, false));
 
-    private static IEnumerable<string> Lines(IReadOnlyList<OrchestratorInventory> orchestrators)
+    /// <summary>
+    /// The flow document a run verb answers with where it stops before its session - a bad name, a --directory that is
+    /// not there, a definition the repository does not declare: the session it would have run, empty, after the code it
+    /// exits with and the line it ends on.
+    /// </summary>
+    /// <param name="exitCode">The code the command exits with.</param>
+    /// <param name="summary">The line it ends on.</param>
+    public static string FlowStopped(int exitCode, string summary)
+        => ReportJson.Stopped(
+            exitCode,
+            summary,
+            new JsonObject
+            {
+                ["run"] = null,
+                ["status"] = null,
+                ["questions"] = new JsonArray(),
+                ["answered"] = new JsonArray(),
+                ["passedOver"] = new JsonArray(),
+                ["handoffs"] = new JsonArray(),
+                ["leftForAPerson"] = new JsonArray(),
+                ["spent"] = null,
+                ["records"] = new JsonObject(),
+            });
+
+    private static IEnumerable<string> Lines(IReadOnlyList<OrchestratorInventory> orchestrators, bool steps, bool questions)
     {
         foreach (var orchestrator in orchestrators)
         {
             var record = orchestrator.Record;
 
             yield return $"{record.Name}  model {record.Model}, {orchestrator.Open.Count} of at most {ReportText.Counted(record.Parallel, "agent")} open{Session(record.Session)}";
+
+            foreach (var line in RunLines(orchestrator, steps, questions))
+            {
+                yield return $"  {line}";
+            }
 
             foreach (var agent in orchestrator.Agents)
             {
@@ -50,6 +81,48 @@ public static class OrchestrationReports
             foreach (var worktree in orchestrator.WorktreesWithoutAgent)
             {
                 yield return $"  worktree {worktree.Name} at '{worktree.Path}' has no agent of this orchestrator's recording it";
+            }
+        }
+    }
+
+    /// <summary>A run's own lines, from <c>flow.json</c> and <c>questions.json</c>: its definition, its status, what runs next, its open question - and with <paramref name="steps"/> each step instance, with <paramref name="questions"/> every question it raised.</summary>
+    private static IEnumerable<string> RunLines(OrchestratorInventory orchestrator, bool steps, bool questions)
+    {
+        if (orchestrator.Run is not { } run)
+        {
+            yield break;
+        }
+
+        var flow = run.Flow;
+
+        yield return $"run of '{flow.Definition}': {run.Status}";
+
+        if (flow.Next.Count > 0)
+        {
+            yield return $"runs next: {string.Join(", ", flow.Next)}";
+        }
+
+        if (run.Questions?.Open is { Count: > 0 } open)
+        {
+            foreach (var question in open)
+            {
+                yield return $"open question {question.Id} ({question.Kind}): {question.ProblemShown?.Happened ?? question.Kind}";
+            }
+        }
+
+        if (steps)
+        {
+            foreach (var step in flow.Steps)
+            {
+                yield return $"step {step.Instance}: {step.State.ToLower(CultureInfo.InvariantCulture)} (attempt {step.Attempt.ToString(CultureInfo.InvariantCulture)}){(step.Agent is { } agent ? $", agent {agent}" : string.Empty)}";
+            }
+        }
+
+        if (questions && run.Questions is { } held)
+        {
+            foreach (var line in Flow.QuestionsText.Of(held))
+            {
+                yield return line;
             }
         }
     }
@@ -77,7 +150,7 @@ public static class OrchestrationReports
         };
     }
 
-    private static JsonObject Document(IReadOnlyList<OrchestratorInventory> orchestrators)
+    private static JsonObject Document(IReadOnlyList<OrchestratorInventory> orchestrators, bool steps, bool questions)
     {
         var list = new JsonArray();
 
@@ -110,10 +183,42 @@ public static class OrchestrationReports
                 ["log"] = orchestrator.Layout.LogFile(record.Name),
                 ["agents"] = agents,
                 ["worktreesWithoutAgent"] = worktrees,
+                ["run"] = RunNode(orchestrator.Run, steps, questions),
             });
         }
 
         return new JsonObject { ["orchestrators"] = list };
+    }
+
+    /// <summary>A run as the listing's document holds it: its definition, its status, what runs next, its open questions - and each step instance and every question where asked for.</summary>
+    private static JsonNode? RunNode(FlowRunInventory? run, bool steps, bool questions)
+    {
+        if (run is null)
+        {
+            return null;
+        }
+
+        return new JsonObject
+        {
+            ["definition"] = run.Flow.Definition,
+            ["status"] = run.Flow.Status,
+            ["next"] = new JsonArray([.. run.Flow.Next.Select(next => (JsonNode?)next)]),
+            ["openQuestions"] = new JsonArray([.. (run.Questions?.Open ?? []).Select(question => (JsonNode?)question.Id)]),
+            ["steps"] = steps ? new JsonArray([.. run.Flow.Steps.Select(step => new JsonObject
+            {
+                ["instance"] = step.Instance,
+                ["state"] = step.State,
+                ["attempt"] = step.Attempt,
+                ["agent"] = step.Agent,
+            })]) : null,
+            ["questions"] = questions && run.Questions is { } held ? new JsonArray([.. held.Questions.Select(question => new JsonObject
+            {
+                ["id"] = question.Id,
+                ["state"] = question.State,
+                ["kind"] = question.Kind,
+                ["problem"] = question.ProblemShown?.Happened,
+            })]) : null,
+        };
     }
 
     private static JsonObject AgentNode(OrchestratorInventory orchestrator, AgentInventory agent)

@@ -14,11 +14,13 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="Differing">Each instance whose own record the index did not agree with, in the order they were found.</param>
 /// <param name="Adopted">Each instance a step directory holds that the index did not name, in the order they were found.</param>
 /// <param name="Handoffs">Each stopped step's handoff, by instance id, read from its own directory where it holds one.</param>
+/// <param name="Questions">Every question the run raised and every answer it was given, the open ones among them, as the run's one file of them holds it.</param>
 public sealed record FlowResumeState(
     FlowFile File,
     IReadOnlyList<string> Differing,
     IReadOnlyList<string> Adopted,
-    IReadOnlyDictionary<string, string> Handoffs);
+    IReadOnlyDictionary<string, string> Handoffs,
+    IReadOnlyList<FlowQuestionEntry>? Questions = null);
 
 /// <summary>
 /// Reads what a killed or stopped run left and hands it to a resume: the run's state in one file checked against the
@@ -88,7 +90,7 @@ public sealed class FlowResume(OrchestrationStore store, OrchestratorLayout layo
 
         _store.WriteFlow(_layout, reconciled);
 
-        return new FlowResumeState(reconciled, differing, adopted, HandoffsOf(reconciled));
+        return new FlowResumeState(reconciled, differing, adopted, HandoffsOf(reconciled), _store.ReadFlowQuestions(_layout)?.Questions);
     }
 
     /// <summary>Every step record the run's directories hold: the run's and each agent's, by instance id.</summary>

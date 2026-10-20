@@ -29,6 +29,21 @@ public static class PointOfNoReturn
     };
 
     /// <summary>
+    /// The commands that pause safely: a first interrupt asks the engine for a safe pause and a second is the hard
+    /// stop, so each is waited for as the safe pause needs and never cut off part way - the engine may stay for as
+    /// long as a build takes, and the drain of a hard stop is bounded (<see cref="SafePauseDrain"/>).
+    /// </summary>
+    public static IReadOnlySet<string> PausesSafely { get; } = new HashSet<string>(StringComparer.Ordinal)
+    {
+        Orchestration.Flow.FlowService.RunCommand,
+        Orchestration.Flow.FlowService.ResumeCommand,
+        Orchestration.Flow.FlowService.AnswerCommand,
+    };
+
+    /// <summary>The longest a hard stop of a run can take: the 90 s of drain, which the engine's own answer of the handoffs' bound is beside.</summary>
+    public static TimeSpan SafePauseDrain { get; } = TimeSpan.FromSeconds(90);
+
+    /// <summary>
     /// Whether the command <paramref name="commandLine"/> types passes a point of no return: one of
     /// <see cref="Commands"/>, or a run asked to set up (<see cref="LegSetUps.Option"/>), whose legs bring down what they
     /// brought up however the run ends - a set-up left up runs on after every run that used it.
@@ -62,11 +77,21 @@ public static class PointOfNoReturn
 
     /// <summary>
     /// How long the command line waits for the command <paramref name="commandLine"/> types once interrupted: as long
-    /// as a deletion expects where it passes a point of no return, and this tool's own answer of none where it does
-    /// not - <see langword="null"/>, which leaves the command line's own short wait as it is. A front end that holds a
-    /// window open while a command runs holds it by this, for as long as the command asks.
+    /// as a deletion expects where it passes a point of no return, as long as a hard stop of a run can take where it
+    /// pauses safely, and this tool's own answer of none where it does neither - <see langword="null"/>, which leaves
+    /// the command line's own short wait as it is. A front end that holds a window open while a command runs holds it
+    /// by this, for as long as the command asks.
     /// </summary>
     /// <param name="commandLine">The command's name, then its arguments as typed.</param>
     public static TimeSpan? GraceFor(IReadOnlyList<string> commandLine)
-        => Holds(commandLine) ? WorktreeService.DefaultInterruptionGrace : null;
+    {
+        ArgumentNullException.ThrowIfNull(commandLine);
+
+        if (commandLine.Count > 0 && PausesSafely.Contains(commandLine[0]))
+        {
+            return SafePauseDrain;
+        }
+
+        return Holds(commandLine) ? WorktreeService.DefaultInterruptionGrace : null;
+    }
 }

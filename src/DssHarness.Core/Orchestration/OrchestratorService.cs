@@ -38,12 +38,14 @@ public interface IOrchestratorService : IUseCase
     /// <param name="cancellationToken">Stops it.</param>
     Task<CommandOutcome> DeleteAsync(string startDirectory, string name, bool deleteEvidence, CancellationToken cancellationToken = default);
 
-    /// <summary>Lists the orchestrators, or the one named, with their agents and where each stands.</summary>
+    /// <summary>Lists the orchestrators, or the one named, with their agents and where each stands; a run's own lines from <c>flow.json</c> beside them.</summary>
     /// <param name="startDirectory">A directory in the repository.</param>
     /// <param name="name">The orchestrator to list, or null for all of them.</param>
+    /// <param name="steps">Whether to list each step instance of a run, with its state and its attempt.</param>
+    /// <param name="questions">Whether to list every question a run raised and what became of it.</param>
     /// <param name="json">Whether to answer with one JSON document rather than lines.</param>
     /// <param name="cancellationToken">Stops it.</param>
-    Task<CommandOutcome> ListAsync(string startDirectory, string? name, bool json, CancellationToken cancellationToken = default);
+    Task<CommandOutcome> ListAsync(string startDirectory, string? name, bool steps, bool questions, bool json, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Creates an orchestrator, as the request says: the answer carries <see cref="OrchestratorCreated"/> facts, and the
@@ -272,6 +274,16 @@ public sealed class OrchestratorService(
                 return CommandOutcome.Refused(OrchestrationReports.NoOrchestrator(name));
             }
 
+            // A run's engine is a live owner: only it records what its steps left running, and the deletion does not
+            // take the run from under it.
+            if (_store.ReadFlow(orchestrator) is not null && _store.ReadOwner(orchestrator) is { } held)
+            {
+                return CommandOutcome.Refused(
+                    $"Orchestrator '{name}' was not deleted: a live engine owns the run (process {held.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture)} of '{held.Machine}'). "
+                    + $"{OrchestrationReports.Line(Flow.FlowService.PauseCommand, name)} pauses it and "
+                    + $"{OrchestrationReports.Line(Flow.FlowService.StopCommand, name)} ends it, and once the engine is gone the run can be deleted. Nothing was changed.");
+            }
+
             var agents = _store.Agents(orchestrator);
 
             if (agents.FirstOrDefault(agent => agent.Record is null) is { } unreadable)
@@ -318,6 +330,22 @@ public sealed class OrchestratorService(
                     Files(orchestrator.AgentSessionsDirectory(agent.Name))))
                 .Where(agent => agent.Evidence + agent.Transcripts + agent.Steps + agent.Sessions > 0)
                 .ToList();
+
+            // A run's own records are kept records as its agents' evidence and transcripts are: the steps under the
+            // run, the steps and the sessions inside each agent's directory - a deleted agent's included, since its
+            // directory stays - and the report. A deleted agent's are counted above where its directory still names
+            // it; the run's own steps and its report are counted here.
+            if (_store.ReadFlow(orchestrator) is not null)
+            {
+                var report = (_fileSystem.KindOf(orchestrator.ReportFile) == PathKind.File ? 1 : 0)
+                    + (_fileSystem.KindOf(orchestrator.ReportJsonFile) == PathKind.File ? 1 : 0);
+                var runKept = new KeptOf(name, 0, 0, Files(orchestrator.StepsDirectory), 0, report);
+
+                if (runKept.Steps > 0 || report > 0)
+                {
+                    kept.Insert(0, runKept);
+                }
+            }
 
             if (kept.Count > 0 && !deleteEvidence)
             {
@@ -406,6 +434,9 @@ public sealed class OrchestratorService(
             }
 
             RemoveKeepingRecordLast(orchestrator.Directory, orchestrator.RecordFile);
+
+            // The owner file sits beside the directory, not in it: a run's goes with the run.
+            _store.RemoveOwner(orchestrator);
             return null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -466,6 +497,8 @@ public sealed class OrchestratorService(
     public async Task<CommandOutcome> ListAsync(
         string startDirectory,
         string? name,
+        bool steps,
+        bool questions,
         bool json,
         CancellationToken cancellationToken = default)
     {
@@ -504,10 +537,13 @@ public sealed class OrchestratorService(
                 record,
                 [.. agents.Select(agent => Inventory(layout, context.Config.Worktrees.Root, orchestrator, agent))],
                 [.. listed.Where(worktree => WorktreeAddress.AgentOf(orchestrator.Name, worktree.Name) is { } agent && !agents.Any(entry => entry.Name == agent))],
-                OrchestrationRules.OpenAgents(orchestrator.Name, agents, listed.Select(worktree => worktree.Name))));
+                OrchestrationRules.OpenAgents(orchestrator.Name, agents, listed.Select(worktree => worktree.Name)),
+                Run: _store.ReadFlow(orchestrator) is { } flow
+                    ? new FlowRunInventory(flow, _store.ReadFlowQuestions(orchestrator))
+                    : null));
         }
 
-        return OrchestrationReports.List(inventory, json);
+        return OrchestrationReports.List(inventory, steps, questions, json);
     }
 
     /// <summary>
@@ -556,7 +592,8 @@ public sealed class OrchestratorService(
     /// <param name="Transcripts">Its kept Claude transcripts' files.</param>
     /// <param name="Steps">The files of the steps that ran as it.</param>
     /// <param name="Sessions">The files of its conversations with an API client.</param>
-    private sealed record KeptOf(string Name, int Evidence, int Transcripts, int Steps, int Sessions)
+    /// <param name="Report">A run's own report files; always 0 for an agent.</param>
+    private sealed record KeptOf(string Name, int Evidence, int Transcripts, int Steps, int Sessions, int Report = 0)
     {
         /// <summary>
         /// What <paramref name="kept"/> hold between them: the one wording of the refusal and the detail. Evidence and
@@ -568,12 +605,14 @@ public sealed class OrchestratorService(
         {
             var steps = kept.Sum(agent => agent.Steps);
             var sessions = kept.Sum(agent => agent.Sessions);
+            var report = kept.Sum(agent => agent.Report);
             string[] said =
             [
                 ReportText.Counted(kept.Sum(agent => agent.Evidence), "evidence file"),
                 ReportText.Counted(kept.Sum(agent => agent.Transcripts), "transcript file"),
                 .. steps == 0 ? [] : new[] { ReportText.Counted(steps, "step file") },
                 .. sessions == 0 ? [] : new[] { ReportText.Counted(sessions, "session file") },
+                .. report == 0 ? [] : new[] { ReportText.Counted(report, "report file") },
             ];
 
             return $"{string.Join(", ", said[..^1])} and {said[^1]}";
@@ -589,12 +628,26 @@ public sealed class OrchestratorService(
 /// <param name="Agents">Its agents.</param>
 /// <param name="WorktreesWithoutAgent">Worktrees below its directory that no agent of it records.</param>
 /// <param name="Open">The agents that count against its limit (<see cref="OrchestrationRules.OpenAgents"/>).</param>
+/// <param name="Run">What it is as a run - the flow's own lines from <c>flow.json</c> - where it holds one.</param>
 public sealed record OrchestratorInventory(
     OrchestratorLayout Layout,
     OrchestratorRecord Record,
     IReadOnlyList<AgentInventory> Agents,
     IReadOnlyList<WorktreeListing> WorktreesWithoutAgent,
-    IReadOnlyList<string> Open);
+    IReadOnlyList<string> Open,
+    FlowRunInventory? Run = null);
+
+/// <summary>
+/// One run as list-orchestrator reports it, read from <c>flow.json</c> and worked nothing out again: what the engine
+/// wrote there at its last change of state is what runs next, so a person, a resume and a front end see one answer.
+/// </summary>
+/// <param name="Flow">The run's state in one file.</param>
+/// <param name="Questions">The run's questions and answers, where it holds them.</param>
+public sealed record FlowRunInventory(Flow.FlowFile Flow, Flow.FlowQuestionsFile? Questions)
+{
+    /// <summary>The run's status, lower-case, as the listing says it.</summary>
+    public string Status => Flow.Status.ToLower(System.Globalization.CultureInfo.InvariantCulture);
+}
 
 /// <summary>One agent, as list-orchestrator reports it.</summary>
 /// <param name="Entry">Its directory's record, or why it has none that reads.</param>

@@ -373,12 +373,12 @@ public sealed class ReadingAgentTests
         await kit.CreateAgentAsync("w1");
         await kit.CreateReadingAgentAsync("a7");
 
-        var listed = await kit.Harness.OrchestratorService.ListAsync(kit.Main, OrchestrationKit.Orchestrator, json: false, Token);
+        var listed = await kit.Harness.OrchestratorService.ListAsync(kit.Main, OrchestrationKit.Orchestrator, false, false, json: false, Token);
 
         Assert.Contains("  a7  live, reads the main tree (no worktree)", listed.Details!);
         Assert.Contains("o1  model model-a, 1 of at most 2 agent(s) open", listed.Details!);
 
-        var json = await kit.Harness.OrchestratorService.ListAsync(kit.Main, OrchestrationKit.Orchestrator, json: true, Token);
+        var json = await kit.Harness.OrchestratorService.ListAsync(kit.Main, OrchestrationKit.Orchestrator, false, false, json: true, Token);
         var agents = JsonNode.Parse(Assert.Single(json.Data!))!["orchestrators"]!.AsArray()[0]!["agents"]!.AsArray();
 
         var reader = agents.Single(node => (string?)node?["name"] == "a7")!;

@@ -29,8 +29,17 @@ public sealed class FlowQuestion(string Id, string Kind, string Instance, string
     /// <summary>The answers it takes, spelled as the kind spells them.</summary>
     public IReadOnlyList<string> Options { get; } = Options;
 
-    /// <summary>Whether the question waits: <c>open</c>, or <c>answered</c> where an answer settled it.</summary>
+    /// <summary>Whether the question waits: <c>open</c>, <c>answered</c> where an answer settled it, or <c>withdrawn</c> where a redirect ran its step again before anybody answered.</summary>
     public string State { get; internal set; } = "open";
+
+    /// <summary>When the question was raised.</summary>
+    public DateTimeOffset RaisedAt { get; internal set; } = DateTimeOffset.UtcNow;
+
+    /// <summary>What the run tried about it before it asked; null where nothing had been tried.</summary>
+    public string? Tried { get; internal set; }
+
+    /// <summary>What the answer changes, as the run's person reads it; null where the run has not said.</summary>
+    public string? Means { get; internal set; }
 
     /// <summary>Every answer it was given, in the order they were given, and who gave each.</summary>
     public IReadOnlyList<FlowAnswerEntry> Given => _given;
@@ -49,7 +58,10 @@ public sealed class FlowQuestion(string Id, string Kind, string Instance, string
 /// Where the answer is configured, a configuration's answer alone: <c>step 'fix'</c>, <c>group 'items'</c> or
 /// <c>the orchestrator's answers</c>; <see langword="null"/> for a person's.
 /// </param>
-public sealed record FlowAnswerEntry(string Answer, string? Text, string By, string? Where);
+/// <param name="Through">How a person gave it: <c>answer-orchestrator</c> or <c>front-end</c>; null for every other answer.</param>
+/// <param name="At">When it was given.</param>
+/// <param name="Did">What the engine did with it; null where it has not been applied.</param>
+public sealed record FlowAnswerEntry(string Answer, string? Text, string By, string? Where, string? Through = null, DateTimeOffset? At = null, string? Did = null);
 
 /// <summary>
 /// The question kinds' own rules, beside the coordinator that raises and answers them: which answers a kind offers a

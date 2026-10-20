@@ -222,6 +222,8 @@ public sealed class FlowCoordinator
     private readonly Dictionary<string, int> _declarationOrder = new(StringComparer.Ordinal);
     private readonly Dictionary<string, int> _answerSpent = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _answerWhere = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string?> _answerThrough = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, IReadOnlyList<FlowQuestionOption>> _optionsHeld = new(StringComparer.Ordinal);
 
     private Scope _top = null!;
     private bool _stopping;
@@ -416,6 +418,8 @@ public sealed class FlowCoordinator
             _ = _open.Remove(id);
             _ = _answerable.Remove(id);
         }
+
+        WriteQuestions();
     }
 
     /// <summary>Cancels every handoff turn in flight, wherever the loop is parked awaiting them.</summary>
@@ -598,6 +602,14 @@ public sealed class FlowCoordinator
                 // nothing, no step the run has left can ever start - one held behind a limit that nothing will free
                 // among them - and the session ends rather than wait for it; what never started is NotRun.
                 if (_created.Any(instance => instance.State is FlowInstanceState.Running && !instance.Step.IsGroup) || _wakes.Count > 0 || started > 0)
+                {
+                    await WaitNextAsync(cancellationToken).ConfigureAwait(false);
+                    continue;
+                }
+
+                // An answer offered from outside the session may sit unread while nothing runs: it is taken before
+                // the session ends over a question an answer has settled, for the loop alone applies it.
+                if (_messages.Reader.TryPeek(out _))
                 {
                     await WaitNextAsync(cancellationToken).ConfigureAwait(false);
                     continue;
@@ -805,18 +817,22 @@ public sealed class FlowCoordinator
                 _answerSpent["runBudget|run"] = given + 1;
                 _budgetGranted++;
                 var granted = BudgetQuestion(hit);
-                granted._given.Add(new FlowAnswerEntry("more", null, "configuration", "the orchestrator's answers"));
+                granted._given.Add(new FlowAnswerEntry("more", null, "configuration", "the orchestrator's answers", At: _clock.GetUtcNow(), Did: "each amount is allowed once again"));
                 granted.State = "answered";
                 _questions.Add(granted);
+                _optionsHeld[granted.Id] = HeldOptionsOf(null, "runBudget", granted.Options);
+                WriteQuestions();
                 return;
             }
 
             if (entry.Then == "abort")
             {
                 var stopped = BudgetQuestion(hit);
-                stopped._given.Add(new FlowAnswerEntry("abort", null, "configuration", "the orchestrator's answers"));
+                stopped._given.Add(new FlowAnswerEntry("abort", null, "configuration", "the orchestrator's answers", At: _clock.GetUtcNow(), Did: "the run ends stopped"));
                 stopped.State = "answered";
                 _questions.Add(stopped);
+                _optionsHeld[stopped.Id] = HeldOptionsOf(null, "runBudget", stopped.Options);
+                WriteQuestions();
                 RequestStop();
                 return;
             }
@@ -859,7 +875,12 @@ public sealed class FlowCoordinator
             "runBudget",
             "run",
             $"run 'r1' has spent {reached.SpentOf} (its reserve of {reserve}% was reached)",
-            FlowQuestions.OptionsOf("runBudget", null));
+            FlowQuestions.OptionsOf("runBudget", null))
+        {
+            RaisedAt = _clock.GetUtcNow(),
+            Tried = "the amounts were counted at each reason step's end",
+            Means = null,
+        };
     }
 
     /// <summary>
@@ -884,11 +905,13 @@ public sealed class FlowCoordinator
     /// <param name="answer">The answer, spelled as the question's options spell it.</param>
     /// <param name="text">The text given with the answer, where it takes one.</param>
     /// <param name="problem">Why the answer was not taken, where it was not.</param>
+    /// <param name="through">How a person gave it: <c>answer-orchestrator</c> or <c>front-end</c>; null where not said.</param>
     /// <returns>Whether the answer was taken.</returns>
-    public bool TryAnswer(string question, string answer, string? text, out string? problem)
+    public bool TryAnswer(string question, string answer, string? text, out string? problem, string? through = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(question);
         ArgumentException.ThrowIfNullOrWhiteSpace(answer);
+        _answerThrough[question] = through;
 
         if (!_open.Contains(question))
         {
@@ -933,7 +956,7 @@ public sealed class FlowCoordinator
         {
             // The budget's question is the run's alone: more allows each amount once again and the run goes on at the
             // next session; abort ends it as a hard stop does.
-            asked._given.Add(new FlowAnswerEntry(answer, null, "person", null));
+            asked._given.Add(new FlowAnswerEntry(answer, null, "person", null, Through: _answerThrough.GetValueOrDefault(asked.Id), At: _clock.GetUtcNow(), Did: answer == "more" ? "each amount is allowed once again" : "the run ends stopped"));
             asked.State = "answered";
 
             if (answer == "more")
@@ -945,10 +968,12 @@ public sealed class FlowCoordinator
                 RequestStop();
             }
 
+            WriteQuestions();
             return true;
         }
 
         ApplyAnswer(instance!, asked, answer, string.IsNullOrWhiteSpace(text) ? null : text, by: null);
+        WriteQuestions();
         Record(FlowChangeKind.Step, instance, from: FlowInstanceState.Paused, detail: $"'{asked.Id}' answered '{answer}'");
 
         return true;
@@ -961,7 +986,7 @@ public sealed class FlowCoordinator
     /// </summary>
     private void ApplyAnswer(FlowInstance instance, FlowQuestion asked, string answer, string? text, string? by)
     {
-        asked._given.Add(new FlowAnswerEntry(answer, text, by ?? "person", by is null ? null : _answerWhere[asked.Id]));
+        asked._given.Add(new FlowAnswerEntry(answer, text, by ?? "person", by is null ? null : _answerWhere[asked.Id], by is null ? _answerThrough.GetValueOrDefault(asked.Id) : null, _clock.GetUtcNow()));
         asked.State = "answered";
 
         if (answer == "abort" && asked.Kind is not ("failure" or "loopBound"))
@@ -1842,8 +1867,14 @@ public sealed class FlowCoordinator
     private string Ask(FlowInstance instance, string kind, string problem, IReadOnlyList<string> options)
     {
         var id = $"q{++_questionsRaised}";
-        var asked = new FlowQuestion(id, kind, instance.Id, problem, options);
+        var asked = new FlowQuestion(id, kind, instance.Id, problem, options)
+        {
+            RaisedAt = _clock.GetUtcNow(),
+            Tried = TriedOf(instance),
+            Means = MeansOf(instance),
+        };
         _questions.Add(asked);
+        _optionsHeld[id] = HeldOptionsOf(instance.Step, kind, options);
 
         if (ConfiguredFor(instance, kind) is { } configured)
         {
@@ -1865,6 +1896,7 @@ public sealed class FlowCoordinator
                 _answerWhere[id] = where;
                 _answeredAtOnce = true;
                 ApplyAnswer(instance, asked, atOnce, null, by: "configuration");
+                WriteQuestions();
                 return id;
             }
 
@@ -1879,9 +1911,68 @@ public sealed class FlowCoordinator
         _answerable.Add(id, instance);
         instance.State = FlowInstanceState.Paused;
         instance.WaitingQuestion = id;
+
+        // The question is on disk before the step's own record and before the event: a client woken by either reads
+        // what was asked already written.
+        WriteQuestions();
         Record(FlowChangeKind.Step, instance, from: FlowInstanceState.Running, to: FlowInstanceState.Paused, attempt: instance.Attempt, detail: kind);
         return id;
     }
+
+    /// <summary>What the run tried about <paramref name="instance"/> before a question of it asked: its attempts, and the answers its questions were already given.</summary>
+    private string TriedOf(FlowInstance instance)
+    {
+        var given = _questions.Count(question => question.Instance == instance.Id && question.State == "answered");
+        var tried = $"attempt {instance.Attempt.ToString(System.Globalization.CultureInfo.InvariantCulture)} of the step";
+        return given > 0 ? $"{tried}, and {given.ToString(System.Globalization.CultureInfo.InvariantCulture)} answer{(given == 1 ? string.Empty : "s")} given already" : tried;
+    }
+
+    /// <summary>What the answer changes, as the run's person reads it: which steps wait on this one, by name; null where none do.</summary>
+    private string? MeansOf(FlowInstance instance)
+    {
+        var waiting = _created
+            .Where(held => held.DeclaredScope == instance.DeclaredScope && held.Step.DependsOn.Contains(instance.Step.Name, StringComparer.Ordinal))
+            .Select(held => held.Id)
+            .ToList();
+
+        return waiting.Count == 0 ? null : $"'{string.Join("', '", waiting)}' wait{(waiting.Count == 1 ? "s" : string.Empty)} on this";
+    }
+
+    /// <summary>The answers a question takes as its file holds them: what each does, and whether it takes a text.</summary>
+    private IReadOnlyList<FlowQuestionOption> HeldOptionsOf(WorkflowStep? step, string kind, IReadOnlyList<string> options)
+        => [.. options.Select(option => new FlowQuestionOption(option, FlowAnswerDoes.Of(option), kind == "pause" && (step?.Text.Contains(option, StringComparer.Ordinal) ?? false)))];
+
+    /// <summary>Writes the run's questions and answers, whole, through the records seam: the one owner of what every question said.</summary>
+    private void WriteQuestions()
+    {
+        if (_records is null)
+        {
+            return;
+        }
+
+        _records.Question([.. _questions.Select(EntryOf)]);
+    }
+
+    /// <summary>One question as the run's file holds it, from what the coordinator knows.</summary>
+    private FlowQuestionEntry EntryOf(FlowQuestion asked)
+        => new(
+            asked.Id,
+            asked.State,
+            asked.Kind,
+            asked.RaisedAt,
+            [],
+            _optionsHeld.TryGetValue(asked.Id, out var options)
+                ? options
+                : [.. asked.Options.Select(option => new FlowQuestionOption(option, FlowAnswerDoes.Of(option)))],
+            [.. asked.Given.Select(entry => new FlowAnswerRecord(
+                entry.Answer,
+                entry.At ?? asked.RaisedAt,
+                entry.Text,
+                new FlowAnswerBy(entry.By, entry.By == "person" ? entry.Through ?? _answerThrough.GetValueOrDefault(asked.Id) : null, entry.By == "configuration" ? entry.Where : null),
+                entry.Did))],
+            RaisedBy: asked.Instance == "run" ? new FlowQuestionRaisedBy("engine") : new FlowQuestionRaisedBy("step", asked.Instance),
+            ProblemShown: new FlowQuestionProblem(asked.Problem, asked.Tried, asked.Means),
+            Recommendation: FlowRecommendation.NotSought);
 
     /// <summary>
     /// The configured answer a question of <paramref name="kind"/> on <paramref name="instance"/> is given at once:
@@ -2032,8 +2123,10 @@ public sealed class FlowCoordinator
             var reached = ReachedOf(_definition.Budget!);
             var question = BudgetQuestion(reached ?? ("usd", "its budget"));
             _questions.Add(question);
+            _optionsHeld[question.Id] = HeldOptionsOf(null, "runBudget", question.Options);
             _open.Add(question.Id);
             _answerable.Add(question.Id, null);
+            WriteQuestions();
         }
 
         var waiting = _created
@@ -2133,6 +2226,22 @@ public sealed class FlowCoordinator
 
         void Take(Message message)
         {
+            if (message.Offered is { } offered)
+            {
+                // An answer from outside the session - taken from the run's inbox while the engine runs. The loop
+                // alone applies it, for the graph is the loop's alone to change; where the question is no longer
+                // open the answer is refused and said, naming what became of it.
+                var taken = TryAnswer(offered.Question, offered.Answer, offered.Text, out var problem, offered.Through);
+
+                if (!taken)
+                {
+                    Record(FlowChangeKind.Answer, detail: problem);
+                }
+
+                _ = offered.Completion.TrySetResult(taken);
+                return;
+            }
+
             if (message.Instance is null || message.Attempt != message.Instance.Attempt)
             {
                 // A message of an attempt that is over - the step was stopped and runs again, or was answered - says
@@ -3056,6 +3165,36 @@ public sealed class FlowCoordinator
             _spent.Minutes = resume.File.Spent.Minutes;
             _budgetGranted = resume.File.BudgetGranted;
 
+            // The run's open questions are its file's, restored here: the file is the one owner of what every
+            // question said, and the run goes on answering them by id as it did. The asking instance waits as it
+            // was, for what it waits on is its own record's.
+            if (resume.Questions is { } entries)
+            {
+                foreach (var entry in entries.Where(entry => entry.State == "open"))
+                {
+                    var asked = new FlowQuestion(
+                        entry.Id,
+                        entry.Kind,
+                        entry.RaisedBy?.Step ?? "run",
+                        entry.ProblemShown?.Happened ?? entry.Kind,
+                        [.. entry.Options.Select(option => option.Answer)])
+                    {
+                        RaisedAt = entry.RaisedAt,
+                        Tried = entry.ProblemShown?.Tried,
+                        Means = entry.ProblemShown?.Means,
+                    };
+                    _questions.Add(asked);
+                    _optionsHeld[asked.Id] = entry.Options;
+                    _open.Add(asked.Id);
+                    _answerable[asked.Id] = _instances.TryGetValue(asked.Instance, out var waiting) ? waiting : null;
+
+                    if (int.TryParse(asked.Id[1..], System.Globalization.CultureInfo.InvariantCulture, out var raised))
+                    {
+                        _questionsRaised = Math.Max(_questionsRaised, raised);
+                    }
+                }
+            }
+
             if (resume.File.Pause is { } pause && pause.CompletedAt is not null)
             {
                 _pause = new FlowPauseState(pause.Cause, pause.All, pause.At) { CompletedAt = pause.CompletedAt };
@@ -3102,7 +3241,28 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>One thing the coordinator learns while it waits: a step's ending, or an event of one of its legs.</summary>
-    private readonly record struct Message(FlowInstance Instance, FlowStepResult? Result, FlowLegEvent? Leg, (double Usd, long Tokens)? Usage = null, int Attempt = 0);
+    private readonly record struct Message(FlowInstance Instance, FlowStepResult? Result, FlowLegEvent? Leg, (double Usd, long Tokens)? Usage = null, int Attempt = 0, (string Question, string Answer, string? Text, string? Through, TaskCompletionSource<bool> Completion)? Offered = null);
+
+    /// <summary>
+    /// Offers an answer to a running session from outside it - taken from the run's inbox while the engine runs, by
+    /// the same hand a person at the terminal is answered by. The loop alone applies it, for the graph is the loop's
+    /// alone to change; where the question is no longer open - a redirect withdrew it, or another answer came first -
+    /// the answer is refused and said.
+    /// </summary>
+    /// <param name="question">The question's id.</param>
+    /// <param name="answer">The answer, spelled as the question's options spell it.</param>
+    /// <param name="text">The text given with the answer, where it takes one.</param>
+    /// <param name="through">How a person gave it; <c>answer-orchestrator</c> where the command handed it over.</param>
+    /// <returns>Whether the answer was taken, once the session has applied it or refused it.</returns>
+    public Task<bool> OfferAnswerAsync(string question, string answer, string? text = null, string? through = "answer-orchestrator")
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(question);
+        ArgumentException.ThrowIfNullOrWhiteSpace(answer);
+
+        var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _ = _messages.Writer.TryWrite(new Message(null!, null, null, null, 0, (question, answer, text, through, completion)));
+        return completion.Task;
+    }
 
     /// <summary>One event of one leg of a running step.</summary>
     /// <param name="Leg">The leg's name.</param>

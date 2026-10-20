@@ -23,6 +23,13 @@ public interface IFlowRecords
     /// <param name="attempt">Which attempt the change tells of, where one is.</param>
     /// <param name="detail">What the change says in words, where the kinds alone cannot.</param>
     void Write(FlowChangeKind kind, FlowSnapshot snapshot, string? instance = null, string? from = null, string? to = null, int? attempt = null, string? detail = null);
+
+    /// <summary>
+    /// Records the run's questions and answers, whole, in the run's own file: written before the step's own record
+    /// and before the event, for a client woken by either reads what was asked already on disk.
+    /// </summary>
+    /// <param name="questions">Every question the run raised, in the order raised, with every answer each was given.</param>
+    void Question(IReadOnlyList<FlowQuestionEntry> questions);
 }
 
 /// <summary>
@@ -354,6 +361,20 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
         {
             _issues.Write([], _clock.GetUtcNow());
         }
+
+        // The run's questions and answers are created empty with it too: the one owner of what every question said
+        // is there to read from the start, and every entry it ever holds is written whole through this one record.
+        if (_store.ReadFlowQuestions(_layout) is null)
+        {
+            _store.WriteFlowQuestions(_layout, new FlowQuestionsFile(1, _context.Run, _clock.GetUtcNow(), []));
+        }
+    }
+
+    /// <inheritdoc/>
+    void IFlowRecords.Question(IReadOnlyList<FlowQuestionEntry> questions)
+    {
+        ArgumentNullException.ThrowIfNull(questions);
+        _store.WriteFlowQuestions(_layout, new FlowQuestionsFile(1, _context.Run, _clock.GetUtcNow(), questions));
     }
 
     /// <inheritdoc/>
@@ -393,6 +414,7 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
                 FlowChangeKind.Handoff => "handoff",
                 FlowChangeKind.PauseCompleted => "pauseCompleted",
                 FlowChangeKind.SessionEnded => "sessionEnded",
+                FlowChangeKind.Answer => "answer",
                 _ => "step",
             },
             step?.Instance,
@@ -423,7 +445,7 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
             _context.StartCommit,
             _context.Branch,
             snapshot.Pause is { } pause
-                ? new FlowPauseRecord(pause.Cause, pause.All, pause.BeganAt, pause.CompletedAt, [.. pause.Handoffs])
+                ? new FlowPauseRecord(pause.Cause, pause.All, pause.BeganAt, [.. pause.Handoffs], pause.CompletedAt)
                 : null);
     }
 

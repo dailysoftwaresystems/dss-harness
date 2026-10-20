@@ -15,7 +15,8 @@ If a behaviour cannot be expressed in `config.json`, that is a defect.
 Implemented today: `init`, `verify-git`, `create-worktree`, `delete-worktree`,
 `list-worktree`, the orchestrator commands (`create-orchestrator`, `delete-orchestrator`,
 `list-orchestrator`, `create-agent`, `seed-agent`, `refresh-agent`, `rebase-agent`,
-`fold-agent`, `delete-agent`), `validate-workflow`, `export-workflow`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
+`fold-agent`, `delete-agent`), the run commands (`run-orchestrator`, `resume-orchestrator`,
+`answer-orchestrator`, `pause-orchestrator`, `stop-orchestrator`), `validate-workflow`, `export-workflow`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
 `read-anchor`, `read-anchors`, `check-anchor-balance`, `check-anchor-citations`),
 `fix-line-endings`, `check-ci-legs`, `legs`, `host-exec`, `install-missing-tools`,
 `update-tool`, `sync`, `build`, `test`, `run`, `check-mutations`, `clean`, `up`, `down` and
@@ -2581,7 +2582,10 @@ tool replaces, where a green result had quietly stopped meaning anything.
   answers in its own document's shape, never the ledger's: the agent verbs with the agent
   document, empty; `list-orchestrator`, `list-worktree`, `legs`, `install-missing-tools`,
   `check-ci-legs`, `check-anchor-citations`, `check-anchor-balance`, `fix-line-endings`, `validate-workflow`, `export-workflow`, `up` and `down` with their own document
-holding nothing, after `exitCode` and `summary` (`ReportJson.Stopped`);
+  holding nothing, after `exitCode` and `summary` (`ReportJson.Stopped`); the run verbs
+  (`run-orchestrator`, `resume-orchestrator`, `answer-orchestrator`, `pause-orchestrator`,
+  `stop-orchestrator`) with the flow document - the session they would have run, empty
+  (`OrchestrationReports.FlowStopped`);
   `check-mutations --list` with its listing, no legs; and `read-anchor` and `read-anchors`,
   whose document is an array, with that array empty - the process's exit code and the line it
   ends on say the rest. Each command registers which where it is wired (`CommandRunner.Wire`,

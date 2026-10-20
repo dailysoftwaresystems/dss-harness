@@ -404,7 +404,7 @@ public sealed class ChildSessionsTests
         var outcome = command switch
         {
             OrchestratorService.CreateCommand => await kit.Harness.OrchestratorService.CreateAsync(kit.Main, OrchestrationKit.Orchestrator, "model-a", null, null, Token),
-            OrchestratorService.ListCommand => await kit.Harness.OrchestratorService.ListAsync(kit.Main, OrchestrationKit.Orchestrator, json: false, Token),
+            OrchestratorService.ListCommand => await kit.Harness.OrchestratorService.ListAsync(kit.Main, OrchestrationKit.Orchestrator, false, false, json: false, Token),
             OrchestratorService.DeleteCommand => await kit.Harness.OrchestratorService.DeleteAsync(kit.Main, OrchestrationKit.Orchestrator, deleteEvidence: false, Token),
             AgentService.CreateCommand => await kit.Harness.AgentService.CreateAsync(kit.Main, OrchestrationKit.Orchestrator, "a1", "model-b", empty: false, session: null, Token),
             AgentService.SeedCommand => await kit.Harness.AgentService.SeedAsync(kit.Main, OrchestrationKit.Orchestrator, "nobody", empty: false, force: false, Token),
@@ -442,7 +442,7 @@ public sealed class ChildSessionsTests
             Writer(kit, laterStart: false).For(step).Placed(leader, TestHost.AssemblyProgram);
             var record = OrchestratorLayout.ChildFile(step, leader);
 
-            var listed = await kit.Harness.OrchestratorService.ListAsync(kit.Main, OrchestrationKit.Orchestrator, json: false, Token);
+            var listed = await kit.Harness.OrchestratorService.ListAsync(kit.Main, OrchestrationKit.Orchestrator, false, false, json: false, Token);
 
             Assert.True(listed.Succeeded, OrchestrationKit.Describe(listed));
             Assert.True(File.Exists(record));
@@ -505,7 +505,7 @@ public sealed class ChildSessionsTests
             kit,
             OrchestratorService.ListCommand,
             (_, exitCode, summary) => OrchestrationReports.ListStopped(exitCode, summary),
-            services => services.GetRequiredService<IOrchestratorService>().ListAsync(kit.Main, OrchestrationKit.Orchestrator, json: true, Token),
+            services => services.GetRequiredService<IOrchestratorService>().ListAsync(kit.Main, OrchestrationKit.Orchestrator, false, false, json: true, Token),
             replace);
 
     /// <summary>fold-agent --json's dry run of <paramref name="agent"/>, as the command line runs it.</summary>

@@ -52,7 +52,7 @@ public sealed record FlowEvent(
     string? Detail = null)
 {
     /// <summary>Every kind of event a run appends.</summary>
-    public static readonly IReadOnlyList<string> Kinds = ["sessionBegan", "step", "pauseBegan", "handoff", "pauseCompleted", "resumed", "sessionEnded"];
+    public static readonly IReadOnlyList<string> Kinds = ["sessionBegan", "step", "pauseBegan", "handoff", "pauseCompleted", "resumed", "sessionEnded", "answer"];
 
     /// <summary>What is wrong with this event; null when nothing is.</summary>
     public string? Problem()
@@ -257,8 +257,8 @@ public sealed record FlowPauseRecord(
     string Cause,
     bool All,
     [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset At,
-    [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset? CompletedAt,
-    IReadOnlyList<string> Handoffs)
+    IReadOnlyList<string> Handoffs,
+    [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset? CompletedAt = null)
 {
     /// <summary>What is wrong with this record; null when nothing is.</summary>
     public string? Problem()
@@ -503,6 +503,9 @@ public enum FlowChangeKind
 
     /// <summary>A session ended, however it ended.</summary>
     SessionEnded,
+
+    /// <summary>An answer was given from outside the session - taken from the inbox, or refused where its question was no longer open.</summary>
+    Answer,
 }
 
 /// <summary>

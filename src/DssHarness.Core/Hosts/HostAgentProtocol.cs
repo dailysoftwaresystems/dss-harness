@@ -100,9 +100,21 @@ public static class HostAgentProtocol
     /// Commands a host is never asked to run. A host that passed the work on to another host would leave
     /// the machine that asked unable to say where anything ran; and the step that places a contained child
     /// is the process runner's own, which run inside the agent would become the program in its place.
+    ///
+    /// The run verbs are no host's either (part 04, "Commands and use cases"): a flow runs where it was typed, and
+    /// its machine steps reach hosts as legs do - never the session that drives them.
     /// </summary>
     public static IReadOnlyList<string> NotForwardable { get; } =
-        [CommandName, HostExecService.CommandName, Execution.HoldAwakeService.CommandName, Processes.ContainExec.CommandName];
+        [
+            CommandName,
+            HostExecService.CommandName,
+            Execution.HoldAwakeService.CommandName,
+            Processes.ContainExec.CommandName,
+            Orchestration.Flow.FlowService.RunCommand,
+            Orchestration.Flow.FlowService.ResumeCommand,
+            Orchestration.Flow.FlowService.AnswerCommand,
+            Orchestration.Flow.FlowService.PauseCommand,
+            Orchestration.Flow.FlowService.StopCommand];
 
     /// <summary>Whether <paramref name="command"/> is one a host is never asked to run, in whatever case it is typed.</summary>
     public static bool IsNotForwardable(string command) => NotForwardable.Contains(command, StringComparer.OrdinalIgnoreCase);

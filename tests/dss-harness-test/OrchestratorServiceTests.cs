@@ -312,7 +312,7 @@ public sealed class OrchestratorServiceTests
         var kit = await OrchestrationKit.PrepareAsync(temp);
         await kit.CreateAgentAsync("ag", session: "sess-1");
 
-        var listed = await kit.Harness.OrchestratorService.ListAsync(kit.Main, name: null, json: true, Token);
+        var listed = await kit.Harness.OrchestratorService.ListAsync(kit.Main, name: null, false, false, json: true, Token);
 
         Assert.True(listed.Succeeded, OrchestrationKit.Describe(listed));
 
@@ -442,7 +442,7 @@ public sealed class OrchestratorServiceTests
         Assert.True((await kit.DeleteAsync("gone", apply: true, discard: true)).Succeeded);
         OrchestrationKit.Write(kit.Layout.AgentDirectory("odd"), "agent.json", "{");
 
-        var listed = await kit.Harness.OrchestratorService.ListAsync(kit.Main, name: null, json: false, Token);
+        var listed = await kit.Harness.OrchestratorService.ListAsync(kit.Main, name: null, false, false, json: false, Token);
 
         Assert.True(listed.Succeeded, OrchestrationKit.Describe(listed));
         Assert.Contains(listed.Details!, line => line.StartsWith("o1  model model-a, 2 of at most 4 agent(s) open", StringComparison.Ordinal));
@@ -460,8 +460,8 @@ public sealed class OrchestratorServiceTests
         var worktree = await kit.CreateAgentAsync("ag");
         Assert.True((await kit.Harness.WorktreeService.DeleteAsync(kit.Main, "o1/ag", force: true, deleteEvidence: true, cancellationToken: Token)).Succeeded);
 
-        var listed = await kit.Harness.OrchestratorService.ListAsync(kit.Main, "o1", json: true, Token);
-        var unknown = await kit.Harness.OrchestratorService.ListAsync(kit.Main, "nope", json: true, Token);
+        var listed = await kit.Harness.OrchestratorService.ListAsync(kit.Main, "o1", false, false, json: true, Token);
+        var unknown = await kit.Harness.OrchestratorService.ListAsync(kit.Main, "nope", false, false, json: true, Token);
 
         var agent = Assert.Single(Assert.Single(JsonNode.Parse(Assert.Single(listed.Data))!["orchestrators"]!.AsArray())!["agents"]!.AsArray())!;
         Assert.False((bool?)agent["worktreeExists"]);

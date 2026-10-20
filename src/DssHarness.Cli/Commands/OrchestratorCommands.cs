@@ -181,20 +181,38 @@ internal static class ListOrchestratorCommand
         Description = "Print the listing as one JSON document.",
     };
 
+    private static readonly Option<bool> StepsOption = new("--steps")
+    {
+        Description = "For a run, each step instance with its state, its attempt and its agent, from flow.json.",
+    };
+
+    private static readonly Option<bool> QuestionsOption = new("--questions")
+    {
+        Description = "For a run, every question it raised and what became of it, the open ones first, from questions.json.",
+    };
+
     /// <summary>Its --json, which a listing that stops before it lists anything answers with its listing for, listing nothing.</summary>
     private static readonly JsonAnswer JsonAnswerOfList = new(JsonOption, (_, exitCode, summary, _, _) => OrchestrationReports.ListStopped(exitCode, summary));
 
     internal static Command Create()
     {
-        var command = new Command(Name, "List orchestrators, their agents and where each stands, and worktrees below an orchestrator's directory that no agent records.");
+        var command = new Command(Name, "List orchestrators, their agents and where each stands, a run's own lines from flow.json, and worktrees below an orchestrator's directory that no agent records.");
         command.Arguments.Add(NameArgument);
+        command.Options.Add(StepsOption);
+        command.Options.Add(QuestionsOption);
         command.Options.Add(JsonOption);
         GlobalOptions.AddTo(command);
 
         CommandRunner.Wire(
             command,
             (context, cancellationToken) => context.Get<IOrchestratorService>()
-                .ListAsync(context.Directory, context.ParseResult.GetValue(NameArgument), context.Json, cancellationToken),
+                .ListAsync(
+                    context.Directory,
+                    context.ParseResult.GetValue(NameArgument),
+                    context.ParseResult.GetValue(StepsOption),
+                    context.ParseResult.GetValue(QuestionsOption),
+                    context.Json,
+                    cancellationToken),
             JsonAnswerOfList);
 
         return command;

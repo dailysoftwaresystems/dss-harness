@@ -94,6 +94,24 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <summary>The name of the file a run's events are appended to, one JSON object to a line.</summary>
     public const string EventsFileName = "events.jsonl";
 
+    /// <summary>The name of the file every question a run raised and every answer it was given is kept in, whole.</summary>
+    public const string QuestionsFileName = "questions.json";
+
+    /// <summary>The name of the file what another process asked of the running engine is kept in, until it is taken.</summary>
+    public const string StopFileName = "stop.json";
+
+    /// <summary>The name of the file what a person gave from another terminal is kept in, until the engine has written it where it belongs.</summary>
+    public const string InboxFileName = "inbox.json";
+
+    /// <summary>The name of the file a run's report is written in, at the end of every session.</summary>
+    public const string ReportFileName = "report.md";
+
+    /// <summary>The name of the file a run's report is written in as one JSON document, beside its markdown.</summary>
+    public const string ReportJsonFileName = "report.json";
+
+    /// <summary>The directory one call of <c>ask-orchestrator</c> or <c>ask-orchestrator-status</c> is kept in. The engine never reads it.</summary>
+    public const string AsksDirectoryName = "asks";
+
     /// <summary>The name of the file a run's live owner is kept in, beside the run's directory.</summary>
     public const string OwnerFileName = ".owner.json";
 
@@ -256,6 +274,24 @@ public sealed record OrchestratorLayout(string Name, string Directory)
 
     /// <summary>The run's events, append-only, one JSON object to a line.</summary>
     public string EventsFile => Path.Combine(Directory, EventsFileName);
+
+    /// <summary>Every question the run raised and every answer it was given, the open ones among them: the one owner of what a question said.</summary>
+    public string QuestionsFile => Path.Combine(Directory, QuestionsFileName);
+
+    /// <summary>What another process asked of the running engine: a safe pause, or a stop. Read by the engine every two seconds, and taken.</summary>
+    public string StopFile => Path.Combine(Directory, StopFileName);
+
+    /// <summary>What a person gave from another terminal while the engine runs, read as <see cref="StopFile"/> is, and emptied of each thing once the engine has written it where it belongs.</summary>
+    public string InboxFile => Path.Combine(Directory, InboxFileName);
+
+    /// <summary>The run's report, written at the end of every session, however it ended.</summary>
+    public string ReportFile => Path.Combine(Directory, ReportFileName);
+
+    /// <summary>The run's report as one JSON document, beside its markdown.</summary>
+    public string ReportJsonFile => Path.Combine(Directory, ReportJsonFileName);
+
+    /// <summary>The calls of <c>ask-orchestrator</c> and <c>ask-orchestrator-status</c>, one directory each. The engine never reads them.</summary>
+    public string AsksDirectory => Path.Combine(Directory, AsksDirectoryName);
 
     /// <summary>
     /// The run's live owner: its process stamp, beside the run's directory. A live owner refuses a session; a dead one
