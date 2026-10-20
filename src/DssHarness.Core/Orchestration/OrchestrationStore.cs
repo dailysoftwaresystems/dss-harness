@@ -230,6 +230,22 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
         return MachineWideFile.Update(orchestrator.RecordFile, Window, work);
     }
 
+    /// <summary>
+    /// Runs <paramref name="work"/> with no other process deciding about the repository's runs at once: the scan for
+    /// unfinished runs, the choice of a run's name and the creation of its record. <see cref="Exclusively{T}"/> will
+    /// not do for these, since it is a section for one orchestrator's record, and two runs - two orchestrators -
+    /// would take two different ones and both pass.
+    /// </summary>
+    /// <param name="layout">The repository.</param>
+    /// <param name="work">The reading, the decision and the writing, all synchronous.</param>
+    public T AcrossRuns<T>(HarnessLayout layout, Func<T> work)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+        ArgumentNullException.ThrowIfNull(work);
+
+        return MachineWideFile.Update(Path.Combine(layout.OrchestratorsDirectory, ".runs"), Window, work);
+    }
+
     /// <summary>The run's state in one file, or null where the run holds none.</summary>
     /// <param name="orchestrator">The run's orchestrator.</param>
     /// <exception cref="HarnessException">The file cannot be read as one (<see cref="HarnessExit.Refused"/>).</exception>
