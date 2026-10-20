@@ -197,6 +197,7 @@ public static class ServiceRegistration
         services.AddSingleton<IHostSecretsStore, HostSecretsStore>();
         services.AddSingleton<DssHarness.Core.Secrets.AgentKeyStore>();
         services.AddSingleton<DssHarness.Core.Agents.IAgentProviders, DssHarness.Core.Agents.AgentProvidersService>();
+        services.AddSingleton<DssHarness.Core.Agents.ClaudeCode.ClaudeCodeUpdateService>();
         services.AddSingleton<INameLookup, DnsNameLookup>();
         services.AddSingleton<IHostAddressResolver>(provider => new HostAddressResolver(
             provider.GetRequiredService<INameLookup>(),

@@ -187,6 +187,13 @@ public sealed class HarnessConfig
     /// </summary>
     public bool? BalanceKeyUsage { get; init; }
 
+    /// <summary>
+    /// The configuration's clients, by the kind of client each is: a name the tool builds in, its entry saying how a
+    /// model is reached through it. Each key is read by the slice that builds what it says; <c>init</c> writes none,
+    /// and a config that declares none uses every client as it is built in.
+    /// </summary>
+    public Dictionary<string, AgentClientConfig> AgentClients { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+
     private static Dictionary<string, TValue> Map<TValue>() => new(StringComparer.OrdinalIgnoreCase);
 }
 

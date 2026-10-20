@@ -1,6 +1,22 @@
 namespace DssHarness.Core.Configuration;
 
 /// <summary>
+/// One client of the configuration, under <c>agentClients</c>: how a model is reached, named by its kind. A client
+/// names no model, no effort, no address and no key - which model, at what effort, where and with whose key is said by
+/// the step, <c>tierConfig</c> and the provider. Each key is read by the slice that builds what it says.
+/// </summary>
+public sealed class AgentClientConfig
+{
+    /// <summary>
+    /// Whether the tool installs Claude Code with npm where npm has none, and brings one older than it needs up to
+    /// date, before a run (claude-code's key; true where nothing is said). With false the tool installs nothing and
+    /// updates nothing: a run that needs the client and finds Claude Code missing or too old is refused (14), with the
+    /// command.
+    /// </summary>
+    public bool? Update { get; init; }
+}
+
+/// <summary>
 /// A company whose models the tool reaches: the one place a model's API address, its key's name and its client are
 /// said. A provider appoints the NAME of the variable that holds its key, and the value is in the git-ignored slot -
 /// nothing of a key is tracked here.

@@ -2388,8 +2388,25 @@ public static class HelpTopics
         builder.AppendLine("it holds.");
         builder.AppendLine();
         builder.AppendLine("This build checks configurations and definitions against these sections and writes them with");
-        builder.AppendLine($"init (and '{ToolPackage.Command} init' writes the prices it holds, as read on their date); the");
-        builder.AppendLine("clients that reach the companies are what it builds next, and nothing here runs a step.");
+        builder.AppendLine($"init (and '{ToolPackage.Command} init' writes the prices it holds, as read on their date).");
+        builder.AppendLine();
+        builder.AppendLine("The Claude Code this tool uses is the one npm installs, and no other: npm's is the one");
+        builder.AppendLine("that is installed, brought up to date and driven from a command line, and a native");
+        builder.AppendLine("launcher, a Homebrew or WinGet package and any other claude on the PATH is never started,");
+        builder.AppendLine("updated or fallen back to. The tool asks npm where its global packages are and starts the");
+        builder.AppendLine("program the package names, by its full path and never a launcher; on Windows npm.cmd is a");
+        builder.AppendLine("batch file, so the tool does what that file does and starts npm's own npm-cli.js with node.");
+        builder.AppendLine("A run that needs a Claude model through the claude-code client needs npm, and no other run");
+        builder.AppendLine("does: where npm has no Claude Code, or one older than the tool needs, a run that needs it");
+        builder.AppendLine("installs or updates it first, with");
+        builder.AppendLine($"'npm install -g @anthropic-ai/claude-code@{Agents.ClaudeCode.ClaudeCodeUpdateService.Needed}' -");
+        builder.AppendLine("never with sudo, never 'npm update -g', never past the version needed, never beside a");
+        builder.AppendLine("session that is running, and never a program the slot names (CLAUDE_EXECUTABLE: a person's");
+        builder.AppendLine("own choice, started as named). A client's update key (agentClients.<client>.update, true");
+        builder.AppendLine("where nothing is said) and DISABLE_UPDATES in the tool's own environment turn installing");
+        builder.AppendLine("and updating off, and a run that then needs one that is missing or too old is refused with");
+        builder.AppendLine("the command to run by hand. The clients that reach the companies are what it builds next,");
+        builder.AppendLine("and nothing here runs a step.");
 
         return builder.ToString();
     }

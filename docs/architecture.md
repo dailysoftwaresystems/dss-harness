@@ -1314,7 +1314,13 @@ variable of the tool's own environment neither chooses whose key a run bills nor
 files' privacy is asked of the file each name came from when a value is read, as the item rules ask
 of a host's. `list-agent-providers` says the same configuration without saying one key: each
 provider, client and tier, every appointed name present or missing, `--template` the sections as
-`init` writes them, exit 0 whatever is missing. This build checks workflow definitions and
+`init` writes them, exit 0 whatever is missing. The Claude Code the clients will drive is npm's own:
+`NpmClient` finds it (a program, or on Windows what `npm.cmd` would have started - the tool never
+starts a batch file), `ClaudeCodeInstall` reads the package it holds, and
+`ClaudeCodeUpdateService` - the second caller of the shared `ProgramUpdate` sequence `update-tool`
+has - installs it where npm has none and brings one older than the tool needs up to the one version
+it names, never elevated, never beside a running session, never a program the slot names, bounded
+and read back before it is said done. This build checks workflow definitions and
 does not run them: the engine that runs them - the coordinator, the agents, the steps over the
 services the tool already has - is the next thing the tool grows.
 

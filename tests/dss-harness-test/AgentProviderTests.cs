@@ -121,6 +121,39 @@ public sealed class AgentProviderTests
         One(problems, @"'all' cannot be a model's code: a step's effort uses it for every model it does not name");
     }
 
+    /// <summary>A client of the configuration is one the tool builds in; each key of one is read by the slice that builds it.</summary>
+    [Fact]
+    public void AnAgentClientIsOneTheToolBuildsIn()
+    {
+        var mine = new HarnessConfig
+        {
+            Defaults = new HarnessDefaults { AgentTier = "balanced" },
+            Providers = [Provider()],
+            TierConfig = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase) { ["balanced"] = ["glm-5.3"] },
+            AgentClients = new(StringComparer.OrdinalIgnoreCase)
+            {
+                ["claude-code"] = new AgentClientConfig { Update = false },
+                ["mine"] = new AgentClientConfig(),
+            },
+        };
+
+        var (_, problems) = AgentProviders.Resolve(mine);
+
+        One(problems, "agentClients 'mine' is not a client this tool builds in: 'claude-code', 'claude-api', 'glm'");
+
+        var glm = new HarnessConfig
+        {
+            Defaults = new HarnessDefaults { AgentTier = "balanced" },
+            Providers = [Provider()],
+            TierConfig = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase) { ["balanced"] = ["glm-5.3"] },
+            AgentClients = new(StringComparer.OrdinalIgnoreCase) { ["glm"] = new AgentClientConfig { Update = false } },
+        };
+
+        var (_, ofClientAlone) = AgentProviders.Resolve(glm);
+
+        One(ofClientAlone, "agentClients 'glm' names update, a key of the claude-code client alone: whether the tool installs Claude Code with npm and brings one up to date");
+    }
+
     /// <summary>balanceKeyUsage is refused where it is on and a provider with two keys or more lists a model with no price; one key is nothing to balance, and off is never refused.</summary>
     [Fact]
     public void BalanceKeyUsage_IsRefusedWhereASpendCouldNotBeCounted()

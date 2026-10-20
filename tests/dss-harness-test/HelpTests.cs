@@ -151,6 +151,26 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The agent-clients topic says which Claude Code the tool uses and why - npm's, and never a native launcher -,
+    /// that a run which needs it needs npm, what the tool runs to install it and bring it up to date, what it never
+    /// runs, and the two ways to turn it off.
+    /// </summary>
+    [Fact]
+    public async Task AgentClientsTopic_SaysWhichClaudeCodeItUses()
+    {
+        var prose = Prose.Words(HelpText.Of("agent-clients").StandardOutput);
+
+        Assert.Contains("The Claude Code this tool uses is the one npm installs, and no other", prose, StringComparison.Ordinal);
+        Assert.Contains($"'npm install -g @anthropic-ai/claude-code@{DssHarness.Core.Agents.ClaudeCode.ClaudeCodeUpdateService.Needed}'", prose, StringComparison.Ordinal);
+        Assert.Contains("never with sudo, never 'npm update -g', never past the version needed", prose, StringComparison.Ordinal);
+        Assert.Contains("never beside a session that is running", prose, StringComparison.Ordinal);
+        Assert.Contains("A run that needs a Claude model through the claude-code client needs npm, and no other run", prose, StringComparison.Ordinal);
+        Assert.Contains("CLAUDE_EXECUTABLE", prose, StringComparison.Ordinal);
+        Assert.Contains("agentClients.<client>.update", prose, StringComparison.Ordinal);
+        Assert.Contains("DISABLE_UPDATES", prose, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The verdicts topic says what becomes of a build stopped from outside, which is stopped rather than failed - but for
     /// one the harness stopped for hanging, or under another build tool - and of a run killed before it finished, which
     /// reaches no verdict and says nothing itself: the next run in its tree on that machine says it was abandoned, and

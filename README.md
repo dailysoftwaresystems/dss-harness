@@ -464,6 +464,20 @@ machine that only checks a configuration needs no key. The credential slots - th
 value directories and this one among them - are never handed to an agent, seeded from the main tree
 or folded back into it, whatever git or the ignore block says.
 
+The Claude Code this tool uses is the one npm installs, and no other: the tool asks npm where its
+global packages are and starts the program the package names, by its full path - never a launcher,
+never a batch file, and on Windows `npm.cmd` itself is never started: the tool does what that file
+does and starts npm's own `npm-cli.js` with node. A run that needs a Claude model through the
+`claude-code` client needs npm, and no other run does; where npm has no Claude Code, or one older
+than this tool needs, the run installs or updates it first with
+`npm install -g @anthropic-ai/claude-code@2.1.287` - never with sudo, never past the version
+needed, never beside a session of it that is running, under the same machine-wide lock and the same
+never-stopped, read-back sequence `update-tool` has, and never a program the slot names
+(`CLAUDE_EXECUTABLE` is a person's own choice, started as named). A client's `update` key
+(`agentClients.<client>.update`, true by default) and `DISABLE_UPDATES` in the tool's own
+environment turn installing and updating off, and a run that then needs one that is missing or too
+old is refused with the command to run by hand.
+
 ```bash
 dssharness validate-workflow                 # check every declared workflow
 dssharness validate-workflow implementation  # check one

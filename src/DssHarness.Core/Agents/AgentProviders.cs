@@ -117,6 +117,19 @@ public sealed partial class AgentProviders
             problems.Add($"providers '{string.Join("' and '", twice.Select(entry => entry.provider.Name))}' both appoint '{twice.Key}' for a key: a second key is another variable's name");
         }
 
+        // A client is one the tool builds in, its kind; the keys of one entry are read by the slices that build what
+        // they say, and an unknown key of the section is refused where the file is read, as of every section. A key of
+        // one client alone is refused on the others, so a key that loads is a key that is read.
+        foreach (var client in config.AgentClients.Keys.Where(name => ClientKinds.All(kind => !string.Equals(kind.Name, name, StringComparison.Ordinal))))
+        {
+            problems.Add($"agentClients '{client}' is not a client this tool builds in: {string.Join(", ", ClientKinds.Select(kind => $"'{kind.Name}'"))}");
+        }
+
+        foreach (var (client, entry) in config.AgentClients.Where(entry => entry.Value.Update is not null && entry.Key != "claude-code"))
+        {
+            problems.Add($"agentClients '{client}' names update, a key of the claude-code client alone: whether the tool installs Claude Code with npm and brings one up to date");
+        }
+
         foreach (var (provider, at) in providers.Select((entry, at) => (entry, at)))
         {
             var where = $"providers[{at.ToString(CultureInfo.InvariantCulture)}] '{provider.Name}'";
