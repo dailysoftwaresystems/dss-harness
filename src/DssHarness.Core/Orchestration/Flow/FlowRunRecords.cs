@@ -30,6 +30,14 @@ public interface IFlowRecords
     /// </summary>
     /// <param name="questions">Every question the run raised, in the order raised, with every answer each was given.</param>
     void Question(IReadOnlyList<FlowQuestionEntry> questions);
+
+    /// <summary>
+    /// Records the run's pre-existing issues, whole, in the run's own file: each entry added at a triage answer
+    /// <c>list</c>, proven, ids <c>pe-&lt;n&gt;</c> in the order added.
+    /// </summary>
+    /// <param name="issues">Every issue the run listed, in the order it added them.</param>
+    /// <param name="at">When the list was written.</param>
+    void PreExisting(IReadOnlyList<PreExistingIssue> issues, DateTimeOffset at);
 }
 
 /// <summary>
@@ -161,7 +169,8 @@ public sealed class WorkflowStatusWriter
                 snapshot.Steps.Count(step => step.State is FlowInstanceState.Failed),
                 snapshot.Steps.Count(step => step.State is FlowInstanceState.Skipped),
                 snapshot.Steps.Count(step => step.State is FlowInstanceState.Stopped),
-                snapshot.Steps.Count(step => step.State is FlowInstanceState.NotRun)),
+                snapshot.Steps.Count(step => step.State is FlowInstanceState.NotRun),
+                snapshot.PreExisting),
             steps,
             snapshot.EndedAt,
             waiting.Count == 0 ? null : waiting);
@@ -381,6 +390,13 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
     {
         ArgumentNullException.ThrowIfNull(questions);
         _store.WriteFlowQuestions(_layout, new FlowQuestionsFile(1, _context.Run, _clock.GetUtcNow(), questions));
+    }
+
+    /// <inheritdoc/>
+    void IFlowRecords.PreExisting(IReadOnlyList<PreExistingIssue> issues, DateTimeOffset at)
+    {
+        ArgumentNullException.ThrowIfNull(issues);
+        _issues.Write(issues, at);
     }
 
     /// <inheritdoc/>

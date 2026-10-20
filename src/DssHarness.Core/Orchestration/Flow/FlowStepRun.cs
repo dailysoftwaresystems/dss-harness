@@ -11,6 +11,18 @@ namespace DssHarness.Core.Orchestration.Flow;
 public sealed record FlowAnswerGiven(string Question, string Answer);
 
 /// <summary>
+/// One issue a reason step's answer reports having met that was there before the run's changes: it reports; it never
+/// fixes one outside its own work. Each issue raises one instance of the step the reporting step's
+/// <c>onPreExisting</c> names, which triages it.
+/// </summary>
+/// <param name="Title">What it is, in a line.</param>
+/// <param name="Description">What it is, in the words the reporting agent gave.</param>
+/// <param name="Where">The paths or the command it is in, as the repository spells them.</param>
+/// <param name="Evidence">What the agent read or ran and saw: a file and line it quotes, a command and the output.</param>
+/// <param name="Blocks">Whether the issue stops the reporting step's own work.</param>
+public sealed record FlowPreExistingReport(string Title, string Description, string Where, string Evidence, bool Blocks);
+
+/// <summary>
 /// What one step is asked to run: its definition, the instance of it that runs, the scope the instance sits in, and
 /// the answers this visit's questions were given.
 /// </summary>
@@ -23,6 +35,7 @@ public sealed record FlowAnswerGiven(string Question, string Answer);
 /// <param name="Answers">The answers the questions of this visit were given, in the order they were given.</param>
 /// <param name="Events">What the step tells the coordinator as it runs, beside the result it ends with.</param>
 /// <param name="Handoff">The handoff this attempt is given, where a stop cut the attempt before it off; null where it is given none.</param>
+/// <param name="Issue">The pre-existing issue this instance is raised to triage, where it is one; null for every step the schedule starts.</param>
 public sealed record FlowStepRun(
     WorkflowStep Step,
     string Instance,
@@ -32,7 +45,8 @@ public sealed record FlowStepRun(
     int? Iteration,
     IReadOnlyList<FlowAnswerGiven> Answers,
     IFlowRunEvents Events,
-    string? Handoff = null)
+    string? Handoff = null,
+    FlowPreExistingReport? Issue = null)
 {
     /// <summary>Which visit of the step this is: the first, until a redirect sends the run back (the redirect is its own slice).</summary>
     public int Visit => 1;
@@ -134,6 +148,12 @@ public sealed record FlowStepResult
     /// <summary>The step's output, as the run keeps it and later steps read it; <see langword="null"/> where it wrote none.</summary>
     public JsonNode? Output { get; init; }
 
+    /// <summary>
+    /// The issues a reason step's answer reports having met that were there before the run's changes: each raises one
+    /// instance of the step its <c>onPreExisting</c> names, which triages it. Empty for every other step.
+    /// </summary>
+    public IReadOnlyList<FlowPreExistingReport> PreExisting { get; init; } = [];
+
     /// <summary>Every leg the step ran, with each one's own verdict; the steps that run no legs give none.</summary>
     public IReadOnlyList<FlowLeg> Legs { get; init; } = [];
 
@@ -166,8 +186,8 @@ public sealed record FlowStepResult
     public string? ChecksDetail { get; init; }
 
     /// <summary>A result for a step that ended: passed or not, with its code.</summary>
-    public static FlowStepResult Ended(bool passed, int exit, string? error = null, JsonNode? output = null)
-        => new() { Asked = null, Passed = passed, Exit = exit, Error = error, Output = output };
+    public static FlowStepResult Ended(bool passed, int exit, string? error = null, JsonNode? output = null, IReadOnlyList<FlowPreExistingReport>? preExisting = null)
+        => new() { Asked = null, Passed = passed, Exit = exit, Error = error, Output = output, PreExisting = preExisting ?? [] };
 
     /// <summary>A result for a step that asks: no ending, the question open.</summary>
     public static FlowStepResult Asking(FlowQuestion question)

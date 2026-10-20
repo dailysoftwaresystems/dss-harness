@@ -351,6 +351,13 @@ public sealed record WorkflowStatus(
     public static readonly IReadOnlyList<string> RunStatuses = ["Running", "Paused", "Done", "Failed", "Stopped"];
 }
 
+/// <summary>The run's pre-existing issues by what became of them, as <c>workflow.json</c> counts them.</summary>
+/// <param name="Listed">How many the triage answered <c>list</c>: proven, and in the run's own file.</param>
+/// <param name="Fixed">How many a recovery fixed at their root.</param>
+/// <param name="Duplicate">How many the list already held.</param>
+/// <param name="Unproven">How many no one could reproduce on the base commit: never shown to a person as a fact.</param>
+public sealed record WorkflowPreExisting(int Listed, int Fixed, int Duplicate, int Unproven);
+
 /// <summary>Every instance of the run by its state, and their total, as <c>workflow.json</c> holds it.</summary>
 /// <param name="Steps">How many instances the run has made.</param>
 /// <param name="NotStarted">How many have not begun.</param>
@@ -362,7 +369,19 @@ public sealed record WorkflowStatus(
 /// <param name="Skipped">How many the flow decided not to run.</param>
 /// <param name="Stopped">How many a stop ended where they stood.</param>
 /// <param name="NotRun">How many were never reached.</param>
-public sealed record WorkflowProgress(int Steps, int NotStarted, int Running, int Recovering, int Paused, int Done, int Failed, int Skipped, int Stopped, int NotRun)
+/// <param name="PreExisting">The run's pre-existing issues by what became of them; null until it has one.</param>
+public sealed record WorkflowProgress(
+    int Steps,
+    int NotStarted,
+    int Running,
+    int Recovering,
+    int Paused,
+    int Done,
+    int Failed,
+    int Skipped,
+    int Stopped,
+    int NotRun,
+    WorkflowPreExisting? PreExisting = null)
 {
     /// <summary>What is wrong with this progress; null when nothing is.</summary>
     public string? Problem()
@@ -403,8 +422,7 @@ public sealed record WorkflowStepStatus(
 /// <param name="FinishedAt">When this instance ended; null until it has.</param>
 /// <param name="Seconds">What the instance took; null until it finished.</param>
 /// <param name="Recovery">The recovery it is under, where one holds it; null otherwise.</param>
-public sealed record WorkflowInstanceStatus(
-    string Status,
+public sealed record WorkflowInstanceStatus(    string Status,
     int Visit,
     int Attempt,
     int Recoveries,
@@ -565,6 +583,7 @@ public enum FlowChangeKind
 /// <param name="Next">The steps that would start now, in the order they would start.</param>
 /// <param name="WaitingOn">The questions the run holds open, in the order they were raised.</param>
 /// <param name="Redirect">The redirect the run owes and has not made yet; null where none is owed.</param>
+/// <param name="PreExisting">The run's pre-existing issues by what became of them; null until it has one.</param>
 public sealed record FlowSnapshot(
     FlowRunStatus Status,
     DateTimeOffset? EndedAt,
@@ -574,7 +593,8 @@ public sealed record FlowSnapshot(
     IReadOnlyList<FlowSnapshotStep> Steps,
     IReadOnlyList<string> Next,
     IReadOnlyList<string> WaitingOn,
-    FlowRedirectRecord? Redirect = null);
+    FlowRedirectRecord? Redirect = null,
+    WorkflowPreExisting? PreExisting = null);
 
 /// <summary>One step instance as the snapshot holds it: everything its own record and the index say of it.</summary>
 /// <param name="Instance">The instance's id.</param>

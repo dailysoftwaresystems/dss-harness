@@ -174,6 +174,9 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
     /// <summary>What a repeat that ended with its until still false says it left, as its leftover expression read it.</summary>
     public JsonNode? Leftover { get; internal set; }
 
+    /// <summary>The pre-existing issue this instance was raised to triage, where it is one; null for every step the schedule starts.</summary>
+    public FlowPreExistingReport? Issue { get; internal set; }
+
     internal readonly List<FlowAnswerGiven> _answers = [];
     internal Scope? DeclaredScope;
     internal FlowInstance? GroupOf;
@@ -204,6 +207,9 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
 
     /// <summary>The fix a person gave for the failure a recovery of this instance works on, where recoveryBound was answered direct.</summary>
     internal string? Direction;
+
+    /// <summary>Where a visit of the recovery sends the run once its steps are done: the step that gave it its failure, which runs again.</summary>
+    internal FlowInstance? Rerun;
 }
 
 /// <summary>
@@ -287,7 +293,16 @@ public sealed class FlowCoordinator
     private readonly Dictionary<string, string> _direction = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _askedSubject = new(StringComparer.Ordinal);
     private readonly List<FlowInstance> _owedEndings = [];
+    private readonly List<PreExistingIssue> _issues = [];
+    private readonly List<PreExistingTally> _tally = [];
+    private readonly List<FlowInstance> _pendingFixes = [];
     private PendingRedirect? _redirect;
+
+    /// <summary>One pre-existing issue and what became of it, as <c>{run.preExisting}</c> says it and the run counts it.</summary>
+    /// <param name="State">What became of it: <c>listed</c>, <c>being fixed</c>, <c>fixed</c>, <c>duplicate of pe-&lt;n&gt;</c> or <c>unproven</c>.</param>
+    /// <param name="Line">The issue as a person reads it: its title and where it is.</param>
+    /// <param name="Triage">The triage instance that took it; null for none.</param>
+    private sealed record PreExistingTally(string State, string Line, FlowInstance? Triage = null);
 
     /// <summary>One ending whose handlers are raised and not all settled: the source, and what each handler did.</summary>
     /// <param name="Source">The step whose ending raised them.</param>
@@ -1163,7 +1178,10 @@ public sealed class FlowCoordinator
                 _direction[instance.Path] = text ?? string.Empty;
             }
 
-            TakeRecovery(instance);
+            TakeRecoveryOf(
+                instance,
+                instance.Issue is null ? instance : instance.Issue.Blocks == true ? instance.RaisedBy : null,
+                instance.Issue);
             return;
         }
 
@@ -1394,6 +1412,13 @@ public sealed class FlowCoordinator
             {
                 // A handler is never started by the ordinary schedule: what brings it into being is its source's
                 // ending, and until one raises it its name is NotRun, satisfying nothing.
+                continue;
+            }
+
+            if (declaration.Raised is not null)
+            {
+                // A step raised by each pre-existing issue a step reports is never scheduled either: what brings it
+                // into being is the issue, one instance of it for each.
                 continue;
             }
 
@@ -1871,7 +1896,8 @@ public sealed class FlowCoordinator
                         instance.Iteration,
                         [.. instance._answers],
                         new RunEvents(this, instance, attempt),
-                        handoff?.Text),
+                        handoff?.Text,
+                        instance.Issue),
                     token).ConfigureAwait(false);
 
                 _ = _messages.Writer.TryWrite(new Message(instance, result, null, Attempt: attempt));
@@ -2006,6 +2032,117 @@ public sealed class FlowCoordinator
                 HandleFailure(instance);
             }
         }
+
+        if (instance.Step.Raised == WorkflowStep.RaisedByPreExisting && instance.State == FlowInstanceState.Done)
+        {
+            // A triage instance ended: its answer says what becomes of the issue it was raised for.
+            TriageOf(instance);
+        }
+
+        if (result.PreExisting.Count > 0 && instance.Step.OnPreExisting is { } triage && !_pausing && !_stopping)
+        {
+            // Each issue a reason step's answer reports raises one instance of the step its onPreExisting names, which
+            // triages it: one visit of it for each issue, in the order the answer held them.
+            RaiseIssues(instance, triage, result.PreExisting);
+        }
+    }
+
+    /// <summary>Raises one instance of the triage step for each issue a reporting step's answer reported, with the reporting step as its source.</summary>
+    private void RaiseIssues(FlowInstance reported, string triage, IReadOnlyList<FlowPreExistingReport> issues)
+    {
+        var declaration = _definition.Steps.FirstOrDefault(step => step.Name == triage);
+
+        if (declaration is null)
+        {
+            return;
+        }
+
+        foreach (var issue in issues)
+        {
+            var raised = NewVisit(_top, declaration, FlowInstanceState.NotStarted);
+            raised.RaisedBy = reported;
+            raised.Issue = issue;
+        }
+    }
+
+    /// <summary>Acts on the answer a triage instance gave for its issue: fix goes to the recovery, list to the run's file, duplicate and unproven are recorded and not listed.</summary>
+    private void TriageOf(FlowInstance instance)
+    {
+        var course = instance.Output?["course"]?.GetValue<string>();
+
+        switch (course)
+        {
+            case "fix":
+                // The issue is given to the recovery, which fixes it at its root as it fixes a failure; where it
+                // blocks the reporting step, that step runs again from where it stopped once the fix is done. A fix
+                // asked while the recovery is already at work waits for that visit's end: the recovery never calls
+                // itself (V50).
+                _tally.Add(new PreExistingTally("being fixed", $"{TitleOf(instance)} ({WhereOf(instance)})", instance));
+
+                if (_created.Any(atWork => IsRecovery(atWork) && atWork.State is FlowInstanceState.Running or FlowInstanceState.Paused or FlowInstanceState.NotStarted))
+                {
+                    _pendingFixes.Add(instance);
+                    return;
+                }
+
+                TakeRecoveryOf(instance, instance.Issue?.Blocks == true ? instance.RaisedBy : null, instance.Issue);
+                break;
+            case "list":
+                ListIssue(instance);
+                break;
+            case "duplicate":
+                _tally.Add(new PreExistingTally(
+                    instance.Output?["of"]?.GetValue<string>() is { } of ? $"duplicate of {of}" : "duplicate",
+                    TitleOf(instance)));
+                break;
+            case "unproven":
+                // A claim no one could prove is never shown to a person as a fact: the triage instance's own record
+                // keeps why, and nothing is listed.
+                _tally.Add(new PreExistingTally("unproven", TitleOf(instance)));
+                break;
+        }
+    }
+
+    /// <summary>The issue a triage instance was raised for, as the tally names it.</summary>
+    private static string TitleOf(FlowInstance instance)
+        => instance.Issue?.Title ?? instance.Output?["title"]?.GetValue<string>() ?? "an issue";
+
+    /// <summary>Where the issue a triage instance was raised for is, as the tally names it.</summary>
+    private static string WhereOf(FlowInstance instance)
+        => instance.Issue?.Where ?? instance.Output?["where"]?.GetValue<string>() ?? string.Empty;
+
+    /// <summary>Adds the issue a triage instance answered <c>list</c> for to the run's list, proven: the run's own file, whole, in the one order.</summary>
+    private void ListIssue(FlowInstance instance)
+    {
+        var where = instance.Output?["where"] as JsonArray;
+        var proof = instance.Output?["proof"] as JsonObject;
+        var issue = new PreExistingIssue(
+            $"pe-{(_issues.Count + 1).ToString(System.Globalization.CultureInfo.InvariantCulture)}",
+            instance.Output?["title"]?.GetValue<string>() ?? instance.Issue?.Title ?? "an issue",
+            instance.Output?["description"]?.GetValue<string>() ?? instance.Issue?.Description ?? string.Empty,
+            [.. (where ?? []).Select(path => path?.GetValue<string>() ?? instance.Issue?.Where ?? string.Empty)],
+            new PreExistingProof(
+                proof?["kind"]?.GetValue<string>() ?? "read",
+                proof?["at"]?.GetValue<string>() ?? string.Empty,
+                proof?["file"]?.GetValue<string>(),
+                proof?["lines"]?.GetValue<string>(),
+                proof?["quote"]?.GetValue<string>(),
+                proof?["command"]?.GetValue<string>(),
+                proof?["output"]?.GetValue<string>()),
+            instance.Output?["why"]?.GetValue<string>() ?? "none of the three: not related to the work, not critical, and in no step's way",
+            instance.RaisedBy?.Id ?? instance.Id,
+            _clock.GetUtcNow());
+
+        if (issue.Problem() is { } problem)
+        {
+            End(instance, FlowInstanceState.Failed, HarnessExit.ConfigInvalid, $"its answer's issue does not read back: {problem}");
+            HandleFailure(instance);
+            return;
+        }
+
+        _issues.Add(issue);
+        _tally.Add(new PreExistingTally("listed", $"{issue.Title} ({string.Join(", ", issue.Where)})"));
+        _records?.PreExisting(_issues, _clock.GetUtcNow());
     }
 
     /// <summary>Writes what a failure's ending owes its handlers, without raising anything: a pause finds it owed, and the resume makes it.</summary>
@@ -2645,38 +2782,54 @@ public sealed class FlowCoordinator
     /// advisor's recommendation as every question carries one.
     /// </summary>
     private void TakeRecovery(FlowInstance failed)
+        => TakeRecoveryOf(failed, failed, null);
+
+    /// <summary>
+    /// Takes one thing to the workflow's recovery: a failure (the step that failed is what runs again once the
+    /// recovery is done), or an issue a triage answered <c>fix</c> for (the reporting step runs again where the issue
+    /// blocked it, and the run simply goes on where it did not).
+    /// </summary>
+    /// <param name="source">The step whose failure it takes, or the triage instance whose issue it fixes: what its steps read as <c>source</c>.</param>
+    /// <param name="rerun">What runs again once the recovery is done; null where the run only goes on.</param>
+    /// <param name="issue">The issue a triage sent, where one did; null for a failure.</param>
+    private void TakeRecoveryOf(FlowInstance source, FlowInstance? rerun, FlowPreExistingReport? issue)
     {
         var recover = _definition.Recover!;
-        var scope = failed.DeclaredScope!;
-        var key = (scope.Id, failed.Path);
+        var scope = source.DeclaredScope ?? _top;
+        var key = (scope.Id, issue is null ? source.Path : source.Id);
         var visits = _recoveryVisits.TryGetValue(key, out var taken) ? taken + 1 : 1;
         var allowed = (recover.MaxVisits ?? FlowRecover.MostVisits) + _recoveryExtra.GetValueOrDefault(key);
 
         if (visits > allowed)
         {
-            failed.FailureSettled = false;
+            source.FailureSettled = false;
             _ = Ask(
-                failed,
+                source,
                 "recoveryBound",
-                $"'{failed.Step.Name}' failed, and the recovery took it {allowed.ToString(System.Globalization.CultureInfo.InvariantCulture)} time{(allowed == 1 ? string.Empty : "s")} without putting it right ({failed.Exit}: {failed.Error ?? "its work ended failed"})",
-                FlowQuestions.OptionsOf("recoveryBound", failed.Step));
+                issue is { } sent
+                    ? $"'{sent.Title}' is to be fixed at its root, and the recovery has taken it {allowed.ToString(System.Globalization.CultureInfo.InvariantCulture)} time{(allowed == 1 ? string.Empty : "s")} without putting it right"
+                    : $"'{source.Step.Name}' failed, and the recovery took it {allowed.ToString(System.Globalization.CultureInfo.InvariantCulture)} time{(allowed == 1 ? string.Empty : "s")} without putting it right ({source.Exit}: {source.Error ?? "its work ended failed"})",
+                FlowQuestions.OptionsOf("recoveryBound", source.Step));
             return;
         }
 
         _recoveryVisits[key] = visits;
-        failed.FailureSettled = false;
+        source.FailureSettled = false;
 
         var declaration = RecoveryDeclaration();
         var instance = NewVisit(scope, declaration, FlowInstanceState.Running);
-        instance.RaisedBy = failed;
+        instance.RaisedBy = source;
+        instance.Rerun = rerun;
         instance.Visit = visits;
-        instance.Direction = _direction.GetValueOrDefault(failed.Path);
+        instance.Direction = _direction.GetValueOrDefault(source.Path);
 
-        // A block of its own in the scope the step failed in: its steps are scheduled as any scope's are, and read
-        // the failed step as source.
+        // A block of its own in the scope the source stands in: its steps are scheduled as any scope's are, and read
+        // the source - the failed step, or the triage instance and its issue - as source and {issue}.
         instance.OwnScope = NewScope(instance.Id, PathOf(scope, declaration), scope, declaration, FlowValue.Missing, null, null, null);
         instance.OwnScope.OwnGroupInstance = instance;
-        Record(FlowChangeKind.Step, instance, detail: $"the failure of '{failed.Id}' is given to the recovery (visit {visits.ToString(System.Globalization.CultureInfo.InvariantCulture)})");
+        Record(FlowChangeKind.Step, instance, detail: issue is null
+            ? $"the failure of '{source.Id}' is given to the recovery (visit {visits.ToString(System.Globalization.CultureInfo.InvariantCulture)})"
+            : $"the issue '{source.Id}' was sent to fix is given to the recovery (visit {visits.ToString(System.Globalization.CultureInfo.InvariantCulture)})");
     }
 
     /// <summary>Withdraws a question the run no longer waits on: its entry in questions.json says so, and the step's record says why.</summary>
@@ -2980,12 +3133,48 @@ public sealed class FlowCoordinator
         if (IsRecovery(instance) && state == FlowInstanceState.Done && instance.RaisedBy is { } again)
         {
             // onSuccess: failed-step - the step that gave the recovery its failure runs again from where it stopped,
-            // as a new visit with its retries whole; what depended on it was waiting, and starts when it ends.
+            // as a new visit with its retries whole; what depended on it was waiting, and starts when it ends. An
+            // issue the recovery fixed blocks no one, where it did not block its reporter: the run goes on.
             again.FailureSettled = true;
 
-            if (ResolveStep(again.DeclaredScope!, again.Step.Name) is { } declaration)
+            if (again.Issue is not null)
             {
-                DecideRedirectOf(instance, again.DeclaredScope!, declaration);
+                var fixedEntry = _tally.FirstOrDefault(entry => ReferenceEquals(entry.Triage, again));
+
+                if (fixedEntry is not null)
+                {
+                    _tally.Remove(fixedEntry);
+                    _tally.Add(fixedEntry with { State = "fixed" });
+                }
+            }
+
+            if (instance.Rerun is { } target && target.DeclaredScope is { } targetScope && ResolveStep(targetScope, target.Step.Name) is { } declaration)
+            {
+                DecideRedirectOf(instance, targetScope, declaration);
+            }
+        }
+
+        if (IsRecovery(instance) && state is FlowInstanceState.Done or FlowInstanceState.Failed)
+        {
+            DrainPendingFixes();
+        }
+    }
+
+    /// <summary>Gives the recovery each issue a triage answered fix for while a visit of it was already at work: one at a time, for the recovery never calls itself (V50).</summary>
+    private void DrainPendingFixes()
+    {
+        if (_created.Any(atWork => IsRecovery(atWork) && atWork.State is FlowInstanceState.Running or FlowInstanceState.Paused or FlowInstanceState.NotStarted))
+        {
+            return;
+        }
+
+        foreach (var waiting in _pendingFixes.ToList())
+        {
+            _ = _pendingFixes.Remove(waiting);
+
+            if (waiting.State == FlowInstanceState.Done)
+            {
+                TriageOf(waiting);
             }
         }
     }
@@ -3442,6 +3631,22 @@ public sealed class FlowCoordinator
                 return scope.Iteration is { } iteration ? FlowValue.Of((long)iteration) : FlowValue.Missing;
             case "visit":
                 return FlowValue.Of((long)(reader?.Visit ?? 1));
+            case "issue":
+            {
+                // The issue a raised instance or the recovery over it triages: the item itself, as a read sees it.
+                var item = reader?.Issue ?? source?.Issue;
+
+                return item is { } found
+                    ? FlowValue.Of(new JsonObject
+                    {
+                        ["title"] = found.Title,
+                        ["description"] = found.Description,
+                        ["where"] = found.Where,
+                        ["evidence"] = found.Evidence,
+                        ["blocks"] = found.Blocks,
+                    })
+                    : FlowValue.Missing;
+            }
             case "previous":
                 return PreviousOf(scope) is { } before ? FlowValue.Of(MembersObjectOf(before)) : FlowValue.Missing;
             case "run":
@@ -3616,6 +3821,7 @@ public sealed class FlowCoordinator
         var leftover = string.Join("; ", _created
             .Where(instance => instance.Step.Repeat?.Leftover is not null && instance.Leftover is not null)
             .Select(instance => $"'{instance.Id}' left {FlowValue.Of(instance.Leftover!.DeepClone()).AsTemplateText()}"));
+        var preExisting = string.Join("; ", _tally.Select(entry => $"{entry.State} - {entry.Line}"));
 
         return new JsonObject
         {
@@ -3627,6 +3833,7 @@ public sealed class FlowCoordinator
             ["stopped"] = _stopping,
             ["passedOver"] = main.Count(instance => instance.PassedOver),
             ["leftover"] = leftover,
+            ["preExisting"] = preExisting,
         };
     }
 
@@ -3972,7 +4179,12 @@ public sealed class FlowCoordinator
             waiting,
             _redirect is { } redirect
                 ? new FlowRedirectRecord(redirect.Handler.Id, redirect.Target, [.. redirect.Set.Select(entry => entry.Scope.Members.GetValueOrDefault(entry.Declaration.Name)?.Id ?? entry.Declaration.Name)])
-                : null);
+                : null,
+            _tally.Count == 0 ? null : new WorkflowPreExisting(
+                _tally.Count(entry => entry.State == "listed"),
+                _tally.Count(entry => entry.State == "fixed"),
+                _tally.Count(entry => entry.State.StartsWith("duplicate", StringComparison.Ordinal)),
+                _tally.Count(entry => entry.State == "unproven")));
     }
 
     /// <summary>One instance, as its records read it.</summary>
@@ -4278,6 +4490,36 @@ public sealed class FlowCoordinator
             _spent.Tokens = resume.File.Spent.Tokens;
             _spent.Minutes = resume.File.Spent.Minutes;
             _budgetGranted = resume.File.BudgetGranted;
+
+            // The issues the run listed are its file's, restored whole; what became of each the tally rebuilds from
+            // the triage instances' own records, for the file holds only the listed ones.
+            if (resume.Issues is { } listed)
+            {
+                _issues.AddRange(listed);
+            }
+
+            foreach (var listedIssue in _issues)
+            {
+                _tally.Add(new PreExistingTally("listed", $"{listedIssue.Title} ({string.Join(", ", listedIssue.Where)})"));
+            }
+
+            foreach (var triage in _created.Where(created => created.Step.Raised == WorkflowStep.RaisedByPreExisting))
+            {
+                var course = triage.Output?["course"]?.GetValue<string>();
+
+                if (course is "fix")
+                {
+                    var atWork = _created.Any(created => IsRecovery(created) && ReferenceEquals(created.RaisedBy, triage)
+                        && created.State is FlowInstanceState.Running or FlowInstanceState.Paused or FlowInstanceState.NotStarted);
+                    _tally.Add(new PreExistingTally(atWork ? "being fixed" : "fixed", $"{TitleOf(triage)} ({WhereOf(triage)})", triage));
+                }
+                else if (course is "duplicate" or "unproven")
+                {
+                    _tally.Add(new PreExistingTally(
+                        course == "duplicate" && triage.Output?["of"]?.GetValue<string>() is { } of ? $"duplicate of {of}" : course!,
+                        TitleOf(triage)));
+                }
+            }
 
             // The run's open questions are its file's, restored here: the file is the one owner of what every
             // question said, and the run goes on answering them by id as it did. The asking instance waits as it
