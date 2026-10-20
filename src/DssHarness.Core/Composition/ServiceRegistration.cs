@@ -195,6 +195,8 @@ public static class ServiceRegistration
         // resolved with a retry before ssh is started, and where each program is on it is measured
         // per connection rather than assumed from a login shell's PATH.
         services.AddSingleton<IHostSecretsStore, HostSecretsStore>();
+        services.AddSingleton<DssHarness.Core.Secrets.AgentKeyStore>();
+        services.AddSingleton<DssHarness.Core.Agents.IAgentProviders, DssHarness.Core.Agents.AgentProvidersService>();
         services.AddSingleton<INameLookup, DnsNameLookup>();
         services.AddSingleton<IHostAddressResolver>(provider => new HostAddressResolver(
             provider.GetRequiredService<INameLookup>(),

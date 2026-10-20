@@ -377,7 +377,11 @@ public sealed class WorkflowExportServiceTests
         var files = fileSystem ?? harness.FileSystem;
 
         return new WorkflowExportService(
-            new WorkflowValidationService(harness.ContextLoader, files, harness.Platform),
+            new WorkflowValidationService(
+                harness.ContextLoader,
+                files,
+                harness.Platform,
+                new DssHarness.Core.Secrets.AgentKeyStore(files, harness.FilePermissions, harness.Platform)),
             files,
             process ?? new FixedProcessContext());
     }

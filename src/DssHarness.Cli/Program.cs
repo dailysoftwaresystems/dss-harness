@@ -24,6 +24,7 @@ root.Subcommands.Add(ListWorktreeCommand.Create());
 root.Subcommands.Add(CreateOrchestratorCommand.Create());
 root.Subcommands.Add(DeleteOrchestratorCommand.Create());
 root.Subcommands.Add(ListOrchestratorCommand.Create());
+root.Subcommands.Add(ListAgentProviderCommand.Create());
 root.Subcommands.Add(RunOrchestratorCommand.Create());
 root.Subcommands.Add(ResumeOrchestratorCommand.Create());
 root.Subcommands.Add(AnswerOrchestratorCommand.Create());

@@ -32,14 +32,47 @@ public sealed class WorkflowValidationServiceTests
         Assert.Equal($"ok {Shown(Default)} (80 steps, 46 recovering, 46 reasoning)", report.Lines[0]);
         Assert.Contains("step 'planning.plan' (best): claude-fable-5-1 at xhigh, glm-5.3 at max", report.Lines);
         Assert.Contains("step 'intake.triage' (high): claude-opus-5-5 at high, glm-5.3 at high", report.Lines);
-        Assert.All(
-            report.Lines.Skip(1),
-            line => Assert.True(line.StartsWith("step ", StringComparison.Ordinal) || line.StartsWith("advisor ", StringComparison.Ordinal) || line.StartsWith("reporter ", StringComparison.Ordinal), $"a level line: {line}"));
+
+        // The slot holds no key in a repository just initialized, so each provider's key is named as missing with every
+        // step that needs one - every step's first model is Anthropic's, GLM a later model of each tier.
+        var missingKeys = report.Lines.Where(line => line.StartsWith("no file under", StringComparison.Ordinal)).ToList();
+
+        Assert.Equal(2, missingKeys.Count);
+        Assert.StartsWith(
+            $"no file under '{DssHarness.Core.Repository.HarnessLayout.WorkflowsEnvSlotRelative}/' declares 'ANTHROPIC_API_KEY', the name provider 'anthropic' appoints for its key (its apiKeyNames); the steps that need it: step 'intake.priority', step 'intake.triage', step 'planning.plan'",
+            missingKeys[0]);
+        Assert.StartsWith(
+            $"no file under '{DssHarness.Core.Repository.HarnessLayout.WorkflowsEnvSlotRelative}/' declares 'ZAI_API_KEY', the name provider 'zai' appoints for its key (its apiKeyNames); the steps that need it: step 'intake.priority' (a later model of its tier)",
+            missingKeys[1]);
+        Assert.DoesNotContain("(a later model of its tier)", missingKeys[0]);
+        Assert.EndsWith(", advisor, reporter", missingKeys[0]);
+        Assert.EndsWith(", advisor (a later model of its tier), reporter (a later model of its tier)", missingKeys[1]);
 
         var outcome = WorkflowValidationReports.Render(report, json: false);
 
         Assert.Equal(HarnessExit.Success, outcome.ExitCode);
         Assert.Equal("1 workflow(s) checked, all valid", outcome.Message);
+    }
+
+    /// <summary>
+    /// A slot that holds a provider's key takes its missing-key line away, and the check passes either way: which names
+    /// the slot holds is no problem of the definition, so a machine that only checks a configuration needs no key.
+    /// </summary>
+    [Fact]
+    public async Task AProviderWhoseKeyTheSlotHolds_IsNotNamedAsMissing()
+    {
+        using var repository = await RepositoryAsync(config: null);
+        File.WriteAllText(Path.Combine(repository.Path, ".harness-config", "workflows", ".env", "keys.env"), "ZAI_API_KEY=one\n");
+
+        var report = await Service(repository).CheckAsync(repository.Path, named: null, TestContext.Current.CancellationToken);
+
+        Assert.True(report.Passed);
+        var missing = report.Lines.Where(line => line.StartsWith("no file under", StringComparison.Ordinal)).ToList();
+
+        Assert.Single(missing);
+        Assert.StartsWith(
+            $"no file under '{DssHarness.Core.Repository.HarnessLayout.WorkflowsEnvSlotRelative}/' declares 'ANTHROPIC_API_KEY', the name provider 'anthropic' appoints for its key",
+            missing[0]);
     }
 
     /// <summary>
@@ -126,7 +159,12 @@ public sealed class WorkflowValidationServiceTests
         Assert.Equal($"ok {Shown(Default)} (80 steps, 46 recovering, 46 reasoning)", report.Lines[0]);
         Assert.All(
             report.Lines.Skip(1).TakeWhile(line => !line.StartsWith(Shown("small"), StringComparison.Ordinal)),
-            line => Assert.True(line.StartsWith("step ", StringComparison.Ordinal) || line.StartsWith("advisor ", StringComparison.Ordinal) || line.StartsWith("reporter ", StringComparison.Ordinal), $"a level line: {line}"));
+            line => Assert.True(
+                line.StartsWith("step ", StringComparison.Ordinal)
+                    || line.StartsWith("advisor ", StringComparison.Ordinal)
+                    || line.StartsWith("reporter ", StringComparison.Ordinal)
+                    || line.StartsWith("no file under", StringComparison.Ordinal),
+                $"a level or missing-key line: {line}"));
         Assert.Equal(
             [
                 $"{Shown("small")}: 'agents/implementer.md', step 'make''s agent, is not at '.harness-config/workflows/small/agents/implementer.md'; write it there, beside the definition that names it",
@@ -134,7 +172,11 @@ public sealed class WorkflowValidationServiceTests
                 $"{Shown("small")}: 'prompts/work.md', step 'draft''s prompt, is not at '.harness-config/workflows/small/prompts/work.md'; write it there, beside the definition that names it",
                 $"{Shown("small")}: 'schemas/work.json', step 'draft''s outputs, is not at '.harness-config/workflows/small/schemas/work.json'; write it there, beside the definition that names it",
             ],
-            report.Lines.Skip(1).SkipWhile(line => line.StartsWith("step ", StringComparison.Ordinal) || line.StartsWith("advisor ", StringComparison.Ordinal) || line.StartsWith("reporter ", StringComparison.Ordinal)));
+            report.Lines.Skip(1).SkipWhile(line =>
+                line.StartsWith("step ", StringComparison.Ordinal)
+                    || line.StartsWith("advisor ", StringComparison.Ordinal)
+                    || line.StartsWith("reporter ", StringComparison.Ordinal)
+                    || line.StartsWith("no file under", StringComparison.Ordinal)));
         Assert.Equal([true, false], report.Workflows.Select(workflow => workflow.Holds));
 
         var outcome = WorkflowValidationReports.Render(report, json: false);
@@ -470,7 +512,13 @@ public sealed class WorkflowValidationServiceTests
         Assert.Equal($"ok {Shown(Default)} (80 steps, 46 recovering, 46 reasoning)", report.Lines[1]);
         Assert.All(
             report.Lines.Skip(2),
-            line => Assert.True(line.StartsWith("step ", StringComparison.Ordinal) || line.StartsWith("advisor ", StringComparison.Ordinal) || line.StartsWith("reporter ", StringComparison.Ordinal), $"a level line: {line}"));
+            line => Assert.True(
+                line.StartsWith("step ", StringComparison.Ordinal)
+                    || line.StartsWith("advisor ", StringComparison.Ordinal)
+                    || line.StartsWith("reporter ", StringComparison.Ordinal)
+                    || line.StartsWith("no file under", StringComparison.Ordinal),
+                $"a level or missing-key line: {line}"));
+        Assert.Equal(2, report.Lines.Count(line => line.StartsWith("no file under", StringComparison.Ordinal)));
     }
 
     /// <summary>A schema the disk will not give up is a problem naming it, with the disk's reason, as a missing one is.</summary>
@@ -1134,7 +1182,11 @@ public sealed class WorkflowValidationServiceTests
     }
 
     private static WorkflowValidationService Service(Repository repository, IFileSystem? fileSystem = null)
-        => new(repository.Harness.ContextLoader, fileSystem ?? repository.Harness.FileSystem, repository.Harness.Platform);
+        => new(
+            repository.Harness.ContextLoader,
+            fileSystem ?? repository.Harness.FileSystem,
+            repository.Harness.Platform,
+            new DssHarness.Core.Secrets.AgentKeyStore(fileSystem ?? repository.Harness.FileSystem, repository.Harness.FilePermissions, repository.Harness.Platform));
 
     /// <summary>
     /// A repository of one commit whose config declares the workflows asked for, with the default's files written where

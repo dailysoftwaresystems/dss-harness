@@ -1,0 +1,138 @@
+using DssHarness.Core.Application;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Orchestration;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
+using DssHarness.Core.Secrets;
+
+namespace DssHarness.Core.Agents;
+
+/// <summary>
+/// The configuration's providers, models, tiers and keys as one listing, for the command line now and a settings
+/// screen later: which names the slot holds is said by name alone, so nothing this answers could carry a value.
+/// </summary>
+public interface IAgentProviders : IUseCase
+{
+    /// <summary>
+    /// Lists the providers, models, tiers, clients and appointed names of the configuration at
+    /// <paramref name="startDirectory"/>'s repository, or the sections as <c>init</c> writes them where
+    /// <paramref name="template"/> is asked.
+    /// </summary>
+    /// <param name="startDirectory">A directory inside the repository.</param>
+    /// <param name="template">Print the agent sections as <c>init</c> writes them into a new config, to paste into an existing one.</param>
+    /// <param name="json">Answer with one JSON document rather than lines.</param>
+    /// <param name="cancellationToken">Stops the listing.</param>
+    Task<CommandOutcome> ListAsync(string startDirectory, bool template, bool json, CancellationToken cancellationToken = default);
+}
+
+/// <inheritdoc cref="IAgentProviders"/>
+public sealed class AgentProvidersService(
+    IHarnessContextLoader contextLoader,
+    IHostPlatform platform,
+    AgentKeyStore keys) : IAgentProviders
+{
+    /// <summary>The command this service answers.</summary>
+    public const string ListCommand = "list-agent-providers";
+
+    private readonly IHarnessContextLoader _contextLoader = contextLoader;
+    private readonly IHostPlatform _platform = platform;
+    private readonly AgentKeyStore _keys = keys;
+
+    /// <inheritdoc/>
+    public async Task<CommandOutcome> ListAsync(string startDirectory, bool template, bool json, CancellationToken cancellationToken = default)
+    {
+        var context = await MainTree.LoadAsync(_contextLoader, _platform, startDirectory, cancellationToken).ConfigureAwait(false);
+
+        if (template)
+        {
+            return AgentProviderReports.Template(json);
+        }
+
+        var resolved = AgentProviders.Resolve(context.Config);
+
+        if (resolved.Problems is [var problem, ..])
+        {
+            return CommandOutcome.Failed(
+                HarnessExit.ConfigInvalid,
+                $"the agent sections of the configuration do not read: {problem}",
+                resolved.Problems);
+        }
+
+        var present = _keys.Present(context.Layout);
+
+        if (present.Problems.Count > 0)
+        {
+            return CommandOutcome.Failed(
+                HarnessExit.ConfigInvalid,
+                $"the key slot '{HarnessLayout.WorkflowsEnvSlotRelative}/' does not read",
+                present.Problems);
+        }
+
+        return AgentProviderReports.List(List(context.Config, context.Layout, present), json);
+    }
+
+    /// <summary>Builds the listing of one configuration and one slot's presence, every problem already refused.</summary>
+    private AgentProviderList List(HarnessConfig config, HarnessLayout layout, AgentSlotPresent present)
+    {
+        bool Holds(string name) => present.Holds(name);
+
+        List<AgentProviderListing> providers = [.. config.Providers.Select(provider => new AgentProviderListing(
+            provider.Name,
+            provider.Type,
+            provider.Api,
+            provider.Client,
+            [.. provider.ApiKeyNames.Select(name => new AgentKeyListing(name, Holds(name)))],
+            [.. provider.Models.Select(model => new AgentModelListing(
+                model.Code,
+                model.Name,
+                model.Tiers,
+                model.Efforts,
+                model.ContextTokens,
+                model.MaxOutputTokens,
+                model.PriceInputMiss is not null || model.PriceOutput is not null,
+                AgentProviders.PricesOf(model).ToDictionary(price => price.Key, price => price.Value)))],
+            provider.Currency,
+            provider.ReadOn))];
+
+        List<AgentTierListing> tiers = [.. config.TierConfig.Select(tier => new AgentTierListing(
+            tier.Key,
+            [.. tier.Value.Select(code => config.Providers.SelectMany(provider => provider.Models)
+                .FirstOrDefault(model => model.Code == code) is { } named ? (named.Code, named.Name) : (code, code))]))];
+
+        List<string> appointed = [.. config.Providers.SelectMany(provider => provider.ApiKeyNames)];
+
+        var clients = new List<AgentClientListing>();
+
+        foreach (var client in config.Providers.Select(provider => provider.Client).Distinct(StringComparer.Ordinal))
+        {
+            // Only a client that signs in is said: a pure API client - glm - signs each request with its provider's
+            // key, which the provider's own row says, and appoints no name of its own. Until the configuration's
+            // clients are read (their section is later work), a sign-in client signs in with the machine's login.
+            if (client == "claude-code")
+            {
+                clients.Add(new AgentClientListing(client, "the machine's login", []));
+            }
+            else if (client == "claude-api")
+            {
+                foreach (var provider in config.Providers.Where(provider => provider.Client == client))
+                {
+                    clients.Add(new AgentClientListing(
+                        client,
+                        $"the key of provider '{provider.Name}'",
+                        [.. provider.ApiKeyNames.Select(name => new AgentKeyListing(name, Holds(name)))]));
+                }
+            }
+        }
+
+        return new AgentProviderList(
+            HarnessLayout.WorkflowsEnvSlotRelative + "/",
+            present.Files.Count,
+            providers,
+            config.BalanceKeyUsage is true,
+            tiers,
+            clients,
+            [.. present.Names.Where(name => !appointed.Contains(name, StringComparer.OrdinalIgnoreCase))]);
+    }
+}

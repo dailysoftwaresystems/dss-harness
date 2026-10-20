@@ -48,6 +48,17 @@ public sealed class ItemEnvironment(IFileSystem fileSystem, IFilePermissions fil
     private readonly IFilePermissions _filePermissions = filePermissions;
 
     /// <summary>
+    /// The command that makes a file private, said the way this system reads one - the one owner of those words, for
+    /// every reader that refuses a file other users can read or change.
+    /// </summary>
+    /// <param name="platform">The platform the file is read on.</param>
+    /// <param name="path">The file.</param>
+    public static string HowToProtect(IHostPlatform platform, string path)
+        => platform.Current == PlatformId.Windows
+            ? $"make it private with: icacls \"{path}\" /inheritance:r /grant:r \"%USERNAME%:F\""
+            : $"make it private with: chmod 600 '{path}'";
+
+    /// <summary>
     /// Reads an item's environment file into its declared keys, filling in the default of every key
     /// that has one, or names the one thing to fix: the file's permissions, or a key that is absent
     /// or blank.

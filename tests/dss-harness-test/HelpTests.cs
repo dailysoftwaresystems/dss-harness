@@ -125,9 +125,10 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
-    /// The layout topic names the agent clients' key slot, in the workflows directory beside the
-    /// workflows' own: init creates its placeholder and ignores what it holds, nothing this build
-    /// runs reads it yet, and no workflow may take its name.
+    /// The layout topic names the agent clients' key slot, in the workflows directory beside the workflows' own: init
+    /// creates its placeholder and ignores what it holds, the keys are read from it and from nowhere else, and no
+    /// workflow may take its name. The agent-clients topic holds a sample file for it, one line per appointed name
+    /// saying what its value is, none filled in.
     /// </summary>
     [Fact]
     public async Task LayoutTopic_NamesTheAgentClientsKeySlot()
@@ -136,10 +137,17 @@ public sealed partial class HelpTests
         var prose = Prose.Words(result.StandardOutput);
 
         Assert.Contains(
-            ".harness-config/workflows/.env/ contents ignored; kept for the agent clients' keys and settings, which this build "
-                + "does not read yet; no workflow may be named .env",
+            ".harness-config/workflows/.env/ contents ignored; the agent clients' keys, NAME=value files, every file merged, "
+                + "no key read from anywhere else; no workflow may be named .env",
             prose,
             StringComparison.Ordinal);
+
+        var clients = Prose.Words(HelpText.Of("agent-clients").StandardOutput);
+
+        Assert.Contains("A sample for the providers init declares, none filled in:", clients, StringComparison.Ordinal);
+        Assert.Contains("# .harness-config/workflows/.env/keys.env", clients, StringComparison.Ordinal);
+        Assert.Contains("ANTHROPIC_API_KEY= # the Anthropic API key", clients, StringComparison.Ordinal);
+        Assert.Contains("ZAI_API_KEY= # the Z.AI API key", clients, StringComparison.Ordinal);
     }
 
     /// <summary>

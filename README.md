@@ -209,7 +209,7 @@ in `config.json`.
 .harness-config/config.json                  tracked; the whole contract
 .harness-config/workflows/<name>/<name>.yml  tracked; one directory per workflow, its definition
 .harness-config/workflows/<name>/...         tracked; every file that definition names - its agents, prompts, schemas
-.harness-config/workflows/.env/              contents ignored, .gitkeep tracked; kept for the agent clients' keys and settings, which this build does not read yet
+.harness-config/workflows/.env/              contents ignored, .gitkeep tracked; the agent clients' keys: NAME=value files, every file merged, no key read from anywhere else
 .harness-config/runner/actions/<name>/<name>.yml   tracked; one directory per action
 .harness-config/runner/actions/<name>/...          tracked; whatever its steps run
 .harness-config/runner/.env/                 contents ignored, .gitkeep tracked
@@ -448,11 +448,30 @@ expression that switches it - where it reads false the step gives no filter and 
 legs runs, as the shipped `verify` steps do where the run's input `affectedTests` is off, each item
 tested on its own tests only where the run turns it on (`--input affectedTests=on`).
 
+The models a step runs on are the configuration's, under `providers`: each provider is a company
+whose models the tool will reach - its API's address, its keys' names, its client - and each model's
+entry says what it takes, holds and costs, with the date its numbers were read. A provider's keys
+are `apiKeyNames`, the names of the variables that hold them in the git-ignored slot
+`.harness-config/workflows/.env/`, in the order they are tried; a second key of one company is a
+second name in the list, and no key is read from the process environment - a CI machine writes the
+file. `list-agent-providers` says it all without saying one key: each provider, client and tier, and
+for every appointed name `present` or `missing`, exit 0 whatever is missing; `--template` prints
+the agent sections as `init` writes them into a new config, to paste into an existing one. A slot
+file other users can change or read is refused with the command that fixes it, and a name declared
+in two of its files is refused as the runner's value directories refuse one. `validate-workflow`
+names every key no file of the slot declares, with the steps that need it, and still passes - a
+machine that only checks a configuration needs no key. The credential slots - the runner's two
+value directories and this one among them - are never handed to an agent, seeded from the main tree
+or folded back into it, whatever git or the ignore block says.
+
 ```bash
 dssharness validate-workflow                 # check every declared workflow
 dssharness validate-workflow implementation  # check one
+dssharness list-agent-providers              # each provider, client, tier and key, present or missing
+dssharness list-agent-providers --template   # the agent sections, to paste into an existing config
 dssharness export-workflow implementation --shipped --to ../mine  # the shipped one, to make your own
 dssharness help workflows                    # the file, every step type and every key
+dssharness help agent-clients                # providers, tiers, efforts and the key slot
 ```
 
 `export-workflow <workflow> --to <dir>` copies a workflow - its yml and every file it names, and

@@ -82,7 +82,8 @@ public sealed record WorkflowValidationReport(string Root, IReadOnlyList<Workflo
 public sealed class WorkflowValidationService(
     IHarnessContextLoader contextLoader,
     IFileSystem fileSystem,
-    IHostPlatform platform) : IWorkflowValidationService
+    IHostPlatform platform,
+    DssHarness.Core.Secrets.AgentKeyStore keys) : IWorkflowValidationService
 {
     /// <summary>The command this service reports under.</summary>
     public const string CommandName = "validate-workflow";
@@ -90,6 +91,7 @@ public sealed class WorkflowValidationService(
     private readonly IHarnessContextLoader _contextLoader = contextLoader;
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly IHostPlatform _platform = platform;
+    private readonly DssHarness.Core.Secrets.AgentKeyStore _keys = keys;
 
     /// <inheritdoc/>
     public async Task<WorkflowValidationReport> CheckAsync(
@@ -159,22 +161,33 @@ public sealed class WorkflowValidationService(
             resolved.Providers));
         problems.AddRange(Files(definition, directory, name, context.Config));
 
+        // The key slot's own problems - a name declared twice, a line that defines nothing - are the configuration's,
+        // said where the definition is checked; which names it holds is no problem at all, so a machine that only
+        // checks a configuration needs no key, and the steps that would need one are said under the line that says
+        // the definition holds.
+        var slot = _keys.Present(context.Layout);
+        problems.AddRange(slot.Problems);
+
         if (problems.Count > 0)
         {
             return new WorkflowCheck(name, [.. problems.Select(problem => $"{Shown(name)}: {problem}")]);
         }
 
         // The recovery is counted apart: its steps run only where something failed. Under the one line that says the
-        // definition holds, each agent's models and the level each runs at, resolved the same check resolved them.
+        // definition holds, each agent's models and the level each runs at, resolved the same check resolved them, and
+        // the keys no file of the slot declares, with the steps that need them.
         var steps = Count(definition.Steps);
         var recovering = definition.Recover is { } recover ? Count(recover.Steps) : 0;
         var reasons = Count([.. definition.Steps, .. definition.Recover?.Steps ?? []], "reason");
         var recovery = definition.Recover is null ? string.Empty : $", {recovering} recovering";
+        IReadOnlyList<string> agents = resolved.Providers is { } providers
+            ? [.. WorkflowValidator.ModelLevels(definition, providers), .. WorkflowValidator.MissingKeys(definition, providers, slot.Names)]
+            : [];
         return new WorkflowCheck(
             name,
             [
                 $"ok {Shown(name)} ({steps} step{(steps == 1 ? string.Empty : "s")}{recovery}, {reasons} reasoning)",
-                .. WorkflowValidator.ModelLevels(definition, resolved.Providers!),
+                .. agents,
             ])
         {
             Definition = definition,

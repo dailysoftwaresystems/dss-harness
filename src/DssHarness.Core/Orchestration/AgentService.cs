@@ -3572,7 +3572,7 @@ public sealed class AgentService(
         return (seed, [.. ledger.NotKept, .. ledger.Kept.Prune(seed)]);
     }
 
-    private static IReadOnlyList<string> Floor(HarnessContext context) => TreeFloor.Of(context.Config.Worktrees.Root);
+    private static IReadOnlyList<string> Floor(HarnessContext context) => TreeFloor.OfAgentMoves(context.Config.Worktrees.Root);
 
     private static string? Shape(string orchestrator, string agent)
         => OrchestrationRules.NameProblem(orchestrator)

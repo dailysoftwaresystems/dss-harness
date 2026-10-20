@@ -358,10 +358,11 @@ orchestrators directory, `.orchestrators`, for the slots every tree keeps its ow
 `.mutations` for a sweep's workers and `.legs` for the copies its legs work in, and for the harness
 directories a person fills by hand
 — the credential slots `sshItems`, `wslDistros`, `runner/.env`, `runner/.secrets` and
-`workflows/.env`, which is kept for the agent clients' keys and settings and which this build
-does not read yet — so a clone arrives with each directory in place. `init` writes the
+`workflows/.env`, the agent clients' keys, read by the runner's one rule for a directory of dotenv
+files and from nowhere else — so a clone arrives with each directory in place. `init` writes the
 credential slots' rules and placeholders from the one list of them (`HarnessLayout.SecretSlots`),
-and no workflow may be named `.env`. A configuration `init` writes names `.worktrees` as the root; one that names
+which is also the floor that names them for every move of work: seed, fold, refresh and rebase never
+touch them, whatever git or the ignore block says (`TreeFloor.OfAgentMoves`). No workflow may be named `.env`. A configuration `init` writes names `.worktrees` as the root; one that names
 none keeps `.harness-config/worktrees`, so worktrees made before stay where they are. The root
 was ignored whole, with no placeholder, and the costs of this shape were measured then and are
 accepted now: a directory holding a tracked file never reads as ignored itself, so `git
@@ -1302,7 +1303,18 @@ reaches the provider, and each model the step may run on is given a level it tak
 every model, or a map of `all` and models' codes, each model's resolved on its own, a code the step
 does not run on refused as dead, and a step that goes on with another's work checked against the tier
 it inherits. Where the definition holds, the check says each agent's models and the level each runs
-at, one line apiece under the line that says it holds. This build checks workflow definitions and
+at, one line apiece under the line that says it holds, and every key no file of the agent clients'
+slot declares, with the steps that need it - a provider's key as a step's first model, or as a later
+model of its tier - which is a report and not a problem: a machine that only checks a configuration
+needs no key, and starting a run is what refuses. The slot itself
+(`Secrets\AgentKeyStore`, beside the host items' own store) reads the git-ignored
+`.harness-config/workflows/.env/` by the runner's one rule for a directory of dotenv files - every
+file merged, a name declared twice refused in its own words - and from nowhere else, so a stray
+variable of the tool's own environment neither chooses whose key a run bills nor redirects one; its
+files' privacy is asked of the file each name came from when a value is read, as the item rules ask
+of a host's. `list-agent-providers` says the same configuration without saying one key: each
+provider, client and tier, every appointed name present or missing, `--template` the sections as
+`init` writes them, exit 0 whatever is missing. This build checks workflow definitions and
 does not run them: the engine that runs them - the coordinator, the agents, the steps over the
 services the tool already has - is the next thing the tool grows.
 

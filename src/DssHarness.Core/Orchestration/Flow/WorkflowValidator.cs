@@ -172,6 +172,25 @@ public static class WorkflowValidator
         return new Check(definition, hasCommitTemplate: false, files: null, providers).Levels();
     }
 
+    /// <summary>
+    /// The keys a definition's steps need that the slot holds none of, one line apiece - for a definition that holds,
+    /// said by <c>validate-workflow</c>, which passes: a machine that only checks a configuration needs no key, and
+    /// starting a run is what refuses. A step needs a provider's key where its first model is the provider's, or where
+    /// one is a later model of its tier; the advisor and the reporter are asked the same. A name the slot holds that
+    /// nothing appoints is not refused.
+    /// </summary>
+    /// <param name="definition">A workflow's parsed definition.</param>
+    /// <param name="providers">The configuration's providers and tiers, resolved.</param>
+    /// <param name="held">The names the slot declares, holding something.</param>
+    public static IReadOnlyList<string> MissingKeys(WorkflowDefinition definition, DssHarness.Core.Agents.AgentProviders providers, IReadOnlyCollection<string> held)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(providers);
+        ArgumentNullException.ThrowIfNull(held);
+
+        return new Check(definition, hasCommitTemplate: false, files: null, providers).Keys(held);
+    }
+
     /// <summary>One check of one definition, holding what the walk built so no rule reads a fact twice.</summary>
     private sealed class Check
     {
@@ -2258,6 +2277,104 @@ public static class WorkflowValidator
             }
 
             return lines;
+        }
+
+        /// <summary>
+        /// One line for each provider no key of the slot serves, with every step that needs one - first model and later
+        /// models of a tier apart, for a run refuses only where the first model of one of its steps has no key, and a
+        /// later model is said and passed over.
+        /// </summary>
+        internal IReadOnlyList<string> Keys(IReadOnlyCollection<string> held)
+        {
+            if (_providers is not { } providers)
+            {
+                return [];
+            }
+
+            var needed = new Dictionary<string, (Configuration.AgentProviderConfig Provider, List<string> First, List<string> Later)>(StringComparer.Ordinal);
+
+            void Need(string where, string? tier, string? model)
+            {
+                var models = model is { } named
+                    ? (providers.Of(named) is { } of ? [(of.Provider, of.Model)] : [])
+                    : providers.ModelsOf(tier ?? providers.DefaultTier ?? string.Empty);
+
+                foreach (var (provider, at) in models.Select((entry, at) => (entry.Provider, at)))
+                {
+                    if (provider.ApiKeyNames.Any(name => held.Contains(name, StringComparer.OrdinalIgnoreCase)))
+                    {
+                        continue;
+                    }
+
+                    if (!needed.TryGetValue(provider.Name, out var steps))
+                    {
+                        steps = (provider, [], []);
+                        needed[provider.Name] = steps;
+                    }
+
+                    // A step that needs the provider as its first model needs it as a later one too, and a tier that
+                    // tries two of its models says the step once either way.
+                    if (at == 0)
+                    {
+                        if (!steps.First.Contains(where, StringComparer.Ordinal))
+                        {
+                            steps.First.Add(where);
+                        }
+                    }
+                    else if (!steps.First.Contains(where, StringComparer.Ordinal) && !steps.Later.Contains(where, StringComparer.Ordinal))
+                    {
+                        steps.Later.Add(where);
+                    }
+                }
+            }
+
+            foreach (var entry in _entries.Where(entry => entry.Step.Type == "reason"))
+            {
+                var step = entry.Step;
+                var inherited = Inherited(entry);
+                Need($"step '{entry.Path}'", inherited?.Tier ?? step.Tier, inherited?.Model ?? step.Model);
+            }
+
+            if (_definition.Advisor is { } advisor)
+            {
+                Need("advisor", advisor.Tier, advisor.Model);
+            }
+
+            if (_definition.Reporter is { } reporter)
+            {
+                Need("reporter", reporter.Tier, reporter.Model);
+            }
+
+            var lines = new List<string>();
+
+            foreach (var entry in needed.Values)
+            {
+                var provider = entry.Provider;
+                var missing = Joined(provider.ApiKeyNames.Select(name => $"'{name}'"), "or");
+                var one = provider.ApiKeyNames.Count == 1;
+                var who = string.Join(", ",
+                    [.. entry.First, .. entry.Later.Select(where => $"{where} (a later model of its tier)")]);
+
+                lines.Add(
+                    $"no file under '{DssHarness.Core.Repository.HarnessLayout.WorkflowsEnvSlotRelative}/' declares {missing}, "
+                    + $"the name{(one ? string.Empty : "s")} provider '{provider.Name}' appoints for its key{(one ? string.Empty : "s")} "
+                    + $"(its apiKeyNames); the steps that need it: {who}");
+            }
+
+            return lines;
+        }
+
+        /// <summary>A list said as the tool says one: comma-separated, the last apart, the separator before it.</summary>
+        private static string Joined(IEnumerable<string> items, string last)
+        {
+            var list = items.ToList();
+
+            return list.Count switch
+            {
+                0 => string.Empty,
+                1 => list[0],
+                _ => $"{string.Join(", ", list[..^1])} {last} {list[^1]}",
+            };
         }
 
         private void AddLevels(

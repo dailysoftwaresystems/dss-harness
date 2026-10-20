@@ -28,9 +28,18 @@ namespace DssHarness.Core.Secrets;
 /// reader asks it of neither of its directories.
 /// </para>
 /// </remarks>
-public sealed class DotEnvDirectories(IFileSystem fileSystem)
+/// <param name="fileSystem">The file system the directory is read through.</param>
+/// <param name="twiceDeclared">
+/// How the reader says a name defined twice, completing the sentence that names the name and the two files - the
+/// agent clients' slot refuses one in its own words (<c>a name is declared once</c>). Where null, the runner's own
+/// words are said.
+/// </param>
+/// <param name="skipFile">The name of a file in the directory that is no dotenv file and is not read at all - a slot's placeholder.</param>
+public sealed class DotEnvDirectories(IFileSystem fileSystem, Func<string, string, string, string>? twiceDeclared = null, string? skipFile = null)
 {
     private readonly IFileSystem _fileSystem = fileSystem;
+    private readonly Func<string, string, string, string>? _twiceDeclared = twiceDeclared;
+    private readonly string? _skipFile = skipFile;
     private readonly Dictionary<string, string> _origins = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<string> _problems = [];
 
@@ -62,6 +71,7 @@ public sealed class DotEnvDirectories(IFileSystem fileSystem)
 
         var files = _fileSystem
             .EnumerateFiles(directory, recursive: false)
+            .Where(file => _skipFile is null || !string.Equals(Path.GetFileName(file), _skipFile, StringComparison.Ordinal))
             .OrderBy(file => Path.GetFileName(file), StringComparer.Ordinal);
 
         foreach (var file in files)
@@ -72,8 +82,10 @@ public sealed class DotEnvDirectories(IFileSystem fileSystem)
             {
                 if (_origins.TryGetValue(name, out var first))
                 {
-                    _problems.Add($"'{name}' is defined in '{first}' and again in '{file}'; "
-                        + "nothing can say which value a run used.");
+                    _problems.Add(_twiceDeclared is { } worded
+                        ? worded(name, first, file)
+                        : $"'{name}' is defined in '{first}' and again in '{file}'; "
+                            + "nothing can say which value a run used.");
                     continue;
                 }
 

@@ -2362,6 +2362,23 @@ public static class HelpTopics
         builder.AppendLine("repository's records; what the same key spends elsewhere - another repository, another");
         builder.AppendLine("machine, another tool - is not seen.");
         builder.AppendLine();
+        builder.AppendLine("The slot itself is a directory of dotenv files, " + HarnessLayout.WorkflowsEnvSlotRelative + "/:");
+        builder.AppendLine("every file in it is read and merged, a name declared in two of them is refused, and no key");
+        builder.AppendLine("or setting is ever read from the process environment - a CI machine writes the file. A");
+        builder.AppendLine("sample for the providers init declares, none filled in:");
+        builder.AppendLine();
+
+        foreach (var line in SlotSample())
+        {
+            builder.AppendLine(line);
+        }
+
+        builder.AppendLine();
+        builder.AppendLine($"'{ToolPackage.Command} list-agent-providers' says what your configuration appoints and");
+        builder.AppendLine("whether the slot holds it, present or missing, never a value; 'list-agent-providers");
+        builder.AppendLine("--template' prints the agent sections as init writes them into a new config, to paste into");
+        builder.AppendLine("an existing one.");
+        builder.AppendLine();
         builder.AppendLine("The tiers a step runs on are tierConfig's: each tier its models in the order they are");
         builder.AppendLine("tried, the first serving a step on the tier and the rest its fallback. A step's effort is");
         builder.AppendLine("its own - one level for every model of its tier, or a map giving each its own: all for the");
@@ -2375,6 +2392,21 @@ public static class HelpTopics
         builder.AppendLine("clients that reach the companies are what it builds next, and nothing here runs a step.");
 
         return builder.ToString();
+    }
+
+    /// <summary>
+    /// The sample file for the slot, from the names the providers the configuration init writes appoint: one comment
+    /// naming the file, then each appointed name with nothing after its <c>=</c> but a comment saying what its value
+    /// is - the shape a person copies, holding no value.
+    /// </summary>
+    private static IReadOnlyList<string> SlotSample()
+    {
+        return
+        [
+            "  # " + HarnessLayout.WorkflowsEnvSlotRelative + "/keys.env",
+            .. Agents.AgentProviderTemplates.Read().Providers.SelectMany(provider =>
+                provider.ApiKeyNames.Select(name => $"  {name}= # {DssHarness.Core.Secrets.AgentKeyStore.WhatHolds(provider)}")),
+        ];
     }
 
     private static string RenderAnchors()
@@ -3089,9 +3121,9 @@ public static class HelpTopics
         builder.AppendLine($"                                     its agents, prompts and schemas ('{ToolPackage.Command} help workflows');");
         builder.AppendLine("                                     each missing file written by init where");
         builder.AppendLine("                                     config.json declares the implementation one");
-        builder.AppendLine($"  {HarnessLayout.WorkflowsEnvSlotRelative}/    contents ignored; kept for the agent clients'");
-        builder.AppendLine("                                     keys and settings, which this build does not");
-        builder.AppendLine("                                     read yet; no workflow may be named .env");
+        builder.AppendLine($"  {HarnessLayout.WorkflowsEnvSlotRelative}/    contents ignored; the agent clients' keys, NAME=value");
+        builder.AppendLine("                                     files, every file merged, no key read from");
+        builder.AppendLine("                                     anywhere else; no workflow may be named .env");
         builder.AppendLine($"  {HarnessLayout.RunnerActionsDirectoryRelative}/<name>/<name>.yml");
         builder.AppendLine("                                     tracked; one directory per action, holding its");
         builder.AppendLine("                                     steps and whatever those steps run");
