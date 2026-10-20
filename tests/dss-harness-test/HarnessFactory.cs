@@ -278,6 +278,11 @@ public sealed class HarnessFactory
         await RunGitAsync(path, ["config", "user.email", "harness@test.invalid"], cancellationToken);
         await RunGitAsync(path, ["config", "user.name", "Harness Test"], cancellationToken);
 
+        // A fixture holds still: git's own background maintenance, run after a commit (git 2.55's), would race the
+        // tests that read the repository's object directory while it rewrites its own book-keeping there.
+        await RunGitAsync(path, ["config", "gc.auto", "0"], cancellationToken);
+        await RunGitAsync(path, ["config", "maintenance.auto", "false"], cancellationToken);
+
         File.WriteAllText(Path.Combine(path, "README.md"), "test repository");
 
         await RunGitAsync(path, ["add", "-A"], cancellationToken);
