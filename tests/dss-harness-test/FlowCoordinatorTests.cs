@@ -1328,6 +1328,105 @@ public sealed class FlowCoordinatorTests
         Assert.Equal(FlowInstanceState.Skipped, coordinator.Instances["reads-error"].State);
     }
 
+    /// <summary>
+    /// A block's member and a repeat's member, read from outside by their paths, read what the member wrote - the
+    /// repeat's from its last iteration - and the names after the member walk its output; a pause step's question
+    /// fills such a name too, and so does a member's own fact.
+    /// </summary>
+    [Fact]
+    public async Task AGroupsMemberReadFromOutside_ReadsWhatTheMemberWrote()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: review
+                steps:
+                  - name: correctness
+                    type: orient
+              - name: fix
+                repeat:
+                  until: attempt.ok
+                  maxIterations: 3
+                steps:
+                  - name: attempt
+                    type: orient
+              - name: reads-block
+                type: orient
+                dependsOn: [review, fix]
+                when: "review.correctness.verdict == 'ok' && review.correctness.outcome == 'done' && fix.attempt.ok"
+              - name: asks
+                type: pause
+                dependsOn: [review]
+                question: "the review said {review.correctness.verdict}"
+                options: [go]
+            """);
+        var runner = new FakeRunner()
+            .On("correctness", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"verdict": "ok"}""")))
+            .On("attempt", run => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output(run.Iteration == 2 ? """{"ok": true}""" : """{"ok": false}""")));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        _ = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["reads-block"].State);
+        Assert.Equal("the review said ok", coordinator.OpenQuestions.Single().Problem);
+    }
+
+    /// <summary>
+    /// A placeholder inside an expression reads the path it names - its first name the root, the rest walked - as any
+    /// read does: a step's member, an input's value, written as text and compared.
+    /// </summary>
+    [Fact]
+    public async Task APlaceholderInsideAnExpression_ReadsThePathItNames()
+    {
+        var definition = Parse("""
+            name: flow
+            inputs:
+              - name: target
+                default: main
+            steps:
+              - name: orient
+                type: orient
+              - name: on-main
+                type: orient
+                dependsOn: [orient]
+                when: "{orient.branch} == 'main' && {input.target} == 'main'"
+            """);
+        var runner = new FakeRunner()
+            .On("orient", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"branch": "main"}""")));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["on-main"].State);
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+    }
+
+    /// <summary>The latest output of a step whose failure the run passed over is Missing, as its output is: nothing it left is read.</summary>
+    [Fact]
+    public async Task APassedOverStepsLatest_ReadsNothing()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                onFailure: continue
+              - name: after
+                type: orient
+                dependsOn: [think]
+                when: empty(think.latest)
+            """);
+        var runner = new FakeRunner()
+            .On("think", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "it went wrong", Output("""{"plan": "half"}""")));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        _ = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["after"].State);
+    }
+
     /// <summary>An answer must name an open question and be one it takes: anything else is refused, and the question stays open.</summary>
     [Fact]
     public async Task AnAnswerNotAmongTheOptions_IsRefused_AndTheQuestionStaysOpen()

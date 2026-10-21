@@ -111,16 +111,38 @@ public abstract record FlowExpression
     }
 
     /// <summary>
-    /// What this expression yields as a run reads it, over what each path yields then: the same operators, with the same
-    /// short-circuits, evaluated left to right. A value an operator does not take - a Missing name where a value was
-    /// needed - throws <see cref="UnresolvedReadException"/>, and the step that read it failed with 12.
+    /// What a read of a path yields to the tree: the value the reader reached, and how many of the path's steps it
+    /// walked to reach it - a group's member named after the group's own name is the reader's to find, for only it
+    /// knows which instance a name means - so the tree walks only the steps after them.
+    /// </summary>
+    /// <param name="Value">What the reader reached: the root's value, or the member's it walked down to.</param>
+    /// <param name="Walked">How many of the path's first steps the reader consumed reaching it, all of them keys.</param>
+    public readonly record struct PathRead(FlowValue Value, int Walked);
+
+    /// <summary>
+    /// What this expression yields as a run reads it, over what each path's root yields then: the same operators, with
+    /// the same short-circuits, evaluated left to right. A value an operator does not take - a Missing name where a value
+    /// was needed - throws <see cref="UnresolvedReadException"/>, and the step that read it failed with 12.
     /// </summary>
     /// <param name="read">
-    /// What a path yields when the run reads it - a step's output or one of its facts, an input, one of the run's own
-    /// names - answering <see cref="FlowValue.Missing"/> where nothing holds it. A path from <c>it</c> is read here, as
-    /// an item of the list the nearest <c>any(...)</c> looks into.
+    /// What a path's root yields when the run reads it - a step's output or one of its facts, an input, one of the run's
+    /// own names - answering <see cref="FlowValue.Missing"/> where nothing holds it; the tree walks every step after the
+    /// root. A path from <c>it</c> is read here, as an item of the list the nearest <c>any(...)</c> looks into.
     /// </param>
     public FlowValue Evaluate(Func<Path, FlowValue> read)
+    {
+        ArgumentNullException.ThrowIfNull(read);
+
+        return Evaluate(path => new PathRead(read(path), 0));
+    }
+
+    /// <summary>
+    /// What this expression yields as a run reads it, over what each path's reader reached: the reader may walk the
+    /// first keys of a path itself - a group's member read from outside it - and says how many, and the tree walks the
+    /// rest. Otherwise as <see cref="Evaluate(Func{Path, FlowValue})"/>.
+    /// </summary>
+    /// <param name="read">What a path's reader reached, and how many of its steps it walked.</param>
+    public FlowValue Evaluate(Func<Path, PathRead> read)
     {
         ArgumentNullException.ThrowIfNull(read);
 
@@ -134,7 +156,7 @@ public abstract record FlowExpression
     /// One reading of one expression at run time: what its paths yield, and the items the <c>any(...)</c> calls around
     /// the part being read look into, the nearest last.
     /// </summary>
-    private protected sealed record Evaluating(Func<Path, FlowValue> Read)
+    private protected sealed record Evaluating(Func<Path, PathRead> Read)
     {
         /// <summary>Each <c>any(...)</c> around the part being read: the item its test names <c>it</c>.</summary>
         public Stack<FlowValue> Items { get; } = new();
@@ -602,10 +624,9 @@ public abstract record FlowExpression
 
         private protected override FlowValue Yield(Evaluating evaluating)
         {
-            // A placeholder names one value by its dotted name - no index, none of a template's spellings - and what it
-            // yields is written as text, as a template fills it.
-            var path = new Path(Whole, Whole.Split('.').Select(name => new Segment(name, null)).ToList());
-            var value = evaluating.Read(path);
+            // A placeholder names one value by its path, read as every path is - its first name the root, each name
+            // after it walked - and what it yields is written as text, as a template fills it.
+            var value = Named().Yield(evaluating);
 
             if (value.IsMissing)
             {
@@ -614,6 +635,12 @@ public abstract record FlowExpression
 
             return FlowValue.Of(value.AsTemplateText());
         }
+
+        /// <summary>The path the placeholder names, parsed by the grammar's own rule for one.</summary>
+        private Path Named()
+            => GrammarProblem(Whole) is { } problem
+                ? throw new UnresolvedReadException($"{{{Whole}}} names no path: {problem}")
+                : Parse(Whole) as Path ?? throw new UnresolvedReadException($"{{{Whole}}} names no path");
     }
 
     /// <summary>One step of a path: a key of what the last step named, or an index into its list.</summary>
@@ -666,15 +693,22 @@ public abstract record FlowExpression
 
         private protected override FlowValue Yield(Evaluating evaluating)
         {
-            var value = Root == "it"
+            var read = Root == "it"
                 ? evaluating.Items.TryPeek(out var item)
-                    ? item
+                    ? new PathRead(item, 0)
                     : throw new UnresolvedReadException($"'it' names the member of the list any looks into, and there is none here")
                 : evaluating.Read(this);
 
-            // Each step walks what the last one named; a step that finds nothing leaves the value Missing, which ?? and
-            // empty(...) take and nothing else does.
-            foreach (var step in Steps)
+            if (read.Walked < 0 || read.Walked > Steps.Count || Steps.Take(read.Walked).Any(step => !step.IsKey))
+            {
+                throw new InvalidOperationException($"The reader of '{Whole}' says it walked {read.Walked} of its {Steps.Count} steps, and those are not keys of it.");
+            }
+
+            // Each step the reader did not walk walks what the last one named; a step that finds nothing leaves the value
+            // Missing, which ?? and empty(...) take and nothing else does.
+            var value = read.Value;
+
+            foreach (var step in Steps.Skip(read.Walked))
             {
                 value = step.Key is { } key ? value.Member(key) : value.At(step.Index ?? 0);
             }

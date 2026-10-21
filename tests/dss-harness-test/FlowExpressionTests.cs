@@ -462,4 +462,33 @@ public sealed class FlowExpressionTests
         Assert.True(Evaluate("{os} == 'linux'", values).AsBoolean("x"));
         Assert.Throws<UnresolvedReadException>(() => _ = Evaluate("{nowhere}", values).AsBoolean("x"));
     }
+
+    /// <summary>A dotted placeholder is a path like any other: its first name is the root the reader is asked for, and the names after it are walked.</summary>
+    [Fact]
+    public void ADottedPlaceholder_ReadsItsRootAndWalksTheRest()
+    {
+        var values = new Dictionary<string, JsonNode?>(StringComparer.Ordinal)
+        {
+            ["orient"] = new JsonObject { ["branch"] = "main" },
+        };
+
+        Assert.True(Evaluate("{orient.branch} == 'main'", values).AsBoolean("x"));
+        Assert.Throws<UnresolvedReadException>(() => _ = Evaluate("{orient.nothere} == 'main'", values));
+    }
+
+    /// <summary>
+    /// A reader may walk the first keys of a path itself - a group's member, which only it can find - and says how many:
+    /// the tree walks only the names after them, never the ones the reader consumed again.
+    /// </summary>
+    [Fact]
+    public void AReaderThatWalkedAPathsFirstKeys_LeavesTheTreeTheRest()
+    {
+        var member = FlowValue.Of(new JsonObject { ["verdict"] = "ok" });
+
+        var read = FlowExpression.Parse("review.correctness.verdict == 'ok'")
+            .Evaluate(path => new FlowExpression.PathRead(member, path.Root == "review" ? 1 : 0));
+
+        Assert.True(read.AsBoolean("x"));
+        Assert.Throws<InvalidOperationException>(() => FlowExpression.Parse("plan[0].x").Evaluate(path => new FlowExpression.PathRead(member, 1)));
+    }
 }

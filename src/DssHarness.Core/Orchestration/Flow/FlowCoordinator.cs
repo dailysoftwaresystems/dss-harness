@@ -3643,49 +3643,86 @@ public sealed class FlowCoordinator
     /// <param name="scope">The scope the read is made in.</param>
     /// <param name="source">The instance a handler or a recovery reads as <c>source</c>; null where none raised what the read is for.</param>
     /// <param name="reader">The instance whose template is being filled, where one is; its visit is what <c>visit</c> reads.</param>
-    private FlowValue Read(FlowExpression.Path path, Scope scope, FlowInstance? source = null, FlowInstance? reader = null)
+    /// <returns>
+    /// What the root yields - or, for a step's name, what the step the read names yields, a group's member walked down
+    /// to by the names after the group's - and how many of the path's steps that walk consumed: the tree walks the rest.
+    /// </returns>
+    private FlowExpression.PathRead Read(FlowExpression.Path path, Scope scope, FlowInstance? source = null, FlowInstance? reader = null)
     {
         switch (path.Root)
         {
             case "input":
-                return FlowValue.Of(Inputs());
+                return new(FlowValue.Of(Inputs()), 0);
             case "param":
-                return FlowValue.Of(Params());
+                return new(FlowValue.Of(Params()), 0);
             case "item":
-                return scope.Item;
+                return new(scope.Item, 0);
             case "index":
-                return scope.Index is { } index ? FlowValue.Of((long)index) : FlowValue.Missing;
+                return new(scope.Index is { } index ? FlowValue.Of((long)index) : FlowValue.Missing, 0);
             case "iteration":
-                return scope.Iteration is { } iteration ? FlowValue.Of((long)iteration) : FlowValue.Missing;
+                return new(scope.Iteration is { } iteration ? FlowValue.Of((long)iteration) : FlowValue.Missing, 0);
             case "visit":
-                return FlowValue.Of((long)(reader?.Visit ?? 1));
+                return new(FlowValue.Of((long)(reader?.Visit ?? 1)), 0);
             case "issue":
             {
                 // The issue a raised instance or the recovery over it triages: the item itself, as a read sees it.
                 var item = reader?.Issue ?? source?.Issue;
 
-                return item is { } found
-                    ? FlowValue.Of(new JsonObject
-                    {
-                        ["title"] = found.Title,
-                        ["description"] = found.Description,
-                        ["where"] = found.Where,
-                        ["evidence"] = found.Evidence,
-                        ["blocks"] = found.Blocks,
-                    })
-                    : FlowValue.Missing;
+                return new(
+                    item is { } found
+                        ? FlowValue.Of(new JsonObject
+                        {
+                            ["title"] = found.Title,
+                            ["description"] = found.Description,
+                            ["where"] = found.Where,
+                            ["evidence"] = found.Evidence,
+                            ["blocks"] = found.Blocks,
+                        })
+                        : FlowValue.Missing,
+                    0);
             }
             case "previous":
-                return PreviousOf(scope) is { } before ? FlowValue.Of(MembersObjectOf(before)) : FlowValue.Missing;
+                // The iteration before this one, read by the names after 'previous' as a step's name is read: its step,
+                // a group's member walked down to, from where that iteration stands.
+                return PreviousOf(scope) is { } before ? StepRead(path, keysFrom: 0, scope, before) : new(FlowValue.Missing, 0);
             case "run":
-                return FlowValue.Of(RunValues());
+                return new(FlowValue.Of(RunValues()), 0);
             case "source":
-                return source is null ? FlowValue.Missing : FlowValue.Of(SourceFacts(source));
+                return new(source is null ? FlowValue.Missing : FlowValue.Of(SourceFacts(source)), 0);
             default:
-                var names = WorkflowExpressions.ReadOf(path.Whole, template: false, insideAny: false).Names;
-                var located = FlowScope.Read(names, _definition, scope.GroupPath.Length == 0 ? null : scope.GroupPath, out _);
-                return located is null ? FlowValue.Missing : ValueOf(Locate(located.Value.Step.Path, scope), path.Steps.Count == 0);
+                return StepRead(path, keysFrom: -1, scope, scope);
         }
+    }
+
+    /// <summary>
+    /// What a read that names a step yields: the step found as <see cref="FlowScope.Read"/> finds it from where the read
+    /// is made - each name after it that names a member of a group going down into that member - and the instance of it
+    /// the run means, located from <paramref name="at"/>; with how many of the path's steps the names that went down
+    /// consumed. A path that indexes a step before it names a member reads nothing.
+    /// </summary>
+    /// <param name="path">The path being read.</param>
+    /// <param name="keysFrom">Where the step's own name is: -1 for the root, or the index of the path's step that holds it (<c>previous</c>'s).</param>
+    /// <param name="scope">The scope the read is made in, where its names are looked up.</param>
+    /// <param name="at">The scope the instance is located from: the reader's, or the iteration before it.</param>
+    private FlowExpression.PathRead StepRead(FlowExpression.Path path, int keysFrom, Scope scope, Scope at)
+    {
+        var leading = path.Steps.Skip(keysFrom + 1).TakeWhile(step => step.IsKey).Select(step => step.Key!).ToList();
+        IReadOnlyList<string> names = keysFrom < 0 ? [path.Root, .. leading] : [path.Steps[keysFrom].Key!, .. leading];
+
+        if (keysFrom >= 0 && !path.Steps[keysFrom].IsKey)
+        {
+            return new(FlowValue.Missing, 0);
+        }
+
+        if (FlowScope.Read(names, _definition, scope.GroupPath.Length == 0 ? null : scope.GroupPath, out _) is not { } located)
+        {
+            return new(FlowValue.Missing, 0);
+        }
+
+        // The step's own name and each member name the walk went down by are consumed; the names after them are its
+        // output's. A root is no step of the path, and previous's step name is its first.
+        var walked = keysFrom + (names.Count - located.After.Count);
+        return new(ValueOf(Locate(located.Step.Path, at), path.Steps.Count == walked), walked);
     }
 
     /// <summary>
@@ -3807,8 +3844,14 @@ public sealed class FlowCoordinator
         merged["code"] = instance.Exit;
         merged["error"] = instance.Error;
         merged["question"] = instance.EndedByQuestion;
-        merged["latest"] = instance.Output?.DeepClone();
         merged["assumptions"] = new JsonArray();
+
+        // The newest output of the work, as its output is read: a step whose failure was passed over left nothing it
+        // is read by, so its latest is Missing too.
+        if (!instance.PassedOver)
+        {
+            merged["latest"] = instance.Output?.DeepClone();
+        }
 
         return FlowValue.Of(merged);
     }
@@ -3825,19 +3868,6 @@ public sealed class FlowCoordinator
         }
 
         return null;
-    }
-
-    /// <summary>The merged values of a scope's members, as a namespace read walks them.</summary>
-    private JsonObject MembersObjectOf(Scope scope)
-    {
-        var members = new JsonObject();
-
-        foreach (var (name, instance) in scope.Members)
-        {
-            members[name] = ValueOf(instance, whole: false).ToNode();
-        }
-
-        return members;
     }
 
     /// <summary>The run's own values, as <c>run</c> reads them, said without its always steps: only they read these, so none reads its own effect.</summary>
