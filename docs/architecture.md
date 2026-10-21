@@ -66,7 +66,10 @@ these with mode bits; Windows answers them with access lists and file extensions
 a POSIX implementation and a Windows implementation, and no third.
 
 **The process table**: what else is running on this machine, with each process's parent,
-its start time and its command line, which is what a leg's contention check reads.
+its start time and its command line, which is what a leg's contention check reads, and the
+full path of the program it runs, which is how an update tells a session of the installation
+it would replace from a program of the same name installed elsewhere - a command line need
+not name its program by a path at all.
 Windows publishes it through WMI, Linux through `/proc`, macOS through `ps`. Behind the
 seam so that nothing above it branches on the operating system to find out, and so a test
 can say what the machine was running without the machine having to be running it.

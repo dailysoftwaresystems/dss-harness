@@ -19,7 +19,14 @@ namespace DssHarness.Core.Platform;
 /// Its command line, where the platform exposes one. A process that does not expose it cannot be
 /// matched against a build directory, which the report states rather than passing over.
 /// </param>
-public sealed record SampledProcess(int Id, int? ParentId, string Name, DateTimeOffset? StartedUtc, string? CommandLine);
+/// <param name="Executable">
+/// The full path of the program it runs, where the platform reports one: Windows' image path, the link
+/// <c>/proc/&lt;id&gt;/exe</c> names on Linux, the program <c>ps</c> names on macOS. Read beside the command line
+/// because a command line need not name its program by a path at all - on Linux a program a shell found on the PATH is
+/// started under its bare name - and Windows' own path is the image's, spelled whole whatever the line that started it
+/// said.
+/// </param>
+public sealed record SampledProcess(int Id, int? ParentId, string Name, DateTimeOffset? StartedUtc, string? CommandLine, string? Executable = null);
 
 /// <summary>Reading the machine's process table.</summary>
 /// <remarks>
@@ -132,7 +139,7 @@ public sealed class ProcessTable(IHostPlatform platform, IProcessRunner processR
                 if ($_.CreationDate) { $created = $_.CreationDate.ToUniversalTime().ToString('o') }
                 $line = $_.CommandLine
                 if ($line) { $line = $line -replace '[\r\n]+', ' ' } else { $line = '' }
-                [string]::Join($s, @([string]$_.ProcessId, [string]$_.ParentProcessId, $created, [string]$_.Name, $line))
+                [string]::Join($s, @([string]$_.ProcessId, [string]$_.ParentProcessId, $created, [string]$_.Name, $line, [string]$_.ExecutablePath))
             }
             """;
 
@@ -171,7 +178,8 @@ public sealed class ProcessTable(IHostPlatform platform, IProcessRunner processR
                 int.TryParse(fields[1], CultureInfo.InvariantCulture, out var parent) ? parent : null,
                 CleanName(fields[3]),
                 DateTimeOffset.TryParse(fields[2], CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal, out var started) ? started : null,
-                fields[4].Length == 0 ? null : fields[4]));
+                fields[4].Length == 0 ? null : fields[4],
+                fields.Length > 5 && fields[5].Length > 0 ? fields[5] : null));
         }
 
         return (processes, null);
@@ -217,7 +225,7 @@ public sealed class ProcessTable(IHostPlatform platform, IProcessRunner processR
 
                 var commandLine = ReadCommandLine(Path.Combine(directory, "cmdline"));
 
-                processes.Add(new SampledProcess(id, parent, CleanName(name), started, commandLine));
+                processes.Add(new SampledProcess(id, parent, CleanName(name), started, commandLine, ReadExecutable(Path.Combine(directory, "exe"))));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -298,12 +306,15 @@ public sealed class ProcessTable(IHostPlatform platform, IProcessRunner processR
                 ? startedAt
                 : (DateTimeOffset?)null;
 
+            programs.TryGetValue(id, out var itsProgram);
+
             processes.Add(new SampledProcess(
                 id,
                 int.TryParse(fields[1], CultureInfo.InvariantCulture, out var parent) ? parent : null,
-                CleanName(programs.TryGetValue(id, out var itsProgram) ? itsProgram : FirstToken(commandLine)),
+                CleanName(itsProgram ?? FirstToken(commandLine)),
                 started,
-                commandLine.Length == 0 ? null : commandLine));
+                commandLine.Length == 0 ? null : commandLine,
+                itsProgram is not null && itsProgram.StartsWith('/') ? itsProgram : null));
         }
 
         return (processes, null);
@@ -352,6 +363,23 @@ public sealed class ProcessTable(IHostPlatform platform, IProcessRunner processR
             var raw = File.ReadAllText(path);
             var line = raw.Replace('\0', ' ').Trim();
             return line.Length == 0 ? null : line;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// The program a Linux process runs, as the kernel names it through <c>/proc/&lt;id&gt;/exe</c>: its whole path, links
+    /// already followed - with <c> (deleted)</c> after it where the file was replaced since the program started - or
+    /// null where this user may not read another user's.
+    /// </summary>
+    private static string? ReadExecutable(string path)
+    {
+        try
+        {
+            return new FileInfo(path).LinkTarget is { Length: > 0 } target ? target : null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
