@@ -802,6 +802,134 @@ public sealed class FlowHandlerTests
     }
 
     /// <summary>
+    /// A redirect reaches every level of a group it resets: a block nested in it, open over a member waiting on a
+    /// question, is no step running - the redirect is made at once, the question withdrawn and the nested visit left
+    /// whole, never waiting for a person to answer what it withdraws.
+    /// </summary>
+    [Fact]
+    public async Task ARedirectIntoAGroup_ReachesABlockNestedInIt_WithdrawingItsQuestion()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: plan
+                type: orient
+              - name: check
+                type: ci-read
+                dependsOn: [plan]
+              - name: fix
+                type: orient
+                on: {step: check, outcome: failure}
+                then: plan
+              - name: round
+                dependsOn: [plan]
+                steps:
+                  - name: review
+                    steps:
+                      - name: ask
+                        type: pause
+                        question: go on?
+                        options: [go]
+                      - name: after-ask
+                        type: orient
+                        dependsOn: [ask]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner()
+            .On("check", run => run.Visit == 1
+                ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "the read failed")
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Equal("withdrawn", coordinator.Questions.Single(question => question.Instance == "round.review.ask").State);
+        Assert.Equal(FlowInstanceState.Skipped, coordinator.Instances["round.review.ask"].State);
+        Assert.Equal(FlowInstanceState.Skipped, coordinator.Instances["round.review"].State);
+        Assert.Equal(FlowInstanceState.Skipped, coordinator.Instances["round"].State);
+        Assert.Equal("round+2.review.ask", Assert.Single(coordinator.OpenQuestions).Instance);
+        Assert.Equal(["plan", "check", "fix", "plan+2", "check+2"], runner.Started);
+    }
+
+    /// <summary>
+    /// A redirect decided while what it resets is in flight freezes every level of a group it resets: a member of a block
+    /// nested in it, freed meanwhile by its dependency, is not drawn, and nothing of the old visit runs.
+    /// </summary>
+    [Fact]
+    public async Task ARedirectWaiting_FreezesABlockNestedInTheGroupItResets()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: plan
+                type: orient
+              - name: check
+                type: ci-read
+                dependsOn: [plan]
+              - name: fix
+                type: orient
+                on: {step: check, outcome: failure}
+                then: plan
+              - name: round
+                dependsOn: [plan]
+                steps:
+                  - name: slow
+                    type: orient
+                  - name: review
+                    steps:
+                      - name: early
+                        type: orient
+                      - name: late
+                        type: orient
+                        dependsOn: [early]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+
+        // Made without asynchronous continuations: what a gate's completion posts to the session is posted before the
+        // completion returns, so the session settles over it.
+        var slow = new TaskCompletionSource<FlowStepResult>();
+        var early = new TaskCompletionSource<FlowStepResult>();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new FakeRunner()
+            .On("check", run => run.Visit == 1
+                ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "the read failed")
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success))
+            .OnAsync("slow", run => run.Instance == "round.slow" ? slow.Task : Task.FromResult(FlowStepResult.Ended(passed: true, HarnessExit.Success)))
+            .OnAsync("early", run =>
+            {
+                if (run.Instance != "round.review.early")
+                {
+                    return Task.FromResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
+                }
+
+                started.TrySetResult();
+                return early.Task;
+            });
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var session = coordinator.RunAsync(cancel);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        // The check's failure, then its handler's end: the redirect is decided, and waits for slow and early.
+        await coordinator.SettledAsync(cancel);
+        await coordinator.SettledAsync(cancel);
+        Assert.Contains("fix", runner.Started);
+
+        early.SetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        await coordinator.SettledAsync(cancel);
+
+        Assert.DoesNotContain("round.review.late", runner.Started);
+
+        slow.SetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.DoesNotContain("round.review.late", runner.Started);
+        Assert.Contains("round+2.review.late", runner.Started);
+    }
+
+    /// <summary>
     /// A redirect decided while another waits is kept, never dropped: redirects are made in the order they were decided,
     /// each once nothing it resets is running - here two items of a forEach each send the run back within their own
     /// item, and both go back.

@@ -3489,8 +3489,8 @@ public sealed class FlowCoordinator
         {
             if (declaration.IsGroup && scope.Members.GetValueOrDefault(declaration.Name) is { } group)
             {
-                // A group resets with all that is in it, so nothing inside it starts either.
-                foreach (var inner in ScopesOf(group))
+                // A group resets with all that is in it, at every level, so nothing inside it starts either.
+                foreach (var inner in ScopesUnder(group))
                 {
                     redirect.Frozen[inner.Id] = null;
                 }
@@ -3564,7 +3564,7 @@ public sealed class FlowCoordinator
                 continue;
             }
 
-            foreach (var member in ScopesOf(group).SelectMany(scope => scope.Members.Values))
+            foreach (var member in ScopesUnder(group).SelectMany(scope => scope.Members.Values))
             {
                 if (member.Step.Type == "create-agent" && member.Made is not null && _agentsOpen.ContainsKey(member.Id))
                 {
@@ -3576,7 +3576,10 @@ public sealed class FlowCoordinator
         return agents;
     }
 
-    /// <summary>Whether <paramref name="redirect"/> can be made: nothing it resets is running.</summary>
+    /// <summary>
+    /// Whether <paramref name="redirect"/> can be made: no step it resets is running - at any level of a group it resets,
+    /// and only a step that runs counts: a group standing open over members that wait is no step running.
+    /// </summary>
     private static bool RedirectQuiet(PendingRedirect redirect)
     {
         foreach (var entry in redirect.Set)
@@ -3586,9 +3589,9 @@ public sealed class FlowCoordinator
                 continue;
             }
 
-            var held = instance.Step.IsGroup ? ScopesOf(instance).SelectMany(scope => scope.Members.Values) : [instance];
+            var held = instance.Step.IsGroup ? ScopesUnder(instance).SelectMany(scope => scope.Members.Values) : [instance];
 
-            if (held.Any(member => member.State is FlowInstanceState.Running))
+            if (held.Any(member => !member.Step.IsGroup && member.State is FlowInstanceState.Running))
             {
                 return false;
             }
@@ -4732,6 +4735,27 @@ public sealed class FlowCoordinator
                 && member.State is not (FlowInstanceState.NotStarted or FlowInstanceState.Running or FlowInstanceState.Paused or FlowInstanceState.Stopped)
                 && member.Failure is not FlowFailure.EndedRun
                 && member.NotRunCause is not FlowNotRunCause.RunEnded);
+
+    /// <summary>
+    /// Every scope under a group, at every level: its own (<see cref="ScopesOf"/>), then those of each group among their
+    /// members, and so down - what a redirect that resets the group freezes, waits on and leaves.
+    /// </summary>
+    private static IReadOnlyList<Scope> ScopesUnder(FlowInstance group)
+    {
+        var scopes = new List<Scope>();
+
+        foreach (var scope in ScopesOf(group))
+        {
+            scopes.Add(scope);
+
+            foreach (var inner in scope.Members.Values.Where(member => member.Step.IsGroup))
+            {
+                scopes.AddRange(ScopesUnder(inner));
+            }
+        }
+
+        return scopes;
+    }
 
     /// <summary>The scopes of a group: a block's own one, or every item and iteration of a loop.</summary>
     private static IReadOnlyList<Scope> ScopesOf(FlowInstance group)
