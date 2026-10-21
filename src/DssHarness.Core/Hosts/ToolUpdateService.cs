@@ -256,6 +256,9 @@ public sealed class ToolUpdateService(
     /// <summary>What a refusal over running processes ends with.</summary>
     private const string RunAgain = $"Run again once each has ended, or with {WaitOption} to wait for them.";
 
+    /// <summary>What an update begun and not finished ends with, where nothing that started while it ran stands in the way.</summary>
+    private const string UnfinishedAgain = "It was begun and not finished; running it again can finish it.";
+
     /// <summary>
     /// The release the tool is moved to, or why there is none to move it to. It is the newest nuget.org lists; or, where
     /// the feed does not say, the copy running where that is a release newer than what is installed - run from its
@@ -370,13 +373,18 @@ public sealed class ToolUpdateService(
                 one => IsTheTool(one.Name),
                 _process.CurrentId);
 
+            // dotnet says a feed it did not reach in the machine's own language, with no code a reader could match
+            // (measured on a machine set to Portuguese), so only its bound tells an update begun and not finished from
+            // one it refused.
+            var code = ProgramUpdate.FailedExit(ran, unreached: false, HarnessExit.CommandFailed);
+
             return new CommandOutcome(
-                HarnessExit.CommandFailed,
+                code,
                 HostProbes.Failure($"{doing} failed", ran),
                 [
                     .. Named($"{Count(started, "started")} on this machine while it ran, which is what stops an update:", started),
                     unknown is null ? $"{ToolPackage.Id} is {listed} since." : $"What is listed there since is not known: {unknown.TrimEnd('.')}.",
-                    .. started.Count == 0 ? [] : new[] { RunAgain },
+                    .. started.Count > 0 ? new[] { RunAgain } : code == HarnessExit.Incomplete ? new[] { UnfinishedAgain } : [],
                 ]);
         }
 

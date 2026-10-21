@@ -2037,7 +2037,11 @@ command that says nothing of it. A Ctrl+C typed at a terminal on Linux or macOS 
 itself, as it reaches every process of the terminal's: what that leaves is read back and said
 like any other failure of the update. It says the update done only once `dotnet tool list` shows that release, and a failure with
 what dotnet said, each DssHarness that started while it ran, and what is listed since - or, where
-that listing failed too, why in dotnet's words (exit 20). Which release is the newest is asked of
+that listing failed too, why in dotnet's words (exit 20; 21 where dotnet did not finish within its
+ten minutes - an update begun and not finished, which running it again can finish, the one code
+`ProgramUpdate.FailedExit` gives every program's update, Claude Code's by npm among them; dotnet
+says a feed it did not reach in the machine's own language, with no code to match, so only its
+bound tells it). Which release is the newest is asked of
 nuget.org (`IPublishedToolVersions`), and an answer that does not come is said with its cause
 (`PublishedAnswer.Untold`): the feed not reached, no answer in three seconds, a status that is no
 success, a list or a leaf this build cannot read - put right in different places, and once said as
@@ -4877,7 +4881,7 @@ with "the harness could not run", because the remedies differ.
 | 14 | A required tool is missing, or could not be started |
 | 15 | A host could not be reached, DssHarness could not run there, or a command run there never reported how it finished |
 | 20 | The wrapped command ran and failed |
-| 21 | Ran with nothing failing, but a leg reached no verdict or left a set-up it brought up running, or a deletion, a fold, a hand-over or a move of an agent's base stopped part way; it is not a pass, and running it again, once what it names is dealt with, finishes it |
+| 21 | Ran with nothing failing, but a leg reached no verdict or left a set-up it brought up running, or a deletion, a fold, a hand-over, a move of an agent's base or an update of a program stopped part way (not finished within its bound, or its download not reached); it is not a pass, and running it again, once what it names is dealt with, finishes it |
 | 70 | The harness itself failed unexpectedly (a defect in the tool) |
 | 130 | The run was interrupted before it finished; what it had already done is still reported |
 

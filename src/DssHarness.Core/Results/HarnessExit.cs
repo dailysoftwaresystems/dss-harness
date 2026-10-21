@@ -45,8 +45,9 @@ public static class HarnessExit
 
     /// <summary>
     /// The work ran and nothing failed, but not every unit of it reached a verdict; or a change was begun and not
-    /// finished - a set-up a leg brought up was not brought down, or a deletion, a fold, a hand-over or a move of an
-    /// agent's base stopped part way - and running the command again, once what it names is dealt with, finishes it.
+    /// finished - a set-up a leg brought up was not brought down, or a deletion, a fold, a hand-over, a move of an
+    /// agent's base or an update of a program stopped part way - and running the command again, once what it names is
+    /// dealt with, finishes it.
     /// </summary>
     /// <remarks>
     /// Distinct from <see cref="Success"/> because a leg that never ran is not a leg that passed,
@@ -54,7 +55,9 @@ public static class HarnessExit
     /// comparing runs needs to tell "the tests passed" from "the tests never ran", and a single
     /// zero for both is how a switched-off machine reads as a green build. An agent closed whose
     /// worktree's removal stopped part way is the same answer: its deletion is not done, and
-    /// delete-agent run again finishes it without folding anything.
+    /// delete-agent run again finishes it without folding anything. So is an update of a program -
+    /// DssHarness by update-tool, Claude Code by npm - not finished within its bound, or whose download
+    /// was not reached: both updaters answer it with this one code (<see cref="ProgramUpdate.FailedExit"/>).
     /// </remarks>
     public const int Incomplete = 21;
 
@@ -104,7 +107,7 @@ public static class HarnessExit
             [nameof(ToolMissing)] = "A required external tool is not installed, or could not be started.",
             [nameof(HostUnavailable)] = "A host could not be reached, or DssHarness could not run there; nothing ran on it.",
             [nameof(CommandFailed)] = "The wrapped command ran and reported failure.",
-            [nameof(Incomplete)] = "Ran with nothing failing, but a leg reached no verdict or left a set-up it brought up running, or a deletion, a fold, a hand-over or a move of an agent's base stopped part way; it is not a pass, and running it again, once what it names is dealt with, finishes it.",
+            [nameof(Incomplete)] = "Ran with nothing failing, but a leg reached no verdict or left a set-up it brought up running, or a deletion, a fold, a hand-over, a move of an agent's base or an update of a program stopped part way (not finished within its bound, or its download not reached); it is not a pass, and running it again, once what it names is dealt with, finishes it.",
             [nameof(InternalError)] = "The harness itself failed unexpectedly; this is a defect in the tool.",
             [nameof(Cancelled)] = "The run was interrupted before it finished; what it had already done is still reported.",
         };

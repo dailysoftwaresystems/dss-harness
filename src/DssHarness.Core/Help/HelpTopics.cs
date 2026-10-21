@@ -1973,7 +1973,9 @@ public static class HelpTopics
             + $"{ToolUpdateService.WaitOption} or without, since it read the machine before the other changed it. "
             + "Once the update has begun this command does not stop it, interrupted or not, and reads back what it left: "
             + "it says the update done only once the tool is listed as that release, and a failure with what dotnet said and what "
-            + $"is listed since, or why that is not known ({HarnessExit.CommandFailed}). Where nuget.org does not say which release "
+            + $"is listed since, or why that is not known ({HarnessExit.CommandFailed}; {HarnessExit.Incomplete} where dotnet did not finish within "
+            + $"{ToolPackage.ChangeBudget.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes, an update begun and not finished, which running "
+            + "it again can finish, as every program's update this tool makes answers it). Where nuget.org does not say which release "
             + "is the newest it says why - no route to it, no answer in time, an answer it cannot read - and changes nothing, "
             + "unless the copy asking is itself a release newer than the installed one, which it then moves to, saying so. A tool "
             + $"installed with dotnet's --tool-path is named with {ToolUpdateService.ToolPathOption}.");

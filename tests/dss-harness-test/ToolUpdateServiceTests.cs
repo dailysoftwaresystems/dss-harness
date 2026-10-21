@@ -385,6 +385,27 @@ public sealed class ToolUpdateServiceTests
             outcome.Details);
     }
 
+    /// <summary>
+    /// An update dotnet did not finish within its bound is a change begun and not finished, which running it again can
+    /// finish: it exits as every program's update begun and not finished does, by the one rule both updaters share.
+    /// </summary>
+    [Fact]
+    public async Task AnUpdateThatDidNotFinishInTime_IsIncomplete_AsEveryProgramsUpdateIs()
+    {
+        var kit = new Kit(installed: "0.6.12", newest: "0.6.13");
+        kit.Dotnet.Change = new ProcessResult(-1, string.Empty, string.Empty, ToolPackage.ChangeBudget, TimedOut: true);
+        kit.Dotnet.Listed = ["0.6.12", "0.6.12"];
+
+        var outcome = await kit.Service().RunAsync(new ToolUpdateRequest(), Token);
+
+        Assert.Equal(
+            (HarnessExit.Incomplete, $"updating DssHarness in {Global} from 0.6.12 to 0.6.13 failed: there was no answer within 600 seconds"),
+            (outcome.ExitCode, outcome.Message));
+        Assert.Equal(
+            ["DssHarness is listed there as 0.6.12 since.", "It was begun and not finished; running it again can finish it."],
+            outcome.Details);
+    }
+
     /// <summary>An update dotnet called done that is not listed as the release it was moved to is a failure, saying what is listed.</summary>
     [Fact]
     public async Task AnUpdateSaidDone_ThatIsNotListedAsTheReleaseSince_IsAFailure()

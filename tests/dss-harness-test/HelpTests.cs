@@ -824,6 +824,21 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The exit codes topic, and the table the architecture keeps by hand, say that 21 is also an update of a program begun
+    /// and not finished - not finished within its bound, or its download not reached - which both updaters exit with: a
+    /// code whose words named only a leg, a set-up and an agent's verbs was what each updater answered differently.
+    /// </summary>
+    [Fact]
+    public void ExitCodeTopic_SaysAnUpdateStoppedPartWayIsIncomplete()
+    {
+        const string Said = "or a deletion, a fold, a hand-over, a move of an agent's base or an update of a program stopped part way (not "
+            + "finished within its bound, or its download not reached)";
+
+        Assert.Contains(Said, Prose.Words(HelpText.Of("exit-codes").StandardOutput), StringComparison.Ordinal);
+        Assert.Contains($"| {HarnessExit.Incomplete} | Ran with nothing failing, but a leg reached no verdict or left a set-up it brought up running, {Said};", Prose.Document("docs", "architecture.md"), StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The orchestrators topic names the five run verbs as they are typed, the one-unfinished-run rule, the codes a session
     /// ends with, and what each of the two interrupts does - the first a safe pause that starts no clock - from the code's
     /// own names and bounds.
@@ -1886,7 +1901,8 @@ public sealed partial class HelpTests
         Assert.Contains(
             "Once the update has begun this command does not stop it, interrupted or not, and reads back what it left: it says the update done only once "
             + $"the tool is listed as that release, and a failure with what dotnet said and what is listed since, or why that is not known "
-            + $"({HarnessExit.CommandFailed}).",
+            + $"({HarnessExit.CommandFailed}; {HarnessExit.Incomplete} where dotnet did not finish within {ToolPackage.ChangeBudget.TotalMinutes} "
+            + "minutes, an update begun and not finished, which running it again can finish, as every program's update this tool makes answers it).",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(

@@ -135,6 +135,29 @@ public sealed class ProgramUpdate(IProcessRunner processRunner, IHostPlatform pl
     }
 
     /// <summary>
+    /// The code a change that ran and did not succeed exits with, by the one rule every program's updater shares:
+    /// <see cref="HarnessExit.Incomplete"/> where it was begun and not finished - ended by its own bound, or the registry
+    /// or the download it fetches from not reached, which <paramref name="unreached"/> says from the program's own words,
+    /// read by its updater, which knows them -, since running it again can finish it; otherwise
+    /// <paramref name="refused"/>, the updater's own code for a change its program refused.
+    /// </summary>
+    /// <param name="ran">How the change ended.</param>
+    /// <param name="unreached">Whether the program said it reached neither its registry nor its download.</param>
+    /// <param name="refused">The updater's code for a change its program refused: what its caller reads that as.</param>
+    /// <exception cref="ArgumentException"><paramref name="ran"/> succeeded, and a change that did has no failure's code.</exception>
+    public static int FailedExit(ProcessResult ran, bool unreached, int refused)
+    {
+        ArgumentNullException.ThrowIfNull(ran);
+
+        if (ran.Succeeded)
+        {
+            throw new ArgumentException("A change that succeeded has no failure's code.", nameof(ran));
+        }
+
+        return ran.TimedOut || unreached ? HarnessExit.Incomplete : refused;
+    }
+
+    /// <summary>
     /// The machine-wide lock on <paramref name="place"/>, taken where no other update of it holds it; or
     /// <see langword="null"/> at once where one does, and nothing may be changed there.
     /// </summary>

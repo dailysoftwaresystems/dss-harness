@@ -379,29 +379,33 @@ public sealed class ClaudeCodeUpdateService(
 
     /// <summary>
     /// How a change that npm did not finish is refused, and with which code: not finished within its bound, the
-    /// registry or the download not reached - each a change begun and not finished, which running it again can finish
-    /// - or anything else npm refused, a machine that will not let it write among them, which the tool never runs sudo
-    /// to reach past.
+    /// registry or the download not reached - each a change begun and not finished, which running it again can finish,
+    /// and which exits as every program's update begun and not finished does (<see cref="ProgramUpdate.FailedExit"/>)
+    /// - or anything else npm refused (14: the Claude Code a run needs could not be made ready), a machine that will
+    /// not let it write among them, which the tool never runs sudo to reach past.
     /// </summary>
     private static (int Code, string Why) Failed(ProcessResult ran, string output)
     {
+        var network = !ran.TimedOut
+            && (output.Contains("ENOTFOUND", StringComparison.Ordinal)
+                || output.Contains("ECONNRESET", StringComparison.Ordinal)
+                || output.Contains("ETIMEDOUT", StringComparison.Ordinal)
+                || output.Contains("network", StringComparison.Ordinal));
+        var code = ProgramUpdate.FailedExit(ran, network, HarnessExit.ToolMissing);
+
         if (ran.TimedOut)
         {
             return (
-                HarnessExit.Incomplete,
+                code,
                 $"npm did not finish within {ToolPackage.ChangeBudget.TotalMinutes.ToString("0", CultureInfo.InvariantCulture)} minutes and was ended, "
                     + "part way through the download or the step after the install; running it again can help. "
                     + $"Run it by hand: {InstallCommand()}.");
         }
 
-        var network = output.Contains("ENOTFOUND", StringComparison.Ordinal)
-            || output.Contains("ECONNRESET", StringComparison.Ordinal)
-            || output.Contains("ETIMEDOUT", StringComparison.Ordinal)
-            || output.Contains("network", StringComparison.Ordinal);
         var elevated = output.Contains("EACCES", StringComparison.Ordinal);
 
         return (
-            network ? HarnessExit.Incomplete : HarnessExit.ToolMissing,
+            code,
             (network
                 ? $"npm reached neither the registry nor the download ({HostProbes.Failure("the install was not reached", ran)}); running it again can help"
                 : $"npm could not change what it holds ({HostProbes.Failure("the install failed", ran)})")
