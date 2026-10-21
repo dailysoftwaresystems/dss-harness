@@ -1635,6 +1635,36 @@ public sealed class FlowCoordinatorTests
         Assert.Equal(FlowRunStatus.Failed, end.Status);
     }
 
+    /// <summary>
+    /// A failure a handler took leaves the run done for the always steps that read it - done is a run whose every
+    /// failure was passed over or handled - and <c>run.name</c> reads the name the run was given.
+    /// </summary>
+    [Fact]
+    public async Task AHandledFailure_LeavesTheRunDone_ForTheAlwaysStepsThatReadIt()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: build
+                type: orient
+              - name: fix
+                type: orient
+                on: {step: build, outcome: failure}
+              - name: report
+                type: orient
+                always: true
+                when: run.done && !run.failed && run.status == 'done' && run.name == 'r7'
+            """);
+        var runner = new FakeRunner().On("build", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "the build failed"));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), runName: "r7");
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.Equal("fix", coordinator.Instances["build"].HandledBy);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["report"].State);
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+    }
+
     /// <summary>A block gathers its members' lists into one, in declaration order, when it ends - done or failed alike - and a member that was skipped adds nothing.</summary>
     [Fact]
     public async Task ABlockGathersItsMembersLists_WhenItEnds()

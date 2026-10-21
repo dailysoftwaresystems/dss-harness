@@ -1157,7 +1157,7 @@ public sealed class FlowPauseTests
             })
             .HandsOff("think", "half way through");
         var gate = runner.Hold("gate");
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), runName: "r7");
 
         var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
         await runner.StartedAsync("gate");
@@ -1178,8 +1178,181 @@ public sealed class FlowPauseTests
         var question = coordinator.OpenQuestions.Single();
         Assert.Equal("runBudget", question.Kind);
         Assert.Equal(["more", "abort"], question.Options);
-        Assert.Equal("run 'r1' has spent 45.10 of 50.00 USD (its reserve of 10% was reached)", question.Problem);
+        Assert.Equal("run 'r7' has spent 45.10 of 50.00 USD (its reserve of 10% was reached)", question.Problem);
         Assert.Equal("paused; 1 handoff written, waiting on q1", end.Summary);
+    }
+
+    /// <summary>
+    /// The minutes a reason step runs count while it runs: a step that runs past the reserve pauses the run on a tick of
+    /// the clock, before its budget is spent, rather than only when its attempt ends.
+    /// </summary>
+    [Fact]
+    public async Task AReasonStepRunningPastTheReserve_PausesTheRunOnATickOfTheClock()
+    {
+        var definition = Parse("""
+            name: flow
+            budget:
+              minutes: 30
+              reservePercent: 10
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner().HandsOff("think", "half way through");
+        _ = runner.Hold("think");
+        var clock = new TimerClock();
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, runName: "r7");
+
+        var session = coordinator.RunAsync(cancel);
+        await runner.StartedAsync("think").WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        await clock.WaitingAsync().WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        clock.Advance(TimeSpan.FromMinutes(27));
+
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Equal("budget", end.Pause!.Cause);
+        Assert.Equal("half way through", coordinator.Instances["think"].Handoff!.Text);
+        Assert.Equal("run 'r7' has spent 27.0 of 30.0 minutes (its reserve of 10% was reached)", coordinator.OpenQuestions.Single().Problem);
+    }
+
+    /// <summary>
+    /// The workflow's own answer abort, given the budget's question beforehand, answers it at the reserve and the run
+    /// stops; as every abort, it settles nothing - the question is open again, asked once, and holds the run until a
+    /// person answers it.
+    /// </summary>
+    [Fact]
+    public async Task AConfiguredAbort_AnswersTheBudgetsQuestion_AndStopsTheRun()
+    {
+        var definition = Parse("""
+            name: flow
+            budget:
+              usd: 50
+              reservePercent: 10
+            answers:
+              runBudget: abort
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+              - name: after
+                type: orient
+                dependsOn: [think]
+            """);
+        var runner = new FakeRunner().On("think", run =>
+        {
+            // Only the first attempt reports this spend: the re-run goes on with the same conversation.
+            if (run.Attempt == 1)
+            {
+                run.Events.Used(tokens: 1_000, usd: 45.10);
+            }
+
+            return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"plan": "short"}"""));
+        });
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), runName: "r7");
+        var cancel = TestContext.Current.CancellationToken;
+
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Stopped, end.Status);
+        var asked = Assert.Single(coordinator.Questions);
+        Assert.Equal("runBudget", asked.Kind);
+        Assert.Equal("open", asked.State);
+        var given = Assert.Single(asked.Given);
+        Assert.Equal("abort", given.Answer);
+        Assert.Equal("configuration", given.By);
+        Assert.Equal("the orchestrator's answers", given.Where);
+        Assert.Equal("the run ends stopped", given.Did);
+        Assert.Equal(FlowInstanceState.Stopped, coordinator.Instances["think"].State);
+        Assert.Equal(["think"], runner.Started);
+
+        // The next session is held by the question: nothing starts, and it is not asked a second time.
+        end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Equal("budget", end.Pause!.Cause);
+        Assert.Equal(asked.Id, Assert.Single(coordinator.OpenQuestions).Id);
+        Assert.Single(coordinator.Questions);
+        Assert.Equal(["think"], runner.Started);
+
+        // A person's more allows each amount once again, and the run goes on to its end.
+        Assert.True(coordinator.TryAnswer(asked.Id, "more", out var problem), problem);
+        Assert.Equal("each amount is allowed once again", asked.Given[^1].Did);
+
+        end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(["think", "think", "after"], runner.Started);
+    }
+
+    /// <summary>The tokens a reason step reports count against the run's budget as its dollars do, and an amount exactly at its reserve has reached it.</summary>
+    [Fact]
+    public async Task TokensExactlyAtTheReserve_PauseTheRunAndAsk()
+    {
+        var definition = Parse("""
+            name: flow
+            budget:
+              tokens: 10000
+              reservePercent: 10
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+              - name: after
+                type: orient
+                dependsOn: [think]
+            """);
+        var runner = new FakeRunner().On("think", run =>
+        {
+            run.Events.Used(tokens: 9_000, usd: 0);
+            return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"plan": "short"}"""));
+        });
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Equal("the run has spent 9000 of 10000 tokens (its reserve of 10% was reached)", Assert.Single(coordinator.OpenQuestions).Problem);
+        Assert.Equal(["think"], runner.Started);
+    }
+
+    /// <summary>The minutes budget counts reason steps alone: a machine step that runs past it spends none of it.</summary>
+    [Fact]
+    public async Task AMachineStepRunningPastTheMinutes_SpendsNoneOfThem()
+    {
+        var definition = Parse("""
+            name: flow
+            budget:
+              minutes: 30
+              reservePercent: 10
+            steps:
+              - name: compile
+                type: build
+              - name: after
+                type: orient
+                dependsOn: [compile]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner();
+        var compile = runner.Hold("compile");
+        var clock = new TimerClock();
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock);
+
+        var session = coordinator.RunAsync(cancel);
+        await runner.StartedAsync("compile").WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        clock.Advance(TimeSpan.FromMinutes(40));
+        compile.Done();
+
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Empty(coordinator.Questions);
+        Assert.Equal(["compile", "after"], runner.Started);
     }
 
     /// <summary>A budget answered more - by a person, or beforehand by the workflow's own answers - allows each amount once again and the run goes on.</summary>
@@ -1302,6 +1475,7 @@ public sealed class FlowPauseTests
 
         Assert.Equal(FlowRunStatus.Paused, end.Status);
         var question = coordinator.OpenQuestions.Single();
+        Assert.Equal("the run has spent 45.10 of 50.00 USD (its reserve of 10% was reached)", question.Problem);
         Assert.True(coordinator.TryAnswer(question.Id, "more", out _));
 
         // Each amount is allowed once again: the same spend no longer reaches the reserve, and the run goes on.

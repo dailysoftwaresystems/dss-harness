@@ -138,10 +138,10 @@ public static class FlowQuestions
     /// Where a counted answer of <paramref name="kind"/> on <paramref name="instance"/> is counted: one instance of a
     /// repeat for a loop's bound, one step instance for the kinds its own work raises - an answer that lets the same
     /// thing go on is counted across the attempts it itself creates, for nothing a configuration answers would
-    /// otherwise ever stop - and the run alone for its budget.
+    /// otherwise ever stop - and the run alone for its budget, the one question no step asks.
     /// </summary>
-    public static string PlaceOf(string kind, FlowInstance instance)
-        => kind == "runBudget" ? "run" : instance.Id;
+    public static string PlaceOf(string kind, FlowInstance? instance)
+        => kind == "runBudget" || instance is null ? "run" : instance.Id;
 
     /// <summary>
     /// The consents a fold's dry run needs, one at a time: a person's first, for the matter a person alone can

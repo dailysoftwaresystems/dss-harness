@@ -306,11 +306,11 @@ public sealed class FlowCoordinator
     private FlowPauseRequest? _pauseRequest;
     private FlowPauseState? _pause;
     private readonly FlowBudgetSpent _spent = new();
+    private readonly string? _runName;
     private readonly Dictionary<string, DateTimeOffset> _reasonStarted = new(StringComparer.Ordinal);
     private readonly List<FlowInstance> _owedFailures = [];
     private readonly List<CancellationTokenSource> _handoffBounds = [];
     private int _budgetGranted;
-    private bool _budgetAsked;
     private bool _pauseAllAsked;
     private bool _stopApplied;
     private int _questionsRaised;
@@ -380,6 +380,10 @@ public sealed class FlowCoordinator
     /// <param name="inputs">The values the run is started with, by input name.</param>
     /// <param name="records">Records the run on disk at every change, in the run's own order; null for a run that holds nothing.</param>
     /// <param name="resume">The state a killed or stopped run left, to go on with; null for a run that begins.</param>
+    /// <param name="runName">
+    /// The run's name - <c>r&lt;N&gt;</c>, or the one <c>--run</c> gave - which <c>run.name</c> reads and the budget's
+    /// question says; null for a run held in memory alone, whose name reads empty and whose question says "the run".
+    /// </param>
     /// <exception cref="HarnessException">An input the run needs is missing, or a value is outside the ones its input takes.</exception>
     public FlowCoordinator(
         WorkflowDefinition definition,
@@ -388,7 +392,8 @@ public sealed class FlowCoordinator
         TimeProvider? clock = null,
         IReadOnlyDictionary<string, string>? inputs = null,
         IFlowRecords? records = null,
-        FlowResumeState? resume = null)
+        FlowResumeState? resume = null,
+        string? runName = null)
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(runner);
@@ -400,6 +405,7 @@ public sealed class FlowCoordinator
         _clock = clock ?? TimeProvider.System;
         _inputs = StartValues(definition, inputs);
         _records = records;
+        _runName = runName;
 
         foreach (var (path, _) in FlowScope.Declared(definition))
         {
@@ -855,13 +861,6 @@ public sealed class FlowCoordinator
         _pause = new FlowPauseState(request.Cause, request.All, _clock.GetUtcNow());
         Record(FlowChangeKind.PauseBegan, detail: $"{request.Cause}{(request.All ? ", all" : string.Empty)}");
 
-        if (request.Cause == "budget")
-        {
-            // Each pause of the budget asks its own question: a run granted more reaches its new reserve and asks
-            // again.
-            _budgetAsked = false;
-        }
-
         // No retry that was waiting is started: the run goes on with it at the resume, as the instance it belongs to.
         foreach (var wake in _wakes.Where(wake => !wake.Drain).ToList())
         {
@@ -1005,10 +1004,46 @@ public sealed class FlowCoordinator
         => _spent.Minutes += (_clock.GetUtcNow() - began).TotalMinutes;
 
     /// <summary>
-    /// The run's budget at its reserve: what was spent reached the share of an amount the reserve leaves, and the run
-    /// is paused before the budget is spent - or, where the workflow's own <c>answers</c> give <c>more</c> a counted
-    /// number of times, the amounts are allowed once again and the run goes on, the question recorded answered as
-    /// every configured answer is.
+    /// The minutes the run's reasoning has spent as it stands now: what the ended attempts and handoff turns counted,
+    /// and the time each reason step running now has run so far - two at once counting twice.
+    /// </summary>
+    private double MinutesSpent()
+    {
+        var now = _clock.GetUtcNow();
+        return _spent.Minutes + _reasonStarted.Values.Sum(began => (now - began).TotalMinutes);
+    }
+
+    /// <summary>The share of <paramref name="amount"/> the run may spend before the reserve of <paramref name="budget"/> is reached, each grant of more allowing the amount once again.</summary>
+    private double ReserveOf(FlowBudget budget, double amount)
+        => amount * (_budgetGranted + 1) * (100 - (budget.ReservePercent ?? 10)) / 100.0;
+
+    /// <summary>The run's question of its budget, where one is open: asked once, and open until a person answers it.</summary>
+    private FlowQuestion? OpenBudgetQuestion
+        => _questions.FirstOrDefault(asked => asked.Kind == "runBudget" && _open.Contains(asked.Id));
+
+    /// <summary>
+    /// How long until the reason steps running now bring the minutes to the budget's reserve, at the rate they run
+    /// together - the tick of the clock the run waits on beside its other waits; null where no minutes are budgeted,
+    /// no reason step runs, or the run is pausing or stopping already.
+    /// </summary>
+    private TimeSpan? MinutesToReserve()
+    {
+        if (_definition.Budget is not { Minutes: { } minutes } budget || _reasonStarted.Count == 0 || _pausing || _hardStop || _pauseRequest is not null)
+        {
+            return null;
+        }
+
+        var left = ReserveOf(budget, minutes) - MinutesSpent();
+        return TimeSpan.FromMinutes(Math.Max(0, left / _reasonStarted.Count));
+    }
+
+    /// <summary>
+    /// The run's budget at its reserve: what was spent - the minutes as the reason steps run - reached the share of an
+    /// amount the reserve leaves. The question is the run's, and the workflow's own <c>answers</c> answer it as they
+    /// answer every question, through the one owner of configured answers: <c>more</c> a counted number of times allows
+    /// each amount once again and the run goes on; <c>abort</c> ends the run as a hard stop does. Where they give none,
+    /// the run is paused before the budget is spent, and asks when the pause has ended. While its question is open the
+    /// run is held: nothing starts until a person answers it.
     /// </summary>
     private void CheckBudget()
     {
@@ -1017,42 +1052,30 @@ public sealed class FlowCoordinator
             return;
         }
 
-        var reached = ReachedOf(budget);
+        if (OpenBudgetQuestion is not null)
+        {
+            // Asked already - by an earlier session, or answered abort and open again: a person answers it, and the
+            // configuration that gave nothing then, or the abort, is not given again.
+            _pauseRequest = new FlowPauseRequest("budget", false);
+            return;
+        }
 
-        if (reached is not { } hit)
+        if (ReachedOf(budget) is not { } hit)
         {
             return;
         }
 
-        if (_definition.Answers.TryGetValue("runBudget", out var entry) && entry.Answer == "more")
+        var options = FlowQuestions.OptionsOf("runBudget", null);
+
+        if (ConfiguredAnswer(null, "runBudget", options) is { } configured)
         {
-            var given = _answerSpent.GetValueOrDefault("runBudget|run");
-
-            if (given < (entry.Times ?? 1))
-            {
-                // The amounts are allowed once again: the same budget, one more time.
-                _answerSpent["runBudget|run"] = given + 1;
-                _budgetGranted++;
-                var granted = BudgetQuestion(hit);
-                granted._given.Add(new FlowAnswerEntry("more", null, "configuration", "the orchestrator's answers", At: _clock.GetUtcNow(), Did: "each amount is allowed once again"));
-                granted.State = "answered";
-                _questions.Add(granted);
-                _optionsHeld[granted.Id] = HeldOptionsOf(null, "runBudget", granted.Options);
-                WriteQuestions();
-                return;
-            }
-
-            if (entry.Then == "abort")
-            {
-                var stopped = BudgetQuestion(hit);
-                stopped._given.Add(new FlowAnswerEntry("abort", null, "configuration", "the orchestrator's answers", At: _clock.GetUtcNow(), Did: "the run ends stopped"));
-                stopped.State = "answered";
-                _questions.Add(stopped);
-                _optionsHeld[stopped.Id] = HeldOptionsOf(null, "runBudget", stopped.Options);
-                WriteQuestions();
-                BeginHardStop();
-                return;
-            }
+            var asked = BudgetQuestion(hit);
+            _questions.Add(asked);
+            _optionsHeld[asked.Id] = HeldOptionsOf(null, "runBudget", asked.Options);
+            _answerWhere[asked.Id] = configured.Where;
+            ApplyAnswer(null, asked, configured.Answer, null, by: "configuration");
+            WriteQuestions();
+            return;
         }
 
         // The reserve is what the handoffs are written in, so the pause begins before the budget ends and not at it.
@@ -1062,40 +1085,42 @@ public sealed class FlowCoordinator
     /// <summary>The amount of <paramref name="budget"/> whose reserve the run has reached, with what was spent against it; null where none has.</summary>
     private (string Kind, string SpentOf)? ReachedOf(FlowBudget budget)
     {
-        var reserve = (100 - (budget.ReservePercent ?? 10)) / 100.0;
         var times = _budgetGranted + 1;
 
-        if (budget.Usd is { } usd && _spent.Usd >= usd * times * reserve)
+        if (budget.Usd is { } usd && _spent.Usd >= ReserveOf(budget, usd))
         {
             return ("usd", $"{_spent.Usd.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)} of {(usd * times).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)} USD");
         }
 
-        if (budget.Tokens is { } tokens && _spent.Tokens >= tokens * times * reserve)
+        if (budget.Tokens is { } tokens && _spent.Tokens >= ReserveOf(budget, tokens))
         {
             return ("tokens", $"{_spent.Tokens} of {tokens * times} tokens");
         }
 
-        if (budget.Minutes is { } minutes && _spent.Minutes >= minutes * times * reserve)
+        var minutesSpent = MinutesSpent();
+
+        if (budget.Minutes is { } minutes && minutesSpent >= ReserveOf(budget, minutes))
         {
-            return ("minutes", $"{_spent.Minutes.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)} of {(minutes * times).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)} minutes");
+            return ("minutes", $"{minutesSpent.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)} of {(minutes * times).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)} minutes");
         }
 
         return null;
     }
 
-    /// <summary>The question the run's budget asks at its reserve, worded as the run's person reads it.</summary>
+    /// <summary>The question the run's budget asks at its reserve, worded as the run's person reads it: the run by its name, where it was given one.</summary>
     private FlowQuestion BudgetQuestion((string Kind, string SpentOf) reached)
     {
         var reserve = _definition.Budget?.ReservePercent ?? 10;
+        var run = _runName is { Length: > 0 } name ? $"run '{name}'" : "the run";
         return new FlowQuestion(
             $"q{++_questionsRaised}",
             "runBudget",
             "run",
-            $"run 'r1' has spent {reached.SpentOf} (its reserve of {reserve}% was reached)",
+            $"{run} has spent {reached.SpentOf} (its reserve of {reserve}% was reached)",
             FlowQuestions.OptionsOf("runBudget", null))
         {
             RaisedAt = _clock.GetUtcNow(),
-            Tried = "the amounts were counted at each reason step's end",
+            Tried = "the amounts were counted as the reason steps ran",
             Means = null,
         };
     }
@@ -1170,30 +1195,14 @@ public sealed class FlowCoordinator
             instance.WaitingQuestion = null;
         }
 
-        if (asked.Kind == "runBudget")
-        {
-            // The budget's question is the run's alone: more allows each amount once again and the run goes on at the
-            // next session; abort ends it as a hard stop does.
-            asked._given.Add(new FlowAnswerEntry(answer, null, "person", null, Through: _answerThrough.GetValueOrDefault(asked.Id), At: _clock.GetUtcNow(), Did: answer == "more" ? "each amount is allowed once again" : "the run ends stopped"));
-            asked.State = "answered";
-
-            if (answer == "more")
-            {
-                _budgetGranted++;
-            }
-            else
-            {
-                BeginHardStop();
-            }
-
-            WriteQuestions();
-            return true;
-        }
-
-        var was = instance!.State;
+        var was = instance?.State;
         ApplyAnswer(instance, asked, answer, string.IsNullOrWhiteSpace(text) ? null : text, by: null);
         WriteQuestions();
-        Record(FlowChangeKind.Step, instance, from: was, to: instance.State, detail: $"'{asked.Id}' answered '{answer}'");
+
+        if (instance is not null)
+        {
+            Record(FlowChangeKind.Step, instance, from: was, to: instance.State, detail: $"'{asked.Id}' answered '{answer}'");
+        }
 
         return true;
     }
@@ -1201,11 +1210,13 @@ public sealed class FlowCoordinator
     /// <summary>
     /// Applies one answer to the question that waits on it, recording who gave it: a person (a caller of
     /// <see cref="TryAnswer(string, string, out string?)"/>) or the configuration, which answered the kind beforehand where <paramref name="by"/>
-    /// says so. The question's own kind says what the answer does.
+    /// says so. The question's own kind says what the answer does; the run's own question, its budget's, is about no
+    /// step, and <paramref name="instance"/> is null for it.
     /// </summary>
-    private void ApplyAnswer(FlowInstance instance, FlowQuestion asked, string answer, string? text, string? by)
+    private void ApplyAnswer(FlowInstance? instance, FlowQuestion asked, string answer, string? text, string? by)
     {
-        asked._given.Add(new FlowAnswerEntry(answer, text, by ?? "person", by is null ? null : _answerWhere[asked.Id], by is null ? _answerThrough.GetValueOrDefault(asked.Id) : null, _clock.GetUtcNow()));
+        var did = asked.Kind == "runBudget" ? answer == "more" ? "each amount is allowed once again" : "the run ends stopped" : null;
+        asked._given.Add(new FlowAnswerEntry(answer, text, by ?? "person", by is null ? null : _answerWhere[asked.Id], by is null ? _answerThrough.GetValueOrDefault(asked.Id) : null, _clock.GetUtcNow(), did));
         asked.State = "answered";
 
         if (answer == "abort")
@@ -1215,6 +1226,22 @@ public sealed class FlowCoordinator
             // answers, and its step waits on it as it did - so the resume goes on with the question asked.
             WaitOn(instance, asked);
             BeginHardStop();
+        }
+        else if (asked.Kind == "runBudget")
+        {
+            // more: each amount is allowed once again - the same budget, one more time - and the run goes on.
+            _budgetGranted++;
+        }
+
+        if (instance is null)
+        {
+            // No step changed: the run's own counts did, and the records hold them.
+            Record(FlowChangeKind.Answer, detail: $"'{asked.Id}' answered '{answer}' by {by ?? "a person"}");
+            return;
+        }
+
+        if (answer == "abort")
+        {
             return;
         }
 
@@ -3339,36 +3366,13 @@ public sealed class FlowCoordinator
             _askedSubject[id] = subject;
         }
 
-        if (ConfiguredFor(instance, kind, subject) is { } configured)
+        if (ConfiguredAnswer(instance, kind, options, subject) is { } configured)
         {
-            var (entry, where) = configured;
-            var place = subject is null ? FlowQuestions.PlaceOf(kind, instance) : $"{FlowQuestions.PlaceOf(kind, instance)}:{subject}";
-            var key = $"{kind}|{place}";
-            var given = _answerSpent.GetValueOrDefault(key);
-
-            // An answer that lets the same thing go on is given a counted number of times and no more; an answer that
-            // ends the matter is given whenever the question comes, for it ends it. A direct answer is a person's
-            // alone, for its text is the person's fix; a configuration that names one is not given it.
-            var counted = WorkflowValidator.GoesOn.Contains(entry.Answer, StringComparer.Ordinal) && given < (entry.Times ?? 1);
-            var answer = entry.Answer == "direct"
-                ? null
-                : WorkflowValidator.GoesOn.Contains(entry.Answer, StringComparer.Ordinal)
-                    ? counted ? entry.Answer : entry.Then
-                    : entry.Answer;
-
-            if (answer is { } atOnce && (options.Contains(atOnce, StringComparer.Ordinal) || atOnce == "abort"))
-            {
-                if (counted)
-                {
-                    _answerSpent[key] = given + 1;
-                }
-
-                _answerWhere[id] = where;
-                _answeredAtOnce = true;
-                ApplyAnswer(instance, asked, atOnce, null, by: "configuration");
-                WriteQuestions();
-                return id;
-            }
+            _answerWhere[id] = configured.Where;
+            _answeredAtOnce = true;
+            ApplyAnswer(instance, asked, configured.Answer, null, by: "configuration");
+            WriteQuestions();
+            return id;
         }
 
         var was = instance.State;
@@ -3384,13 +3388,20 @@ public sealed class FlowCoordinator
     /// <summary>
     /// Leaves <paramref name="asked"/> open with <paramref name="instance"/> waiting on it, holding nothing: where a
     /// question is raised, and where an <c>abort</c> settled nothing of it. A step whose work asked is paused; a question
-    /// of an ending leaves the step in the state it ended in.
+    /// of an ending leaves the step in the state it ended in; the run's own question, its budget's, waits on no step.
     /// </summary>
-    private void WaitOn(FlowInstance instance, FlowQuestion asked)
+    private void WaitOn(FlowInstance? instance, FlowQuestion asked)
     {
         asked.State = "open";
         _open.Add(asked.Id);
         _answerable[asked.Id] = instance;
+
+        if (instance is null)
+        {
+            // The run's own question: no step waits on it, and the run is held while it is open.
+            return;
+        }
+
         instance.WaitingQuestion = asked.Id;
 
         if (!FlowQuestions.AsksOfAnEnding(asked.Kind))
@@ -3455,6 +3466,46 @@ public sealed class FlowCoordinator
             Recommendation: FlowRecommendation.NotSought);
 
     /// <summary>
+    /// The answer the configuration gives at once to a question of <paramref name="kind"/> on <paramref name="instance"/>
+    /// - null for the run's own question - with where it is configured, counted where it is given; null where a person
+    /// is asked. An answer that lets the same thing go on is given a counted number of times and no more, and then its
+    /// <c>then</c>; an answer that ends the matter is given whenever the question comes, for it ends it. A direct answer
+    /// is a person's alone, for its text is the person's fix, and one the question does not offer - a skip where the
+    /// step is not skippable - is neither given nor counted.
+    /// </summary>
+    private (string Answer, string Where)? ConfiguredAnswer(FlowInstance? instance, string kind, IReadOnlyList<string> options, string? subject = null)
+    {
+        if (ConfiguredFor(instance, kind) is not { } configured)
+        {
+            return null;
+        }
+
+        var (entry, where) = configured;
+
+        var place = subject is null ? FlowQuestions.PlaceOf(kind, instance) : $"{FlowQuestions.PlaceOf(kind, instance)}:{subject}";
+        var key = $"{kind}|{place}";
+        var given = _answerSpent.GetValueOrDefault(key);
+        var counted = WorkflowValidator.GoesOn.Contains(entry.Answer, StringComparer.Ordinal) && given < (entry.Times ?? 1);
+        var answer = entry.Answer == "direct"
+            ? null
+            : WorkflowValidator.GoesOn.Contains(entry.Answer, StringComparer.Ordinal)
+                ? counted ? entry.Answer : entry.Then
+                : entry.Answer;
+
+        if (answer is not { } atOnce || !(options.Contains(atOnce, StringComparer.Ordinal) || atOnce == "abort"))
+        {
+            return null;
+        }
+
+        if (counted)
+        {
+            _answerSpent[key] = given + 1;
+        }
+
+        return (atOnce, where);
+    }
+
+    /// <summary>
     /// The configured answer a question of <paramref name="kind"/> on <paramref name="instance"/> is given at once:
     /// the nearest <c>answers</c> that names the kind - the step's own, then each group around it from the inside out,
     /// then the workflow's - and none where the kind is a person's alone, or answered by the step's own key
@@ -3462,10 +3513,19 @@ public sealed class FlowCoordinator
     /// the step itself and never one that says <c>person</c>, or the run's budget answered anywhere but on the
     /// workflow.
     /// </summary>
-    private (FlowAnswer Entry, string Where)? ConfiguredFor(FlowInstance instance, string kind, string? subject = null)
+    private (FlowAnswer Entry, string Where)? ConfiguredFor(FlowInstance? instance, string kind)
     {
-        _ = subject;
         if (FlowQuestions.PersonsKinds.Contains(kind, StringComparer.Ordinal) || kind is "failure" or "ask")
+        {
+            return null;
+        }
+
+        if (kind == "runBudget")
+        {
+            return _definition.Answers.TryGetValue(kind, out var run) ? (run, "the orchestrator's answers") : null;
+        }
+
+        if (instance is null)
         {
             return null;
         }
@@ -3475,11 +3535,6 @@ public sealed class FlowCoordinator
             return instance.Step.Person is true
                 ? null
                 : instance.Step.Answers.TryGetValue(kind, out var own) ? (own, $"step '{instance.Step.Name}'") : null;
-        }
-
-        if (kind == "runBudget")
-        {
-            return _definition.Answers.TryGetValue(kind, out var run) ? (run, "the orchestrator's answers") : null;
         }
 
         if (instance.Step.Answers.TryGetValue(kind, out var nearest))
@@ -3713,17 +3768,16 @@ public sealed class FlowCoordinator
     /// </summary>
     private FlowSessionEnd Finish()
     {
-        if (_pause is { Cause: "budget" } && !_hardStop && !_budgetAsked)
+        if (_pause is { Cause: "budget" } && !_hardStop && OpenBudgetQuestion is null)
         {
-            // The budget's pause has ended: the run holds its question, which a person or the workflow's own answers
-            // settle - more allows each amount once again, abort ends the run.
-            _budgetAsked = true;
+            // The budget's pause has ended: the run holds its question, once, which a person settles - more allows each
+            // amount once again, abort ends the run. The workflow's own answers were asked at the reserve, and gave
+            // none.
             var reached = ReachedOf(_definition.Budget!);
             var question = BudgetQuestion(reached ?? ("usd", "its budget"));
             _questions.Add(question);
             _optionsHeld[question.Id] = HeldOptionsOf(null, "runBudget", question.Options);
-            _open.Add(question.Id);
-            _answerable.Add(question.Id, null);
+            WaitOn(null, question);
             WriteQuestions();
         }
 
@@ -3791,7 +3845,7 @@ public sealed class FlowCoordinator
                 : $"{_handled.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)} failures were handled: {string.Join(", ", _handled.Select(instance => $"{instance.Step.Name}, by {instance.HandledBy}"))}";
     }
 
-    /// <summary>Waits for the next thing the run learns - a completion, an event of a leg, or a retry's time coming - and takes it. One read of the channel is kept open across the waits a retry's turn takes, so no message is read by a wait that no longer stands.</summary>
+    /// <summary>Waits for the next thing the run learns - a completion, an event of a leg, a retry's time coming, or the budget's tick - and takes it. One read of the channel is kept open across the waits a retry's turn takes, so no message is read by a wait that no longer stands.</summary>
     private async Task WaitNextAsync(CancellationToken cancellationToken)
     {
         // A read cancelled by a session's end is dropped, not kept: the next session arms its own.
@@ -3812,17 +3866,57 @@ public sealed class FlowCoordinator
             _pending = _messages.Reader.ReadAsync(cancellationToken).AsTask();
         }
 
-        if (_wakes.Count == 0)
+        // The minutes a reason step runs count while it runs: the run wakes when those running now would bring the
+        // budget to its reserve, so a long one pauses the run there and not only when its attempt ends.
+        using var tickEnds = new CancellationTokenSource();
+        var tick = MinutesToReserve() is { } due ? Task.Delay(due, _clock, tickEnds.Token) : null;
+
+        try
         {
-            Take(await _pending.ConfigureAwait(false));
-            _pending = null;
-            return;
+            if (_wakes.Count == 0 && tick is null)
+            {
+                Take(await _pending.ConfigureAwait(false));
+                _pending = null;
+                return;
+            }
+
+            var earliest = _wakes.OrderBy(wake => wake.At).FirstOrDefault();
+            var waits = new List<Task>(3) { _pending };
+
+            if (earliest is not null)
+            {
+                waits.Add(earliest.Delay);
+            }
+
+            if (tick is not null)
+            {
+                waits.Add(tick);
+            }
+
+            var done = await Task.WhenAny(waits).ConfigureAwait(false);
+
+            if (done == tick)
+            {
+                // The loop goes round, and reads the budget as it stands now.
+                return;
+            }
+
+            if (done != _pending)
+            {
+                Woken(earliest!);
+                return;
+            }
+        }
+        finally
+        {
+            tickEnds.Cancel();
         }
 
-        var earliest = _wakes.OrderBy(wake => wake.At).First();
-        var done = await Task.WhenAny(_pending, earliest.Delay).ConfigureAwait(false);
+        // Awaited, not read: a read the session's token cancelled ends the session cancelled, as every wait does.
+        Take(await _pending.ConfigureAwait(false));
+        _pending = null;
 
-        if (done != _pending)
+        void Woken(Wake earliest)
         {
             _wakes.Remove(earliest);
 
@@ -3835,12 +3929,7 @@ public sealed class FlowCoordinator
             }
 
             NewAttempt(earliest.Instance);
-            return;
         }
-
-        // Awaited, not read: a read the session's token cancelled ends the session cancelled, as every wait does.
-        Take(await _pending.ConfigureAwait(false));
-        _pending = null;
 
         void Take(Message message)
         {
@@ -4325,11 +4414,15 @@ public sealed class FlowCoordinator
         return null;
     }
 
-    /// <summary>The run's own values, as <c>run</c> reads them, said without its always steps: only they read these, so none reads its own effect.</summary>
+    /// <summary>
+    /// The run's own values, as <c>run</c> reads them, said without its always steps: only they read these, so none
+    /// reads its own effect. The run is failed where a failure ended it - one its policy stopped the run on - and done
+    /// where every step that failed was passed over or handled.
+    /// </summary>
     private JsonObject RunValues()
     {
         var main = _created.Where(instance => !instance.IsAlways).ToList();
-        var failed = main.Any(instance => instance.State is FlowInstanceState.Failed && !instance.PassedOver);
+        var failed = _failed.Any(instance => !instance.IsAlways);
         var paused = _open.Count > 0 || main.Any(instance => instance.State is FlowInstanceState.Paused);
         var leftover = string.Join("; ", _created
             .Where(instance => instance.Step.Repeat?.Leftover is not null && instance.Leftover is not null)
@@ -4338,7 +4431,7 @@ public sealed class FlowCoordinator
 
         return new JsonObject
         {
-            ["name"] = "r1",
+            ["name"] = _runName ?? string.Empty,
             ["status"] = failed ? "failed" : paused ? "paused" : "done",
             ["done"] = !failed && !paused,
             ["failed"] = failed,

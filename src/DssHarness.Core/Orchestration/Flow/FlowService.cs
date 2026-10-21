@@ -646,7 +646,7 @@ public sealed class FlowService(
             var (definition, runContext, resume) = begin();
 
             using var records = new FlowRunRecords(_fileSystem, _store, layout, runContext, _clock);
-            var coordinator = new FlowCoordinator(definition, _runner, _runnerFacts, _clock, runContext.Inputs, records, resume);
+            var coordinator = new FlowCoordinator(definition, _runner, _runnerFacts, _clock, runContext.Inputs, records, resume, layout.Name);
             var before = _store.ReadFlowQuestions(layout);
             var offered = new Dictionary<string, Task<bool>>(StringComparer.Ordinal);
 
