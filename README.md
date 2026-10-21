@@ -456,9 +456,13 @@ are `apiKeyNames`, the names of the variables that hold them in the git-ignored 
 second name in the list, and no key is read from the process environment - a CI machine writes the
 file. `list-agent-providers` says it all without saying one key: each provider, client and tier, and
 for every appointed name `present` or `missing`, exit 0 whatever is missing; `--template` prints
-the agent sections as `init` writes them into a new config, to paste into an existing one. A slot
-file other users can change or read is refused with the command that fixes it, and a name declared
-in two of its files is refused as the runner's value directories refuse one. `validate-workflow`
+the agent sections as `init` writes them into a new config, to paste into an existing one. A name
+declared in two of the slot's files is refused as the runner's value directories refuse one, a line
+whose name is no variable's name (`[A-Z][A-Z0-9_]*`) is refused by its line number alone - it may be
+part of a key pasted on its own - and a file where the slot's directory should be is refused rather
+than read as an empty slot. Where a value of the slot is read - which no command of this build does
+yet - a file other users can change, or can read while it holds a key, is refused with the command
+that fixes it; a setting, such as `CLAUDE_EXECUTABLE`, is no key. `validate-workflow`
 names every key a step's model would read that no file of the slot declares, with the steps that
 would read it, and still passes - a machine that only checks a configuration needs no key. A model
 reached through `claude-api` or `glm` reads its provider's keys; one reached through `claude-code`

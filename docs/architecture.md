@@ -1318,10 +1318,15 @@ that only checks a configuration needs no key, and no command of this build refu
 that will is the engine's, which this build does not yet run. The slot itself
 (`Secrets\AgentKeyStore`, beside the host items' own store) reads the git-ignored
 `.harness-config/workflows/.env/` by the runner's one rule for a directory of dotenv files - every
-file merged, a name declared twice refused in its own words - and from nowhere else, so a stray
-variable of the tool's own environment neither chooses whose key a run bills nor redirects one; its
-files' privacy is asked of the file each name came from when a value is read, as the item rules ask
-of a host's. `list-agent-providers` says the same configuration without saying one key: each
+file merged, a name declared twice refused in its own words, a file in the directory's place refused
+rather than read as none, and (the slot's own shape) each name held to a variable's name, a line
+whose name is not one said by its number and never by its text, which may be part of a key - and
+from nowhere else, so a stray variable of the tool's own environment neither chooses whose key a run
+bills nor redirects one. Where a value is read (`AgentKeyStore.Value`, which no command of this
+build calls yet), who may reach the file each name came from is asked by the one rule
+the host items' files are held to (`ItemEnvironment.Unprotected`): never a file others can change,
+and never one others can read while it holds a secret - a name the configuration appoints as a key,
+not a setting such as the program a client starts. `list-agent-providers` says the same configuration without saying one key: each
 provider, client and tier, every appointed name present or missing, `--template` the sections as
 `init` writes them, exit 0 whatever is missing. The Claude Code the clients will drive is npm's own:
 `NpmClient` finds npm (a program, or on Windows what `npm.cmd` would have started - the tool never

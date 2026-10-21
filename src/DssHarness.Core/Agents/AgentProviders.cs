@@ -169,9 +169,9 @@ public sealed partial class AgentProviders
                 problems.Add($"{where} declares no apiKeyNames; a provider's keys are at least one variable's name, in the order they are tried");
             }
 
-            foreach (var name in provider.ApiKeyNames.Where(name => !VariableName().IsMatch(name)))
+            foreach (var name in provider.ApiKeyNames.Where(name => !Secrets.AgentKeyStore.IsVariableName(name)))
             {
-                problems.Add($"{where} apiKeyNames '{name}' is not a variable's name: [A-Z][A-Z0-9_]*, a name and never a key");
+                problems.Add($"{where} apiKeyNames '{name}' is not a variable's name: {Secrets.AgentKeyStore.VariableNameShape}, a name and never a key");
             }
 
             if (provider.Models.Any(model => Priced(model)) && string.IsNullOrWhiteSpace(provider.Currency))
@@ -320,9 +320,6 @@ public sealed partial class AgentProviders
     /// <summary>Whether a model's entry holds any price at all.</summary>
     private static bool Priced(AgentModelConfig model)
         => model.PriceInputMiss is not null || model.PriceOutput is not null;
-
-    [System.Text.RegularExpressions.GeneratedRegex("^[A-Z][A-Z0-9_]*$")]
-    private static partial System.Text.RegularExpressions.Regex VariableName();
 
     [System.Text.RegularExpressions.GeneratedRegex("^[A-Z]{3}$")]
     private static partial System.Text.RegularExpressions.Regex CurrencyName();

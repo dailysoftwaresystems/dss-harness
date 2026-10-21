@@ -2363,9 +2363,10 @@ public static class HelpTopics
         builder.AppendLine("machine, another tool - is not seen.");
         builder.AppendLine();
         builder.AppendLine("The slot itself is a directory of dotenv files, " + HarnessLayout.WorkflowsEnvSlotRelative + "/:");
-        builder.AppendLine("every file in it is read and merged, a name declared in two of them is refused, and no key");
-        builder.AppendLine("is ever read from the process environment - a CI machine writes the file. A sample for the");
-        builder.AppendLine("providers init declares, none filled in:");
+        builder.AppendLine("every file in it is read and merged, a name declared in two of them is refused, a line whose");
+        builder.AppendLine($"name is no variable's name ({Secrets.AgentKeyStore.VariableNameShape}) is refused by its line number alone, for it");
+        builder.AppendLine("may be part of a key, and no key is ever read from the process environment - a CI machine");
+        builder.AppendLine("writes the file. A sample for the providers init declares, none filled in:");
         builder.AppendLine();
 
         foreach (var line in SlotSample())

@@ -136,5 +136,46 @@ public sealed class DotEnvDirectoriesTests
         Assert.Empty(directories.Problems);
     }
 
+    /// <summary>
+    /// A file where the directory should be is a problem said by a sentence, and nothing of it is read: taken for a
+    /// directory that is not there, its values would be lost without a word, and the reader would run on none.
+    /// </summary>
+    [Fact]
+    public void AFileWhereTheDirectoryShouldBe_IsAProblem_AndNothingOfItIsRead()
+    {
+        using var temp = new TempDirectory();
+        var file = temp.WriteFile("env", "JOBS=8\n");
+        var directories = Directories();
+
+        Assert.Empty(directories.Read(file, Token));
+        Assert.Empty(directories.Origins);
+        Assert.Empty(directories.Files);
+        Assert.Equal(
+            [$"'{file}' is a file, where a directory of dotenv files is read: nothing of it was read. Make it a directory and move the file into it, where every file is read and merged."],
+            directories.Problems);
+    }
+
+    /// <summary>
+    /// The files read are said in the order they were read - by name within a directory, and the directories in the
+    /// order they were read - the file a reader skips by name not among them: the one list of a directory's files, so no
+    /// reader counts them again with its own skip and order.
+    /// </summary>
+    [Fact]
+    public void TheFilesRead_AreSaidInTheOrderTheyWereRead_TheSkippedFileNotAmongThem()
+    {
+        using var temp = new TempDirectory();
+        var second = temp.WriteFile(Path.Combine("env", "b.env"), "TARGET=all\n");
+        var first = temp.WriteFile(Path.Combine("env", "a.env"), "JOBS=8\n");
+        temp.WriteFile(Path.Combine("env", ".gitkeep"), string.Empty);
+        var third = temp.WriteFile(Path.Combine("secrets", "c.env"), "TOKEN=x\n");
+        var directories = new DotEnvDirectories(new PhysicalFileSystem(FilePermissionsFactory.Create()), skipFile: ".gitkeep");
+
+        directories.Read(temp.Combine("env"), Token);
+        directories.Read(temp.Combine("secrets"), Token);
+
+        Assert.Equal([first, second, third], directories.Files);
+        Assert.Empty(directories.Problems);
+    }
+
     private static DotEnvDirectories Directories() => new(new PhysicalFileSystem(FilePermissionsFactory.Create()));
 }

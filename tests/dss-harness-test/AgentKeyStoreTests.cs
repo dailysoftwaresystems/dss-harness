@@ -135,6 +135,90 @@ public sealed class AgentKeyStoreTests
         Assert.Equal($"other users can read '{file}', and it holds ZAI_API_KEY; make it private with: chmod 600 '{file}'", answer.Problem);
     }
 
+    /// <summary>
+    /// Who may read a file is asked only where it holds a secret, by the one item rule: a setting - the program the
+    /// claude-code client starts - in a file other users can read is answered, for it is no credential, while the same
+    /// file holding a key beside it is refused naming the key.
+    /// </summary>
+    [Fact]
+    public void Value_OfASettingInAFileOthersCanRead_IsAnswered_UnlessAKeyIsBesideIt()
+    {
+        using var temp = new TempDirectory();
+        temp.WriteFile(".harness-config/workflows/.env/keys.env", "CLAUDE_EXECUTABLE=/opt/claude/bin/claude\n");
+        var file = Path.Combine(temp.Path, ".harness-config", "workflows", ".env", "keys.env");
+        var (_, store) = Store(isPrivate: false);
+        var program = new AppointedKey("CLAUDE_EXECUTABLE", "client 'claude-code'", "the program the claude-code client starts", Secret: false);
+
+        var setting = store.Value(Layout(temp.Path), [ZaiKey, program], "CLAUDE_EXECUTABLE");
+
+        Assert.Null(setting.Problem);
+        Assert.Equal("/opt/claude/bin/claude", setting.Value);
+
+        temp.WriteFile(".harness-config/workflows/.env/keys.env", "CLAUDE_EXECUTABLE=/opt/claude/bin/claude\nZAI_API_KEY=one\n");
+
+        var beside = store.Value(Layout(temp.Path), [ZaiKey, program], "CLAUDE_EXECUTABLE");
+
+        Assert.Null(beside.Value);
+        Assert.Equal($"other users can read '{file}', and it holds ZAI_API_KEY; make it private with: chmod 600 '{file}'", beside.Problem);
+    }
+
+    /// <summary>On Windows the refusal of a file others can read says the command that makes it private there.</summary>
+    [Fact]
+    public void Value_OfAFileOthersCanRead_OnWindows_SaysTheIcaclsCommand()
+    {
+        using var temp = new TempDirectory();
+        temp.WriteFile(".harness-config/workflows/.env/keys.env", "ZAI_API_KEY=one\n");
+        var file = Path.Combine(temp.Path, ".harness-config", "workflows", ".env", "keys.env");
+        var (_, store) = Store(isPrivate: false, platform: PlatformId.Windows);
+
+        var answer = store.Value(Layout(temp.Path), [ZaiKey], "ZAI_API_KEY");
+
+        Assert.Null(answer.Value);
+        Assert.Equal($"other users can read '{file}', and it holds ZAI_API_KEY; make it private with: icacls \"{file}\" /inheritance:r /grant:r \"%USERNAME%:F\"", answer.Problem);
+    }
+
+    /// <summary>
+    /// A line of the slot whose part before '=' is no variable's name - a key pasted alone, cut at a '=' of its own - is
+    /// reported by its file and line and never by its text, which may be part of a key: it is no name the slot holds, so
+    /// no listing, no document and no refusal could carry it.
+    /// </summary>
+    [Fact]
+    public void Present_OfALineWhoseNameIsNoVariablesName_ReportsItByItsLineAlone()
+    {
+        using var temp = new TempDirectory();
+        temp.WriteFile(".harness-config/workflows/.env/keys.env", "ZAI_API_KEY=one\nc2VjcmV0a2V5MTIz==\nsk-ant pasted=x\n");
+        var file = Path.Combine(temp.Path, ".harness-config", "workflows", ".env", "keys.env");
+        var (_, store) = Store();
+
+        var present = store.Present(Layout(temp.Path));
+
+        Assert.Equal(["ZAI_API_KEY"], present.Names);
+        Assert.Equal(
+            [
+                $"'{file}' line 2: what is before '=' is no variable's name ([A-Z][A-Z0-9_]*), and it is not repeated here, for it may be part of a key.",
+                $"'{file}' line 3: what is before '=' is no variable's name ([A-Z][A-Z0-9_]*), and it is not repeated here, for it may be part of a key.",
+            ],
+            present.Problems);
+    }
+
+    /// <summary>A file where the slot's directory should be is refused by a sentence, never read as an empty slot.</summary>
+    [Fact]
+    public void Present_OfAFileWhereTheSlotsDirectoryShouldBe_IsRefused()
+    {
+        using var temp = new TempDirectory();
+        temp.WriteFile(".harness-config/workflows/.env", "ZAI_API_KEY=one\n");
+        var slot = Path.Combine(temp.Path, ".harness-config", "workflows", ".env");
+        var (_, store) = Store();
+
+        var present = store.Present(Layout(temp.Path));
+
+        Assert.Empty(present.Names);
+        Assert.Empty(present.Files);
+        Assert.Equal(
+            [$"'{slot}' is a file, where a directory of dotenv files is read: nothing of it was read. Make it a directory and move the file into it, where every file is read and merged."],
+            present.Problems);
+    }
+
     [Fact]
     public void Missing_NamesEveryKeyOfTheProviderAndTheNamesNothingAppoints()
     {
@@ -159,12 +243,12 @@ public sealed class AgentKeyStoreTests
         => new(repository, repository);
 
     /// <summary>The store over the real file system, with every answer a privacy rule needs fixed at its making.</summary>
-    private static (IFileSystem Files, AgentKeyStore Store) Store(bool isPrivate = true, bool writableByOthers = false)
+    private static (IFileSystem Files, AgentKeyStore Store) Store(bool isPrivate = true, bool writableByOthers = false, PlatformId platform = PlatformId.Linux)
     {
         var permissions = new FixedPermissions(isPrivate, writableByOthers);
         var files = new PassThroughFileSystem(new PhysicalFileSystem(permissions));
 
-        return (files, new AgentKeyStore(files, permissions, HostDoubles.Platform(PlatformId.Linux)));
+        return (files, new AgentKeyStore(files, permissions, HostDoubles.Platform(platform)));
     }
 
     /// <summary>Every answer a test of the store's privacy rules needs, fixed at its making.</summary>
