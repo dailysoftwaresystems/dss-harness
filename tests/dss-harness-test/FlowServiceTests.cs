@@ -377,16 +377,17 @@ public sealed class FlowServiceTests
     [InlineData(FlowRunStatus.Failed, 3, null, HarnessExit.Incomplete)]
     [InlineData(FlowRunStatus.Failed, 20, null, HarnessExit.CommandFailed)]
     [InlineData(FlowRunStatus.Failed, 13, null, HarnessExit.CommandFailed)]
+    [InlineData(FlowRunStatus.Failed, 13, null, HarnessExit.Incomplete, "LockHeld")]
     [InlineData(FlowRunStatus.Paused, null, null, FlowExit.Paused)]
     [InlineData(FlowRunStatus.Paused, null, "budget", FlowExit.Paused)]
     [InlineData(FlowRunStatus.Paused, null, "interrupt", HarnessExit.Cancelled)]
     [InlineData(FlowRunStatus.Paused, null, "command", HarnessExit.Cancelled)]
     [InlineData(FlowRunStatus.Stopped, null, null, HarnessExit.Cancelled)]
-    public void ASessionsEndExitsWithItsCode(FlowRunStatus status, int? exit, string? pause, int expected)
+    public void ASessionsEndExitsWithItsCode(FlowRunStatus status, int? exit, string? pause, int expected, string? cause = null)
     {
         var failed = exit is null ? Array.Empty<string>() : ["one"];
         var end = new FlowSessionEnd(status, [], failed, [], "ended", pause is null ? null : new FlowPauseState(pause, false, DateTimeOffset.UnixEpoch));
-        var flow = new FlowFile(1, "r1", "flow", "digest", new Dictionary<string, string>(), status.ToString(), new FlowBudgetRecord(0, 0, 0), 0, [new FlowStepRecord("one", "one", false, "Failed", 1, 1, [], [], "build", Exit: exit)], [], DateTimeOffset.UnixEpoch);
+        var flow = new FlowFile(1, "r1", "flow", "digest", new Dictionary<string, string>(), status.ToString(), new FlowBudgetRecord(0, 0, 0), 0, [new FlowStepRecord("one", "one", false, "Failed", 1, 1, [], [], "build", Exit: exit, Cause: cause)], [], DateTimeOffset.UnixEpoch);
 
         Assert.Equal(expected, FlowService.ExitOf(end, flow));
     }

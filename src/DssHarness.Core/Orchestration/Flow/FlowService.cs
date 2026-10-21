@@ -949,12 +949,12 @@ public sealed class FlowService(
 
     /// <summary>
     /// Whether the instance <paramref name="id"/> ended with a code the retry table runs again - incomplete, its retries
-    /// spent. A refusal over a held lock carries its cause in the step's own run, not in its record, so it is counted as
-    /// the refusal its code is.
+    /// spent - read from its record alone: its code, and the cause its record keeps where the code cannot say it, as a
+    /// refusal over a held lock.
     /// </summary>
     private static bool IncompleteEnding(FlowFile flow, string id)
-        => flow.Steps.FirstOrDefault(step => string.Equals(step.Instance, id, StringComparison.Ordinal)) is { Exit: { } exit }
-            && FlowRetry.RunsAgain(exit, OutcomeCause.None);
+        => flow.Steps.FirstOrDefault(step => string.Equals(step.Instance, id, StringComparison.Ordinal)) is { Exit: { } exit } step
+            && FlowRetry.RunsAgain(exit, step.Cause is { } cause ? FlowRecordNames.Of<OutcomeCause>(cause) : OutcomeCause.None);
 
     /// <summary>Every record a session of the run writes, by what it is and its path - the inbox where the session took or left an answer in it.</summary>
     private static IReadOnlyList<FlowRecordPath> RecordsOf(OrchestratorLayout layout, bool inbox)

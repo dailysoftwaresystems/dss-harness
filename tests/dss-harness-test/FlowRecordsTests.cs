@@ -50,6 +50,10 @@ public sealed class FlowRecordsTests
         var badFailure = step with { Instance = "one", State = "Failed", Failure = "ignored" };
         Assert.Contains("is not where a failure leaves the run", badFailure.Problem(), StringComparison.Ordinal);
 
+        Assert.Equal("'None' is not a cause an ending is recorded with", (step with { Instance = "one", Cause = "None" }).Problem());
+        Assert.Equal("'lockHeld' is not a cause an ending is recorded with", (step with { Instance = "one", Cause = "lockHeld" }).Problem());
+        Assert.Null((step with { Instance = "one", State = "Failed", Cause = "LockHeld" }).Problem());
+
         var itemWithoutIndex = step with { Instance = "one", Item = JsonNode.Parse("""{"a": 1}""") };
         Assert.Contains("an item without its index", itemWithoutIndex.Problem(), StringComparison.Ordinal);
 

@@ -238,6 +238,9 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
     /// <summary>The handler whose redirect sent the run back past this visit, by its instance id; null where none did.</summary>
     public string? LeftBy { get; internal set; }
 
+    /// <summary>What the code alone cannot say of how this attempt ended - a refusal whose only obstacle was a held lock; none for every other ending.</summary>
+    public OutcomeCause Cause { get; internal set; }
+
     internal readonly List<FlowAnswerGiven> _answers = [];
     internal Scope? DeclaredScope;
     internal FlowInstance? GroupOf;
@@ -1732,6 +1735,7 @@ public sealed class FlowCoordinator
         instance.State = FlowInstanceState.NotStarted;
         instance.Exit = null;
         instance.Error = null;
+        instance.Cause = OutcomeCause.None;
         instance.EndedByQuestion = null;
         instance.Failure = null;
         instance.FinishedAt = null;
@@ -2705,6 +2709,9 @@ public sealed class FlowCoordinator
             TriageOf(instance);
         }
 
+        // What the code alone cannot say of a failure - a refusal over a held lock - is the ending's own, in its record:
+        // the run that ends on it counts it as incomplete, from the records alone.
+        instance.Cause = passed ? OutcomeCause.None : cause;
         End(instance, passed ? FlowInstanceState.Done : FlowInstanceState.Failed, exit, error);
 
         if (!passed)
@@ -5376,7 +5383,8 @@ public sealed class FlowCoordinator
             instance.NotRunCause,
             instance.Issue,
             instance.IssuesOwed.Count == 0 ? null : [.. instance.IssuesOwed],
-            instance.LeftBy);
+            instance.LeftBy,
+            instance.Cause);
 
     /// <summary>The agent this step works in: the one its <c>in</c> or <c>of</c> names, made by its create-agent; null for the create-agent itself and every step that names none.</summary>
     private string? WorksInOf(FlowInstance instance)
@@ -5729,6 +5737,7 @@ public sealed class FlowCoordinator
             instance.SkippedBecause = record.SkippedBecause;
             instance.NotRunBecause = record.NotRunBecause;
             instance.NotRunCause = record.NotRunCause is { } cause ? FlowRecordNames.Of<FlowNotRunCause>(cause) : null;
+            instance.Cause = record.Cause is { } outcome ? FlowRecordNames.Of<OutcomeCause>(outcome) : OutcomeCause.None;
             instance.Failure = record.FailureOf();
             instance.EndedByQuestion = record.EndedByQuestion;
             instance.Output = record.Output?.DeepClone();

@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Results;
 
 namespace DssHarness.Core.Orchestration.Flow;
 
@@ -566,7 +567,8 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
             step.NotRunCause?.ToString(),
             step.Issue,
             step.IssuesOwed,
-            step.LeftBy);
+            step.LeftBy,
+            step.Cause is OutcomeCause.None ? null : step.Cause.ToString());
     }
 
     /// <summary>

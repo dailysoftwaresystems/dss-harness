@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using DssHarness.Core.Results;
 
 namespace DssHarness.Core.Orchestration.Flow;
 
@@ -155,6 +156,11 @@ public sealed record FlowEvent(
 /// The handler whose redirect sent the run back past this visit, by its instance id: a resume draws the step's next visit
 /// where this one is still its newest. Null where no redirect left it.
 /// </param>
+/// <param name="Cause">
+/// What its code alone cannot say of its ending, one of <see cref="OutcomeCause"/>'s names exactly: <c>LockHeld</c> for a
+/// refusal whose only obstacle was a lock another run held, which the retry table runs again and a run that ended on it
+/// counts as incomplete (21). Null for every other ending.
+/// </param>
 public sealed record FlowStepRecord(
     string Instance,
     string Step,
@@ -189,7 +195,8 @@ public sealed record FlowStepRecord(
     string? NotRunCause = null,
     FlowPreExistingReport? Issue = null,
     IReadOnlyList<FlowPreExistingReport>? IssuesOwed = null,
-    string? LeftBy = null)
+    string? LeftBy = null,
+    string? Cause = null)
 {
     /// <summary>Where a failure can leave the run, as the record names each of <see cref="FlowFailure"/>'s values.</summary>
     public static readonly IReadOnlyList<string> Failures = [.. Enum.GetValues<FlowFailure>().Select(NameOf)];
@@ -214,6 +221,7 @@ public sealed record FlowStepRecord(
             : Visit < 1 ? $"its visit is {Visit.ToString(CultureInfo.InvariantCulture)}, and the first is 1"
             : Failure is { } failure && !Failures.Contains(failure, StringComparer.Ordinal) ? $"'{failure}' is not where a failure leaves the run"
             : NotRunCause is { } cause && !FlowRecordNames.Is<FlowNotRunCause>(cause) ? $"'{cause}' is not a reason a step is NotRun for"
+            : Cause is { } outcome && (!FlowRecordNames.Is<OutcomeCause>(outcome) || outcome == nameof(OutcomeCause.None)) ? $"'{outcome}' is not a cause an ending is recorded with"
             : Question is not null && !FlowQuestionIds.IsWellFormed(Question) ? $"'{Question}' is not a question's id"
             : Item is not null && Index is null ? "it holds an item without its index"
             : Answers.Any(answer => string.IsNullOrWhiteSpace(answer.Question) || string.IsNullOrWhiteSpace(answer.Answer)) ? "an answer names neither its question nor its answer"
@@ -708,6 +716,7 @@ public sealed record FlowSnapshot(
 /// <param name="Issue">The pre-existing issue this instance was raised to triage; null for every step the schedule starts.</param>
 /// <param name="IssuesOwed">The pre-existing issues this step reported whose triage is not raised yet; null where none is owed.</param>
 /// <param name="LeftBy">The handler whose redirect sent the run back past this visit; null where none did.</param>
+/// <param name="Cause">What the code alone cannot say of its ending: a refusal over a held lock; none for every other.</param>
 public sealed record FlowSnapshotStep(
     string Instance,
     string Step,
@@ -742,4 +751,5 @@ public sealed record FlowSnapshotStep(
     FlowNotRunCause? NotRunCause = null,
     FlowPreExistingReport? Issue = null,
     IReadOnlyList<FlowPreExistingReport>? IssuesOwed = null,
-    string? LeftBy = null);
+    string? LeftBy = null,
+    OutcomeCause Cause = OutcomeCause.None);

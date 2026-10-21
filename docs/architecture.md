@@ -1483,7 +1483,9 @@ goes on with all of it.
 Each session ends however it ends with the run's report (`report.md`, `report.json`), its owner
 released in a `finally`, its line in the run's log, and every record it wrote named in text and in
 `--json` (`FlowRunResult`, `FlowReports.Document`): `0` done, `20` failed - `21` where every failure
-that ended it was incomplete after its retries (`FlowRetry.RunsAgain`) - `1` paused on a question,
+that ended it was incomplete after its retries (`FlowRetry.RunsAgain`, read from each step's record:
+its code, and the `cause` it keeps where the code cannot say it, `LockHeld` for a refusal whose only
+obstacle was a held lock) - `1` paused on a question,
 the budget's among them, and `130` at a safe pause or a stop. A refusal met inside a session is
 answered as a refusal, naming the records as they stand. Another terminal reaches the engine
 through two files its poller reads at once and every 2 s: `stop.json` (`pause-orchestrator`, which

@@ -1881,6 +1881,40 @@ public sealed class FlowResumeTests
     }
 
     /// <summary>
+    /// A refusal whose only obstacle was a held lock keeps its cause in the step's own record: the run that ends on it,
+    /// its retries spent, ends incomplete (21) from the records alone, and a resume reads the cause back.
+    /// </summary>
+    [Fact]
+    public async Task ARefusalOverAHeldLock_KeepsItsCauseInItsRecord_AndTheRunEndsIncomplete()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: holding
+                type: ci-read
+            """);
+        var runner = new Runner().On("holding", run => new FlowStepResult { Asked = null, Passed = false, Exit = HarnessExit.Refused, Cause = OutcomeCause.LockHeld });
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        FlowSessionEnd end;
+
+        using (records)
+        {
+            end = await new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: records).RunAsync(Token).WaitAsync(Bound, Token);
+        }
+
+        var flow = harness.OrchestrationStore.ReadFlow(layout)!;
+
+        Assert.Equal(FlowRunStatus.Failed, end.Status);
+        Assert.Equal(nameof(OutcomeCause.LockHeld), harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("holding"))!.Cause);
+        Assert.Equal(HarnessExit.Incomplete, FlowService.ExitOf(end, flow));
+
+        var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition));
+
+        Assert.Equal(OutcomeCause.LockHeld, coordinator.Instances["holding"].Cause);
+    }
+
+    /// <summary>
     /// The issue a triage lists is in its end's one write, in the one order - its record, then the run's state and
     /// status, then the run's file of issues: a crash before that file leaves the triage's end written, and a resume
     /// lists the issue from it, once; a resume after it lists nothing again.
