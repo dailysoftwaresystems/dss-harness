@@ -334,7 +334,8 @@ public sealed class FlowCoordinator
     private readonly List<PreExistingIssue> _issues = [];
     private readonly List<PreExistingTally> _tally = [];
     private readonly List<FlowInstance> _pendingFixes = [];
-    private PendingRedirect? _redirect;
+    /// <summary>The redirects the run owes, in the order they were decided: each is made in its turn, once nothing it resets is running.</summary>
+    private readonly List<PendingRedirect> _redirects = [];
 
     /// <summary>The alone step waiting for quiet, while it waits: nothing new is admitted until it has started.</summary>
     private FlowInstance? _barrier;
@@ -352,7 +353,7 @@ public sealed class FlowCoordinator
     /// <param name="Then">The one among them that names a then, where one does.</param>
     private sealed record PendingEnding(FlowInstance Source, bool Failed, List<FlowInstance> Handlers, FlowInstance? Then);
 
-    /// <summary>A redirect the run owes: written to its records before the first reset, made once nothing it resets runs.</summary>
+    /// <summary>A redirect the run owes: written to its records before the first reset, made in its turn once nothing it resets runs.</summary>
     private sealed class PendingRedirect(FlowInstance handler, string target)
     {
         public FlowInstance Handler { get; } = handler;
@@ -1219,7 +1220,7 @@ public sealed class FlowCoordinator
                 AnswerRecoveryBound(instance, answer, text);
                 break;
             case "openAgents":
-                AnswerOpenAgents(instance, answer);
+                AnswerOpenAgents(instance, asked, answer);
                 break;
             case "pause":
                 AnswerPause(instance, answer, text);
@@ -1317,9 +1318,9 @@ public sealed class FlowCoordinator
     /// deleted - and asks again where one is still open - and <c>stay</c> gives the redirect up, the run going on as
     /// if the handler named no <c>then</c>.
     /// </summary>
-    private void AnswerOpenAgents(FlowInstance handler, string answer)
+    private void AnswerOpenAgents(FlowInstance handler, FlowQuestion asked, string answer)
     {
-        if (_redirect is not { } redirect)
+        if (_redirects.FirstOrDefault(pending => pending.Asking == asked.Id) is not { } redirect)
         {
             return;
         }
@@ -1328,7 +1329,7 @@ public sealed class FlowCoordinator
 
         if (answer == "stay")
         {
-            _redirect = null;
+            _ = _redirects.Remove(redirect);
 
             if (handler.RaisedBy is { } source && source.State == FlowInstanceState.Failed && source.HandledBy is null)
             {
@@ -1571,8 +1572,9 @@ public sealed class FlowCoordinator
     {
         var changed = false;
 
-        if (_hardStop)
+        if (_hardStop || !ScopeLive(scope))
         {
+            // A scope a redirect or a failure left draws nothing more: its group's visit is over.
             return false;
         }
 
@@ -1624,7 +1626,7 @@ public sealed class FlowCoordinator
                 continue;
             }
 
-            if (_redirect is { } pending && pending.Frozen.TryGetValue(scope.Id, out var held) && (held is null || held.Contains(declaration.Name)))
+            if (Frozen(scope, declaration.Name))
             {
                 // Nothing new is started among the steps a pending redirect will reset - not even drawn, for one
                 // drawn now would read the ending the redirect is about to undo.
@@ -1647,6 +1649,14 @@ public sealed class FlowCoordinator
             }
 
             scope.Instantiated.Add(declaration.Name);
+
+            if (scope.Visits.GetValueOrDefault(declaration.Name) >= 99)
+            {
+                // A step the run was sent back to a hundredth time in one scope fails, saying so.
+                _ = NewVisit(scope, declaration, FlowInstanceState.NotStarted);
+                changed = true;
+                continue;
+            }
 
             if (declaration.When is { } when)
             {
@@ -1690,12 +1700,39 @@ public sealed class FlowCoordinator
                 continue;
             }
 
+            if (declaration.Type == "create-agent" && LiveAgentOf(scope, declaration) is { } live)
+            {
+                // A create-agent step visited again in the same scope, while the agent it made is live, is Done at once
+                // with that agent and makes nothing: the agent's slot passes to the new visit.
+                var made = Create(scope, declaration, FlowInstanceState.NotStarted);
+                made.Made = live.Made;
+                _ = _agentsOpen.Remove(live.Id);
+                End(made, FlowInstanceState.Done, HarnessExit.Success, null);
+                changed = true;
+                continue;
+            }
+
             Create(scope, declaration, FlowInstanceState.NotStarted);
             changed = true;
         }
 
         return changed;
     }
+
+    /// <summary>Whether <paramref name="scope"/> still draws its steps: the flow's top level always, and a group's scope while that visit of the group is running.</summary>
+    private static bool ScopeLive(Scope scope)
+        => scope.Parent is null || (scope.OwnGroupInstance ?? scope.GroupInstance) is { State: FlowInstanceState.Running or FlowInstanceState.Paused };
+
+    /// <summary>Whether a redirect the run owes keeps <paramref name="name"/> in <paramref name="scope"/> from starting - not even drawn - for it will reset it.</summary>
+    private bool Frozen(Scope scope, string name)
+        => _redirects.Any(redirect => redirect.Frozen.TryGetValue(scope.Id, out var held) && (held is null || held.Contains(name)));
+
+    /// <summary>The visit of a create-agent declaration in <paramref name="scope"/> whose agent is live still, where one is.</summary>
+    private FlowInstance? LiveAgentOf(Scope scope, WorkflowStep declaration)
+        => _created.LastOrDefault(visit => ReferenceEquals(visit.DeclaredScope, scope)
+            && visit.Step.Name == declaration.Name
+            && visit.Made is not null
+            && _agentsOpen.ContainsKey(visit.Id));
 
     /// <summary>Opens a group its dependencies freed: a block runs its members at once, a forEach expands to an item scope for each work item, a repeat makes its first iteration.</summary>
     private void OpenGroup(Scope scope, WorkflowStep declaration)
@@ -1923,12 +1960,13 @@ public sealed class FlowCoordinator
             }
         }
 
-        if (_redirect is { } && _redirect.Asking is null && !_pausing && RedirectQuiet())
+        while (_redirects.Count > 0 && _redirects[0] is { Asking: null } next && !_pausing && RedirectQuiet(next))
         {
-            // The redirect the run owes is made once nothing it resets is running: a redirect cancels nothing, and
-            // what it resets that was in flight is recorded as the visit it was. A pause under way leaves it owed,
+            // The redirects the run owes are made in the order they were decided, each once nothing it resets is
+            // running: a redirect cancels nothing, and what it resets that was in flight is recorded as the visit it
+            // was. One still asking about an open agent holds the ones after it. A pause under way leaves them owed,
             // for the resume makes what a pause found owed.
-            ApplyRedirect();
+            ApplyRedirect(next);
             changed = true;
         }
 
@@ -2048,7 +2086,7 @@ public sealed class FlowCoordinator
             return [];
         }
 
-        if (_redirect is { } redirect && redirect.Frozen.TryGetValue(scope.Id, out var frozen) && (frozen is null || frozen.Contains(instance.Step.Name)))
+        if (Frozen(scope, instance.Step.Name))
         {
             return ["redirect"];
         }
@@ -2945,18 +2983,12 @@ public sealed class FlowCoordinator
     /// <summary>Decides one redirect: its set computed, its open agents asked about, itself written to the run's records before any reset.</summary>
     private void DecideRedirectOf(FlowInstance handler, Scope targetScope, WorkflowStep targetDeclaration)
     {
-        if (_redirect is not null)
-        {
-            // One redirect at a time: a second that would be decided while one waits is given up, and the run goes on
-            // as if its handler named no then.
-            return;
-        }
-
+        // A redirect decided while others wait is queued behind them, never given up: each is made in its turn.
         var redirect = new PendingRedirect(handler, targetDeclaration.Name);
         Collect(redirect, targetScope, targetDeclaration);
         FrozenOf(redirect);
 
-        _redirect = redirect;
+        _redirects.Add(redirect);
         var open = OpenAgentsOf(redirect);
 
         if (open.Count > 0)
@@ -3018,14 +3050,9 @@ public sealed class FlowCoordinator
         return agents;
     }
 
-    /// <summary>Whether the redirect the run owes can be made: nothing it resets is running.</summary>
-    private bool RedirectQuiet()
+    /// <summary>Whether <paramref name="redirect"/> can be made: nothing it resets is running.</summary>
+    private static bool RedirectQuiet(PendingRedirect redirect)
     {
-        if (_redirect is not { } redirect)
-        {
-            return false;
-        }
-
         foreach (var entry in redirect.Set)
         {
             if (entry.Scope.Members.GetValueOrDefault(entry.Declaration.Name) is not { } instance)
@@ -3045,59 +3072,68 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// Makes the redirect the run owes: each step of its set that had ended gets a new visit, one that was waiting
-    /// goes on waiting, one that never started is untouched, and a paused question among them is withdrawn and asked
-    /// anew. A repeat entered again begins at iteration 1 with its bounds whole; a forEach is expanded anew.
+    /// Makes one redirect the run owes, as the moment before its target started: every step of its set is taken out of
+    /// its scope's drawn steps - the visit it had stands as it ended, and one still waiting is left (<see cref="Leave"/>)
+    /// - and the schedule draws each again as a new visit, through its dependencies and its when, as it drew the first:
+    /// what depends on the target waits for its new visit. A group entered again begins whole - a repeat at iteration 1
+    /// with its bounds intact, a forEach expanded anew. A part of the set in a scope an earlier redirect left is not
+    /// reset: that visit is over.
     /// </summary>
-    private void ApplyRedirect()
+    private void ApplyRedirect(PendingRedirect redirect)
     {
-        var redirect = _redirect!;
-        _redirect = null;
+        _ = _redirects.Remove(redirect);
+        var because = $"the run was sent back to '{redirect.Target}' by '{redirect.Handler.Step.Name}', leaving this visit";
+        var reset = 0;
 
-        foreach (var (scope, declaration) in redirect.Set)
+        foreach (var (scope, declaration) in redirect.Set.Where(entry => ScopeLive(entry.Scope)))
         {
-            var current = scope.Members.GetValueOrDefault(declaration.Name);
-
-            if (current is null || current.State == FlowInstanceState.NotStarted)
+            if (scope.Members.Remove(declaration.Name, out var current))
             {
-                // One that never started is untouched; one that was waiting goes on waiting.
-                continue;
+                Leave(current, because);
             }
 
-            if (current.State == FlowInstanceState.Paused && current.WaitingQuestion is { } question)
-            {
-                Withdraw(question);
-                End(current, FlowInstanceState.Skipped, current.Exit, current.Error);
-                current.SkippedBecause = $"its question was withdrawn by the redirect to '{redirect.Target}'";
-            }
-            else if (current.State == FlowInstanceState.Running)
-            {
-                End(current, FlowInstanceState.Skipped, current.Exit, current.Error);
-                current.SkippedBecause = $"the run was sent back to '{redirect.Target}' by '{redirect.Handler.Step.Name}', leaving this visit";
-            }
-
-            if (declaration.IsGroup)
-            {
-                // A repeat entered again begins at iteration 1 with its bounds whole; a forEach entered again is
-                // expanded anew from what its expression then yields.
-                OpenGroup(scope, declaration);
-                continue;
-            }
-
-            if (declaration.Type == "create-agent" && current.Made is { } live && _agentsOpen.ContainsKey(current.Id))
-            {
-                // A create-agent step visited again in the same scope, while the agent it made is live, is Done at
-                // once with that agent and makes nothing.
-                var made = NewVisit(scope, declaration, FlowInstanceState.Done);
-                made.Made = live;
-                End(made, FlowInstanceState.Done, HarnessExit.Success, null);
-                continue;
-            }
-
-            _ = NewVisit(scope, declaration, FlowInstanceState.NotStarted);
+            _ = scope.Instantiated.Remove(declaration.Name);
+            reset++;
         }
 
-        Record(FlowChangeKind.Step, redirect.Handler, detail: $"the run was sent to '{redirect.Target}', resetting {redirect.Set.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)} of its scope");
+        Record(FlowChangeKind.Step, redirect.Handler, detail: reset == 0
+            ? $"the run was not sent to '{redirect.Target}': an earlier redirect left the scope it would reset"
+            : $"the run was sent to '{redirect.Target}', resetting {reset.ToString(System.Globalization.CultureInfo.InvariantCulture)} of its scope");
+    }
+
+    /// <summary>
+    /// Leaves one visit a redirect resets: a question it, or anything open inside it, waits on is withdrawn - to be
+    /// asked anew by the new visit if it comes to that - a step that never started or waits on a question is skipped,
+    /// and a group still open is skipped with all that is open in it, so nothing of the old visit runs. A visit that
+    /// had ended stands as it ended.
+    /// </summary>
+    private void Leave(FlowInstance visit, string because)
+    {
+        if (visit.WaitingQuestion is { } question)
+        {
+            Withdraw(question);
+        }
+
+        if (visit.Step.IsGroup && visit.State is FlowInstanceState.Running or FlowInstanceState.Paused)
+        {
+            foreach (var member in ScopesOf(visit).SelectMany(inner => inner.Members.Values).ToList())
+            {
+                Leave(member, because);
+            }
+
+            foreach (var child in visit.Children.Select(child => child.GroupInstance).Where(child => child is { State: FlowInstanceState.Running }))
+            {
+                child!.SkippedBecause = because;
+                End(child, FlowInstanceState.Skipped, child.Exit, child.Error);
+            }
+        }
+        else if (visit.State is not (FlowInstanceState.NotStarted or FlowInstanceState.Paused))
+        {
+            return;
+        }
+
+        visit.SkippedBecause = visit.State is FlowInstanceState.NotStarted ? $"withdrawn before it started: {because}" : because;
+        End(visit, FlowInstanceState.Skipped, visit.Exit, visit.Error);
     }
 
     /// <summary>Makes a new visit of <paramref name="declaration"/> in <paramref name="scope"/>, and fails it where the run would visit a step more than 99 times in one scope.</summary>
@@ -3983,9 +4019,14 @@ public sealed class FlowCoordinator
         return (waiting, false);
     }
 
-    /// <summary>Whether every declaration of <paramref name="scope"/> has been instantiated and every one of its members has ended, with no question of its ending open.</summary>
+    /// <summary>
+    /// Whether every declaration of <paramref name="scope"/> has been instantiated and every one of its members has
+    /// ended, with no question of its ending open and no redirect owed that will reset a step of it: that work is to
+    /// be done again. A redirect that resets the group itself lets this visit end as it stands, and draws a new one.
+    /// </summary>
     private bool ScopeEnded(Scope scope)
-        => DeclarationsOf(scope).All(declaration => scope.Instantiated.Contains(declaration.Name))
+        => !_redirects.Any(redirect => redirect.Set.Any(entry => ReferenceEquals(entry.Scope, scope)))
+            && DeclarationsOf(scope).All(declaration => scope.Instantiated.Contains(declaration.Name))
             && scope.Members.Values.All(member => member.WaitingQuestion is null
                 && member.State is not (FlowInstanceState.NotStarted or FlowInstanceState.Running or FlowInstanceState.Paused or FlowInstanceState.Stopped));
 
@@ -4618,7 +4659,7 @@ public sealed class FlowCoordinator
             [.. _created.Select(instance => SnapshotStepOf(instance, decided))],
             [.. walk.Where(decision => decision.Starts).Select(decision => decision.Instance.Id)],
             waiting,
-            _redirect is { } redirect
+            _redirects.FirstOrDefault() is { } redirect
                 ? new FlowRedirectRecord(redirect.Handler.Id, redirect.Target, [.. redirect.Set.Select(entry => entry.Scope.Members.GetValueOrDefault(entry.Declaration.Name)?.Id ?? entry.Declaration.Name)])
                 : null,
             _tally.Count == 0 ? null : new WorkflowPreExisting(
@@ -4825,7 +4866,7 @@ public sealed class FlowCoordinator
                 if (redirect.Set.Count > 0)
                 {
                     FrozenOf(redirect);
-                    _redirect = redirect;
+                    _redirects.Add(redirect);
                 }
             }
 

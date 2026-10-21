@@ -50,6 +50,13 @@ public sealed class FlowHandlerTests
             return this;
         }
 
+        /// <summary>Answers <paramref name="step"/> by a script that may hold the step open, on the task it answers.</summary>
+        public FakeRunner OnAsync(string step, Func<FlowStepRun, Task<FlowStepResult>> script)
+        {
+            _scripts[step] = script;
+            return this;
+        }
+
         /// <inheritdoc/>
         public Task<FlowStepResult> RunAsync(FlowStepRun run, CancellationToken cancellationToken)
         {
@@ -571,6 +578,259 @@ public sealed class FlowHandlerTests
         Assert.Equal(bound.Problem, failed.Error);
         Assert.Equal(FlowRunStatus.Failed, end.Status);
         Assert.Equal(["build+2"], end.Failed);
+    }
+
+    /// <summary>
+    /// A redirect's new visits are drawn by the schedule as the first were: the target's when is read again - here it
+    /// now reads false, so the target is skipped unrun - and what depends on it, directly or through others, waits for
+    /// it and runs after it, once.
+    /// </summary>
+    [Fact]
+    public async Task ARedirectsNewVisits_ReadTheirWhenAgain_AndWaitForWhatTheyDependOn()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: gate
+                type: orient
+                when: '!(fix.skip ?? false)'
+              - name: verify
+                type: ci-read
+                dependsOn: [gate]
+              - name: report
+                type: orient
+                dependsOn: [verify]
+                when: verify.ok
+              - name: fix
+                type: orient
+                on: {step: verify, outcome: failure}
+                then: gate
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner()
+            .On("verify", run => run.Visit == 1
+                ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "the read failed", output: Output("""{"ok": false}"""))
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"ok": true}""")))
+            .On("fix", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"skip": true}""")));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(["gate", "verify", "fix", "verify+2", "report"], runner.Started);
+        var again = coordinator.Instances["gate+2"];
+        Assert.Equal(FlowInstanceState.Skipped, again.State);
+        Assert.Equal("its when read false", again.SkippedBecause);
+    }
+
+    /// <summary>While a question of a source's ending is open - its handler at its bound after a success - what depends on the source waits for the answer.</summary>
+    [Fact]
+    public async Task AQuestionOfASourcesEnding_HoldsWhatDependsOnIt_UntilAnswered()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: build
+                type: orient
+              - name: tell
+                type: orient
+                on: {step: build, outcome: success}
+                maxVisits: 1
+                then: build
+              - name: after
+                type: orient
+                dependsOn: [build]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner();
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        var asked = AssertSingle(coordinator.OpenQuestions, question => question.Kind == "visitBound");
+        Assert.Equal(["build", "tell", "after", "build+2"], runner.Started);
+
+        Assert.True(coordinator.TryAnswer(asked.Id, "accept", out _));
+        end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(["build", "tell", "after", "build+2", "after+2"], runner.Started);
+    }
+
+    /// <summary>What a redirect resets waits for the target's new visit: nothing that depends on it starts while it runs.</summary>
+    [Fact]
+    public async Task ARedirectsDependents_WaitForTheTargetsNewVisitToEnd()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: gate
+                type: orient
+              - name: verify
+                type: ci-read
+                dependsOn: [gate]
+              - name: fix
+                type: orient
+                on: {step: verify, outcome: failure}
+                then: gate
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var held = new TaskCompletionSource<FlowStepResult>();
+        var heldStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new FakeRunner()
+            .OnAsync("gate", run =>
+            {
+                if (run.Visit == 1)
+                {
+                    return Task.FromResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
+                }
+
+                heldStarted.TrySetResult();
+                return held.Task;
+            })
+            .On("verify", run => run.Visit == 1
+                ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "the read failed")
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var session = coordinator.RunAsync(cancel);
+        await heldStarted.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        await coordinator.SettledAsync(cancel);
+
+        // The target's new visit runs; what depends on it has not started beside it.
+        Assert.Equal(["gate", "verify", "fix", "gate+2"], runner.Started);
+
+        held.SetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(["gate", "verify", "fix", "gate+2", "verify+2"], runner.Started);
+    }
+
+    /// <summary>
+    /// A redirect back past a group leaves that group's visit whole: a question a member had open is withdrawn, the
+    /// members that never ran are skipped, and nothing of the old visit runs - the new visit is drawn when what it
+    /// depends on has run again, its members reading what the new visit of their source wrote.
+    /// </summary>
+    [Fact]
+    public async Task ARedirectIntoAGroup_WithdrawsItsMembersQuestions_AndRunsNothingOfTheOldVisit()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: plan
+                type: orient
+              - name: check
+                type: ci-read
+                dependsOn: [plan]
+              - name: fix
+                type: orient
+                on: {step: check, outcome: failure}
+                then: plan
+              - name: round
+                dependsOn: [plan]
+                steps:
+                  - name: ask
+                    type: pause
+                    question: go on?
+                    options: [go]
+                  - name: extra
+                    type: orient
+                    when: plan.second
+                  - name: after-ask
+                    type: orient
+                    dependsOn: [ask]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner()
+            .On("plan", run => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output(run.Visit == 1 ? """{"second": false}""" : """{"second": true}""")))
+            .On("check", run => run.Visit == 1
+                ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "the read failed")
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        // The old visit's question was withdrawn and its waiting member skipped; the new visit asks its own and ran
+        // the member whose when only the second plan meets.
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Equal("withdrawn", coordinator.Questions.Single(question => question.Instance == "round.ask").State);
+        Assert.Equal(FlowInstanceState.Skipped, coordinator.Instances["round.ask"].State);
+        Assert.Equal(FlowInstanceState.Skipped, coordinator.Instances["round"].State);
+        var asked = Assert.Single(coordinator.OpenQuestions);
+        Assert.Equal("round+2.ask", asked.Instance);
+        Assert.Equal(["plan", "check", "fix", "plan+2", "check+2", "round+2.extra"], runner.Started);
+
+        Assert.True(coordinator.TryAnswer(asked.Id, "go", out _));
+        end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(["plan", "check", "fix", "plan+2", "check+2", "round+2.extra", "round+2.after-ask"], runner.Started);
+        Assert.DoesNotContain(coordinator.Instances.Keys, id => id == "round.after-ask");
+    }
+
+    /// <summary>
+    /// A redirect decided while another waits is kept, never dropped: redirects are made in the order they were decided,
+    /// each once nothing it resets is running - here two items of a forEach each send the run back within their own
+    /// item, and both go back.
+    /// </summary>
+    [Fact]
+    public async Task ASecondRedirectWhileOneWaits_IsQueued_AndMadeInTurn()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: plan
+                type: orient
+              - name: items
+                forEach: plan.list
+                dependsOn: [plan]
+                steps:
+                  - name: build
+                    type: orient
+                  - name: slow
+                    type: orient
+                    dependsOn: [build]
+                  - name: tell
+                    type: orient
+                    on: {step: build, outcome: success}
+                    when: source.n == 1
+                    then: build
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var held = new TaskCompletionSource<FlowStepResult>();
+        var heldStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new FakeRunner()
+            .On("plan", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"list": ["a", "b"]}""")))
+            .On("build", run => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output($$"""{"n": {{run.Visit}}}""")))
+            .OnAsync("slow", run =>
+            {
+                if (run.Instance != "items[0].slow")
+                {
+                    return Task.FromResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
+                }
+
+                heldStarted.TrySetResult();
+                return held.Task;
+            });
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var session = coordinator.RunAsync(cancel);
+        await heldStarted.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        await coordinator.SettledAsync(cancel);
+
+        // The first item's redirect waits for its slow step; the second's, decided meanwhile, waits its turn.
+        Assert.DoesNotContain("items[0].build+2", runner.Started);
+        Assert.DoesNotContain("items[1].build+2", runner.Started);
+
+        held.SetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Contains("items[0].build+2", runner.Started);
+        Assert.Contains("items[1].build+2", runner.Started);
+        Assert.Contains("items[1].slow+2", runner.Started);
     }
 
     /// <summary>A handler's bound counts the visits it was raised for, never the place-holder a pass-by leaves: a handler never raised is raised, not asked about.</summary>
