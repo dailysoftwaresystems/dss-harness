@@ -1466,7 +1466,9 @@ over such a member, never ended done over it. What the run owed is made before a
 failure recorded `owed` - one that ended while a pause recorded what it left running, or before what
 decides it was written - an ending whose handlers its record holds `owed`, issues a step's record
 holds owed their triage (`issuesOwed`), an issue a triage answered fix for whose recovery was never
-raised, and every redirect in `flow.json`'s `redirects`, each in its turn. A triage's answer is
+raised, and every redirect in `flow.json`'s `redirects`, each in its turn - a pause and a hard stop
+alike leave a redirect owed, never making it, for the resume makes it once what they stopped stands
+to be withdrawn. A triage's answer is
 listed and counted before its end is recorded, so the end's one write carries the run's file of
 issues (`FlowSnapshot.Issues`) in the one order; a crash before that file leaves the end written, and
 the resume lists the issue from the triage's answer - once, for one the list already holds the same in

@@ -1139,6 +1139,22 @@ public sealed class FlowHandlerRecordsTests
         public bool Release(string step)
             => _gates[step].TrySetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
 
+        /// <summary>Answers <paramref name="step"/> by its script, which sees the whole run.</summary>
+        public Runner On(string step, Func<FlowStepRun, FlowStepResult> script)
+        {
+            _scripts[step] = run => Task.FromResult(script(run));
+            return this;
+        }
+
+        /// <summary>Holds <paramref name="step"/> open until its work is cancelled - a stop - or the test completes it.</summary>
+        public void HoldHearingTheStop(string step)
+        {
+            Hold(step);
+            _ = _hearing.Add(step);
+        }
+
+        private readonly HashSet<string> _hearing = new(StringComparer.Ordinal);
+
         /// <inheritdoc/>
         public async Task<FlowStepResult> RunAsync(FlowStepRun run, CancellationToken cancellationToken)
         {
@@ -1151,6 +1167,11 @@ public sealed class FlowHandlerRecordsTests
             }
 
             _ = started.TrySetResult();
+
+            if (_hearing.Contains(run.Step.Name))
+            {
+                return await _gates[run.Step.Name].Task.WaitAsync(cancellationToken);
+            }
 
             return await _scripts.GetValueOrDefault(run.Step.Name, _ => Task.FromResult(FlowStepResult.Ended(passed: true, HarnessExit.Success)))(run);
         }
@@ -1336,6 +1357,69 @@ public sealed class FlowHandlerRecordsTests
             Assert.Null(harness.OrchestrationStore.ReadFlow(layout)?.Redirects);
             Assert.Equal(FlowInstanceState.Done, resumed.Instances["round+2"].State);
             Assert.Contains("round+2.member", resumed.Instances.Keys, StringComparer.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// A hard stop leaves a redirect owed as a pause does: one waiting on a member of its set still in flight is not made
+    /// by the stop, and the resume - from the records alone - makes it: the target runs again exactly once, and the
+    /// member the stop stopped never runs again beside its new visit.
+    /// </summary>
+    [Fact]
+    public async Task AHardStop_LeavesARedirectOwed_TheResumeMakesIt_TheTargetRunningAgainOnce()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: implement
+                type: orient
+              - name: verify
+                type: orient
+                dependsOn: [implement]
+              - name: slow
+                type: orient
+                dependsOn: [implement]
+              - name: mend
+                type: orient
+                on: {step: verify, outcome: failure}
+                then: implement
+            """);
+        var runner = new Runner()
+            .On("verify", run => run.Visit == 1
+                ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)")
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        runner.HoldHearingTheStop("slow");
+        var (harness, layout, records, clock) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var watched = new Watched(records, snapshot => snapshot.Redirects is { Count: > 0 });
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: watched);
+            var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+            // The redirect waits for slow, a member of its set in flight; the hard stop stops slow and makes nothing.
+            await watched.Seen.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+            coordinator.RequestStop();
+            var end = await session.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+            Assert.Equal(FlowRunStatus.Stopped, end.Status);
+            Assert.Equal("implement", Assert.Single(harness.OrchestrationStore.ReadFlow(layout)?.Redirects ?? []).Target);
+        }
+
+        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
+        var again = new Runner()
+            .On("verify", run => FlowStepResult.Ended(passed: true, HarnessExit.Success));
+
+        using (var records2 = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var resumed = new FlowCoordinator(definition, again, new RunnerFacts(), clock, records: records2, resume: taken);
+            var done = await resumed.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+            Assert.Equal(FlowRunStatus.Done, done.Status);
+            Assert.Equal(["implement+2", "verify+2", "slow+2"], again.Started);
+            Assert.Equal(FlowInstanceState.Skipped, resumed.Instances["slow"].State);
+            Assert.Null(harness.OrchestrationStore.ReadFlow(layout)?.Redirects);
         }
     }
 }

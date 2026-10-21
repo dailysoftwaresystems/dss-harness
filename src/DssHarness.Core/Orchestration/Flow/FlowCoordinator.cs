@@ -2302,12 +2302,13 @@ public sealed class FlowCoordinator
             }
         }
 
-        while (_redirects.Count > 0 && _redirects[0] is { Asking: null } next && !_pausing && RedirectQuiet(next))
+        while (_redirects.Count > 0 && _redirects[0] is { Asking: null } next && !_pausing && !_hardStop && RedirectQuiet(next))
         {
             // The redirects the run owes are made in the order they were decided, each once nothing it resets is
             // running: a redirect cancels nothing, and what it resets that was in flight is recorded as the visit it
             // was. One still asking about an open agent holds the ones after it. A pause under way leaves them owed,
-            // for the resume makes what a pause found owed.
+            // and so does a hard stop - which makes nothing owed, and stops what the redirect waited on - for the
+            // resume makes what the run owes, from its records alone, once what was stopped stands to run again.
             ApplyRedirect(next);
             changed = true;
         }
