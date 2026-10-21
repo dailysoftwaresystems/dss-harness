@@ -100,7 +100,7 @@ public sealed class AgentProvidersService(
                 model.Efforts,
                 model.ContextTokens,
                 model.MaxOutputTokens,
-                model.PriceInputMiss is not null || model.PriceOutput is not null,
+                AgentProviders.Priced(model),
                 AgentProviders.PricesOf(model).ToDictionary(price => price.Key, price => price.Value)))],
             provider.Currency,
             provider.ReadOn))];

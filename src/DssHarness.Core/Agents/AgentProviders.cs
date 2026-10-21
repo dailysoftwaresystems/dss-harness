@@ -368,9 +368,19 @@ public sealed partial class AgentProviders
         return models;
     }
 
-    /// <summary>Whether a model's entry holds any price at all.</summary>
-    private static bool Priced(AgentModelConfig model)
-        => model.PriceInputMiss is not null || model.PriceOutput is not null;
+    /// <summary>
+    /// Whether the configuration has a price for a model: its input and its output priced, the two written together or
+    /// not at all. The one owner of "priced" - for the listing, for <c>balanceKeyUsage</c>, and for what
+    /// <c>validate-workflow</c> says of each model a step may run on; a kind of token a request uses that its entry has
+    /// no price for is still unknown (<see cref="AgentPrices"/>).
+    /// </summary>
+    /// <param name="model">The model's entry.</param>
+    public static bool Priced(AgentModelConfig model)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+
+        return model.PriceInputMiss is not null || model.PriceOutput is not null;
+    }
 
     [System.Text.RegularExpressions.GeneratedRegex("^[A-Z]{3}$")]
     private static partial System.Text.RegularExpressions.Regex CurrencyName();
@@ -439,6 +449,12 @@ public sealed partial class AgentProviders
         if (model.PriceInputMiss is null != (model.PriceOutput is null))
         {
             problems.Add($"{where} names one of priceInputMiss and priceOutput and not the other; the two are written together or not at all");
+        }
+
+        // A large-prompt set is held to the flat set's own rule: its input and its output priced together or not at all.
+        if (model.LargePrompt is { } prices && prices.PriceInputMiss is null != (prices.PriceOutput is null))
+        {
+            problems.Add($"{where} largePrompt names one of priceInputMiss and priceOutput and not the other; the two are written together or not at all");
         }
 
         if (model.LargePrompt is { } large && large.OverTokens <= 0)

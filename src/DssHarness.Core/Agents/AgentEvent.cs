@@ -122,20 +122,27 @@ public enum AgentPermissionSource
 }
 
 /// <summary>What a turn or a run used, as reported or counted: tokens and searches, never money.</summary>
-/// <param name="InputTokens">Input tokens.</param>
+/// <param name="InputTokens">Input tokens not read from a cache and written to none.</param>
 /// <param name="OutputTokens">Output tokens.</param>
 /// <param name="CacheReadTokens">Tokens read from the provider's cache.</param>
-/// <param name="CacheWriteTokens">Tokens written to the provider's cache.</param>
+/// <param name="CacheWriteTokens">Tokens written to the provider's cache to be kept five minutes - all of them where the provider bills cache writes alike.</param>
+/// <param name="CacheWrite1hTokens">Tokens written to the provider's cache to be kept an hour, where it bills them apart: the Claude API's <c>cache_creation.ephemeral_1h_input_tokens</c>.</param>
 /// <param name="Searches">The searches the provider ran.</param>
-public sealed record AgentUsage(long InputTokens, long OutputTokens, long CacheReadTokens, long CacheWriteTokens, long Searches)
+public sealed record AgentUsage(long InputTokens, long OutputTokens, long CacheReadTokens, long CacheWriteTokens, long CacheWrite1hTokens, long Searches)
 {
     /// <summary>Nothing used.</summary>
-    public static AgentUsage None { get; } = new(0, 0, 0, 0, 0);
+    public static AgentUsage None { get; } = new(0, 0, 0, 0, 0, 0);
 
     /// <summary><paramref name="other"/> added to this, member by member.</summary>
     /// <param name="other">Another usage.</param>
     public AgentUsage Plus(AgentUsage other)
-        => new(InputTokens + other.InputTokens, OutputTokens + other.OutputTokens, CacheReadTokens + other.CacheReadTokens, CacheWriteTokens + other.CacheWriteTokens, Searches + other.Searches);
+        => new(
+            InputTokens + other.InputTokens,
+            OutputTokens + other.OutputTokens,
+            CacheReadTokens + other.CacheReadTokens,
+            CacheWriteTokens + other.CacheWriteTokens,
+            CacheWrite1hTokens + other.CacheWrite1hTokens,
+            Searches + other.Searches);
 }
 
 /// <summary>One call an assistant message made, by its id.</summary>

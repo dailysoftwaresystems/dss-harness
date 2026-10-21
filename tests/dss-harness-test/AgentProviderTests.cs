@@ -380,8 +380,61 @@ public sealed class AgentProviderTests
         var (_, badCurrency) = Resolve([Provider(currency: "dollars")]);
         Exactly(badCurrency, @"providers[0] 'zai' currency 'dollars' is not three capital letters");
 
-        var (_, noOver) = Resolve([Provider(models: [new AgentModelConfig { Code = "glm-5.3", Name = "GLM 5.3", Tiers = ["balanced"], Efforts = ["low", "high", "max"], ContextTokens = 1_000_000, MaxOutputTokens = 131_072, PriceInputMiss = 1.4, PriceInputHit = 0.26, PriceOutput = 4.4, LargePrompt = new LargePromptPrices { OverTokens = 0, PriceInputMiss = 2 } }])]);
+        var (_, noOver) = Resolve([Provider(models: [Large(new LargePromptPrices { OverTokens = 0, PriceInputMiss = 2, PriceOutput = 8 })])]);
         Exactly(noOver, @"providers[0] 'zai' model 'glm-5.3' largePrompt.overTokens 0 is not a positive whole number");
+
+        // A large-prompt set is held to the flat set's rules: its input and output priced together, no price below
+        // zero, and none where the provider names no currency or no readOn - though the model names no flat price.
+        var (_, halfLarge) = Resolve([Provider(models: [Large(new LargePromptPrices { OverTokens = 100_000, PriceInputMiss = 2 })])]);
+        Exactly(halfLarge, @"providers[0] 'zai' model 'glm-5.3' largePrompt names one of priceInputMiss and priceOutput and not the other; the two are written together or not at all");
+
+        var (_, negativeLarge) = Resolve([Provider(models: [Large(new LargePromptPrices { OverTokens = 100_000, PriceInputMiss = 2, PriceOutput = 8, PriceCacheWrite1h = -1 })])]);
+        Exactly(negativeLarge, @"providers[0] 'zai' model 'glm-5.3' largePrompt.priceCacheWrite1h -1 is below zero");
+
+        var (_, largeAlone) = Resolve([Provider(currency: "", readOn: "", models: [Large(new LargePromptPrices { OverTokens = 100_000, PriceInputMiss = 2, PriceOutput = 8 }, flat: false)])]);
+        Exactly(
+            largeAlone,
+            @"providers[0] 'zai' holds prices and names no currency; a provider says once the currency of every price of its models, three capital letters",
+            @"providers[0] 'zai' holds prices and names no readOn; the date its numbers were read (YYYY-MM-DD) is shown wherever a price is, so an old number is not taken for today's");
+    }
+
+    /// <summary>GLM's entry with a large-prompt set, its flat prices with it or none.</summary>
+    private static AgentModelConfig Large(LargePromptPrices large, bool flat = true)
+        => new()
+        {
+            Code = "glm-5.3",
+            Name = "GLM 5.3",
+            Tiers = ["balanced"],
+            Efforts = ["low", "high", "max"],
+            ContextTokens = 1_000_000,
+            MaxOutputTokens = 131_072,
+            PriceInputMiss = flat ? 1.4 : null,
+            PriceInputHit = flat ? 0.26 : null,
+            PriceOutput = flat ? 4.4 : null,
+            LargePrompt = large,
+        };
+
+    /// <summary>A price no model holds but the provider's own - a thousand searches - is in its currency too.</summary>
+    [Fact]
+    public void AProvidersSearchPrice_NeedsACurrencyAndADate()
+    {
+        var unpriced = Provider(currency: "", readOn: "", models: [Model(miss: null, outputPrice: null)]);
+        var withSearches = new AgentProviderConfig
+        {
+            Name = unpriced.Name,
+            Type = unpriced.Type,
+            Api = unpriced.Api,
+            ApiKeyNames = unpriced.ApiKeyNames,
+            Client = unpriced.Client,
+            Models = [new AgentModelConfig { Code = "glm-5.3", Name = "GLM 5.3", Tiers = ["balanced"], Efforts = ["low", "high", "max"], ContextTokens = 1_000_000, MaxOutputTokens = 131_072 }],
+            PricePerThousandSearches = 10,
+        };
+
+        var (_, problems) = Resolve([withSearches]);
+        Exactly(
+            problems,
+            @"providers[0] 'zai' holds prices and names no currency; a provider says once the currency of every price of its models, three capital letters",
+            @"providers[0] 'zai' holds prices and names no readOn; the date its numbers were read (YYYY-MM-DD) is shown wherever a price is, so an old number is not taken for today's");
     }
 
     /// <summary>tierConfig without providers is refused: a tier names models, and models are a provider's.</summary>

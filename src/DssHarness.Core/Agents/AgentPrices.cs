@@ -11,104 +11,82 @@ public static class AgentPrices
     /// <summary>
     /// The cost of <paramref name="usage"/> on <paramref name="model"/>, in its provider's currency: each kind of
     /// token at that kind's price per million, each search at the provider's price for a thousand, and a prompt over
-    /// the model's <c>largePrompt.overTokens</c> at its own prices.
+    /// the model's <c>largePrompt.overTokens</c> at its large-prompt prices.
     /// </summary>
     /// <param name="provider">The model's provider, whose search price and currency hold.</param>
     /// <param name="model">The model that served the request, whose prices hold.</param>
-    /// <param name="usage">The request's usage, as its provider reported it.</param>
-    /// <param name="promptTokens">The prompt's size, counted as the provider counts it: input, cache writes and cache reads together; 0 where not known, and no large-prompt prices are used.</param>
+    /// <param name="usage">One request's usage, as its provider reported it: its prompt is counted from it.</param>
     /// <returns>
     /// The cost, or <see langword="null"/> where a kind the request used holds no price - the cost is unknown, never
     /// zero - and <see cref="UnknownOf"/> says the keys that would fill it.
     /// </returns>
-    public static double? CostOf(AgentProviderConfig provider, AgentModelConfig model, AgentUsage usage, long promptTokens = 0)
+    public static double? CostOf(AgentProviderConfig provider, AgentModelConfig model, AgentUsage usage)
     {
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(usage);
 
-        var large = promptTokens > 0 && model.LargePrompt is { } over && promptTokens > over.OverTokens ? over : null;
         var cost = 0.0;
-        var missing = false;
 
-        void Add(long tokens, double? price, double? largePrice)
+        foreach (var (_, count, price) in Charges(provider, model, usage))
         {
-            if (tokens <= 0)
+            if (price is not { } at)
             {
-                return;
+                return null;
             }
 
-            // A prompt over the model's own bound is priced by the large-prompt entry where it names the kind, and by
-            // the flat price where it does not.
-            if ((large is null ? price : largePrice ?? price) is not { } at)
-            {
-                missing = true;
-                return;
-            }
-
-            cost += tokens / 1_000_000.0 * at;
+            cost += count * at;
         }
 
-        Add(usage.InputTokens, model.PriceInputMiss, large?.PriceInputMiss);
-        Add(usage.CacheReadTokens, model.PriceInputHit, large?.PriceInputHit);
-        Add(usage.OutputTokens, model.PriceOutput, large?.PriceOutput);
-        Add(usage.CacheWriteTokens, model.PriceCacheWrite, large?.PriceCacheWrite);
+        return cost;
+    }
+
+    /// <summary>Why a request's cost is unknown: the sentence the report says, naming the model and every key its entry holds none of that the request used.</summary>
+    /// <param name="provider">The model's provider.</param>
+    /// <param name="model">The model that served the request.</param>
+    /// <param name="usage">One request's usage, whose kinds name the keys that would fill.</param>
+    /// <returns>The sentence, as a report says it.</returns>
+    public static string UnknownOf(AgentProviderConfig provider, AgentModelConfig model, AgentUsage usage)
+    {
+        ArgumentNullException.ThrowIfNull(provider);
+        ArgumentNullException.ThrowIfNull(model);
+        ArgumentNullException.ThrowIfNull(usage);
+
+        var missing = Charges(provider, model, usage).Where(charge => charge.Price is null).Select(charge => charge.Key);
+
+        return $"no price for '{model.Code}' (providers '{provider.Name}', model '{model.Code}': {string.Join(", ", missing)})";
+    }
+
+    /// <summary>
+    /// The one choice of a price for each kind the request used, read by the cost and by its unknown alike: the key that
+    /// prices it, how many it was billed by (tokens per million, searches per thousand), and the price, null where the
+    /// configuration holds none. A request whose prompt - input, cache writes and cache reads together, as a provider
+    /// that prices by length counts it - is over the model's <c>largePrompt.overTokens</c> is priced by the large-prompt
+    /// set alone: a kind that set lacks is unknown, never the flat price, which would count the request short.
+    /// </summary>
+    private static IEnumerable<(string Key, double Count, double? Price)> Charges(AgentProviderConfig provider, AgentModelConfig model, AgentUsage usage)
+    {
+        var prompt = usage.InputTokens + usage.CacheWriteTokens + usage.CacheWrite1hTokens + usage.CacheReadTokens;
+        var large = model.LargePrompt is { } set && prompt > set.OverTokens ? set : null;
+        var prefix = large is null ? string.Empty : "largePrompt.";
+
+        (string Kind, long Tokens, double? Flat, double? Large)[] kinds =
+        [
+            ("priceInputMiss", usage.InputTokens, model.PriceInputMiss, large?.PriceInputMiss),
+            ("priceInputHit", usage.CacheReadTokens, model.PriceInputHit, large?.PriceInputHit),
+            ("priceOutput", usage.OutputTokens, model.PriceOutput, large?.PriceOutput),
+            ("priceCacheWrite", usage.CacheWriteTokens, model.PriceCacheWrite, large?.PriceCacheWrite),
+            ("priceCacheWrite1h", usage.CacheWrite1hTokens, model.PriceCacheWrite1h, large?.PriceCacheWrite1h),
+        ];
+
+        foreach (var (kind, tokens, flat, largePrice) in kinds.Where(kind => kind.Tokens > 0))
+        {
+            yield return (prefix + kind, tokens / 1_000_000.0, large is null ? flat : largePrice);
+        }
 
         if (usage.Searches > 0)
         {
-            if (provider.PricePerThousandSearches is not { } perThousand)
-            {
-                missing = true;
-            }
-            else
-            {
-                cost += usage.Searches / 1000.0 * perThousand;
-            }
+            yield return ("pricePerThousandSearches", usage.Searches / 1000.0, provider.PricePerThousandSearches);
         }
-
-        return missing ? null : cost;
-    }
-
-    /// <summary>Why a request's cost is unknown: the sentence the report says, naming the model and the keys its entry holds none of.</summary>
-    /// <param name="provider">The model's provider.</param>
-    /// <param name="model">The model that served the request.</param>
-    /// <param name="usage">The request's usage, whose kinds name the keys that would fill.</param>
-    /// <param name="promptTokens">The prompt's size, where it was known.</param>
-    /// <returns>The sentence, as a report says it.</returns>
-    public static string UnknownOf(AgentProviderConfig provider, AgentModelConfig model, AgentUsage usage, long promptTokens = 0)
-    {
-        ArgumentNullException.ThrowIfNull(provider);
-        ArgumentNullException.ThrowIfNull(model);
-        ArgumentNullException.ThrowIfNull(usage);
-
-        var large = promptTokens > 0 && model.LargePrompt is { } over && promptTokens > over.OverTokens ? over : null;
-        var missing = new List<string>();
-
-        if (usage.InputTokens > 0 && model.PriceInputMiss is null && large?.PriceInputMiss is null)
-        {
-            missing.Add("priceInputMiss");
-        }
-
-        if (usage.CacheReadTokens > 0 && model.PriceInputHit is null && large?.PriceInputHit is null)
-        {
-            missing.Add("priceInputHit");
-        }
-
-        if (usage.OutputTokens > 0 && model.PriceOutput is null && large?.PriceOutput is null)
-        {
-            missing.Add("priceOutput");
-        }
-
-        if (usage.CacheWriteTokens > 0 && model.PriceCacheWrite is null && large?.PriceCacheWrite is null)
-        {
-            missing.Add("priceCacheWrite");
-        }
-
-        if (usage.Searches > 0 && provider.PricePerThousandSearches is null)
-        {
-            missing.Add("pricePerThousandSearches");
-        }
-
-        return $"no price for '{model.Code}' (providers '{provider.Name}', model '{model.Code}': {string.Join(", ", missing)})";
     }
 }

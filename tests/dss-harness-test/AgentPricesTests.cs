@@ -50,19 +50,79 @@ public sealed class AgentPricesTests
     {
         Assert.Equal(
             2_000_000 / 1_000_000.0 * 1.4 + 500_000 / 1_000_000.0 * 0.26 + 100_000 / 1_000_000.0 * 4.4,
-            AgentPrices.CostOf(Provider(Glm), Glm, new AgentUsage(InputTokens: 2_000_000, OutputTokens: 100_000, CacheReadTokens: 500_000, CacheWriteTokens: 0, Searches: 0)));
+            AgentPrices.CostOf(Provider(Glm), Glm, new AgentUsage(InputTokens: 2_000_000, OutputTokens: 100_000, CacheReadTokens: 500_000, CacheWriteTokens: 0, CacheWrite1hTokens: 0, Searches: 0)));
     }
 
-    /// <summary>A prompt over the model's own bound is priced by the large-prompt entry, one prompt at a time.</summary>
+    /// <summary>
+    /// A prompt over the model's own bound is priced by the large-prompt entry, one request at a time - the prompt
+    /// counted from the request's own usage as the provider counts it: input, cache writes and cache reads together,
+    /// so a request whose cache reads take it over the bound is a large one. At the bound exactly it is not over it.
+    /// </summary>
     [Fact]
     public void APromptOverTheModelsOwnBound_IsPricedByTheLargePromptEntry()
     {
-        var under = AgentPrices.CostOf(Provider(Haiku), Haiku, new AgentUsage(InputTokens: 50_000, OutputTokens: 10_000, CacheReadTokens: 0, CacheWriteTokens: 0, Searches: 0), promptTokens: 50_000);
-        var over = AgentPrices.CostOf(Provider(Haiku), Haiku, new AgentUsage(InputTokens: 150_000, OutputTokens: 10_000, CacheReadTokens: 0, CacheWriteTokens: 0, Searches: 0), promptTokens: 150_000);
+        var under = AgentPrices.CostOf(Provider(Haiku), Haiku, new AgentUsage(InputTokens: 50_000, OutputTokens: 10_000, CacheReadTokens: 0, CacheWriteTokens: 0, CacheWrite1hTokens: 0, Searches: 0));
+        var over = AgentPrices.CostOf(Provider(Haiku), Haiku, new AgentUsage(InputTokens: 150_000, OutputTokens: 10_000, CacheReadTokens: 0, CacheWriteTokens: 0, CacheWrite1hTokens: 0, Searches: 0));
+        var atTheBound = AgentPrices.CostOf(Provider(Haiku), Haiku, new AgentUsage(InputTokens: 100_000, OutputTokens: 10_000, CacheReadTokens: 0, CacheWriteTokens: 0, CacheWrite1hTokens: 0, Searches: 0));
+        var byItsCache = AgentPrices.CostOf(Provider(Haiku), Haiku, new AgentUsage(InputTokens: 10_000, OutputTokens: 10_000, CacheReadTokens: 95_000, CacheWriteTokens: 0, CacheWrite1hTokens: 0, Searches: 0));
 
         // Under: 50k at 0.1, 10k at 0.5. Over: the same request at the large-prompt prices.
         Assert.Equal(50_000 / 1_000_000.0 * 0.1 + 10_000 / 1_000_000.0 * 0.5, under);
         Assert.Equal(150_000 / 1_000_000.0 * 0.5 + 10_000 / 1_000_000.0 * 2.5, over);
+        Assert.Equal(100_000 / 1_000_000.0 * 0.1 + 10_000 / 1_000_000.0 * 0.5, atTheBound);
+        Assert.Equal(10_000 / 1_000_000.0 * 0.5 + 95_000 / 1_000_000.0 * 0.05 + 10_000 / 1_000_000.0 * 2.5, byItsCache);
+    }
+
+    /// <summary>
+    /// A large prompt using a kind of token its large-prompt set has no price for is unknown, never priced at the
+    /// flat price, which would count it short: said naming the large-prompt key that would fill it.
+    /// </summary>
+    [Fact]
+    public void ALargePromptUsingAKindItsSetHasNoPriceFor_IsUnknown()
+    {
+        // Haiku's large-prompt set here prices no cache write, while its flat set does.
+        var usage = new AgentUsage(InputTokens: 150_000, OutputTokens: 10_000, CacheReadTokens: 0, CacheWriteTokens: 1_000, CacheWrite1hTokens: 0, Searches: 0);
+
+        Assert.Null(AgentPrices.CostOf(Provider(Haiku), Haiku, usage));
+        Assert.Equal("no price for 'claude-haiku-5-5' (providers 'zai', model 'claude-haiku-5-5': largePrompt.priceCacheWrite)", AgentPrices.UnknownOf(Provider(Haiku), Haiku, usage));
+    }
+
+    /// <summary>
+    /// A cache write kept an hour is counted at its own price, apart from one kept five minutes: the Claude API bills the
+    /// two apart, and counted as the other the budget would be short. A model with no price for it is unknown where a
+    /// request wrote one; the hour-long writes are part of the prompt a large-prompt price is chosen by.
+    /// </summary>
+    [Fact]
+    public void AnHourLongCacheWrite_IsCountedAtItsOwnPrice_AndUnknownWhereThereIsNone()
+    {
+        var fable = new AgentModelConfig
+        {
+            Code = "claude-fable-5-1",
+            Name = "Claude Fable 5.1",
+            Tiers = ["best"],
+            Efforts = ["low", "medium", "high", "xhigh", "max"],
+            ContextTokens = 1_000_000,
+            MaxOutputTokens = 128_000,
+            PriceInputMiss = 10,
+            PriceInputHit = 0.25,
+            PriceOutput = 50,
+            PriceCacheWrite = 12.5,
+            PriceCacheWrite1h = 20,
+        };
+        var both = new AgentUsage(InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 1_000_000, CacheWrite1hTokens: 500_000, Searches: 0);
+
+        Assert.Equal(1_000_000 / 1_000_000.0 * 12.5 + 500_000 / 1_000_000.0 * 20, AgentPrices.CostOf(Provider(fable), fable, both));
+
+        var hour = new AgentUsage(InputTokens: 100, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, CacheWrite1hTokens: 100, Searches: 0);
+
+        Assert.Null(AgentPrices.CostOf(Provider(Glm), Glm, hour));
+        Assert.Equal("no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': priceCacheWrite1h)", AgentPrices.UnknownOf(Provider(Glm), Glm, hour));
+
+        var large = new AgentUsage(InputTokens: 1_000, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, CacheWrite1hTokens: 150_000, Searches: 0);
+
+        Assert.Equal(
+            "no price for 'claude-haiku-5-5' (providers 'zai', model 'claude-haiku-5-5': largePrompt.priceCacheWrite1h)",
+            AgentPrices.UnknownOf(Provider(Haiku), Haiku, large));
     }
 
     /// <summary>Each search is counted at the provider's price for a thousand of them.</summary>
@@ -71,7 +131,7 @@ public sealed class AgentPricesTests
     {
         var provider = Provider(Glm, searches: 10);
 
-        Assert.Equal(2 / 1000.0 * 10, AgentPrices.CostOf(provider, Glm, new AgentUsage(InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, Searches: 2)));
+        Assert.Equal(2 / 1000.0 * 10, AgentPrices.CostOf(provider, Glm, new AgentUsage(InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, CacheWrite1hTokens: 0, Searches: 2)));
     }
 
     /// <summary>A model with no price for a kind the request used is unknown, never zero, said naming the keys to fill.</summary>
@@ -79,13 +139,13 @@ public sealed class AgentPricesTests
     public void AModelWithNoPriceForAKind_IsUnknownNeverZero_SaidNamingTheKeys()
     {
         // GLM holds no cache-write price: a request that wrote a cache is unknown.
-        var usage = new AgentUsage(InputTokens: 100, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 100, Searches: 0);
+        var usage = new AgentUsage(InputTokens: 100, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 100, CacheWrite1hTokens: 0, Searches: 0);
 
         Assert.Null(AgentPrices.CostOf(Provider(Glm), Glm, usage));
         Assert.Equal("no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': priceCacheWrite)", AgentPrices.UnknownOf(Provider(Glm), Glm, usage));
 
         // A search with no price for one is said the same way.
-        var searched = new AgentUsage(InputTokens: 100, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, Searches: 1);
+        var searched = new AgentUsage(InputTokens: 100, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, CacheWrite1hTokens: 0, Searches: 1);
 
         Assert.Null(AgentPrices.CostOf(Provider(Glm), Glm, searched));
         Assert.Equal("no price for 'glm-5.3' (providers 'zai', model 'glm-5.3': pricePerThousandSearches)", AgentPrices.UnknownOf(Provider(Glm), Glm, searched));
@@ -96,7 +156,7 @@ public sealed class AgentPricesTests
     public void AKindTheRequestDidNotUse_DecidesNothing()
     {
         // No cache write in the request: the missing cache-write price is not read.
-        Assert.NotNull(AgentPrices.CostOf(Provider(Glm), Glm, new AgentUsage(InputTokens: 1_000_000, OutputTokens: 1_000_000, CacheReadTokens: 0, CacheWriteTokens: 0, Searches: 0)));
+        Assert.NotNull(AgentPrices.CostOf(Provider(Glm), Glm, new AgentUsage(InputTokens: 1_000_000, OutputTokens: 1_000_000, CacheReadTokens: 0, CacheWriteTokens: 0, CacheWrite1hTokens: 0, Searches: 0)));
     }
 }
 
