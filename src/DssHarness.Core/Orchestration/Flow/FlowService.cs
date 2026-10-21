@@ -201,11 +201,11 @@ public sealed class FlowService(
                 check?.Lines ?? [WorkflowValidationReports.NoneDeclared]);
         }
 
-        // The inputs are held to the definition before anything of a run is made, by the coordinator - the one owner of
-        // what an input takes - built over no records, so nothing is written for a start that is refused.
+        // The inputs are held to the definition before anything of a run is made, by the one owner of what an input
+        // takes - the engine holds its run to the same - so nothing is written for a start that is refused.
         try
         {
-            _ = new FlowCoordinator(workflow, _runner, _runnerFacts, _clock, given);
+            _ = FlowInputs.Resolve(workflow, given);
         }
         catch (HarnessException ex)
         {

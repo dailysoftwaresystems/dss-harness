@@ -447,7 +447,7 @@ public sealed class FlowCoordinator
         _runner = runner;
         _runnerFacts = runnerFacts;
         _clock = clock ?? TimeProvider.System;
-        _inputs = StartValues(definition, inputs);
+        _inputs = FlowInputs.Resolve(definition, inputs);
         _records = records;
         _runName = runName;
 
@@ -5268,44 +5268,6 @@ public sealed class FlowCoordinator
     private static string InstanceBound(string group, int wouldBring, int most)
         => $"group '{group}' would bring this run to {wouldBring} step instances, and at most {most} are allowed (maxInstances). "
             + "A step instance is one run of a step: one for each work item, each iteration and each visit. Raise maxInstances, or lower a loop's bounds";
-
-    /// <summary>The start values of a run: its inputs resolved against what the workflow declares.</summary>
-    private static IReadOnlyDictionary<string, string> StartValues(WorkflowDefinition definition, IReadOnlyDictionary<string, string>? given)
-    {
-        var values = new Dictionary<string, string>(StringComparer.Ordinal);
-
-        foreach (var input in definition.Inputs)
-        {
-            var value = given is not null && given.TryGetValue(input.Name, out var supplied) ? supplied : input.Default;
-
-            if (value is null)
-            {
-                if (input.Required)
-                {
-                    throw new HarnessException(HarnessExit.Refused, $"input '{input.Name}' is required, and nothing gave the run a value for it");
-                }
-
-                continue;
-            }
-
-            if (input.Options.Count > 0 && !input.Options.Contains(value, StringComparer.Ordinal))
-            {
-                throw new HarnessException(HarnessExit.Refused, $"input '{input.Name}' takes one of {string.Join(", ", input.Options)}, and the run was given '{value}'");
-            }
-
-            values[input.Name] = value;
-        }
-
-        foreach (var parameter in definition.Params)
-        {
-            if (parameter.Required && parameter.Default is null)
-            {
-                throw new HarnessException(HarnessExit.Refused, $"param '{parameter.Name}' is required, and the workflow declares no default for it");
-            }
-        }
-
-        return values;
-    }
 
     /// <summary>Records one change of the run where its records are, whole: the snapshot is the run as it stands, and the records own the order they are written in.</summary>
     private void Record(FlowChangeKind kind, FlowInstance? instance = null, FlowInstanceState? from = null, FlowInstanceState? to = null, int? attempt = null, string? detail = null)

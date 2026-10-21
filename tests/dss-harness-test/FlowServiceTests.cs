@@ -284,6 +284,59 @@ public sealed class FlowServiceTests
         Assert.Equal((null, null), FlowInputs.Read(files, temp.Path, null));
     }
 
+    /// <summary>
+    /// What an input takes has one owner: the values a run starts with are each input given or its default, an input
+    /// with neither left out, and a required input nothing gave, a value outside an input's options and a required param
+    /// with no default are each refused.
+    /// </summary>
+    [Fact]
+    public void TheValuesARunStartsWith_AreEachInputGivenOrItsDefault()
+    {
+        var definition = WorkflowFileParser.Parse("workflows/flow/flow.yml", """
+            name: flow
+            inputs:
+              - name: request
+                required: true
+              - name: mode
+                options: [fast, slow]
+                default: slow
+              - name: notes
+            steps:
+              - name: only
+                type: orient
+            """);
+
+        Assert.Equal(
+            new Dictionary<string, string>(StringComparer.Ordinal) { ["request"] = "do it", ["mode"] = "slow" },
+            FlowInputs.Resolve(definition, new Dictionary<string, string>(StringComparer.Ordinal) { ["request"] = "do it" }));
+        Assert.Equal("input 'request' is required, and nothing gave the run a value for it", Assert.Throws<HarnessException>(() => FlowInputs.Resolve(definition, null)).Message);
+        Assert.Equal(
+            "input 'mode' takes one of fast, slow, and the run was given 'quick'",
+            Assert.Throws<HarnessException>(() => FlowInputs.Resolve(definition, new Dictionary<string, string>(StringComparer.Ordinal) { ["request"] = "do it", ["mode"] = "quick" })).Message);
+    }
+
+    /// <summary>A start whose inputs its workflow does not take is refused (13) before anything of the run is made.</summary>
+    [Fact]
+    public async Task AStartWhoseInputsItsWorkflowDoesNotTake_IsRefused_BeforeAnythingIsMade()
+    {
+        var (repository, service, _) = await ServiceAsync("""
+            name: flow
+            inputs:
+              - name: mode
+                options: [fast, slow]
+            steps:
+              - name: only
+                type: orient
+            """);
+        using var disposed = repository;
+
+        var outcome = await service.RunAsync(repository.Path, Workflow, run: null, inputs: ["mode=quick"], json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
+        Assert.Equal("input 'mode' takes one of fast, slow, and the run was given 'quick'", outcome.Message);
+        Assert.False(Directory.Exists(RunOf(repository).Directory));
+    }
+
     /// <summary>A session that leaves a question open exits 1, names the way to answer it, and holds the question in questions.json.</summary>
     [Fact]
     public async Task ASessionThatLeavesAQuestionOpen_ExitsOne_AndNamesTheWayToAnswerIt()

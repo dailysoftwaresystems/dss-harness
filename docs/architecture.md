@@ -1414,7 +1414,8 @@ A run is an orchestrator the engine drives (`FlowService`, a use case of Core; t
 it). `run-orchestrator <workflow>` checks the definition as `validate-workflow` does (12 where it
 does not hold), reads `--input` - `name=@<file>` through `IFileSystem`, relative to `--directory`,
 a missing file a usage error - and checks the inputs against the definition before anything is
-made; then, inside the repository's one section (`FlowSessions.AcrossRuns`), it refuses another
+made, by the one owner of what an input takes (`FlowInputs.Resolve`, which the engine holds its run
+to as well); then, inside the repository's one section (`FlowSessions.AcrossRuns`), it refuses another
 unfinished run with work in the tree - a run whose agent's record cannot be read counts as one,
 said - chooses the name (`r<N>`, one more than the highest there; a name `--run` gives is held to
 `worktrees.maxNameLength` and refused where a record or anything else is there), holds the start

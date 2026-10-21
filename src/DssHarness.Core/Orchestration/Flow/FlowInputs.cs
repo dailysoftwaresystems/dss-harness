@@ -1,4 +1,5 @@
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Results;
 
 namespace DssHarness.Core.Orchestration.Flow;
 
@@ -6,7 +7,7 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// What a run's command line gives as text: the inputs a run is started with, <c>name=value</c> or <c>name=@file</c>,
 /// and the file an answer's text is read from. A file is read through the tool's own file system, relative to the
 /// directory the command acts on - its <c>--directory</c>, or where it was typed - and one that is not there is a usage
-/// error, said by its path.
+/// error, said by its path. And what an input takes: the values a run starts with, resolved against its workflow.
 /// </summary>
 public static class FlowInputs
 {
@@ -64,6 +65,54 @@ public static class FlowInputs
         }
 
         return (inputs, null);
+    }
+
+    /// <summary>
+    /// The values a run of <paramref name="definition"/> starts with: each input the workflow declares, given or its
+    /// default - the one owner of what an input takes, which a start holds its inputs to before anything of the run is
+    /// made, and the engine its run to. A required input nothing gave, a value outside an input's options and a required
+    /// param with no default are each refused (13).
+    /// </summary>
+    /// <param name="definition">The workflow the run runs.</param>
+    /// <param name="given">The inputs given, by name; null where none was.</param>
+    /// <returns>The run's input values, by name.</returns>
+    public static IReadOnlyDictionary<string, string> Resolve(WorkflowDefinition definition, IReadOnlyDictionary<string, string>? given)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+
+        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        foreach (var input in definition.Inputs)
+        {
+            var value = given is not null && given.TryGetValue(input.Name, out var supplied) ? supplied : input.Default;
+
+            if (value is null)
+            {
+                if (input.Required)
+                {
+                    throw new HarnessException(HarnessExit.Refused, $"input '{input.Name}' is required, and nothing gave the run a value for it");
+                }
+
+                continue;
+            }
+
+            if (input.Options.Count > 0 && !input.Options.Contains(value, StringComparer.Ordinal))
+            {
+                throw new HarnessException(HarnessExit.Refused, $"input '{input.Name}' takes one of {string.Join(", ", input.Options)}, and the run was given '{value}'");
+            }
+
+            values[input.Name] = value;
+        }
+
+        foreach (var parameter in definition.Params)
+        {
+            if (parameter.Required && parameter.Default is null)
+            {
+                throw new HarnessException(HarnessExit.Refused, $"param '{parameter.Name}' is required, and the workflow declares no default for it");
+            }
+        }
+
+        return values;
     }
 
     /// <summary>
