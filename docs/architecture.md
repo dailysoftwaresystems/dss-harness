@@ -1435,7 +1435,10 @@ does not hold, a time in any but the one form (`yyyy-MM-dd HH:mm:ss`, UTC; one n
 written `null`), a log line out of sequence or corrupt is refused by its number, and only a torn last
 line is set aside, said. A resume reconciles `flow.json` against every step's own record, taking the
 step's own whole wherever there is one, keeping the index's order and adopting what only a step's
-directory holds at the end; it takes back a handoff a crash left beside its record, and refuses -
+directory holds at the end. The graph is rebuilt in that order, never sorted again - `build+10` after
+`build+2`, `rounds#10` after `rounds#2`, a loop's later visit (`rounds+2`) and its items as their own,
+a block's members whatever the block ended - and a record whose scope never comes, or whose state the
+engine does not name, is refused rather than taken for one that runs again; it takes back a handoff a crash left beside its record, and refuses -
 naming the file - a record that names a handoff that is gone, and a missing `questions.json` or
 `pre-existing-issues.json`, never made again empty.
 

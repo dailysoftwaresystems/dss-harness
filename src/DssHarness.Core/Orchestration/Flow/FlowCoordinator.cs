@@ -5295,14 +5295,34 @@ public sealed class FlowCoordinator
 
             var scopes = new Dictionary<string, Scope>(StringComparer.Ordinal) { [string.Empty] = top };
 
-            foreach (var record in resume.File.Steps
-                .OrderBy(step => step.Instance.Count(character => character == '.') + 1)
-                .ThenBy(step => step.Instance, StringComparer.Ordinal))
+            // The records are taken in the order the run made them - the index's own, each parent before what is in it,
+            // what only a step's directory held after it all - and never sorted again: b+10 stays after b+2, and
+            // rounds#10 after rounds#2. One whose scope is not placed yet - an adopted record of a scope the index
+            // names later - waits for it; one whose scope never comes is refused.
+            var unplaced = resume.File.Steps.ToList();
+
+            while (unplaced.Count > 0)
+            {
+                var placed = unplaced.RemoveAll(record =>
+                {
+                    var lastDot = record.Instance.LastIndexOf('.');
+                    return scopes.TryGetValue(lastDot < 0 ? string.Empty : record.Instance[..lastDot], out var declaring) && Place(record, declaring);
+                });
+
+                if (placed == 0)
+                {
+                    throw new HarnessException(
+                        HarnessExit.Refused,
+                        $"'{unplaced[0].Instance}' is inside a scope the run's state holds no record of; the run's state and the definition do not agree, and a record is never guessed at");
+                }
+            }
+
+            // Places one record in its scope; false where it is an item or an iteration whose loop is not placed yet.
+            bool Place(FlowStepRecord record, Scope declaring)
             {
                 var lastDot = record.Instance.LastIndexOf('.');
                 var parentPrefix = lastDot < 0 ? string.Empty : record.Instance[..lastDot];
                 var segment = lastDot < 0 ? record.Instance : record.Instance[(lastDot + 1)..];
-                var declaring = scopes[parentPrefix];
                 var name = segment.Split(['[', '#', '+'], 2)[0];
                 var recovery = _definition.Recover is not null && name == FlowScope.Recovery;
                 var declaration = recovery
@@ -5314,40 +5334,45 @@ public sealed class FlowCoordinator
 
                 FlowInstance instance;
 
-                if (!recovery && declaration.IsGroup && !string.Equals(segment, name, StringComparison.Ordinal))
+                // An item or an iteration is spelled with its index or its number after its loop's own id, visit and
+                // all (rounds+2#1, items[0]); a loop visited again is rounds+2, a member like any other.
+                var loopEnd = segment.IndexOfAny(['[', '#']);
+
+                if (!recovery && declaration.IsGroup && loopEnd > 0)
                 {
                     // One item or iteration of a loop: its scope is made against the loop's own declaring scope, as
                     // the loop's expansion made it, with the item and the index or the iteration the record holds.
-                    var outerId = parentPrefix.Length == 0 ? name : $"{parentPrefix}.{name}";
+                    var outerId = parentPrefix.Length == 0 ? segment[..loopEnd] : $"{parentPrefix}.{segment[..loopEnd]}";
 
-                    if (_instances.TryGetValue(outerId, out var outer) && outer.Step == declaration)
+                    if (!_instances.TryGetValue(outerId, out var outer))
                     {
-                        var scope = record.Index is { } index
-                            ? NewScope($"{outer.Id}[{index.ToString(System.Globalization.CultureInfo.InvariantCulture)}]", PathOf(declaring, declaration), declaring, declaration, FlowValue.Of(record.Item?.DeepClone()), index, null, outer)
-                            : NewScope($"{outer.Id}#{record.Iteration?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "1"}", PathOf(declaring, declaration), declaring, declaration, FlowValue.Missing, null, record.Iteration, outer);
-
-                        outer.Children.Add(scope);
-                        scopes[scope.Id] = scope;
-                        instance = Create(scope, declaration, StateOf(record), scope.Id);
+                        // Its loop's own record is not placed yet: it waits for it, and is refused where it never comes.
+                        return false;
                     }
-                    else
+
+                    if (outer.Step != declaration)
                     {
                         throw new HarnessException(
                             HarnessExit.Refused,
                             $"'{record.Instance}' is an instance of a loop the run's state holds no whole record of ('{outerId}'); the run's state and the definition do not agree, and a record is never guessed at");
                     }
+
+                    var scope = record.Index is { } index
+                        ? NewScope($"{outer.Id}[{index.ToString(System.Globalization.CultureInfo.InvariantCulture)}]", PathOf(declaring, declaration), declaring, declaration, FlowValue.Of(record.Item?.DeepClone()), index, null, outer)
+                        : NewScope($"{outer.Id}#{record.Iteration?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "1"}", PathOf(declaring, declaration), declaring, declaration, FlowValue.Missing, null, record.Iteration, outer);
+
+                    outer.Children.Add(scope);
+                    scopes[scope.Id] = scope;
+                    instance = Create(scope, declaration, StateOf(record), scope.Id);
                 }
                 else if (recovery || declaration.IsGroup && declaration.ForEach is null && declaration.Repeat is null)
                 {
-                    // A block: its own scope holds its members, keyed by its instance's id.
+                    // A block: its own scope holds its members, keyed by its instance's id - in whatever state it
+                    // ended, for a block that failed or was left holds the records of its members too.
                     instance = Create(declaring, declaration, StateOf(record), memberId: record.Instance);
-
-                    if (instance.State is not (FlowInstanceState.Failed or FlowInstanceState.Skipped or FlowInstanceState.NotRun))
-                    {
-                        instance.OwnScope = NewScope(instance.Id, PathOf(declaring, declaration), declaring, declaration, FlowValue.Missing, null, null, null);
-                        instance.OwnScope.OwnGroupInstance = instance;
-                        scopes[instance.Id] = instance.OwnScope;
-                    }
+                    instance.OwnScope = NewScope(instance.Id, PathOf(declaring, declaration), declaring, declaration, FlowValue.Missing, null, null, null);
+                    instance.OwnScope.OwnGroupInstance = instance;
+                    scopes[instance.Id] = instance.OwnScope;
                 }
                 else
                 {
@@ -5357,6 +5382,7 @@ public sealed class FlowCoordinator
                 }
 
                 Apply(instance, record, resume);
+                return true;
             }
 
             foreach (var raised in _created.Where(created => created.RaisedByRecord is not null))
@@ -5532,8 +5558,9 @@ public sealed class FlowCoordinator
             _replaying = false;
         }
 
+        // Every name a record holds is read by the one strict reader of the engine's names, never guessed at.
         static FlowInstanceState StateOf(FlowStepRecord record)
-            => Enum.TryParse<FlowInstanceState>(record.State, out var state) ? state : FlowInstanceState.NotStarted;
+            => FlowRecordNames.Of<FlowInstanceState>(record.State);
 
         // What one id a redirect's record resets names: a visit the state holds, or - for a step not drawn yet - the
         // declaration its first visit would be, under the scope its id names.

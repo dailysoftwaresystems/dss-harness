@@ -1534,6 +1534,224 @@ public sealed class FlowResumeTests
     }
 
     /// <summary>
+    /// The records are taken in the order the run made them, never sorted again: with ten visits and more of a step,
+    /// the newest is still the one its name reads, and what depends on it reads that visit.
+    /// </summary>
+    [Fact]
+    public async Task TenVisitsAndMore_AreTakenUpInTheOrderTheRunMadeThem()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: build
+                type: orient
+              - name: fix
+                type: orient
+                on: {step: build, outcome: failure}
+                then: build
+                maxVisits: 12
+              - name: after
+                type: orient
+                dependsOn: [build]
+                when: build.code == 0
+            """);
+        var runner = new Runner().OnAsync("build", (run, cancellationToken) => run.Visit switch
+        {
+            <= 10 => Task.FromResult(FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "red")),
+            _ => new TaskCompletionSource<FlowStepResult>().Task.WaitAsync(cancellationToken),
+        });
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            _ = new FlowCoordinator(definition, runner, new RunnerFacts(), records: records).RunAsync(Token);
+            await runner.StartedAsync("build+11").WaitAsync(Bound, Token);
+
+            // The crash, while the eleventh visit runs.
+        }
+
+        var next = new Runner();
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var coordinator = new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+
+            Assert.Equal(FlowRunStatus.Done, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+            Assert.Equal(["build+11", "after"], next.Started);
+            Assert.Equal(FlowInstanceState.Done, coordinator.Instances["after"].State);
+        }
+    }
+
+    /// <summary>
+    /// A repeat's iterations are taken up in the order the run made them: with ten and more, the newest is the one its
+    /// until reads, and the loop goes on from it - never from the ninth, which an ordinal sort puts last.
+    /// </summary>
+    [Fact]
+    public async Task TenIterationsAndMore_GoOnFromTheNewest()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: rounds
+                repeat:
+                  until: attempt.ok
+                  maxIterations: 12
+                steps:
+                  - name: attempt
+                    type: orient
+            """);
+        var runner = new Runner().OnAsync("attempt", (run, cancellationToken) => run.Iteration switch
+        {
+            <= 10 => Task.FromResult(FlowStepResult.Ended(passed: true, 0, output: JsonNode.Parse("""{"ok": false}"""))),
+            _ => new TaskCompletionSource<FlowStepResult>().Task.WaitAsync(cancellationToken),
+        });
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            _ = new FlowCoordinator(definition, runner, new RunnerFacts(), records: records).RunAsync(Token);
+            await runner.StartedAsync("rounds#11.attempt").WaitAsync(Bound, Token);
+
+            // The crash, while the eleventh iteration runs.
+        }
+
+        var next = new Runner().On("attempt", run => FlowStepResult.Ended(passed: true, 0, output: JsonNode.Parse("""{"ok": true}""")));
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var coordinator = new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+
+            Assert.Equal(FlowRunStatus.Done, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+            Assert.Equal(["rounds#11.attempt"], next.Started);
+            Assert.Equal(FlowInstanceState.Done, coordinator.Instances["rounds"].State);
+        }
+    }
+
+    /// <summary>
+    /// A loop the run was sent back to is its own visit - rounds+2, a member like any other, never an iteration of
+    /// rounds - and its iterations are taken up under it.
+    /// </summary>
+    [Fact]
+    public async Task ALoopVisitedAgain_IsTakenUpAsItsOwnVisit()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: rounds
+                repeat:
+                  until: attempt.ok
+                  maxIterations: 3
+                steps:
+                  - name: attempt
+                    type: orient
+              - name: verify
+                type: orient
+                dependsOn: [rounds]
+              - name: mend
+                type: orient
+                on: {step: verify, outcome: failure}
+                then: rounds
+            """);
+        var ok = JsonNode.Parse("""{"ok": true}""");
+        var runner = new Runner()
+            .On("verify", run => run.Visit == 1 ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "red") : FlowStepResult.Ended(passed: true, 0))
+            .OnAsync("attempt", (run, cancellationToken) => run.Instance == "rounds#1.attempt"
+                ? Task.FromResult(FlowStepResult.Ended(passed: true, 0, output: ok))
+                : new TaskCompletionSource<FlowStepResult>().Task.WaitAsync(cancellationToken));
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            _ = new FlowCoordinator(definition, runner, new RunnerFacts(), records: records).RunAsync(Token);
+            await runner.StartedAsync("rounds+2#1.attempt").WaitAsync(Bound, Token);
+
+            // The crash, while the loop's second visit runs its first iteration.
+        }
+
+        var next = new Runner()
+            .On("attempt", run => FlowStepResult.Ended(passed: true, 0, output: ok))
+            .On("verify", run => FlowStepResult.Ended(passed: true, 0));
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var coordinator = new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+
+            Assert.Equal(FlowRunStatus.Done, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+            Assert.Equal(["rounds+2#1.attempt", "verify+2"], next.Started);
+            Assert.Equal(FlowInstanceState.Done, coordinator.Instances["rounds+2"].State);
+        }
+    }
+
+    /// <summary>
+    /// A block that failed holds the records of its members, and they are taken up in its scope: the failure its member
+    /// handed it ended the run, and the resume runs the block again as a new visit, whole.
+    /// </summary>
+    [Fact]
+    public async Task AFailedBlocksMembers_AreTakenUp_AndTheBlockRunsAgain()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: work
+                steps:
+                  - name: gate
+                    type: orient
+                  - name: side
+                    type: orient
+            """);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var first = new Runner().On("gate", run => FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "it broke"));
+
+            Assert.Equal(FlowRunStatus.Failed, (await new FlowCoordinator(definition, first, new RunnerFacts(), records: records).RunAsync(Token).WaitAsync(Bound, Token)).Status);
+        }
+
+        var next = new Runner();
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var coordinator = new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+
+            Assert.Equal(FlowRunStatus.Done, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+            Assert.Equal(["work+2.gate", "work+2.side"], next.Started);
+            Assert.Equal(FlowFailure.TakenByGroup, coordinator.Instances["work.gate"].Failure);
+        }
+    }
+
+    /// <summary>A record's state is read by the engine's one strict reader of its names: one it does not have is refused, never taken for a step that runs again.</summary>
+    [Fact]
+    public void AStateTheEngineDoesNotHave_IsRefused_NeverTakenForOneThatRunsAgain()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: one
+                type: orient
+            """);
+        var state = new FlowResumeState(
+            new FlowFile(1, "r1", "flow", FlowRunContext.DigestOf(definition), new Dictionary<string, string>(), "Done", new FlowBudgetRecord(0, 0, 0), 0, [new FlowStepRecord("one", "one", false, "Finished", 1, 1, [], [], "orient")], [], DateTimeOffset.UnixEpoch),
+            [],
+            [],
+            new Dictionary<string, string>(),
+            [],
+            []);
+
+        var refused = Assert.Throws<InvalidOperationException>(() => new FlowCoordinator(definition, new Runner(), new RunnerFacts(), resume: state));
+
+        Assert.Equal("'Finished' is not one of the FlowInstanceState names a run's records hold: NotStarted, Running, Done, Skipped, Failed, Paused, Stopped, NotRun.", refused.Message);
+    }
+
+    /// <summary>
     /// A resume never ends done over a step it never drew: a record of a failure nothing decided - which this engine never
     /// leaves, for a failure is recorded owed until something decides it - leaves what depends on it waiting, and the
     /// session says so, failed.
