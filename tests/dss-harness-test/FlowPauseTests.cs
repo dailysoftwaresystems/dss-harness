@@ -70,6 +70,13 @@ public sealed class FlowPauseTests
             return this;
         }
 
+        /// <summary>Fails <paramref name="step"/>'s handoff turn with <paramref name="message"/>, as a client that ended would.</summary>
+        public FakeRunner HandoffFails(string step, string message)
+        {
+            _handoffs[step] = (_, _) => Task.FromException<string?>(new InvalidOperationException(message));
+            return this;
+        }
+
         /// <summary>
         /// Holds <paramref name="step"/>'s handoff turn open until a stop or its bound cancels it; answers the signal that
         /// the turn has begun.
@@ -234,7 +241,7 @@ public sealed class FlowPauseTests
         Assert.Contains("after", runner.Started);
     }
 
-    /// <summary>An agent that gives no account still leaves a handoff: the engine writes it, saying so with the bound it passed.</summary>
+    /// <summary>An agent that gives no account still leaves a handoff: the engine writes it, saying that the agent's answer held none.</summary>
     [Fact]
     public async Task AnAgentThatGivesNoAccount_LeavesAHandoffTheEngineWrites()
     {
@@ -260,8 +267,151 @@ public sealed class FlowPauseTests
         var think = coordinator.Instances["think"];
         Assert.Equal(FlowInstanceState.Stopped, think.State);
         Assert.Equal("engine", think.Handoff!.By);
-        Assert.Equal("Written by the engine: the agent gave no account before its handoff turn's 60 s bound", think.Handoff.Text);
+        Assert.Equal("Written by the engine: the agent's answer to its handoff turn held no account", think.Handoff.Text);
+        Assert.Equal("the agent's answer to its handoff turn held no account", think.Handoff.Why);
         Assert.Equal(["think"], end.Pause!.Handoffs);
+    }
+
+    /// <summary>A handoff turn that runs past its bound - the workflow's handoffSeconds, or 180 where it says none - is ended there, and the engine writes the handoff, saying the bound it passed.</summary>
+    [Theory]
+    [InlineData("", 180)]
+    [InlineData("handoffSeconds: 60", 60)]
+    public async Task AHandoffTurnPastItsBound_IsEndedThere_AndTheEngineWritesTheHandoff(string bound, int seconds)
+    {
+        var definition = Parse($"""
+            name: flow
+            {bound}
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner();
+        _ = runner.Hold("think");
+        _ = runner.HandoffHeld("think");
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var session = coordinator.RunAsync(cancel);
+        await runner.StartedAsync("think").WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        coordinator.RequestPause("command");
+
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        var think = coordinator.Instances["think"];
+        Assert.Equal("engine", think.Handoff!.By);
+        Assert.Equal($"Written by the engine: the agent's handoff turn passed its {seconds} s", think.Handoff.Text);
+        Assert.Equal($"the agent's handoff turn passed its {seconds} s", think.Handoff.Why);
+    }
+
+    /// <summary>A handoff turn whose client fails still leaves a handoff: the engine writes it, saying what the turn failed with - never that a bound passed.</summary>
+    [Fact]
+    public async Task AHandoffTurnThatFails_LeavesAHandoffSayingWhatItFailedWith()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner().HandoffFails("think", "the client's process ended");
+        _ = runner.Hold("think");
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var session = coordinator.RunAsync(cancel);
+        await runner.StartedAsync("think").WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        coordinator.RequestPause("command");
+
+        _ = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        var think = coordinator.Instances["think"];
+        Assert.Equal("engine", think.Handoff!.By);
+        Assert.Equal("Written by the engine: the agent's handoff turn failed: the client's process ended", think.Handoff.Text);
+        Assert.Equal("the agent's handoff turn failed: the client's process ended", think.Handoff.Why);
+    }
+
+    /// <summary>
+    /// The handoff stays the step's until an attempt given it says the prompt that holds it is written: the attempt's
+    /// start leaves it in the record, one that fails before its prompt is written leaves it for the retry, and it is
+    /// spent - its file with it - only once the runner says so.
+    /// </summary>
+    [Fact]
+    public async Task TheHandoffStaysTheSteps_UntilAnAttemptSaysItsPromptHoldsIt()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                onFailure: pause
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner().HandsOff("think", "half way through");
+        _ = runner.Hold("think");
+        var seen = new List<string>();
+        var records = new RecordsWatch((kind, snapshot, instance, to) =>
+        {
+            if (kind == FlowChangeKind.Step && instance == "think")
+            {
+                var think = snapshot.Steps.Single(step => step.Instance == "think");
+
+                lock (seen)
+                {
+                    seen.Add($"{to} {think.Attempt} {(think.Handoff is null ? "none" : "held")}");
+                }
+            }
+        });
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: records);
+
+        var session = coordinator.RunAsync(cancel);
+        await runner.StartedAsync("think").WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        coordinator.RequestPause("interrupt");
+        _ = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        // The next attempt fails before its prompt is written, and never says it took the handoff; the retry after it
+        // is given the same handoff, and says so.
+        var given = new List<string?>();
+        _ = runner.On("think", run =>
+        {
+            lock (given)
+            {
+                given.Add(run.Handoff);
+            }
+
+            if (run.Attempt == 2)
+            {
+                return FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "the client ended before its prompt");
+            }
+
+            run.Events.HandoffTaken();
+            return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"plan": "done"}"""));
+        });
+
+        lock (seen)
+        {
+            seen.Clear();
+        }
+
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "retry", out var problem), problem);
+
+        end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(["half way through", "half way through"], given);
+        Assert.Null(coordinator.Instances["think"].Handoff);
+        Assert.Equal(
+            ["NotStarted 2 held", "Running 2 held", "Failed 2 held", "Paused 2 held", "NotStarted 3 held", "Running 3 held", "Running 3 none", "Done 3 none"],
+            seen);
     }
 
     /// <summary>A pause that says all stops the machine steps it would have left running; a later request that says all stops what an earlier one left.</summary>
@@ -333,6 +483,76 @@ public sealed class FlowPauseTests
         Assert.Null(think.Handoff);
         // A hard stop runs no always step.
         Assert.DoesNotContain("gate", runner.Started);
+    }
+
+    /// <summary>
+    /// A hard stop keeps no handoff its own pause would have written, but one an earlier pause wrote that no prompt holds
+    /// yet stays the step's: the attempt the stop cut off never said it took it, so the resume gives it again rather
+    /// than a note of the engine's.
+    /// </summary>
+    [Fact]
+    public async Task AHardStop_KeepsAHandoffNoPromptHoldsYet_ForTheResume()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner().HandsOff("think", "half way through");
+        _ = runner.Hold("think");
+
+        // The stop is asked on the run's own thread as the resume's attempt is recorded running: before its runner
+        // can say anything of its prompt.
+        var stopAtTheStart = false;
+        FlowCoordinator? coordinator = null;
+        var records = new RecordsWatch((kind, _, instance, to) =>
+        {
+            if (stopAtTheStart && kind == FlowChangeKind.Step && instance == "think" && to == "Running")
+            {
+                coordinator!.RequestStop();
+            }
+        });
+        coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: records);
+
+        var session = coordinator.RunAsync(cancel);
+        await runner.StartedAsync("think").WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        coordinator.RequestPause("interrupt");
+        _ = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        // The resume's attempt is given the handoff and stopped before it says its prompt holds it.
+        var given = new List<string?>();
+        _ = runner.On("think", run =>
+        {
+            lock (given)
+            {
+                given.Add(run.Handoff);
+            }
+
+            if (run.Attempt == 2)
+            {
+                return FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "cut off by the stop");
+            }
+
+            run.Events.HandoffTaken();
+            return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"plan": "done"}"""));
+        });
+        stopAtTheStart = true;
+
+        var stopped = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Stopped, stopped.Status);
+        Assert.Equal("half way through", coordinator.Instances["think"].Handoff!.Text);
+        Assert.Equal("agent", coordinator.Instances["think"].Handoff!.By);
+
+        stopAtTheStart = false;
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(["half way through", "half way through"], given);
     }
 
     /// <summary>

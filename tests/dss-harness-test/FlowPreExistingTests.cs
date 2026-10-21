@@ -444,7 +444,10 @@ public sealed class FlowPreExistingTests
             runner.Started);
     }
 
-    /// <summary>An issue the triage answers duplicate for is recorded and not listed; the run's counts say what became of each.</summary>
+    /// <summary>
+    /// An issue the triage answers duplicate for is recorded and not listed, the listed one it repeats named as its
+    /// answer's duplicates names it; the run's counts say what became of each.
+    /// </summary>
     [Fact]
     public async Task AnIssueAnsweredDuplicate_IsRecordedAndNotListed()
     {
@@ -457,6 +460,11 @@ public sealed class FlowPreExistingTests
                 prompt: work.md
                 outputs: work.json
                 onPreExisting: triage
+              - name: tell
+                type: pause
+                always: true
+                question: 'what was there before: {run.preExisting}'
+                options: [ok, no]
               - name: triage
                 type: reason
                 prompt: triage.md
@@ -466,9 +474,15 @@ public sealed class FlowPreExistingTests
             """);
         var runner = new FakeRunner()
             .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("a broken test"), Issue("the same broken test")]))
-            .On("triage", run => run.Issue!.Title == "a broken test"
-                ? Course("list", run.Issue.Title)
-                : FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"course": "duplicate", "of": "pe-1"}""")));
+            .On("triage", run =>
+            {
+                if (run.Issue!.Title == "a broken test")
+                {
+                    return Course("list", run.Issue.Title);
+                }
+
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"course": "duplicate", "title": "the same broken test", "duplicates": "pe-1"}"""));
+            });
         var harness = new HarnessFactory();
         var store = new OrchestrationStore(harness.FileSystem, harness.Output);
         var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "r1");
@@ -478,7 +492,11 @@ public sealed class FlowPreExistingTests
         {
             var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
 
-            _ = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+            _ = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+            // The always step reads the run's words once every triage has answered.
+            var asked = coordinator.OpenQuestions.Single(question => question.Kind == "pause");
+            Assert.Equal("what was there before: listed - a broken test (src/Parser.cs); duplicate of pe-1 - the same broken test", asked.Problem);
         }
 
         // The file holds the one listed issue, proven; the duplicate added nothing.
@@ -496,6 +514,93 @@ public sealed class FlowPreExistingTests
 
         Assert.NotNull(status);
         Assert.Equal(new WorkflowPreExisting(1, 0, 1, 0), status.Progress.PreExisting);
+    }
+
+    /// <summary>A triage answer that says no course the engine takes - none at all, or one it does not know - fails the triage step, and the issue vanishes nowhere unsaid.</summary>
+    [Theory]
+    [InlineData("""{"title": "a broken test"}""", "its answer says no course: it is one of fix, list, duplicate, unproven")]
+    [InlineData("""{"course": 7, "title": "a broken test"}""", "its answer says no course: it is one of fix, list, duplicate, unproven")]
+    [InlineData("""{"course": "later", "title": "a broken test"}""", "its answer's course 'later' is none of fix, list, duplicate, unproven")]
+    public async Task ATriageAnswerWithNoCourseTheEngineTakes_FailsTheTriageStep(string answer, string error)
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                onPreExisting: triage
+              - name: triage
+                type: reason
+                prompt: triage.md
+                outputs: pre-existing.json
+                raised: preExisting
+                onAddress: recover
+                onFailure: continue
+            """);
+        var runner = new FakeRunner()
+            .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("a broken test")]))
+            .On("triage", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output(answer)));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        _ = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        var triage = coordinator.Instances["triage"];
+        Assert.Equal(FlowInstanceState.Failed, triage.State);
+        Assert.Equal(HarnessExit.ConfigInvalid, triage.Exit);
+        Assert.Equal(error, triage.Error);
+    }
+
+    /// <summary>
+    /// A quote or an output longer than the file holds is cut by the one owner of the cut, the cut said, and the issue
+    /// is listed: a long proof never fails the triage step.
+    /// </summary>
+    [Fact]
+    public async Task ALongQuote_IsCutTheWayTheFileHoldsIt_AndTheIssueIsListed()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                onPreExisting: triage
+              - name: triage
+                type: reason
+                prompt: triage.md
+                outputs: pre-existing.json
+                raised: preExisting
+                onAddress: recover
+                onFailure: stop
+            """);
+        var quote = new string('x', PreExistingProof.Most + 500);
+        var answer = (JsonObject)Course("list", "a broken test").Output!.DeepClone();
+        answer["proof"]!["quote"] = quote;
+        var runner = new FakeRunner()
+            .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("a broken test")]))
+            .On("triage", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: answer));
+        var harness = new HarnessFactory();
+        var store = new OrchestrationStore(harness.FileSystem, harness.Output);
+        var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "r1");
+        var clock = new ManualClock();
+
+        using (var records = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+
+            var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+            Assert.Equal(FlowInstanceState.Done, coordinator.Instances["triage"].State);
+        }
+
+        var issues = store.ReadPreExistingIssues(layout);
+
+        Assert.NotNull(issues);
+        Assert.Equal(PreExistingIssuesWriter.Cut(quote), Assert.Single(issues.Issues).Proof.Quote);
     }
 
     /// <summary>A triage answer whose issue does not read back fails the triage step: a record is never guessed at.</summary>

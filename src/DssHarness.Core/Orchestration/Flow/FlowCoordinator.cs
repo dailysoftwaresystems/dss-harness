@@ -538,8 +538,9 @@ public sealed class FlowCoordinator
             Stop(instance);
         }
 
-        // No handoff is kept: the stop cancelled the turns, and whatever they had written is not a stop's to keep.
-        foreach (var handed in _created.Where(instance => instance.Handoff is not null).ToList())
+        // No handoff this pause wrote is kept: the stop cancelled its turns, and whatever they had written is not a
+        // stop's to keep. One an earlier pause wrote that no prompt holds yet stays, for the resume gives it.
+        foreach (var handed in _created.Where(instance => instance.Handoff is not null && _pause?._handoffs.Contains(instance.Id) == true).ToList())
         {
             handed.Handoff = null;
         }
@@ -913,9 +914,11 @@ public sealed class FlowCoordinator
                     continue;
                 }
 
+                // Where the agent gave none the engine writes it, saying why in its first line: the bound passed, the
+                // turn failed - with what it failed with - or the agent's answer held nothing.
                 instance.Handoff = accounts[at].Text is { Length: > 0 } written
                     ? new FlowHandoff(written, "agent")
-                    : new FlowHandoff($"Written by the engine: the agent gave no account before its handoff turn's {bound} s bound", "engine", $"the agent gave no account before its handoff turn's {bound.ToString(System.Globalization.CultureInfo.InvariantCulture)} s bound");
+                    : new FlowHandoff($"Written by the engine: {accounts[at].Why}", "engine", accounts[at].Why);
                 _pause._handoffs.Add(instance.Id);
                 Record(FlowChangeKind.Handoff, instance, detail: instance.Handoff.By);
             }
@@ -934,11 +937,16 @@ public sealed class FlowCoordinator
         Record(FlowChangeKind.PauseCompleted, detail: $"{_pause._handoffs.Count} handoff(s)");
     }
 
-    /// <summary>One reason step's handoff turn: the agent's account where it gives one, and what the turn spent.</summary>
-    private async Task<(string? Text, TimeSpan Minutes)> HandoffTurnAsync(FlowInstance instance, int seconds)
+    /// <summary>
+    /// One reason step's handoff turn: the agent's account where it gives one, what the turn spent, and - where it gave
+    /// none - why, as the handoff the engine writes says it.
+    /// </summary>
+    private async Task<(string? Text, TimeSpan Minutes, string Why)> HandoffTurnAsync(FlowInstance instance, int seconds)
     {
         var began = _clock.GetUtcNow();
         string? text = null;
+        var why = "the agent's answer to its handoff turn held no account";
+        var boundPassed = false;
 
         try
         {
@@ -961,6 +969,7 @@ public sealed class FlowCoordinator
                 {
                     try
                     {
+                        boundPassed = true;
                         boundToCancel.Cancel();
                     }
                     catch (ObjectDisposedException)
@@ -974,14 +983,21 @@ public sealed class FlowCoordinator
                 try
                 {
                     text = await _runner.HandoffAsync(run, boundToCancel.Token).ConfigureAwait(false);
+
+                    if (boundPassed)
+                    {
+                        why = $"the agent's handoff turn passed its {seconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} s";
+                    }
                 }
                 catch (OperationCanceledException)
                 {
+                    why = $"the agent's handoff turn passed its {seconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} s";
                 }
-                catch (Exception)
+                catch (Exception failed)
                 {
                     // An agent that cannot answer - its client ended, its conversation out of context - still leaves
-                    // a handoff: the engine writes it.
+                    // a handoff: the engine writes it, saying what the turn failed with.
+                    why = $"the agent's handoff turn failed: {failed.Message}";
                 }
             }
             finally
@@ -996,7 +1012,7 @@ public sealed class FlowCoordinator
         {
         }
 
-        return (text, _clock.GetUtcNow() - began);
+        return (text, _clock.GetUtcNow() - began, why);
     }
 
     /// <summary>Adds the minutes a reason step ran from <paramref name="began"/> to now, where it was running.</summary>
@@ -1881,17 +1897,24 @@ public sealed class FlowCoordinator
         return true;
     }
 
-    /// <summary>Ends a repeat that ends with its until still false: what its leftover expression says it left is kept in its record.</summary>
+    /// <summary>
+    /// Ends a repeat that ends with its until still false: what its leftover expression says it left is kept in its
+    /// record. A leftover that cannot be read fails the repeat as an unreadable until does, for what a loop left is
+    /// never dropped unsaid.
+    /// </summary>
     private void EndRepeat(FlowInstance instance)
     {
         if (instance.Step.Repeat?.Leftover is { } leftover && instance.Children.Count > 0)
         {
             var left = Evaluate(leftover, instance.Children[^1], out var problem);
 
-            if (problem is null)
+            if (problem is not null)
             {
-                instance.Leftover = left.ToNode();
+                FailGroup(instance, HarnessExit.ConfigInvalid, Unreadable("leftover", instance.Children[^1].GroupInstance?.Id ?? instance.Id, problem), instance.Path);
+                return;
             }
+
+            instance.Leftover = left.ToNode();
         }
 
         End(instance, FlowInstanceState.Done, null, null);
@@ -2181,10 +2204,9 @@ public sealed class FlowCoordinator
     {
         var was = instance.State;
 
-        // The handoff is spent where the attempt is given it: its text goes to the runner, and the file is removed -
-        // the step's own record says it holds no handoff now, and the record is the truth.
+        // The handoff goes to the attempt and stays the step's until the runner says the prompt that holds it is
+        // written (HandoffTaken), or the attempt ends done: it is always in the file or in the prompt, never neither.
         var handoff = instance.Handoff;
-        instance.Handoff = null;
 
         instance.State = FlowInstanceState.Running;
         instance.StartedAt ??= _clock.GetUtcNow();
@@ -2285,8 +2307,15 @@ public sealed class FlowCoordinator
 
                 _ = _messages.Writer.TryWrite(new Message(instance, result, null, Attempt: attempt));
             }
+            catch (HarnessException refused)
+            {
+                // A runner that refuses says so with its own code - a step's config, a lock held, a command that
+                // failed - and the step ends with it, as every ending does.
+                _ = _messages.Writer.TryWrite(new Message(instance, FlowStepResult.Ended(passed: false, refused.ExitCode, refused.Message), null, Attempt: attempt));
+            }
             catch (Exception ex)
             {
+                // Anything else is the engine's own fault, and ends the step 70 with what it was.
                 _ = _messages.Writer.TryWrite(new Message(instance, FlowStepResult.Ended(passed: false, HarnessExit.InternalError, ex.Message), null, Attempt: attempt));
             }
         }
@@ -2376,9 +2405,16 @@ public sealed class FlowCoordinator
         instance.RedLegs = FlowLegVerdicts.OfClass(result.Legs, FlowLegClass.Red);
         instance.Output = result.Output;
 
+        // A triage instance's answer is read before it ends: one that says no course the engine takes, or an issue to
+        // list that does not read back, fails the step - a record is never guessed at, and nothing vanishes unsaid.
+        if (passed && instance.Step.Raised == WorkflowStep.RaisedByPreExisting && TriageRefusal(instance) is { } refused)
+        {
+            (passed, exit, error) = (false, HarnessExit.ConfigInvalid, refused);
+        }
+
         // The agent a create-agent step made, as its output names it: the one every step that names the step with in
         // or of works in, and the one whose directory those steps keep theirs in.
-        if (instance.Step.Type == "create-agent" && passed && result.Output?["agent"]?.GetValue<string>() is { Length: > 0 } agent)
+        if (instance.Step.Type == "create-agent" && passed && TextOf(result.Output?["agent"]) is { Length: > 0 } agent)
         {
             instance.Made = agent;
         }
@@ -2473,10 +2509,49 @@ public sealed class FlowCoordinator
         }
     }
 
+    /// <summary>The courses a triage answers, and the engine takes: <c>fix</c>, <c>list</c>, <c>duplicate</c>, <c>unproven</c>.</summary>
+    private static readonly string[] TriageCourses = ["fix", "list", "duplicate", "unproven"];
+
+    /// <summary>
+    /// Why a triage instance's answer cannot be acted on, read before the step ends: a course that is none the engine
+    /// takes, or an issue to list that does not read back; null where it can be.
+    /// </summary>
+    private string? TriageRefusal(FlowInstance instance)
+    {
+        var course = CourseOf(instance);
+
+        if (course is null || !TriageCourses.Contains(course, StringComparer.Ordinal))
+        {
+            return course is null
+                ? $"its answer says no course: it is one of {string.Join(", ", TriageCourses)}"
+                : $"its answer's course '{course}' is none of {string.Join(", ", TriageCourses)}";
+        }
+
+        return course == "list" && IssueOf(instance).Problem() is { } problem
+            ? $"its answer's issue does not read back: {problem}"
+            : null;
+    }
+
+    /// <summary>The course a triage instance answered; null where its answer says none as text.</summary>
+    private static string? CourseOf(FlowInstance triage)
+        => TextOf(triage.Output?["course"]);
+
+    /// <summary>The id of the listed issue a triage answered <c>duplicate</c> of, as its answer's <c>duplicates</c> names it; null where it names none.</summary>
+    private static string? DuplicateOf(FlowInstance triage)
+        => TextOf(triage.Output?["duplicates"]) is { Length: > 0 } of ? of : null;
+
+    /// <summary>What a triage that answered <c>duplicate</c> or <c>unproven</c> leaves in the run's tally: the course, with the issue a duplicate repeats.</summary>
+    private static PreExistingTally SettledTally(FlowInstance triage, string course)
+        => new(course == "duplicate" && DuplicateOf(triage) is { } of ? $"duplicate of {of}" : course, TitleOf(triage));
+
+    /// <summary>A value of a step's answer as text; null where it is none, or not text.</summary>
+    private static string? TextOf(JsonNode? node)
+        => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
+
     /// <summary>Acts on the answer a triage instance gave for its issue: fix goes to the recovery, list to the run's file, duplicate and unproven are recorded and not listed.</summary>
     private void TriageOf(FlowInstance instance)
     {
-        var course = instance.Output?["course"]?.GetValue<string>();
+        var course = CourseOf(instance);
 
         switch (course)
         {
@@ -2499,55 +2574,58 @@ public sealed class FlowCoordinator
                 ListIssue(instance);
                 break;
             case "duplicate":
-                _tally.Add(new PreExistingTally(
-                    instance.Output?["of"]?.GetValue<string>() is { } of ? $"duplicate of {of}" : "duplicate",
-                    TitleOf(instance)));
+                _tally.Add(SettledTally(instance, "duplicate"));
                 break;
             case "unproven":
                 // A claim no one could prove is never shown to a person as a fact: the triage instance's own record
                 // keeps why, and nothing is listed.
-                _tally.Add(new PreExistingTally("unproven", TitleOf(instance)));
+                _tally.Add(SettledTally(instance, "unproven"));
                 break;
+            default:
+                // Read before the step ended (TriageRefusal): an answer with no course the engine takes failed it.
+                throw new InvalidOperationException($"'{instance.Id}' ended done with the course '{course}', which its ending refuses.");
         }
     }
 
     /// <summary>The issue a triage instance was raised for, as the tally names it.</summary>
     private static string TitleOf(FlowInstance instance)
-        => instance.Issue?.Title ?? instance.Output?["title"]?.GetValue<string>() ?? "an issue";
+        => instance.Issue?.Title ?? TextOf(instance.Output?["title"]) ?? "an issue";
 
     /// <summary>Where the issue a triage instance was raised for is, as the tally names it.</summary>
     private static string WhereOf(FlowInstance instance)
-        => instance.Issue?.Where ?? instance.Output?["where"]?.GetValue<string>() ?? string.Empty;
+        => instance.Issue?.Where ?? string.Join(", ", (instance.Output?["where"] as JsonArray ?? []).Select(TextOf).OfType<string>());
 
-    /// <summary>Adds the issue a triage instance answered <c>list</c> for to the run's list, proven: the run's own file, whole, in the one order.</summary>
-    private void ListIssue(FlowInstance instance)
+    /// <summary>
+    /// The issue a triage instance answered <c>list</c> for, as the run's file would hold it next: its quote or its
+    /// output cut by the one owner of the cut, the cut said.
+    /// </summary>
+    private PreExistingIssue IssueOf(FlowInstance instance)
     {
         var where = instance.Output?["where"] as JsonArray;
         var proof = instance.Output?["proof"] as JsonObject;
-        var issue = new PreExistingIssue(
+
+        return new PreExistingIssue(
             $"pe-{(_issues.Count + 1).ToString(System.Globalization.CultureInfo.InvariantCulture)}",
-            instance.Output?["title"]?.GetValue<string>() ?? instance.Issue?.Title ?? "an issue",
-            instance.Output?["description"]?.GetValue<string>() ?? instance.Issue?.Description ?? string.Empty,
-            [.. (where ?? []).Select(path => path?.GetValue<string>() ?? instance.Issue?.Where ?? string.Empty)],
+            TextOf(instance.Output?["title"]) ?? instance.Issue?.Title ?? "an issue",
+            TextOf(instance.Output?["description"]) ?? instance.Issue?.Description ?? string.Empty,
+            [.. (where ?? []).Select(path => TextOf(path) ?? instance.Issue?.Where ?? string.Empty)],
             new PreExistingProof(
-                proof?["kind"]?.GetValue<string>() ?? "read",
-                proof?["at"]?.GetValue<string>() ?? string.Empty,
-                proof?["file"]?.GetValue<string>(),
-                proof?["lines"]?.GetValue<string>(),
-                proof?["quote"]?.GetValue<string>(),
-                proof?["command"]?.GetValue<string>(),
-                proof?["output"]?.GetValue<string>()),
-            instance.Output?["why"]?.GetValue<string>() ?? "none of the three: not related to the work, not critical, and in no step's way",
+                TextOf(proof?["kind"]) ?? "read",
+                TextOf(proof?["at"]) ?? string.Empty,
+                TextOf(proof?["file"]),
+                TextOf(proof?["lines"]),
+                TextOf(proof?["quote"]) is { } quote ? PreExistingIssuesWriter.Cut(quote) : null,
+                TextOf(proof?["command"]),
+                TextOf(proof?["output"]) is { } output ? PreExistingIssuesWriter.Cut(output) : null),
+            TextOf(instance.Output?["why"]) ?? "none of the three: not related to the work, not critical, and in no step's way",
             instance.RaisedBy?.Id ?? instance.Id,
             _clock.GetUtcNow());
+    }
 
-        if (issue.Problem() is { } problem)
-        {
-            End(instance, FlowInstanceState.Failed, HarnessExit.ConfigInvalid, $"its answer's issue does not read back: {problem}");
-            HandleFailure(instance);
-            return;
-        }
-
+    /// <summary>Adds the issue a triage instance answered <c>list</c> for to the run's list, proven: the run's own file, whole, in the one order. Its answer was read back before the step ended (<see cref="TriageRefusal"/>).</summary>
+    private void ListIssue(FlowInstance instance)
+    {
+        var issue = IssueOf(instance);
         _issues.Add(issue);
         _tally.Add(new PreExistingTally("listed", $"{issue.Title} ({string.Join(", ", issue.Where)})"));
         _records?.PreExisting(_issues, _clock.GetUtcNow());
@@ -3562,6 +3640,13 @@ public sealed class FlowCoordinator
         instance.Exit ??= exit;
         instance.Error ??= error;
         instance.FinishedAt ??= _clock.GetUtcNow();
+
+        if (state is FlowInstanceState.Done or FlowInstanceState.Skipped or FlowInstanceState.NotRun)
+        {
+            // A done attempt was given its handoff, and a visit that will not run again has no use for one. A failed
+            // one keeps it, for the retry that may follow is given it, as a stopped one is at the resume.
+            instance.Handoff = null;
+        }
         Release(instance);
         instance.Stoppable?.Dispose();
         instance.Stoppable = null;
@@ -3961,6 +4046,10 @@ public sealed class FlowCoordinator
                 _ = _wakes.RemoveAll(wake => ReferenceEquals(wake.Instance, message.Instance));
                 Complete(message.Instance, result);
             }
+            else if (message.HandoffTaken)
+            {
+                TakeHandoff(message.Instance);
+            }
             else if (message.Leg is { } leg)
             {
                 TakeEvent(message.Instance, leg);
@@ -3973,6 +4062,21 @@ public sealed class FlowCoordinator
                 _spent.Tokens += usage.Tokens;
             }
         }
+    }
+
+    /// <summary>
+    /// The runner says the prompt that holds this attempt's handoff is written: the handoff is spent, and the step's
+    /// record says it holds none - so its file goes only once the prompt is on disk.
+    /// </summary>
+    private void TakeHandoff(FlowInstance instance)
+    {
+        if (instance.State is not FlowInstanceState.Running || instance.Handoff is null)
+        {
+            return;
+        }
+
+        instance.Handoff = null;
+        Record(FlowChangeKind.Step, instance, from: instance.State, to: instance.State, attempt: instance.Attempt, detail: "its handoff is in its prompt");
     }
 
     /// <summary>Reads one event of a running step's legs: where each works, that every one is placed, when each copy is made, when each one's work in the tree itself has ended.</summary>
@@ -5014,7 +5118,7 @@ public sealed class FlowCoordinator
 
             foreach (var triage in _created.Where(created => created.Step.Raised == WorkflowStep.RaisedByPreExisting))
             {
-                var course = triage.Output?["course"]?.GetValue<string>();
+                var course = CourseOf(triage);
 
                 if (course is "fix")
                 {
@@ -5024,9 +5128,7 @@ public sealed class FlowCoordinator
                 }
                 else if (course is "duplicate" or "unproven")
                 {
-                    _tally.Add(new PreExistingTally(
-                        course == "duplicate" && triage.Output?["of"]?.GetValue<string>() is { } of ? $"duplicate of {of}" : course!,
-                        TitleOf(triage)));
+                    _tally.Add(SettledTally(triage, course));
                 }
             }
 
@@ -5116,7 +5218,7 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>One thing the coordinator learns while it waits: a step's ending, or an event of one of its legs.</summary>
-    private readonly record struct Message(FlowInstance Instance, FlowStepResult? Result, FlowLegEvent? Leg, (double Usd, long Tokens)? Usage = null, int Attempt = 0, (string Question, string Answer, string? Text, string? Through, TaskCompletionSource<bool> Completion)? Offered = null);
+    private readonly record struct Message(FlowInstance Instance, FlowStepResult? Result, FlowLegEvent? Leg, (double Usd, long Tokens)? Usage = null, int Attempt = 0, (string Question, string Answer, string? Text, string? Through, TaskCompletionSource<bool> Completion)? Offered = null, bool HandoffTaken = false);
 
     /// <summary>
     /// Offers an answer to a running session from outside it - taken from the run's inbox while the engine runs, by
@@ -5196,6 +5298,10 @@ public sealed class FlowCoordinator
         /// <inheritdoc/>
         public void Used(long tokens, double usd)
             => _ = coordinator._messages.Writer.TryWrite(new Message(instance, null, null, (usd, tokens), attempt));
+
+        /// <inheritdoc/>
+        public void HandoffTaken()
+            => _ = coordinator._messages.Writer.TryWrite(new Message(instance, null, null, Attempt: attempt, HandoffTaken: true));
     }
 }
 

@@ -107,6 +107,13 @@ public interface IFlowRunEvents
     /// <param name="tokens">The tokens the clients report: input, cache write, cache read and output.</param>
     /// <param name="usd">What they cost, at the prices the configuration gives each model.</param>
     void Used(long tokens, double usd);
+
+    /// <summary>
+    /// The prompt that holds this attempt's <see cref="FlowStepRun.Handoff"/> is written: the handoff is spent, and its
+    /// file goes. Until it is said - or the attempt ends done - the step keeps it, so a crash between the two leaves it
+    /// in one place or the other and never in neither.
+    /// </summary>
+    void HandoffTaken();
 }
 
 /// <summary>

@@ -1266,8 +1266,12 @@ a fix to a declared `recover`, and names no triage of its own, which would be it
 where a workflow has one, every other reasoning step names it. Its agent reproduces the issue on the
 base commit and answers `fix` (in a step's way, related to the work, or critical: given to the
 recovery, the step it was in the way of running again after), `list` (added, proven, to the run's
-`pre-existing-issues.json`, shown in the pull request's body and the handoff), `duplicate` or
-`unproven`. The engine raises it and keeps the list - though until the reasoning step runner lands no step reports an issue; `issue` is read only by the triage and the recovery, and `source` by them and by a handler.
+`pre-existing-issues.json`, shown in the pull request's body and the handoff, a quote or an output
+cut to 4,000 characters, the cut said), `duplicate` (naming in `duplicates` the listed issue it
+repeats) or `unproven`; an answer whose course is none of the four, or whose issue to list does not
+read back, fails the triage step (12) before it ends. The engine raises it and keeps the list -
+though until the reasoning step runner lands no step reports an issue; `issue` is read only by the
+triage and the recovery, and `source` by them and by a handler.
 
 `validate-workflow` checks a declared workflow, or every one declared: the file's shape, every key
 against the table that owns it (`WorkflowStepTypes`, which the parser reads exactly and `help

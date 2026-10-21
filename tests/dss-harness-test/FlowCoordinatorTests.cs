@@ -1636,6 +1636,40 @@ public sealed class FlowCoordinatorTests
     }
 
     /// <summary>
+    /// A runner that refuses the step with a code of its own ends it with that code and its message; anything else it
+    /// throws is the engine's own fault, and ends the step 70.
+    /// </summary>
+    [Fact]
+    public async Task ARunnersOwnRefusal_EndsTheStepWithItsCode_AndAnythingElseWith70()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: refused
+                type: orient
+                onFailure: continue
+              - name: broken
+                type: orient
+                onFailure: continue
+            """);
+        var runner = new FakeRunner()
+            .OnAsync("refused", _ => Task.FromException<FlowStepResult>(new HarnessException(HarnessExit.ConfigInvalid, "its runner refused the step's config")))
+            .OnAsync("broken", _ => Task.FromException<FlowStepResult>(new InvalidOperationException("the runner broke")));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        _ = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        var refused = coordinator.Instances["refused"];
+        Assert.Equal(FlowInstanceState.Failed, refused.State);
+        Assert.Equal(HarnessExit.ConfigInvalid, refused.Exit);
+        Assert.Equal("its runner refused the step's config", refused.Error);
+        var broken = coordinator.Instances["broken"];
+        Assert.Equal(FlowInstanceState.Failed, broken.State);
+        Assert.Equal(HarnessExit.InternalError, broken.Exit);
+        Assert.Equal("the runner broke", broken.Error);
+    }
+
+    /// <summary>
     /// A failure a handler took leaves the run done for the always steps that read it - done is a run whose every
     /// failure was passed over or handled - and <c>run.name</c> reads the name the run was given.
     /// </summary>

@@ -944,6 +944,39 @@ public sealed class FlowHandlerTests
         }
     }
 
+    /// <summary>A leftover that cannot be read fails its repeat as an unreadable until does: what a loop left is never dropped unsaid.</summary>
+    [Fact]
+    public async Task AnUnreadableLeftover_FailsItsRepeat_AsAnUnreadableUntilDoes()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: loop
+                onFailure: continue
+                repeat:
+                  until: review.passed
+                  rounds: 1
+                  blocking: review.blocking
+                  leftover: nowhere.left
+                steps:
+                  - name: review
+                    type: orient
+            """);
+        var runner = new FakeRunner().On("review", FlowStepResult.Ended(
+            passed: true,
+            HarnessExit.Success,
+            output: Output("""{"passed": false, "blocking": false}""")));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        _ = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        var loop = coordinator.Instances["loop"];
+        Assert.Equal(FlowInstanceState.Failed, loop.State);
+        Assert.Equal(HarnessExit.ConfigInvalid, loop.Exit);
+        Assert.StartsWith("expression 'leftover' of 'loop#1': ", loop.Error, StringComparison.Ordinal);
+        Assert.Null(loop.Leftover);
+    }
+
     /// <summary>A repeat bound by rounds runs its first rounds on until alone; past them, a false blocking ends it with no question and its leftover said.</summary>
     [Fact]
     public async Task ARoundsRepeatEndsWhereBlockingReadsFalse_WithItsLeftoverSaid()
