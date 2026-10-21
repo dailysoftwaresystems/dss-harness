@@ -782,6 +782,53 @@ public sealed class FlowPauseTests
         Assert.Contains("report", runner.Started);
     }
 
+    /// <summary>
+    /// An always step a pause stopped in one session's always phase waits for the next session's always phase: the
+    /// work the answer freed runs first, and the always step runs after it, once - never at the session's start.
+    /// </summary>
+    [Fact]
+    public async Task AnAlwaysStepThePauseStopped_RunsInTheNextSessionsAlwaysPhase_AfterTheRest()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: notes
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                always: true
+              - name: approve
+                type: pause
+                question: go on?
+                options: [go]
+              - name: work
+                type: orient
+                dependsOn: [approve]
+            """);
+        var runner = new FakeRunner();
+        var notes = runner.Hold("notes");
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        // The question leaves the rest quiescent: the always phase begins, and the pause stops notes in it.
+        var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
+        await runner.StartedAsync("notes").WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        coordinator.RequestPause("command");
+        var paused = await session.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Paused, paused.Status);
+        Assert.Equal(FlowInstanceState.Stopped, coordinator.Instances["notes"].State);
+        notes.Done();
+
+        var asked = Assert.Single(coordinator.OpenQuestions);
+        Assert.True(coordinator.TryAnswer(asked.Id, "go", out _));
+
+        var resumed = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Done, resumed.Status);
+        Assert.Equal(["notes", "work", "notes"], runner.Started);
+        Assert.Equal(2, coordinator.Instances["notes"].Attempt);
+    }
+
     /// <summary>A machine step the pause left running that ends incomplete with retries left is stopped where it stands, and runs again at the resume.</summary>
     [Fact]
     public async Task ALeftRunningStepThatEndsIncomplete_IsStoppedAndRunsAgainAtTheResume()

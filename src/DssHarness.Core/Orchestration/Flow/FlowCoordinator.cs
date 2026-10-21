@@ -2409,6 +2409,7 @@ public sealed class FlowCoordinator
     /// <summary>
     /// What keeps <paramref name="instance"/> from starting before any claim or limit is asked: a hard stop or a pause
     /// under way (it runs at the resume; in a pause's always phase only an always step that is a machine step starts),
+    /// an always step before the session's always phase (one carried into this session as well as one drawn in it),
     /// a stopping run (only always steps start), a pending redirect that will reset it, or a dependency it still waits
     /// on. Empty where nothing does.
     /// </summary>
@@ -2417,6 +2418,13 @@ public sealed class FlowCoordinator
         if (_hardStop || _pausing && (!_alwaysPhase || !instance.IsAlways || instance.Step.Type == "reason"))
         {
             return ["resume"];
+        }
+
+        if (instance.IsAlways && !_alwaysPhase)
+        {
+            // The always steps run once the rest is quiescent: one a pause stopped in the last session's always phase
+            // waits for this one's, as the ones this session draws do.
+            return ["always"];
         }
 
         if (_stopping && !instance.IsAlways)
@@ -4220,9 +4228,11 @@ public sealed class FlowCoordinator
             return false;
         }
 
+        // What the phase starts: the always steps not drawn yet, and those carried into this session waiting to start.
         var pending = _scopes
             .SelectMany(scope => DeclarationsOf(scope).Where(declaration => !scope.Instantiated.Contains(declaration.Name)).Select(declaration => (scope, declaration)))
-            .Count(entry => IsAlways(entry.declaration, entry.scope));
+            .Count(entry => IsAlways(entry.declaration, entry.scope))
+            + _created.Count(instance => instance.IsAlways && instance.State is FlowInstanceState.NotStarted);
 
         if (pending == 0)
         {
