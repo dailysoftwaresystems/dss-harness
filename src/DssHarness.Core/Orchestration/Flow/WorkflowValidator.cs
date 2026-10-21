@@ -1399,9 +1399,14 @@ public static class WorkflowValidator
                 _problems.Add($"{where} answers '{kind}' with {answer.Answer} and no times: say how many times, from 1 to 20");
             }
 
-            if (answer.Answer == "skip" && owner?.Step.Skippable is not true)
+            if (answer.Answer == "skip" || answer.Then == "skip")
             {
-                _problems.Add($"{where} answers '{kind}' with skip, and {(owner is null ? "the workflow is" : $"'{owner.Path}' is")} no skippable step; skip ends a step skipped only where it says skippable");
+                // skip is offered only where the step is skippable, so the engine gives it nowhere else: every step this
+                // answer would answer - the nearest answers that name the kind - must be one.
+                foreach (var answered in Answered(owner, kind, raises).Where(answered => answered.Step.Skippable is not true))
+                {
+                    _problems.Add($"{where} answers '{kind}' {(answer.Answer == "skip" ? "with skip" : "then skip")}, and '{answered.Path}' is no skippable step; skip ends a step skipped only where it says skippable");
+                }
             }
 
             if (answer.Times is not null)
@@ -1437,6 +1442,31 @@ public static class WorkflowValidator
             => _entries.Any(entry => !ReferenceEquals(entry, _recover)
                 && (owner is null || ReferenceEquals(entry, owner) || owner.Owns(entry))
                 && raises(entry.Step, EffectiveOnFailure(entry)?.Policy));
+
+        /// <summary>
+        /// The steps an answer written at <paramref name="owner"/> answers, as the engine finds the nearest <c>answers</c>
+        /// that names the kind: each step that raises it - the owner itself, a step in it, any step for the workflow's own -
+        /// with no answers of its own, or of a group between it and the owner, that name the kind first.
+        /// </summary>
+        private IEnumerable<Entry> Answered(Entry? owner, string kind, Func<WorkflowStep, string?, bool>? raises)
+            => _entries.Where(entry => !ReferenceEquals(entry, _recover)
+                && (owner is null || ReferenceEquals(entry, owner) || owner.Owns(entry))
+                && (raises is null || raises(entry.Step, EffectiveOnFailure(entry)?.Policy))
+                && !AnsweredNearer(entry, owner, kind));
+
+        /// <summary>Whether <paramref name="entry"/>, or a group around it inside <paramref name="owner"/>, names the kind in answers of its own, which the engine reads first.</summary>
+        private static bool AnsweredNearer(Entry entry, Entry? owner, string kind)
+        {
+            for (var at = entry; at is not null && !ReferenceEquals(at, owner); at = at.Parent)
+            {
+                if (at.Step.Answers.ContainsKey(kind))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
 
         /// <summary>Checks every template key of one typed step, against the step's own place in the flow.</summary>
         private void Templates(Entry entry, WorkflowStepTypes.StepType type)

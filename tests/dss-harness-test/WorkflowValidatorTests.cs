@@ -2426,6 +2426,65 @@ public sealed class WorkflowValidatorTests
     }
 
     /// <summary>
+    /// skip - as the answer, or as the then given once the counted answers are spent - is refused wherever it would answer
+    /// a step that is not skippable: the step it is written on, or, written on a group or the workflow, each step in it
+    /// that raises the kind and has no nearer answer of its own. Where every step it answers is skippable it stands.
+    /// </summary>
+    [Fact]
+    public void ASkipAnswerOrThen_ThatWouldAnswerAStepNotSkippable_IsRefused()
+    {
+        var problems = Problems(
+            """
+            name: default
+            answers:
+              contextLimit: skip
+            steps:
+              - name: alone
+                type: reason
+                agent: thinker
+                prompt: prompts/think.md
+                outputs: schemas/think.json
+                answers:
+                  turnLimit:
+                    answer: retry
+                    times: 2
+                    then: skip
+              - name: group
+                answers:
+                  truncated: skip
+                steps:
+                  - name: free
+                    type: reason
+                    agent: thinker
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                    skippable: true
+                  - name: held
+                    type: reason
+                    agent: thinker
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                  - name: own
+                    type: reason
+                    agent: thinker
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                    answers:
+                      truncated: fail
+                      contextLimit: fail
+            """);
+
+        Assert.Equal(
+            [
+                "the workflow answers 'contextLimit' with skip, and 'alone' is no skippable step; skip ends a step skipped only where it says skippable",
+                "the workflow answers 'contextLimit' with skip, and 'group.held' is no skippable step; skip ends a step skipped only where it says skippable",
+                "step 'alone' answers 'turnLimit' then skip, and 'alone' is no skippable step; skip ends a step skipped only where it says skippable",
+                "group 'group' answers 'truncated' with skip, and 'group.held' is no skippable step; skip ends a step skipped only where it says skippable",
+            ],
+            problems);
+    }
+
+    /// <summary>
     /// An answer given beforehand is to a question its step can raise - on a group, one some step in it raises, and on
     /// the workflow one some step of it raises - since one to a question nothing raises would be read by nothing; and an
     /// answer after which the same question can come again says how many times it is given.

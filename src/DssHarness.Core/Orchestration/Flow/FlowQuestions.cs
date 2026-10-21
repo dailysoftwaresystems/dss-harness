@@ -109,6 +109,15 @@ public static class FlowQuestions
     }
 
     /// <summary>
+    /// Whether a question of <paramref name="kind"/> asks of an ending that has already happened - a handler at its bound,
+    /// the recovery at its bound, a redirect that would leave an agent open - rather than of work a step still has to do.
+    /// The step it is about keeps the state it ended in while the question is open, and what depends on it waits on the
+    /// answer; a step whose work asks is <see cref="FlowInstanceState.Paused"/> instead.
+    /// </summary>
+    public static bool AsksOfAnEnding(string kind)
+        => kind is "visitBound" or "recoveryBound" or "openAgents";
+
+    /// <summary>
     /// What a <c>fail</c> answer ends a step of <paramref name="kind"/> with: the code the table of codes gives it -
     /// 13 for the fold family, 20 for a reason step's limit, 2 where no check ran and 21 where checks were still
     /// running or ended unsettled - with the question's own text as its error.

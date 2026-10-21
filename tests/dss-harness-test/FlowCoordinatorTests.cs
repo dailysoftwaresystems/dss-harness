@@ -1901,6 +1901,87 @@ public sealed class FlowCoordinatorTests
     }
 
     /// <summary>
+    /// retry, answered to a group's failure, runs the group again: a new visit of it, opened whole with fresh members,
+    /// and what depends on it runs once it ends - never a group left NotStarted that nothing opens.
+    /// </summary>
+    [Fact]
+    public async Task ARetryOfAGroupsFailure_OpensTheGroupAgain_AsANewVisit()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: work
+                onFailure: pause
+                steps:
+                  - name: gate
+                    type: build
+              - name: after
+                type: orient
+                dependsOn: [work]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var gates = 0;
+        var runner = new FakeRunner().On("gate", _ => ++gates == 1
+            ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "a leg failed")
+            : FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        var asked = Assert.Single(coordinator.OpenQuestions);
+        Assert.Equal("work", asked.Instance);
+        Assert.True(coordinator.TryAnswer(asked.Id, "retry", out _));
+
+        end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(["work.gate", "work+2.gate", "after"], runner.Started);
+        Assert.Equal(FlowInstanceState.Failed, coordinator.Instances["work"].State);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["work+2"].State);
+        Assert.Equal(2, coordinator.Instances["work+2"].Visit);
+    }
+
+    /// <summary>retry, after a when that could not be read, reads the when again: the step is never run past a when nobody read.</summary>
+    [Fact]
+    public async Task ARetryAfterAnUnreadableWhen_ReadsTheWhenAgain()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: plan
+                type: orient
+              - name: gated
+                type: orient
+                dependsOn: [plan]
+                when: plan.go
+                onFailure: pause
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+
+        // plan writes nothing named go: the when reads nothing, every time.
+        var runner = new FakeRunner().On("plan", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"other": true}""")));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        var first = Assert.Single(coordinator.OpenQuestions);
+        Assert.True(coordinator.TryAnswer(first.Id, "retry", out _));
+
+        end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        // The retried attempt read its when again, which still reads nothing: it failed again and asks again, unrun.
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        var second = Assert.Single(coordinator.OpenQuestions);
+        Assert.NotEqual(first.Id, second.Id);
+        var gated = coordinator.Instances["gated"];
+        Assert.Equal(2, gated.Attempt);
+        Assert.Equal(HarnessExit.ConfigInvalid, gated.Exit);
+        Assert.Equal(["plan"], runner.Started);
+    }
+
+    /// <summary>
     /// A step nothing left in the run can free fails as any step does, so its own onFailure decides: under pause the
     /// session ends on its question, and what depends on it waits rather than being dropped unlisted.
     /// </summary>

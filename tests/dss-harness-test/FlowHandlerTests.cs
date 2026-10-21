@@ -487,18 +487,124 @@ public sealed class FlowHandlerTests
 
         var first = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
-        // The handler sends the run back past the group it lives in, and the agent made in it is still open.
+        // The handler sends the run back past the group it lives in, and the agent made in it is still open. The
+        // question is of the handler's ending: the handler stays done while it is open.
         Assert.Equal(FlowRunStatus.Paused, first.Status);
         var asked = AssertSingle(coordinator.OpenQuestions, question => question.Kind == "openAgents");
         Assert.Equal("'fix' would go back to 'plan', and agents 'a3', made since, are still open", asked.Problem);
         Assert.Equal(["retry", "stay", "abort"], asked.Options);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["round.fix"].State);
+        Assert.Equal(asked.Id, coordinator.Instances["round.fix"].WaitingQuestion);
+        Assert.Equal(FlowInstanceState.Running, coordinator.Instances["round"].State);
 
         Assert.True(coordinator.TryAnswer(asked.Id, "stay", out _));
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
-        // The redirect is given up: the run goes on as if the handler named no then, and the source's failure counts as handled.
+        // The redirect is given up: the run goes on as if the handler named no then, the source's failure counts as
+        // handled, and the group ends over its done handler.
         Assert.Equal(FlowRunStatus.Done, end.Status);
         Assert.Equal("fix", coordinator.Instances["round.check"].HandledBy);
+        Assert.Equal("done; 1 failure was handled: check, by fix", end.Summary);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["round.fix"].State);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["round"].State);
+    }
+
+    /// <summary>
+    /// A handler at its bound after a success asks of the source's ending and leaves it as it ended: done. accept takes
+    /// the success as it stands without that handler - the others it fits are raised; fail fails the source with the
+    /// question's words, and its own onFailure decides.
+    /// </summary>
+    [Fact]
+    public async Task AVisitBoundAfterASuccess_LeavesTheSourceDone_AcceptGoesOn_FailFailsIt()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: build
+                type: orient
+              - name: tell
+                type: orient
+                on: {step: build, outcome: success}
+                maxVisits: 1
+                then: build
+              - name: note
+                type: orient
+                on: {step: build, outcome: success}
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner();
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        // build, tell sending the run back, build again - and tell at its bound asks of that ending.
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        var asked = AssertSingle(coordinator.OpenQuestions, question => question.Kind == "visitBound");
+        Assert.Equal("build+2", asked.Instance);
+        Assert.Equal("'tell' has answered 'build' 1 times, and 'build' ended done again", asked.Problem);
+        var again = coordinator.Instances["build+2"];
+        Assert.Equal(FlowInstanceState.Done, again.State);
+        Assert.Equal(asked.Id, again.WaitingQuestion);
+        Assert.Equal(["build", "tell", "note", "build+2"], runner.Started);
+
+        Assert.True(coordinator.TryAnswer(asked.Id, "accept", out _));
+        end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal("done", end.Summary);
+        Assert.Equal(FlowInstanceState.Done, again.State);
+        Assert.Null(again.WaitingQuestion);
+        Assert.DoesNotContain(coordinator.Instances.Values, instance => instance.HandledBy is not null);
+        Assert.Equal(["build", "tell", "note", "build+2", "note+2"], runner.Started);
+
+        var failing = new FlowCoordinator(definition, new FakeRunner(), new RunnerFacts(), new JumpingClock());
+        _ = await failing.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        var bound = AssertSingle(failing.OpenQuestions, question => question.Kind == "visitBound");
+        Assert.True(failing.TryAnswer(bound.Id, "fail", out _));
+
+        end = await failing.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        var failed = failing.Instances["build+2"];
+        Assert.Equal(FlowInstanceState.Failed, failed.State);
+        Assert.Equal("visitBound", failed.EndedByQuestion);
+        Assert.Equal(HarnessExit.CommandFailed, failed.Exit);
+        Assert.Equal(bound.Problem, failed.Error);
+        Assert.Equal(FlowRunStatus.Failed, end.Status);
+        Assert.Equal(["build+2"], end.Failed);
+    }
+
+    /// <summary>A handler's bound counts the visits it was raised for, never the place-holder a pass-by leaves: a handler never raised is raised, not asked about.</summary>
+    [Fact]
+    public async Task TheVisitBound_CountsTheVisitsRaised_NotAHandlerPassedBy()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: check
+                type: orient
+              - name: again
+                type: orient
+                on: {step: check, outcome: success}
+                maxVisits: 1
+                then: check
+              - name: fix
+                type: orient
+                on: {step: check, outcome: failure}
+                maxVisits: 1
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+
+        // The first visit passes - fix is passed by - and the second fails, which fix has never answered.
+        var runner = new FakeRunner().On("check", run => run.Visit == 1
+            ? FlowStepResult.Ended(passed: true, HarnessExit.Success)
+            : FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Empty(coordinator.OpenQuestions);
+        Assert.Equal(["check", "again", "check+2", "fix+2"], runner.Started);
+        Assert.Equal(FlowRunStatus.Done, end.Status);
         Assert.Equal("done; 1 failure was handled: check, by fix", end.Summary);
     }
 

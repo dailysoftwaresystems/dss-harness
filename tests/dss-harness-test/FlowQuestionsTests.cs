@@ -360,6 +360,67 @@ public sealed class FlowQuestionsTests
         Assert.Empty(question.Given);
     }
 
+    /// <summary>
+    /// A configured answer is given only where the question offers it: a then of skip, on a step that is not skippable,
+    /// is no answer the question takes, so a person is asked - the step is never ended skipped against its own word.
+    /// </summary>
+    [Fact]
+    public async Task AConfiguredAnswerTheQuestionDoesNotOffer_IsAskedOfAPerson()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                answers:
+                  turnLimit:
+                    answer: retry
+                    times: 1
+                    then: skip
+              - name: after
+                type: orient
+                dependsOn: [think]
+            """);
+        var runner = new FakeRunner().On("think", FlowStepResult.AtLimit("turns", "12 turns"));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        // The counted retry was given once; the then is no answer of this question, so it is open for a person.
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        var asked = Assert.Single(coordinator.OpenQuestions);
+        Assert.Equal("turnLimit", asked.Kind);
+        Assert.Empty(asked.Given);
+        Assert.Equal(FlowInstanceState.Paused, coordinator.Instances["think"].State);
+        Assert.Equal(["think", "think"], runner.Started);
+        Assert.False(coordinator.Instances.ContainsKey("after"));
+    }
+
+    /// <summary>A pause step answered with no text holds an empty text, as the plan says: a prompt that reads it reads nothing, never "null".</summary>
+    [Fact]
+    public async Task APauseAnsweredWithNoText_HoldsAnEmptyText()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: approval
+                type: pause
+                question: may it go ahead?
+                options: [approve, revise]
+            """);
+        var coordinator = new FlowCoordinator(definition, new FakeRunner(), new RunnerFacts(), new JumpingClock());
+
+        await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "approve", out _));
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(string.Empty, coordinator.Instances["approval"].Output!["text"]!.GetValue<string>());
+    }
+
     /// <summary>A fail answer ends the step failed with the question's text, its kind as its question fact, and the code the table of codes gives.</summary>
     [Fact]
     public async Task AFailAnswerEndsTheStepFailed_WithItsKindAndCode_AndTheOnFailureDecides()

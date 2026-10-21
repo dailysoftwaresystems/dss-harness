@@ -227,6 +227,49 @@ public sealed class FlowRecoverTests
         Assert.Equal("recover", asked.Instance);
     }
 
+    /// <summary>
+    /// retry, answered to the failure of the recovery's own work, runs the recovery again for the same failure: its next
+    /// visit, and once it is done the failed step runs again - never a recovery left stranded.
+    /// </summary>
+    [Fact]
+    public async Task ARetryOfTheRecoverysOwnFailure_RunsTheRecoveryAgain_AndThenTheFailedStep()
+    {
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: mend
+                  type: orient
+            steps:
+              - name: build
+                type: orient
+                onFailure: recover
+            """);
+        var runner = new FakeRunner()
+            .On("build", asked => asked == 1
+                ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)")
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success))
+            .On("mend", asked => asked == 1
+                ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "the remedy stayed red")
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        var asked = One(coordinator.OpenQuestions, question => question.Kind == "failure");
+        Assert.True(coordinator.TryAnswer(asked.Id, "retry", out _));
+
+        end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(["build", "recover.mend", "recover+2.mend", "build+2"], runner.Started);
+        Assert.Equal(2, coordinator.Instances["recover+2"].Visit);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["build+2"].State);
+    }
+
     /// <summary>A failure of the recovery's own work ends the run where its onFailure says stop.</summary>
     [Fact]
     public async Task AFailureOfTheRecoverysOwnWork_EndsTheRunWhereItsOnFailureSaysStop()
