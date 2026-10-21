@@ -1473,7 +1473,11 @@ step that never ended, nor one its scope never drew. What the session's start wr
 order made and each with the run as it stood, until it is known the session goes on: a resume beside
 an open question is refused only where nothing can run until a question is answered, and then it has
 written nothing - no event, no attempt, no state; a session an answer began, and one whose budget
-question is open, are never refused, and end paused on the question left.
+question is open, are never refused, and end paused on the question left. A stop asked between
+sessions - `abort` answered with no engine running the run - ends the session it begins where the run
+stands, stopped, as a stop in a session ends it: nothing it found stopped runs again or is given the
+engine's handoff in place of its own, nothing owed is made and nothing starts; the session after it
+goes on with all of it.
 
 Each session ends however it ends with the run's report (`report.md`, `report.json`), its owner
 released in a `finally`, its line in the run's log, and every record it wrote named in text and in

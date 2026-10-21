@@ -187,6 +187,79 @@ public sealed class FlowResumeTests
     }
 
     /// <summary>
+    /// A stop asked between sessions - abort answered with no engine running the run - ends the session it begins where
+    /// the run stands, stopped, as a stop in a session ends it: what a pause stopped stays stopped with the agent's own
+    /// account, its attempt as it was, no handoff of the engine's in its place, the abort's question open again - and the
+    /// session after it goes on with all of it.
+    /// </summary>
+    [Fact]
+    public async Task AStopAskedBetweenSessions_EndsWhereTheRunStands_NothingRunAgain()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: asker
+                type: pause
+                question: which way?
+                options: [left, right]
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+            """);
+        var first = new Runner().HandsOff("think", "what the agent did").Hold("think");
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var watched = new Watched(records);
+            var coordinator = new FlowCoordinator(definition, first, new RunnerFacts(), records: watched);
+            var session = coordinator.RunAsync(Token);
+            await first.StartedAsync("think").WaitAsync(Bound, Token);
+            await watched.SeenAsync(snapshot => snapshot.WaitingOn.Count == 1).WaitAsync(Bound, Token);
+            coordinator.RequestPause("command");
+
+            Assert.Equal(FlowRunStatus.Paused, (await session.WaitAsync(Bound, Token)).Status);
+        }
+
+        var thinkBefore = File.ReadAllText(layout.StepRecordFile("think"));
+        var aborted = new Runner();
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var coordinator = new FlowCoordinator(definition, aborted, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+
+            Assert.True(coordinator.TryAnswer("q1", "abort", out var problem), problem);
+
+            var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+
+            Assert.Equal(FlowRunStatus.Stopped, end.Status);
+            Assert.Empty(aborted.Started);
+            Assert.Equal(FlowInstanceState.Stopped, coordinator.Instances["think"].State);
+            Assert.Equal(1, coordinator.Instances["think"].Attempt);
+            Assert.Equal(new FlowHandoff("what the agent did", "agent"), coordinator.Instances["think"].Handoff);
+            Assert.Equal(["q1"], coordinator.OpenQuestions.Select(question => question.Id));
+        }
+
+        Assert.Equal(thinkBefore, File.ReadAllText(layout.StepRecordFile("think")));
+
+        var next = new Runner();
+        var (_, _, last) = Records("r1", temp.Path, definition);
+
+        using (last)
+        {
+            var coordinator = new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: last);
+
+            Assert.Equal(FlowRunStatus.Paused, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+        }
+
+        Assert.Equal(["think"], next.Started);
+        Assert.Equal("what the agent did", next.Given[2]);
+    }
+
+    /// <summary>
     /// An agent's account an attempt still holds - an earlier pause wrote it, and no prompt holds it yet - is never
     /// written over by the engine: not by a later pause whose turn gives none, and not by the resume after a crash.
     /// Each next attempt is given the agent's account as it wrote it.

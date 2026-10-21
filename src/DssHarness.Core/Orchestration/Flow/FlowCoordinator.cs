@@ -746,114 +746,14 @@ public sealed class FlowCoordinator
                 }
             }
 
-            // What a pause or a stop stopped, runs again: a new attempt of its visit, as a retry is, its handoff
-            // spent. What the pause left owed - the policies of failures recorded while it recorded what it left
-            // running - is made now, at the resume, before anything else runs.
-            foreach (var stopped in _created.Where(instance => !instance.Step.IsGroup
-                    && (instance.State is FlowInstanceState.Stopped || instance.State is FlowInstanceState.Running && instance.FromResume)).ToList())
-            {
-                var was = stopped.State;
-
-                if (was is FlowInstanceState.Running)
-                {
-                    Release(stopped);
-                }
-
-                if (stopped.Step.Type == "reason" && stopped.Handoff is null)
-                {
-                    // The attempt before was cut off and left no handoff - a crash ended the engine, or a stop ended
-                    // the run - so the engine writes one, for the next attempt is told what the cut-off one had done,
-                    // on every client and after every kind of stop. One the attempt still held - an agent's account no
-                    // prompt holds yet - is never written over: the next attempt is given it.
-                    stopped.Handoff = FlowHandoff.ByEngine(
-                        was is FlowInstanceState.Running ? "the engine's process ended" : "the run was stopped",
-                        $"Attempt {stopped.Attempt.ToString(System.Globalization.CultureInfo.InvariantCulture)} was cut off.");
-                    Record(FlowChangeKind.Handoff, stopped, detail: stopped.Handoff.Why);
-                }
-
-                NewAttempt(stopped);
-                stopped.FromResume = false;
-                Record(FlowChangeKind.Step, stopped, from: was, to: FlowInstanceState.NotStarted, attempt: stopped.Attempt);
-            }
-
+            // A stop asked between sessions - an abort answered then - ends the session it begins where the run stands,
+            // as a stop in a session ends it: nothing it found stopped runs again or is given a handoff in place of its
+            // own, nothing owed is made, nothing starts. All of it stays as the records hold it, for the session that
+            // goes on.
             if (!stopPending)
             {
-                // A failure that ended the run - nothing handled it, its policy stopped the run - runs again, as a new
-                // attempt, as what a stop stopped does: the session it ended is over, and this one goes on where the run
-                // stood. A group runs again as a retry opens it, a new visit whole, its failed visit standing as it
-                // ended. One an answer fail ended stands, and the run stays stopped on it.
-                foreach (var failed in Standing(FlowFailure.EndedRun).Where(instance => instance.EndedByQuestion is null))
-                {
-                    if (failed.Step.IsGroup)
-                    {
-                        SetFailure(failed, null);
-                        Retry(failed);
-                        continue;
-                    }
-
-                    NewAttempt(failed);
-                    Record(FlowChangeKind.Step, failed, from: FlowInstanceState.Failed, to: FlowInstanceState.NotStarted, attempt: failed.Attempt);
-                }
-
-                _stopping = Standing(FlowFailure.EndedRun).Count > 0;
-
-                if (!_stopping)
-                {
-                    RedrawWhatTheStopLeft();
-                }
+                GoOnWhereTheRunStood();
             }
-
-            // The always steps run once per session, however the run went: those an earlier session ran are drawn
-            // again in this one's always phase, as new visits, the visits they had standing as they ended.
-            foreach (var scope in _scopes.Where(ScopeLive).ToList())
-            {
-                foreach (var declaration in DeclarationsOf(scope).Where(declaration => IsAlways(declaration, scope)))
-                {
-                    if (scope.Members.GetValueOrDefault(declaration.Name) is { State: FlowInstanceState.Done or FlowInstanceState.Failed or FlowInstanceState.Skipped or FlowInstanceState.NotRun })
-                    {
-                        _ = scope.Members.Remove(declaration.Name);
-                        _ = scope.Instantiated.Remove(declaration.Name);
-                    }
-                }
-            }
-
-            // What a pause left owed, its records say, and it is made now, before anything else runs: each failure
-            // recorded while the pause recorded what it left running - its handlers, its policy - and then each ending
-            // whose raise it found owed, save one whose question is open, which the answer makes.
-            foreach (var owed in Standing(FlowFailure.Owed))
-            {
-                HandleFailure(owed);
-            }
-
-            foreach (var owed in _created.Where(instance => instance.Step.On is null && instance.WaitingQuestion is null && instance._handlers.Any(handler => handler.State == "owed")).ToList())
-            {
-                if (owed.State == FlowInstanceState.Failed)
-                {
-                    HandleFailure(owed);
-                }
-                else if (owed.State == FlowInstanceState.Done)
-                {
-                    _ = RaiseFor(owed);
-                }
-            }
-
-            foreach (var pending in _pendingEndings.Values.Where(pending => pending.Handlers.All(Ended)).ToList())
-            {
-                // An ending whose handlers have all ended and that its record does not say settled: a crash came between
-                // the last handler's end and the source's record. It is settled now, as that end would have settled it.
-                SettleEnding(pending);
-            }
-
-            foreach (var reporter in _created.Where(instance => instance.IssuesOwed.Count > 0).ToList())
-            {
-                // The issues a step reported while nothing could be started - a pause or a stop under way, or a crash
-                // before their triage was raised - are owed in its own record, and their triage is raised now.
-                RaiseOwedIssues(reporter);
-            }
-
-            // An issue a triage answered fix for whose recovery was never raised - it waited behind a visit at work, or
-            // a crash came between the triage's end and the raise - is given to the recovery now, one at a time.
-            DrainPendingFixes();
 
             // The session is recorded where a run's records are: begun, or taken up from one another left.
             Record(
@@ -988,6 +888,121 @@ public sealed class FlowCoordinator
 
         _last = Finish();
         return _last;
+    }
+
+    /// <summary>
+    /// A session's start where the run goes on, made before anything runs: what a pause, a stop or a crash stopped runs
+    /// again as a new attempt, its handoff given; a failure that ended the run runs again, and what its stop left is
+    /// drawn again; the always steps are drawn for this session; and what the run owed is made - owed failures, endings
+    /// owed their handlers, endings whose handlers all ended, issues owed their triage, fixes owed the recovery.
+    /// </summary>
+    private void GoOnWhereTheRunStood()
+    {
+        // What a pause or a stop stopped, runs again: a new attempt of its visit, as a retry is, its handoff
+        // spent. What the pause left owed - the policies of failures recorded while it recorded what it left
+        // running - is made now, at the resume, before anything else runs.
+        foreach (var stopped in _created.Where(instance => !instance.Step.IsGroup
+                && (instance.State is FlowInstanceState.Stopped || instance.State is FlowInstanceState.Running && instance.FromResume)).ToList())
+        {
+            var was = stopped.State;
+
+            if (was is FlowInstanceState.Running)
+            {
+                Release(stopped);
+            }
+
+            if (stopped.Step.Type == "reason" && stopped.Handoff is null)
+            {
+                // The attempt before was cut off and left no handoff - a crash ended the engine, or a stop ended
+                // the run - so the engine writes one, for the next attempt is told what the cut-off one had done,
+                // on every client and after every kind of stop. One the attempt still held - an agent's account no
+                // prompt holds yet - is never written over: the next attempt is given it.
+                stopped.Handoff = FlowHandoff.ByEngine(
+                    was is FlowInstanceState.Running ? "the engine's process ended" : "the run was stopped",
+                    $"Attempt {stopped.Attempt.ToString(System.Globalization.CultureInfo.InvariantCulture)} was cut off.");
+                Record(FlowChangeKind.Handoff, stopped, detail: stopped.Handoff.Why);
+            }
+
+            NewAttempt(stopped);
+            stopped.FromResume = false;
+            Record(FlowChangeKind.Step, stopped, from: was, to: FlowInstanceState.NotStarted, attempt: stopped.Attempt);
+        }
+
+        // A failure that ended the run - nothing handled it, its policy stopped the run - runs again, as a new
+        // attempt, as what a stop stopped does: the session it ended is over, and this one goes on where the run
+        // stood. A group runs again as a retry opens it, a new visit whole, its failed visit standing as it
+        // ended. One an answer fail ended stands, and the run stays stopped on it.
+        foreach (var failed in Standing(FlowFailure.EndedRun).Where(instance => instance.EndedByQuestion is null))
+        {
+            if (failed.Step.IsGroup)
+            {
+                SetFailure(failed, null);
+                Retry(failed);
+                continue;
+            }
+
+            NewAttempt(failed);
+            Record(FlowChangeKind.Step, failed, from: FlowInstanceState.Failed, to: FlowInstanceState.NotStarted, attempt: failed.Attempt);
+        }
+
+        _stopping = Standing(FlowFailure.EndedRun).Count > 0;
+
+        if (!_stopping)
+        {
+            RedrawWhatTheStopLeft();
+        }
+
+        // The always steps run once per session, however the run went: those an earlier session ran are drawn
+        // again in this one's always phase, as new visits, the visits they had standing as they ended.
+        foreach (var scope in _scopes.Where(ScopeLive).ToList())
+        {
+            foreach (var declaration in DeclarationsOf(scope).Where(declaration => IsAlways(declaration, scope)))
+            {
+                if (scope.Members.GetValueOrDefault(declaration.Name) is { State: FlowInstanceState.Done or FlowInstanceState.Failed or FlowInstanceState.Skipped or FlowInstanceState.NotRun })
+                {
+                    _ = scope.Members.Remove(declaration.Name);
+                    _ = scope.Instantiated.Remove(declaration.Name);
+                }
+            }
+        }
+
+        // What a pause left owed, its records say, and it is made now, before anything else runs: each failure
+        // recorded while the pause recorded what it left running - its handlers, its policy - and then each ending
+        // whose raise it found owed, save one whose question is open, which the answer makes.
+        foreach (var owed in Standing(FlowFailure.Owed))
+        {
+            HandleFailure(owed);
+        }
+
+        foreach (var owed in _created.Where(instance => instance.Step.On is null && instance.WaitingQuestion is null && instance._handlers.Any(handler => handler.State == "owed")).ToList())
+        {
+            if (owed.State == FlowInstanceState.Failed)
+            {
+                HandleFailure(owed);
+            }
+            else if (owed.State == FlowInstanceState.Done)
+            {
+                _ = RaiseFor(owed);
+            }
+        }
+
+        foreach (var pending in _pendingEndings.Values.Where(pending => pending.Handlers.All(Ended)).ToList())
+        {
+            // An ending whose handlers have all ended and that its record does not say settled: a crash came between
+            // the last handler's end and the source's record. It is settled now, as that end would have settled it.
+            SettleEnding(pending);
+        }
+
+        foreach (var reporter in _created.Where(instance => instance.IssuesOwed.Count > 0).ToList())
+        {
+            // The issues a step reported while nothing could be started - a pause or a stop under way, or a crash
+            // before their triage was raised - are owed in its own record, and their triage is raised now.
+            RaiseOwedIssues(reporter);
+        }
+
+        // An issue a triage answered fix for whose recovery was never raised - it waited behind a visit at work, or
+        // a crash came between the triage's end and the raise - is given to the recovery now, one at a time.
+        DrainPendingFixes();
     }
 
     /// <summary>
