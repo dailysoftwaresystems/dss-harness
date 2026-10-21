@@ -108,4 +108,24 @@ public sealed class PointOfNoReturnTests
     [InlineData(new string[0], false)]
     public void OnlyTheRunVerbsThatPauseSafely_CountTheirOwnInterrupts(string[] commandLine, bool counted)
         => Assert.Equal(counted, PointOfNoReturn.CountsItsOwnInterrupts(commandLine));
+
+    /// <summary>
+    /// The termination timeout the command line runs a command with is chosen in one place, which the command line
+    /// calls: none for the run verbs that count their own interrupts - so its handling, which cancels at the first
+    /// Ctrl+C and ends the process when its clock runs out, is off - the grace for a command past its point of no
+    /// return, and the command line's own, as it is, for every other.
+    /// </summary>
+    [Theory]
+    [InlineData(new[] { FlowService.RunCommand, "implementation" }, null)]
+    [InlineData(new[] { FlowService.ResumeCommand, "r1" }, null)]
+    [InlineData(new[] { FlowService.AnswerCommand, "r1", "more" }, null)]
+    [InlineData(new[] { WorktreeService.DeleteCommand, "w" }, 120_000)]
+    [InlineData(new[] { "test", "--set-up" }, 120_000)]
+    [InlineData(new[] { FlowService.PauseCommand, "r1" }, 2_000)]
+    [InlineData(new[] { "build" }, 2_000)]
+    [InlineData(new string[0], 2_000)]
+    public void TheTerminationTimeout_IsNoneForTheRunVerbs_TheGraceForAPointOfNoReturn_AndTheCommandLinesOwnOtherwise(string[] commandLine, int? timeoutMilliseconds)
+        => Assert.Equal(
+            timeoutMilliseconds is { } milliseconds ? TimeSpan.FromMilliseconds(milliseconds) : null,
+            PointOfNoReturn.TerminationTimeoutFor(commandLine, TimeSpan.FromSeconds(2)));
 }

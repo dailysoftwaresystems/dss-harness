@@ -97,14 +97,7 @@ async Task<int> RunAsync(string[] arguments, CancellationToken cancellationToken
     var invocation = new InvocationConfiguration();
     string[] commandLine = [parseResult.CommandResult.Command.Name, .. parseResult.Tokens.Select(token => token.Value)];
 
-    if (PointOfNoReturn.CountsItsOwnInterrupts(commandLine))
-    {
-        invocation.ProcessTerminationTimeout = null;
-    }
-    else if (PointOfNoReturn.GraceFor(commandLine) is { } grace)
-    {
-        invocation.ProcessTerminationTimeout = grace;
-    }
+    invocation.ProcessTerminationTimeout = PointOfNoReturn.TerminationTimeoutFor(commandLine, invocation.ProcessTerminationTimeout);
 
     return await parseResult.InvokeAsync(invocation, cancellationToken).ConfigureAwait(false);
 }

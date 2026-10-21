@@ -127,4 +127,17 @@ public static class PointOfNoReturn
 
         return Holds(commandLine) ? WorktreeService.DefaultInterruptionGrace : null;
     }
+
+    /// <summary>
+    /// The process termination timeout the command line runs the command <paramref name="commandLine"/> types with - the
+    /// one choice of it, which the command line makes by this: <see langword="null"/> for a command that counts its own
+    /// interrupts (<see cref="CountsItsOwnInterrupts"/>), which turns the command line's own handling of termination off
+    /// - it cancels at the first interrupt and ends the process when its clock runs out, and a safe pause has no such
+    /// longest; the grace for one that holds one (<see cref="GraceFor"/>); and the command line's own,
+    /// <paramref name="commandLines"/>, as it is, for every other.
+    /// </summary>
+    /// <param name="commandLine">The command's name, then its arguments as typed.</param>
+    /// <param name="commandLines">The command line's own termination timeout, which a command of neither kind keeps.</param>
+    public static TimeSpan? TerminationTimeoutFor(IReadOnlyList<string> commandLine, TimeSpan? commandLines)
+        => CountsItsOwnInterrupts(commandLine) ? null : GraceFor(commandLine) ?? commandLines;
 }

@@ -1514,7 +1514,8 @@ complete pause left running, or gone.
 A session's interrupts are its own (`FlowTerminal`, `FlowInterrupts`): Ctrl+C, and off Windows
 SIGTERM and a hang-up, are taken by `PosixSignalRegistration` and never end the process, and the
 command line's own termination handling is turned off for the three session verbs
-(`PointOfNoReturn.CountsItsOwnInterrupts`), since it cancels at the first interrupt and starts a
+(`PointOfNoReturn.TerminationTimeoutFor`, the one choice of the termination timeout, which
+`Program.cs` makes by), since it cancels at the first interrupt and starts a
 clock. They are counted once, for the whole session - every drive of it, the one an answer taken as
 it ended begins among them - and the terminal's bound begins at the second of that one count,
 whoever pressed the first; only the session's end clears it. The first asks the engine for the safe
