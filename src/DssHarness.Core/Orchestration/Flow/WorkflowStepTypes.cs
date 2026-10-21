@@ -104,11 +104,9 @@ public static class WorkflowStepTypes
             "reason",
             [
                 new("agent", "the agent definition, as agents/<name>.md in the workflow's directory; absent, the agent of the step it resumes"),
-                new("tier", "a name for a class of model, resolved by the configuration's agent tiers"),
+                new("tier", "a name for a class of model: one of the configuration's tierConfig, its models in the order they are tried"),
                 new("model", "the model outright, whose provider, key and client follow from it"),
-                new("effort", "the effort the model is asked for"),
-                new("fallback", "models to go on with, in order, when the one serving declines or its account is at its limit"),
-                new("provider", "the provider, where the model alone does not say it"),
+                new("effort", "the effort the model is asked for: one level for every model the step may run on, or a map of all and models' codes giving each its own"),
                 new("client", "the client, where the provider is reached two ways"),
                 new("prompt", "the prompt file the step is asked with") { Required = true },
                 new("resumePrompt", "the prompt file a step that goes on with its own work (resume names itself) is asked with when it runs again, in place of prompt"),
@@ -300,7 +298,7 @@ public static class WorkflowStepTypes
     /// </summary>
     public static IReadOnlyList<string> ExpressionKeys { get; } =
     [
-        "when", "forEach", "repeat.until", "repeat.blocking", "repeat.leftover", "items", "scope", "questions",
+        "when", "filterWhen", "forEach", "repeat.until", "repeat.blocking", "repeat.leftover", "items", "scope", "questions",
         "preAnswer.when", "preAnswer.quote.text",
     ];
 
@@ -361,6 +359,7 @@ public static class WorkflowStepTypes
     private static IReadOnlyList<KeyDescription> TestKeys =>
     [
         new("filter", "the tests it runs, in the leg's runner's own filter"),
+        new("filterWhen", "an expression that says whether the filter is given: where it reads false, every test of the step's legs runs; absent, the filter is given"),
         new("exclude", "tests it leaves out, by name"),
         new("labels", "labels it selects its tests by"),
         new("skipBuild", "skip the build and test what is there"),

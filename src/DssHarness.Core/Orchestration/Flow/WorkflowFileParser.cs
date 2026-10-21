@@ -216,6 +216,12 @@ public static class WorkflowFileParser
         return problems.Count == 0
             ? new WorkflowDefinition(
                 name!,
+                answers,
+                inputs,
+                parameters,
+                outputs,
+                steps ?? [],
+                path,
                 description,
                 maxReasoningAgents,
                 maxParallelProcesses,
@@ -228,13 +234,7 @@ public static class WorkflowFileParser
                 recommendations,
                 advisor,
                 reporter,
-                amend,
-                answers,
-                inputs,
-                parameters,
-                outputs,
-                steps ?? [],
-                path)
+                amend)
             {
                 Recover = recover,
                 BackoffSeconds = backoffSeconds,
@@ -332,7 +332,7 @@ public static class WorkflowFileParser
             return null;
         }
 
-        var keys = CollectKeys(mapping, "advisor", KeyDescription.Names(WorkflowKeys.Advisor), problems);
+        var keys = CollectKeys(mapping, "advisor", KeyDescription.Names(WorkflowKeys.Advisor), problems, RetiredAgentKey);
         var read = ReadAgentSelection(keys, "advisor", problems);
         var agent = RequireScalarIn(keys, "advisor.agent", problems);
         var prompt = RequireScalarIn(keys, "advisor.prompt", problems);
@@ -346,10 +346,11 @@ public static class WorkflowFileParser
             return null;
         }
 
-        return new FlowAdvisor(agent, prompt, read.Tier, read.Model, read.Effort, read.Fallback, read.Provider, read.Client, kinds)
+        return new FlowAdvisor(agent, prompt, read.Tier, read.Model, read.Effort, read.Client, kinds)
         {
             Retries = IntIn(keys, "advisor.retries", problems),
             BackoffSeconds = IntIn(keys, "advisor.backoffSeconds", problems),
+            EffortByModel = read.EffortByModel,
         };
     }
 
@@ -361,7 +362,7 @@ public static class WorkflowFileParser
             return null;
         }
 
-        var keys = CollectKeys(mapping, "reporter", KeyDescription.Names(WorkflowKeys.Reporter), problems);
+        var keys = CollectKeys(mapping, "reporter", KeyDescription.Names(WorkflowKeys.Reporter), problems, RetiredAgentKey);
         var read = ReadAgentSelection(keys, "reporter", problems);
         var agent = RequireScalarIn(keys, "reporter.agent", problems);
         var statusPrompt = RequireScalarIn(keys, "reporter.statusPrompt", problems);
@@ -372,23 +373,22 @@ public static class WorkflowFileParser
             return null;
         }
 
-        return new FlowReporter(agent, statusPrompt, askPrompt, read.Tier, read.Model, read.Effort, read.Fallback, read.Provider, read.Client)
+        return new FlowReporter(agent, statusPrompt, askPrompt, read.Tier, read.Model, read.Effort, read.Client)
         {
             Retries = IntIn(keys, "reporter.retries", problems),
             BackoffSeconds = IntIn(keys, "reporter.backoffSeconds", problems),
+            EffortByModel = read.EffortByModel,
         };
     }
 
     /// <summary>The keys <c>advisor</c> and <c>reporter</c> share: how each picks the model its agent runs on.</summary>
-    private static (string? Tier, string? Model, string? Effort, IReadOnlyList<string> Fallback, string? Provider, string? Client)
+    private static (string? Tier, string? Model, string? Effort, IReadOnlyDictionary<string, string>? EffortByModel, string? Client)
         ReadAgentSelection(List<(string Key, YamlNode Value)> keys, string owner, List<string> problems)
     {
         string? tier = null;
         string? model = null;
-        string? effort = null;
-        string? provider = null;
         string? client = null;
-        var fallback = new List<string>();
+        (string? Effort, IReadOnlyDictionary<string, string>? ByModel) effort = (null, null);
 
         foreach (var (key, value) in keys)
         {
@@ -403,15 +403,7 @@ public static class WorkflowFileParser
                     break;
 
                 case "effort":
-                    effort = YamlReading.RequireScalar(value, $"{owner}.effort", problems);
-                    break;
-
-                case "fallback":
-                    fallback.AddRange(RequireStringList(value, $"{owner}.fallback", problems));
-                    break;
-
-                case "provider":
-                    provider = YamlReading.RequireScalar(value, $"{owner}.provider", problems);
+                    effort = ReadEffort(value, $"{owner}.effort", problems);
                     break;
 
                 case "client":
@@ -434,7 +426,52 @@ public static class WorkflowFileParser
             }
         }
 
-        return (tier, model, effort, fallback, provider, client);
+        return (tier, model, effort.Effort, effort.ByModel, client);
+    }
+
+    /// <summary>
+    /// One effort, as the file writes it: a single level, for every model the owner may run on, or a map whose keys are
+    /// <c>all</c> and models' codes, giving each model its own - <c>effort: high</c> reads as <c>{all: high}</c>. A map
+    /// with no entry is refused, as a key given nothing.
+    /// </summary>
+    private static (string? Effort, IReadOnlyDictionary<string, string>? ByModel) ReadEffort(YamlNode node, string what, List<string> problems)
+    {
+        if (node is not YamlMappingNode map)
+        {
+            return (YamlReading.RequireScalar(node, what, problems), null);
+        }
+
+        var byModel = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        foreach (var (key, value) in map.Children)
+        {
+            var code = YamlReading.ScalarOf(key);
+            var level = YamlReading.RequireScalar(value, $"{what}.{code ?? "''"}", problems);
+
+            if (level is null)
+            {
+                continue;
+            }
+
+            if (code is null)
+            {
+                problems.Add(YamlReading.At(key, $"'{what}' holds a key that is not one name: a map's keys are all and models' codes"));
+                continue;
+            }
+
+            if (!byModel.TryAdd(code, level))
+            {
+                problems.Add(YamlReading.At(key, $"'{what}' names '{code}' more than once"));
+            }
+        }
+
+        if (byModel.Count == 0)
+        {
+            problems.Add(YamlReading.At(node, $"'{what}' holds no entry; a map of efforts names all or a model's code, each with the level it runs at"));
+            return (null, null);
+        }
+
+        return (null, byModel);
     }
 
     private static FlowAmend? ReadAmend(YamlNode node, List<string> problems)
@@ -706,6 +743,18 @@ public static class WorkflowFileParser
             : null;
 
     /// <summary>
+    /// The agent keys a step, the advisor and the reporter took before the configuration owned them: each is refused
+    /// naming what replaced it, so a reader moves the key's meaning instead of deleting its line.
+    /// </summary>
+    private static string? RetiredAgentKey(string key)
+        => key switch
+        {
+            "fallback" => "a fallback is the order of the tier's models in tierConfig",
+            "provider" => "a model's code is listed by one provider, which it names",
+            _ => null,
+        };
+
+    /// <summary>
     /// Reads one step, at <paramref name="depth"/> levels of nesting: a typed step, or a group
     /// holding steps of its own.
     /// </summary>
@@ -717,7 +766,7 @@ public static class WorkflowFileParser
             yield break;
         }
 
-        var keys = CollectKeys(mapping, "a step", [.. KeyDescription.Names(WorkflowStepTypes.Common), .. KeyDescription.Names(WorkflowStepTypes.Group), .. WorkflowStepTypes.AllKeys], problems, PlanUpdateKey);
+        var keys = CollectKeys(mapping, "a step", [.. KeyDescription.Names(WorkflowStepTypes.Common), .. KeyDescription.Names(WorkflowStepTypes.Group), .. WorkflowStepTypes.AllKeys], problems, key => PlanUpdateKey(key) ?? RetiredAgentKey(key));
         // A name or a type written as a list or a mapping is refused naming the key, never read as one left out.
         var nameNode = keys.FirstOrDefault(entry => entry.Key == "name").Value;
         var name = nameNode is null ? null : YamlReading.ScalarOf(nameNode);
@@ -972,14 +1021,15 @@ public static class WorkflowFileParser
         switch (type.Type)
         {
             case "reason":
+                var effort = NodeIn(keys, "effort") is { } effortNode ? ReadEffort(effortNode, $"{where}.effort", problems) : (Effort: (string?)null, ByModel: (IReadOnlyDictionary<string, string>?)null);
+
                 step = step with
                 {
                     Agent = ScalarIn(keys, $"{where}.agent", problems),
                     Tier = ScalarIn(keys, $"{where}.tier", problems),
                     Model = ScalarIn(keys, $"{where}.model", problems),
-                    Effort = ScalarIn(keys, $"{where}.effort", problems),
-                    Fallback = StringListIn(keys, $"{where}.fallback", problems) ?? [],
-                    Provider = ScalarIn(keys, $"{where}.provider", problems),
+                    Effort = effort.Effort,
+                    EffortByModel = effort.ByModel,
                     Client = ScalarIn(keys, $"{where}.client", problems),
                     Prompt = ScalarIn(keys, $"{where}.prompt", problems),
                     ResumePrompt = ScalarIn(keys, $"{where}.resumePrompt", problems),
@@ -1006,6 +1056,7 @@ public static class WorkflowFileParser
                 step = step with
                 {
                     Filter = ScalarIn(keys, $"{where}.filter", problems),
+                    FilterWhen = ScalarIn(keys, $"{where}.filterWhen", problems),
                     Exclude = StringListIn(keys, $"{where}.exclude", problems) ?? [],
                     Labels = StringListIn(keys, $"{where}.labels", problems) ?? [],
                     SkipBuild = BooleanIn(keys, $"{where}.skipBuild", problems),

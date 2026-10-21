@@ -44,11 +44,11 @@ public interface IWorkflowValidationService
 
 /// <summary>What checking one declared workflow found.</summary>
 /// <param name="Name">The workflow, as <c>workflows</c> declares it.</param>
-/// <param name="Lines">One line saying what it is, where it holds; one line for each problem, where it does not.</param>
+/// <param name="Lines">One line saying what it is, where it holds, and one line for each of its agents' models and levels; one line for each problem, where it does not.</param>
 public sealed record WorkflowCheck(string Name, IReadOnlyList<string> Lines)
 {
-    /// <summary>Whether it holds: its one line says so.</summary>
-    public bool Holds => Lines is [var line] && WorkflowValidationReport.Holds(line);
+    /// <summary>Whether it holds: its first line says so, whatever its agents' models and levels add under it.</summary>
+    public bool Holds => Lines is [var line, ..] && WorkflowValidationReport.Holds(line);
 
     /// <summary>
     /// The definition that held, as it was read and checked; <see langword="null"/> where it does not hold. What a command
@@ -82,7 +82,8 @@ public sealed record WorkflowValidationReport(string Root, IReadOnlyList<Workflo
 public sealed class WorkflowValidationService(
     IHarnessContextLoader contextLoader,
     IFileSystem fileSystem,
-    IHostPlatform platform) : IWorkflowValidationService
+    IHostPlatform platform,
+    DssHarness.Core.Secrets.AgentKeyStore keys) : IWorkflowValidationService
 {
     /// <summary>The command this service reports under.</summary>
     public const string CommandName = "validate-workflow";
@@ -90,6 +91,7 @@ public sealed class WorkflowValidationService(
     private readonly IHarnessContextLoader _contextLoader = contextLoader;
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly IHostPlatform _platform = platform;
+    private readonly DssHarness.Core.Secrets.AgentKeyStore _keys = keys;
 
     /// <inheritdoc/>
     public async Task<WorkflowValidationReport> CheckAsync(
@@ -148,27 +150,94 @@ public sealed class WorkflowValidationService(
             return new WorkflowCheck(name, [$"{Shown(name)} names itself '{definition.Name}'; a workflow's name is its directory's and its file's, said again in the file so a copied directory cannot pass as the workflow it was copied from"]);
         }
 
+        // The configuration's providers, resolved once: the same resolution checks the definition and says each
+        // agent's models and levels where it holds.
+        var resolved = DssHarness.Core.Agents.AgentProviders.Resolve(context.Config);
+
         var problems = new List<string>(WorkflowValidator.Validate(
             definition,
             context.Config.Commit.Template is not null,
-            named => Text(named, directory, name)));
+            named => Text(named, directory, name),
+            resolved.Providers));
         problems.AddRange(Files(definition, directory, name, context.Config));
+
+        // The key slot's own problems - a name declared twice, a line that defines nothing - are the configuration's,
+        // said where the definition is checked; which names it holds is no problem at all, so a machine that only
+        // checks a configuration needs no key, and the steps that would read one it lacks are said under the line that
+        // says the definition holds.
+        var slot = _keys.Present(context.Layout);
+        problems.AddRange(slot.Problems);
 
         if (problems.Count > 0)
         {
             return new WorkflowCheck(name, [.. problems.Select(problem => $"{Shown(name)}: {problem}")]);
         }
 
-        // The recovery is counted apart: its steps run only where something failed.
+        // The recovery is counted apart: its steps run only where something failed. Under the one line that says the
+        // definition holds, each agent's models and the level each runs at, resolved the same check resolved them, the
+        // prices of the models a step may run on, and the keys a step's model would read that no file of the slot
+        // declares, with the steps that would read them.
         var steps = Count(definition.Steps);
         var recovering = definition.Recover is { } recover ? Count(recover.Steps) : 0;
         var reasons = Count([.. definition.Steps, .. definition.Recover?.Steps ?? []], "reason");
         var recovery = definition.Recover is null ? string.Empty : $", {recovering} recovering";
-        return new WorkflowCheck(name, [$"ok {Shown(name)} ({steps} step{(steps == 1 ? string.Empty : "s")}{recovery}, {reasons} reasoning)"])
+        IReadOnlyList<string> agents = resolved.Providers is { } providers
+            ? [.. WorkflowValidator.ModelLevels(definition, providers), .. Prices(definition, providers), .. MissingKeys(definition, providers, slot)]
+            : [];
+        return new WorkflowCheck(
+            name,
+            [
+                $"ok {Shown(name)} ({steps} step{(steps == 1 ? string.Empty : "s")}{recovery}, {reasons} reasoning)",
+                .. agents,
+            ])
         {
             Definition = definition,
             Directory = directory,
         };
+    }
+
+    /// <summary>
+    /// One line for each provider whose models a step of the definition may run on: whether each of those models has a
+    /// price, and when the provider's numbers were read - by the one line the listing says it in.
+    /// </summary>
+    private static IEnumerable<string> Prices(WorkflowDefinition definition, DssHarness.Core.Agents.AgentProviders providers)
+    {
+        var models = WorkflowValidator.ModelsRunOn(definition, providers);
+
+        foreach (var provider in providers.Providers)
+        {
+            var runOn = provider.Models.Where(model => models.Any(entry => ReferenceEquals(entry.Model, model))).ToList();
+
+            if (runOn.Count > 0)
+            {
+                yield return DssHarness.Core.Agents.AgentProviderReports.PriceLine(
+                    provider.Name,
+                    provider.Currency,
+                    provider.ReadOn,
+                    [.. runOn.Select(model => (model.Code, DssHarness.Core.Agents.AgentProviders.Priced(model)))],
+                    everyModel: runOn.Count == provider.Models.Count);
+            }
+        }
+    }
+
+    /// <summary>
+    /// One line for each provider with a key the slot lacks that a step of the definition would read: every such name,
+    /// said by the one builder of the missing-key sentence with the steps that would read it - a report under the line
+    /// that says the definition holds, never a problem of it.
+    /// </summary>
+    private static IEnumerable<string> MissingKeys(
+        WorkflowDefinition definition,
+        DssHarness.Core.Agents.AgentProviders providers,
+        DssHarness.Core.Secrets.AgentSlotPresent slot)
+    {
+        var appointed = providers.Appointed();
+
+        return WorkflowValidator.MissingKeys(definition, providers, slot.Names).Select(need => DssHarness.Core.Secrets.AgentKeyStore.Missing(
+            slot,
+            appointed,
+            need.Missing,
+            appointed.First(key => string.Equals(key.Name, need.Missing[0], StringComparison.Ordinal)),
+            need.ReadBy));
     }
 
     /// <summary>

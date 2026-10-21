@@ -1,0 +1,44 @@
+{
+  "defaults": { "agentTier": "balanced" },
+  "providers": [
+    {
+      "name": "anthropic", "type": "anthropic", "api": "https://api.anthropic.com",
+      "apiKeyNames": ["ANTHROPIC_API_KEY"], "client": "claude-code",
+      "currency": "USD", "readOn": "2026-10-12",
+      "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "pricePerThousandSearches": 10,
+      "models": [
+        { "code": "claude-fable-5-1", "name": "Claude Fable 5.1", "tiers": ["best"],
+          "efforts": ["low", "medium", "high", "xhigh", "max"], "contextTokens": 1000000, "maxOutputTokens": 128000,
+          "priceInputMiss": 10, "priceInputHit": 0.25, "priceOutput": 50, "priceCacheWrite": 12.5, "priceCacheWrite1h": 20 },
+        { "code": "claude-opus-5-5", "name": "Claude Opus 5.5", "tiers": ["high"],
+          "efforts": ["low", "medium", "high", "xhigh", "max"], "contextTokens": 1000000, "maxOutputTokens": 128000,
+          "priceInputMiss": 4, "priceInputHit": 0.2, "priceOutput": 20, "priceCacheWrite": 5, "priceCacheWrite1h": 8 },
+        { "code": "claude-sonnet-5-5", "name": "Claude Sonnet 5.5", "tiers": ["balanced"],
+          "efforts": ["low", "medium", "high", "xhigh", "max"], "contextTokens": 1000000, "maxOutputTokens": 128000,
+          "priceInputMiss": 2, "priceInputHit": 0.2, "priceOutput": 10, "priceCacheWrite": 2.5, "priceCacheWrite1h": 4 },
+        { "code": "claude-haiku-5-5", "name": "Claude Haiku 5.5", "tiers": ["fast"],
+          "efforts": ["low", "medium", "high", "xhigh", "max"], "contextTokens": 1000000, "maxOutputTokens": 128000,
+          "priceInputMiss": 0.1, "priceInputHit": 0.01, "priceOutput": 0.5, "priceCacheWrite": 0.125, "priceCacheWrite1h": 0.2,
+          "largePrompt": { "overTokens": 100000, "priceInputMiss": 0.5, "priceInputHit": 0.05, "priceOutput": 2.5,
+                           "priceCacheWrite": 0.625, "priceCacheWrite1h": 1 } }
+      ]
+    },
+    {
+      "name": "zai", "type": "zai", "api": "https://api.z.ai/api/paas/v4",
+      "apiKeyNames": ["ZAI_API_KEY"], "client": "glm",
+      "currency": "USD", "readOn": "2026-10-12", "source": "https://docs.z.ai/guides/overview/pricing",
+      "models": [
+        { "code": "glm-5.3", "name": "GLM 5.3", "tiers": ["best", "high", "balanced", "fast"],
+          "efforts": ["low", "high", "max"], "contextTokens": 1000000, "maxOutputTokens": 131072,
+          "priceInputMiss": 1.4, "priceInputHit": 0.26, "priceOutput": 4.4 }
+      ]
+    }
+  ],
+  "tierConfig": {
+    "best":     ["claude-fable-5-1", "glm-5.3"],
+    "high":     ["claude-opus-5-5", "glm-5.3"],
+    "balanced": ["claude-sonnet-5-5", "glm-5.3"],
+    "fast":     ["claude-haiku-5-5", "glm-5.3"]
+  }
+}

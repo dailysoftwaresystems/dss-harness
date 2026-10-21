@@ -56,6 +56,14 @@ public sealed class JsonConfigStore(IFileSystem fileSystem) : IConfigStore
             throw new ConfigException($"'{path}' is empty.");
         }
 
+        // The agent sections' own refusals, made where the file is read: a config that loads is one the tool can use.
+        var (_, problems) = DssHarness.Core.Agents.AgentProviders.Resolve(config);
+
+        if (problems is [_, ..])
+        {
+            throw new ConfigException($"'{path}' could not be read: {string.Join(" ", problems)}");
+        }
+
         HarnessConfigValidator.ThrowIfInvalid(config, path);
         return config;
     }

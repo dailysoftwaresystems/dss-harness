@@ -167,6 +167,33 @@ public sealed class HarnessConfig
     /// <summary>Continuous integration: the workflows that carry this repository's legs, and their budget.</summary>
     public CiSettings Ci { get; init; } = new();
 
+    /// <summary>
+    /// The companies whose models the tool reaches: a model's provider, its API's address, its key's name and its
+    /// client, and everything known of the model, are its entry here. Nothing of a model is in the tool's code - a
+    /// config that declares none has no model.
+    /// </summary>
+    public List<AgentProviderConfig> Providers { get; init; } = [];
+
+    /// <summary>
+    /// The tiers - a name for a class of model - each with its models in the order they are tried: a step on the tier
+    /// starts on the first, and the rest are its fallback. A tier is defined here and nowhere else.
+    /// </summary>
+    public Dictionary<string, List<string>> TierConfig { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Whether a provider's keys are balanced by what each spent in the last seven days, a step starting on the one
+    /// that spent least: off (<c>false</c>) when left out, and <c>init</c> writes none. Refused where it is on and a
+    /// provider with two keys or more lists a model with no price, whose spend could not be counted.
+    /// </summary>
+    public bool? BalanceKeyUsage { get; init; }
+
+    /// <summary>
+    /// The configuration's clients, by the kind of client each is: a name the tool builds in, its entry saying how a
+    /// model is reached through it. Each key is read by the slice that builds what it says; <c>init</c> writes none,
+    /// and a config that declares none uses every client as it is built in.
+    /// </summary>
+    public Dictionary<string, AgentClientConfig> AgentClients { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+
     private static Dictionary<string, TValue> Map<TValue>() => new(StringComparer.OrdinalIgnoreCase);
 }
 
@@ -212,6 +239,13 @@ public sealed class HarnessDefaults
 
     /// <summary>Project used when a command names none.</summary>
     public string? Project { get; init; }
+
+    /// <summary>
+    /// The tier of a step that names neither a tier nor a model. Nothing is built in: <c>init</c> writes
+    /// <c>balanced</c>, and where the config names none, such a step is refused when the definition is checked. (An
+    /// agent definition's own tier or model stands before it once definitions are read - not yet in this build.)
+    /// </summary>
+    public string? AgentTier { get; init; }
 
     /// <summary>
     /// The rule heavy legs are admitted by on a machine whose own section declares nothing, and each field such a

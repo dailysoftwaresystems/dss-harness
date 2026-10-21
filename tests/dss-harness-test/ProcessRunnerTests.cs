@@ -996,6 +996,28 @@ public sealed class ProcessRunnerTests
         Assert.Null(ProcessRunner.ProgramOnPath("tool", directory, windows: true, path => present.Contains(path)));
     }
 
+    /// <summary>
+    /// Asked several names, the walk takes the earliest directory holding any of them and, within it, the names in the
+    /// order asked - the one walk for a finder that tells a program from the batch file beside it, read by the same rule
+    /// as a walk for one name: entries split at the separator and unquoted, a later directory never ahead of an
+    /// earlier one.
+    /// </summary>
+    [Fact]
+    public void ProgramOnPath_ForSeveralNames_TakesTheEarliestDirectory_ThenTheNamesInOrder()
+    {
+        var first = Path.Combine(TestHost.TemporaryRoot, "first");
+        var second = Path.Combine(TestHost.TemporaryRoot, "second");
+        var third = Path.Combine(TestHost.TemporaryRoot, "third");
+        string[] present = [Path.Combine(second, "npm.cmd"), Path.Combine(second, "npm.exe"), Path.Combine(third, "npm.exe")];
+        var path = string.Join(Path.PathSeparator, first, $"\"{second}\"", third);
+
+        Assert.Equal(Path.Combine(second, "npm.exe"), ProcessRunner.ProgramOnPath(["npm.exe", "npm.cmd"], path, windows: true, candidate => present.Contains(candidate)));
+        Assert.Equal(Path.Combine(second, "npm.cmd"), ProcessRunner.ProgramOnPath(["npm.cmd", "npm.exe"], path, windows: true, candidate => present.Contains(candidate)));
+        Assert.Equal(
+            [Path.Combine(second, "npm.exe"), Path.Combine(second, "npm.cmd"), Path.Combine(third, "npm.exe")],
+            ProcessRunner.ProgramsOnPath(["npm.exe", "npm.cmd"], path, windows: true, candidate => present.Contains(candidate)));
+    }
+
     private static List<string> Lines(string text)
         => [.. text.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(line => line.TrimEnd('\r'))];
 

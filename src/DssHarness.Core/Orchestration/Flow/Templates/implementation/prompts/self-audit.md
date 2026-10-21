@@ -74,8 +74,9 @@ Name it under unverified; it is a finding only where the line says the step fail
 
 ## The tests a work item names
 
-Each item names the filter that selects its tests, written in what each leg's test runner takes after its filter
-option. The legs this run tests on, each with its runner, the option a filter is given through, and what the leg
+Each item names the filter that selects the tests its change affects - the test classes that test what it changes,
+the tests it writes among them - written in what each leg's test runner takes after its filter option. The engine
+tests an item on it alone where the run's input affectedTests is on, and on every test where it is off. The legs this run tests on, each with its runner, the option a filter is given through, and what the leg
 leaves out:
 
 {orient.tests}

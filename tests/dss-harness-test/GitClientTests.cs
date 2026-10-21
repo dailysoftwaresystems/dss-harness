@@ -1692,9 +1692,21 @@ public sealed class GitClientTests
 
     private static string Text(byte[]? bytes) => Encoding.UTF8.GetString(bytes ?? []);
 
-    /// <summary>Every file under the repository's object directory: what a stored object would add to.</summary>
+    /// <summary>
+    /// Every loose object file in the repository's object directory: what a stored object would add to. Git's own
+    /// book-keeping under <c>objects/info</c> and <c>objects/pack</c> is left out - a maintenance git runs in the
+    /// background after a commit (git 2.55's) rewrites those while a test reads, never a loose object.
+    /// </summary>
     private static string[] ObjectFiles(string repository)
-        => [.. Directory.EnumerateFiles(Path.Combine(repository, ".git", "objects"), "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal)];
+    {
+        var objects = Path.Combine(repository, ".git", "objects");
+
+        return [.. Directory.EnumerateDirectories(objects)
+            .Select(directory => (Directory: directory, Name: Path.GetFileName(directory)))
+            .Where(entry => entry.Name.Length == 2 && entry.Name.All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f'))
+            .SelectMany(entry => Directory.EnumerateFiles(entry.Directory))
+            .Order(StringComparer.Ordinal)];
+    }
 
     /// <summary>
     /// A repository whose text files are checked out with CRLF and stored with LF, holding <c>a.txt</c> so, and the blob

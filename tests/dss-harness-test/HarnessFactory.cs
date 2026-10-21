@@ -95,7 +95,7 @@ public sealed class HarnessFactory
         OrchestrationLog = new OrchestrationLog(FileSystem, TimeProvider.System, Output);
         Transcripts = TranscriptsOver(FileSystem);
         ChildSessions = SessionsOver(FileSystem);
-        OrchestratorService = new OrchestratorService(ContextLoader, GitClient, FileSystem, Platform, Output, WorktreeService, OrchestrationStore, OrchestrationLog, ChildSessions, TimeProvider.System);
+        OrchestratorService = new OrchestratorService(ContextLoader, GitClient, FileSystem, Platform, Output, WorktreeService, OrchestrationStore, OrchestrationLog, ChildSessions, Identity, TimeProvider.System);
         AgentService = Agents(FileSystem, AnchorRegistryService);
     }
 
@@ -275,8 +275,17 @@ public sealed class HarnessFactory
     public async Task InitializeGitRepositoryAsync(string path, CancellationToken cancellationToken)
     {
         await RunGitAsync(path, ["init", "--quiet", "."], cancellationToken);
-        await RunGitAsync(path, ["config", "user.email", "harness@test.invalid"], cancellationToken);
-        await RunGitAsync(path, ["config", "user.name", "Harness Test"], cancellationToken);
+
+        // The identity commits are made under, and a fixture that holds still: git's own background maintenance, run
+        // after a commit (git 2.55's), would race the tests that read the repository's object directory while it
+        // rewrites its own book-keeping there. Written into the repository's config file at once rather than by a
+        // `git config` each: this runs for thousands of tests, and four programs started apiece are minutes of the
+        // slowest runner's suite.
+        File.AppendAllText(
+            Path.Combine(path, ".git", "config"),
+            "[user]\n\temail = harness@test.invalid\n\tname = Harness Test\n" +
+            "[gc]\n\tauto = 0\n" +
+            "[maintenance]\n\tauto = false\n");
 
         File.WriteAllText(Path.Combine(path, "README.md"), "test repository");
 

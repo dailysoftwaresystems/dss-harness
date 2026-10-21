@@ -125,9 +125,10 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
-    /// The layout topic names the agent clients' key slot, in the workflows directory beside the
-    /// workflows' own: init creates its placeholder and ignores what it holds, nothing this build
-    /// runs reads it yet, and no workflow may take its name.
+    /// The layout topic names the agent clients' key slot, in the workflows directory beside the workflows' own: init
+    /// creates its placeholder and ignores what it holds, the keys are read from it and from nowhere else, and no
+    /// workflow may take its name. The agent-clients topic holds a sample file for it, one line per appointed name
+    /// saying what its value is, none filled in.
     /// </summary>
     [Fact]
     public async Task LayoutTopic_NamesTheAgentClientsKeySlot()
@@ -136,10 +137,101 @@ public sealed partial class HelpTests
         var prose = Prose.Words(result.StandardOutput);
 
         Assert.Contains(
-            ".harness-config/workflows/.env/ contents ignored; kept for the agent clients' keys and settings, which this build "
-                + "does not read yet; no workflow may be named .env",
+            ".harness-config/workflows/.env/ contents ignored; the agent clients' keys, NAME=value files, every file merged, "
+                + "no key read from anywhere else; no workflow may be named .env",
             prose,
             StringComparison.Ordinal);
+
+        var clients = Prose.Words(HelpText.Of("agent-clients").StandardOutput);
+
+        Assert.Contains("A sample for the providers init declares, none filled in:", clients, StringComparison.Ordinal);
+        Assert.Contains("# .harness-config/workflows/.env/keys.env", clients, StringComparison.Ordinal);
+        Assert.Contains("ANTHROPIC_API_KEY= # the Anthropic API key", clients, StringComparison.Ordinal);
+        Assert.Contains("ZAI_API_KEY= # the Z.AI API key", clients, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The config topic names every agent section of the file's top level, agentClients among them - its one key, and
+    /// that a client holds no size, a model's sizes being its own - and the agent-clients topic the name rules.
+    /// </summary>
+    [Fact]
+    public async Task ConfigTopic_NamesTheAgentClientsSection_AndTheAgentClientsTopicTheNameRules()
+    {
+        var config = Prose.Words(HelpText.Of("config").StandardOutput);
+
+        Assert.Contains(
+            "agentClients the clients the tool builds in (claude-code, claude-api, glm), each by its name: update, claude-code's alone, says "
+                + "whether the tool installs and updates Claude Code with npm; a client holds no model, size or price - contextTokens and "
+                + "maxOutputTokens are a model's ('help agent-clients')",
+            config,
+            StringComparison.Ordinal);
+
+        Assert.Contains(
+            "A provider's name and each tier's are held to the orchestration name rule - lower-case letters and digits, single hyphens - "
+                + "and a tier is one name in one case everywhere; a model's code, what is sent to the API, is one word, and its name is the "
+                + "one a person reads.",
+            Prose.Words(HelpText.Of("agent-clients").StandardOutput),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The agent-clients topic says what this build does with keys and what it leaves to the engine: claude-code reads
+    /// none, choosing one is the engine's and no command runs a step, and validate-workflow says the prices and the
+    /// missing keys of a definition's steps - and the workflows topic that a step's tier is one of tierConfig's.
+    /// </summary>
+    [Fact]
+    public async Task AgentClientsTopic_SaysChoosingAKeyIsTheEngines_AndWhatValidateWorkflowSays_AndAStepsTierIsTierConfigs()
+    {
+        var prose = Prose.Words(HelpText.Of("agent-clients").StandardOutput);
+
+        Assert.Contains(
+            "A client that signs in with the machine's login - claude-code - reads no key at all. Choosing a key is the engine's, "
+                + "when it runs a run's steps, and no command of this build runs a step: a step is to start on the first key the slot holds,",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "validate-workflow says, under the line that says a definition holds, every step's models and levels, each provider's "
+                + "prices for the models its steps may run on and the date they were read, and each key a step's model would read that "
+                + "the slot lacks, with the steps that would read it.",
+            prose,
+            StringComparison.Ordinal);
+
+        // A step's tier is one of tierConfig's, the section the configuration holds tiers under.
+        Assert.Contains(
+            "reason.tier a name for a class of model: one of the configuration's tierConfig, its models in the order they are tried",
+            Prose.Words(HelpText.Of("workflows").StandardOutput),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The agent-clients topic says which Claude Code the tool uses and why - npm's, and never a native launcher -,
+    /// that a run which needs it needs npm, what the tool runs to install it and bring it up to date, what it never
+    /// runs - beside a session of that installation, each kind of process that counts as one said, a claude installed
+    /// otherwise whose program is read not counting, and a table read by names alone refusing -, that a slot
+    /// that cannot give a named program is refused rather than passed over, that what npm holds is said after every
+    /// change, the two ways to turn it off, and that no key is read from the process environment.
+    /// </summary>
+    [Fact]
+    public async Task AgentClientsTopic_SaysWhichClaudeCodeItUses()
+    {
+        var prose = Prose.Words(HelpText.Of("agent-clients").StandardOutput);
+
+        Assert.Contains("The Claude Code this tool uses is the one npm installs, and no other", prose, StringComparison.Ordinal);
+        Assert.Contains($"'npm install -g @anthropic-ai/claude-code@{DssHarness.Core.Agents.ClaudeCode.ClaudeCodeUpdateService.Needed}'", prose, StringComparison.Ordinal);
+        Assert.Contains("never with sudo, never 'npm update -g', never past the version needed", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            "never beside a session of that installation that is running (its program, node running its script, a claude node runs, or a "
+                + "claude whose program the machine will not say, such as another user's on Linux; a claude installed any other way whose "
+                + "program it names does not count, and a process table read by names alone refuses the change)",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("a slot that cannot give it is refused, never passed over for npm's", prose, StringComparison.Ordinal);
+        Assert.Contains("After a change, whether it ran or failed, what npm holds since is said.", prose, StringComparison.Ordinal);
+        Assert.Contains("and no key is ever read from the process environment", prose, StringComparison.Ordinal);
+        Assert.Contains("A run that needs a Claude model through the claude-code client needs npm, and no other run", prose, StringComparison.Ordinal);
+        Assert.Contains("CLAUDE_EXECUTABLE", prose, StringComparison.Ordinal);
+        Assert.Contains("agentClients.<client>.update", prose, StringComparison.Ordinal);
+        Assert.Contains("DISABLE_UPDATES", prose, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -712,6 +804,75 @@ public sealed partial class HelpTests
             "ssh vps: this leg needs ~11.4 GiB, what worktree o1/xa's copy of the same variant came to there; 3.2 GiB free on '/'",
             said,
             StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The exit codes topic gives the run verbs' own code - a question waiting is 1, which a wrapper that retries 21 would
+    /// otherwise loop on - beside what else a session ends with, from the constants the session exits by.
+    /// </summary>
+    [Fact]
+    public void ExitCodeTopic_SaysARunPausedOnAQuestionExitsOne()
+    {
+        var result = HelpText.Of("exit-codes");
+
+        Assert.Contains($"  {FlowService.RunCommand}, {FlowService.ResumeCommand}, {FlowService.AnswerCommand}", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains($"      {FlowExit.Paused}  paused: a question waits - a step's, or the budget's at its reserve - for {FlowService.AnswerCommand}", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains(
+            "A session otherwise ends 0 done, 20 failed, 21 failed where every failure that ended it was incomplete after its retries, and 130 at a safe pause or a stop",
+            Prose.Words(result.StandardOutput),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The exit codes topic, and the table the architecture keeps by hand, say that 21 is also an update of a program begun
+    /// and not finished - not finished within its bound, or its download not reached - which both updaters exit with: a
+    /// code whose words named only a leg, a set-up and an agent's verbs was what each updater answered differently.
+    /// </summary>
+    [Fact]
+    public void ExitCodeTopic_SaysAnUpdateStoppedPartWayIsIncomplete()
+    {
+        const string Said = "or a deletion, a fold, a hand-over, a move of an agent's base or an update of a program stopped part way (not "
+            + "finished within its bound, or its download not reached)";
+
+        Assert.Contains(Said, Prose.Words(HelpText.Of("exit-codes").StandardOutput), StringComparison.Ordinal);
+        Assert.Contains($"| {HarnessExit.Incomplete} | Ran with nothing failing, but a leg reached no verdict or left a set-up it brought up running, {Said};", Prose.Document("docs", "architecture.md"), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The orchestrators topic names the five run verbs as they are typed, the one-unfinished-run rule, the codes a session
+    /// ends with, and what each of the two interrupts does - the first a safe pause that starts no clock - from the code's
+    /// own names and bounds.
+    /// </summary>
+    [Fact]
+    public void OrchestratorsTopic_NamesTheRunVerbs_AndWhatEachInterruptDoes()
+    {
+        var result = HelpText.Of("orchestrators");
+        var prose = Prose.Words(result.StandardOutput);
+
+        foreach (var command in new[] { FlowService.RunCommand, FlowService.ResumeCommand, FlowService.AnswerCommand, FlowService.PauseCommand, FlowService.StopCommand })
+        {
+            Assert.Contains($"  {ToolPackage.Command} {command} ", result.StandardOutput, StringComparison.Ordinal);
+        }
+
+        Assert.Contains($"  {ToolPackage.Command} list-orchestrator [<o>] [--steps] [--questions] [--json]", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains(
+            "Only one run of a repository is unfinished with work in the tree at once: a start, or a session of another run, is refused (13) "
+                + "while one is, and so it is where an agent's record of another run cannot be read.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "done (0), failed (20, or 21 where every failure that ended it was incomplete after its retries), paused on a question (1), or "
+                + "paused or stopped on request (130)",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "In the terminal a session runs in, the first Ctrl+C - and off Windows SIGTERM or a hang-up - asks the safe pause, which starts no "
+                + "clock: an agent's handoff and a build may take as long as they take. The second stops the run where it stands - a step whose "
+                + "runner does not end within 90 s is recorded stopped all the same - and the command ends within 120 s whatever is left;",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("which it reads every 2 s", prose, StringComparison.Ordinal);
+        Assert.Contains("waits 30 s, and --now ends its process: only on this machine, and only the process its owner names by its start.", prose, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1740,7 +1901,8 @@ public sealed partial class HelpTests
         Assert.Contains(
             "Once the update has begun this command does not stop it, interrupted or not, and reads back what it left: it says the update done only once "
             + $"the tool is listed as that release, and a failure with what dotnet said and what is listed since, or why that is not known "
-            + $"({HarnessExit.CommandFailed}).",
+            + $"({HarnessExit.CommandFailed}; {HarnessExit.Incomplete} where dotnet did not finish within {ToolPackage.ChangeBudget.TotalMinutes} "
+            + "minutes, an update begun and not finished, which running it again can finish, as every program's update this tool makes answers it).",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -2394,7 +2556,8 @@ public sealed partial class HelpTests
             "What a killed process left running. On Linux and macOS a contained child of a step leads a session of its own, "
             + $"which nothing ends when the process that started it is killed, so it is recorded in its step's {OrchestratorLayout.ChildrenDirectoryName}/ "
             + "while it runs and the record taken back once that process ends it. Every command over an orchestrator - the three "
-            + "orchestrator commands and each agent command - first ends each recorded session whose starter has gone, as a stop "
+            + "orchestrator commands, each agent command, and each run verb over a run already made - first ends each recorded "
+            + "session whose starter has gone, as a stop "
             + "ends one (SIGTERM, then SIGKILL five seconds later), removes its record, and says so in a line, and in the document's "
             + "ended where it answers with --json. A session whose starter still runs is left; one whose id a later process "
             + "carries ends nothing, and its record goes; a record that does not read as one is said and left; a starter on another "
@@ -2738,7 +2901,9 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
-            "This build checks a workflow's definition, with 'dssharness validate-workflow <name>'; it does not run one.",
+            "This build checks a workflow's definition, with 'dssharness validate-workflow <name>', and starts and drives a run of one with "
+                + "'dssharness run-orchestrator <name>' (see 'help orchestrators'). No step runner is built yet, so each step of a run fails, "
+                + "saying no runner serves its type.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(

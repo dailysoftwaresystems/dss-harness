@@ -303,4 +303,209 @@ public sealed class FlowExpressionTests
         Assert.Equal("plan", read.Root);
         Assert.Equal(100_000, read.Names.Count);
     }
+
+    /// <summary>
+    /// What the run's own reads yield, as one object keyed by the read's root: the tree walks the names after the root,
+    /// so the delegate answers the root alone.
+    /// </summary>
+    private static FlowValue Evaluate(string expression, IReadOnlyDictionary<string, JsonNode?> values)
+        => FlowExpression.Parse(expression).Evaluate(path => values.TryGetValue(path.Root, out var value) ? FlowValue.Of(value) : FlowValue.Missing);
+
+    /// <summary>
+    /// The join, the comparison and the test evaluate as the grammar says: short-circuiting left to right, so a term
+    /// after one that settles the join is never read.
+    /// </summary>
+    [Fact]
+    public void JoinsEvaluateLeftToRight_ShortCircuiting()
+    {
+        var read = new List<string>();
+
+        FlowValue EvaluateOf(string expression)
+            => FlowExpression.Parse(expression).Evaluate(path =>
+            {
+                read.Add(path.Whole);
+                return FlowValue.Of(path.Root switch
+                {
+                    "a" => true,
+                    "b" => false,
+                    "c" => false,
+                    _ => false,
+                });
+            });
+
+        Assert.True(EvaluateOf("a || b").AsBoolean("x"));
+        Assert.Equal(["a"], read);
+
+        read.Clear();
+        Assert.False(EvaluateOf("b && a").AsBoolean("x"));
+        Assert.Equal(["b"], read);
+
+        read.Clear();
+        Assert.False(EvaluateOf("(a || b) && c && a").AsBoolean("x"));
+        Assert.Equal(["a", "c"], read);
+    }
+
+    /// <summary>
+    /// <c>??</c> yields the first side that is there and not null - Missing and null both fall through - and the last
+    /// side as it is; <c>empty(...)</c> is true of Missing, null, an empty text, an empty list and an empty object.
+    /// </summary>
+    [Fact]
+    public void CoalesceFallsThroughMissingAndNull_EmptyTakesEverythingEmpty()
+    {
+        var values = new Dictionary<string, JsonNode?>(StringComparer.Ordinal)
+        {
+            ["gone"] = null,
+            ["text"] = "",
+            ["list"] = new JsonArray(),
+            ["map"] = new JsonObject(),
+            ["full"] = "x",
+        };
+
+        Assert.True(Evaluate("gone.missing ?? gone ?? 'none' == 'none'", values).AsBoolean("x"));
+        Assert.True(Evaluate("empty(gone.nothere) && empty(gone) && empty(text) && empty(list) && empty(map)", values).AsBoolean("x"));
+        Assert.False(Evaluate("empty(full)", values).AsBoolean("x"));
+        Assert.True(Evaluate("gone ?? full == 'x'", values).AsBoolean("x"));
+    }
+
+    /// <summary>
+    /// A comparison compares two scalars, or null: null equals only null, numbers compare as numbers however each is
+    /// written, texts compare Ordinal, and values of different kinds are unequal - never an error.
+    /// </summary>
+    [Fact]
+    public void AComparison_ComparesScalarsOrNull_AndUnlikeKindsAreUnequal()
+    {
+        var values = new Dictionary<string, JsonNode?>(StringComparer.Ordinal)
+        {
+            ["n"] = JsonValue.Create(1),
+            ["m"] = JsonValue.Create(1.0),
+            ["s"] = "one",
+            ["z"] = null,
+        };
+
+        Assert.True(Evaluate("n == m && n == 1 && m != 2", values).AsBoolean("x"));
+        Assert.True(Evaluate("z == null && null == z", values).AsBoolean("x"));
+        Assert.True(Evaluate("z != s && s != n && s == 'one'", values).AsBoolean("x"));
+        Assert.True(Evaluate("n != '1' && s != null", values).AsBoolean("x"));
+    }
+
+    /// <summary>
+    /// <c>any(list, test)</c> looks into a list with <c>it</c> bound to each member: an empty list yields false, a
+    /// member that meets the test true, and a list that is Missing or null refuses the read.
+    /// </summary>
+    [Fact]
+    public void AnyLooksIntoAList_BindingItToEachMember()
+    {
+        var findings = new JsonArray(
+            new JsonObject { ["severity"] = "low" },
+            new JsonObject { ["severity"] = "high", ["production"] = true });
+
+        var values = new Dictionary<string, JsonNode?>(StringComparer.Ordinal)
+        {
+            ["findings"] = findings,
+            ["none"] = new JsonArray(),
+        };
+
+        Assert.True(Evaluate("any(findings, it.severity == 'high')", values).AsBoolean("x"));
+        Assert.True(Evaluate("any(findings, (it.production ?? false) && it.severity != 'low')", values).AsBoolean("x"));
+        Assert.False(Evaluate("any(none, it == 'x')", values).AsBoolean("x"));
+        Assert.True(Evaluate("!any(findings, it.severity == 'nonsense')", values).AsBoolean("x"));
+    }
+
+    /// <summary>
+    /// An operator that needs something definite - a boolean, a scalar to compare, a list to look into - refuses
+    /// Missing and values of the wrong kind: the step that read it failed with 12, and the refusal names the part.
+    /// </summary>
+    [Fact]
+    public void AnOperatorThatNeedsSomethingDefinite_RefusesMissingAndWrongKinds()
+    {
+        var values = new Dictionary<string, JsonNode?>(StringComparer.Ordinal)
+        {
+            ["text"] = "x",
+            ["list"] = new JsonArray(),
+        };
+
+        Assert.Throws<UnresolvedReadException>(() => _ = Evaluate("!nowhere.atall", values).AsBoolean("x"));
+        Assert.Throws<UnresolvedReadException>(() => _ = Evaluate("nowhere.atall == 'x'", values));
+        Assert.Throws<UnresolvedReadException>(() => _ = Evaluate("nowhere.atall != 'x'", values));
+        Assert.Throws<UnresolvedReadException>(() => _ = Evaluate("!text", values).AsBoolean("x"));
+        Assert.Throws<UnresolvedReadException>(() => _ = Evaluate("any(nowhere.list, it == 'x')", values).AsBoolean("x"));
+        Assert.Throws<UnresolvedReadException>(() => _ = Evaluate("list == 'x'", values));
+    }
+
+    /// <summary>A path walks keys and indexes into what its root yields, and a step that finds nothing leaves it Missing.</summary>
+    [Fact]
+    public void APathWalksKeysAndIndexes_AndAStepThatFindsNothingLeavesItMissing()
+    {
+        var values = new Dictionary<string, JsonNode?>(StringComparer.Ordinal)
+        {
+            ["plan"] = new JsonObject
+            {
+                ["items"] = new JsonArray(JsonValue.Create("first"), JsonValue.Create("second")),
+                ["title"] = "the plan",
+            },
+        };
+
+        Assert.True(Evaluate("plan.items[1] == 'second' && plan.title == 'the plan'", values).AsBoolean("x"));
+        Assert.True(Evaluate("plan.items[9] ?? 'none' == 'none'", values).AsBoolean("x"));
+        Assert.True(Evaluate("plan.nothere ?? 'none' == 'none'", values).AsBoolean("x"));
+    }
+
+    /// <summary>A placeholder is filled as a template fills it: the value it names, written as text.</summary>
+    [Fact]
+    public void APlaceholder_IsFilledAsATemplateFillsIt()
+    {
+        var values = new Dictionary<string, JsonNode?>(StringComparer.Ordinal)
+        {
+            ["os"] = "linux",
+        };
+
+        Assert.True(Evaluate("{os} == 'linux'", values).AsBoolean("x"));
+        Assert.Throws<UnresolvedReadException>(() => _ = Evaluate("{nowhere}", values).AsBoolean("x"));
+    }
+
+    /// <summary>
+    /// A value is the run's own copy: the JSON it was made of can change after and the value does not, and the list it
+    /// hands out is a copy, so nothing that holds one - a step's runner given its work item among them - changes what
+    /// another reads.
+    /// </summary>
+    [Fact]
+    public void AValueIsItsOwnCopy_NothingOutsideItChangesIt()
+    {
+        var made = new JsonObject { ["tags"] = new JsonArray(JsonValue.Create("a")) };
+        var value = FlowValue.Of(made);
+
+        ((JsonArray)made["tags"]!).Add("from outside");
+        value.Member("tags").AsList("tags").Add("from a holder");
+
+        Assert.Equal("""{"tags":["a"]}""", value.ToNode()!.ToJsonString());
+    }
+
+    /// <summary>A dotted placeholder is a path like any other: its first name is the root the reader is asked for, and the names after it are walked.</summary>
+    [Fact]
+    public void ADottedPlaceholder_ReadsItsRootAndWalksTheRest()
+    {
+        var values = new Dictionary<string, JsonNode?>(StringComparer.Ordinal)
+        {
+            ["orient"] = new JsonObject { ["branch"] = "main" },
+        };
+
+        Assert.True(Evaluate("{orient.branch} == 'main'", values).AsBoolean("x"));
+        Assert.Throws<UnresolvedReadException>(() => _ = Evaluate("{orient.nothere} == 'main'", values));
+    }
+
+    /// <summary>
+    /// A reader may walk the first keys of a path itself - a group's member, which only it can find - and says how many:
+    /// the tree walks only the names after them, never the ones the reader consumed again.
+    /// </summary>
+    [Fact]
+    public void AReaderThatWalkedAPathsFirstKeys_LeavesTheTreeTheRest()
+    {
+        var member = FlowValue.Of(new JsonObject { ["verdict"] = "ok" });
+
+        var read = FlowExpression.Parse("review.correctness.verdict == 'ok'")
+            .Evaluate(path => new FlowExpression.PathRead(member, path.Root == "review" ? 1 : 0));
+
+        Assert.True(read.AsBoolean("x"));
+        Assert.Throws<InvalidOperationException>(() => FlowExpression.Parse("plan[0].x").Evaluate(path => new FlowExpression.PathRead(member, 1)));
+    }
 }

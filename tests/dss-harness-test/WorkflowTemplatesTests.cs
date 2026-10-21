@@ -28,7 +28,9 @@ public sealed class WorkflowTemplatesTests
         Assert.Equal(80, Count(definition.Steps));
         Assert.Equal(46, Count(definition.Recover!.Steps));
         Assert.Equal(46, Count([.. definition.Steps, .. definition.Recover.Steps], "reason"));
-        Assert.Equal(5, definition.Inputs.Count);
+        Assert.Equal(6, definition.Inputs.Count);
+        Assert.Contains(definition.Inputs, input => input.Name == "affectedTests" && input.Default == "off");
+        Assert.Equal(["on", "off"], definition.Inputs.Single(input => input.Name == "affectedTests").Options);
     }
 
     /// <summary>

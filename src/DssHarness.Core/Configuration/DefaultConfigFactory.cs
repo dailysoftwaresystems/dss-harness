@@ -23,16 +23,23 @@ public static class DefaultConfigFactory
         ArgumentException.ThrowIfNullOrWhiteSpace(os);
         ArgumentException.ThrowIfNullOrWhiteSpace(processor);
 
+        // The agent sections whole from the one template that holds them - providers with their models and prices,
+        // and tierConfig - so that they are there to be read and changed. Nothing of a model is in the tool's code,
+        // and an existing config is never changed.
+        var agents = DssHarness.Core.Agents.AgentProviderTemplates.Read();
+
         var config = new HarnessConfig
         {
             // The default project exists exactly when a project was detected to declare.
-            Defaults = new HarnessDefaults { Project = detected.Count == 0 ? null : PrimaryProject },
+            Defaults = new HarnessDefaults { Project = detected.Count == 0 ? null : PrimaryProject, AgentTier = agents.AgentTier },
             Worktrees = new WorktreeSettings { Root = WorktreeSettings.SeededRoot },
             BuildConfigs =
             {
                 ["debug"] = new BuildConfiguration { CmakeBuildType = "Debug", DotnetConfiguration = "Debug", DartMode = "debug" },
                 ["release"] = new BuildConfiguration { CmakeBuildType = "Release", DotnetConfiguration = "Release", DartMode = "release" },
             },
+            Providers = [.. agents.Providers],
+            TierConfig = new Dictionary<string, List<string>>(agents.TierConfig, StringComparer.OrdinalIgnoreCase),
 
             // The implementation workflow, declared by name: its definition is the file init writes under
             // workflows/implementation/, never an entry in this file.

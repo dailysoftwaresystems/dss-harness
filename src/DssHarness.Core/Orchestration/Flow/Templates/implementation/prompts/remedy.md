@@ -20,8 +20,10 @@ issue that was there before the run. What the diagnosis found:
 - The paths near your work that you must not touch: {item.forbiddenPaths}
 - What must hold when your work is finished, your item's definition of done, checked statement by statement before
   you report: {item.done}
-- The filter that selects your tests when the engine runs them: `{item.testFilter}`. The tests it names are yours to
-  write where they are not there yet; where it is empty, the engine runs every test.
+- The filter that names the tests your change affects: `{item.testFilter}`. The tests it names are yours to write
+  where they are not there yet. The engine runs only those for this item where the run's input affectedTests is on
+  (it is `{input.affectedTests}`), and every test where it is off or the filter is empty; every test runs once every
+  item of the round is built, either way.
 
 What exists and what is new:
 

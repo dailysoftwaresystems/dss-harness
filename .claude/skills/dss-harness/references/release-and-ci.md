@@ -64,7 +64,7 @@ it, so a maintainer runs such a change from a branch here. Read required checks 
 Every release stands on this check: neither Deploy nor Package Pipeline runs a suite. Deploy promotes `main`'s
 commit as the check passed it (for beta, with only `<Version>` bumped on top) and stable promotes what beta
 released. Never add a suite back to either; a slow runner is met by the Test step's `timeout-minutes` in
-`test.yml` (80, the job's 90).
+`test.yml` (120, the job's 135).
 
 ## 5. Versions and channels
 

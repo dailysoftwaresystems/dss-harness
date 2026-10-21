@@ -161,6 +161,14 @@ public static class ServiceRegistration
         services.AddSingleton<IOrchestratorService, OrchestratorService>();
         services.AddSingleton<IAgentService, AgentService>();
 
+        // The commands of a run: one unfinished run at a time (15b) and the session driver over it (15c). The step
+        // runner a run's steps are given is the refusing one until the machine step runners and the agent clients
+        // land (slices 19 and 20): a run that says what it cannot do, never one that passes everything over.
+        services.AddSingleton<FlowSessions>();
+        services.AddSingleton<IFlowService, FlowService>();
+        services.AddSingleton<IFlowStepRunner, NoStepRunner>();
+        services.AddSingleton<IFlowRunnerFacts, NoRunnerFacts>();
+
         // The one way an agent's step is worked, whatever the client is. No client is built in yet: the clients
         // register themselves when their slices land, and a test registers its fake the same way.
         services.AddSingleton<IAgentRunner, AgentRunner>();
@@ -187,6 +195,9 @@ public static class ServiceRegistration
         // resolved with a retry before ssh is started, and where each program is on it is measured
         // per connection rather than assumed from a login shell's PATH.
         services.AddSingleton<IHostSecretsStore, HostSecretsStore>();
+        services.AddSingleton<DssHarness.Core.Secrets.AgentKeyStore>();
+        services.AddSingleton<DssHarness.Core.Agents.IAgentProviders, DssHarness.Core.Agents.AgentProvidersService>();
+        services.AddSingleton<DssHarness.Core.Agents.ClaudeCode.ClaudeCodeUpdateService>();
         services.AddSingleton<INameLookup, DnsNameLookup>();
         services.AddSingleton<IHostAddressResolver>(provider => new HostAddressResolver(
             provider.GetRequiredService<INameLookup>(),

@@ -16,8 +16,9 @@ namespace DssHarness.Tests;
 public sealed class WorkflowValidationServiceTests
 {
     /// <summary>
-    /// The implementation workflow, initialized into a repository and declared in its config, passes its check: the one line
-    /// says what it is, and the outcome says every one checked.
+    /// The implementation workflow, initialized into a repository and declared in its config, passes its check: the one
+    /// line says what it is, and under it each reason step's models and the level each runs at - the plan's own among
+    /// them, xhigh on Fable 5.1 and max on GLM 5.3 - and the outcome says every one checked.
     /// </summary>
     [Fact]
     public async Task TheImplementationWorkflow_InitializedIntoARepository_PassesItsCheck()
@@ -28,12 +29,177 @@ public sealed class WorkflowValidationServiceTests
         var report = await Service(repository).CheckAsync(repository.Path, named: null, cancellationToken);
 
         Assert.True(report.Passed);
-        Assert.Equal($"ok {Shown(Default)} (80 steps, 46 recovering, 46 reasoning)", Assert.Single(report.Lines));
+        Assert.Equal($"ok {Shown(Default)} (80 steps, 46 recovering, 46 reasoning)", report.Lines[0]);
+        Assert.Contains("step 'planning.plan' (best): claude-fable-5-1 at xhigh, glm-5.3 at max", report.Lines);
+        Assert.Contains("step 'intake.triage' (high): claude-opus-5-5 at high, glm-5.3 at high", report.Lines);
+
+        // Whether each model a step may run on has a price, and when its provider's numbers were read: every model of
+        // the configuration init writes is priced, each provider's line naming its date.
+        Assert.Equal(
+            [
+                "prices of 'anthropic' (USD, read 2026-10-12): all 4 models priced",
+                "prices of 'zai' (USD, read 2026-10-12): glm-5.3 priced",
+            ],
+            report.Lines.Where(line => line.StartsWith("prices of", StringComparison.Ordinal)));
+
+        // The slot holds no key in a repository just initialized. Every step's first model is Anthropic's, reached through
+        // claude-code, which signs in with the machine's login and reads no key: nothing is said of Anthropic's. GLM is a
+        // later model of each tier, reached through glm, which signs each request with Z.AI's key - named once, with
+        // every step that would read it.
+        var missingKeys = report.Lines.Where(line => line.StartsWith("no file under", StringComparison.Ordinal)).ToList();
+        var missing = Assert.Single(missingKeys);
+
+        Assert.StartsWith(
+            $"no file under '{DssHarness.Core.Repository.HarnessLayout.WorkflowsEnvSlotRelative}/' declares 'ZAI_API_KEY', the name provider 'zai' appoints for its key (its apiKeyNames); "
+                + "add ZAI_API_KEY= to a file there, holding the Z.AI API key (it is read from this slot and nowhere else). "
+                + "The steps that would read it: step 'intake.priority' (a later model of its tier), step 'intake.triage' (a later model of its tier), step 'planning.plan' (a later model of its tier)",
+            missing);
+        Assert.EndsWith(", advisor (a later model of its tier), reporter (a later model of its tier)", missing);
+        Assert.DoesNotContain(report.Lines, line => line.Contains("ANTHROPIC_API_KEY", StringComparison.Ordinal));
 
         var outcome = WorkflowValidationReports.Render(report, json: false);
 
         Assert.Equal(HarnessExit.Success, outcome.ExitCode);
         Assert.Equal("1 workflow(s) checked, all valid", outcome.Message);
+    }
+
+    /// <summary>
+    /// A slot that holds a provider's key takes its missing-key line away, and the check passes either way: which names
+    /// the slot holds is no problem of the definition, so a machine that only checks a configuration needs no key.
+    /// </summary>
+    [Fact]
+    public async Task AProviderWhoseKeyTheSlotHolds_IsNotNamedAsMissing()
+    {
+        using var repository = await RepositoryAsync(config: null);
+        File.WriteAllText(Path.Combine(repository.Path, ".harness-config", "workflows", ".env", "keys.env"), "ZAI_API_KEY=one\n");
+
+        var report = await Service(repository).CheckAsync(repository.Path, named: null, TestContext.Current.CancellationToken);
+
+        Assert.True(report.Passed);
+        Assert.DoesNotContain(report.Lines, line => line.StartsWith("no file under", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// What a step's model needs of the slot is decided by the client that reaches it - the step's own where it names
+    /// one, else its provider's: a step on claude-api reads its provider's key, and a step on claude-code, which signs in
+    /// with the machine's login, reads none, so it is never said to need one.
+    /// </summary>
+    [Fact]
+    public async Task AStepOnTheClaudeApiClient_ReadsItsProvidersKey_WhereOneOnClaudeCodeReadsNone()
+    {
+        using var repository = await RepositoryAsync(new HarnessConfig { Workflows = ["small"] });
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        await WriteAsync(
+            repository,
+            "small",
+            """
+            name: small
+            steps:
+              - name: think
+                type: reason
+                agent: worker
+                model: claude-opus-5-5
+                client: claude-api
+                prompt: prompts/work.md
+                outputs: schemas/work.json
+              - name: write
+                type: reason
+                agent: worker
+                model: claude-sonnet-5-5
+                prompt: prompts/work.md
+                outputs: schemas/work.json
+            """,
+            cancellationToken,
+            "agents/worker.md",
+            "prompts/work.md",
+            "schemas/work.json");
+
+        var report = await Service(repository).CheckAsync(repository.Path, named: null, cancellationToken);
+
+        Assert.True(report.Passed);
+        Assert.Equal(
+            [
+                $"ok {Shown("small")} (2 steps, 2 reasoning)",
+                "step 'think': claude-opus-5-5 at its own default",
+                "step 'write': claude-sonnet-5-5 at its own default",
+                "prices of 'anthropic' (USD, read 2026-10-12): claude-opus-5-5, claude-sonnet-5-5 priced",
+                $"no file under '{DssHarness.Core.Repository.HarnessLayout.WorkflowsEnvSlotRelative}/' declares 'ANTHROPIC_API_KEY', the name provider 'anthropic' appoints for its key (its apiKeyNames); "
+                    + "add ANTHROPIC_API_KEY= to a file there, holding the Anthropic API key (it is read from this slot and nowhere else). The steps that would read it: step 'think'",
+            ],
+            report.Lines);
+    }
+
+    /// <summary>
+    /// Every key of a provider the slot does not hold is named, the ones beside a key it holds among them - each name
+    /// by the one builder of the missing-key sentence, ending with the names the slot holds that nothing appoints.
+    /// </summary>
+    [Fact]
+    public async Task EveryKeyTheSlotLacks_IsNamed_BesideAKeyItHolds()
+    {
+        var zai = new AgentProviderConfig
+        {
+            Name = "zai",
+            Type = "zai",
+            Api = "https://api.z.ai/api/paas/v4",
+            ApiKeyNames = ["ZAI_API_KEY", "ZAI_API_KEY_TWO"],
+            Client = "glm",
+            Models = [new AgentModelConfig { Code = "glm-5.3", Name = "GLM 5.3", Tiers = ["balanced"], Efforts = ["low", "high", "max"], ContextTokens = 1_000_000, MaxOutputTokens = 131_072 }],
+        };
+
+        using var repository = await RepositoryAsync(new HarnessConfig
+        {
+            Workflows = ["small"],
+            Providers = [zai],
+            TierConfig = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase) { ["balanced"] = ["glm-5.3"] },
+        });
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        await WriteAsync(
+            repository,
+            "small",
+            """
+            name: small
+            steps:
+              - name: write
+                type: reason
+                agent: worker
+                prompt: prompts/work.md
+                outputs: schemas/work.json
+            """,
+            cancellationToken,
+            "agents/worker.md",
+            "prompts/work.md",
+            "schemas/work.json");
+
+        var slot = Path.Combine(repository.Path, ".harness-config", "workflows", ".env", "keys.env");
+        var prefix = $"no file under '{DssHarness.Core.Repository.HarnessLayout.WorkflowsEnvSlotRelative}/' declares";
+
+        File.WriteAllText(slot, "ZAI_API_KEY=one\nZAI_APIKEY=two\n");
+        var one = await Service(repository).CheckAsync(repository.Path, named: null, cancellationToken);
+
+        Assert.True(one.Passed);
+        Assert.Equal(
+            [
+                $"{prefix} 'ZAI_API_KEY_TWO', the name provider 'zai' appoints for its key (its apiKeyNames); add ZAI_API_KEY_TWO= to a file there, "
+                    + "holding the Z.AI API key (it is read from this slot and nowhere else). The steps that would read it: step 'write'. "
+                    + "Declared there and appointed by nothing: ZAI_APIKEY",
+            ],
+            one.Lines.Where(line => line.StartsWith("no file under", StringComparison.Ordinal)));
+
+        // A model with no price is said so, with the run's cost of it unknown, beside the levels.
+        Assert.Contains("prices of 'zai': none; the cost of glm-5.3 is unknown", one.Lines);
+
+        File.Delete(slot);
+        var none = await Service(repository).CheckAsync(repository.Path, named: null, cancellationToken);
+
+        Assert.True(none.Passed);
+        Assert.Equal(
+            [
+                $"{prefix} 'ZAI_API_KEY' or 'ZAI_API_KEY_TWO', the names provider 'zai' appoints for its keys (its apiKeyNames); add ZAI_API_KEY= or ZAI_API_KEY_TWO= "
+                    + "to a file there, holding the Z.AI API key (it is read from this slot and nowhere else). The steps that would read one of them: step 'write'",
+            ],
+            none.Lines.Where(line => line.StartsWith("no file under", StringComparison.Ordinal)));
     }
 
     /// <summary>
@@ -117,15 +283,29 @@ public sealed class WorkflowValidationServiceTests
 
         var report = await Service(repository).CheckAsync(repository.Path, named: null, cancellationToken);
 
+        Assert.Equal($"ok {Shown(Default)} (80 steps, 46 recovering, 46 reasoning)", report.Lines[0]);
+        Assert.All(
+            report.Lines.Skip(1).TakeWhile(line => !line.StartsWith(Shown("small"), StringComparison.Ordinal)),
+            line => Assert.True(
+                line.StartsWith("step ", StringComparison.Ordinal)
+                    || line.StartsWith("advisor ", StringComparison.Ordinal)
+                    || line.StartsWith("reporter ", StringComparison.Ordinal)
+                    || line.StartsWith("prices of", StringComparison.Ordinal)
+                    || line.StartsWith("no file under", StringComparison.Ordinal),
+                $"a level, price or missing-key line: {line}"));
         Assert.Equal(
             [
-                $"ok {Shown(Default)} (80 steps, 46 recovering, 46 reasoning)",
                 $"{Shown("small")}: 'agents/implementer.md', step 'make''s agent, is not at '.harness-config/workflows/small/agents/implementer.md'; write it there, beside the definition that names it",
                 $"{Shown("small")}: 'agents/worker.md', step 'draft''s agent, is not at '.harness-config/workflows/small/agents/worker.md'; write it there, beside the definition that names it",
                 $"{Shown("small")}: 'prompts/work.md', step 'draft''s prompt, is not at '.harness-config/workflows/small/prompts/work.md'; write it there, beside the definition that names it",
                 $"{Shown("small")}: 'schemas/work.json', step 'draft''s outputs, is not at '.harness-config/workflows/small/schemas/work.json'; write it there, beside the definition that names it",
             ],
-            report.Lines);
+            report.Lines.Skip(1).SkipWhile(line =>
+                line.StartsWith("step ", StringComparison.Ordinal)
+                    || line.StartsWith("advisor ", StringComparison.Ordinal)
+                    || line.StartsWith("reporter ", StringComparison.Ordinal)
+                    || line.StartsWith("prices of", StringComparison.Ordinal)
+                    || line.StartsWith("no file under", StringComparison.Ordinal)));
         Assert.Equal([true, false], report.Workflows.Select(workflow => workflow.Holds));
 
         var outcome = WorkflowValidationReports.Render(report, json: false);
@@ -457,12 +637,20 @@ public sealed class WorkflowValidationServiceTests
         var held = new Held(repository.Harness.FileSystem, Path.Combine(repository.Path, ".harness-config", "workflows", "small", "small.yml"), denied);
         var report = await Service(repository, held).CheckAsync(repository.Path, named: null, cancellationToken);
 
-        Assert.Equal(
-            [
-                $"{Shown("small")} could not be read: {Held.Why}",
-                $"ok {Shown(Default)} (80 steps, 46 recovering, 46 reasoning)",
-            ],
-            report.Lines);
+        Assert.Equal($"{Shown("small")} could not be read: {Held.Why}", report.Lines[0]);
+        Assert.Equal($"ok {Shown(Default)} (80 steps, 46 recovering, 46 reasoning)", report.Lines[1]);
+        Assert.All(
+            report.Lines.Skip(2),
+            line => Assert.True(
+                line.StartsWith("step ", StringComparison.Ordinal)
+                    || line.StartsWith("advisor ", StringComparison.Ordinal)
+                    || line.StartsWith("reporter ", StringComparison.Ordinal)
+                    || line.StartsWith("prices of", StringComparison.Ordinal)
+                    || line.StartsWith("no file under", StringComparison.Ordinal),
+                $"a level, price or missing-key line: {line}"));
+
+        // Z.AI's key alone: Anthropic's models are reached through claude-code, which reads none.
+        Assert.Equal(1, report.Lines.Count(line => line.StartsWith("no file under", StringComparison.Ordinal)));
     }
 
     /// <summary>A schema the disk will not give up is a problem naming it, with the disk's reason, as a missing one is.</summary>
@@ -1126,7 +1314,11 @@ public sealed class WorkflowValidationServiceTests
     }
 
     private static WorkflowValidationService Service(Repository repository, IFileSystem? fileSystem = null)
-        => new(repository.Harness.ContextLoader, fileSystem ?? repository.Harness.FileSystem, repository.Harness.Platform);
+        => new(
+            repository.Harness.ContextLoader,
+            fileSystem ?? repository.Harness.FileSystem,
+            repository.Harness.Platform,
+            new DssHarness.Core.Secrets.AgentKeyStore(fileSystem ?? repository.Harness.FileSystem, repository.Harness.FilePermissions, repository.Harness.Platform));
 
     /// <summary>
     /// A repository of one commit whose config declares the workflows asked for, with the default's files written where
@@ -1139,13 +1331,63 @@ public sealed class WorkflowValidationServiceTests
         var cancellationToken = TestContext.Current.CancellationToken;
 
         temp.WriteFile("file.txt", "content\n");
-        await harness.InitializeHarnessAsync(
-            temp.Path,
-            cancellationToken,
-            config ?? new HarnessConfig { Workflows = [Default] });
+
+        // The agent sections the workflows resolve their tiers against: as init writes them, so every check runs
+        // under a configuration the caller chose. A test that names its own providers keeps them.
+        var agents = DssHarness.Core.Agents.AgentProviderTemplates.Read();
+        var given = config ?? new HarnessConfig { Workflows = [Default] };
+        var withAgents = new HarnessConfig
+        {
+            Version = given.Version,
+            Defaults = new HarnessDefaults
+            {
+                BuildCores = given.Defaults.BuildCores,
+                TestCores = given.Defaults.TestCores,
+                MaxParallelLegs = given.Defaults.MaxParallelLegs,
+                MaxParallelLegsTotal = given.Defaults.MaxParallelLegsTotal,
+                Project = given.Defaults.Project,
+                Admission = given.Defaults.Admission,
+                StallSeconds = given.Defaults.StallSeconds,
+                DurationWarningFactor = given.Defaults.DurationWarningFactor,
+                ClockStepToleranceMilliseconds = given.Defaults.ClockStepToleranceMilliseconds,
+                ProcessSampleSeconds = given.Defaults.ProcessSampleSeconds,
+                LocalCopy = given.Defaults.LocalCopy,
+                AgentTier = given.Defaults.AgentTier ?? agents.AgentTier,
+            },
+            Toolchains = given.Toolchains,
+            Sanitizers = given.Sanitizers,
+            BuildConfigs = given.BuildConfigs,
+            Projects = given.Projects,
+            Hosts = given.Hosts,
+            Emulators = given.Emulators,
+            DeveloperEnvironments = given.DeveloperEnvironments,
+            Legs = given.Legs,
+            LegSets = given.LegSets,
+            Tools = given.Tools,
+            ToolSearchDirectories = given.ToolSearchDirectories,
+            PredefinedRunners = given.PredefinedRunners,
+            Workflows = given.Workflows,
+            SetUp = given.SetUp,
+            Commit = given.Commit,
+            Sync = given.Sync,
+            Contention = given.Contention,
+            Worktrees = given.Worktrees,
+            Anchors = given.Anchors,
+            Mutations = given.Mutations,
+            SshItems = given.SshItems,
+            WslDistros = given.WslDistros,
+            BuildTimingRegex = given.BuildTimingRegex,
+            RunTimingRegex = given.RunTimingRegex,
+            TestTimingRegex = given.TestTimingRegex,
+            LineEndings = given.LineEndings,
+            Ci = given.Ci,
+            Providers = given.Providers.Count == 0 ? [.. agents.Providers] : given.Providers,
+            TierConfig = given.TierConfig.Count == 0 ? new Dictionary<string, List<string>>(agents.TierConfig, StringComparer.OrdinalIgnoreCase) : given.TierConfig,
+        };
+        await harness.InitializeHarnessAsync(temp.Path, cancellationToken, withAgents);
         await harness.CommitAllAsync(temp.Path, "initial", cancellationToken);
 
-        if (config is null || (config.Workflows ?? []).Contains(Default))
+        if ((withAgents.Workflows ?? []).Contains(Default))
         {
             WorkflowTemplates.EnsureShipped(Path.Combine(temp.Path, ".harness-config", "workflows"), harness.FileSystem);
         }

@@ -661,6 +661,48 @@ public sealed class InitServiceTests
         Assert.Equal(ignoreBefore, File.ReadAllText(temp.Combine(".gitignore")));
     }
 
+    /// <summary>
+    /// init writes the agent sections - defaults.agentTier, providers and tierConfig - whole into the config it creates,
+    /// as the one template holds them; and in a repository that has a config already it changes nothing of it, its
+    /// agent sections or the lack of them included: a config without providers stays without, and one with its own keeps
+    /// them, byte for byte.
+    /// </summary>
+    [Fact]
+    public async Task InitializeAsync_WritesTheAgentSectionsIntoANewConfig_AndChangesNothingInAnExistingOne()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = new HarnessFactory();
+
+        using (var fresh = new TempDirectory())
+        {
+            await harness.InitializeGitRepositoryAsync(fresh.Path, cancellationToken);
+            await harness.InitService.InitializeAsync(fresh.Path, cancellationToken);
+
+            var written = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(fresh.Combine(".harness-config", "config.json")))!;
+            var (agentTier, providers, tierConfig) = DssHarness.Core.Agents.AgentProviderTemplates.Read();
+
+            Assert.Equal(agentTier, (string?)written["defaults"]!["agentTier"]);
+            Assert.Equal(System.Text.Json.JsonSerializer.Serialize(providers, JsonConfigOptions.Default), written["providers"]!.ToJsonString(JsonConfigOptions.Default));
+            Assert.Equal(System.Text.Json.JsonSerializer.Serialize(tierConfig, JsonConfigOptions.Default), written["tierConfig"]!.ToJsonString(JsonConfigOptions.Default));
+        }
+
+        foreach (var existing in new[]
+        {
+            "{\n  \"workflows\": [\"implementation\"]\n}\n",
+            "{\n  \"defaults\": { \"agentTier\": \"mine\" },\n  \"providers\": [\n    { \"name\": \"zai\", \"type\": \"zai\", \"api\": \"https://api.z.ai/api/paas/v4\", \"apiKeyNames\": [\"ZAI_KEY_OF_MINE\"], \"client\": \"glm\",\n      \"models\": [{ \"code\": \"glm-5.3\", \"name\": \"GLM 5.3\", \"tiers\": [\"mine\"], \"efforts\": [\"low\"], \"contextTokens\": 1000, \"maxOutputTokens\": 100 }] }\n  ],\n  \"tierConfig\": { \"mine\": [\"glm-5.3\"] }\n}\n",
+        })
+        {
+            using var temp = new TempDirectory();
+            await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
+            var file = temp.WriteFile(Path.Combine(".harness-config", "config.json"), existing);
+
+            var result = await harness.InitService.InitializeAsync(temp.Path, cancellationToken);
+
+            Assert.True(result.Succeeded);
+            Assert.Equal(existing, File.ReadAllText(file));
+        }
+    }
+
     [Fact]
     public async Task InitializeAsync_SeedsConfigurationFromTheDetectedProject()
     {

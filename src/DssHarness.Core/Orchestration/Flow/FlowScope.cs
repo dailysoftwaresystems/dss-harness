@@ -47,8 +47,7 @@ public static class FlowScope
     /// <summary>
     /// Whether <paramref name="name"/> is spelt as a step's name is: a lower-case letter, then lower-case letters,
     /// digits and dashes, and nothing after them - not even a line's end, which a pattern anchored with <c>$</c>
-    /// would let through. A dot separates the segments of a read and of an instance id, so a name holds none. A
-    /// declared input's, param's and output's name is spelt the same way.
+    /// would let through. A dot separates the segments of a read and of an instance id, so a name holds none.
     /// </summary>
     /// <param name="name">The name, as written.</param>
     public static bool IsWellFormedName(string name)
@@ -58,6 +57,22 @@ public static class FlowScope
         return name.Length > 0
             && name[0] is >= 'a' and <= 'z'
             && name.All(character => character is >= 'a' and <= 'z' or >= '0' and <= '9' or '-');
+    }
+
+    /// <summary>
+    /// Whether <paramref name="name"/> is spelt as a declared input's, param's or output's name is: as a step's, with
+    /// capitals allowed within - a run's inputs are a person's words, and the shipped workflow declares
+    /// <c>affectedTests</c> (the user's own, 2026-10-20). A dot still separates the segments of a read, so a name
+    /// holds none.
+    /// </summary>
+    /// <param name="name">The name, as written.</param>
+    public static bool IsWellFormedDeclaredName(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+
+        return name.Length > 0
+            && name[0] is >= 'a' and <= 'z'
+            && name.All(character => character is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9' or '-');
     }
 
     /// <summary>The scope a step at <paramref name="path"/> sits in: its group's path, <see cref="Recovery"/> for one of the recovery's own steps, or <see langword="null"/> at the flow's top level.</summary>

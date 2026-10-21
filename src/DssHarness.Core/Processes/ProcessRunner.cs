@@ -111,7 +111,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// The variable a program is looked up on. Spelled once: on Windows the environment a child is
     /// given compares names without case, so this also finds the 'Path' Windows itself writes.
     /// </summary>
-    private const string PathVariable = "PATH";
+    internal const string PathVariable = "PATH";
 
     public async Task<ProcessResult> RunAsync(
         ProcessRequest request,
@@ -894,13 +894,48 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         => ProgramsOnPath(name, pathVariable, windows, isExecutable).FirstOrDefault();
 
     /// <summary>
+    /// The first file that would start as one of <paramref name="names"/> in the directories
+    /// <paramref name="pathVariable"/> lists - the earliest directory holding any of them, and of those it holds the first
+    /// asked - or <see langword="null"/> when there is none. Nowhere else is looked in.
+    /// </summary>
+    internal static string? ProgramOnPath(IReadOnlyList<string> names, string? pathVariable, bool windows, Func<string, bool> isExecutable)
+        => ProgramsOnPath(names, pathVariable, windows, isExecutable).FirstOrDefault();
+
+    /// <summary>
     /// Every file that would start as <paramref name="name"/> in the directories <paramref name="pathVariable"/>
-    /// lists, in the order it lists them: the first is the one <see cref="ProgramOnPath"/> finds.
+    /// lists, in the order it lists them: the first is the one <see cref="ProgramOnPath(string, string?, bool, Func{string, bool})"/> finds.
     /// </summary>
     internal static IEnumerable<string> ProgramsOnPath(string name, string? pathVariable, bool windows, Func<string, bool> isExecutable)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
+
+        return ProgramsOnPath([name], pathVariable, windows, isExecutable);
+    }
+
+    /// <summary>
+    /// Every file that would start as one of <paramref name="names"/> in the directories <paramref name="pathVariable"/>
+    /// lists: directory by directory in the order it lists them, and within one directory in the order of
+    /// <paramref name="names"/> - so the first is the file of the earliest directory that holds any of them, and of the
+    /// names it holds, the first asked.
+    /// </summary>
+    /// <remarks>
+    /// The one walk of a PATH: how it is split, how a quoted entry is read and how a name becomes a file in each entry
+    /// (<see cref="ProgramInDirectory"/>) are decided here and nowhere else, for a caller asking one name and for one
+    /// that tells a program from the batch file beside it, as npm's finder does.
+    /// </remarks>
+    /// <param name="names">The names, in the order a directory is asked for them.</param>
+    /// <param name="pathVariable">The PATH whose directories are walked; none where it is <see langword="null"/>.</param>
+    /// <param name="windows">Whether the files are started on Windows.</param>
+    /// <param name="isExecutable">Whether a candidate file is one this machine would start.</param>
+    internal static IEnumerable<string> ProgramsOnPath(IReadOnlyList<string> names, string? pathVariable, bool windows, Func<string, bool> isExecutable)
+    {
+        ArgumentNullException.ThrowIfNull(names);
         ArgumentNullException.ThrowIfNull(isExecutable);
+
+        if (names.Count == 0 || names.Any(string.IsNullOrWhiteSpace))
+        {
+            throw new ArgumentException("A PATH is walked for at least one name, and every name is one.", nameof(names));
+        }
 
         return Found(pathVariable ?? string.Empty);
 
@@ -908,9 +943,12 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         {
             foreach (var directory in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
             {
-                if (ProgramInDirectory(name, directory.Trim('"'), windows, isExecutable) is { } found)
+                foreach (var name in names)
                 {
-                    yield return found;
+                    if (ProgramInDirectory(name, directory.Trim('"'), windows, isExecutable) is { } found)
+                    {
+                        yield return found;
+                    }
                 }
             }
         }

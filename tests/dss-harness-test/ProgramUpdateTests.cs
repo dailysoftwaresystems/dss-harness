@@ -1,6 +1,7 @@
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
+using DssHarness.Core.Results;
 
 namespace DssHarness.Tests;
 
@@ -52,6 +53,46 @@ public sealed class ProgramUpdateTests
         Assert.Same(ListedRelease.Absent, absent.Now);
         Assert.Equal((true, (string?)null), (absent.Now.Readable, absent.Now.Release));
         Assert.Equal((true, "1.2.3"), (named.Now.Readable, named.Now.Release));
+    }
+
+    /// <summary>
+    /// A change begun and not finished - ended by its bound, or its download not reached - exits incomplete whichever
+    /// program's it is, since running it again can finish it; a change its program refused exits with its updater's own
+    /// code. Each updater once answered the same timed-out change with a code of its own.
+    /// </summary>
+    [Theory]
+    [InlineData(true, false, HarnessExit.CommandFailed, HarnessExit.Incomplete)]
+    [InlineData(true, false, HarnessExit.ToolMissing, HarnessExit.Incomplete)]
+    [InlineData(false, true, HarnessExit.ToolMissing, HarnessExit.Incomplete)]
+    [InlineData(false, false, HarnessExit.CommandFailed, HarnessExit.CommandFailed)]
+    [InlineData(false, false, HarnessExit.ToolMissing, HarnessExit.ToolMissing)]
+    public void AChangeBegunAndNotFinished_ExitsIncomplete_WhicheverProgramsItIs(bool timedOut, bool unreached, int refused, int expected)
+    {
+        var ran = new ProcessResult(timedOut ? -1 : 1, string.Empty, "failed\n", TimeSpan.FromMinutes(1), TimedOut: timedOut);
+
+        Assert.Equal(expected, ProgramUpdate.FailedExit(ran, unreached, refused));
+    }
+
+    /// <summary>A change that succeeded has no failure's code, and asking for one is refused rather than answered.</summary>
+    [Fact]
+    public void AChangeThatSucceeded_HasNoFailuresCode()
+    {
+        var refused = Assert.Throws<ArgumentException>(() => ProgramUpdate.FailedExit(ProcessResultOf("done"), unreached: false, HarnessExit.CommandFailed));
+
+        Assert.Equal("A change that succeeded has no failure's code. (Parameter 'ran')", refused.Message);
+    }
+
+    /// <summary>
+    /// A table read whole is answered by nothing; one read by names alone by what the update needs of it that could not be
+    /// read, and why the table was read so - its own trailing full stop dropped - as the opening of a refusal's sentence.
+    /// </summary>
+    [Fact]
+    public void ATableReadByNamesAlone_IsSaidAsWhatCouldNotBeRead_AndWhy()
+    {
+        Assert.Null(ProgramUpdate.Unread(new ProcessTableReading([], null), "what each process runs"));
+        Assert.Equal(
+            "what each process runs could not be read - the query was refused -",
+            ProgramUpdate.Unread(new ProcessTableReading([], "the query was refused."), "what each process runs"));
     }
 
     /// <summary>

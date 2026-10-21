@@ -1017,6 +1017,24 @@ public sealed class AgentServiceTests
     }
 
     /// <summary>
+    /// A credential slot is never handed to an agent either - the agent clients' key slot among the five - whatever
+    /// git or the ignore block says: a planted .env folded back could redirect a key, so the floor names the slots
+    /// for every move of work, and not only for what sync withholds.
+    /// </summary>
+    [Fact]
+    public async Task AKeySlot_IsNeverHandedToAnAgent()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync("ag");
+
+        var refresh = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under(".harness-config/workflows/.env"), apply: true, Token);
+
+        Assert.Equal(HarnessExit.UsageError, refresh.ExitCode);
+        Assert.StartsWith("'.harness-config/workflows/.env' is never handed to an agent: ", refresh.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A refresh never hands a path into a submodule the agent's worktree records: where the main tree turned a submodule
     /// into files of its own, committed or not, the refresh is refused, exit 13, naming each path with the submodule it is
     /// or lies in, and nothing is written.

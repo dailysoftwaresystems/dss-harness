@@ -1,5 +1,8 @@
 using System.Text;
+using DssHarness.Core.Agents;
+using DssHarness.Core.Configuration;
 using DssHarness.Core.Orchestration.Flow;
+using DssHarness.Core.Results;
 
 namespace DssHarness.Tests;
 
@@ -554,7 +557,7 @@ public sealed class WorkflowValidatorTests
         Assert.Equal(
             [
                 "step 'reads-but-names-in' reads and names 'in'; a reading step has no worktree to work in, and reads the main tree",
-                "step 'resumes' resumes 'implement' and names agent; a step that goes on with another's work runs in that step's agent, on its model and in its worktree, and names none of agent, provider, client, tier, model, fallback, access, in or writes",
+                "step 'resumes' resumes 'implement' and names agent; a step that goes on with another's work runs in that step's agent, on its model and in its worktree, and names none of agent, client, tier, model, access, in or writes",
                 "step 'resumes' is independent and resumes 'implement'; independence is never being given the author's work, and resuming is going on with exactly that",
                 "step 'makes-no-agent' names no agent and resumes no step; a reason step runs an agent of its own, or goes on with the agent of the step it resumes",
                 "step 'folding' names 'implement' as its of, which is a reason step; an agent is made by a create-agent step",
@@ -631,10 +634,8 @@ public sealed class WorkflowValidatorTests
                 type: reason
                 resume: builder
                 agent: other
-                provider: someone
                 client: cli
                 tier: best
-                fallback: [second]
                 access: write
                 in: make
                 writes: [src/**]
@@ -657,14 +658,14 @@ public sealed class WorkflowValidatorTests
         Assert.Equal(
             [
                 "step 'once' resumes itself and runs once; a step goes on with its own work only where it runs again - inside a repeat, where a handler's then sends the run back to it, or as a step of the recovery",
-                "step 'borrows' resumes 'builder' and names agent, provider, client, tier, fallback, access, in, writes; a step that goes on with another's work runs in that step's agent, on its model and in its worktree, and names none of agent, provider, client, tier, model, fallback, access, in or writes",
+                "step 'borrows' resumes 'builder' and names agent, client, tier, access, in, writes; a step that goes on with another's work runs in that step's agent, on its model and in its worktree, and names none of agent, client, tier, model, access, in or writes",
                 "step 'borrows' says resumePrompt and does not resume itself; resumePrompt is what a step that goes on with its own work is asked with when it runs again, and any other step is asked with its prompt",
             ],
             problems);
 
         // The model is one of the keys too, named alone where the step names no tier beside it.
         Assert.Equal(
-            ["step 'borrows' resumes 'builder' and names model; a step that goes on with another's work runs in that step's agent, on its model and in its worktree, and names none of agent, provider, client, tier, model, fallback, access, in or writes"],
+            ["step 'borrows' resumes 'builder' and names model; a step that goes on with another's work runs in that step's agent, on its model and in its worktree, and names none of agent, client, tier, model, access, in or writes"],
             Problems(
                 """
                 name: default
@@ -1593,55 +1594,375 @@ public sealed class WorkflowValidatorTests
     }
 
     /// <summary>
-    /// V38's halves the definition alone answers: a fallback is a model gone on with in place of the agent's own, so of a
-    /// reasoning step, the advisor and the reporter it is never that model and never named twice.
+    /// The agent keys a step, the advisor and the reporter took before the configuration owned them: each is refused
+    /// naming what replaced it, so a reader moves the key's meaning instead of deleting its line.
     /// </summary>
     [Fact]
-    public void AFallback_IsNeverTheAgentsOwnModel_NorNamedTwice()
+    public void RetiredAgentKeys_AreRefusedNamingWhatReplacedThem()
     {
         Assert.Equal(
             [
-                "step 'think' falls back to 'm4', which is its own model: a fallback is a model gone on with in its place",
-                "step 'think' falls back to 'm5' twice",
-                "advisor falls back to 'm1', which is its own model: a fallback is a model gone on with in its place",
-                "advisor falls back to 'm2' twice",
-                "reporter falls back to 'm3' twice",
+                "line 5, column 3: 'fallback' is not a key of advisor; a fallback is the order of the tier's models in tierConfig.",
+                "line 6, column 3: 'provider' is not a key of advisor; a model's code is listed by one provider, which it names.",
+                "line 11, column 3: 'fallback' is not a key of reporter; a fallback is the order of the tier's models in tierConfig.",
+                "line 12, column 3: 'provider' is not a key of reporter; a model's code is listed by one provider, which it names.",
+                "line 17, column 5: 'fallback' is not a key of a step; a fallback is the order of the tier's models in tierConfig.",
+                "line 18, column 5: 'provider' is not a key of a step; a model's code is listed by one provider, which it names.",
             ],
-            Problems(
+            Refusals(
                 """
                 name: default
                 advisor:
                   agent: advisor
                   prompt: prompts/recommend.md
-                  model: m1
-                  fallback: [m1, m2, m2]
+                  fallback: [m1]
+                  provider: someone
                 reporter:
                   agent: reporter
                   statusPrompt: prompts/status.md
                   askPrompt: prompts/ask.md
-                  fallback: [m3, m3]
+                  fallback: [m2]
+                  provider: someone
                 steps:
                   - name: think
                     type: reason
                     agent: thinker
-                    model: m4
-                    fallback: [m5, m4, m5]
+                    fallback: [m5]
+                    provider: someone
                     prompt: prompts/think.md
                     outputs: schemas/think.json
                 """));
+    }
 
-        Assert.Empty(Problems(
-            """
+    /// <summary>
+    /// V38's config half, for each agent the definition runs: what a step names is resolved against the
+    /// configuration's providers and tiers, so a model no provider lists, a tier nothing defines, an effort a model
+    /// does not take, a client that does not reach the provider, and a step that names neither where the config names
+    /// neither either, are all refused with the step that names them. Every model of the tier is checked, the ones
+    /// this machine cannot use included; and where the config declares no providers at all, the sentence says what to
+    /// paste.
+    /// </summary>
+    [Fact]
+    public void V38sConfigHalf_RefusesWhatTheConfigurationDoesNotResolve_NamingTheStep()
+    {
+        var providers = Providers();
+
+        // A model no provider lists, said with the lists.
+        Assert.Equal(
+            ["workflow 'default' step 'plan' resolves to model 'claude-opus-6', which no provider lists. Listed: zai: glm-5.3. Add it to its provider's models under providers"],
+            WorkflowValidator.Validate(Parse("""
+                name: default
+                steps:
+                  - name: plan
+                    type: reason
+                    agent: thinker
+                    model: claude-opus-6
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                """), hasCommitTemplate: false, files: null, providers));
+
+        // A tier nothing defines.
+        Assert.Equal(
+            ["workflow 'default' step 'plan' names tier 'deep', which tierConfig does not define. Defined: balanced"],
+            WorkflowValidator.Validate(Parse("""
+                name: default
+                steps:
+                  - name: plan
+                    type: reason
+                    agent: thinker
+                    tier: deep
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                """), hasCommitTemplate: false, files: null, providers));
+
+        // An effort a model of the tier does not take - every model of the tier checked, glm-5.3 among them - with
+        // the level to give it instead: the nearest it takes at or above the one asked.
+        Assert.Equal(
+            ["workflow 'default' step 'plan' runs at effort 'medium', which 'glm-5.3' (tier 'balanced') does not take. It takes: low, high, max. Give it a level of its own under effort: glm-5.3: high"],
+            WorkflowValidator.Validate(Parse("""
+                name: default
+                steps:
+                  - name: plan
+                    type: reason
+                    agent: thinker
+                    tier: balanced
+                    effort: medium
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                """), hasCommitTemplate: false, files: null, providers));
+
+        // A step that names neither a tier nor a model, where the configuration names no default tier.
+        Assert.Equal(
+            ["workflow 'default' step 'plan' names neither a tier nor a model, and the configuration names no defaults.agentTier; say one on the step, or under defaults.agentTier"],
+            WorkflowValidator.Validate(Parse("""
+                name: default
+                steps:
+                  - name: plan
+                    type: reason
+                    agent: thinker
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                """), hasCommitTemplate: false, files: null, Providers(agentTier: null)));
+
+        // Where the config declares no providers at all, the sentence says what to paste - whatever the step names: a
+        // tier, a model, or neither, the default tier then naming a tier no configuration defines.
+        var none = AgentProviders.Resolve(new HarnessConfig { Defaults = new HarnessDefaults { AgentTier = "balanced" } }).Providers!;
+
+        Assert.Equal(
+            [
+                "workflow 'default' step 'plan' names tier 'balanced' and the config declares no providers and no tierConfig: dssharness list-agent-providers --template prints them as init writes them into a new config, to paste",
+                "workflow 'default' step 'draft' names model 'glm-5.3' and the config declares no providers and no tierConfig: dssharness list-agent-providers --template prints them as init writes them into a new config, to paste",
+                "workflow 'default' step 'write' names neither a tier nor a model and the config declares no providers and no tierConfig: dssharness list-agent-providers --template prints them as init writes them into a new config, to paste",
+            ],
+            WorkflowValidator.Validate(Parse("""
+                name: default
+                steps:
+                  - name: plan
+                    type: reason
+                    agent: thinker
+                    tier: balanced
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                  - name: draft
+                    type: reason
+                    agent: thinker
+                    model: glm-5.3
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                  - name: write
+                    type: reason
+                    agent: thinker
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                """), hasCommitTemplate: false, files: null, none));
+
+        // With no providers given at all, the half is unchecked: a definition is never checked against a configuration
+        // the caller did not choose.
+        Assert.Empty(WorkflowValidator.Validate(Parse("""
             name: default
             steps:
-              - name: think
+              - name: plan
                 type: reason
                 agent: thinker
-                model: m4
-                fallback: [m5, m6]
+                tier: deep
                 prompt: prompts/think.md
                 outputs: schemas/think.json
-            """));
+            """), hasCommitTemplate: false, files: null, providers: null));
+    }
+
+    /// <summary>
+    /// An effort given for each model is checked model by model: a level a model does not take is refused naming the
+    /// level to give it instead where the level came from all, a model named by no entry and no all runs at its own
+    /// default, and a step that goes on with another's work names either form against the tier it inherits.
+    /// </summary>
+    [Fact]
+    public void AnEffortForEachModel_IsCheckedModelByModel()
+    {
+        var providers = TwoModels();
+
+        // The map's all gives every model it does not name: glm-5.3 does not take xhigh, and the refusal names the
+        // nearest level it takes at or above the one asked.
+        Assert.Equal(
+            ["workflow 'default' step 'plan' runs 'glm-5.3' (tier 'best') at effort 'xhigh', which it does not take. It takes: low, high, max. Give it a level of its own under effort: glm-5.3: max"],
+            WorkflowValidator.Validate(Parse("""
+                name: default
+                steps:
+                  - name: plan
+                    type: reason
+                    agent: thinker
+                    tier: best
+                    effort:
+                      all: xhigh
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                """), hasCommitTemplate: false, files: null, providers));
+
+        // Where the model's own entry gave the level, the first sentence stands alone: it has a level of its own, and
+        // the level is what is wrong.
+        Assert.Equal(
+            ["workflow 'default' step 'plan' runs 'glm-5.3' (tier 'best') at effort 'medium', which it does not take. It takes: low, high, max"],
+            WorkflowValidator.Validate(Parse("""
+                name: default
+                steps:
+                  - name: plan
+                    type: reason
+                    agent: thinker
+                    tier: best
+                    effort:
+                      all: high
+                      glm-5.3: medium
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                """), hasCommitTemplate: false, files: null, providers));
+
+        // A model named by no entry and no all runs at its own default, and nothing is refused of it.
+        Assert.Empty(WorkflowValidator.Validate(Parse("""
+            name: default
+            steps:
+              - name: plan
+                type: reason
+                agent: thinker
+                tier: best
+                effort:
+                  glm-5.3: max
+                prompt: prompts/think.md
+                outputs: schemas/think.json
+            """), hasCommitTemplate: false, files: null, providers));
+
+        // A step that goes on with another's work names either form, checked against the tier it inherits.
+        Assert.Equal(
+            ["workflow 'default' step 'mend' runs 'glm-5.3' (tier 'best') at effort 'xhigh', which it does not take. It takes: low, high, max. Give it a level of its own under effort: glm-5.3: max"],
+            WorkflowValidator.Validate(Parse("""
+                name: default
+                steps:
+                  - name: implement
+                    type: reason
+                    agent: thinker
+                    tier: best
+                    effort: high
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                  - name: mend
+                    type: reason
+                    resume: implement
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                    effort:
+                      all: xhigh
+                """), hasCommitTemplate: false, files: null, providers));
+
+        // A step that names neither a tier nor a model runs on the configuration's default tier, its models checked
+        // like a named tier's own - here balanced, GLM's alone.
+        Assert.Equal(
+            ["workflow 'default' step 'plan' runs at effort 'medium', which 'glm-5.3' (tier 'balanced') does not take. It takes: low, high, max. Give it a level of its own under effort: glm-5.3: high"],
+            WorkflowValidator.Validate(Parse("""
+                name: default
+                steps:
+                  - name: plan
+                    type: reason
+                    agent: thinker
+                    effort: medium
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                """), hasCommitTemplate: false, files: null, providers));
+    }
+
+    /// <summary>A code under a step's effort that is no model it runs on is refused rather than ignored: a repository that changes its tier then hears which steps still name the old model.</summary>
+    [Fact]
+    public void AnEffortForAModelTheStepDoesNotRunOn_IsRefused()
+    {
+        Assert.Equal(
+            ["workflow 'default' step 'plan' gives an effort to 'glm-5.4', which it does not run on. It runs on: claude-fable-5-1, glm-5.3"],
+            WorkflowValidator.Validate(Parse("""
+                name: default
+                steps:
+                  - name: plan
+                    type: reason
+                    agent: thinker
+                    tier: best
+                    effort:
+                      all: high
+                      glm-5.4: max
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                """), hasCommitTemplate: false, files: null, TwoModels()));
+    }
+
+    /// <summary>A test step's filterWhen is an expression as when is, with the same reads, and must yield a boolean.</summary>
+    [Fact]
+    public void AFilterWhenThatIsNoBoolean_IsRefused()
+    {
+        Assert.Equal(
+            ["'verify.filterWhen' yields a text, where a boolean is read: nothing is read as true or as false but true and false"],
+            WorkflowValidator.Validate(Parse("""
+                name: default
+                inputs:
+                  - name: request
+                steps:
+                  - name: verify
+                    type: test
+                    filterWhen: input.request
+                """), hasCommitTemplate: false, files: null, providers: null));
+    }
+
+    /// <summary>One provider, one model, one tier, as the config-half tests spell the configuration.</summary>
+    private static AgentProviders? Providers(string? agentTier = "balanced")
+    {
+        var config = new HarnessConfig
+        {
+            Defaults = new HarnessDefaults { AgentTier = agentTier },
+            Providers =
+            [
+                new()
+                {
+                    Name = "zai", Type = "zai", Api = "https://api.z.ai", ApiKeyNames = ["ZAI_API_KEY"], Client = "glm",
+                    Currency = "USD", ReadOn = "2026-10-12",
+                    Models =
+                    [
+                        new() { Code = "glm-5.3", Name = "GLM 5.3", Tiers = ["balanced"], Efforts = ["low", "high", "max"], ContextTokens = 1_000_000, MaxOutputTokens = 131_072 },
+                    ],
+                },
+            ],
+            TierConfig = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase) { ["balanced"] = ["glm-5.3"] },
+        };
+
+        return AgentProviders.Resolve(config).Providers;
+    }
+
+    /// <summary>
+    /// Two companies' models on two tiers, as the effort-by-model tests spell the configuration: Claude's and GLM's on
+    /// best, GLM's alone on balanced - the configuration's default, so a step that inherits a tier is told from one it
+    /// would otherwise run on.
+    /// </summary>
+    private static AgentProviders? TwoModels()
+    {
+        var config = new HarnessConfig
+        {
+            Defaults = new HarnessDefaults { AgentTier = "balanced" },
+            Providers =
+            [
+                new()
+                {
+                    Name = "anthropic", Type = "anthropic", Api = "https://api.anthropic.com", ApiKeyNames = ["ANTHROPIC_API_KEY"], Client = "claude-code",
+                    Currency = "USD", ReadOn = "2026-10-12",
+                    Models =
+                    [
+                        new() { Code = "claude-fable-5-1", Name = "Claude Fable 5.1", Tiers = ["best"], Efforts = ["low", "medium", "high", "xhigh", "max"], ContextTokens = 1_000_000, MaxOutputTokens = 128_000 },
+                    ],
+                },
+                new()
+                {
+                    Name = "zai", Type = "zai", Api = "https://api.z.ai", ApiKeyNames = ["ZAI_API_KEY"], Client = "glm",
+                    Currency = "USD", ReadOn = "2026-10-12",
+                    Models =
+                    [
+                        new() { Code = "glm-5.3", Name = "GLM 5.3", Tiers = ["best", "balanced"], Efforts = ["low", "high", "max"], ContextTokens = 1_000_000, MaxOutputTokens = 131_072 },
+                    ],
+                },
+            ],
+            TierConfig = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["best"] = ["claude-fable-5-1", "glm-5.3"],
+                ["balanced"] = ["glm-5.3"],
+            },
+        };
+
+        return AgentProviders.Resolve(config).Providers;
+    }
+
+    /// <summary>Reads a definition's parse refusals, whole with their place in the file.</summary>
+    private static IReadOnlyList<string> Refusals(string text)
+    {
+        try
+        {
+            _ = WorkflowFileParser.Parse("workflows/implementation/implementation.yml", text);
+        }
+        catch (HarnessException ex)
+        {
+            return [.. ((string)ex.Message).Split(" - ").Select(line => line.Trim()).Skip(1)];
+        }
+
+        return [];
     }
 
     /// <summary>
@@ -2100,6 +2421,65 @@ public sealed class WorkflowValidatorTests
                 "step 'mender' answers 'visitBound' with more and no times: say how many times, from 1 to 20",
                 "step 'mender' answers 'visitBound' then accept with no times; then is what is answered once the counted answers are spent",
                 "step 'asked' answers 'pause' with 'stop', which is not one of the options the step offers",
+            ],
+            problems);
+    }
+
+    /// <summary>
+    /// skip - as the answer, or as the then given once the counted answers are spent - is refused wherever it would answer
+    /// a step that is not skippable: the step it is written on, or, written on a group or the workflow, each step in it
+    /// that raises the kind and has no nearer answer of its own. Where every step it answers is skippable it stands.
+    /// </summary>
+    [Fact]
+    public void ASkipAnswerOrThen_ThatWouldAnswerAStepNotSkippable_IsRefused()
+    {
+        var problems = Problems(
+            """
+            name: default
+            answers:
+              contextLimit: skip
+            steps:
+              - name: alone
+                type: reason
+                agent: thinker
+                prompt: prompts/think.md
+                outputs: schemas/think.json
+                answers:
+                  turnLimit:
+                    answer: retry
+                    times: 2
+                    then: skip
+              - name: group
+                answers:
+                  truncated: skip
+                steps:
+                  - name: free
+                    type: reason
+                    agent: thinker
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                    skippable: true
+                  - name: held
+                    type: reason
+                    agent: thinker
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                  - name: own
+                    type: reason
+                    agent: thinker
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                    answers:
+                      truncated: fail
+                      contextLimit: fail
+            """);
+
+        Assert.Equal(
+            [
+                "the workflow answers 'contextLimit' with skip, and 'alone' is no skippable step; skip ends a step skipped only where it says skippable",
+                "the workflow answers 'contextLimit' with skip, and 'group.held' is no skippable step; skip ends a step skipped only where it says skippable",
+                "step 'alone' answers 'turnLimit' then skip, and 'alone' is no skippable step; skip ends a step skipped only where it says skippable",
+                "group 'group' answers 'truncated' with skip, and 'group.held' is no skippable step; skip ends a step skipped only where it says skippable",
             ],
             problems);
     }
@@ -2853,11 +3233,11 @@ public sealed class WorkflowValidatorTests
             [
                 "input 'request' lists 'yes' among its options more than once; an option is one value a run may be started with, and a second says nothing the first did not",
                 "the input 'step' is named with a word a definition reads for its own; name it another way",
-                "the input 'Upper' is not a lower-case word with dashes within",
+                "the input 'Upper' is not a word with a lower-case letter first: letters, digits and dashes within",
                 "param 'rounds' is required and declares a default: a default always supplies the value, so required would never refuse. Give the default, or require the value.",
                 "the param 'os' is named with a word a definition reads for its own; name it another way",
                 "advisor.kinds names 'unboundLoop', which is no question kind. Known: 'loopBound', 'visitBound', 'recoveryBound', 'openAgents', 'foldNewRows', 'foldLostRows', 'foldOverCells', 'foldTwoChanges', 'foldConflicts', 'foldOutside', 'turnLimit', 'truncated', 'stepBudget', 'contextLimit', 'runBudget', 'noChecks', 'checksUnsettled', 'checksPending', 'failure', 'pause', 'ask'.",
-                "the output 'Title' is not a lower-case word with dashes within",
+                "the output 'Title' is not a word with a lower-case letter first: letters, digits and dashes within",
             ],
             problems);
     }

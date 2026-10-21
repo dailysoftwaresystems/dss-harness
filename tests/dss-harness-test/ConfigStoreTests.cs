@@ -3003,6 +3003,97 @@ public sealed class ConfigStoreTests
         Assert.Contains("\"CCACHE_DIR\"", exception.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The agent sections of the plan before the configuration owned them are refused naming the sections that
+    /// replaced them, so a reader moves their meaning instead of deleting their lines.
+    /// </summary>
+    [Theory]
+    [InlineData("""{ "agentProviders": [] }""", "agentProviders is no longer read: a provider and its models are declared under providers, and a step names none of it - a model's code is listed by one provider, which it names")]
+    [InlineData("""{ "agentProviders": [{ "name": "anthropic" }] }""", "agentProviders is no longer read: a provider and its models are declared under providers, and a step names none of it - a model's code is listed by one provider, which it names")]
+    [InlineData("""{ "agentTiers": { "best": [] } }""", "agentTiers is no longer read: which models a tier runs on, in the order they are tried, is declared under tierConfig")]
+    public void TheRetiredAgentSections_AreRefusedNamingWhatTookTheirPlace(string json, string expected)
+    {
+        var exception = LoadInvalid(json);
+
+        Assert.Contains(expected, exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The one-name form of a provider's keys, of the plan before 2026-10-20, is refused naming the list that
+    /// replaced it: a reader moves the key's name into the list instead of deleting its line.
+    /// </summary>
+    [Theory]
+    [InlineData("""{ "providers": [{ "name": "zai", "apiKeyName": "ZAI_API_KEY" }] }""", "providers 'zai': 'apiKeyName' is no key of a provider: list its keys under apiKeyNames, in the order they are tried")]
+    [InlineData("""{ "providers": [{ "apiKeyName": "ZAI_API_KEY" }] }""", "providers #1: 'apiKeyName' is no key of a provider: list its keys under apiKeyNames, in the order they are tried")]
+    public void AProvidersOneNameFormOfItsKeys_IsRefusedNamingTheList(string json, string expected)
+    {
+        var exception = LoadInvalid(json);
+
+        Assert.Contains(expected, exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>Both retired agent sections in one file are each refused, each naming what took its place: neither hides the other.</summary>
+    [Fact]
+    public void BothRetiredAgentSections_AreEachRefused()
+    {
+        using var temp = new TempDirectory();
+        var path = temp.WriteFile("config.json", """{ "agentProviders": [], "agentTiers": {} }""");
+
+        var exception = Assert.Throws<ConfigException>(() => CreateStore().Load(path));
+
+        Assert.Equal(
+            $"'{path}' could not be read: "
+                + "agentProviders is no longer read: a provider and its models are declared under providers, and a step names none of it - a model's code is listed by one provider, which it names "
+                + "agentTiers is no longer read: which models a tier runs on, in the order they are tried, is declared under tierConfig",
+            exception.Message);
+    }
+
+    /// <summary>
+    /// A client's contextTokens and maxOutputTokens, keys of a client before 2026-10-19, are refused naming the model's
+    /// keys that hold them now: no key of a client holds a size, which is its model's, under its provider.
+    /// </summary>
+    [Fact]
+    public void AClientsRetiredSizes_AreRefusedNamingTheModelsKeys()
+    {
+        using var temp = new TempDirectory();
+        var path = temp.WriteFile("config.json", """{ "agentClients": { "claude-api": { "contextTokens": 1000000, "maxOutputTokens": 128000 }, "glm": { "maxOutputTokens": 131072 } } }""");
+
+        var exception = Assert.Throws<ConfigException>(() => CreateStore().Load(path));
+
+        Assert.Equal(
+            $"'{path}' could not be read: "
+                + "agentClients 'claude-api': 'contextTokens' is no key of a client: what a model's context holds is its own entry's contextTokens, under its provider "
+                + "agentClients 'claude-api': 'maxOutputTokens' is no key of a client: the most a model's reply holds is its own entry's maxOutputTokens, under its provider "
+                + "agentClients 'glm': 'maxOutputTokens' is no key of a client: the most a model's reply holds is its own entry's maxOutputTokens, under its provider",
+            exception.Message);
+    }
+
+    /// <summary>
+    /// The agent sections' own refusals are made where config.json is read: a file whose providers do not read does not
+    /// load, naming the file and the problem, so a config that loads is one the tool can use.
+    /// </summary>
+    [Fact]
+    public void AProvidersSectionThatDoesNotRead_IsRefusedWhereTheFileIsRead()
+    {
+        using var temp = new TempDirectory();
+        var path = temp.WriteFile(
+            "config.json",
+            """
+            {
+              "providers": [
+                { "name": "zai", "type": "zai", "api": "api.z.ai", "apiKeyNames": ["ZAI_API_KEY"], "client": "glm",
+                  "models": [{ "code": "glm-5.3", "name": "GLM 5.3", "tiers": [], "efforts": ["low"], "contextTokens": 1000, "maxOutputTokens": 100 }] }
+              ]
+            }
+            """);
+
+        var exception = Assert.Throws<ConfigException>(() => CreateStore().Load(path));
+
+        Assert.Equal(
+            $"'{path}' could not be read: providers[0] 'zai' api 'api.z.ai' is no absolute https address; an address is the company's own or a gateway's, and http only for localhost",
+            exception.Message);
+    }
+
     /// <summary>An unknown key that was never read is refused as unknown, with nothing said to take its place.</summary>
     [Fact]
     public void AnUnknownKey_IsNotMistakenForARetiredOne()

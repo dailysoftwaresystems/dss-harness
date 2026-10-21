@@ -37,16 +37,18 @@ internal static class TestHost
     /// </summary>
     internal static string AssemblyProgram => Path.ChangeExtension(AssemblyPath, OperatingSystem.IsWindows() ? ".exe" : null);
 
+    /// <summary>The child behaviour this process was started in, by a test; null in an ordinary test run.</summary>
+    internal static string? ChildMode
+        => Environment.GetEnvironmentVariable(ChildModeVariable) is { Length: > 0 } mode ? mode : null;
+
     [ModuleInitializer]
     internal static void Initialize()
     {
-        var mode = Environment.GetEnvironmentVariable(ChildModeVariable);
-
-        if (!string.IsNullOrEmpty(mode))
+        // A child does its work from the entry point (TestProgram), never from here: while this runs, no other thread can
+        // run this assembly's code. It is left as its parent made it.
+        if (ChildMode is not null)
         {
-            // Started by a test as a child: do what the mode asks, and exit before the test
-            // framework ever starts.
-            Environment.Exit(TestChild.Run(mode, [.. Environment.GetCommandLineArgs().Skip(1)]));
+            return;
         }
 
         IsolateGitConfiguration();

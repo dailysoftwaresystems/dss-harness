@@ -181,9 +181,7 @@ public sealed class HostSecretsStore(IFileSystem fileSystem, IFilePermissions fi
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
-        return _platform.Current == PlatformId.Windows
-            ? $"make it private with: icacls \"{path}\" /inheritance:r /grant:r \"%USERNAME%:F\""
-            : $"make it private with: chmod 600 '{path}'";
+        return ItemEnvironment.HowToProtect(_platform, path);
     }
 
     /// <summary>

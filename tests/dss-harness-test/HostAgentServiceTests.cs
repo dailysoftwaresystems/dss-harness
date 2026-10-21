@@ -8,6 +8,7 @@ using NSubstitute;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Mutations;
+using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Repository;
@@ -934,6 +935,28 @@ public sealed class HostAgentServiceTests
     /// <summary>Every command past its point of no return that a host is ever asked to run.</summary>
     public static TheoryData<string> CommandsPastThePointOfNoReturn
         => [.. PointOfNoReturn.Commands.Where(command => !HostAgentProtocol.IsNotForwardable(command)).Order(StringComparer.Ordinal)];
+
+    /// <summary>
+    /// The one list of the commands no host is ever asked to run: the host agent's own verb and its hidden helpers, and
+    /// the five run verbs - a flow runs where it was typed, and its machine steps reach hosts as legs do, never the
+    /// session that drives them.
+    /// </summary>
+    [Fact]
+    public void TheOneListOfTheCommandsNoHostIsEverAskedToRun()
+        => Assert.Equal(
+            new[]
+            {
+                FlowService.AnswerCommand,
+                DssHarness.Core.Processes.ContainExec.CommandName,
+                HostAgentProtocol.CommandName,
+                HostExecService.CommandName,
+                DssHarness.Core.Execution.HoldAwakeService.CommandName,
+                FlowService.PauseCommand,
+                FlowService.ResumeCommand,
+                FlowService.RunCommand,
+                FlowService.StopCommand,
+            }.Order(StringComparer.Ordinal),
+            HostAgentProtocol.NotForwardable.Order(StringComparer.Ordinal));
 
     /// <summary>
     /// A command past its point of no return goes on once cancelled, to finish what it began or to say what is left: a

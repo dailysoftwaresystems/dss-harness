@@ -21,6 +21,9 @@ public sealed class StoppedDocumentTests
     /// <summary>The ledger's members as a command that begins a run answers with it stopped, in its order.</summary>
     private static readonly string[] Ledger = ["exitCode", "summary", "runId", "passed", "cancelled", "unfinished", "complete", "legs"];
 
+    /// <summary>The flow document's members, in its order: the session a run verb would have run, empty.</summary>
+    private static readonly string[] FlowDocument = ["exitCode", "summary", "run", "status", "questions", "answered", "passedOver", "handoffs", "leftForAPerson", "spent", "records"];
+
     /// <summary>
     /// Every command that takes --json, with the members of the document it answers with where it stops before its body
     /// has an outcome, in their order - an empty list where its document is an array, which it answers with empty.
@@ -29,6 +32,12 @@ public sealed class StoppedDocumentTests
     {
         ["list-worktree"] = ["exitCode", "summary", "worktrees", "elsewhere", "gone"],
         ["list-orchestrator"] = ["exitCode", "summary", "orchestrators"],
+        ["list-agent-providers"] = ["exitCode", "summary", "slot", "files", "providers", "balanceKeyUsage", "tiers", "clients", "unappointed"],
+        ["run-orchestrator"] = FlowDocument,
+        ["resume-orchestrator"] = FlowDocument,
+        ["answer-orchestrator"] = FlowDocument,
+        ["pause-orchestrator"] = FlowDocument,
+        ["stop-orchestrator"] = FlowDocument,
         ["refresh-agent"] = AgentDocument,
         ["rebase-agent"] = AgentDocument,
         ["fold-agent"] = AgentDocument,
@@ -387,6 +396,21 @@ public sealed class StoppedDocumentTests
             Assert.Equal(exitCode, result.ExitCode);
             Assert.Equal(OwnDocuments["list-orchestrator"], Stopped(result).Select(member => member.Key));
         }
+
+        // The run verbs answer with the flow document: the session they would have run, empty.
+        foreach (var (arguments, exitCode) in new (string[], int)[]
+        {
+            (["resume-orchestrator", "BAD!"], HarnessExit.UsageError),
+            (["answer-orchestrator", "BAD!", "more"], HarnessExit.UsageError),
+            (["pause-orchestrator", "nosuch"], HarnessExit.Refused),
+            (["stop-orchestrator", "nosuch"], HarnessExit.Refused),
+        })
+        {
+            var result = await CliRunner.RunAsync([.. arguments, "--json"], Token, workingDirectory: kit.Main);
+
+            Assert.Equal(exitCode, result.ExitCode);
+            Assert.Equal(FlowDocument, Stopped(result).Select(member => member.Key));
+        }
     }
 
     /// <summary>
@@ -424,8 +448,13 @@ public sealed class StoppedDocumentTests
             "Every other command asked for `--json` that stops before it has anything of its own to say answers in its own document's "
                 + "shape, never the ledger's: the agent verbs with the agent document, empty; `list-orchestrator`, `list-worktree`, `legs`, "
                 + "`install-missing-tools`, `check-ci-legs`, `check-anchor-citations`, `check-anchor-balance`, `fix-line-endings`, `validate-workflow`, "
-                + "`export-workflow`, `up` and `down` with their own document holding nothing, after `exitCode` and `summary` (`ReportJson.Stopped`); `check-mutations --list` with "
-                + "its listing, no legs; and `read-anchor` and `read-anchors`, whose document is an array, with that array empty - the "
+                + "`export-workflow`, `up` and `down` with their own document holding nothing, after `exitCode` and `summary` (`ReportJson.Stopped`); the run verbs "
+                + "(`run-orchestrator`, `resume-orchestrator`, `answer-orchestrator`, `pause-orchestrator`, "
+                + "`stop-orchestrator`) with the flow document - the session they would have run, empty "
+                + "(`OrchestrationReports.FlowStopped`); `check-mutations --list` with "
+                + "its listing, no legs; `list-agent-providers` with its listing, no provider - and with `--template` with the template's "
+                + "own document, `template` null (`AgentProviderReports.Stopped`, `AgentProviderReports.TemplateStopped`); and "
+                + "`read-anchor` and `read-anchors`, whose document is an array, with that array empty - the "
                 + "process's exit code and the line it ends on say the rest. Each command registers which where it is wired "
                 + "(`CommandRunner.Wire`, `JsonAnswer`), so the plumbing answers for it without choosing by its name: where the parser "
                 + "refuses its command line, the first error the line it ends on, wherever the parser itself read `--json` as that "
@@ -437,8 +466,9 @@ public sealed class StoppedDocumentTests
             StringComparison.Ordinal);
         Assert.Contains(
             "One reader reads a command line's flags wherever the parser may have refused it (`CommandFlags`): whether `--json` is "
-                + "set, and each flag a stopped document says - `fix-line-endings`' `check`, `install-missing-tools`' `dryRun`, and "
-                + "whether `check-mutations` answers with its listing. It never throws: a flag whose own value the parser refused, "
+                + "set, and each flag a stopped document says - `fix-line-endings`' `check`, `install-missing-tools`' `dryRun`, "
+                + "whether `check-mutations` answers with its listing, and whether `list-agent-providers` answers with its template. "
+                + "It never throws: a flag whose own value the parser refused, "
                 + "given twice with a value each, reads as not given. A command's body reads `--json` as that reader read it where "
                 + "the command was wired (`CommandContext.Json`), never from the option again.",
             architecture,

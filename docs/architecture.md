@@ -15,7 +15,9 @@ If a behaviour cannot be expressed in `config.json`, that is a defect.
 Implemented today: `init`, `verify-git`, `create-worktree`, `delete-worktree`,
 `list-worktree`, the orchestrator commands (`create-orchestrator`, `delete-orchestrator`,
 `list-orchestrator`, `create-agent`, `seed-agent`, `refresh-agent`, `rebase-agent`,
-`fold-agent`, `delete-agent`), `validate-workflow`, `export-workflow`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
+`fold-agent`, `delete-agent`), the run commands (`run-orchestrator`, `resume-orchestrator`,
+`answer-orchestrator`, `pause-orchestrator`, `stop-orchestrator`; each step of a run fails until
+the step runners land), `validate-workflow`, `export-workflow`, `list-agent-providers`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
 `read-anchor`, `read-anchors`, `check-anchor-balance`, `check-anchor-citations`),
 `fix-line-endings`, `check-ci-legs`, `legs`, `host-exec`, `install-missing-tools`,
 `update-tool`, `sync`, `build`, `test`, `run`, `check-mutations`, `clean`, `up`, `down` and
@@ -65,8 +67,17 @@ these with mode bits; Windows answers them with access lists and file extensions
 a POSIX implementation and a Windows implementation, and no third.
 
 **The process table**: what else is running on this machine, with each process's parent,
-its start time and its command line, which is what a leg's contention check reads.
-Windows publishes it through WMI, Linux through `/proc`, macOS through `ps`. Behind the
+its start time and its command line, which is what a leg's contention check reads, and the
+full path of the program it runs, which is how an update tells a session of the installation
+it would replace from a program of the same name installed elsewhere - a command line need
+not name its program by a path at all, and a process may write its own name and line over, as
+node running Claude Code calls itself `claude` on Linux and macOS.
+Windows publishes it through WMI, Linux through `/proc`, macOS through `ps` - whose name for a
+process is the first word it was started with, never its program - and libproc's
+`proc_pidpath`, which names the program. The kernel's own answers (`IProcessKernel`: `/proc`'s
+files, libproc's path) sit behind a seam of their own, so a test scripts the ones a machine
+cannot be made to give - another user's program, which Linux keeps from this user, a process
+that ended, a zombie - and the table carries each as none. Behind the
 seam so that nothing above it branches on the operating system to find out, and so a test
 can say what the machine was running without the machine having to be running it.
 
@@ -357,10 +368,11 @@ orchestrators directory, `.orchestrators`, for the slots every tree keeps its ow
 `.mutations` for a sweep's workers and `.legs` for the copies its legs work in, and for the harness
 directories a person fills by hand
 — the credential slots `sshItems`, `wslDistros`, `runner/.env`, `runner/.secrets` and
-`workflows/.env`, which is kept for the agent clients' keys and settings and which this build
-does not read yet — so a clone arrives with each directory in place. `init` writes the
+`workflows/.env`, the agent clients' keys, read by the runner's one rule for a directory of dotenv
+files and from nowhere else — so a clone arrives with each directory in place. `init` writes the
 credential slots' rules and placeholders from the one list of them (`HarnessLayout.SecretSlots`),
-and no workflow may be named `.env`. A configuration `init` writes names `.worktrees` as the root; one that names
+which is also the floor that names them for every move of work: seed, fold, refresh and rebase never
+touch them, whatever git or the ignore block says (`TreeFloor.OfAgentMoves`). No workflow may be named `.env`. A configuration `init` writes names `.worktrees` as the root; one that names
 none keeps `.harness-config/worktrees`, so worktrees made before stay where they are. The root
 was ignored whole, with no placeholder, and the costs of this shape were measured then and are
 accepted now: a directory holding a tracked file never reads as ignored itself, so `git
@@ -1260,8 +1272,12 @@ a fix to a declared `recover`, and names no triage of its own, which would be it
 where a workflow has one, every other reasoning step names it. Its agent reproduces the issue on the
 base commit and answers `fix` (in a step's way, related to the work, or critical: given to the
 recovery, the step it was in the way of running again after), `list` (added, proven, to the run's
-`pre-existing-issues.json`, shown in the pull request's body and the handoff), `duplicate` or
-`unproven`. The engine that raises it and writes the list is the next thing built; `issue` is read only by the triage and the recovery, and `source` by them and by a handler.
+`pre-existing-issues.json`, shown in the pull request's body and the handoff, a quote or an output
+cut to 4,000 characters, the cut said), `duplicate` (naming in `duplicates` the listed issue it
+repeats) or `unproven`; an answer whose course is none of the four, or whose issue to list does not
+read back, fails the triage step (12) before it ends. The engine raises it and keeps the list -
+though until the reasoning step runner lands no step reports an issue; `issue` is read only by the
+triage and the recovery, and `source` by them and by a handler.
 
 `validate-workflow` checks a declared workflow, or every one declared: the file's shape, every key
 against the table that owns it (`WorkflowStepTypes`, which the parser reads exactly and `help
@@ -1275,7 +1291,7 @@ the output a built-in type answers, which `WorkflowStepTypes` holds, the engine'
 the run's own names, which `WorkflowExpressions` holds), every operator held to what it takes
 (`FlowExpression`: `!`, `&&` and `||` a boolean, `==` and `!=` no list and no object, `any` a list
 and a test that yields a boolean, `??` and `empty(...)` anything) and every key to what it reads (a
-`when`, an `until` and a `blocking` a boolean, a `forEach` and a key that takes a list a list) - a value
+`when`, a test step's `filterWhen`, an `until` and a `blocking` a boolean, a `forEach` and a key that takes a list a list) - a value
 refused only where none its reading allows could be what is taken, so that one that may be null is
 the run's to read. How the run stands without its `always` steps (`run.status`, `run.done` and the
 rest) is read by an `always` step alone; a placeholder stands in a key that is a template and is
@@ -1295,9 +1311,60 @@ has nothing to check, and is refused (13), saying that `"workflows": ["implement
 (`WorkflowValidator`), pure, so the engine can run them at the start of a run without reading a
 file: the text of the schemas and prompts a definition names is handed to it by whoever reads them -
 `validate-workflow` from the repository, and the shipped definition from what this build embeds.
-This build checks workflow definitions and
-does not run them: the engine that runs them - the coordinator, the agents, the steps over the
-services the tool already has - is the next thing the tool grows.
+Against a configuration's providers it also checks every reason step, the advisor and the reporter
+(V38's config half): the tier is one `tierConfig` defines, the model one a provider lists, the client
+reaches the provider, and each model the step may run on is given a level it takes - one level for
+every model, or a map of `all` and models' codes, each model's resolved on its own, a code the step
+does not run on refused as dead, and a step that goes on with another's work checked against the tier
+it inherits. Where the definition holds, the check says each agent's models and the level each runs
+at, one line apiece under the line that says it holds, and every key a step's model would read that
+no file of the agent clients' slot declares, one beside a key the slot holds among them, with the
+steps that would read it - as a step's first model, or as a later model of its tier. What a model
+reads is decided in one place (`AgentProviders.KeysRead`) by the client that reaches it, the step's
+own or else its provider's: `claude-api` and `glm` sign each request with the provider's key, and
+`claude-code` signs in with the machine's login and reads none, so a step on it is never said to
+need one. Each line is the one sentence a missing key is said in (`AgentKeyStore.Missing`), ending
+with the names the slot holds that nothing appoints. It is a report and not a problem: a machine
+that only checks a configuration needs no key, and no command of this build refuses one - the run
+that will is the engine's, which this build does not yet run. The slot itself
+(`Secrets\AgentKeyStore`, beside the host items' own store) reads the git-ignored
+`.harness-config/workflows/.env/` by the runner's one rule for a directory of dotenv files - every
+file merged, a name declared twice refused in its own words, a file in the directory's place refused
+rather than read as none, and (the slot's own shape) each name held to a variable's name, a line
+whose name is not one said by its number and never by its text, which may be part of a key - and
+from nowhere else, so a stray variable of the tool's own environment neither chooses whose key a run
+bills nor redirects one. Where a value is read (`AgentKeyStore.Value`, which no command of this
+build calls yet), who may reach the file each name came from is asked by the one rule
+the host items' files are held to (`ItemEnvironment.Unprotected`): never a file others can change,
+and never one others can read while it holds a secret - a name the configuration appoints as a key,
+not a setting such as the program a client starts. `list-agent-providers` says the same configuration without saying one key: each
+provider, client and tier, every appointed name present or missing, exit 0 whatever is missing;
+`--template` the sections as `init` writes them, answered before any repository is read - outside
+one, and where the configuration it is printed to repair does not load. The Claude Code the clients will drive is npm's own:
+`NpmClient` finds npm (a program, or on Windows what `npm.cmd` would have started - the tool never
+starts a batch file - with npm and the node that starts it looked for on one PATH by the tool's one
+walk of a PATH), `ClaudeCodeInstall` reads the package it holds and the version its program
+answers (the version in the line `claude --version` prints, compared as a version, never as
+text), and `ClaudeCodeUpdateService` - the second caller of the shared `ProgramUpdate` sequence
+`update-tool` has - installs it where npm has none and brings one older than the tool needs up to
+the one version it names: never elevated, never beside a running session of that installation
+(`ClaudeCodeInstall.SessionsAsync`, the one rule of which processes count: a process whose
+program, or a path on whose command line, lies under the package's directory - read as text
+first, links followed only for a process called `claude` or `node` whose text did not say, each
+path once per reading, off the caller's thread and within ten seconds, a path on a mount that
+answers nothing counting its process as one that cannot be told apart -; a `claude` whose
+program is node, which is how node running Claude Code shows on Linux and macOS once it has
+written its title over its name and line; and a `claude` whose program could not be read,
+another user's on Linux - each named in the refusal (13). A `claude` installed any other way
+whose program is read does not count, and a table read by names alone refuses the change (13)
+by the rule `update-tool` refuses such a wait by, `ProgramUpdate.Unread`), bounded, and read back after a change that
+failed as after one that ran, saying what npm holds since. A program the slot names is never
+moved, and a slot that cannot give it is refused, never passed over for npm's; the client's
+`update` key is read by the service, true where nothing is said. The step runner that asks it
+before a run's first step is the engine's, still to come. This build checks workflow definitions and
+starts and drives a run of one (see "Running a workflow" below); the step runners - the agents, the
+steps over the services the tool already has - are the next thing the tool grows, and until they land
+each step of a run fails, saying no runner serves its type.
 
 A definition is held to the `config.json` it is checked under as well: a `run` step whose runner -
 or a runner its run checks name - says `writesTree` names with `in` the create-agent step whose
@@ -1340,6 +1407,148 @@ configuration with no `commit.template`, written as
 `init` writes it. The yml is written last, and a file that cannot be written takes back what was
 written before it, with every folder the export made, so a folder with part of a workflow in it is never
 left behind - or the refusal says why it could not be taken back.
+
+### Running a workflow
+
+A run is an orchestrator the engine drives (`FlowService`, a use case of Core; the CLI only wires
+it). `run-orchestrator <workflow>` checks the definition as `validate-workflow` does (12 where it
+does not hold) - read from the definition tree, the main checkout, whichever tree the command was
+typed in, as every later session of the run reads it - reads `--input` - `name=@<file>` through `IFileSystem`, relative to `--directory`,
+a missing file a usage error - and checks the inputs against the definition before anything is
+made, by the one owner of what an input takes (`FlowInputs.Resolve`, which the engine holds its run
+to as well); then, inside the repository's one section (`FlowSessions.AcrossRuns`), it refuses another
+unfinished run with work in the tree - a run whose agent's record cannot be read counts as one,
+said - chooses the name (`r<N>`, one more than the highest there; a name `--run` gives is held to
+`worktrees.maxNameLength` and refused where a record or anything else is there), holds the start
+to the path budget of its agents' worktrees with the copies and workers its leg steps keep inside
+them (`FlowRunPaths`), makes the run's record, its status and its owner
+(`.orchestrators/<run>.owner.json`), and leaves the section. A session of a run already made -
+`resume-orchestrator`, or `answer-orchestrator` where no engine runs the run - first sweeps what a
+killed engine's steps left running (`ChildSessions`), refuses a definition the repository's entry
+in the main checkout no longer matches - compared by digest of what the definition says
+(`FlowRunContext.DigestOf`), never of where its file was read from, so a checkout that moved or a
+command typed in another tree is no change - and claims the run inside the same section: refused by
+name where the run was deleted since, refused while a live engine owns it, a dead owner reclaimed
+and said, a request no engine took removed. Two starts, or two sessions of one run, can never both
+pass; and `delete-orchestrator` decides and removes inside that section too, taken before the
+orchestrator's own, so no claim comes between its look at the owner and its removal of the run.
+
+The run's records are written in one order at every change - a step's own files (its `handoff.md`
+where it handed off, its `output.json`, then the `step.json` that names them), then `flow.json` (the
+truth a resume reads), `workflow.json`, `pre-existing-issues.json` where the change listed one, and last the event
+in `events.jsonl` - each read back strictly: a value the engine does not name, a nested record that
+does not hold, a time in any but the one form (`yyyy-MM-dd HH:mm:ss`, UTC; one not yet come is
+written `null`), a log line out of sequence or corrupt is refused by its number, and only a torn last
+line is set aside, said. A resume reconciles `flow.json` against every step's own record, taking the
+step's own whole wherever there is one, keeping the index's order and adopting what only a step's
+directory holds at the end. The graph is rebuilt in that order, never sorted again - `build+10` after
+`build+2`, `rounds#10` after `rounds#2`, a loop's later visit (`rounds+2`) and its items as their own,
+a block's members whatever the block ended, the agents the run holds open (each a create-agent step
+made, held by its newest visit, that no deletion deleted) - and a record whose scope never comes, or
+whose state the engine does not name, is refused rather than taken for one that runs again. It takes back a handoff a
+crash left beside its record - the engine's where its first line says so and why, as the engine
+writes every handoff of its own (`FlowHandoff.ByEngine`, read back by `FlowHandoffRecord.Of`), the
+agent's otherwise - reads each handoff back as it was handed, and refuses - naming the file - a record
+that names a handoff that is gone, and a missing `questions.json` or `pre-existing-issues.json`,
+never made again empty. A handoff an attempt still held when it was cut off - an agent's account no
+prompt holds yet, stopped or running - is given to the next attempt; neither a later pause whose turn
+gives none nor the resume writes the engine's over it.
+
+The session then goes on from those records alone, where the run stood, whatever ended the last one
+and whichever engine wrote them. Every question in `questions.json` comes back with every answer it
+was given - the next id after the highest of any state, and what a configuration's counted answers
+spent and every `more` a bound was granted counted again from the answers - and a step waits on each
+one still open. What was running or stopped runs again as a new attempt, and so does a failure that
+ended the run (its record's `failure` is `endedRun`) save one an answer `fail` ended, which stands and
+keeps the run stopped; what that stop left NotRun (`notRunCause` `RunEnded`, or `DependencyFailed`
+where the failure no longer blocks it) is drawn again under the same id, and a group stands open
+over such a member, never ended done over it. What the run owed is made before anything runs: a
+failure recorded `owed` - one that ended while a pause recorded what it left running, or before what
+decides it was written - an ending whose handlers its record holds `owed`, issues a step's record
+holds owed their triage (`issuesOwed`), an issue a triage answered fix for whose recovery was never
+raised, and every redirect in `flow.json`'s `redirects`, each in its turn - a pause and a hard stop
+alike leave a redirect owed, never making it, for the resume makes it once what they stopped stands
+to be withdrawn. A triage's answer is
+listed and counted before its end is recorded, so the end's one write carries the run's file of
+issues (`FlowSnapshot.Issues`) in the one order; a crash before that file leaves the end written, and
+the resume lists the issue from the triage's answer - once, for one the list already holds the same in
+all but its id and time is not listed again. Each record is written before what follows from it - a question before the record of the
+step that waits on it, an answer before what it changes, a visit with what raised it, a failure
+owed until it is decided, every visit a redirect leaves marked `leftBy` before the redirect leaves
+the run's records, and a handler a redirect leaves before it ended marked `left` in its source's
+record, for it took nothing: the ending it was raised for is abandoned, settled by none of its handlers
+and never rebuilt by a resume - so a crash between any two writes leaves records the next session completes: an
+answer written is carried out once, a configured answer never written is given, a handler is never
+raised twice, and an ending whose handlers all ended is settled. A session is never said done over a
+step that never ended, nor one its scope never drew. What the session's start writes is held, in the
+order made and each with the run as it stood, until it is known the session goes on: a resume beside
+an open question is refused only where nothing can run until a question is answered, and then it has
+written nothing - no event, no attempt, no state; a session an answer began, and one whose budget
+question is open, are never refused, and end paused on the question left. A stop asked between
+sessions - `abort` answered with no engine running the run - ends the session it begins where the run
+stands, stopped, as a stop in a session ends it: nothing it found stopped runs again or is given the
+engine's handoff in place of its own, nothing owed is made and nothing starts; the session after it
+goes on with all of it.
+
+Each session ends however it ends with the run's report (`report.md`, `report.json`), its owner
+released in a `finally`, its line in the run's log, and every record it wrote named in text and in
+`--json` (`FlowRunResult`, `FlowReports.Document`): `0` done, `20` failed - `21` where every failure
+that ended it was incomplete after its retries (`FlowRetry.RunsAgain`, read from each step's record:
+its code, and the `cause` it keeps where the code cannot say it, `LockHeld` for a refusal whose only
+obstacle was a held lock) - `1` paused on a question,
+the budget's among them, and `130` at a safe pause or a stop. A refusal met inside a session is
+answered as a refusal, naming the records as they stand. Another terminal reaches the engine
+through two files its poller reads at once and every 2 s: `stop.json` (`pause-orchestrator`, which
+waits until the pause is complete; `stop-orchestrator`, which waits 30 s) and `inbox.json`
+(`answer-orchestrator` to a running engine, each answer under an id of its own). The poller never
+waits on what it hands the engine; what it cannot read is said once and read again, anything else
+asks the run to pause; a last poll at the session's end takes what came late, and the next session
+takes what is left. The engine takes an answer offered before a session begins at its start, before
+anything is admitted - so a resume is never refused over the question it settles - and hands one left
+unread as its session ends back cancelled, never refused, so it stays in the inbox for whoever takes it
+next; what a step spent that came late is counted. Every answer handed over is weighed by one owner
+(`FlowCoordinator.AnswerHandedOver`), whether a session's loop or the inbox taken between two drives
+meets it, and what became of it is written into `questions.json` under its inbox entry's id before
+anything else is said of it: an answer taken carries the id in who gave it (`by.inbox`), and one the
+run does not take - its question no longer open, or it changes an answer already given - is kept in
+the file's `refused` list, then recorded as an `answer` event naming why. An answer a session weighed
+leaves the inbox only once what became of it is written: one weighed at a session's start, whose writes
+are held until it is known the session goes on, is settled when they are made, and handed back - left in
+the inbox, and said - where they never are, a refused resume writing nothing; so nothing empties from
+the inbox an answer the run's records do not hold. Once settled it is counted, and leaves the inbox
+once the file lets it go: a removal that fails is tried again at the next poll or drive's end, and one
+the inbox still holds as the session ends - the removal failed to the last, or a crash came between the
+take and the removal - is settled by the run's records, so a later session that meets the entry only
+empties it from the inbox: no answer is weighed, offered or taken twice. Where the engine leaves before it takes a request, the command answers from the
+run's state and takes the request back. `stop-orchestrator --now` ends the engine's process tree -
+only on this machine, and only the process whose start matches the one its owner recorded - and
+removes the owner once it is gone. Whether a run's engine is live is asked of one owner
+(`FlowRunOwner`) by every command: `delete-orchestrator` refuses a run a live engine owns (13,
+naming `pause-orchestrator` and `stop-orchestrator`) and removes a gone engine's owner with the run,
+and `list-orchestrator` says what the engine is doing - none, running, pausing, recording what a
+complete pause left running, or gone.
+
+A session's interrupts are its own (`FlowTerminal`, `FlowInterrupts`): Ctrl+C, and off Windows
+SIGTERM and a hang-up, are taken by `PosixSignalRegistration` and never end the process, and the
+command line's own termination handling is turned off for the three session verbs
+(`PointOfNoReturn.TerminationTimeoutFor`, the one choice of the termination timeout, which
+`Program.cs` makes by), since it cancels at the first interrupt and starts a
+clock. They are counted once, for the whole session - every drive of it, the one an answer taken as
+it ended begins among them - and the terminal's bound begins at the second of that one count,
+whoever pressed the first; only the session's end clears it. The first asks the engine for the safe
+pause, which starts no clock; the second asks it to stop where it stands: the engine records a step whose runner does not end within 90 s of applying
+the stop as stopped all the same (`PointOfNoReturn.SafePauseDrain`), and the command ends within 120 s
+of the interrupt whatever is left (`PointOfNoReturn.HardStopBound`, the drain and 30 s to write the
+end, so the terminal never cuts off a session the engine is still ending in order) - what a crash
+leaves, which a resume goes on from. A session cut off answers as every command over its run does:
+the run and `resume-orchestrator <run>` named, every record listed in text and `--json`, and its line
+in the run's log. A hang-up keeps the process to pause the run but leaves nobody to read the
+terminal: from it on the terminal says nothing, and a line said while the session runs - an
+interrupt's, the poller's (`FlowTerminal.Warn`) - is dropped where the terminal can no longer be
+written to, never an exception that ends the process part way; the run's records hold what happened. The engine's loop alone applies either,
+and a cancellation of the session's token is the second, never a cut-off. Until the step runners
+land, the runner registered is `NoStepRunner`: each step of a run fails, saying no runner serves its
+type (its code 14).
 
 ## Anchor registries
 
@@ -1908,7 +2117,11 @@ command that says nothing of it. A Ctrl+C typed at a terminal on Linux or macOS 
 itself, as it reaches every process of the terminal's: what that leaves is read back and said
 like any other failure of the update. It says the update done only once `dotnet tool list` shows that release, and a failure with
 what dotnet said, each DssHarness that started while it ran, and what is listed since - or, where
-that listing failed too, why in dotnet's words (exit 20). Which release is the newest is asked of
+that listing failed too, why in dotnet's words (exit 20; 21 where dotnet did not finish within its
+ten minutes - an update begun and not finished, which running it again can finish, the one code
+`ProgramUpdate.FailedExit` gives every program's update, Claude Code's by npm among them; dotnet
+says a feed it did not reach in the machine's own language, with no code to match, so only its
+bound tells it). Which release is the newest is asked of
 nuget.org (`IPublishedToolVersions`), and an answer that does not come is said with its cause
 (`PublishedAnswer.Untold`): the feed not reached, no answer in three seconds, a status that is no
 success, a list or a leaf this build cannot read - put right in different places, and once said as
@@ -2581,8 +2794,13 @@ tool replaces, where a green result had quietly stopped meaning anything.
   answers in its own document's shape, never the ledger's: the agent verbs with the agent
   document, empty; `list-orchestrator`, `list-worktree`, `legs`, `install-missing-tools`,
   `check-ci-legs`, `check-anchor-citations`, `check-anchor-balance`, `fix-line-endings`, `validate-workflow`, `export-workflow`, `up` and `down` with their own document
-holding nothing, after `exitCode` and `summary` (`ReportJson.Stopped`);
-  `check-mutations --list` with its listing, no legs; and `read-anchor` and `read-anchors`,
+  holding nothing, after `exitCode` and `summary` (`ReportJson.Stopped`); the run verbs
+  (`run-orchestrator`, `resume-orchestrator`, `answer-orchestrator`, `pause-orchestrator`,
+  `stop-orchestrator`) with the flow document - the session they would have run, empty
+  (`OrchestrationReports.FlowStopped`);
+  `check-mutations --list` with its listing, no legs; `list-agent-providers` with its listing, no
+  provider - and with `--template` with the template's own document, `template` null
+  (`AgentProviderReports.Stopped`, `AgentProviderReports.TemplateStopped`); and `read-anchor` and `read-anchors`,
   whose document is an array, with that array empty - the process's exit code and the line it
   ends on say the rest. Each command registers which where it is wired (`CommandRunner.Wire`,
   `JsonAnswer`), so the plumbing answers for it without choosing by its name: where the parser
@@ -2595,8 +2813,9 @@ holding nothing, after `exitCode` and `summary` (`ReportJson.Stopped`);
   with a value each.
 - One reader reads a command line's flags wherever the parser may have refused it
   (`CommandFlags`): whether `--json` is set, and each flag a stopped document says -
-  `fix-line-endings`' `check`, `install-missing-tools`' `dryRun`, and whether `check-mutations`
-  answers with its listing. It never throws: a flag whose own value the parser refused, given
+  `fix-line-endings`' `check`, `install-missing-tools`' `dryRun`, whether `check-mutations`
+  answers with its listing, and whether `list-agent-providers` answers with its template. It
+  never throws: a flag whose own value the parser refused, given
   twice with a value each, reads as not given. A command's body reads `--json` as that reader
   read it where the command was wired (`CommandContext.Json`), never from the option again.
 - The one exit of a command asked for `--json` without its document is its usage: `--help`, `-h`
@@ -4742,7 +4961,7 @@ with "the harness could not run", because the remedies differ.
 | 14 | A required tool is missing, or could not be started |
 | 15 | A host could not be reached, DssHarness could not run there, or a command run there never reported how it finished |
 | 20 | The wrapped command ran and failed |
-| 21 | Ran with nothing failing, but a leg reached no verdict or left a set-up it brought up running, or a deletion, a fold, a hand-over or a move of an agent's base stopped part way; it is not a pass, and running it again, once what it names is dealt with, finishes it |
+| 21 | Ran with nothing failing, but a leg reached no verdict or left a set-up it brought up running, or a deletion, a fold, a hand-over, a move of an agent's base or an update of a program stopped part way (not finished within its bound, or its download not reached); it is not a pass, and running it again, once what it names is dealt with, finishes it |
 | 70 | The harness itself failed unexpectedly (a defect in the tool) |
 | 130 | The run was interrupted before it finished; what it had already done is still reported |
 
@@ -4760,6 +4979,11 @@ than a failure of the command. `check-ci-legs` exits `1` when a leg is red and `
 is a leg - the matrix did not run, or `legJobPattern` matches none of its jobs - an empty answer
 indistinguishable from every leg passing, and never read as one. `host-exec` returns the exit code of the command it ran on the host,
 unchanged, or 15 when that command never reported how it finished.
+A session of a run (`run-orchestrator`, `resume-orchestrator`, `answer-orchestrator`) exits `1`
+where it ends paused on a question - a step's, or the budget's at its reserve (`FlowExit.Paused`) -
+so a wrapper that retries 21 never loops on a question nobody answered; otherwise `0` done, `20`
+failed, `21` failed where every failure that ended it was incomplete after its retries, and `130` at
+a safe pause or a stop.
 `dssharness help exit-codes` prints the shared table from the code itself; this copy, and the
 per-command codes above, are maintained by hand.
 

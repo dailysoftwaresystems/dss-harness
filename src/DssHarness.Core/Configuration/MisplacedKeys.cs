@@ -48,7 +48,63 @@ internal static class MisplacedKeys
 
         using (document)
         {
-            return [.. Retired(document.RootElement), .. StepKeysOnPhases(document.RootElement)];
+            List<string> keys = [.. RetiredAgentSections(document.RootElement)];
+
+            keys.AddRange(Retired(document.RootElement));
+            keys.AddRange(RetiredProviderKeys(document.RootElement));
+            keys.AddRange(RetiredClientKeys(document.RootElement));
+            keys.AddRange(StepKeysOnPhases(document.RootElement));
+            return keys;
+        }
+    }
+
+    /// <summary>
+    /// The agent sections of the plan before 2026-10-19: each is refused naming the section that replaced it, so a
+    /// reader moves its meaning instead of deleting its lines.
+    /// </summary>
+    private const string AgentProviders = "agentProviders";
+
+    /// <summary>As <see cref="AgentProviders"/>, for the tiers.</summary>
+    private const string AgentTiers = "agentTiers";
+
+    /// <summary>Each retired agent section the file holds, each said: one never hides the other.</summary>
+    private static IEnumerable<string> RetiredAgentSections(JsonElement root)
+    {
+        if (Property(root, AgentProviders) is not null)
+        {
+            yield return $"{AgentProviders} is no longer read: a provider and its models are declared under providers, and a step names none of it - a model's code is listed by one provider, which it names";
+        }
+
+        if (Property(root, AgentTiers) is not null)
+        {
+            yield return $"{AgentTiers} is no longer read: which models a tier runs on, in the order they are tried, is declared under tierConfig";
+        }
+    }
+
+    /// <summary>
+    /// A client's sizes, keys of a client of the plan before 2026-10-19, each with what it says now and where: no key of a
+    /// client holds a size, which is its model's, on the model's entry under its provider.
+    /// </summary>
+    private static readonly (string Key, string Now)[] RetiredClientSizes =
+    [
+        ("contextTokens", "what a model's context holds is its own entry's contextTokens, under its provider"),
+        ("maxOutputTokens", "the most a model's reply holds is its own entry's maxOutputTokens, under its provider"),
+    ];
+
+    /// <summary>Every client entry that still holds a size, each key said with the model's key that took its place.</summary>
+    private static IEnumerable<string> RetiredClientKeys(JsonElement root)
+    {
+        if (Property(root, "agentClients") is not { ValueKind: JsonValueKind.Object } clients)
+        {
+            yield break;
+        }
+
+        foreach (var client in clients.EnumerateObject())
+        {
+            foreach (var (key, now) in RetiredClientSizes.Where(size => Property(client.Value, size.Key) is not null))
+            {
+                yield return $"agentClients '{client.Name}': '{key}' is no key of a client: {now}";
+            }
         }
     }
 
@@ -84,6 +140,34 @@ internal static class MisplacedKeys
     /// <c>buildConfigs</c>, and read by nothing, so a file naming <c>release</c> there tested only the config each leg names.
     /// </summary>
     private const string TestConfigs = "configs";
+
+    /// <summary>
+    /// The one-name form of a provider's keys, of the plan before 2026-10-20: each provider entry holding it is refused
+    /// naming the list that replaced it, so a reader moves the key's name into the list instead of deleting its line.
+    /// </summary>
+    private const string ApiKeyName = "apiKeyName";
+
+    /// <summary>Every provider entry that still holds the one-name form of its keys.</summary>
+    private static IEnumerable<string> RetiredProviderKeys(JsonElement root)
+    {
+        if (Property(root, "providers") is not { ValueKind: JsonValueKind.Array } providers)
+        {
+            yield break;
+        }
+
+        var position = 0;
+
+        foreach (var provider in providers.EnumerateArray())
+        {
+            position++;
+
+            if (Property(provider, ApiKeyName) is not null)
+            {
+                yield return $"providers {NameOrPlace(provider, position)}: '{ApiKeyName}' is no key of a provider: list its keys "
+                    + "under apiKeyNames, in the order they are tried";
+            }
+        }
+    }
 
     /// <summary>Every test section the file declares - a project's and a leg's - named as a refusal names it.</summary>
     private static IEnumerable<(string Name, JsonElement Test)> TestSections(JsonElement root)

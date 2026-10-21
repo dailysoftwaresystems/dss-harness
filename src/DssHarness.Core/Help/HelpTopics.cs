@@ -62,6 +62,7 @@ public static class HelpTopics
         new("worktrees", ["worktree"], "Naming rules, the path budget, and when deleting refuses", RenderWorktrees),
         new("orchestrators", ["orchestrator", "agents", "agent"], "Orchestrators, their agents, and folding an agent's work", RenderOrchestrators),
         new("workflows", ["workflow"], "Workflow definitions: what config.json declares and the yml file defines", RenderWorkflows),
+        new("agent-clients", ["clients", "models"], "Providers, models, tiers and keys in config.json", RenderAgentClients),
         new("anchors", ["anchor"], "Anchor registries and the commands that change them", RenderAnchors),
         new("layout", [], "What init creates, and what git tracks", RenderLayout),
         new("secrets", ["hosts-secrets"], "Where each host's connection data lives", RenderSecrets),
@@ -1702,6 +1703,11 @@ public static class HelpTopics
         builder.AppendLine($"    {MutationService.NothingRuns,3}  no selected leg can run, and no failure turned one away: incomplete, since");
         builder.AppendLine($"         {LegsExit.Unavailable} is an arm violated here");
         builder.AppendLine();
+        builder.AppendLine($"  {FlowService.RunCommand}, {FlowService.ResumeCommand}, {FlowService.AnswerCommand}");
+        builder.AppendLine($"    {FlowExit.Paused,3}  paused: a question waits - a step's, or the budget's at its reserve - for {FlowService.AnswerCommand}");
+        builder.AppendLine($"         A session otherwise ends {HarnessExit.Success} done, {HarnessExit.CommandFailed} failed, {HarnessExit.Incomplete} failed where every failure that ended it");
+        builder.AppendLine($"         was incomplete after its retries, and {HarnessExit.Cancelled} at a safe pause or a stop");
+        builder.AppendLine();
         builder.AppendLine("host-exec returns the exit code of the command it ran on the host, unchanged, or");
         builder.AppendLine($"{HarnessExit.HostUnavailable} when nothing ran there, or the command never reported how it finished.");
 
@@ -1967,7 +1973,9 @@ public static class HelpTopics
             + $"{ToolUpdateService.WaitOption} or without, since it read the machine before the other changed it. "
             + "Once the update has begun this command does not stop it, interrupted or not, and reads back what it left: "
             + "it says the update done only once the tool is listed as that release, and a failure with what dotnet said and what "
-            + $"is listed since, or why that is not known ({HarnessExit.CommandFailed}). Where nuget.org does not say which release "
+            + $"is listed since, or why that is not known ({HarnessExit.CommandFailed}; {HarnessExit.Incomplete} where dotnet did not finish within "
+            + $"{ToolPackage.ChangeBudget.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes, an update begun and not finished, which running "
+            + "it again can finish, as every program's update this tool makes answers it). Where nuget.org does not say which release "
             + "is the newest it says why - no route to it, no answer in time, an answer it cannot read - and changes nothing, "
             + "unless the copy asking is itself a release newer than the installed one, which it then moves to, saying so. A tool "
             + $"installed with dotnet's --tool-path is named with {ToolUpdateService.ToolPathOption}.");
@@ -2332,6 +2340,115 @@ public static class HelpTopics
         return builder.ToString();
     }
 
+    /// <summary>
+    /// The agent sections of config.json: the companies whose models the tool reaches, their keys in the git-ignored
+    /// slot, the tiers a step runs on and the effort forms - said where a person reads them, before the clients that
+    /// reach the companies are built (nothing here runs a step).
+    /// </summary>
+    private static string RenderAgentClients()
+    {
+        var builder = new StringBuilder();
+
+        builder.AppendLine("Agent clients");
+        builder.AppendLine();
+        builder.AppendLine("The companies whose models this tool reaches are declared in config.json, under");
+        builder.AppendLine("providers, and nothing of a model is in the tool's code: a model's entry says what it");
+        builder.AppendLine("takes (its efforts), what it holds (its context and its output) and what it costs (its");
+        builder.AppendLine("prices, with the date they were read); a model's code is listed once across every");
+        builder.AppendLine("provider, so naming a model is enough - its code says its provider, its API's address,");
+        builder.AppendLine("its keys' names and its client.");
+        builder.AppendLine();
+        builder.AppendLine("A provider's keys are a list, apiKeyNames: the names of the variables that hold its");
+        builder.AppendLine($"keys in the git-ignored slot {HarnessLayout.WorkflowsDirectoryRelative}/.env/, at least one, in the");
+        builder.AppendLine("order they are tried - a name and never a key, and a second key of one company is a second");
+        builder.AppendLine("name in the list. A client that signs in with the machine's login - claude-code - reads no");
+        builder.AppendLine("key at all. Choosing a key is the engine's, when it runs a run's steps, and no command of");
+        builder.AppendLine("this build runs a step: a step is to start on the first key the slot holds, unless");
+        builder.AppendLine("balanceKeyUsage is on (off unless turned on), where it is to start on the one that has spent");
+        builder.AppendLine("least in the last seven days, counted back from the moment it starts, its conversation");
+        builder.AppendLine("staying with one account. What a key spent is to be what the engine counts for each request");
+        builder.AppendLine("served with it, at the configuration's prices, recorded by the key's name in the");
+        builder.AppendLine("repository's records; what the same key spends elsewhere - another repository, another");
+        builder.AppendLine("machine, another tool - is not seen.");
+        builder.AppendLine();
+        builder.AppendLine("The slot itself is a directory of dotenv files, " + HarnessLayout.WorkflowsEnvSlotRelative + "/:");
+        builder.AppendLine("every file in it is read and merged, a name declared in two of them is refused, a line whose");
+        builder.AppendLine($"name is no variable's name ({Secrets.AgentKeyStore.VariableNameShape}) is refused by its line number alone, for it");
+        builder.AppendLine("may be part of a key, and no key is ever read from the process environment - a CI machine");
+        builder.AppendLine("writes the file. A sample for the providers init declares, none filled in:");
+        builder.AppendLine();
+
+        foreach (var line in SlotSample())
+        {
+            builder.AppendLine(line);
+        }
+
+        builder.AppendLine();
+        builder.AppendLine($"'{ToolPackage.Command} list-agent-providers' says what your configuration appoints and");
+        builder.AppendLine("whether the slot holds it, present or missing, never a value; 'list-agent-providers");
+        builder.AppendLine("--template' prints the agent sections as init writes them into a new config, to paste into");
+        builder.AppendLine("an existing one.");
+        builder.AppendLine();
+        builder.AppendLine("A provider's name and each tier's are held to the orchestration name rule - lower-case");
+        builder.AppendLine("letters and digits, single hyphens - and a tier is one name in one case everywhere; a");
+        builder.AppendLine("model's code, what is sent to the API, is one word, and its name is the one a person reads.");
+        builder.AppendLine();
+        builder.AppendLine("The tiers a step runs on are tierConfig's: each tier its models in the order they are");
+        builder.AppendLine("tried, the first serving a step on the tier and the rest its fallback. A step's effort is");
+        builder.AppendLine("its own - one level for every model of its tier, or a map giving each its own: all for the");
+        builder.AppendLine("rest, a model's code for one. Each model's level is checked against what that model takes");
+        builder.AppendLine("when the definition is checked, a level it does not take refused naming the level to give");
+        builder.AppendLine("it instead; validate-workflow says, under the line that says a definition holds, every");
+        builder.AppendLine("step's models and levels, each provider's prices for the models its steps may run on and");
+        builder.AppendLine("the date they were read, and each key a step's model would read that the slot lacks, with");
+        builder.AppendLine("the steps that would read it.");
+        builder.AppendLine();
+        builder.AppendLine("This build checks configurations and definitions against these sections and writes them with");
+        builder.AppendLine($"init (and '{ToolPackage.Command} init' writes the prices it holds, as read on their date).");
+        builder.AppendLine();
+        builder.AppendLine("The Claude Code this tool uses is the one npm installs, and no other: npm's is the one");
+        builder.AppendLine("that is installed, brought up to date and driven from a command line, and a native");
+        builder.AppendLine("launcher, a Homebrew or WinGet package and any other claude on the PATH is never started,");
+        builder.AppendLine("updated or fallen back to. The tool asks npm where its global packages are and starts the");
+        builder.AppendLine("program the package names, by its full path and never a launcher; on Windows npm.cmd is a");
+        builder.AppendLine("batch file, so the tool does what that file does and starts npm's own npm-cli.js with node.");
+        builder.AppendLine("A run that needs a Claude model through the claude-code client needs npm, and no other run");
+        builder.AppendLine("does: where npm has no Claude Code, or one older than the tool needs, a run that needs it");
+        builder.AppendLine("will install or update it first, with");
+        builder.AppendLine($"'npm install -g @anthropic-ai/claude-code@{Agents.ClaudeCode.ClaudeCodeUpdateService.Needed}' -");
+        builder.AppendLine("never with sudo, never 'npm update -g', never past the version needed, never beside a");
+        builder.AppendLine("session of that installation that is running (its program, node running its script, a");
+        builder.AppendLine("claude node runs, or a claude whose program the machine will not say, such as another");
+        builder.AppendLine("user's on Linux; a claude installed any other way whose program it names does not count,");
+        builder.AppendLine("and a process table read by names alone refuses the change), and never a program the slot");
+        builder.AppendLine("names (CLAUDE_EXECUTABLE: a person's own choice, started as named; a slot that cannot give");
+        builder.AppendLine("it is refused, never passed over for npm's).");
+        builder.AppendLine("After a change, whether it ran or failed, what npm holds since is said. A client's update");
+        builder.AppendLine("key (agentClients.<client>.update, true where nothing is said) and DISABLE_UPDATES in the");
+        builder.AppendLine("tool's own environment (a setting of the person's, never a key) turn installing and");
+        builder.AppendLine("updating off, and a run that then needs one that is missing or too old will be refused with");
+        builder.AppendLine("the command to run by hand. The clients that reach the companies, and the step runner that");
+        builder.AppendLine("readies Claude Code before a run's first step, are what it builds next, and nothing here");
+        builder.AppendLine("runs a step.");
+
+        return builder.ToString();
+    }
+
+    /// <summary>
+    /// The sample file for the slot, from the names the providers the configuration init writes appoint: one comment
+    /// naming the file, then each appointed name with nothing after its <c>=</c> but a comment saying what its value
+    /// is - the shape a person copies, holding no value.
+    /// </summary>
+    private static IReadOnlyList<string> SlotSample()
+    {
+        return
+        [
+            "  # " + HarnessLayout.WorkflowsEnvSlotRelative + "/keys.env",
+            .. Agents.AgentProviderTemplates.Read().Providers.SelectMany(provider =>
+                provider.ApiKeyNames.Select(name => $"  {name}= # {DssHarness.Core.Secrets.AgentKeyStore.WhatHolds(provider)}")),
+        ];
+    }
+
     private static string RenderAnchors()
     {
         var defaults = new AnchorSettings();
@@ -2522,6 +2639,15 @@ public static class HelpTopics
                 ($"  {OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.StepsDirectoryName}/<instance>/", "one step the agent runs, or that runs in or for its worktree: everything of the step, its handoff.md where one stopped it"),
                 ($"  {OrchestratorLayout.StepsDirectoryName}/<instance>/", "one step of the run that no agent owns, the create-agent that makes an agent included"),
                 ($"  <step>/{OrchestratorLayout.ChildrenDirectoryName}/<session>{OrchestratorLayout.ChildExtension}", "in either kind of step, on Linux and macOS: a session a contained child of the step leads while it runs"),
+                ($"  {OrchestratorLayout.FlowFileName}", "a run's state in one file - the truth a resume goes on from"),
+                ($"  {OrchestratorLayout.WorkflowStatusFileName}", "a run's status for a person: each step of its definition, its instances, progress and what it waits on"),
+                ($"  {OrchestratorLayout.DefinitionFileName}", "the workflow's definition as the run began with it"),
+                ($"  {OrchestratorLayout.QuestionsFileName}", "every question the run raised, its answers, and who gave each"),
+                ($"  {OrchestratorLayout.PreExistingIssuesFileName}", "each pre-existing issue the run listed, proven"),
+                ($"  {OrchestratorLayout.EventsFileName}", "the run's history, one event to a line, written after the state it tells of"),
+                ($"  {OrchestratorLayout.ReportFileName}, {OrchestratorLayout.ReportJsonFileName}", "the report of the run's last session"),
+                ($"  {OrchestratorLayout.InboxFileName}, {OrchestratorLayout.StopFileName}", "an answer, and a pause or a stop, handed to the engine running the run"),
+                ($"  ../<run>{OrchestratorLayout.OwnerFileName}", "beside the run's directory: the process whose engine holds the run"),
             ]);
         builder.AppendLine();
         AppendWrapped(
@@ -2554,21 +2680,67 @@ public static class HelpTopics
         builder.AppendLine($"  {command} {AgentService.DeleteCommand} <o> <a> [--apply] [--json] {paths}");
         builder.AppendLine($"      {rows} {over}");
         builder.AppendLine("      [--discard-uncommitted]");
-        builder.AppendLine($"  {command} {OrchestratorService.ListCommand} [<o>] [--json]");
+        builder.AppendLine($"  {command} {OrchestratorService.ListCommand} [<o>] [--steps] [--questions] [--json]");
         builder.AppendLine($"  {command} {OrchestratorService.DeleteCommand} <o> [--delete-evidence]");
+        builder.AppendLine($"  {command} {FlowService.RunCommand} <workflow> [--run <name>] [--input <k=v>]... [--json]");
+        builder.AppendLine($"  {command} {FlowService.ResumeCommand} <run> [--json]");
+        builder.AppendLine($"  {command} {FlowService.AnswerCommand} <run> <answer> [--question <id>] [--text <text> | --text-file <file>]");
+        builder.AppendLine("      [--again] [--json]");
+        builder.AppendLine($"  {command} {FlowService.PauseCommand} <run> [--all] [--json]");
+        builder.AppendLine($"  {command} {FlowService.StopCommand} <run> [--now] [--json]");
         builder.AppendLine();
         AppendWrapped(
             builder,
             $"{OrchestratorService.ListCommand} lists the orchestrators, or the one named, their agents and where each stands, "
-            + "and the worktrees below an orchestrator's directory that no agent records; --json prints the listing as one JSON "
-            + $"document. {StoppedDocument}");
+            + "and the worktrees below an orchestrator's directory that no agent records; for a run, its own lines from flow.json "
+            + "and what its engine is doing - none, running, pausing while its handoffs are written, recording the machine steps a "
+            + "complete pause left running, or gone, an owner recorded whose process has ended - with each step instance (--steps: "
+            + "its state, visit, attempt, agent and directory) and each question and what became of it (--questions). --json prints "
+            + $"the listing as one JSON document. {StoppedDocument}");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"A run is an orchestrator a workflow's engine drives. {FlowService.RunCommand} validates the workflow and makes the run - "
+            + "r<N>, one more than the highest there, or the name --run gives, held to worktrees.maxNameLength and refused where it is "
+            + "taken - with its record, its state (flow.json), its status (workflow.json), its questions (questions.json), its "
+            + "pre-existing issues and its events, and claims it for its process (<run>.owner.json beside the run's directory). "
+            + "Only one run of a repository is unfinished with work in the tree at once: a start, or a session of another run, is "
+            + $"refused ({HarnessExit.Refused}) while one is, and so it is where an agent's record of another run cannot be read. Each "
+            + $"session drives the run until nothing more can run: done ({HarnessExit.Success}), failed ({HarnessExit.CommandFailed}, or "
+            + $"{HarnessExit.Incomplete} where every failure that ended it was incomplete after its retries), paused on a question "
+            + $"({FlowExit.Paused}), or paused or stopped on request ({HarnessExit.Cancelled}); it writes the run's report (report.md and "
+            + "report.json) and names each record it wrote, in text and in --json, whichever way it ends. "
+            + $"{FlowService.ResumeCommand} goes on with a run from its records alone, where it stood, under the definition it began "
+            + "with - refused where the repository's entry for it changed since, which is read in the main checkout whichever tree "
+            + "the command was typed in, as a start reads it - reclaiming the owner of an engine that has gone "
+            + "and saying so: what a stop or a crash cut off, and a failure that ended the run, run again as new attempts, save a "
+            + "failure an answer fail ended; what that failure kept from running is drawn again; what the run owed - a failure or "
+            + "an ending a pause recorded, the triage of an issue, a redirect - is made first; and every question and answer the run "
+            + "has is kept. It goes on beside a question still open, and is refused, having written nothing, only where nothing "
+            + "can run until one is answered - a session an answer began, or one whose budget question is open, pauses on it "
+            + "instead. A record the run is made with that is missing is refused by name. "
+            + $"{FlowService.AnswerCommand} answers a question: handed to the engine running the "
+            + $"run through inbox.json, which it reads every {FlowTimings.Default.PollEvery.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s, "
+            + "or else a session of its own. "
+            + $"{FlowService.PauseCommand} asks that engine for the safe pause through stop.json - its agents hand off, the machine "
+            + "steps finish unless --all, then the run is paused - and waits until it is complete; "
+            + $"{FlowService.StopCommand} asks it to stop where it stands and waits {FlowTimings.Default.StopWait.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s, "
+            + "and --now ends its process: only on this machine, and only the process its owner names by its start. "
+            + $"{OrchestratorService.DeleteCommand} refuses a run a live engine owns, and removes a gone engine's owner with the run. In the terminal "
+            + "a session runs in, the first Ctrl+C - and off Windows SIGTERM or a hang-up - asks the safe pause, which starts no "
+            + "clock: an agent's handoff and a build may take as long as they take. The second stops the run where it stands - a "
+            + $"step whose runner does not end within {PointOfNoReturn.SafePauseDrain.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s is recorded stopped all the same - and "
+            + $"the command ends within {PointOfNoReturn.HardStopBound.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s whatever is left; "
+            + $"what is left then is what a crash leaves, and {FlowService.ResumeCommand} goes on from the records. No step runner is "
+            + "built yet: each step of a run fails, saying no runner serves its type.");
         builder.AppendLine();
         AppendWrapped(
             builder,
             "What a killed process left running. On Linux and macOS a contained child of a step leads a session of its own, "
             + $"which nothing ends when the process that started it is killed, so it is recorded in its step's {OrchestratorLayout.ChildrenDirectoryName}/ "
             + "while it runs and the record taken back once that process ends it. Every command over an orchestrator - the three "
-            + "orchestrator commands and each agent command - first ends each recorded session whose starter has gone, as a stop "
+            + "orchestrator commands, each agent command, and each run verb over a run already made - first ends each recorded "
+            + "session whose starter has gone, as a stop "
             + "ends one (SIGTERM, then SIGKILL five seconds later), removes its record, and says so in a line, and in the document's "
             + "ended where it answers with --json. A session whose starter still runs is left; one whose id a later process "
             + "carries ends nothing, and its record goes; a record that does not read as one is said and left; a starter on another "
@@ -2881,8 +3053,9 @@ public static class HelpTopics
         builder.AppendLine($"A workflow is a flow of typed steps that depend on one another by name, declared by");
         builder.AppendLine($"name under workflows in config.json and defined by a yml file of its own:");
         builder.AppendLine($"{HarnessLayout.WorkflowsDirectoryRelative}/<name>/<name>{HarnessLayout.WorkflowFileExtension}. This build checks a");
-        builder.AppendLine($"workflow's definition, with '{ToolPackage.Command} validate-workflow <name>'; it does not run");
-        builder.AppendLine("one. The engine that runs them is the next thing this tool grows.");
+        builder.AppendLine($"workflow's definition, with '{ToolPackage.Command} validate-workflow <name>', and starts and drives a run");
+        builder.AppendLine($"of one with '{ToolPackage.Command} {FlowService.RunCommand} <name>' (see 'help orchestrators'). No step runner");
+        builder.AppendLine("is built yet, so each step of a run fails, saying no runner serves its type.");
         builder.AppendLine();
         builder.AppendLine("The workflow's directory is the workflow's own - its agent files (agents/<name>.md),");
         builder.AppendLine("its prompts, its schemas, the bar it recommends by (recommendations.md) - and every path");
@@ -2933,7 +3106,7 @@ public static class HelpTopics
         builder.AppendLine("step is skippable; or abort.");
         builder.AppendLine();
         builder.AppendLine("An issue a reasoning step meets that was there before the run, it reports in its answer");
-        builder.AppendLine("(preExisting) and never fixes itself; onPreExisting names the step of the flow's top level");
+        builder.AppendLine($"(preExisting) and never fixes itself; onPreExisting names the step of the flow's top level");
         builder.AppendLine($"that triages each one. That step says raised: {WorkflowStep.RaisedByPreExisting} - it is raised once per issue and never");
         builder.AppendLine("scheduled, as the recovery is not - and onAddress: recover: it reproduces the issue on the");
         builder.AppendLine("run's base commit, gives the recovery one that is in a step's way, related to the work or");
@@ -2941,6 +3114,16 @@ public static class HelpTopics
         builder.AppendLine("and lists the rest, proven, with a title and a description, in the run's");
         builder.AppendLine("pre-existing-issues.json, shown at the end. Where a workflow has such a step, every other");
         builder.AppendLine("reasoning step names it, so no issue is lost.");
+        builder.AppendLine();
+        builder.AppendLine("A reasoning step names its tier or its model and its effort: one level for every model it");
+        builder.AppendLine("may run on, or a map giving each its own - all for the rest, a model's code for one, so a");
+        builder.AppendLine("step can run its Claude model at xhigh and GLM 5.3 at max, the highest it takes. Each");
+        builder.AppendLine("model's level is checked against what that model takes when the definition is checked");
+        builder.AppendLine("against the configuration's providers ('help agent-clients'), and validate-workflow says");
+        builder.AppendLine("every step's models and levels under the line that says it holds. A test step's filterWhen");
+        builder.AppendLine("is an expression that switches its filter: where it reads false the step gives no filter and");
+        builder.AppendLine("every test of its legs runs, as the shipped verify steps do where the run's input");
+        builder.AppendLine("affectedTests is off (on with --input affectedTests=on, each item tested on its own tests).");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -3034,9 +3217,9 @@ public static class HelpTopics
         builder.AppendLine($"                                     its agents, prompts and schemas ('{ToolPackage.Command} help workflows');");
         builder.AppendLine("                                     each missing file written by init where");
         builder.AppendLine("                                     config.json declares the implementation one");
-        builder.AppendLine($"  {HarnessLayout.WorkflowsEnvSlotRelative}/    contents ignored; kept for the agent clients'");
-        builder.AppendLine("                                     keys and settings, which this build does not");
-        builder.AppendLine("                                     read yet; no workflow may be named .env");
+        builder.AppendLine($"  {HarnessLayout.WorkflowsEnvSlotRelative}/    contents ignored; the agent clients' keys, NAME=value");
+        builder.AppendLine("                                     files, every file merged, no key read from");
+        builder.AppendLine("                                     anywhere else; no workflow may be named .env");
         builder.AppendLine($"  {HarnessLayout.RunnerActionsDirectoryRelative}/<name>/<name>.yml");
         builder.AppendLine("                                     tracked; one directory per action, holding its");
         builder.AppendLine("                                     steps and whatever those steps run");
@@ -3197,6 +3380,22 @@ public static class HelpTopics
         builder.AppendLine("  mutations      the mutation arms registry, its texts, the workers a leg sweeps");
         builder.AppendLine("                 with, its test binaries' report, and what each runner reads at");
         builder.AppendLine("                 run time, part of each arm's key ('help mutations')");
+        builder.AppendLine("  providers      the companies whose models the tool reaches, each with its models: a");
+        builder.AppendLine("                 model's API address, its keys' variable names (apiKeyNames, in the");
+        builder.AppendLine("                 order they are tried), its client, its efforts, its sizes and its");
+        builder.AppendLine("                 prices, with the date they were read - nothing of a model is in the");
+        builder.AppendLine("                 tool's code ('help agent-clients')");
+        builder.AppendLine("  tierConfig     each tier's models in the order they are tried: the first serves a");
+        builder.AppendLine("                 step on the tier, the rest are its fallback; defaults.agentTier");
+        builder.AppendLine("                 (balanced, as init writes it) is the tier of a step naming neither");
+        builder.AppendLine("  balanceKeyUsage  off unless turned on: a provider's keys balanced by what each");
+        builder.AppendLine("                 spent in the last seven days, a step starting on the one that spent");
+        builder.AppendLine("                 least");
+        builder.AppendLine("  agentClients   the clients the tool builds in (claude-code, claude-api, glm), each");
+        builder.AppendLine("                 by its name: update, claude-code's alone, says whether the tool");
+        builder.AppendLine("                 installs and updates Claude Code with npm; a client holds no model,");
+        builder.AppendLine("                 size or price - contextTokens and maxOutputTokens are a model's");
+        builder.AppendLine("                 ('help agent-clients')");
         builder.AppendLine();
         builder.AppendLine("A list whose absence means every one of what it names, or a set the tool chooses, is");
         builder.AppendLine("refused given empty, as --legs given no name is: a runner's legs and steps; a tool's");

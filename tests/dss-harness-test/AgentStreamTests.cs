@@ -365,16 +365,16 @@ public sealed class AgentStreamTests
     public void EachModelsPartOfTheUsage_IsWrittenByName_AndReadsBack()
     {
         var usage = new AgentUsageReport(
-            new AgentUsage(30, 12, 5, 2, 1),
-            [new AgentModelUsage("model-x", new AgentUsage(10, 4, 5, 2, 1)), new AgentModelUsage("model-y", new AgentUsage(20, 8, 0, 0, 0))]);
+            new AgentUsage(30, 12, 5, 2, 3, 1),
+            [new AgentModelUsage("model-x", new AgentUsage(10, 4, 5, 2, 3, 1)), new AgentModelUsage("model-y", new AgentUsage(20, 8, 0, 0, 0, 0))]);
 
         var line = JsonSerializer.Serialize(usage, JsonStateFile.LineOptions);
         var read = JsonSerializer.Deserialize<AgentUsageReport>(line, JsonStateFile.LineOptions)!;
 
         Assert.Equal(
-            """{"total":{"inputTokens":30,"outputTokens":12,"cacheReadTokens":5,"cacheWriteTokens":2,"searches":1},"perModel":[{"model":"model-x","usage":{"inputTokens":10,"outputTokens":4,"cacheReadTokens":5,"cacheWriteTokens":2,"searches":1}},{"model":"model-y","usage":{"inputTokens":20,"outputTokens":8,"cacheReadTokens":0,"cacheWriteTokens":0,"searches":0}}]}""",
+            """{"total":{"inputTokens":30,"outputTokens":12,"cacheReadTokens":5,"cacheWriteTokens":2,"cacheWrite1hTokens":3,"searches":1},"perModel":[{"model":"model-x","usage":{"inputTokens":10,"outputTokens":4,"cacheReadTokens":5,"cacheWriteTokens":2,"cacheWrite1hTokens":3,"searches":1}},{"model":"model-y","usage":{"inputTokens":20,"outputTokens":8,"cacheReadTokens":0,"cacheWriteTokens":0,"cacheWrite1hTokens":0,"searches":0}}]}""",
             line);
-        Assert.Equal([new AgentModelUsage("model-x", new AgentUsage(10, 4, 5, 2, 1)), new AgentModelUsage("model-y", new AgentUsage(20, 8, 0, 0, 0))], read.PerModel);
+        Assert.Equal([new AgentModelUsage("model-x", new AgentUsage(10, 4, 5, 2, 3, 1)), new AgentModelUsage("model-y", new AgentUsage(20, 8, 0, 0, 0, 0))], read.PerModel);
     }
 
     /// <summary>

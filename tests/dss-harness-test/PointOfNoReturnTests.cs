@@ -1,6 +1,7 @@
 using DssHarness.Core.Execution;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Orchestration;
+using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Worktrees;
 
 namespace DssHarness.Tests;
@@ -60,13 +61,19 @@ public sealed class PointOfNoReturnTests
 
     /// <summary>
     /// How long the command line waits is asked beside whether it waits at all: as long as a deletion expects for a
-    /// command past its point of no return, and no grace of this tool's for any other - the command line's own short
+    /// command past its point of no return, as long as a hard stop of a run can take for the run verbs that pause
+    /// safely - never cut off part way - and no grace of this tool's for any other - the command line's own short
     /// wait, which nothing here widens - so a front end holding a window open holds it exactly as long.
     /// </summary>
     [Theory]
     [InlineData(new[] { WorktreeService.DeleteCommand, "w" }, 120_000)]
     [InlineData(new[] { AgentService.FoldCommand }, 120_000)]
     [InlineData(new[] { "test", "--set-up" }, 120_000)]
+    [InlineData(new[] { FlowService.RunCommand, "implementation" }, 120_000)]
+    [InlineData(new[] { FlowService.ResumeCommand, "r1" }, 120_000)]
+    [InlineData(new[] { FlowService.AnswerCommand, "r1", "more" }, 120_000)]
+    [InlineData(new[] { FlowService.PauseCommand, "r1" }, null)]
+    [InlineData(new[] { FlowService.StopCommand, "r1" }, null)]
     [InlineData(new[] { "build" }, null)]
     [InlineData(new[] { WorktreeService.ListCommand }, null)]
     [InlineData(new string[0], null)]
@@ -74,4 +81,51 @@ public sealed class PointOfNoReturnTests
         => Assert.Equal(
             waitedMilliseconds is { } milliseconds ? TimeSpan.FromMilliseconds(milliseconds) : null,
             PointOfNoReturn.GraceFor(commandLine));
+
+    /// <summary>The run verbs that pause safely are on that list and no other list: a run's sessions are never cut off part way, and they pass no point of no return of their own.</summary>
+    [Theory]
+    [InlineData(FlowService.RunCommand, true)]
+    [InlineData(FlowService.ResumeCommand, true)]
+    [InlineData(FlowService.AnswerCommand, true)]
+    [InlineData(FlowService.PauseCommand, false)]
+    [InlineData(FlowService.StopCommand, false)]
+    public void TheRunVerbsThatPauseSafely_AreOnThatListAndNoOther(string command, bool pauses)
+        => Assert.Equal(pauses, PointOfNoReturn.PausesSafely.Contains(command));
+
+    /// <summary>
+    /// The run verbs that pause safely count their own interrupts, so the command line's own handling of termination -
+    /// which cancels at the first interrupt and ends the process when its clock runs out - is turned off for them alone:
+    /// a deletion keeps its grace, and every other command its short wait.
+    /// </summary>
+    [Theory]
+    [InlineData(new[] { FlowService.RunCommand, "implementation" }, true)]
+    [InlineData(new[] { FlowService.ResumeCommand, "r1" }, true)]
+    [InlineData(new[] { FlowService.AnswerCommand, "r1", "more" }, true)]
+    [InlineData(new[] { FlowService.PauseCommand, "r1" }, false)]
+    [InlineData(new[] { FlowService.StopCommand, "r1" }, false)]
+    [InlineData(new[] { WorktreeService.DeleteCommand, "w" }, false)]
+    [InlineData(new[] { "build" }, false)]
+    [InlineData(new string[0], false)]
+    public void OnlyTheRunVerbsThatPauseSafely_CountTheirOwnInterrupts(string[] commandLine, bool counted)
+        => Assert.Equal(counted, PointOfNoReturn.CountsItsOwnInterrupts(commandLine));
+
+    /// <summary>
+    /// The termination timeout the command line runs a command with is chosen in one place, which the command line
+    /// calls: none for the run verbs that count their own interrupts - so its handling, which cancels at the first
+    /// Ctrl+C and ends the process when its clock runs out, is off - the grace for a command past its point of no
+    /// return, and the command line's own, as it is, for every other.
+    /// </summary>
+    [Theory]
+    [InlineData(new[] { FlowService.RunCommand, "implementation" }, null)]
+    [InlineData(new[] { FlowService.ResumeCommand, "r1" }, null)]
+    [InlineData(new[] { FlowService.AnswerCommand, "r1", "more" }, null)]
+    [InlineData(new[] { WorktreeService.DeleteCommand, "w" }, 120_000)]
+    [InlineData(new[] { "test", "--set-up" }, 120_000)]
+    [InlineData(new[] { FlowService.PauseCommand, "r1" }, 2_000)]
+    [InlineData(new[] { "build" }, 2_000)]
+    [InlineData(new string[0], 2_000)]
+    public void TheTerminationTimeout_IsNoneForTheRunVerbs_TheGraceForAPointOfNoReturn_AndTheCommandLinesOwnOtherwise(string[] commandLine, int? timeoutMilliseconds)
+        => Assert.Equal(
+            timeoutMilliseconds is { } milliseconds ? TimeSpan.FromMilliseconds(milliseconds) : null,
+            PointOfNoReturn.TerminationTimeoutFor(commandLine, TimeSpan.FromSeconds(2)));
 }
