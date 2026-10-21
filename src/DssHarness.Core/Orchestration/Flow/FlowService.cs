@@ -673,19 +673,21 @@ public sealed class FlowService(
 
             // What was handed to an engine whose session ended before it took it is this session's to take - and what
             // cannot be read of it is said and left for the next session: the command's own answer, recorded above,
-            // stands, and the run is driven on.
+            // stands, and the run is driven on. What it takes, the poller empties from the inbox at its first read.
             inbox |= Guarded("handed to the engine as its session began", said, () => TakeInbox(layout, coordinator, offered, said)).Seen > 0;
 
             FlowSessionEnd end;
+            string? unemptied;
 
             while (true)
             {
                 end = await DriveAsync(layout, command, coordinator, interrupts, offered, cancellationToken).ConfigureAwait(false);
 
                 // The last poll, the poller stopped: where an answer it takes settles the question the session paused
-                // on, the run is driven again.
+                // on, the run is driven again - whatever emptying the inbox of it then meets, for it is taken.
                 var (taken, seen) = LastPoll(layout, coordinator, offered, said);
                 inbox |= seen > 0;
+                unemptied = Empty(layout, offered);
 
                 if (taken > 0 && end is { Status: FlowRunStatus.Paused, Pause: null })
                 {
@@ -695,10 +697,21 @@ public sealed class FlowService(
                 break;
             }
 
-            if (offered.Count > 0)
+            // An answer offered that the loop never weighed stays for the next session; one the session settled - taken,
+            // or refused and recorded - that the inbox would not let go is said apart, for it was weighed.
+            var handed = offered.Count(pair => !pair.Value.IsCompletedSuccessfully);
+            var settled = offered.Count - handed;
+
+            if (handed > 0)
             {
                 inbox = true;
-                said.Add($"{ReportText.Counted(offered.Count, "answer")} handed to this engine {(offered.Count == 1 ? "was" : "were")} not taken before its session ended; {(offered.Count == 1 ? "it stays" : "they stay")} in '{layout.InboxFile}', and the next session of the run takes {(offered.Count == 1 ? "it" : "them")}");
+                said.Add($"{ReportText.Counted(handed, "answer")} handed to this engine {(handed == 1 ? "was" : "were")} not taken before its session ended; {(handed == 1 ? "it stays" : "they stay")} in '{layout.InboxFile}', and the next session of the run takes {(handed == 1 ? "it" : "them")}");
+            }
+
+            if (unemptied is not null && settled > 0)
+            {
+                inbox = true;
+                said.Add($"{ReportText.Counted(settled, "answer")} this session settled could not be emptied from '{layout.InboxFile}': {unemptied}; {(settled == 1 ? "it stays" : "they stay")} there");
             }
 
             var flow = _store.ReadFlow(layout)
@@ -862,8 +875,10 @@ public sealed class FlowService(
 
     /// <summary>
     /// The last poll of a session, its poller stopped: a request asked as the session ended was asked of this session and
-    /// of none after it, an answer the loop took is emptied from the inbox, and one it never saw is taken here. What
-    /// cannot be read is said and left for the next session of the run, and the session's end stands.
+    /// of none after it, and an answer the loop never weighed - never offered it, or handed back - is taken here. What
+    /// cannot be read is said and left for the next session of the run, and the session's end stands. Emptying the inbox
+    /// of what the session settled is <see cref="Empty"/>'s, after, apart from the take: a removal that fails never
+    /// unsays an answer taken.
     /// </summary>
     /// <returns>How many answers were taken, and how many were read.</returns>
     private (int Taken, int Seen) LastPoll(OrchestratorLayout layout, FlowCoordinator coordinator, Dictionary<string, Task<bool>> offered, List<string> said)
@@ -874,9 +889,27 @@ public sealed class FlowService(
                 said.Add($"a {(late.Pause is not null ? "pause" : "stop")} asked as the session ended was taken with it");
             }
 
-            Settle(layout, offered);
             return TakeInbox(layout, coordinator, offered, said);
         });
+
+    /// <summary>
+    /// Empties from the inbox, between two drives, what the session settled (<see cref="Settle"/>), where what the removal
+    /// meets is answered and never thrown: an answer taken stays taken, counted, and settled - never offered or taken
+    /// again - and its removal is tried again by the next drive's poller, where the session goes on.
+    /// </summary>
+    /// <returns>Why the inbox could not be emptied of what the session settled; null where it was.</returns>
+    private string? Empty(OrchestratorLayout layout, Dictionary<string, Task<bool>> offered)
+    {
+        try
+        {
+            Settle(layout, offered);
+            return null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or HarnessException)
+        {
+            return ex.Message.TrimEnd('.');
+        }
+    }
 
     /// <summary>
     /// Reads what was asked of the engine between its drives - at a session's start or its end - where what cannot be
@@ -897,16 +930,17 @@ public sealed class FlowService(
     }
 
     /// <summary>
-    /// Empties from the inbox each answer whose offer the loop settled - taken, or refused and recorded as an event - and
-    /// forgets each it cancelled, which stays in the inbox for whoever takes it next. A settled answer is forgotten only
-    /// once the inbox has let it go: a removal that fails leaves it offered, tried again at the next poll, and never
-    /// offered to the engine a second time.
+    /// Empties from the inbox each answer the session settled - an offer the loop took, or refused and recorded as an
+    /// event, and one taken between two drives (<see cref="TakeInbox"/>) - and forgets each offer the loop handed back,
+    /// which stays in the inbox for whoever takes it next. The one owner of a settled answer: it is forgotten only once
+    /// the inbox has let it go - a removal that fails leaves it settled, tried again at the next poll or the next drive's
+    /// end, and never offered to the engine nor taken a second time.
     /// </summary>
     private void Settle(OrchestratorLayout layout, Dictionary<string, Task<bool>> offered)
     {
         foreach (var (id, offer) in offered.Where(pair => pair.Value.IsCompleted).ToList())
         {
-            if (offer.IsCompletedSuccessfully)
+            if (!HandedBack(offer))
             {
                 _ = _store.RemoveFromInbox(layout, id);
             }
@@ -915,10 +949,16 @@ public sealed class FlowService(
         }
     }
 
+    /// <summary>Whether the loop handed <paramref name="offer"/> back, never weighing it - cancelled as its session ended: the answer is no longer the session's, and stays in the inbox.</summary>
+    private static bool HandedBack(Task<bool> offer)
+        => offer is { IsCompleted: true, IsCompletedSuccessfully: false };
+
     /// <summary>
-    /// Takes every answer in the inbox the loop was never offered, between two sessions: each applied as a person's
-    /// through <c>answer-orchestrator</c>, or - where the run does not take it - said and recorded as an <c>answer</c>
-    /// event, as the loop records one it refuses; emptied from the inbox either way.
+    /// Takes every answer in the inbox the session does not hold - never offered to the loop, or handed back by it -
+    /// between two drives: each applied as a person's through <c>answer-orchestrator</c>, or - where the run does not take
+    /// it - said and recorded as an <c>answer</c> event, as the loop records one it refuses. Each is settled as one the
+    /// loop weighed is - held as an offer completed - and counted then, so <see cref="Settle"/> empties it from the inbox
+    /// and tries again where that fails, and nothing takes or offers it a second time.
     /// </summary>
     /// <returns>How many answers were taken, and how many were read.</returns>
     private (int Taken, int Seen) TakeInbox(OrchestratorLayout layout, FlowCoordinator coordinator, Dictionary<string, Task<bool>> offered, List<string> said)
@@ -928,12 +968,14 @@ public sealed class FlowService(
 
         foreach (var entry in _store.ReadInbox(layout)?.Answers ?? [])
         {
-            if (offered.ContainsKey(entry.Id))
+            if (offered.TryGetValue(entry.Id, out var offer) && !HandedBack(offer))
             {
+                // The loop's to weigh still, or settled already and waiting to leave the inbox.
                 continue;
             }
 
             seen++;
+            var took = false;
 
             if (entry.Again)
             {
@@ -941,6 +983,7 @@ public sealed class FlowService(
             }
             else if (coordinator.TryAnswerHandedOver(entry.Question, entry.Answer, entry.Text, out var problem, AnswerCommand))
             {
+                took = true;
                 taken++;
                 said.Add($"the answer '{entry.Answer}' handed over for question '{entry.Question}' was taken from the inbox");
             }
@@ -949,7 +992,7 @@ public sealed class FlowService(
                 said.Add($"the answer '{entry.Answer}' handed over for question '{entry.Question}' was not taken: {problem}");
             }
 
-            _ = _store.RemoveFromInbox(layout, entry.Id);
+            offered[entry.Id] = Task.FromResult(took);
         }
 
         return (taken, seen);

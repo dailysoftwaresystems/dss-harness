@@ -1776,6 +1776,91 @@ public sealed class FlowServiceTests
         Assert.False(File.Exists(run.InboxFile));
     }
 
+    /// <summary>
+    /// An answer a session's last poll takes stays taken though its removal from the inbox fails: it settles the question
+    /// the session paused on, so the run is driven again - whose poller empties it from the inbox - and it is never
+    /// offered again nor said as not taken.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerTheLastPollTakesWhoseRemovalFails_StillDrivesTheRunOn_AndIsRemovedAfter()
+    {
+        var (repository, runner) = await RepositoryAsync("""
+            name: flow
+            steps:
+              - name: first
+                type: orient
+              - name: holding
+                type: pause
+                question: what now?
+                options: [stay, go]
+                dependsOn: [first]
+              - name: after
+                type: orient
+                dependsOn: [holding]
+            """);
+        using var disposed = repository;
+
+        // The poller reads once, at the session's start, and then no more before the session ends.
+        var files = new Signalling(repository.Harness.FileSystem);
+        var service = Service(repository.Harness, runner, timings: new FlowTimings(TimeSpan.FromHours(1), TimeSpan.FromMilliseconds(10), TimeSpan.FromSeconds(30)), fileSystem: files);
+        var run = RunOf(repository);
+
+        files.FailsDeleteOnce(run.InboxFile);
+        runner.OnStart("first", () => repository.Harness.OrchestrationStore.AddToInbox(run, new FlowInboxAnswer(FlowInboxAnswer.NewId(), "q1", "go", DateTimeOffset.UtcNow)));
+
+        var outcome = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+        var (events, _) = FlowEventLog.Read(repository.Harness.FileSystem, run.EventsFile);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal(["first", "after"], runner.Started);
+        Assert.Equal(
+            ["the answer 'go' handed over for question 'q1' was taken from the inbox"],
+            (outcome.Details ?? []).Where(line => line.StartsWith("the answer ", StringComparison.Ordinal)));
+        Assert.DoesNotContain(events, read => read.Kind == "answer");
+        Assert.False(File.Exists(run.InboxFile));
+    }
+
+    /// <summary>
+    /// An answer a session takes from the inbox as it begins stays taken though its removal fails: the poller empties it
+    /// from the inbox at a later poll, and it is never offered to the engine again and recorded as one it refused.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerTakenAsASessionBeganWhoseRemovalFails_IsRemovedLater_NeverOfferedAgain()
+    {
+        var (repository, runner) = await RepositoryAsync("""
+            name: flow
+            steps:
+              - name: holding
+                type: pause
+                question: what now?
+                options: [stay, go]
+              - name: after
+                type: orient
+                dependsOn: [holding]
+            """);
+        using var disposed = repository;
+
+        var files = new Signalling(repository.Harness.FileSystem);
+        var service = Service(repository.Harness, runner, fileSystem: files);
+
+        _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var run = RunOf(repository);
+        repository.Harness.OrchestrationStore.AddToInbox(run, new FlowInboxAnswer(FlowInboxAnswer.NewId(), "q1", "go", DateTimeOffset.UtcNow));
+        files.FailsDeleteOnce(run.InboxFile);
+
+        var resumed = await service.ResumeAsync(repository.Path, "r1", json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+        var (events, _) = FlowEventLog.Read(repository.Harness.FileSystem, run.EventsFile);
+
+        Assert.Equal(HarnessExit.Success, resumed.ExitCode);
+        Assert.Equal(["after"], runner.Started);
+        Assert.Equal(
+            ["the answer 'go' handed over for question 'q1' was taken from the inbox"],
+            (resumed.Details ?? []).Where(line => line.StartsWith("the answer ", StringComparison.Ordinal) || line.StartsWith("what was ", StringComparison.Ordinal)));
+        Assert.DoesNotContain(events, read => read.Kind == "answer");
+        Assert.False(File.Exists(run.InboxFile));
+    }
+
     /// <summary>A workflow whose question opens while a machine step holds the session open: the engine is running while the question waits.</summary>
     private const string Waiting = """
         name: flow
