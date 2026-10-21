@@ -713,10 +713,134 @@ public sealed class FlowResumeTests
             Assert.Equal(FlowRunStatus.Done, end.Status);
             Assert.Equal(FlowInstanceState.Done, coordinator.Instances["round[0].work"].State);
             Assert.Equal(["b"], next.ItemsWorked);
+
+            // The groups the resume took up end as they would have: each item, and the loop over them.
+            Assert.Equal(
+                [FlowInstanceState.Done, FlowInstanceState.Done, FlowInstanceState.Done],
+                new[] { "round[0]", "round[1]", "round" }.Select(id => coordinator.Instances[id].State));
             lastOutput = coordinator.Instances["round[1].work"].Output?["done"]?.GetValue<string>();
         }
 
         Assert.Equal("b", lastOutput);
+    }
+
+    /// <summary>
+    /// A hard stop is gone on from by a new engine from the records alone: what it stopped runs again as a new attempt -
+    /// a reason step given the handoff the engine writes for it - and what never started runs as drawn.
+    /// </summary>
+    [Fact]
+    public async Task AHardStop_IsGoneOnFrom_WhatItStoppedRunsAgain_AndWhatNeverStartedRunsAsDrawn()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+              - name: side
+                type: build
+              - name: after
+                type: orient
+                dependsOn: [think, side]
+            """);
+        var first = new Runner().Hold("think").Hold("side");
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, first, new RunnerFacts(), records: records);
+            var session = coordinator.RunAsync(Token);
+            await first.StartedAsync("think").WaitAsync(Bound, Token);
+            await first.StartedAsync("side").WaitAsync(Bound, Token);
+            coordinator.RequestStop();
+
+            Assert.Equal(FlowRunStatus.Stopped, (await session.WaitAsync(Bound, Token)).Status);
+        }
+
+        string? given = null;
+        var next = new Runner().On("think", run =>
+        {
+            given = run.Handoff;
+            return FlowStepResult.Ended(passed: true, 0);
+        });
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var coordinator = new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+
+            Assert.Equal(FlowRunStatus.Done, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+            Assert.Equal([2, 2, 1], new[] { "think", "side", "after" }.Select(id => coordinator.Instances[id].Attempt));
+        }
+
+        Assert.Equal(["after", "side", "think"], next.Started.Order(StringComparer.Ordinal));
+        Assert.Equal("Written by the engine: the run was stopped.\nAttempt 1 was cut off.", given);
+    }
+
+    /// <summary>
+    /// The agents a run holds open are read back from its records: an agent a create-agent step made and no deletion
+    /// deleted still holds its slot after a resume, so a second making waits for one; one a deletion deleted holds none.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TheAgentsARunHoldsOpen_AreReadBackFromItsRecords(bool deleted)
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse($"""
+            name: flow
+            maxOpenAgents: 1
+            steps:
+              - name: one
+                type: create-agent
+                agent: one.md
+              - name: going
+                type: {(deleted ? "delete-agent" : "fold")}
+                of: one
+                dependsOn: [one]
+              - name: holding
+                type: pause
+                question: go on?
+                options: [go, stay]
+                dependsOn: [going]
+              - name: two
+                type: create-agent
+                agent: two.md
+                dependsOn: [holding]
+            """);
+        var first = new Runner().On("one", run => FlowStepResult.Ended(passed: true, 0, output: new JsonObject { ["agent"] = "a1" }));
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            Assert.Equal(FlowRunStatus.Paused, (await new FlowCoordinator(definition, first, new RunnerFacts(), records: records).RunAsync(Token).WaitAsync(Bound, Token)).Status);
+        }
+
+        var next = new Runner().On("two", run => FlowStepResult.Ended(passed: true, 0, output: new JsonObject { ["agent"] = "a2" }));
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var coordinator = new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+
+            Assert.True(coordinator.TryAnswer("q1", "go", out var problem), problem);
+
+            var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+
+            if (deleted)
+            {
+                Assert.Equal(FlowRunStatus.Done, end.Status);
+                Assert.Equal(["two"], next.Started);
+            }
+            else
+            {
+                Assert.Equal(FlowRunStatus.Failed, end.Status);
+                Assert.Empty(next.Started);
+                Assert.Equal("it could not start: it waits on open agents, and nothing left in the run frees it", coordinator.Instances["two"].Error);
+            }
+        }
     }
 
     /// <summary>A resume beside an open question is not refused where something can run; it is refused only where nothing can until the question is answered, naming answer-orchestrator.</summary>

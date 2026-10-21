@@ -5550,6 +5550,25 @@ public sealed class FlowCoordinator
                 _recoveryVisits[key] = Math.Max(_recoveryVisits.GetValueOrDefault(key), visit.Visit);
             }
 
+            // The agents the run holds open, as its records say: each agent a create-agent step made, held by its newest
+            // visit - a visit again while it is live takes its slot - that no delete-agent step deleted. A deletion names
+            // the agent it deleted as the one it worked in.
+            var deleted = new HashSet<string>(
+                _created.Where(created => created.Step.Type == "delete-agent" && created.State == FlowInstanceState.Done)
+                    .Select(deletion => resume.File.Steps.First(record => record.Instance == deletion.Id).Agent
+                        ?? (deletion.Step.Of is { } of ? CreateStepOf(deletion, of)?.Id : null))
+                    .OfType<string>(),
+                StringComparer.Ordinal);
+
+            foreach (var holder in _created
+                .Where(created => created.Step.Type == "create-agent" && created.State == FlowInstanceState.Done)
+                .GroupBy(created => created.Made ?? created.Id, StringComparer.Ordinal)
+                .Where(agent => !deleted.Contains(agent.Key))
+                .Select(agent => agent.Last()))
+            {
+                _agentsOpen[holder.Id] = holder;
+            }
+
             foreach (var member in _created.Where(created => created.Failure == FlowFailure.TakenByGroup && created.GroupOf is { State: FlowInstanceState.Running or FlowInstanceState.Stopped }).ToList())
             {
                 // A member that handed its failure to a group still open: the group starts nothing more and ends failed
