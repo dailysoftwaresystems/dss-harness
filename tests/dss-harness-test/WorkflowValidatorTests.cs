@@ -1927,7 +1927,7 @@ public sealed class WorkflowValidatorTests
                     Currency = "USD", ReadOn = "2026-10-12",
                     Models =
                     [
-                        new() { Code = "claude-fable-5-1", Name = "Claude Fable 5.1", Tiers = ["best"], Efforts = ["low", "medium", "high", "xhigh", "max"], ContextTokens = 1_000_000, MaxOutputTokens = 131_072 },
+                        new() { Code = "claude-fable-5-1", Name = "Claude Fable 5.1", Tiers = ["best"], Efforts = ["low", "medium", "high", "xhigh", "max"], ContextTokens = 1_000_000, MaxOutputTokens = 128_000 },
                     ],
                 },
                 new()

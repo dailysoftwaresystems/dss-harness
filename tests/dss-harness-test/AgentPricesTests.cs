@@ -33,7 +33,7 @@ public sealed class AgentPricesTests
         Tiers = ["fast"],
         Efforts = ["low", "medium", "high", "xhigh", "max"],
         ContextTokens = 1_000_000,
-        MaxOutputTokens = 131_072,
+        MaxOutputTokens = 128_000,
         PriceInputMiss = 0.1,
         PriceInputHit = 0.01,
         PriceOutput = 0.5,
@@ -125,12 +125,17 @@ public sealed class AgentModelTests
         Assert.Equal(["anthropic", "zai"], [.. providers.Select(provider => provider.Name)]);
         Assert.Equal(5, providers.SelectMany(provider => provider.Models).Count());
 
-        // Every Claude model holds a 1M context and a 128K output, as the models page says; GLM the same context.
-        Assert.All(providers.SelectMany(provider => provider.Models), model =>
-        {
-            Assert.Equal(1_000_000, model.ContextTokens);
-            Assert.Equal(131_072, model.MaxOutputTokens);
-        });
+        // Every Claude model holds a 1M context and a 128K output - 128000, the max_tokens Anthropic's own Models API
+        // reports and the API clients send, which a request over it is refused for - and GLM 5.3 its own 1M and 131072.
+        Assert.Equal(
+            [
+                ("claude-fable-5-1", 1_000_000L, 128_000L),
+                ("claude-opus-5-5", 1_000_000L, 128_000L),
+                ("claude-sonnet-5-5", 1_000_000L, 128_000L),
+                ("claude-haiku-5-5", 1_000_000L, 128_000L),
+                ("glm-5.3", 1_000_000L, 131_072L),
+            ],
+            providers.SelectMany(provider => provider.Models).Select(model => (model.Code, model.ContextTokens, model.MaxOutputTokens)));
     }
 
     /// <summary>Each tier is its models in the order they are tried, another company's model last.</summary>
