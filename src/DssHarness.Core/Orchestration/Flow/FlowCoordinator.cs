@@ -2061,12 +2061,24 @@ public sealed class FlowCoordinator
 
     /// <summary>
     /// Whether <paramref name="scope"/> still draws <paramref name="declaration"/>: a live scope draws every step, and
-    /// one whose group's visit ended done or failed still draws its always steps, in the always phase - that visit's
-    /// ending never waited on them (<see cref="ScopeEnded"/>), and they are owed it however it went.
+    /// one whose group's visit ended done or failed still draws the steps that run after that ending
+    /// (<see cref="RunsAfterItsGroup"/>), in the always phase - the ending never waited on them, and they are owed it
+    /// however it went.
     /// </summary>
     private static bool Draws(Scope scope, WorkflowStep declaration)
         => ScopeLive(scope)
-            || IsAlways(declaration, scope) && (scope.OwnGroupInstance ?? scope.GroupInstance) is { State: FlowInstanceState.Done or FlowInstanceState.Failed };
+            || RunsAfterItsGroup(declaration, scope) && (scope.OwnGroupInstance ?? scope.GroupInstance) is { State: FlowInstanceState.Done or FlowInstanceState.Failed };
+
+    /// <summary>
+    /// Whether <paramref name="declaration"/>, a step of a group's <paramref name="scope"/>, runs after that group's visit
+    /// has ended: it is an always step and the group is not - it runs in the always phase, after the rest of the run, the
+    /// group's ending among that rest. The one owner of what a group's ending does not wait on (<see cref="ScopeEnded"/>)
+    /// and what the scope of a visit that ended still draws (<see cref="Draws"/>). The members of an always group - always
+    /// by it, or by a group around it - run in the always phase as their group does, within its visit, and it waits on
+    /// them as any group waits on its members: it ends once they have run, gathers what they left, and fails with them.
+    /// </summary>
+    private static bool RunsAfterItsGroup(WorkflowStep declaration, Scope scope)
+        => scope is { Parent: { } around, Group: { } group } && IsAlways(declaration, scope) && !IsAlways(group, around);
 
     /// <summary>Whether a redirect the run owes keeps <paramref name="name"/> in <paramref name="scope"/> from starting - not even drawn - for it will reset it.</summary>
     private bool Frozen(Scope scope, string name)
@@ -3110,10 +3122,10 @@ public sealed class FlowCoordinator
                 return;
             }
 
-            // A group that has ended takes no failure: an always member runs in the always phase, after its group's
-            // ending, and its failure goes where the group's own would have gone - the onFailure the group writes, or
-            // on to the group around it, up to the top level's default. A group done is never failed over a step that
-            // ran after its ending was read.
+            // A group that has ended takes no failure: an always member of a group that is not always runs after its
+            // group's ending (RunsAfterItsGroup), and its failure goes where the group's own would have gone - the
+            // onFailure the group writes, or on to the group around it, up to the top level's default. A group done is
+            // never failed over a step that ran after its ending was read.
             for (var taking = group; taking is not null; taking = taking.GroupOf)
             {
                 if (taking.State is FlowInstanceState.Running or FlowInstanceState.Paused)
@@ -3846,7 +3858,8 @@ public sealed class FlowCoordinator
         group.Failing = (exit, error, failed);
 
         // Nothing more of the group starts - save its always steps, which run however the run went, in the always
-        // phase: the group ends without waiting for them, and they run after it ended.
+        // phase: an always member of a group that is not always after the group ended, which never waited for it, and
+        // an always group's members within its visit, which ends failed once they have run.
         foreach (var scope in ScopesOf(group))
         {
             foreach (var declaration in DeclarationsOf(scope).Where(declaration => !scope.Instantiated.Contains(declaration.Name) && !IsAlways(declaration, scope)).ToList())
@@ -4779,15 +4792,16 @@ public sealed class FlowCoordinator
     /// be done again. A redirect that resets the group itself lets this visit end as it stands, and draws a new one.
     /// A member a failure's <c>stop</c> left unfinished - the failure that ended the run, which the next session runs
     /// again, and a step NotRun because the run ended before it - has not ended its work: the group stands open over
-    /// it, as over a stopped one, and is never ended done over work the next session does. An always member that has
-    /// not started - not drawn yet, or drawn and waiting - is not waited on: it runs once the rest of the run is
-    /// quiescent, and the group's ending is part of that rest - its failure decided and what depends on it run before
-    /// any always step starts. The visit's scope still draws it then (<see cref="Draws"/>).
+    /// it, as over a stopped one, and is never ended done over work the next session does. A member that runs after
+    /// the group's ending (<see cref="RunsAfterItsGroup"/>) and has not started - not drawn yet, or drawn and waiting -
+    /// is not waited on: it runs once the rest of the run is quiescent, and the group's ending is part of that rest -
+    /// its failure decided and what depends on it run before any always step starts. The visit's scope still draws it
+    /// then (<see cref="Draws"/>). An always group's members are waited on as any group's are.
     /// </summary>
     private bool ScopeEnded(Scope scope)
         => !_redirects.Any(redirect => redirect.Set.Any(entry => ReferenceEquals(entry.Scope, scope)))
-            && DeclarationsOf(scope).All(declaration => scope.Instantiated.Contains(declaration.Name) || IsAlways(declaration, scope))
-            && scope.Members.Values.All(member => member is { IsAlways: true, State: FlowInstanceState.NotStarted }
+            && DeclarationsOf(scope).All(declaration => scope.Instantiated.Contains(declaration.Name) || RunsAfterItsGroup(declaration, scope))
+            && scope.Members.Values.All(member => member.State is FlowInstanceState.NotStarted && RunsAfterItsGroup(member.Step, scope)
                 || member.WaitingQuestion is null
                     && member.State is not (FlowInstanceState.NotStarted or FlowInstanceState.Running or FlowInstanceState.Paused or FlowInstanceState.Stopped)
                     && member.Failure is not FlowFailure.EndedRun

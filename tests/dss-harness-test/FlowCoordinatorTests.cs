@@ -1721,6 +1721,114 @@ public sealed class FlowCoordinatorTests
         Assert.Equal(FlowRunStatus.Failed, end.Status);
     }
 
+    /// <summary>
+    /// An always group runs its members within its own visit, as any group does - they run in the always phase as it
+    /// does: it ends once they have run, failed with a member's code where one failed, its own policy deciding it, and
+    /// what it gathers reads them.
+    /// </summary>
+    [Fact]
+    public async Task AnAlwaysBlock_EndsOnceItsMembersRan_FailedOverAFailingMember_GatheringThem()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: work
+                type: orient
+              - name: closing
+                always: true
+                onFailure: continue
+                gather: [notes]
+                steps:
+                  - name: teardown
+                    type: ci-read
+                  - name: report
+                    type: orient
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner()
+            .On("teardown", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "the read failed"))
+            .On("report", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"notes": ["torn down"]}""")));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(["work", "closing.teardown", "closing.report"], runner.Started);
+        Assert.Equal(FlowInstanceState.Failed, coordinator.Instances["closing.teardown"].State);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["closing.report"].State);
+        Assert.Equal(FlowInstanceState.Failed, coordinator.Instances["closing"].State);
+        Assert.Equal(HarnessExit.CommandFailed, coordinator.Instances["closing"].Exit);
+        Assert.Equal("""{"notes":["torn down"]}""", coordinator.Instances["closing"].Output!.ToJsonString());
+        Assert.Equal(["closing"], end.PassedOver);
+    }
+
+    /// <summary>An always repeat reads its until on what each iteration's body did, and makes the next while it is false.</summary>
+    [Fact]
+    public async Task AnAlwaysRepeat_ReadsItsUntilOnEachIterationsBody()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: work
+                type: orient
+              - name: polish
+                always: true
+                repeat:
+                  until: attempt.ok
+                  maxIterations: 5
+                steps:
+                  - name: attempt
+                    type: orient
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var attempts = 0;
+        var runner = new FakeRunner().On("attempt", run => FlowStepResult.Ended(
+            passed: true,
+            HarnessExit.Success,
+            output: Output(++attempts < 3 ? """{"ok": false}""" : """{"ok": true}""")));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(["work", "polish#1.attempt", "polish#2.attempt", "polish#3.attempt"], runner.Started);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["polish"].State);
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+    }
+
+    /// <summary>An always forEach ends once its items have run: one whose member failed fails it, its own policy deciding it.</summary>
+    [Fact]
+    public async Task AnAlwaysForEach_EndsOnceItsItemsRan_FailedOverAFailingMember()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: plan
+                type: orient
+              - name: tidy
+                always: true
+                onFailure: continue
+                forEach: plan.list
+                dependsOn: [plan]
+                steps:
+                  - name: clean
+                    type: orient
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner()
+            .On("plan", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"list": ["a", "b"]}""")))
+            .On("clean", run => run.Index == 1
+                ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "the clean failed")
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(["plan", "tidy[0].clean", "tidy[1].clean"], runner.Started);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["tidy[0].clean"].State);
+        Assert.Equal(FlowInstanceState.Failed, coordinator.Instances["tidy[1].clean"].State);
+        Assert.Equal(FlowInstanceState.Failed, coordinator.Instances["tidy"].State);
+        Assert.Equal(["tidy"], end.PassedOver);
+    }
+
     /// <summary>The run's own values an always step reads leave the always steps out, so none of them reads its own effect: an always step that fails does not make the run failed for one that follows it.</summary>
     [Fact]
     public async Task TheRunValuesAnAlwaysStepReads_LeaveTheAlwaysStepsOut()
