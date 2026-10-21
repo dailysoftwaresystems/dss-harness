@@ -36,6 +36,7 @@ public sealed record FlowPreExistingReport(string Title, string Description, str
 /// <param name="Events">What the step tells the coordinator as it runs, beside the result it ends with.</param>
 /// <param name="Handoff">The handoff this attempt is given, where a stop cut the attempt before it off; null where it is given none.</param>
 /// <param name="Issue">The pre-existing issue this instance is raised to triage, where it is one; null for every step the schedule starts.</param>
+/// <param name="Visit">Which visit of the step this is: 1 for the first, one more for each time a redirect, a handler or the recovery sent the run back to it.</param>
 public sealed record FlowStepRun(
     WorkflowStep Step,
     string Instance,
@@ -46,11 +47,8 @@ public sealed record FlowStepRun(
     IReadOnlyList<FlowAnswerGiven> Answers,
     IFlowRunEvents Events,
     string? Handoff = null,
-    FlowPreExistingReport? Issue = null)
-{
-    /// <summary>Which visit of the step this is: the first, until a redirect sends the run back (the redirect is its own slice).</summary>
-    public int Visit => 1;
-}
+    FlowPreExistingReport? Issue = null,
+    int Visit = 1);
 
 /// <summary>
 /// The one who runs a step: the code a step type calls - a machine step's service, a reason step's client runner - asked

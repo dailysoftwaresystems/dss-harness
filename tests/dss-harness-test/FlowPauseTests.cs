@@ -70,31 +70,48 @@ public sealed class FlowPauseTests
             return this;
         }
 
-        /// <summary>Holds <paramref name="step"/>'s handoff turn open until the test completes it, or a stop cancels it.</summary>
+        /// <summary>
+        /// Holds <paramref name="step"/>'s handoff turn open until a stop or its bound cancels it; answers the signal that
+        /// the turn has begun.
+        /// </summary>
         public Task HandoffHeld(string step)
         {
-            var gate = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var begun = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             _handoffs[step] = async (_, token) =>
             {
+                begun.TrySetResult();
+
                 try
                 {
-                    return await gate.Task.WaitAsync(token);
+                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                    return null;
                 }
                 catch (OperationCanceledException)
                 {
                     return null;
                 }
             };
-            return gate.Task.ContinueWith(_ => (string?)null);
+            return begun.Task;
         }
 
-        /// <summary>Holds <paramref name="step"/> open until the test completes it, or a stop cancels it.</summary>
-        public HeldStep Hold(string step)
+        /// <summary>
+        /// Holds <paramref name="step"/> open until the test completes it, or - where it hears the stop - a stop cancels
+        /// it; one that does not hear it runs on until the test ends it, as a build that ignores its token would.
+        /// </summary>
+        public HeldStep Hold(string step, bool hearsTheStop = true)
         {
             var gate = new TaskCompletionSource<FlowStepResult>(TaskCreationOptions.RunContinuationsAsynchronously);
             _gates[step] = gate;
+
+            if (!hearsTheStop)
+            {
+                _deaf.Add(step);
+            }
+
             return new HeldStep(gate);
         }
+
+        private readonly HashSet<string> _deaf = new(StringComparer.Ordinal);
 
         /// <inheritdoc/>
         public async Task<FlowStepResult> RunAsync(FlowStepRun run, CancellationToken cancellationToken)
@@ -109,7 +126,9 @@ public sealed class FlowPauseTests
 
             if (_gates.TryGetValue(run.Step.Name, out var gate))
             {
-                return await gate.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                return _deaf.Contains(run.Step.Name)
+                    ? await gate.Task.ConfigureAwait(false)
+                    : await gate.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
             }
 
             return FlowStepResult.Ended(passed: true, HarnessExit.Success);
@@ -139,6 +158,24 @@ public sealed class FlowPauseTests
     {
         /// <inheritdoc/>
         public bool WritesTree(string runner) => false;
+    }
+
+    /// <summary>A run's records that keep nothing, but signal each change as the coordinator writes it - the run's own signal, on its own thread.</summary>
+    private sealed class RecordsWatch(Action<FlowChangeKind, FlowSnapshot, string?, string?> written) : IFlowRecords
+    {
+        /// <inheritdoc/>
+        public void Write(FlowChangeKind kind, FlowSnapshot snapshot, string? instance = null, string? from = null, string? to = null, int? attempt = null, string? detail = null)
+            => written(kind, snapshot, instance, to);
+
+        /// <inheritdoc/>
+        public void Question(IReadOnlyList<FlowQuestionEntry> questions)
+        {
+        }
+
+        /// <inheritdoc/>
+        public void PreExisting(IReadOnlyList<PreExistingIssue> issues, DateTimeOffset at)
+        {
+        }
     }
 
     /// <summary>A safe pause writes every reason step in flight a handoff, leaves the machine steps to finish and be recorded, and starts nothing more.</summary>
@@ -296,6 +333,185 @@ public sealed class FlowPauseTests
         Assert.Null(think.Handoff);
         // A hard stop runs no always step.
         Assert.DoesNotContain("gate", runner.Started);
+    }
+
+    /// <summary>
+    /// A hard stop leaves what never started as it was - not NotRun for good - so the resume runs the stopped step again
+    /// and then what waited on it.
+    /// </summary>
+    [Fact]
+    public async Task AHardStop_LeavesWhatNeverStartedAsItWas_SoTheResumeRunsIt()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: one
+                type: orient
+              - name: two
+                type: build
+                dependsOn: [one]
+              - name: three
+                type: orient
+                dependsOn: [two]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner();
+        _ = runner.Hold("two");
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new TimerClock());
+
+        var session = coordinator.RunAsync(cancel);
+        await runner.StartedAsync("two").WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        coordinator.RequestStop();
+
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Stopped, end.Status);
+        Assert.Equal(FlowInstanceState.Stopped, coordinator.Instances["two"].State);
+        Assert.False(coordinator.Instances.ContainsKey("three"));
+
+        runner.On("two", FlowStepResult.Ended(passed: true, HarnessExit.Success));
+
+        end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(["one", "two", "two", "three"], runner.Started);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["three"].State);
+    }
+
+    /// <summary>
+    /// A hard stop cancels what is in flight and nothing that waits: a question open at the stop is open still, its step
+    /// waiting on it, and the resume goes on with it answered.
+    /// </summary>
+    [Fact]
+    public async Task AHardStop_LeavesAnOpenQuestionOpen_ForTheResumeToGoOnWith()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: ask
+                type: pause
+                question: may it go ahead?
+                options: [approve]
+              - name: gate
+                type: build
+              - name: after
+                type: orient
+                dependsOn: [ask]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner();
+        _ = runner.Hold("gate");
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new TimerClock());
+
+        var session = coordinator.RunAsync(cancel);
+        await runner.StartedAsync("gate").WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        coordinator.RequestStop();
+
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Stopped, end.Status);
+        var asked = Assert.Single(coordinator.OpenQuestions);
+        Assert.Equal("q1", asked.Id);
+        Assert.Equal(FlowInstanceState.Paused, coordinator.Instances["ask"].State);
+        Assert.Equal("q1", coordinator.Instances["ask"].WaitingQuestion);
+
+        Assert.True(coordinator.TryAnswer("q1", "approve", out _));
+        runner.On("gate", FlowStepResult.Ended(passed: true, HarnessExit.Success));
+
+        end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(["gate", "gate", "after"], runner.Started);
+    }
+
+    /// <summary>A hard stop waits for the runners it cancelled to end before it records them stopped: a step's ending is never said while its work still runs.</summary>
+    [Fact]
+    public async Task AHardStop_WaitsForTheRunnersItCancelledToEnd_BeforeItRecordsThemStopped()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: gate
+                type: build
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner();
+        var gate = runner.Hold("gate", hearsTheStop: false);
+        var clock = new TimerClock();
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock);
+
+        var session = coordinator.RunAsync(cancel);
+        await runner.StartedAsync("gate").WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        coordinator.RequestStop();
+
+        // The stop is applied - its drain's bound is armed - and the build runs on: the session waits for it.
+        await clock.WaitingAsync().WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        Assert.False(session.IsCompleted);
+        gate.Done();
+
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Stopped, end.Status);
+        var stopped = coordinator.Instances["gate"];
+        Assert.Equal(FlowInstanceState.Stopped, stopped.State);
+        Assert.Null(stopped.Error);
+    }
+
+    /// <summary>A runner that does not end after a stop is waited for no longer than the drain's 90 s: then it is recorded stopped, saying so.</summary>
+    [Fact]
+    public async Task AHardStop_RecordsARunnerThatDoesNotEnd_StoppedOnceItsDrainBoundPasses()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: gate
+                type: build
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner();
+        var gate = runner.Hold("gate", hearsTheStop: false);
+        var clock = new TimerClock();
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock);
+
+        var session = coordinator.RunAsync(cancel);
+        await runner.StartedAsync("gate").WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        coordinator.RequestStop();
+        await clock.WaitingAsync().WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        clock.Advance(TimeSpan.FromSeconds(90));
+
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Stopped, end.Status);
+        var stopped = coordinator.Instances["gate"];
+        Assert.Equal(FlowInstanceState.Stopped, stopped.State);
+        Assert.Equal("its runner did not end within 90 s of the stop", stopped.Error);
+        gate.Done();
+    }
+
+    /// <summary>A session cancelled while a retry waits its turn ends cancelled - said as a cancellation - and never as a fault of the engine.</summary>
+    [Fact]
+    public async Task ASessionCancelledWhileARetryWaits_EndsCancelled()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: gate
+                type: build
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+
+        // Incomplete each time: again at once, then after 5 s - a wait this clock never ends unless moved.
+        var runner = new FakeRunner().On("gate", FlowStepResult.Ended(passed: false, HarnessExit.Incomplete, "not settled yet"));
+        var clock = new TimerClock();
+        using var ending = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock);
+
+        var session = coordinator.RunAsync(ending.Token);
+        await clock.WaitingAsync().WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        await ending.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => session.WaitAsync(TimeSpan.FromSeconds(30), cancel));
+        Assert.Equal(["gate", "gate"], runner.Started);
     }
 
     /// <summary>The always steps that are machine steps run once the machine steps a pause left running have ended; a reason step among them does not.</summary>
@@ -602,24 +818,34 @@ public sealed class FlowPauseTests
               - name: gate
                 type: build
             """);
+        var cancel = TestContext.Current.CancellationToken;
         var runner = new FakeRunner();
-        var gate = runner.Hold("gate");
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        _ = runner.Hold("gate");
+        var complete = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var records = new RecordsWatch((kind, _, _, _) =>
+        {
+            if (kind == FlowChangeKind.PauseCompleted)
+            {
+                complete.TrySetResult();
+            }
+        });
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new TimerClock(), records: records);
 
-        var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
-        await runner.StartedAsync("gate");
+        var session = coordinator.RunAsync(cancel);
+        await runner.StartedAsync("gate").WaitAsync(TimeSpan.FromSeconds(30), cancel);
         coordinator.RequestPause("interrupt");
 
-        // The pause has begun and the build runs on; a later request says all.
-        await Task.Delay(50, TestContext.Current.CancellationToken);
+        // The pause is complete - it had no agent to hand off - and the build runs on; a later request says all.
+        await complete.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
         coordinator.RequestPause("command", all: true);
 
-        var end = await session;
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
 
+        // The pause is the first request's, and the later one stopped what it left running.
         Assert.Equal(FlowRunStatus.Paused, end.Status);
         Assert.Equal(FlowInstanceState.Stopped, coordinator.Instances["gate"].State);
-        Assert.True(end.Pause!.All);
-        gate.Fail(HarnessExit.Incomplete, "stopped");
+        Assert.Equal("interrupt", end.Pause!.Cause);
+        Assert.True(end.Pause.All);
     }
 
     /// <summary>A hard stop while the handoffs are being written cancels the turns and keeps no handoff.</summary>
@@ -634,28 +860,168 @@ public sealed class FlowPauseTests
                 prompt: work.md
                 outputs: work.json
             """);
+        var cancel = TestContext.Current.CancellationToken;
         var runner = new FakeRunner();
         _ = runner.Hold("think");
-        _ = runner.HandoffHeld("think");
+        var turning = runner.HandoffHeld("think");
 
-        // A clock that never fires the turn's bound on its own: only the stop ends the turn.
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new SteppingClock());
+        // A clock that never fires the turn's bound unless moved: only the stop ends the turn.
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new TimerClock());
 
-        var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
-        await runner.StartedAsync("think");
+        var session = coordinator.RunAsync(cancel);
+        await runner.StartedAsync("think").WaitAsync(TimeSpan.FromSeconds(30), cancel);
         coordinator.RequestPause("interrupt");
 
-        // The pause is writing its handoff; the stop lands while the turn is still open, and cancels it.
-        await Task.Delay(50, TestContext.Current.CancellationToken);
+        // The pause is writing its handoff; the stop lands while the turn is open, and cancels it.
+        await turning.WaitAsync(TimeSpan.FromSeconds(30), cancel);
         coordinator.RequestStop();
 
-        var end = await session;
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
 
         Assert.Equal(FlowRunStatus.Stopped, end.Status);
         var think = coordinator.Instances["think"];
         Assert.Equal(FlowInstanceState.Stopped, think.State);
         Assert.Null(think.Handoff);
         Assert.Null(end.Pause);
+    }
+
+    /// <summary>A stop that lands as the pause begins - before the handoff turns are under way - still ends them: no turn runs out its bound after a stop.</summary>
+    [Fact]
+    public async Task AStopAsThePauseBegins_StillEndsTheHandoffTurns()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner();
+        _ = runner.Hold("think");
+        _ = runner.HandoffHeld("think");
+        FlowCoordinator? coordinator = null;
+
+        // The stop is asked on the run's own thread the moment the pause is recorded: before any turn has begun.
+        var records = new RecordsWatch((kind, _, _, _) =>
+        {
+            if (kind == FlowChangeKind.PauseBegan)
+            {
+                coordinator!.RequestStop();
+            }
+        });
+        coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new TimerClock(), records: records);
+
+        var session = coordinator.RunAsync(cancel);
+        await runner.StartedAsync("think").WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        coordinator.RequestPause("interrupt");
+
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Stopped, end.Status);
+        Assert.Null(coordinator.Instances["think"].Handoff);
+        Assert.Null(end.Pause);
+    }
+
+    /// <summary>
+    /// A stop that comes once the pause is complete - every agent handed off - is what <c>--all</c> is: the machine steps
+    /// the engine records are stopped, every handoff is kept, and the run stays paused.
+    /// </summary>
+    [Fact]
+    public async Task AStopOnceThePauseIsComplete_StopsWhatItRecords_AndTheRunStaysPaused()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: gate
+                type: build
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner().HandsOff("think", "what I did, what is left");
+        _ = runner.Hold("gate");
+        _ = runner.Hold("think");
+        var complete = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var records = new RecordsWatch((kind, _, _, _) =>
+        {
+            if (kind == FlowChangeKind.PauseCompleted)
+            {
+                complete.TrySetResult();
+            }
+        });
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new TimerClock(), records: records);
+
+        var session = coordinator.RunAsync(cancel);
+        await runner.StartedAsync("gate").WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        await runner.StartedAsync("think").WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        coordinator.RequestPause("interrupt");
+        await complete.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        coordinator.RequestStop();
+
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Equal("paused; 1 handoff written", end.Summary);
+        Assert.True(end.Pause!.All);
+        Assert.Equal(["think"], end.Pause.Handoffs);
+        Assert.Equal(FlowInstanceState.Stopped, coordinator.Instances["gate"].State);
+        Assert.Equal("what I did, what is left", coordinator.Instances["think"].Handoff!.Text);
+    }
+
+    /// <summary>
+    /// A later <c>--all</c> stops the machine steps and never a group: the group stands open over its stopped member, and
+    /// the resume runs the member again, ends the group done and runs what waited on it.
+    /// </summary>
+    [Fact]
+    public async Task ALaterAll_LeavesTheGroupsOpen_AndTheResumeEndsThem()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: work
+                steps:
+                  - name: gate
+                    type: build
+              - name: after
+                type: orient
+                dependsOn: [work]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner();
+        _ = runner.Hold("gate");
+        var complete = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var records = new RecordsWatch((kind, _, _, _) =>
+        {
+            if (kind == FlowChangeKind.PauseCompleted)
+            {
+                complete.TrySetResult();
+            }
+        });
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new TimerClock(), records: records);
+
+        var session = coordinator.RunAsync(cancel);
+        await runner.StartedAsync("work.gate").WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        coordinator.RequestPause("interrupt");
+        await complete.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        coordinator.RequestPause("command", all: true);
+
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Equal(FlowInstanceState.Stopped, coordinator.Instances["work.gate"].State);
+        Assert.Equal(FlowInstanceState.Running, coordinator.Instances["work"].State);
+
+        runner.On("gate", FlowStepResult.Ended(passed: true, HarnessExit.Success));
+
+        end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(["work.gate", "work.gate", "after"], runner.Started);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["work"].State);
     }
 
     /// <summary>The answer abort ends the run as a hard stop: what is in flight is cancelled and ends stopped, not left to finish.</summary>

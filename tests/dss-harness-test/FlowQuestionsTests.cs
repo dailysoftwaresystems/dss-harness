@@ -605,7 +605,8 @@ public sealed class FlowQuestionsTests
 
         await aborting.RunAsync(TestContext.Current.CancellationToken);
 
-        // abort stands among no options, and is taken all the same: it ends the run as a hard stop does - stopped.
+        // abort stands among no options, and is taken all the same: it ends the run as a hard stop does - stopped - and
+        // settles nothing: the question is open again, with the abort kept among its answers, and its step waits on it.
         Assert.True(aborting.TryAnswer(aborting.OpenQuestions.Single().Id, "abort", out _));
 
         end = await aborting.RunAsync(TestContext.Current.CancellationToken);
@@ -613,9 +614,23 @@ public sealed class FlowQuestionsTests
         Assert.Equal(FlowRunStatus.Stopped, end.Status);
         Assert.Equal("stopped", end.Summary);
         var approval = aborting.Instances["approval"];
-        Assert.Equal(FlowInstanceState.Failed, approval.State);
-        Assert.Equal(HarnessExit.CommandFailed, approval.Exit);
-        Assert.Equal("the run was aborted by the answer to its question", approval.Error);
+        Assert.Equal(FlowInstanceState.Paused, approval.State);
+        var reopened = Assert.Single(aborting.OpenQuestions);
+        Assert.Equal("q1", reopened.Id);
+        Assert.Equal("q1", approval.WaitingQuestion);
+        Assert.Equal(["abort"], reopened.Given.Select(given => given.Answer));
+
+        // The resume waits on it, and goes on once it is answered.
+        end = await aborting.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Equal("paused; waiting on q1", end.Summary);
+        Assert.True(aborting.TryAnswer("q1", "approve", out _));
+
+        end = await aborting.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(["abort", "approve"], reopened.Given.Select(given => given.Answer));
     }
 
     /// <summary>A counted answer is counted per place - one step instance - so a retry it itself creates spends the same count.</summary>

@@ -160,6 +160,55 @@ public sealed class FlowPreExistingTests
         Assert.Equal(2, coordinator.Instances.Values.Count(instance => instance.Step.Name == "triage"));
     }
 
+    /// <summary>
+    /// Issues a step reports while a failure's stop is ending the run are not dropped: nothing is started for them then,
+    /// and the next session raises their triage.
+    /// </summary>
+    [Fact]
+    public async Task IssuesReportedWhileTheRunStops_AreOwedToTheNextSession()
+    {
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: mend
+                  type: orient
+            steps:
+              - name: broke
+                type: ci-read
+                onFailure: stop
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                onPreExisting: triage
+              - name: triage
+                type: reason
+                prompt: triage.md
+                outputs: pre-existing.json
+                raised: preExisting
+                onAddress: recover
+            """);
+
+        // Both end at once, in declaration order: the failure has stopped the run when the issue is read.
+        var runner = new FakeRunner()
+            .On("broke", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "the read failed"))
+            .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("a broken test")]))
+            .On("triage", run => Course("unproven", run.Issue!.Title));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Failed, end.Status);
+        Assert.Equal([("broke", null), ("think", null)], runner.Started);
+
+        _ = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.Equal([("broke", null), ("think", null), ("triage", "a broken test")], runner.Started);
+    }
+
     /// <summary>An issue the triage answers list for is added to the run's own file, proven, and {run.preExisting} says what became of each.</summary>
     [Fact]
     public async Task AnIssueAnsweredListIsAddedProven_AndRunPreExistingSaysIt()

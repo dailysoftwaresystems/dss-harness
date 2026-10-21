@@ -602,12 +602,12 @@ public sealed class FlowCoordinatorTests
         await said.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
 
         // An answer the run refuses is read after every event before it, and after the admission those events led to.
-        Assert.False(await coordinator.OfferAnswerAsync("q0", "go").WaitAsync(TimeSpan.FromSeconds(30), cancel));
+        await coordinator.SettledAsync(cancel);
         Assert.DoesNotContain("folding", runner.Started);
 
         events!.LegPlaced("here", inACopy: false);
         events.EveryLegPlaced();
-        Assert.False(await coordinator.OfferAnswerAsync("q0", "go").WaitAsync(TimeSpan.FromSeconds(30), cancel));
+        await coordinator.SettledAsync(cancel);
         Assert.DoesNotContain("folding", runner.Started);
 
         events.LegEnded("here");
@@ -661,7 +661,9 @@ public sealed class FlowCoordinatorTests
             secondBegan.SetResult();
             return second.Task;
         });
-        var keeper = runner.Hold("keeper");
+        // The keeper's completion is posted inline, as the test ends it: what the session reads after it is ordered.
+        var keeper = new TaskCompletionSource<FlowStepResult>();
+        runner.OnAsync("keeper", _ => keeper.Task);
         var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
         var cancel = TestContext.Current.CancellationToken;
 
@@ -669,8 +671,8 @@ public sealed class FlowCoordinatorTests
         await secondBegan.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
 
         // The fold is drawn while the second attempt still runs in its copy, and goes in at once.
-        keeper.Done();
-        await SettledAsync(coordinator, () => coordinator.Instances["keeper"].State == FlowInstanceState.Done, cancel);
+        keeper.SetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        await coordinator.SettledAsync(cancel);
         Assert.Contains("folding", runner.Started);
         Assert.Equal(FlowInstanceState.Running, coordinator.Instances["checks"].State);
 
@@ -678,22 +680,6 @@ public sealed class FlowCoordinatorTests
         _ = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
     }
 
-    /// <summary>
-    /// Waits until the running session has taken <paramref name="until"/> as true, and has walked its admission once
-    /// after: an answer it refuses is read after every message before it, and after what those messages led to.
-    /// </summary>
-    private static async Task SettledAsync(FlowCoordinator coordinator, Func<bool> until, CancellationToken cancel)
-    {
-        using var bound = CancellationTokenSource.CreateLinkedTokenSource(cancel);
-        bound.CancelAfter(TimeSpan.FromSeconds(30));
-
-        while (!until())
-        {
-            Assert.False(await coordinator.OfferAnswerAsync("q0", "go").WaitAsync(bound.Token));
-        }
-
-        Assert.False(await coordinator.OfferAnswerAsync("q0", "go").WaitAsync(bound.Token));
-    }
 
     /// <summary>
     /// A step that names an agent claims that agent's own tree - the one its create-agent made - and not the name the
@@ -1121,10 +1107,55 @@ public sealed class FlowCoordinatorTests
         var end = await session;
 
         Assert.Equal(FlowInstanceState.NotRun, coordinator.Instances["after"].State);
-        Assert.Equal("the run ended before it", coordinator.Instances["after"].NotRunBecause);
+        Assert.Equal("a step it depends on failed and was neither handled nor passed over", coordinator.Instances["after"].NotRunBecause);
         Assert.Equal(FlowInstanceState.Done, coordinator.Instances["teardown"].State);
         Assert.Equal(FlowRunStatus.Failed, end.Status);
         Assert.Equal(["broke"], end.Failed);
+    }
+
+    /// <summary>
+    /// A NotRun step says why, by kind as well as in words: a failure it depends on, a run that ended before it, a group
+    /// that took a member's failure - and a handler left NotRun by its source says its source's.
+    /// </summary>
+    [Fact]
+    public async Task ANotRunStepSaysWhy_AFailedDependency_OrARunThatEndedFirst()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: broke
+                type: ci-read
+              - name: quick
+                type: orient
+              - name: after
+                type: orient
+                dependsOn: [broke]
+              - name: later
+                type: orient
+                dependsOn: [quick]
+              - name: tell
+                type: orient
+                on: {step: later, outcome: success}
+            """);
+
+        // Both end at once, in declaration order: the failure stops the run before 'quick' has ended.
+        var runner = new FakeRunner().On("broke", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "the read failed"));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Failed, end.Status);
+        var after = coordinator.Instances["after"];
+        Assert.Equal(FlowNotRunCause.DependencyFailed, after.NotRunCause);
+        Assert.Equal("a step it depends on failed and was neither handled nor passed over", after.NotRunBecause);
+        var later = coordinator.Instances["later"];
+        Assert.Equal(FlowNotRunCause.RunEnded, later.NotRunCause);
+        Assert.Equal("the run ended before it", later.NotRunBecause);
+        var tell = coordinator.Instances["tell"];
+        Assert.Equal(FlowInstanceState.NotRun, tell.State);
+        Assert.Equal(FlowNotRunCause.RunEnded, tell.NotRunCause);
+        Assert.Equal("'later': the run ended before it", tell.NotRunBecause);
+        Assert.Null(coordinator.Instances["quick"].NotRunCause);
     }
 
     /// <summary>onFailure pause asks about the step alone: what depends on it waits, every other branch runs to its end, nothing is cancelled, and the session ends paused.</summary>
@@ -1231,6 +1262,7 @@ public sealed class FlowCoordinatorTests
         // The items run one at a time against the reasoning limit, so the second had not begun when the first failed.
         Assert.Equal(FlowInstanceState.Failed, coordinator.Instances["items[0].work"].State);
         Assert.Equal(FlowInstanceState.NotRun, coordinator.Instances["items[1].work"].State);
+        Assert.Equal(FlowNotRunCause.GroupFailed, coordinator.Instances["items[1].work"].NotRunCause);
         Assert.Equal(["plan", "items[0].work"], runner.Started);
         Assert.Equal(FlowInstanceState.Failed, coordinator.Instances["items"].State);
         Assert.Equal(HarnessExit.CommandFailed, coordinator.Instances["items"].Exit);
@@ -1857,12 +1889,51 @@ public sealed class FlowCoordinatorTests
 
         var foldedEnd = await foldedRun.RunAsync(TestContext.Current.CancellationToken);
 
-        // The fold leaves the agent open, so the second making waits for a slot nothing frees: the run ends without
-        // it, the step NotRun, rather than waiting for it for ever.
+        // The fold leaves the agent open, so the second making waits for a slot nothing frees: once nothing else can
+        // run it fails, saying what it waits on, and the run ends failed - never done over a step that never ran.
         Assert.Equal(["one", "folding"], foldedRunner.Started);
-        Assert.Equal(FlowInstanceState.NotRun, foldedRun.Instances["two"].State);
-        Assert.Equal("the run ended before it", foldedRun.Instances["two"].NotRunBecause);
-        Assert.Equal(FlowRunStatus.Done, foldedEnd.Status);
+        var two = foldedRun.Instances["two"];
+        Assert.Equal(FlowInstanceState.Failed, two.State);
+        Assert.Equal(HarnessExit.Refused, two.Exit);
+        Assert.Equal("it could not start: it waits on open agents, and nothing left in the run frees it", two.Error);
+        Assert.Equal(FlowRunStatus.Failed, foldedEnd.Status);
+        Assert.Equal(["two"], foldedEnd.Failed);
+    }
+
+    /// <summary>
+    /// A step nothing left in the run can free fails as any step does, so its own onFailure decides: under pause the
+    /// session ends on its question, and what depends on it waits rather than being dropped unlisted.
+    /// </summary>
+    [Fact]
+    public async Task AStepNothingCanFree_FailsUnderItsOwnPolicy_SoPauseAsks()
+    {
+        var definition = Parse("""
+            name: flow
+            maxOpenAgents: 1
+            steps:
+              - name: one
+                type: create-agent
+                agent: one.md
+              - name: two
+                type: create-agent
+                agent: two.md
+                dependsOn: [one]
+                onFailure: pause
+              - name: after
+                type: orient
+                dependsOn: [two]
+            """);
+        var runner = new FakeRunner();
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        var asked = Assert.Single(coordinator.OpenQuestions);
+        Assert.Equal("failure", asked.Kind);
+        Assert.Equal("'two' failed (13): it could not start: it waits on open agents, and nothing left in the run frees it. What does the run do?", asked.Problem);
+        Assert.Equal(["one"], runner.Started);
+        Assert.False(coordinator.Instances.ContainsKey("after"));
     }
 
     /// <summary>A failed step that is skippable offers skip with its other answers, and skip ends it skipped and lets what depends on it go on.</summary>

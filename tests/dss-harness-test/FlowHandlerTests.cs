@@ -257,10 +257,16 @@ public sealed class FlowHandlerTests
                 type: orient
                 dependsOn: [verify]
             """);
+        // The runner is told which visit it runs, and fails the first.
+        var visits = new List<int>();
         var runner = new FakeRunner()
-            .On("build", asked => asked == 1
-                ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)")
-                : FlowStepResult.Ended(passed: true, HarnessExit.Success));
+            .On("build", run =>
+            {
+                visits.Add(run.Visit);
+                return run.Visit == 1
+                    ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)")
+                    : FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            });
         var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
@@ -268,6 +274,7 @@ public sealed class FlowHandlerTests
         // The first visit of build failed; verify and after waited on the failure's settling, are part of what the
         // redirect resets, and run - once each, untouched by the reset for they had not started - after the target's
         // new visit.
+        Assert.Equal([1, 2], visits);
         Assert.Equal(["build", "fix", "build+2", "verify", "after"], runner.Started);
         Assert.Equal(FlowInstanceState.Failed, coordinator.Instances["build"].State);
         Assert.Equal(FlowInstanceState.Done, coordinator.Instances["build+2"].State);
