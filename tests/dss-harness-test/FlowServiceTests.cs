@@ -1320,6 +1320,42 @@ public sealed class FlowServiceTests
     }
 
     /// <summary>
+    /// An answer a resume takes from the inbox between sessions that the run does not take is recorded as an answer event,
+    /// as the loop records one it refuses, beside the line that says it - and emptied from the inbox.
+    /// </summary>
+    [Fact]
+    public async Task AnInboxAnswerRefusedBetweenSessions_IsRecordedAsAnEvent()
+    {
+        var (repository, service, runner) = await ServiceAsync("""
+            name: flow
+            steps:
+              - name: holding
+                type: pause
+                question: what now?
+                options: [stay, go]
+              - name: after
+                type: orient
+                dependsOn: [holding]
+            """);
+        using var disposed = repository;
+
+        _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var run = RunOf(repository);
+        repository.Harness.OrchestrationStore.AddToInbox(run, new FlowInboxAnswer(FlowInboxAnswer.NewId(), "q9", "go", DateTimeOffset.UtcNow));
+        repository.Harness.OrchestrationStore.AddToInbox(run, new FlowInboxAnswer(FlowInboxAnswer.NewId(), "q1", "go", DateTimeOffset.UtcNow));
+
+        var resumed = await service.ResumeAsync(repository.Path, "r1", json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+        var (events, _) = FlowEventLog.Read(repository.Harness.FileSystem, run.EventsFile);
+
+        Assert.Equal(HarnessExit.Success, resumed.ExitCode);
+        Assert.Contains("the answer 'go' handed over for question 'q9' was not taken: 'q9' is not a question this run leaves open", resumed.Details ?? []);
+        Assert.Equal(["'q9' is not a question this run leaves open"], events.Where(read => read.Kind == "answer").Select(read => read.Detail));
+        Assert.Equal(["after"], runner.Started);
+        Assert.False(File.Exists(run.InboxFile));
+    }
+
+    /// <summary>
     /// What the poller cannot read is said once and read again at the next poll - the poller goes on, and a pause asked
     /// after is still taken; a defect it meets is said and asks the run to pause, never leaving it with nobody reading.
     /// </summary>

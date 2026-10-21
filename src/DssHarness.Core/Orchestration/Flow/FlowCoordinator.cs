@@ -1372,6 +1372,29 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
+    /// Answers a question with an answer handed over - through the run's inbox, to a running session or between two -
+    /// as a person's: where the run does not take it, the refusal is recorded as an <c>answer</c> event naming why, so the
+    /// run's own history says what became of an answer nobody saw refused.
+    /// </summary>
+    /// <param name="question">The question's id.</param>
+    /// <param name="answer">The answer, spelled as the question's options spell it.</param>
+    /// <param name="text">The text given with the answer, where it takes one.</param>
+    /// <param name="problem">Why the answer was not taken, where it was not.</param>
+    /// <param name="through">How a person gave it; <c>answer-orchestrator</c> where the command handed it over.</param>
+    /// <returns>Whether the answer was taken.</returns>
+    public bool TryAnswerHandedOver(string question, string answer, string? text, out string? problem, string? through = "answer-orchestrator")
+    {
+        var taken = TryAnswer(question, answer, text, out problem, through);
+
+        if (!taken)
+        {
+            Record(FlowChangeKind.Answer, detail: problem);
+        }
+
+        return taken;
+    }
+
+    /// <summary>
     /// Takes one answer to an open question - a person's, or the configuration's in a person's place - by the one path:
     /// the question no longer open, the answer recorded and carried out, and the record of the step that waited on it
     /// written after, from what the answer changed.
@@ -4465,16 +4488,8 @@ public sealed class FlowCoordinator
         if (message.Offered is { } offered)
         {
             // An answer from outside the session - taken from the run's inbox while the engine runs. The loop
-            // alone applies it, for the graph is the loop's alone to change; where the question is no longer
-            // open the answer is refused and said, naming what became of it.
-            var taken = TryAnswer(offered.Question, offered.Answer, offered.Text, out var problem, offered.Through);
-
-            if (!taken)
-            {
-                Record(FlowChangeKind.Answer, detail: problem);
-            }
-
-            _ = offered.Completion.TrySetResult(taken);
+            // alone applies it, for the graph is the loop's alone to change.
+            _ = offered.Completion.TrySetResult(TryAnswerHandedOver(offered.Question, offered.Answer, offered.Text, out _, offered.Through));
             return;
         }
 

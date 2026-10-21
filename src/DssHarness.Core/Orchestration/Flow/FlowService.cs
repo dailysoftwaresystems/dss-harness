@@ -894,8 +894,8 @@ public sealed class FlowService(
 
     /// <summary>
     /// Takes every answer in the inbox the loop was never offered, between two sessions: each applied as a person's
-    /// through <c>answer-orchestrator</c>, or - where the run does not take it - said, and emptied from the inbox either
-    /// way.
+    /// through <c>answer-orchestrator</c>, or - where the run does not take it - said and recorded as an <c>answer</c>
+    /// event, as the loop records one it refuses; emptied from the inbox either way.
     /// </summary>
     /// <returns>How many answers were taken, and how many were read.</returns>
     private (int Taken, int Seen) TakeInbox(OrchestratorLayout layout, FlowCoordinator coordinator, Dictionary<string, Task<bool>> offered, List<string> said)
@@ -916,7 +916,7 @@ public sealed class FlowService(
             {
                 said.Add($"the answer '{entry.Answer}' handed over for question '{entry.Question}' changes one already given, which raises a plan update; this build takes no plan update yet, so it was not taken");
             }
-            else if (coordinator.TryAnswer(entry.Question, entry.Answer, entry.Text, out var problem, AnswerCommand))
+            else if (coordinator.TryAnswerHandedOver(entry.Question, entry.Answer, entry.Text, out var problem, AnswerCommand))
             {
                 taken++;
                 said.Add($"the answer '{entry.Answer}' handed over for question '{entry.Question}' was taken from the inbox");
