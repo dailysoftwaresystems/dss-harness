@@ -298,6 +298,9 @@ public sealed class FlowCoordinator
     private readonly List<FlowInstance> _pendingFixes = [];
     private PendingRedirect? _redirect;
 
+    /// <summary>The alone step waiting for quiet, while it waits: nothing new is admitted until it has started.</summary>
+    private FlowInstance? _barrier;
+
     /// <summary>One pre-existing issue and what became of it, as <c>{run.preExisting}</c> says it and the run counts it.</summary>
     /// <param name="State">What became of it: <c>listed</c>, <c>being fixed</c>, <c>fixed</c>, <c>duplicate of pe-&lt;n&gt;</c> or <c>unproven</c>.</param>
     /// <param name="Line">The issue as a person reads it: its title and where it is.</param>
@@ -1446,7 +1449,7 @@ public sealed class FlowCoordinator
                 continue;
             }
 
-            var (every, blocked, unreachable) = WaitsOf(declaration, scope, IsAlways(declaration, scope));
+            var (waiting, unreachable) = WaitsOf(declaration, scope, IsAlways(declaration, scope));
 
             if (unreachable)
             {
@@ -1458,7 +1461,7 @@ public sealed class FlowCoordinator
                 continue;
             }
 
-            if (blocked || !every)
+            if (waiting.Count > 0)
             {
                 continue;
             }
@@ -1752,71 +1755,145 @@ public sealed class FlowCoordinator
         return changed;
     }
 
-    /// <summary>Admits every step that can be admitted, in the fixed order: all-or-nothing against the limits and the claims, with a claim-blocked step reserving what it waits for. Answers how many it started.</summary>
-    private int Admit()
+    /// <summary>What admission decides of one step that has not started: it starts now, with the claims it takes, or what it waits on.</summary>
+    /// <param name="Instance">The step.</param>
+    /// <param name="Claims">The claims it takes where it starts.</param>
+    /// <param name="WaitsOn">What it waits on, in the words its record says them; empty where it starts.</param>
+    private readonly record struct Admission(FlowInstance Instance, IReadOnlyList<FlowClaim> Claims, IReadOnlyList<string> WaitsOn)
     {
-        var reserved = new List<FlowClaim>();
-        var started = 0;
+        /// <summary>Whether the step starts now.</summary>
+        public bool Starts => WaitsOn.Count == 0;
+    }
 
-        foreach (var instance in _created
+    /// <summary>
+    /// The one walk admission makes, deciding nothing it does not say: every step that has not started, in the fixed
+    /// order - declaration order, then instance id - held to what keeps the run from starting it (a hard stop, a pause
+    /// under way, a stopping run, a pending redirect), to its dependencies, to the <c>alone</c> barrier, to the claims
+    /// and to the limits, all-or-nothing, each step the walk admits counted as running for the ones after it. A step
+    /// blocked on a claim reserves every claim it waits for, so no later step takes what it waits for first and a fold
+    /// waiting behind readers is not starved; one blocked on a limit, a hold or a pause reserves nothing. Admission
+    /// starts what it admits, the run's records list it as what starts next, and each step's record says what it waits
+    /// on: all three read this walk.
+    /// </summary>
+    private List<Admission> AdmissionWalk()
+    {
+        var waiting = _created
             .Where(instance => instance.State is FlowInstanceState.NotStarted && !instance.Step.IsGroup)
             .OrderBy(instance => _declarationOrder.GetValueOrDefault(instance.Path, int.MaxValue))
-            .ThenBy(instance => instance.Id, StringComparer.Ordinal))
+            .ThenBy(instance => instance.Id, StringComparer.Ordinal)
+            .ToList();
+
+        // What runs is a leaf: a group stands open while its members work, and is no step that runs.
+        var running = _created.Where(instance => instance.State is FlowInstanceState.Running && !instance.Step.IsGroup).ToList();
+        var held = running.SelectMany(instance => instance.HeldClaims).ToList();
+        var reserved = new List<FlowClaim>();
+        var decisions = new List<Admission>();
+
+        // The quiescence barrier: an alone step found waiting for quiet stays the barrier until it starts, and while it
+        // waits nothing new is admitted - steps ready beside it in the same walk and declared before it went first, as
+        // the fixed order says - so it starts when nothing runs, and nothing starts while it runs.
+        var barrier = _barrier is { State: FlowInstanceState.NotStarted } waitingAlone && HoldOf(waitingAlone).Count == 0 ? waitingAlone : null;
+
+        foreach (var instance in waiting)
         {
-            if (_pausing && !_alwaysPhase || _hardStop)
-            {
-                // A pause under way and a hard stop start nothing.
-                break;
-            }
+            var hold = HoldOf(instance);
 
-            if (_pausing && instance.IsAlways && instance.Step.Type == "reason")
+            if (hold.Count > 0)
             {
-                // A reason step among the always steps does not run while a safe pause is under way: it stays as it
-                // is and runs in the next session.
+                decisions.Add(new(instance, [], hold));
                 continue;
             }
 
-            if (_stopping && !instance.IsAlways)
+            if (running.Any(other => other.Step.Alone == true))
             {
+                decisions.Add(new(instance, [], ["quiet"]));
                 continue;
             }
 
-            if (_redirect is { } redirect && instance.DeclaredScope is { } held && redirect.Frozen.TryGetValue(held.Id, out var frozen)
-                && (frozen is null || frozen.Contains(instance.Step.Name)))
+            if (barrier is null && instance.Step.Alone == true && running.Count > 0)
             {
-                // Nothing new is started among the steps a pending redirect will reset.
-                continue;
+                barrier = instance;
             }
 
-            if (instance.Step.Alone == true && _created.Any(running => running.State is FlowInstanceState.Running))
+            if (barrier is not null && (!ReferenceEquals(instance, barrier) || running.Count > 0))
             {
-                // The quiescence barrier waits for quiet and reserves nothing while it waits.
-                continue;
-            }
-
-            if (instance.Step.Alone != true && _created.Any(running => running.State is FlowInstanceState.Running && running.Step.Alone == true))
-            {
-                // Nothing starts while an alone step runs.
+                decisions.Add(new(instance, [], ["quiet"]));
                 continue;
             }
 
             var claims = FlowClaims.Of(instance.Step, _runnerFacts);
 
-            if (claims.Any(claim => HeldClaims(reserved).Any(claim.Conflicts)))
+            if (claims.Any(claim => held.Concat(reserved).Any(claim.Conflicts)))
             {
-                // Blocked on a claim: the step reserves every claim it waits for, so no later step takes what it waits
-                // for first, and a fold waiting behind readers is not starved. A step blocked on a limit reserves
-                // nothing, and a step a hold or a pause keeps from starting reserves nothing either.
                 reserved.AddRange(claims);
+                decisions.Add(new(instance, [], ["claim"]));
                 continue;
             }
 
-            if (!CountersAllow(instance))
+            if (CounterFull(instance, running) is { } counter)
             {
+                decisions.Add(new(instance, [], [counter]));
                 continue;
             }
 
-            if (Start(instance, claims))
+            running.Add(instance);
+            held.AddRange(claims);
+            decisions.Add(new(instance, claims, []));
+        }
+
+        return decisions;
+    }
+
+    /// <summary>
+    /// What keeps <paramref name="instance"/> from starting before any claim or limit is asked: a hard stop or a pause
+    /// under way (it runs at the resume; in a pause's always phase only an always step that is a machine step starts),
+    /// a stopping run (only always steps start), a pending redirect that will reset it, or a dependency it still waits
+    /// on. Empty where nothing does.
+    /// </summary>
+    private IReadOnlyList<string> HoldOf(FlowInstance instance)
+    {
+        if (_hardStop || _pausing && (!_alwaysPhase || !instance.IsAlways || instance.Step.Type == "reason"))
+        {
+            return ["resume"];
+        }
+
+        if (_stopping && !instance.IsAlways)
+        {
+            return ["stop"];
+        }
+
+        if (instance.DeclaredScope is not { } scope)
+        {
+            return [];
+        }
+
+        if (_redirect is { } redirect && redirect.Frozen.TryGetValue(scope.Id, out var frozen) && (frozen is null || frozen.Contains(instance.Step.Name)))
+        {
+            return ["redirect"];
+        }
+
+        return WaitsOf(instance.Step, scope, instance.IsAlways).Waiting;
+    }
+
+    /// <summary>Admits every step the walk admits, in its order, and answers how many it started.</summary>
+    private int Admit()
+    {
+        var started = 0;
+        var walk = AdmissionWalk();
+
+        // An alone step the walk left waiting for quiet is the barrier from now until it starts.
+        _barrier = walk.FirstOrDefault(decision => decision.Instance.Step.Alone == true && decision.WaitsOn is ["quiet"]).Instance;
+
+        foreach (var decision in walk.Where(decision => decision.Starts))
+        {
+            if (_answeredAtOnce || _hardStop || decision.Instance.State is not FlowInstanceState.NotStarted)
+            {
+                // A start that changed the graph - a pause step that asked, answered at once or unfillable - ends this
+                // walk: the loop draws what follows from it and walks again.
+                break;
+            }
+
+            if (Start(decision.Instance, decision.Claims))
             {
                 started++;
             }
@@ -2062,7 +2139,7 @@ public sealed class FlowCoordinator
                 // A machine step the pause left running ended failed: it is recorded as it ended, and what its ending
                 // owes - its policy, the handler it would raise - waits for the resume, for nothing is started and no
                 // question is asked while the run records what it left running.
-                OweHandlers(instance);
+                _ = OweHandlers(instance);
                 _owedFailures.Add(instance);
             }
             else
@@ -2183,25 +2260,26 @@ public sealed class FlowCoordinator
         _records?.PreExisting(_issues, _clock.GetUtcNow());
     }
 
-    /// <summary>Writes what a failure's ending owes its handlers, without raising anything: a pause finds it owed, and the resume makes it.</summary>
-    private void OweHandlers(FlowInstance instance)
+    /// <summary>Writes what an ending owes its handlers, without raising anything: a pause finds it owed, and the resume makes it. Answers whether it owes any.</summary>
+    private bool OweHandlers(FlowInstance instance)
     {
         if (instance.DeclaredScope is not { } scope)
         {
-            return;
+            return false;
         }
 
         var handlers = DeclarationsOf(scope).Where(declaration => declaration.On?.Step == instance.Step.Name).ToList();
 
         if (handlers.Count == 0)
         {
-            return;
+            return false;
         }
 
         instance._handlers.Clear();
         instance._handlers.AddRange(handlers.Select(handler => new FlowHandlerState(handler.Name, "owed")));
-        instance.FailureSettled = false;
+        instance.FailureSettled = instance.State != FlowInstanceState.Failed;
         WriteStepRecordOf(instance);
+        return true;
     }
 
     /// <summary>
@@ -3158,6 +3236,15 @@ public sealed class FlowCoordinator
 
         switch (state)
         {
+            case FlowInstanceState.Done when _pausing:
+                // Nothing is raised while a pause records what it left running: what the ending owes is written owed,
+                // and the resume raises it.
+                if (OweHandlers(instance))
+                {
+                    _owedEndings.Add(instance);
+                }
+
+                break;
             case FlowInstanceState.Done:
                 // A done ending raises its handlers too: every one that fits, though a failure is the usual case.
                 _ = RaiseFor(instance);
@@ -3254,25 +3341,20 @@ public sealed class FlowCoordinator
         instance.HeldClaims.Clear();
     }
 
-    /// <summary>Every claim held by a running instance, and every claim a blocked step reserved.</summary>
-    private IEnumerable<FlowClaim> HeldClaims(IReadOnlyList<FlowClaim> reserved)
-        => _created.Where(instance => instance.State is FlowInstanceState.Running).SelectMany(instance => instance.HeldClaims)
-            .Concat(reserved);
-
-    /// <summary>Whether the limits of the run still leave room for <paramref name="instance"/>: all-or-nothing, so a step short of one of its resources starts with none of them.</summary>
-    private bool CountersAllow(FlowInstance instance)
-    {
-        var running = _created.Where(running => running.State is FlowInstanceState.Running).ToList();
-
-        return instance.Step.Type switch
+    /// <summary>
+    /// The limit of the run that leaves no room for <paramref name="instance"/> beside <paramref name="running"/>, as its
+    /// record names it - reasoning agents, parallel processes, open agents - or null where every limit it counts against
+    /// leaves room: all-or-nothing, so a step short of one of its resources starts with none of them.
+    /// </summary>
+    private string? CounterFull(FlowInstance instance, IReadOnlyList<FlowInstance> running)
+        => instance.Step.Type switch
         {
-            "reason" => running.Count(step => step.Step.Type == "reason") < Limit().MaxReasoningAgents,
+            "reason" when running.Count(step => step.Step.Type == "reason") >= Limit().MaxReasoningAgents => "reasoning agents",
             "build" or "test" or "run" or "check-mutations"
-                => running.Count(step => step.Step.Type is "build" or "test" or "run" or "check-mutations") < Limit().MaxParallelProcesses,
-            "create-agent" => running.Count(step => step.Step.Type == "create-agent") + _agentsOpen.Count < Limit().MaxOpenAgents,
-            _ => true,
+                when running.Count(step => step.Step.Type is "build" or "test" or "run" or "check-mutations") >= Limit().MaxParallelProcesses => "parallel processes",
+            "create-agent" when running.Count(step => step.Step.Type == "create-agent") + _agentsOpen.Count >= Limit().MaxOpenAgents => "open agents",
+            _ => null,
         };
-    }
 
     /// <summary>Starts the always steps of the run, once, where the rest is quiescent in any state; a session runs them after everything else has ended.</summary>
     private bool TryEnterAlwaysPhase()
@@ -3574,21 +3656,20 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// The dependencies of <paramref name="declaration"/>: every one satisfied, one still blocking the rest, or one
-    /// that can never be satisfied - unless the declaration is an always step, which runs even where its dependencies
-    /// did not reach it.
+    /// The dependencies of <paramref name="declaration"/>: the ones it still waits on - none where every one is
+    /// satisfied - or that one can never be satisfied - unless the declaration is an always step, which runs even where
+    /// its dependencies did not reach it. The one owner of what a dependency's state means to what depends on it: what
+    /// is drawn reads it, and so does what admission says a step waits on.
     /// </summary>
-    private static (bool Every, bool Blocked, bool Unreachable) WaitsOf(WorkflowStep declaration, Scope scope, bool always)
+    private static (IReadOnlyList<string> Waiting, bool Unreachable) WaitsOf(WorkflowStep declaration, Scope scope, bool always)
     {
-        var every = true;
-        var blocked = false;
+        var waiting = new List<string>();
 
         foreach (var name in declaration.DependsOn)
         {
             if (!scope.Members.TryGetValue(name, out var dependency))
             {
-                every = false;
-                blocked = true;
+                waiting.Add(name);
                 continue;
             }
 
@@ -3603,19 +3684,17 @@ public sealed class FlowCoordinator
                 case FlowInstanceState.Failed when !dependency.FailureSettled:
                     // A failure a handler or the recovery may still take blocks what depends on it: it waits, for
                     // what took it may send the run back past the failure altogether.
-                    every = false;
-                    blocked = true;
+                    waiting.Add(name);
                     break;
                 case FlowInstanceState.Failed or FlowInstanceState.NotRun:
-                    return (false, false, true);
+                    return ([], true);
                 default:
-                    every = false;
-                    blocked = true;
+                    waiting.Add(name);
                     break;
             }
         }
 
-        return (every, blocked, false);
+        return (waiting, false);
     }
 
     /// <summary>Whether every declaration of <paramref name="scope"/> has been instantiated and every one of its members has ended.</summary>
@@ -4239,14 +4318,18 @@ public sealed class FlowCoordinator
             }
         }
 
+        // One walk says both what starts next and what each step that has not started waits on.
+        var walk = AdmissionWalk();
+        var decided = walk.ToDictionary(decision => decision.Instance);
+
         return new FlowSnapshot(
             Status,
             _endedAt,
             _spent,
             _budgetGranted,
             _pause,
-            [.. _created.Select(SnapshotStepOf)],
-            NextIds(),
+            [.. _created.Select(instance => SnapshotStepOf(instance, decided))],
+            [.. walk.Where(decision => decision.Starts).Select(decision => decision.Instance.Id)],
             waiting,
             _redirect is { } redirect
                 ? new FlowRedirectRecord(redirect.Handler.Id, redirect.Target, [.. redirect.Set.Select(entry => entry.Scope.Members.GetValueOrDefault(entry.Declaration.Name)?.Id ?? entry.Declaration.Name)])
@@ -4258,8 +4341,8 @@ public sealed class FlowCoordinator
                 _tally.Count(entry => entry.State == "unproven")));
     }
 
-    /// <summary>One instance, as its records read it.</summary>
-    private FlowSnapshotStep SnapshotStepOf(FlowInstance instance)
+    /// <summary>One instance, as its records read it, what it waits on as the admission walk said it.</summary>
+    private FlowSnapshotStep SnapshotStepOf(FlowInstance instance, IReadOnlyDictionary<FlowInstance, Admission> walk)
         => new(
             instance.Id,
             instance.Path,
@@ -4286,7 +4369,7 @@ public sealed class FlowCoordinator
             instance.Index,
             instance.Iteration,
             [.. instance._answers],
-            WaitsOnOf(instance),
+            WaitsOnOf(instance, walk),
             [.. instance._handlers],
             instance.HandledBy,
             instance.Leftover?.DeepClone(),
@@ -4305,117 +4388,19 @@ public sealed class FlowCoordinator
         return CreateStepOf(instance, instance.Step.In ?? instance.Step.Of!)?.Made;
     }
 
-    /// <summary>What one instance waits on, where it waits: a dependency, a claim, a counter, a question, the resume.</summary>
-    private List<string> WaitsOnOf(FlowInstance instance)
-    {
-        var waits = new List<string>();
-
-        switch (instance.State)
+    /// <summary>What one instance waits on, where it waits: the question it asked, the resume, or what admission says keeps it - a dependency, the quiet an alone step waits for, a claim, a counter, a redirect, the resume.</summary>
+    private static IReadOnlyList<string> WaitsOnOf(FlowInstance instance, IReadOnlyDictionary<FlowInstance, Admission> walk)
+        => instance.State switch
         {
-            case FlowInstanceState.Paused:
-                if (instance.WaitingQuestion is { } waiting)
-                {
-                    waits.Add(waiting);
-                }
+            FlowInstanceState.Paused when instance.WaitingQuestion is { } waiting => [waiting],
+            FlowInstanceState.Stopped => ["resume"],
+            FlowInstanceState.NotStarted when walk.TryGetValue(instance, out var admission) => admission.WaitsOn,
+            _ => [],
+        };
 
-                break;
-
-            case FlowInstanceState.Stopped:
-                waits.Add("resume");
-                break;
-
-            case FlowInstanceState.NotStarted when !instance.Step.IsGroup:
-                foreach (var name in instance.Step.DependsOn)
-                {
-                    if (instance.DeclaredScope?.Members.TryGetValue(name, out var dependency) is not true
-                        || dependency.State is not (FlowInstanceState.Done or FlowInstanceState.Skipped) && !(dependency.State is FlowInstanceState.Failed && dependency.PassedOver))
-                    {
-                        waits.Add(name);
-                    }
-                }
-
-                if (instance.Step.Alone == true && _created.Any(running => running.State is FlowInstanceState.Running))
-                {
-                    waits.Add("quiet");
-                }
-
-                var claims = FlowClaims.Of(instance.Step, _runnerFacts);
-
-                if (claims.Any(claim => HeldClaims([]).Any(claim.Conflicts)))
-                {
-                    waits.Add("claim");
-                }
-                else if (!CountersAllow(instance))
-                {
-                    waits.Add(instance.Step.Type switch
-                    {
-                        "reason" => "reasoning agents",
-                        "build" or "test" or "run" or "check-mutations" => "parallel processes",
-                        "create-agent" => "open agents",
-                        _ => "a counter",
-                    });
-                }
-
-                break;
-        }
-
-        return waits;
-    }
-
-    /// <summary>The steps that would start now, in the order they would start: the same walk admission makes, deciding nothing.</summary>
+    /// <summary>The steps that would start now, in the order they would start: what the admission walk admits, starting nothing.</summary>
     private List<string> NextIds()
-    {
-        var next = new List<string>();
-        var reserved = new List<FlowClaim>();
-
-        foreach (var instance in _created
-            .Where(instance => instance.State is FlowInstanceState.NotStarted && !instance.Step.IsGroup)
-            .OrderBy(instance => _declarationOrder.GetValueOrDefault(instance.Path, int.MaxValue))
-            .ThenBy(instance => instance.Id, StringComparer.Ordinal))
-        {
-            if (_pausing && !_alwaysPhase || _hardStop)
-            {
-                break;
-            }
-
-            if (_pausing && instance.IsAlways && instance.Step.Type == "reason")
-            {
-                continue;
-            }
-
-            if (_stopping && !instance.IsAlways)
-            {
-                continue;
-            }
-
-            if (instance.Step.Alone == true && _created.Any(running => running.State is FlowInstanceState.Running))
-            {
-                continue;
-            }
-
-            if (instance.Step.Alone != true && _created.Any(running => running.State is FlowInstanceState.Running && running.Step.Alone == true))
-            {
-                continue;
-            }
-
-            var claims = FlowClaims.Of(instance.Step, _runnerFacts);
-
-            if (claims.Any(claim => HeldClaims(reserved).Any(claim.Conflicts)))
-            {
-                reserved.AddRange(claims);
-                continue;
-            }
-
-            if (!CountersAllow(instance))
-            {
-                continue;
-            }
-
-            next.Add(instance.Id);
-        }
-
-        return next;
-    }
+        => [.. AdmissionWalk().Where(decision => decision.Starts).Select(decision => decision.Instance.Id)];
 
     /// <summary>
     /// Rebuilds the run's graph from the state a taken-up run left: every scope re-expanded to the items and iterations

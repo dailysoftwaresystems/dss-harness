@@ -1192,6 +1192,71 @@ public sealed class FlowCoordinatorTests
         _ = await session;
     }
 
+    /// <summary>
+    /// An alone step inside a group starts once nothing else runs: the groups around it, which stand open while their
+    /// members work, are no step that runs. The shipped flow's gate and mutations sit inside its rounds.
+    /// </summary>
+    [Fact]
+    public async Task AnAloneStepInsideAGroup_StartsWhenNoOtherStepRuns()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: rounds
+                repeat:
+                  until: gate.ok
+                  maxIterations: 2
+                steps:
+                  - name: work
+                    type: orient
+                  - name: gate
+                    type: orient
+                    alone: true
+                    dependsOn: [work]
+              - name: after
+                type: orient
+                dependsOn: [rounds]
+            """);
+        var runner = new FakeRunner().On("gate", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"ok": true}""")));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.Equal(["rounds#1.work", "rounds#1.gate", "after"], runner.Started);
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+    }
+
+    /// <summary>
+    /// Once an alone step is ready nothing new is admitted: it waits for what runs to end, and a step ready beside it
+    /// waits too, so the barrier is never starved by steps that keep starting.
+    /// </summary>
+    [Fact]
+    public async Task OnceAnAloneStepIsReady_NothingNewIsAdmitted()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: slow
+                type: build
+              - name: gate
+                type: orient
+                alone: true
+              - name: other
+                type: orient
+            """);
+        var runner = new FakeRunner();
+        var slow = runner.Hold("slow");
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
+        await runner.StartedAsync("slow").WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        slow.Done();
+        _ = await session.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.Equal(["slow", "gate", "other"], runner.Started);
+    }
+
     /// <summary>A checkpoint push is skipped while the switch is off, with the reason, and runs where the workflow turns it on.</summary>
     [Fact]
     public async Task ACheckpointPush_IsSkippedWhileTheSwitchIsOff()

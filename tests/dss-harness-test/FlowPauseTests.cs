@@ -468,6 +468,87 @@ public sealed class FlowPauseTests
         Assert.Contains("after", runner.Started);
     }
 
+    /// <summary>
+    /// In a pause's always phase only the always steps that are machine steps start: a step held behind a limit the
+    /// handoffs freed - a reason step, which would then never hand off - waits for the resume like every other.
+    /// </summary>
+    [Fact]
+    public async Task APausesAlwaysPhase_StartsNoStepHeldBehindALimit()
+    {
+        var definition = Parse("""
+            name: flow
+            maxReasoningAgents: 1
+            steps:
+              - name: first
+                type: reason
+                prompt: work.md
+                outputs: work.json
+              - name: second
+                type: reason
+                prompt: work.md
+                outputs: work.json
+              - name: sweep
+                type: orient
+                always: true
+            """);
+        var runner = new FakeRunner();
+        _ = runner.Hold("first");
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
+        await runner.StartedAsync("first").WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        coordinator.RequestPause("interrupt");
+
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Contains("sweep", runner.Started);
+        Assert.DoesNotContain("second", runner.Started);
+        Assert.Equal(FlowInstanceState.NotStarted, coordinator.Instances["second"].State);
+    }
+
+    /// <summary>
+    /// A machine step the pause left running that ends done raises no handler while the pause records: what its ending
+    /// owes is owed, and the resume raises it.
+    /// </summary>
+    [Fact]
+    public async Task ASuccessWhileThePauseRecords_OwesItsHandler_AndTheResumeRaisesIt()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: gate
+                type: build
+              - name: tell
+                type: orient
+                on:
+                  step: gate
+                  outcome: success
+              - name: sweep
+                type: orient
+                always: true
+            """);
+        var runner = new FakeRunner();
+        var gate = runner.Hold("gate");
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
+        await runner.StartedAsync("gate").WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        coordinator.RequestPause("interrupt");
+        gate.Done();
+
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Contains("sweep", runner.Started);
+        Assert.DoesNotContain("tell", runner.Started);
+
+        end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Contains("tell", runner.Started);
+    }
+
     /// <summary>A block whose member failed while the pause recorded it does not end done over the failure: its policy is owed to the resume.</summary>
     [Fact]
     public async Task ABlockWhoseMemberFailedWhileThePauseRecords_DoesNotEndDoneOverIt()
