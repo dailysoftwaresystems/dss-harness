@@ -690,6 +690,20 @@ public sealed class FlowCoordinator
                 Record(FlowChangeKind.Step, stopped, from: was, to: FlowInstanceState.NotStarted, attempt: stopped.Attempt);
             }
 
+            // The always steps run once per session, however the run went: those an earlier session ran are drawn
+            // again in this one's always phase, as new visits, the visits they had standing as they ended.
+            foreach (var scope in _scopes.Where(ScopeLive).ToList())
+            {
+                foreach (var declaration in DeclarationsOf(scope).Where(declaration => IsAlways(declaration, scope)))
+                {
+                    if (scope.Members.GetValueOrDefault(declaration.Name) is { State: FlowInstanceState.Done or FlowInstanceState.Failed or FlowInstanceState.Skipped or FlowInstanceState.NotRun })
+                    {
+                        _ = scope.Members.Remove(declaration.Name);
+                        _ = scope.Instantiated.Remove(declaration.Name);
+                    }
+                }
+            }
+
             foreach (var owed in _owedFailures.ToList())
             {
                 _ = _owedFailures.Remove(owed);
@@ -3240,16 +3254,18 @@ public sealed class FlowCoordinator
 
         group.Failing = (exit, error, failed);
 
+        // Nothing more of the group starts - save its always steps, which run however the run went, in the always
+        // phase, before the group ends.
         foreach (var scope in ScopesOf(group))
         {
-            foreach (var declaration in DeclarationsOf(scope).Where(declaration => !scope.Instantiated.Contains(declaration.Name)).ToList())
+            foreach (var declaration in DeclarationsOf(scope).Where(declaration => !scope.Instantiated.Contains(declaration.Name) && !IsAlways(declaration, scope)).ToList())
             {
                 scope.Instantiated.Add(declaration.Name);
                 NotRun(Create(scope, declaration, FlowInstanceState.NotRun), FlowNotRunCause.GroupFailed, $"'{failed}' failed and its group took the failure");
             }
         }
 
-        foreach (var member in ScopesOf(group).SelectMany(scope => scope.Members.Values).Where(member => member.State is FlowInstanceState.NotStarted).ToList())
+        foreach (var member in ScopesOf(group).SelectMany(scope => scope.Members.Values).Where(member => member.State is FlowInstanceState.NotStarted && !member.IsAlways).ToList())
         {
             NotRun(member, FlowNotRunCause.GroupFailed, $"'{failed}' failed and its group took the failure");
         }

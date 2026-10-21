@@ -1071,6 +1071,73 @@ public sealed class FlowCoordinatorTests
         Assert.Equal(FlowRunStatus.Failed, end.Status);
     }
 
+    /// <summary>
+    /// The always steps run once per session, however it ends, and are reset on resume: a session that ends on a
+    /// question runs them, and the resume that goes on runs them again at its own end.
+    /// </summary>
+    [Fact]
+    public async Task TheAlwaysSteps_RunOncePerSession_AndAgainAtTheResume()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: ask
+                type: pause
+                question: go on?
+                options: [go]
+              - name: after
+                type: orient
+                dependsOn: [ask]
+              - name: notes
+                type: orient
+                always: true
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner();
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Equal(["notes"], runner.Started);
+        Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", out _));
+
+        end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(["notes", "after", "notes+2"], runner.Started);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["notes"].State);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["notes+2"].State);
+    }
+
+    /// <summary>A group that takes a member's failure still runs its always members, in the always phase; only then does it end failed.</summary>
+    [Fact]
+    public async Task AFailedGroupsAlwaysMember_StillRuns_BeforeTheGroupEndsFailed()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: work
+                onFailure: continue
+                steps:
+                  - name: gate
+                    type: build
+                  - name: tidy
+                    type: orient
+                    always: true
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner().On("gate", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "a leg failed"));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(["work.gate", "work.tidy"], runner.Started);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["work.tidy"].State);
+        Assert.Equal(FlowInstanceState.Failed, coordinator.Instances["work"].State);
+        Assert.Equal(["work"], end.PassedOver);
+    }
+
     /// <summary>onFailure stop ends the run failed: nothing more is started, what runs finishes, the always steps run, and what was never started is NotRun.</summary>
     [Fact]
     public async Task OnFailureStop_EndsTheRunFailed_WhatRunsFinishes_AndAlwaysRuns()
