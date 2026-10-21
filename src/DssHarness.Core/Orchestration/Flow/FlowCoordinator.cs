@@ -3443,6 +3443,14 @@ public sealed class FlowCoordinator
         Put(records => records.Write(FlowChangeKind.Step, snapshot, id, state, state, attempt));
     }
 
+    /// <summary>
+    /// Whether the ending <paramref name="source"/>'s handlers were raised for was abandoned by a redirect, as its record
+    /// says it: the redirect left one of them before it ended (<see cref="Leave"/>), so the ending is never settled - by
+    /// that handler or by a sibling that ran - and no resume rebuilds it from the handlers its record holds raised.
+    /// </summary>
+    private static bool Abandoned(FlowInstance source)
+        => source._handlers.Any(handler => handler.State == "left");
+
     /// <summary>Whether a handler of an ending has ended, its own failure settled with it.</summary>
     private static bool Ended(FlowInstance handler)
         => handler.State switch
@@ -3721,9 +3729,9 @@ public sealed class FlowCoordinator
 
         if (visit.RaisedBy is { } source && _pendingEndings.TryGetValue(source.Id, out var pending) && pending.Handlers.Contains(visit))
         {
-            // A handler left before it ended took nothing: the ending it was raised for is not settled by it - its source
-            // is never counted handled by a handler that never ran - and the source's record says it was left, so no
-            // resume rebuilds the ending and settles it by the skipped visit either.
+            // A handler left before it ended took nothing: the ending it was raised for is abandoned - never settled, by
+            // it or by a sibling that ran, and its source never counted handled by a handler that never ran - and the
+            // source's record says the handler was left, so no resume rebuilds the ending either (Abandoned).
             _ = _pendingEndings.Remove(source.Id);
             SetHandlerState(source, visit.Step.Name, "left");
         }
@@ -5676,7 +5684,8 @@ public sealed class FlowCoordinator
             foreach (var source in _created.Where(created => created.Step is { On: null } && created._handlers.Any(handler => handler.State is "owed" or "raised")))
             {
                 // A raise the pause found owed stays owed in the source's record, and the session makes it from there.
-                if (!source._handlers.Any(handler => handler.State == "owed") && source._handlers.Any(handler => handler.State == "raised"))
+                // An ending a redirect abandoned is never waited on again, whatever its other handlers did.
+                if (!source._handlers.Any(handler => handler.State == "owed") && source._handlers.Any(handler => handler.State == "raised") && !Abandoned(source))
                 {
                     // An ending whose handlers were raised and not all done: the run goes on waiting for them.
                     var handlers = _created.Where(created => created.RaisedBy == source).ToList();

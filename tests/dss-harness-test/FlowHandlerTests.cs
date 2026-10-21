@@ -1004,6 +1004,119 @@ public sealed class FlowHandlerTests
     }
 
     /// <summary>
+    /// An ending a redirect abandoned - it left one of its handlers before that one ended - is never rebuilt by a resume,
+    /// whatever its other handlers did: here a sibling handler ran done, with a then, before the redirect; the resume, from
+    /// the records alone, settles nothing by either, counts the source handled by neither and decides no redirect over
+    /// the visit the run left.
+    /// </summary>
+    [Fact]
+    public async Task AnEndingARedirectAbandoned_IsNeverRebuiltByAResume_ThoughASiblingHandlerRanDone()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: plan
+                type: orient
+              - name: verify
+                type: ci-read
+                dependsOn: [plan]
+              - name: fix
+                type: orient
+                on: {step: verify, outcome: failure}
+                then: plan
+              - name: round
+                dependsOn: [plan]
+                steps:
+                  - name: check
+                    type: orient
+                  - name: mend
+                    type: pause
+                    on: {step: check, outcome: failure}
+                    question: mend it?
+                    options: [go, stop]
+                  - name: log
+                    type: orient
+                    on: {step: check, outcome: failure}
+                    then: check
+              - name: ship
+                type: pause
+                dependsOn: [round]
+                question: ship it?
+                options: [ship, hold]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+
+        // Made without asynchronous continuations, so the session settles over what its completion posts.
+        var verify = new TaskCompletionSource<FlowStepResult>();
+        var verifying = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new FakeRunner()
+            .On("check", run => run.Instance == "round.check"
+                ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "the check failed")
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success))
+            .OnAsync("verify", run =>
+            {
+                if (run.Visit != 1)
+                {
+                    return Task.FromResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
+                }
+
+                verifying.TrySetResult();
+                return verify.Task;
+            });
+        var harness = new HarnessFactory();
+        var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "r1");
+        var clock = new JumpingClock();
+
+        using (var records = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+            var session = coordinator.RunAsync(cancel);
+            await verifying.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+            await coordinator.SettledAsync(cancel);
+            await coordinator.SettledAsync(cancel);
+
+            // The check failed: log ran done, and mend asks; then verify fails, and fix sends the run back past the
+            // group, leaving mend before it ended.
+            Assert.Equal(FlowInstanceState.Done, coordinator.Instances["round.log"].State);
+            Assert.Equal("round.mend", Assert.Single(coordinator.OpenQuestions).Instance);
+            verify.SetResult(FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "the read failed"));
+
+            var paused = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+            Assert.Equal(FlowRunStatus.Paused, paused.Status);
+            Assert.Equal("ship", Assert.Single(coordinator.OpenQuestions).Instance);
+        }
+
+        Assert.Equal(
+            [new FlowHandlerState("log", "raised"), new FlowHandlerState("mend", "left")],
+            harness.OrchestrationStore.ReadFlow(layout)!.Steps.Single(step => step.Instance == "round.check").Handlers!.OrderBy(handler => handler.Handler, StringComparer.Ordinal));
+
+        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
+
+        using (var again = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
+        {
+            var resumed = new FlowCoordinator(definition, new FakeRunner(), new RunnerFacts(), clock, records: again, resume: taken);
+
+            Assert.True(resumed.TryAnswer(Assert.Single(resumed.OpenQuestions).Id, "ship", out _));
+
+            var done = await resumed.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+            Assert.Equal(FlowRunStatus.Done, done.Status);
+            Assert.Equal("done; 1 failure was handled: verify, by fix", done.Summary);
+            Assert.Null(resumed.Instances["round.check"].HandledBy);
+            Assert.Equal(
+                [new FlowHandlerState("log", "raised"), new FlowHandlerState("mend", "left")],
+                harness.OrchestrationStore.ReadFlow(layout)!.Steps.Single(step => step.Instance == "round.check").Handlers!.OrderBy(handler => handler.Handler, StringComparer.Ordinal));
+        }
+
+        // The one redirect the run decided is fix's: none was decided at the resume over the visit the run left.
+        Assert.Equal(
+            ["the run is sent to 'plan' by 'fix'"],
+            FlowEventLog.Read(harness.FileSystem, layout.EventsFile).Events.Select(read => read.Detail).Where(detail => detail?.StartsWith("the run is sent to ", StringComparison.Ordinal) == true));
+    }
+
+    /// <summary>
     /// A redirect decided while another waits is kept, never dropped: redirects are made in the order they were decided,
     /// each once nothing it resets is running - here two items of a forEach each send the run back within their own
     /// item, and both go back.

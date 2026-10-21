@@ -273,7 +273,8 @@ public sealed record FlowHandoffRecord(string By, string? Why = null)
 /// <param name="Handler">The handler's name, as its declaration names it.</param>
 /// <param name="State">
 /// Where it stands: <c>owed</c> (the ending is written, the raise is not made yet), <c>raised</c>, <c>done</c>,
-/// <c>passed</c>, or <c>left</c> (a redirect left its visit before it ended: it took nothing, and settles nothing).
+/// <c>passed</c>, or <c>left</c> (a redirect left its visit before it ended: it took nothing, and the ending it was raised
+/// for is abandoned - settled by none of its handlers, and never rebuilt by a resume).
 /// </param>
 public sealed record FlowHandlerState(string Handler, string State)
 {
