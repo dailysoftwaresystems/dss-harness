@@ -1516,8 +1516,11 @@ SIGTERM and a hang-up, are taken by `PosixSignalRegistration` and never end the 
 command line's own termination handling is turned off for the three session verbs
 (`PointOfNoReturn.CountsItsOwnInterrupts`), since it cancels at the first interrupt and starts a
 clock. The first asks the engine for the safe pause, which starts no clock; the second asks it to
-stop where it stands, and the command ends within 90 s (`PointOfNoReturn.SafePauseDrain`) whatever
-is left - what a crash leaves, which a resume goes on from. The engine's loop alone applies either,
+stop where it stands: the engine records a step whose runner does not end within 90 s of applying
+the stop as stopped all the same (`PointOfNoReturn.SafePauseDrain`), and the command ends within 120 s
+of the interrupt whatever is left (`PointOfNoReturn.HardStopBound`, the drain and 30 s to write the
+end, so the terminal never cuts off a session the engine is still ending in order) - what a crash
+leaves, which a resume goes on from. The engine's loop alone applies either,
 and a cancellation of the session's token is the second, never a cut-off. Until the step runners
 land, the runner registered is `NoStepRunner`: each step of a run fails, saying no runner serves its
 type (its code 14).

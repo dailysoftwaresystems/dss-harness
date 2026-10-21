@@ -137,8 +137,9 @@ refresh's or a rebase's plan takes, keeps, hands and merges. An
 
 A run's session - `run-orchestrator`, `resume-orchestrator`, `answer-orchestrator` - takes its terminal's interrupts
 itself: the first Ctrl+C (off Windows, SIGTERM or a hang-up as well) asks the safe pause - the agents hand off, the machine
-steps finish, then the run is paused - and starts no clock; the second stops the run where it stands, and the command ends
-within 90 s whatever is left, which `resume-orchestrator` goes on from. Every session writes the run's report
+steps finish, then the run is paused - and starts no clock; the second stops the run where it stands: a step whose runner
+does not end within 90 s is recorded stopped all the same, and the command ends within 120 s whatever is left - the
+engine's 90 s and 30 s to write the end - which `resume-orchestrator` goes on from. Every session writes the run's report
 (`report.md`, `report.json`) and names each record it wrote, in text and in `--json`.
 
 `--time` pulls each phase's own timing marks out of its output, using `buildTimingRegex`,

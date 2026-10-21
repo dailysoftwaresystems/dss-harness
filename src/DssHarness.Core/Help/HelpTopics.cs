@@ -2728,8 +2728,9 @@ public static class HelpTopics
             + "and --now ends its process: only on this machine, and only the process its owner names by its start. "
             + $"{OrchestratorService.DeleteCommand} refuses a run a live engine owns, and removes a gone engine's owner with the run. In the terminal "
             + "a session runs in, the first Ctrl+C - and off Windows SIGTERM or a hang-up - asks the safe pause, which starts no "
-            + "clock: an agent's handoff and a build may take as long as they take. The second stops the run where it stands, and "
-            + $"the command ends within {PointOfNoReturn.SafePauseDrain.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s whatever is left; "
+            + "clock: an agent's handoff and a build may take as long as they take. The second stops the run where it stands - a "
+            + $"step whose runner does not end within {PointOfNoReturn.SafePauseDrain.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s is recorded stopped all the same - and "
+            + $"the command ends within {PointOfNoReturn.HardStopBound.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s whatever is left; "
             + $"what is left then is what a crash leaves, and {FlowService.ResumeCommand} goes on from the records. No step runner is "
             + "built yet: each step of a run fails, saying no runner serves its type.");
         builder.AppendLine();

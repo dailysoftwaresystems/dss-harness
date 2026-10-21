@@ -867,8 +867,8 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains(
             "In the terminal a session runs in, the first Ctrl+C - and off Windows SIGTERM or a hang-up - asks the safe pause, which starts no "
-                + "clock: an agent's handoff and a build may take as long as they take. The second stops the run where it stands, and the command "
-                + "ends within 90 s whatever is left;",
+                + "clock: an agent's handoff and a build may take as long as they take. The second stops the run where it stands - a step whose "
+                + "runner does not end within 90 s is recorded stopped all the same - and the command ends within 120 s whatever is left;",
             prose,
             StringComparison.Ordinal);
         Assert.Contains("which it reads every 2 s", prose, StringComparison.Ordinal);

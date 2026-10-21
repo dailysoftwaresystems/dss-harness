@@ -984,6 +984,53 @@ public sealed class FlowServiceTests
         Assert.Equal(flow.Status, repository.Harness.OrchestrationStore.ReadWorkflowStatus(run)!.Status);
     }
 
+    /// <summary>
+    /// The terminal's bound on a hard stop is the engine's own drain and a margin for writing the end: a machine step whose
+    /// runner does not hear the stop is recorded stopped once the engine's 90 s pass, on the one clock the terminal and
+    /// the engine share, and the session ends in order - its report written, its owner released - never cut off by the
+    /// terminal at the same moment.
+    /// </summary>
+    [Fact]
+    public async Task TheSecondInterrupt_OverARunnerDeafToTheStop_EndsInOrderOnceTheEnginesDrainPasses()
+    {
+        var (repository, runner) = await RepositoryAsync(InterruptedFlow);
+        using var disposed = repository;
+        var clock = new TimerClock();
+        var service = Service(repository.Harness, runner, clock);
+        var deaf = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        runner.On("one", FlowStepResult.Ended(passed: true, 0));
+        runner.HoldsDeaf("two", deaf.Task);
+
+        var terminal = new FlowTerminal(repository.Harness.Output, FlowService.RunCommand, clock);
+        var driving = terminal.RunAsync(
+            (interrupts, token) => service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, interrupts, token),
+            Token,
+            bindSignals: false);
+
+        await runner.WaitStartedAsync("two");
+
+        // The poll's wait, then the terminal's bound and the engine's drain: three waits on the one clock.
+        await clock.WaitingAsync(1).WaitAsync(Bound, Token);
+        terminal.Interrupted();
+        terminal.Interrupted();
+        await clock.WaitingAsync(3).WaitAsync(Bound, Token);
+        clock.Advance(PointOfNoReturn.SafePauseDrain);
+
+        var outcome = await driving.WaitAsync(Bound, Token);
+        var run = RunOf(repository);
+        var flow = repository.Harness.OrchestrationStore.ReadFlow(run)!;
+        var two = flow.Steps.Single(step => step.Instance == "two");
+
+        Assert.Equal(HarnessExit.Cancelled, outcome.ExitCode);
+        Assert.Equal("Stopped", flow.Status);
+        Assert.Equal("Stopped", two.State);
+        Assert.Equal("its runner did not end within 90 s of the stop", two.Error);
+        Assert.Null(repository.Harness.OrchestrationStore.ReadOwner(run));
+        Assert.True(File.Exists(run.ReportFile));
+        _ = deaf.TrySetResult();
+    }
+
     /// <summary>The drain of a hard stop is bounded: a session that has not ended within it after the second interrupt is left where it stands, and the command answers 130 saying so.</summary>
     [Fact]
     public async Task TheHardStopsDrainIsBounded()
@@ -1002,7 +1049,7 @@ public sealed class FlowServiceTests
 
         Assert.Equal(HarnessExit.Cancelled, outcome.ExitCode);
         Assert.Equal(
-            "the run did not stop within 90 s of the second interrupt, and the command ends where it stands: what is left is what a crash leaves, and resume-orchestrator reclaims the run and goes on from its records",
+            "the run did not stop within 120 s of the second interrupt, and the command ends where it stands: what is left is what a crash leaves, and resume-orchestrator reclaims the run and goes on from its records",
             outcome.Message);
     }
 
@@ -1826,6 +1873,7 @@ public sealed class FlowServiceTests
         private readonly ConcurrentDictionary<string, Task> _holds = new(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, TaskCompletionSource> _started = new(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, Action> _onStart = new(StringComparer.Ordinal);
+        private readonly ConcurrentDictionary<string, bool> _deaf = new(StringComparer.Ordinal);
         private readonly ConcurrentQueue<string> _order = new();
         private volatile FlowStepResult? _every;
 
@@ -1840,6 +1888,13 @@ public sealed class FlowServiceTests
 
         /// <summary>Holds <paramref name="step"/> until <paramref name="release"/> completes, as a machine step the pause leaves running.</summary>
         public void Holds(string step, Task release) => _holds[step] = release;
+
+        /// <summary>Holds <paramref name="step"/> until <paramref name="release"/> completes, deaf to the stop: a runner that does not end when its step is cancelled.</summary>
+        public void HoldsDeaf(string step, Task release)
+        {
+            _holds[step] = release;
+            _ = _deaf.TryAdd(step, true);
+        }
 
         /// <summary>Does <paramref name="what"/> when <paramref name="step"/> starts, before it answers.</summary>
         public void OnStart(string step, Action what) => _onStart[step] = what;
@@ -1863,7 +1918,7 @@ public sealed class FlowServiceTests
             {
                 // A hold is one attempt's: what a stop or a pause ends, and the resume's own attempt of the step runs
                 // as a step that is no longer held.
-                await held.WaitAsync(cancellationToken);
+                await (_deaf.ContainsKey(run.Step.Name) ? held : held.WaitAsync(cancellationToken));
                 return FlowStepResult.Ended(passed: true, 0);
             }
 

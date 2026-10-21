@@ -31,8 +31,8 @@ public static class PointOfNoReturn
     /// <summary>
     /// The commands that pause safely: a first interrupt asks the engine for a safe pause and a second is the hard
     /// stop, so each is waited for as the safe pause needs and never cut off part way - the engine may stay for as
-    /// long as a build takes, and the drain of a hard stop is bounded (<see cref="SafePauseDrain"/>). Each counts its
-    /// own interrupts (<see cref="CountsItsOwnInterrupts"/>).
+    /// long as a build takes, and a hard stop is bounded (<see cref="HardStopBound"/>). Each counts its own interrupts
+    /// (<see cref="CountsItsOwnInterrupts"/>).
     /// </summary>
     public static IReadOnlySet<string> PausesSafely { get; } = new HashSet<string>(StringComparer.Ordinal)
     {
@@ -41,8 +41,26 @@ public static class PointOfNoReturn
         Orchestration.Flow.FlowService.AnswerCommand,
     };
 
-    /// <summary>The longest a hard stop of a run can take: the 90 s of drain, which the engine's own answer of the handoffs' bound is beside.</summary>
+    /// <summary>
+    /// The engine's drain of a hard stop: the longest it waits, from applying the stop, for a stopped step's runner to
+    /// end - 90 s - before recording the step stopped all the same, saying so.
+    /// </summary>
     public static TimeSpan SafePauseDrain { get; } = TimeSpan.FromSeconds(90);
+
+    /// <summary>
+    /// What a session is given beyond the engine's drain to end in order: the loop applies the stop a moment after it
+    /// is asked, and once the drain has passed it still writes the run's end - its state, its status, its report - and
+    /// releases its owner.
+    /// </summary>
+    public static TimeSpan HardStopEndMargin { get; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// The longest a hard stop of a run can take, from the second interrupt: the engine's drain
+    /// (<see cref="SafePauseDrain"/>) and the margin for writing the end (<see cref="HardStopEndMargin"/>) - so the
+    /// terminal never cuts off a session the engine is still ending in order, and the engine's own word on a runner that
+    /// did not end is what the run records.
+    /// </summary>
+    public static TimeSpan HardStopBound { get; } = SafePauseDrain + HardStopEndMargin;
 
     /// <summary>
     /// Whether the command <paramref name="commandLine"/> types passes a point of no return: one of
@@ -91,8 +109,9 @@ public static class PointOfNoReturn
 
     /// <summary>
     /// How long the command line waits for the command <paramref name="commandLine"/> types once interrupted: as long
-    /// as a deletion expects where it passes a point of no return, as long as a hard stop of a run can take - from its
-    /// second interrupt, the session itself timing it - where it pauses safely, and this tool's own answer of none
+    /// as a deletion expects where it passes a point of no return, as long as a hard stop of a run can take
+    /// (<see cref="HardStopBound"/>) - from its second interrupt, the session itself timing it - where it pauses safely,
+    /// and this tool's own answer of none
     /// where it does neither - <see langword="null"/>, which leaves the command line's own short wait as it is. A front
     /// end that holds a window open while a command runs holds it by this, for as long as the command asks.
     /// </summary>
@@ -103,7 +122,7 @@ public static class PointOfNoReturn
 
         if (CountsItsOwnInterrupts(commandLine))
         {
-            return SafePauseDrain;
+            return HardStopBound;
         }
 
         return Holds(commandLine) ? WorktreeService.DefaultInterruptionGrace : null;

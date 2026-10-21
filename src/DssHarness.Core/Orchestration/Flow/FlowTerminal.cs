@@ -106,8 +106,8 @@ public sealed class FlowInterrupts
 /// The terminal of a run's session: how the interrupts a terminal sends reach the run. Ctrl+C - and off Windows SIGTERM
 /// and a hang-up - are each taken as one interrupt of the session (<see cref="FlowInterrupts"/>) and never end the
 /// process: the first asks the safe pause, which starts no clock, and the second the hard stop, which is bounded - where
-/// the session has not ended <see cref="PointOfNoReturn.SafePauseDrain"/> after it, the command ends where it stands, and
-/// what is left is what a crash leaves.
+/// the session has not ended <see cref="PointOfNoReturn.HardStopBound"/> after it, the engine's own drain and the margin
+/// for writing its end both passed, the command ends where it stands, and what is left is what a crash leaves.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -124,13 +124,13 @@ public sealed class FlowInterrupts
 /// <param name="output">Says what each interrupt asked, as a line of <paramref name="command"/>.</param>
 /// <param name="command">The run verb the session is of.</param>
 /// <param name="clock">How the drain after the second interrupt is timed.</param>
-/// <param name="drain">How long the session may take to end after the second interrupt; <see cref="PointOfNoReturn.SafePauseDrain"/> where not given.</param>
+/// <param name="drain">How long the session may take to end after the second interrupt; <see cref="PointOfNoReturn.HardStopBound"/> where not given.</param>
 public sealed class FlowTerminal(IHarnessOutput output, string command, TimeProvider? clock = null, TimeSpan? drain = null)
 {
     private readonly IHarnessOutput _output = output ?? throw new ArgumentNullException(nameof(output));
     private readonly string _command = command ?? throw new ArgumentNullException(nameof(command));
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
-    private readonly TimeSpan _drain = drain ?? PointOfNoReturn.SafePauseDrain;
+    private readonly TimeSpan _drain = drain ?? PointOfNoReturn.HardStopBound;
     private readonly TaskCompletionSource _drained = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Lock _gate = new();
     private int _presses;
