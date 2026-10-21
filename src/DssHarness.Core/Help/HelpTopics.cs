@@ -2415,9 +2415,12 @@ public static class HelpTopics
         builder.AppendLine("will install or update it first, with");
         builder.AppendLine($"'npm install -g @anthropic-ai/claude-code@{Agents.ClaudeCode.ClaudeCodeUpdateService.Needed}' -");
         builder.AppendLine("never with sudo, never 'npm update -g', never past the version needed, never beside a");
-        builder.AppendLine("session of that installation that is running (a claude installed any other way does not");
-        builder.AppendLine("count), and never a program the slot names (CLAUDE_EXECUTABLE: a person's own choice,");
-        builder.AppendLine("started as named; a slot that cannot give it is refused, never passed over for npm's).");
+        builder.AppendLine("session of that installation that is running (its program, node running its script, a");
+        builder.AppendLine("claude node runs, or a claude whose program the machine will not say, such as another");
+        builder.AppendLine("user's on Linux; a claude installed any other way whose program it names does not count,");
+        builder.AppendLine("and a process table read by names alone refuses the change), and never a program the slot");
+        builder.AppendLine("names (CLAUDE_EXECUTABLE: a person's own choice, started as named; a slot that cannot give");
+        builder.AppendLine("it is refused, never passed over for npm's).");
         builder.AppendLine("After a change, whether it ran or failed, what npm holds since is said. A client's update");
         builder.AppendLine("key (agentClients.<client>.update, true where nothing is said) and DISABLE_UPDATES in the");
         builder.AppendLine("tool's own environment (a setting of the person's, never a key) turn installing and");

@@ -493,9 +493,13 @@ does and starts npm's own `npm-cli.js` with node. A run that needs a Claude mode
 `claude-code` client needs npm, and no other run does. Where npm has no Claude Code, or one older
 than this tool needs, it is installed or updated with
 `npm install -g @anthropic-ai/claude-code@2.1.287` - never with sudo, never past the version
-needed, never beside a running session of that installation (a `claude` installed any other way
-does not count), under the same machine-wide lock and the same never-stopped, read-back sequence
-`update-tool` has: after a change that failed, as after one that ran, it says what npm holds since.
+needed, never beside a running session of that installation: a process that runs its program or
+node running its script, a `claude` that node runs, or a `claude` whose program the machine will
+not say (another user's, on Linux), each named in the refusal; a `claude` installed any other way
+whose program the machine names does not count, and a process table that could be read by names
+alone refuses the change, saying why. The change runs under the same machine-wide lock and the
+same never-stopped, read-back sequence `update-tool` has: after a change that failed, as after
+one that ran, it says what npm holds since.
 This build has that step and its refusals; the engine's step runner, which takes it before a run's
 first step that needs Claude Code, is still to come, so no command of this build installs or
 updates Claude Code yet. A program the slot names (`CLAUDE_EXECUTABLE`) is a person's own choice:

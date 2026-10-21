@@ -228,11 +228,11 @@ public sealed class ToolUpdateService(
         {
             // A table read by names alone names no process's parent: a wait asked from inside one of these could not be
             // told from one that ends, and would be waited on for good without a word.
-            if (table.Degraded is { } unread)
+            if (ProgramUpdate.Unread(table, "which process started which") is { } unread)
             {
                 return new CommandOutcome(
                     HarnessExit.Refused,
-                    $"{move}: {Count(running)} on this machine, and which process started which could not be read - {unread.TrimEnd('.')} - so "
+                    $"{move}: {Count(running)} on this machine, and {unread} so "
                     + "a wait asked from inside one of them could not be told from one that ends. Nothing was changed.",
                     [.. running.Select(one => "  " + Describe(one)), "Run again once each has ended."]);
             }

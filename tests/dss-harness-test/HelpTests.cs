@@ -206,7 +206,8 @@ public sealed partial class HelpTests
     /// <summary>
     /// The agent-clients topic says which Claude Code the tool uses and why - npm's, and never a native launcher -,
     /// that a run which needs it needs npm, what the tool runs to install it and bring it up to date, what it never
-    /// runs - beside a session of that installation alone, a claude installed otherwise not counting -, that a slot
+    /// runs - beside a session of that installation, each kind of process that counts as one said, a claude installed
+    /// otherwise whose program is read not counting, and a table read by names alone refusing -, that a slot
     /// that cannot give a named program is refused rather than passed over, that what npm holds is said after every
     /// change, the two ways to turn it off, and that no key is read from the process environment.
     /// </summary>
@@ -218,7 +219,12 @@ public sealed partial class HelpTests
         Assert.Contains("The Claude Code this tool uses is the one npm installs, and no other", prose, StringComparison.Ordinal);
         Assert.Contains($"'npm install -g @anthropic-ai/claude-code@{DssHarness.Core.Agents.ClaudeCode.ClaudeCodeUpdateService.Needed}'", prose, StringComparison.Ordinal);
         Assert.Contains("never with sudo, never 'npm update -g', never past the version needed", prose, StringComparison.Ordinal);
-        Assert.Contains("never beside a session of that installation that is running (a claude installed any other way does not count)", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            "never beside a session of that installation that is running (its program, node running its script, a claude node runs, or a "
+                + "claude whose program the machine will not say, such as another user's on Linux; a claude installed any other way whose "
+                + "program it names does not count, and a process table read by names alone refuses the change)",
+            prose,
+            StringComparison.Ordinal);
         Assert.Contains("a slot that cannot give it is refused, never passed over for npm's", prose, StringComparison.Ordinal);
         Assert.Contains("After a change, whether it ran or failed, what npm holds since is said.", prose, StringComparison.Ordinal);
         Assert.Contains("and no key is ever read from the process environment", prose, StringComparison.Ordinal);

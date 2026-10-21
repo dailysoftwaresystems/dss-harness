@@ -1347,9 +1347,17 @@ walk of a PATH), `ClaudeCodeInstall` reads the package it holds and the version 
 answers (the version in the line `claude --version` prints, compared as a version, never as
 text), and `ClaudeCodeUpdateService` - the second caller of the shared `ProgramUpdate` sequence
 `update-tool` has - installs it where npm has none and brings one older than the tool needs up to
-the one version it names: never elevated, never beside a running session of that installation (a
-process whose program, or a path on whose command line, lies under the package's directory - a
-`claude` installed any other way does not count), bounded, and read back after a change that
+the one version it names: never elevated, never beside a running session of that installation
+(`ClaudeCodeInstall.SessionsAsync`, the one rule of which processes count: a process whose
+program, or a path on whose command line, lies under the package's directory - read as text
+first, links followed only for a process called `claude` or `node` whose text did not say, each
+path once per reading, off the caller's thread and within ten seconds, a path on a mount that
+answers nothing counting its process as one that cannot be told apart -; a `claude` whose
+program is node, which is how node running Claude Code shows on Linux and macOS once it has
+written its title over its name and line; and a `claude` whose program could not be read,
+another user's on Linux - each named in the refusal (13). A `claude` installed any other way
+whose program is read does not count, and a table read by names alone refuses the change (13)
+by the rule `update-tool` refuses such a wait by, `ProgramUpdate.Unread`), bounded, and read back after a change that
 failed as after one that ran, saying what npm holds since. A program the slot names is never
 moved, and a slot that cannot give it is refused, never passed over for npm's; the client's
 `update` key is read by the service, true where nothing is said. The step runner that asks it

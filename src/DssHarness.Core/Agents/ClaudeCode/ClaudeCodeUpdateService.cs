@@ -217,23 +217,34 @@ public sealed class ClaudeCodeUpdateService(
 
         // A session reads parts of its executable from disk as it works, and npm deletes the previous binary when it
         // installs over it: on Windows the change fails on the locked file, and elsewhere it takes the program from
-        // under the session. A session is a process that runs a program of this installation - its native program, or
-        // node running its script - and no other claude, which npm's change never touches; a claude whose program the
-        // table could not read cannot be told apart and is counted, said as that. An installation where there is none
+        // under the session. Which processes are sessions is ClaudeCodeInstall.SessionsAsync's one rule - a program of
+        // this installation, node running its script, a claude node runs, and a claude whose program could not be
+        // read, each said as what it is - and no other claude, which npm's change never touches. A table read by
+        // names alone says nothing of what any process runs, so it is refused as the rule every updater shares says
+        // (ProgramUpdate.Unread), never read as a machine running no session. An installation where there is none
         // meets no such process, and the table is not read. Every claude this tool starts is given
         // DISABLE_AUTOUPDATER=1 (ClaudeCodeInstall.EveryStart), so no session of the tool's own moves the installation
         // by itself either: only this sequence does.
         if (held.Installed)
         {
             var table = await _processes.ReadAsync(cancellationToken).ConfigureAwait(false);
-            var runs = _install.RunsFrom(root, _platform.PathComparison);
-            var running = _updates.Running(table, one => runs(one) || ClaudeCodeInstall.CannotBeToldApart(one), _process.CurrentId);
+
+            if (ProgramUpdate.Unread(table, "what each process on this machine runs") is { } unread)
+            {
+                return Refused(
+                    HarnessExit.Refused,
+                    $"{unread} so whether a session of Claude Code is running could not be told, and a change beside one takes its "
+                    + $"program from under it. Nothing was changed; with every session of Claude Code ended, run it by hand: {InstallCommand()}");
+            }
+
+            var sessions = await _install.SessionsAsync(table.Processes, root, _platform.PathComparison, cancellationToken).ConfigureAwait(false);
+            var running = _updates.Running(table, sessions.Counts, _process.CurrentId);
 
             if (running.Count > 0)
             {
                 return Refused(
                     HarnessExit.Refused,
-                    $"a session of Claude Code is running on this machine ({string.Join(", ", running.Select(one => Session(one, runs)))}); "
+                    $"a session of Claude Code is running on this machine ({string.Join(", ", running.Select(sessions.Said))}); "
                     + "start the run again when they have ended.");
             }
         }
@@ -424,11 +435,6 @@ public sealed class ClaudeCodeUpdateService(
             _ => throw new UnreachableException("A package that reads names its version and its program."),
         };
     }
-
-    /// <summary>One running session, by its id - and, where it was counted for its name alone, that what it runs could not be read.</summary>
-    private static string Session(SampledProcess one, Func<SampledProcess, bool> runs)
-        => string.Create(CultureInfo.InvariantCulture, $"pid {one.Id}")
-            + (runs(one) ? string.Empty : $" ({one.Name}, whose program could not be read)");
 
     /// <summary>Whether <paramref name="version"/> is <paramref name="needed"/> or a later one: the one comparison of versions.</summary>
     private static bool AtLeast(SemanticVersion version, SemanticVersion needed)

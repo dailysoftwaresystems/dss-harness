@@ -313,6 +313,119 @@ public sealed class ClaudeCodeUpdateServiceTests
         Assert.DoesNotContain(kit.Runner.Ran, line => line.Contains(" install ", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// A session of an older installation that node runs names itself claude: Claude Code sets its process title, and on
+    /// Linux and macOS node writes it over the process's name and its command line, so the table reads a process called
+    /// claude whose line is that bare word and whose program is node. A claude that node runs is npm's, and counts -
+    /// read by its program's path alone it was taken for another installation's, and npm installed over it.
+    /// </summary>
+    [Theory]
+    [InlineData("/usr/bin/node")]
+    [InlineData("/opt/homebrew/Cellar/node/22.9.0/bin/node")]
+    public async Task AClaudeThatNodeRuns_AsLinuxAndMacOsShowIt_RefusesTheChange(string node)
+    {
+        using var kit = new Kit(package: "2.1.201", program: "2.1.201");
+        kit.Table = new ScriptedTable([[new(5151, 1, "claude", null, "claude", node)]]);
+
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+
+        Assert.Equal(HarnessExit.Refused, answer.ExitCode);
+        Assert.Equal(
+            $"a session of Claude Code is running on this machine (pid 5151 (claude, run by node '{node}')); start the run again when they have ended.",
+            answer.Message);
+        Assert.DoesNotContain(kit.Runner.Ran, line => line.Contains(" install ", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A process table read by names alone - WMI or ps having failed - says nothing of what any process runs, so a session
+    /// node runs, which no name tells, cannot be looked for: the change is refused (13) with why the table was read so,
+    /// never run beside a session nobody could see. Nobody looked and nothing was found are different facts.
+    /// </summary>
+    [Fact]
+    public async Task ATableReadByNamesAlone_RefusesTheChange_SayingWhy()
+    {
+        const string Why = "the process table could not be read from WMI through PowerShell (it exited 1: Access denied)";
+        using var kit = new Kit(package: "2.1.201", program: "2.1.201");
+        kit.Table = new ScriptedTable([[new(5150, null, "node", null, null)]], degraded: Why);
+
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+
+        Assert.Equal(HarnessExit.Refused, answer.ExitCode);
+        Assert.Equal(
+            $"what each process on this machine runs could not be read - {Why} - so whether a session of Claude Code is running "
+                + "could not be told, and a change beside one takes its program from under it. Nothing was changed; with every "
+                + $"session of Claude Code ended, run it by hand: {ClaudeCodeUpdateService.InstallCommand()}",
+            answer.Message);
+        Assert.Empty(answer.Details);
+        Assert.DoesNotContain(kit.Runner.Ran, line => line.Contains(" install ", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Links are followed only for a process that could be a session - one called claude or node, by its name or its
+    /// program's - and only where its paths, read as text, do not already say: every path once per reading, the package's
+    /// first. A browser's paths, a node already shown to run elsewhere by its text, and the same path named twice cost the
+    /// file system nothing more - each was once a walk of the disk, a stale network mount among them able to hold the
+    /// update for good.
+    /// </summary>
+    [Fact]
+    public async Task OnlyAProcessThatCouldBeASession_HasItsLinksFollowed_EachPathOnce()
+    {
+        using var kit = new Kit(package: "2.1.201", program: "2.1.201");
+        var browser = Path.Combine(kit.Temp.Path, "apps", "browser.exe");
+        var profile = Path.Combine(kit.Temp.Path, "profile");
+        var server = Path.Combine(kit.Temp.Path, "work", "server.js");
+        kit.Table = new ScriptedTable(
+            [
+                [
+                    new(100, 1, "browser", null, $"\"{browser}\" --user-data-dir {profile}", browser),
+                    new(200, 1, "node", null, $"\"{kit.Node}\" \"{server}\" {server}", kit.Node),
+                ],
+            ]);
+        kit.Runner.OnInstall = () => kit.WritePackage("2.1.287", "2.1.287");
+
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+
+        Assert.True(answer.Ready);
+        Assert.Equal([ClaudeCodeInstall.PackageDirectory(kit.Root), kit.Node, server], kit.Files.Followed);
+    }
+
+    /// <summary>
+    /// A path whose following never ends - a stale network mount under a node's script - holds the update no longer than
+    /// its bound: the process is counted as one that cannot be told apart from a session, said as that, and nothing waits
+    /// on the file system for good.
+    /// </summary>
+    [Fact]
+    public async Task APathThatCannotBeFollowedInTime_IsCountedAsThat_AndNothingWaitsForGood()
+    {
+        using var kit = new Kit(package: "2.1.201", program: "2.1.201");
+        var clock = new TimerClock();
+        var stale = Path.Combine(kit.Temp.Path, "mnt", "share", "server.js");
+        kit.Table = new ScriptedTable([[new(6161, 1, "node", null, $"\"{kit.Node}\" \"{stale}\"", kit.Node)]]);
+        kit.Files.Stalls = stale;
+
+        try
+        {
+            var asked = kit.Service(clock).ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+
+            // The clock is moved past the bound only once the following stands stalled and the wait on it is armed.
+            Assert.True(kit.Files.Reached.Wait(TimeSpan.FromSeconds(30), Token), "The stalling path was never followed.");
+            await clock.WaitingAsync().WaitAsync(TimeSpan.FromSeconds(30), Token);
+            clock.Advance(ClaudeCodeInstall.FollowBudget);
+            var answer = await asked.WaitAsync(TimeSpan.FromSeconds(30), Token);
+
+            Assert.Equal(HarnessExit.Refused, answer.ExitCode);
+            Assert.Equal(
+                "a session of Claude Code is running on this machine (pid 6161 (node, a path on whose command line could not be followed "
+                    + "within 10 seconds)); start the run again when they have ended.",
+                answer.Message);
+            Assert.DoesNotContain(kit.Runner.Ran, line => line.Contains(" install ", StringComparison.Ordinal));
+        }
+        finally
+        {
+            kit.Files.Released.Set();
+        }
+    }
+
     [Fact]
     public async Task ASecondUpdateOfNpmPlace_RefusedAtOnce()
     {
@@ -817,7 +930,7 @@ public sealed class ClaudeCodeUpdateServiceTests
 
         public string Program { get; }
 
-        private IFileSystem Files { get; } = new PassThroughFileSystem(new PhysicalFileSystem(new FixedPermissions()));
+        public FollowingFiles Files { get; } = new(new PhysicalFileSystem(new FixedPermissions()));
 
         private readonly string? _path;
 
@@ -854,7 +967,8 @@ public sealed class ClaudeCodeUpdateServiceTests
             }
         }
 
-        public ClaudeCodeUpdateService Service()
+        /// <summary>The service over the kit's machine, its bound on following links measured by <paramref name="clock"/> where one is given.</summary>
+        public ClaudeCodeUpdateService Service(TimeProvider? clock = null)
             => new(
                 Table,
                 Runner,
@@ -863,7 +977,8 @@ public sealed class ClaudeCodeUpdateServiceTests
                 Platform,
                 new HarnessFactory().Identity,
                 keys: new AgentKeyStore(Files, Permissions, Platform),
-                environment: Name);
+                environment: Name,
+                install: clock is null ? null : new ClaudeCodeInstall(Files, Runner, clock));
 
         /// <summary>Writes the package at <paramref name="version"/>, whose program answers <paramref name="answered"/> - or nothing, where that is null.</summary>
         public void WritePackage(string version, string? answered, bool bin = true)
@@ -946,13 +1061,47 @@ public sealed class ClaudeCodeUpdateServiceTests
         }
     }
 
-    /// <summary>A process table that reads as each of <paramref name="readings"/> in turn, and as the last of them from then on; counts its readings.</summary>
-    private sealed class ScriptedTable(SampledProcess[][] readings) : IProcessTable
+    /// <summary>
+    /// A process table that reads as each of <paramref name="readings"/> in turn, and as the last of them from then on -
+    /// read by names alone, and why, where <paramref name="degraded"/> says so; counts its readings.
+    /// </summary>
+    private sealed class ScriptedTable(SampledProcess[][] readings, string? degraded = null) : IProcessTable
     {
         public int Reads { get; private set; }
 
         public Task<ProcessTableReading> ReadAsync(CancellationToken cancellationToken = default)
-            => Task.FromResult(new ProcessTableReading(readings[Math.Min(Reads++, readings.Length - 1)], null));
+            => Task.FromResult(new ProcessTableReading(readings[Math.Min(Reads++, readings.Length - 1)], degraded));
+    }
+
+    /// <summary>
+    /// The machine's files, recording every path whose links are followed - and, for the one path a test names, a
+    /// following that does not end until the test lets it: a stale network mount, which answers nothing and never fails.
+    /// </summary>
+    private sealed class FollowingFiles(IFileSystem inner) : PassThroughFileSystem(inner)
+    {
+        public System.Collections.Concurrent.ConcurrentQueue<string> Followed { get; } = new();
+
+        /// <summary>The path whose following stalls, where a test names one.</summary>
+        public string? Stalls { get; set; }
+
+        /// <summary>Set once the stalling path's following has begun.</summary>
+        public ManualResetEventSlim Reached { get; } = new();
+
+        /// <summary>Lets the stalling path's following end.</summary>
+        public ManualResetEventSlim Released { get; } = new();
+
+        public override string ResolveLinks(string path)
+        {
+            Followed.Enqueue(path);
+
+            if (string.Equals(path, Stalls, StringComparison.Ordinal))
+            {
+                Reached.Set();
+                Released.Wait();
+            }
+
+            return base.ResolveLinks(path);
+        }
     }
 
     /// <summary>
