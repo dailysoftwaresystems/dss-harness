@@ -153,7 +153,9 @@ public sealed partial class HelpTests
     /// <summary>
     /// The agent-clients topic says which Claude Code the tool uses and why - npm's, and never a native launcher -,
     /// that a run which needs it needs npm, what the tool runs to install it and bring it up to date, what it never
-    /// runs, and the two ways to turn it off.
+    /// runs - beside a session of that installation alone, a claude installed otherwise not counting -, that a slot
+    /// that cannot give a named program is refused rather than passed over, that what npm holds is said after every
+    /// change, the two ways to turn it off, and that no key is read from the process environment.
     /// </summary>
     [Fact]
     public async Task AgentClientsTopic_SaysWhichClaudeCodeItUses()
@@ -163,7 +165,10 @@ public sealed partial class HelpTests
         Assert.Contains("The Claude Code this tool uses is the one npm installs, and no other", prose, StringComparison.Ordinal);
         Assert.Contains($"'npm install -g @anthropic-ai/claude-code@{DssHarness.Core.Agents.ClaudeCode.ClaudeCodeUpdateService.Needed}'", prose, StringComparison.Ordinal);
         Assert.Contains("never with sudo, never 'npm update -g', never past the version needed", prose, StringComparison.Ordinal);
-        Assert.Contains("never beside a session that is running", prose, StringComparison.Ordinal);
+        Assert.Contains("never beside a session of that installation that is running (a claude installed any other way does not count)", prose, StringComparison.Ordinal);
+        Assert.Contains("a slot that cannot give it is refused, never passed over for npm's", prose, StringComparison.Ordinal);
+        Assert.Contains("After a change, whether it ran or failed, what npm holds since is said.", prose, StringComparison.Ordinal);
+        Assert.Contains("and no key is ever read from the process environment", prose, StringComparison.Ordinal);
         Assert.Contains("A run that needs a Claude model through the claude-code client needs npm, and no other run", prose, StringComparison.Ordinal);
         Assert.Contains("CLAUDE_EXECUTABLE", prose, StringComparison.Ordinal);
         Assert.Contains("agentClients.<client>.update", prose, StringComparison.Ordinal);

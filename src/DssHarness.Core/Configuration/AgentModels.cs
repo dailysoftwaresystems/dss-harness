@@ -9,9 +9,10 @@ public sealed class AgentClientConfig
 {
     /// <summary>
     /// Whether the tool installs Claude Code with npm where npm has none, and brings one older than it needs up to
-    /// date, before a run (claude-code's key; true where nothing is said). With false the tool installs nothing and
-    /// updates nothing: a run that needs the client and finds Claude Code missing or too old is refused (14), with the
-    /// command.
+    /// date, before a run (claude-code's key; true where nothing is said - the default is
+    /// <c>ClaudeCodeUpdateService.UpdatesOn</c>'s, which is how the key is read). With false the service installs
+    /// nothing and updates nothing and refuses (14), with the command, a Claude Code that is missing or too old: what a
+    /// run that needs the client will be refused with once the engine's step runner asks it before the run's first step.
     /// </summary>
     public bool? Update { get; init; }
 }

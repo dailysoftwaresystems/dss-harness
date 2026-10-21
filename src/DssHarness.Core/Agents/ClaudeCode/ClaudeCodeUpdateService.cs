@@ -1,3 +1,6 @@
+using System.Diagnostics;
+using System.Globalization;
+using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Hosts;
@@ -16,24 +19,30 @@ namespace DssHarness.Core.Agents.ClaudeCode;
 /// <param name="Ready">Whether a run that needs it may start.</param>
 /// <param name="ExitCode">The code a run refused by it exits with; 0 where it is ready.</param>
 /// <param name="Message">The one line: what it is and where, or the refusal.</param>
-/// <param name="Details">The lines under it: each process by its id, npm's own last lines, what was looked for.</param>
+/// <param name="Details">The lines under it: what npm holds since a change that failed, npm's own last lines.</param>
 public sealed record ClaudeCodeAnswer(bool Ready, int ExitCode, string Message, IReadOnlyList<string> Details)
 {
-    /// <summary>One Claude Code a run may start, said in the line a run says when it starts.</summary>
-    public static ClaudeCodeAnswer ReadyAt(string version, string program)
-        => new(true, 0, $"claude {version}, installed with npm: '{program}'", []);
+    /// <summary>One Claude Code a run may start, said in the line a run says when it starts: the version its program answered.</summary>
+    public static ClaudeCodeAnswer ReadyAt(SemanticVersion version, string program)
+    {
+        ArgumentNullException.ThrowIfNull(version);
+
+        return new(true, 0, $"claude {version}, installed with npm: '{program}'", []);
+    }
 }
 
 /// <summary>
 /// Keeps the Claude Code npm installs ready for a run that needs it: found by asking npm, started by the full path its
 /// package names and never a launcher, installed where npm has none and brought up to the one version this tool needs
-/// - never past it, never with sudo, never beside a session that is running, and never a program a person named. The
-/// change itself is the shared <see cref="ProgramUpdate"/> sequence <c>update-tool</c> has: never stopped once begun,
-/// bounded, under the machine-wide lock on npm's global place, read back before it is said done.
+/// - never past it, never with sudo, never beside a session of that installation that is running, and never a program
+/// a person named. The change itself is the shared <see cref="ProgramUpdate"/> sequence <c>update-tool</c> has: never
+/// stopped once begun, bounded, under the machine-wide lock on npm's global place, and read back - after a change that
+/// failed as after one that ran - so what npm holds since is always said.
 /// </summary>
 /// <param name="processes">The machine's processes, read before a change so no session is taken from under.</param>
 /// <param name="processRunner">Runs npm and the program.</param>
 /// <param name="fileSystem">Reads the package.</param>
+/// <param name="filePermissions">Says whether a file the PATH names is one this machine starts, as npm is looked for.</param>
 /// <param name="platform">The system this is.</param>
 /// <param name="process">The process asking, never one of the running sessions.</param>
 /// <param name="keys">The agent clients' key slot, where a program a person named is appointed.</param>
@@ -44,6 +53,7 @@ public sealed class ClaudeCodeUpdateService(
     IProcessTable processes,
     IProcessRunner processRunner,
     IFileSystem fileSystem,
+    IFilePermissions filePermissions,
     IHostPlatform platform,
     IProcessIdentity process,
     AgentKeyStore? keys = null,
@@ -64,12 +74,29 @@ public sealed class ClaudeCodeUpdateService(
     public static string InstallCommand(string version = Needed)
         => $"npm install -g {ClaudeCodeInstall.PackageId}@{version}";
 
+    /// <summary>
+    /// Whether installing and updating are on for a client: its entry's <c>update</c> key, and on where the entry says
+    /// nothing or there is no entry - installing and updating are what the tool does unless a machine's people keep the
+    /// version themselves.
+    /// </summary>
+    /// <param name="client">The configuration's entry for the client, under <c>agentClients</c>; null where it declares none.</param>
+    public static bool UpdatesOn(AgentClientConfig? client) => client?.Update ?? true;
+
+    /// <summary>The version needed, as the one comparison of versions reads it.</summary>
+    private static readonly SemanticVersion NeededVersion = SemanticVersion.TryParse(Needed, out var needed)
+        ? needed
+        : throw new InvalidOperationException($"'{Needed}' is no version.");
+
+    /// <summary>What every refusal of a change that ran and left no Claude Code this tool can start names as its causes.</summary>
+    private const string Causes =
+        "A Node.js older than 22, which the package asks for, and an installation whose step after the install did not run (npm install --ignore-scripts) are the causes.";
+
     private readonly IProcessTable _processes = processes;
-    private readonly IFileSystem _fileSystem = fileSystem;
+    private readonly IHostPlatform _platform = platform;
     private readonly IProcessIdentity _process = process;
     private readonly AgentKeyStore? _keys = keys;
     private readonly Func<string, string?> _environment = environment ?? Environment.GetEnvironmentVariable;
-    private readonly NpmClient _npm = npm ?? new NpmClient(processRunner, fileSystem, platform, environment);
+    private readonly NpmClient _npm = npm ?? new NpmClient(processRunner, fileSystem, filePermissions, platform, environment);
     private readonly ClaudeCodeInstall _install = install ?? new ClaudeCodeInstall(fileSystem, processRunner);
     private readonly ProgramUpdate _updates = new(processRunner, platform);
 
@@ -86,13 +113,13 @@ public sealed class ClaudeCodeUpdateService(
     /// </summary>
     /// <param name="layout">The repository's layout, where the slot is; null where no slot is to be asked.</param>
     /// <param name="appointed">Every name the configuration appoints, of providers and clients both.</param>
-    /// <param name="update">The client's <c>update</c> key: on where nothing is said.</param>
+    /// <param name="client">The configuration's entry for the client being made ready; null where it declares none (<see cref="UpdatesOn"/>).</param>
     /// <param name="steps">The steps that need the client, as a refusal names them; empty where the asker names none.</param>
     /// <param name="cancellationToken">Stops everything before the change; the change itself, once begun, is never stopped.</param>
     public async Task<ClaudeCodeAnswer> ReadyAsync(
         HarnessLayout? layout,
         IReadOnlyList<AppointedKey> appointed,
-        bool update,
+        AgentClientConfig? client,
         string steps,
         CancellationToken cancellationToken = default)
     {
@@ -100,7 +127,8 @@ public sealed class ClaudeCodeUpdateService(
 
         // A program a person named is that person's own choice: started as named, asked nothing of npm, and neither
         // installed, nor updated, nor second-guessed by this tool. The slot need hold no such name; where its files do
-        // not read, that is the configuration's problem, said here as it is said anywhere the slot is asked.
+        // not read, or the name it holds cannot be taken from them, that is the configuration's problem - refused as
+        // it is anywhere the slot is asked, and never passed over for npm's, which is a program the person did not name.
         if (layout is not null && _keys is not null)
         {
             var present = _keys.Present(layout);
@@ -110,30 +138,33 @@ public sealed class ClaudeCodeUpdateService(
                 return Refused(HarnessExit.ConfigInvalid, broken);
             }
 
-            if (present.Holds(ExecutableVariable)
-                && _keys.Value(layout, appointed, ExecutableVariable) is { Problem: null, Value: { Length: > 0 } named })
+            if (present.Holds(ExecutableVariable))
             {
-                return await NamedAsync(named, cancellationToken).ConfigureAwait(false);
+                var named = _keys.Value(layout, appointed, ExecutableVariable);
+
+                return named is { Problem: null, Value: { Length: > 0 } namedProgram }
+                    ? await NamedAsync(namedProgram, cancellationToken).ConfigureAwait(false)
+                    : Refused(HarnessExit.ConfigInvalid, named.Problem ?? $"the slot declares {ExecutableVariable} and gave no value for it");
             }
         }
 
-        var npm = await _npm.FindAsync(cancellationToken).ConfigureAwait(false);
+        var found = await _npm.FindAsync(cancellationToken).ConfigureAwait(false);
 
-        if (npm is null)
+        if (found.Npm is not { } npm)
         {
             return Refused(
                 HarnessExit.ToolMissing,
-                $"this run needs a Claude model through the client 'claude-code'{steps}, and no npm is on the PATH. "
-                + $"Looked for: {NpmClient.LookedFor}");
+                $"this run needs a Claude model through the client 'claude-code'{steps}, and {found.Missing}. "
+                + "This tool installs Claude Code and brings it up to date with npm. Install Node.js 22 or later, which brings npm, and start the run again");
         }
 
-        var root = await _npm.RootAsync(npm, cancellationToken).ConfigureAwait(false);
+        var asked = await _npm.RootAsync(npm, cancellationToken).ConfigureAwait(false);
 
-        if (root is null)
+        if (asked.Root is not { } root)
         {
             return Refused(
                 HarnessExit.ToolMissing,
-                $"npm was found but would not say where its global packages are, so Claude Code could not be looked for. "
+                $"npm was found but would not say where its global packages are ({asked.Problem}), so Claude Code could not be looked for. "
                 + $"{InstallCommand()} by hand installs the one this tool needs ({Needed}).");
         }
 
@@ -147,33 +178,33 @@ public sealed class ClaudeCodeUpdateService(
         // Nothing installed, or one older than the tool needs: what the change is for. Everything at or above the
         // version needed is left alone - the tool never moves a Claude Code that serves, and never one past what it
         // needs.
-        if (held is { Version: { } version } && AtLeast(version, Needed))
+        if (held is { Version: { } version, Program: { } program } && AtLeast(version, NeededVersion))
         {
             // What the program answers of its own version has to agree with the package's: a pair that disagrees is
             // half an installation, and half an installation is refused as one that did not take.
-            var answered = await _install.VersionAsync(held.Program!, cancellationToken).ConfigureAwait(false);
+            var answered = await _install.VersionAsync(program, cancellationToken).ConfigureAwait(false);
 
-            if (answered is not { Length: > 0 })
+            if (answered.Version is not { } answer)
             {
                 return Refused(
                     HarnessExit.ToolMissing,
-                    $"'{held.Program}' would not answer its own --version, so this tool cannot start it. "
+                    $"'{program}' would not answer its own --version, so this tool cannot start it: {answered.Problem}. "
                     + $"Install it again: {InstallCommand()}; an installation whose step after the install did not run "
                     + "(npm install --ignore-scripts) is the usual cause.");
             }
 
-            return answered == version
-                ? ClaudeCodeAnswer.ReadyAt(answered, held.Program!)
+            return SemanticVersion.Compare(answer, version) == 0
+                ? ClaudeCodeAnswer.ReadyAt(answer, program)
                 : Refused(
                     HarnessExit.ToolMissing,
-                    $"'{held.Program}' says it is claude {answered} and its package says {version}, and the two do not agree. "
+                    $"'{program}' says it is claude {answer} and its package says {version}, and the two do not agree. "
                     + $"Install it again: {InstallCommand()}; an installation whose step after the install did not run "
                     + "(npm install --ignore-scripts) is the usual cause.");
         }
 
-        if (!update || _environment(UpdatesVariable) is { Length: > 0 })
+        if (!UpdatesOn(client) || _environment(UpdatesVariable) is { Length: > 0 })
         {
-            var turnedOff = !update
+            var turnedOff = !UpdatesOn(client)
                 ? "the client's update key is false"
                 : $"{UpdatesVariable} is set in this tool's own environment";
 
@@ -186,22 +217,30 @@ public sealed class ClaudeCodeUpdateService(
 
         // A session reads parts of its executable from disk as it works, and npm deletes the previous binary when it
         // installs over it: on Windows the change fails on the locked file, and elsewhere it takes the program from
-        // under the session. Every claude this tool starts has DISABLE_AUTOUPDATER=1, so no session of the tool's own
-        // moves the installation by itself either: only this sequence does.
-        var table = await _processes.ReadAsync(cancellationToken).ConfigureAwait(false);
-        var running = _updates.Running(table, one => HostProbes.ListsProcess(one.Name, "claude"), _process.CurrentId);
-
-        if (running.Count > 0)
+        // under the session. A session is a process that runs a program of this installation - its native program, or
+        // node running its script - and no other claude, which npm's change never touches; a claude whose program the
+        // table could not read cannot be told apart and is counted, said as that. An installation where there is none
+        // meets no such process, and the table is not read. Every claude this tool starts is given
+        // DISABLE_AUTOUPDATER=1 (ClaudeCodeInstall.EveryStart), so no session of the tool's own moves the installation
+        // by itself either: only this sequence does.
+        if (held.Installed)
         {
-            return Refused(
-                HarnessExit.Refused,
-                $"a session of Claude Code is running on this machine ({string.Join(", ", running.Select(one => $"pid {one.Id}"))}); "
-                + "start the run again when they have ended.");
+            var table = await _processes.ReadAsync(cancellationToken).ConfigureAwait(false);
+            var runs = _install.RunsFrom(root, _platform.PathComparison);
+            var running = _updates.Running(table, one => runs(one) || ClaudeCodeInstall.CannotBeToldApart(one), _process.CurrentId);
+
+            if (running.Count > 0)
+            {
+                return Refused(
+                    HarnessExit.Refused,
+                    $"a session of Claude Code is running on this machine ({string.Join(", ", running.Select(one => Session(one, runs)))}); "
+                    + "start the run again when they have ended.");
+            }
         }
 
-        using var held_ = _updates.TryHold(root);
+        using var hold = _updates.TryHold(root);
 
-        if (held_ is null)
+        if (hold is null)
         {
             return Refused(
                 HarnessExit.Refused,
@@ -214,62 +253,89 @@ public sealed class ClaudeCodeUpdateService(
             Arguments = [.. npm.Leading, "install", "-g", $"{ClaudeCodeInstall.PackageId}@{Needed}"],
             Timeout = ToolPackage.ChangeBudget,
         };
-        var listSince = new ProcessRequest
-        {
-            FileName = npm.Program,
-            Arguments = [.. npm.Leading, "root", "-g"],
-            Timeout = NpmClient.AskBudget,
-        };
 
-        var moved = await _updates.ChangeAsync(held_, change, listSince, _ => ListedRelease.Read(null)).ConfigureAwait(false);
+        // What npm holds since is read from the root npm names since, as the root before was: the package and then
+        // its program, whether the change ran or not - a change that failed part way can leave half an installation.
+        ClaudeCodePackage? since = null;
+        var moved = await _updates.ChangeAsync(
+                hold,
+                change,
+                NpmClient.RootRequest(npm),
+                listing =>
+                {
+                    if (listing.Trim() is not { Length: > 0 } rootSince)
+                    {
+                        return ListedRelease.Unreadable;
+                    }
+
+                    since = _install.Read(rootSince, Needed);
+
+                    return since.Problem is not null ? ListedRelease.Unreadable : ListedRelease.Read(since.Version?.ToString());
+                })
+            .ConfigureAwait(false);
+        var answeredSince = since is { Program: { } sinceProgram, Problem: null }
+            ? await _install.VersionAsync(sinceProgram, CancellationToken.None).ConfigureAwait(false)
+            : null;
+        var output = OutputOf(moved.Ran);
 
         if (!moved.Ran.Succeeded)
         {
-            // The registry or the download not reached is the network's, and trying again can help; no right to write
-            // npm's place is the machine's, and the tool never runs sudo to reach past it.
-            var output = OutputOf(moved.Ran);
-            var elevated = output.Contains("EACCES", StringComparison.Ordinal);
-            var network = moved.Ran.TimedOut
-                || output.Contains("ENOTFOUND", StringComparison.Ordinal)
-                || output.Contains("ECONNRESET", StringComparison.Ordinal)
-                || output.Contains("ETIMEDOUT", StringComparison.Ordinal)
-                || output.Contains("network", StringComparison.Ordinal);
+            var (code, why) = Failed(moved.Ran, output);
 
-            return Refused(
-                network ? HarnessExit.Incomplete : HarnessExit.ToolMissing,
-                (network
-                        ? $"npm reached neither the registry nor the download ({HostProbes.Failure("the install was not reached", moved.Ran)}); running it again can help"
-                        : $"npm could not change what it holds ({HostProbes.Failure("the install failed", moved.Ran)})")
-                    + (elevated ? "; this tool never runs sudo" : string.Empty)
-                    + $". Run it by hand: {InstallCommand()}.");
+            return Refused(code, why, [HeldSince(moved, since, answeredSince), .. Said(output)]);
         }
 
         // The change is done only where the package and the program both say the version needed or a later one.
-        var now = _install.Read(root, Needed);
+        var unlisted = NpmClient.ReadRoot(moved.Listed).Problem;
 
-        if (now is { Version: { } release } && AtLeast(release, Needed))
+        if (unlisted is not null || since is null)
         {
-            var answered = await _install.VersionAsync(now.Program!, CancellationToken.None).ConfigureAwait(false);
-
-            if (answered is { Length: > 0 } && AtLeast(answered, Needed))
-            {
-                return new ClaudeCodeAnswer(
-                    true,
-                    0,
-                    held.Version is { } older
-                        ? $"claude {older} is older than this tool needs ({Needed}): updated with '{InstallCommand()}'; it now says {answered}"
-                        : $"npm has no Claude Code installed: installed {answered} with '{InstallCommand()}'",
-                    []);
-            }
+            return Refused(
+                HarnessExit.ToolMissing,
+                $"npm ran, and what it holds since is not known: {unlisted ?? "its root was not read"}. The command that ran: '{InstallCommand()}'.",
+                Said(output));
         }
 
-        return Refused(
-            HarnessExit.ToolMissing,
-            $"npm ran, and Claude Code is still missing or older than this tool needs: "
-                + $"{(now.Version is { } found ? $"npm holds claude {found}" : "npm holds no Claude Code")}, and this tool needs {Needed}. "
-                + $"The command that ran: '{InstallCommand()}'. "
-                + $"A Node.js older than 22, which the package asks for, and an installation whose step after the install did not run (npm install --ignore-scripts) are the causes.",
-            [HostProbes.Excerpt(OutputOf(moved.Ran))]);
+        if (since.Problem is { } broke)
+        {
+            return Refused(HarnessExit.ToolMissing, broke, Said(output));
+        }
+
+        if (since is not { Version: { } release, Program: { } now } || !AtLeast(release, NeededVersion))
+        {
+            return Refused(
+                HarnessExit.ToolMissing,
+                $"npm ran, and Claude Code is still missing or older than this tool needs: "
+                    + $"{(since.Version is { } stillHeld ? $"npm holds claude {stillHeld}" : "npm holds no Claude Code")}, and this tool needs {Needed}. "
+                    + $"The command that ran: '{InstallCommand()}'. {Causes}",
+                Said(output));
+        }
+
+        if (answeredSince is not { Version: { } said })
+        {
+            return Refused(
+                HarnessExit.ToolMissing,
+                $"npm ran, and the Claude Code it holds does not answer: its package says {release}, and its program '{now}' "
+                    + $"would not answer its --version ({answeredSince?.Problem}). The command that ran: '{InstallCommand()}'. {Causes}",
+                Said(output));
+        }
+
+        if (!AtLeast(said, NeededVersion))
+        {
+            return Refused(
+                HarnessExit.ToolMissing,
+                $"npm ran, and Claude Code is still older than this tool needs: its package says {release}, its program '{now}' "
+                    + $"says {said}, and this tool needs {Needed}. The command that ran: '{InstallCommand()}'. {Causes}",
+                Said(output));
+        }
+
+        return new ClaudeCodeAnswer(
+            true,
+            0,
+            held.Version is { } older
+                ? $"claude {older} is older than this tool needs ({Needed}): updated with '{InstallCommand()}'; it now says {said}"
+                : $"npm has no Claude Code installed: installed {said} with '{InstallCommand()}'",
+            []);
     }
 
     /// <summary>A program a person named: read for what it is, and refused where it is not one this tool can start.</summary>
@@ -284,27 +350,93 @@ public sealed class ClaudeCodeUpdateService(
 
         var answered = await _install.VersionAsync(program, cancellationToken).ConfigureAwait(false);
 
-        if (answered is not { Length: > 0 })
+        if (answered.Version is not { } version)
         {
             return Refused(
                 HarnessExit.ToolMissing,
-                $"'{program}', the program the slot names, would not answer its --version. "
+                $"'{program}', the program the slot names, would not answer its --version: {answered.Problem}. "
                 + $"Update it by hand, or take {ExecutableVariable} out of the slot");
         }
 
-        return AtLeast(answered, Needed)
-            ? new ClaudeCodeAnswer(true, 0, $"claude {answered}, named by the slot: '{program}'", [])
+        return AtLeast(version, NeededVersion)
+            ? new ClaudeCodeAnswer(true, 0, $"claude {version}, named by the slot: '{program}'", [])
             : Refused(
                 HarnessExit.ToolMissing,
-                $"'{program}' is claude {answered}, older than this tool needs ({Needed}), and a program a person named is never updated. "
+                $"'{program}' is claude {version}, older than this tool needs ({Needed}), and a program a person named is never updated. "
                 + $"Update it by hand, or take {ExecutableVariable} out of the slot");
     }
 
-    /// <summary>Whether <paramref name="version"/> is <paramref name="needed"/> or a later one.</summary>
-    private static bool AtLeast(string version, string needed)
-        => SemanticVersion.TryParse(version, out var held)
-            && SemanticVersion.TryParse(needed, out var floor)
-            && SemanticVersion.Compare(held, floor) >= 0;
+    /// <summary>
+    /// How a change that npm did not finish is refused, and with which code: not finished within its bound, the
+    /// registry or the download not reached - each a change begun and not finished, which running it again can finish
+    /// - or anything else npm refused, a machine that will not let it write among them, which the tool never runs sudo
+    /// to reach past.
+    /// </summary>
+    private static (int Code, string Why) Failed(ProcessResult ran, string output)
+    {
+        if (ran.TimedOut)
+        {
+            return (
+                HarnessExit.Incomplete,
+                $"npm did not finish within {ToolPackage.ChangeBudget.TotalMinutes.ToString("0", CultureInfo.InvariantCulture)} minutes and was ended, "
+                    + "part way through the download or the step after the install; running it again can help. "
+                    + $"Run it by hand: {InstallCommand()}.");
+        }
+
+        var network = output.Contains("ENOTFOUND", StringComparison.Ordinal)
+            || output.Contains("ECONNRESET", StringComparison.Ordinal)
+            || output.Contains("ETIMEDOUT", StringComparison.Ordinal)
+            || output.Contains("network", StringComparison.Ordinal);
+        var elevated = output.Contains("EACCES", StringComparison.Ordinal);
+
+        return (
+            network ? HarnessExit.Incomplete : HarnessExit.ToolMissing,
+            (network
+                ? $"npm reached neither the registry nor the download ({HostProbes.Failure("the install was not reached", ran)}); running it again can help"
+                : $"npm could not change what it holds ({HostProbes.Failure("the install failed", ran)})")
+            + (elevated ? "; this tool never runs sudo" : string.Empty)
+            + $". Run it by hand: {InstallCommand()}.");
+    }
+
+    /// <summary>
+    /// What npm holds since a change that did not finish, as a line under its refusal: nothing, the package and what its
+    /// program answers - a package whose program does not answer being half an installation, said as that - or why it
+    /// is not known.
+    /// </summary>
+    private static string HeldSince(ProgramChange moved, ClaudeCodePackage? since, ClaudeCodeVersion? answered)
+    {
+        var unlisted = NpmClient.ReadRoot(moved.Listed).Problem;
+
+        if (unlisted is not null || since is null)
+        {
+            return $"What npm holds since is not known: {unlisted ?? "its root was not read"}.";
+        }
+
+        return since switch
+        {
+            { Installed: false } => "npm holds no Claude Code since.",
+            { Problem: { } problem } => $"What npm holds since is not a Claude Code this tool can start: {problem}",
+            { Version: { } version, Program: { } program } when answered is { Version: { } said }
+                => $"npm holds claude {version} since, and its program '{program}' answers {said}.",
+            { Version: { } version, Program: { } program }
+                => $"npm holds claude {version} since, and its program '{program}' would not answer its --version ({answered?.Problem}): "
+                    + "the change left half an installation.",
+            _ => throw new UnreachableException("A package that reads names its version and its program."),
+        };
+    }
+
+    /// <summary>One running session, by its id - and, where it was counted for its name alone, that what it runs could not be read.</summary>
+    private static string Session(SampledProcess one, Func<SampledProcess, bool> runs)
+        => string.Create(CultureInfo.InvariantCulture, $"pid {one.Id}")
+            + (runs(one) ? string.Empty : $" ({one.Name}, whose program could not be read)");
+
+    /// <summary>Whether <paramref name="version"/> is <paramref name="needed"/> or a later one: the one comparison of versions.</summary>
+    private static bool AtLeast(SemanticVersion version, SemanticVersion needed)
+        => SemanticVersion.Compare(version, needed) >= 0;
+
+    /// <summary>npm's own last lines, as one line under a refusal; none where it printed nothing.</summary>
+    private static IReadOnlyList<string> Said(string output)
+        => HostProbes.Excerpt(output) is { Length: > 0 } excerpt ? [excerpt] : [];
 
     private static ClaudeCodeAnswer Refused(int exitCode, string message, IReadOnlyList<string>? details = null)
         => new(false, exitCode, message, details ?? []);

@@ -1318,12 +1318,19 @@ files' privacy is asked of the file each name came from when a value is read, as
 of a host's. `list-agent-providers` says the same configuration without saying one key: each
 provider, client and tier, every appointed name present or missing, `--template` the sections as
 `init` writes them, exit 0 whatever is missing. The Claude Code the clients will drive is npm's own:
-`NpmClient` finds it (a program, or on Windows what `npm.cmd` would have started - the tool never
-starts a batch file), `ClaudeCodeInstall` reads the package it holds, and
-`ClaudeCodeUpdateService` - the second caller of the shared `ProgramUpdate` sequence `update-tool`
-has - installs it where npm has none and brings one older than the tool needs up to the one version
-it names, never elevated, never beside a running session, never a program the slot names, bounded
-and read back before it is said done. This build checks workflow definitions and
+`NpmClient` finds npm (a program, or on Windows what `npm.cmd` would have started - the tool never
+starts a batch file - with npm and the node that starts it looked for on one PATH by the tool's one
+walk of a PATH), `ClaudeCodeInstall` reads the package it holds and the version its program
+answers (the version in the line `claude --version` prints, compared as a version, never as
+text), and `ClaudeCodeUpdateService` - the second caller of the shared `ProgramUpdate` sequence
+`update-tool` has - installs it where npm has none and brings one older than the tool needs up to
+the one version it names: never elevated, never beside a running session of that installation (a
+process whose program, or a path on whose command line, lies under the package's directory - a
+`claude` installed any other way does not count), bounded, and read back after a change that
+failed as after one that ran, saying what npm holds since. A program the slot names is never
+moved, and a slot that cannot give it is refused, never passed over for npm's; the client's
+`update` key is read by the service, true where nothing is said. The step runner that asks it
+before a run's first step is the engine's, still to come. This build checks workflow definitions and
 does not run them: the engine that runs them - the coordinator, the agents, the steps over the
 services the tool already has - is the next thing the tool grows.
 

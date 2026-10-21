@@ -2364,8 +2364,8 @@ public static class HelpTopics
         builder.AppendLine();
         builder.AppendLine("The slot itself is a directory of dotenv files, " + HarnessLayout.WorkflowsEnvSlotRelative + "/:");
         builder.AppendLine("every file in it is read and merged, a name declared in two of them is refused, and no key");
-        builder.AppendLine("or setting is ever read from the process environment - a CI machine writes the file. A");
-        builder.AppendLine("sample for the providers init declares, none filled in:");
+        builder.AppendLine("is ever read from the process environment - a CI machine writes the file. A sample for the");
+        builder.AppendLine("providers init declares, none filled in:");
         builder.AppendLine();
 
         foreach (var line in SlotSample())
@@ -2398,15 +2398,19 @@ public static class HelpTopics
         builder.AppendLine("batch file, so the tool does what that file does and starts npm's own npm-cli.js with node.");
         builder.AppendLine("A run that needs a Claude model through the claude-code client needs npm, and no other run");
         builder.AppendLine("does: where npm has no Claude Code, or one older than the tool needs, a run that needs it");
-        builder.AppendLine("installs or updates it first, with");
+        builder.AppendLine("will install or update it first, with");
         builder.AppendLine($"'npm install -g @anthropic-ai/claude-code@{Agents.ClaudeCode.ClaudeCodeUpdateService.Needed}' -");
         builder.AppendLine("never with sudo, never 'npm update -g', never past the version needed, never beside a");
-        builder.AppendLine("session that is running, and never a program the slot names (CLAUDE_EXECUTABLE: a person's");
-        builder.AppendLine("own choice, started as named). A client's update key (agentClients.<client>.update, true");
-        builder.AppendLine("where nothing is said) and DISABLE_UPDATES in the tool's own environment turn installing");
-        builder.AppendLine("and updating off, and a run that then needs one that is missing or too old is refused with");
-        builder.AppendLine("the command to run by hand. The clients that reach the companies are what it builds next,");
-        builder.AppendLine("and nothing here runs a step.");
+        builder.AppendLine("session of that installation that is running (a claude installed any other way does not");
+        builder.AppendLine("count), and never a program the slot names (CLAUDE_EXECUTABLE: a person's own choice,");
+        builder.AppendLine("started as named; a slot that cannot give it is refused, never passed over for npm's).");
+        builder.AppendLine("After a change, whether it ran or failed, what npm holds since is said. A client's update");
+        builder.AppendLine("key (agentClients.<client>.update, true where nothing is said) and DISABLE_UPDATES in the");
+        builder.AppendLine("tool's own environment (a setting of the person's, never a key) turn installing and");
+        builder.AppendLine("updating off, and a run that then needs one that is missing or too old will be refused with");
+        builder.AppendLine("the command to run by hand. The clients that reach the companies, and the step runner that");
+        builder.AppendLine("readies Claude Code before a run's first step, are what it builds next, and nothing here");
+        builder.AppendLine("runs a step.");
 
         return builder.ToString();
     }
