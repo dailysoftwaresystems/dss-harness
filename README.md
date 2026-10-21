@@ -75,7 +75,12 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `rebase-agent <o> <a> [--apply] [--json] [--merge <path>] [--settled <path>]` | Move a live agent's base to the main tree's HEAD: what the main tree committed since comes in as git holds it, its own changes and what it was handed stay; a path both changed is refused with what a three-way merge of it gives, unless `--merge` names it and its merge is clean - written into the worktree as the agent's own change on the new base - or `--settled` keeps the copy reconciled by hand; the arm registry is merged by arm, unasked, and taken where the result reads as a registry; refused over anything of its own what comes in would go over, a file renamed in case alone over the agent's copy at its old name, or its deletion of it, among it; a file the agent's session wrote after it was weighed stops it, exit 21, never written over; run again after one that stopped part way - the command its last words name - it finishes it |
 | `fold-agent <o> <a> [--apply] [--json] [--merge <path>] [--settled <path>] [--new <ID>] [--accept-lost <ID>:<cell>] [--accept-over <ID>:<cell>]` | Fold an agent's own work into the main tree and apply the rows it filed, every refusal named before anything is written and the rows all or nothing; a path both trees changed is refused with what a three-way merge of it gives, and a clean merge written into both trees only where `--merge` names it - the arm registry is merged by arm, unasked, and taken where the result reads as a registry; a path reconciled in the main tree by hand and named with `--settled` is handed to the agent as the main tree holds it and recorded as shared; a row is made only where `--new` names it, and a cell that does not keep its stored text written only where `--accept-lost` names it; a row an earlier fold applied is weighed cell by cell against what the registries took since - their change kept where the agent made none, and a cell both changed otherwise written only where `--accept-over` names it; a rename of case alone the agent made is refused, saying to `git mv -f` it in the main tree, and once made there is weighed against the base's file under its old name; its worktree is kept |
 | `delete-agent <o> <a> [--apply] [--json] [--merge <path>] [--settled <path>] [--new <ID>] [--accept-lost <ID>:<cell>] [--accept-over <ID>:<cell>] [--discard-uncommitted]` | Fold what is left and apply its rows, keep its evidence and transcripts, then remove its worktree and its copies on hosts; an agent with no worktree is marked deleted in one write, nothing folded and no transcript looked for |
-| `list-orchestrator [<o>] [--json]` | List orchestrators, their agents and where each stands |
+| `list-orchestrator [<o>] [--steps] [--questions] [--json]` | List orchestrators, their agents and where each stands; for a run, its own lines from `flow.json` and what its engine is doing - none, running, pausing, recording what a complete pause left running, or gone - each step instance with its state, visit, attempt, agent and directory with `--steps`, and each question and what became of it with `--questions` |
+| `run-orchestrator <workflow> [--run <name>] [--input k=v]... [--json]` | Start a run of a declared workflow: validate it, make the run - `r<N>`, one more than the highest there, or `--run`'s name, refused where it is taken - claim it for this process, and drive it until nothing more can run: done `0`, failed `20` (`21` where every failure that ended it was incomplete), paused on a question `1`, paused or stopped on request `130`; `k=@<file>` gives a text input a file's text, relative to `--directory`. Refused (13) while another run of the repository is unfinished with work in the tree |
+| `resume-orchestrator <run> [--json]` | Go on with a run - what a stop, a crash or an answer left - under the definition it began with; refused (13) where the repository's entry for it changed since, or where a record the run is made with is missing, named |
+| `answer-orchestrator <run> <answer> [--question <id>] [--text <text> \| --text-file <file>] [--again] [--json]` | Answer a question of a run: handed to the engine running it through `inbox.json`, or else a session of its own; `--again`, which changes an answer, is refused in this build |
+| `pause-orchestrator <run> [--all] [--json]` | Ask the engine running a run for the safe pause through `stop.json` - its agents hand off, the machine steps finish unless `--all`, then the run is paused - and wait until it is complete |
+| `stop-orchestrator <run> [--now] [--json]` | Ask the engine running a run to stop where it stands, and wait 30 s; `--now` ends the engine's process - only on this machine, and only the process its owner names by its start |
 | `validate-workflow [<workflow>] [--json]` | Check the workflows `workflows` in config.json declares: that each yml definition reads, holds and names files that are there (`help workflows`). Nothing is run |
 | `export-workflow <workflow> --to <dir> [--shipped] [--json]` | Copy a workflow - its yml and every file it names - into `<dir>/<workflow>/`: a declared one once it holds (12 where it does not), byte for byte, or with `--shipped` the one this tool ships, to make a version of your own. Refused (13) where that folder is there; a file that cannot be written takes back what was written |
 | `list-agent-providers [--template] [--json]` | List the agent sections config.json declares: each provider, its keys' names in the order they are tried with whether the slot holds each - `present` or `missing`, never a value - its models and whether each is priced, the tiers and the clients; exit 0 whatever is missing; `--template` prints the sections as `init` writes them into a new config, to paste into an existing one (`help agent-clients`) |
@@ -128,7 +133,13 @@ for anything else), `folded` what a fold's `--apply` wrote, merged, handed and a
 refresh's or a rebase's plan takes, keeps, hands and merges. An
 `--apply` refused at its hold answers the same document, `sound`, with the run it met in
 `heldNow`. Either way a dry run still prints all it weighed.
-`dssharness help orchestrators` explains seeding, rebasing, folding and deleting agents.
+`dssharness help orchestrators` explains seeding, rebasing, folding and deleting agents, and the five verbs of a run.
+
+A run's session - `run-orchestrator`, `resume-orchestrator`, `answer-orchestrator` - takes its terminal's interrupts
+itself: the first Ctrl+C (off Windows, SIGTERM or a hang-up as well) asks the safe pause - the agents hand off, the machine
+steps finish, then the run is paused - and starts no clock; the second stops the run where it stands, and the command ends
+within 90 s whatever is left, which `resume-orchestrator` goes on from. Every session writes the run's report
+(`report.md`, `report.json`) and names each record it wrote, in text and in `--json`.
 
 `--time` pulls each phase's own timing marks out of its output, using `buildTimingRegex`,
 `testTimingRegex` or `runTimingRegex`, and prints them under the ledger as a `TIMINGS` block naming
@@ -428,8 +439,8 @@ that fails again comes back by its own `onFailure`, until it passes or a person 
 `maxVisits` the run asks, with the advisor's recommended fix. A reasoning step is never recovered: a
 failed agent is tried again (`retries`, waiting `backoffSeconds`, twice as long each time) and on
 each model of its fallback, quota or a provider that fails pauses the run where it can resume, and
-what still fails is asked (`onFailure: pause`). The implementation workflow says all of it on its steps, so a run of it - once the engine
-that runs workflows is built - ends done or asks only what it must.
+what still fails is asked (`onFailure: pause`). The implementation workflow says all of it on its steps, so a run of it - once the
+engine's step runners are built - ends done or asks only what it must.
 
 An issue a reasoning step meets that was there before the run, it reports in its answer
 (`preExisting`) and never fixes itself; `onPreExisting` names the step that triages each one. That
@@ -437,8 +448,8 @@ step, at the flow's top level, says `raised: preExisting` - raised once per issu
 as the recovery is not - and `onAddress: recover`: it reproduces the issue on the run's base commit,
 gives the recovery one that is in a step's way, related to the work or critical, to fix at its root,
 and lists the rest, proven, with a title and a description, in the run's `pre-existing-issues.json`,
-shown in the pull request's body and the handoff. Where a workflow has such a step, every other reasoning step names it, so no issue is lost. This
-build checks that wiring; the engine that raises the triage and writes the list is built next.
+shown in the pull request's body and the handoff. Where a workflow has such a step, every other reasoning step names it, so no issue is lost. The
+engine raises the triage and keeps the list; until the reasoning step runner is built, no step reports an issue.
 
 A reasoning step's `effort` is one level for every model it may run on, or a map giving each its own -
 `all` for the rest and a model's code for one, so the shipped workflow's heaviest steps run their
@@ -531,7 +542,9 @@ template key reads and no skill. A question gives only the texts the engine name
 `problem`, `answers`, `record`), and so do the status (`facts`, `question`, `records`), a plan
 update (`cause`, `since`, `work`) and a piece (`kind`, `changed`, `keep`, `undo`, `instead`,
 `cause`, `before`); the bar is one text, and so is each run fact (`{worktree}`, `{os}` and the
-rest), which a template reads and an expression does not. The engine that runs workflows is the next thing the tool grows. Run `dssharness help workflows` for the whole of it.
+rest), which a template reads and an expression does not. The engine starts and drives a run of a workflow
+(`run-orchestrator`, `dssharness help orchestrators`); its step runners are the next thing the tool grows, and until they land
+each step of a run fails, saying no runner serves its type. Run `dssharness help workflows` for the whole of it.
 
 ## Anchors
 

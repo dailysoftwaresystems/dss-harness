@@ -1703,6 +1703,11 @@ public static class HelpTopics
         builder.AppendLine($"    {MutationService.NothingRuns,3}  no selected leg can run, and no failure turned one away: incomplete, since");
         builder.AppendLine($"         {LegsExit.Unavailable} is an arm violated here");
         builder.AppendLine();
+        builder.AppendLine($"  {FlowService.RunCommand}, {FlowService.ResumeCommand}, {FlowService.AnswerCommand}");
+        builder.AppendLine($"    {FlowExit.Paused,3}  paused: a question waits - a step's, or the budget's at its reserve - for {FlowService.AnswerCommand}");
+        builder.AppendLine($"         A session otherwise ends {HarnessExit.Success} done, {HarnessExit.CommandFailed} failed, {HarnessExit.Incomplete} failed where every failure that ended it");
+        builder.AppendLine($"         was incomplete after its retries, and {HarnessExit.Cancelled} at a safe pause or a stop");
+        builder.AppendLine();
         builder.AppendLine("host-exec returns the exit code of the command it ran on the host, unchanged, or");
         builder.AppendLine($"{HarnessExit.HostUnavailable} when nothing ran there, or the command never reported how it finished.");
 
@@ -2629,6 +2634,15 @@ public static class HelpTopics
                 ($"  {OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.StepsDirectoryName}/<instance>/", "one step the agent runs, or that runs in or for its worktree: everything of the step, its handoff.md where one stopped it"),
                 ($"  {OrchestratorLayout.StepsDirectoryName}/<instance>/", "one step of the run that no agent owns, the create-agent that makes an agent included"),
                 ($"  <step>/{OrchestratorLayout.ChildrenDirectoryName}/<session>{OrchestratorLayout.ChildExtension}", "in either kind of step, on Linux and macOS: a session a contained child of the step leads while it runs"),
+                ($"  {OrchestratorLayout.FlowFileName}", "a run's state in one file - the truth a resume goes on from"),
+                ($"  {OrchestratorLayout.WorkflowStatusFileName}", "a run's status for a person: each step of its definition, its instances, progress and what it waits on"),
+                ($"  {OrchestratorLayout.DefinitionFileName}", "the workflow's definition as the run began with it"),
+                ($"  {OrchestratorLayout.QuestionsFileName}", "every question the run raised, its answers, and who gave each"),
+                ($"  {OrchestratorLayout.PreExistingIssuesFileName}", "each pre-existing issue the run listed, proven"),
+                ($"  {OrchestratorLayout.EventsFileName}", "the run's history, one event to a line, written after the state it tells of"),
+                ($"  {OrchestratorLayout.ReportFileName}, {OrchestratorLayout.ReportJsonFileName}", "the report of the run's last session"),
+                ($"  {OrchestratorLayout.InboxFileName}, {OrchestratorLayout.StopFileName}", "an answer, and a pause or a stop, handed to the engine running the run"),
+                ($"  ../<run>{OrchestratorLayout.OwnerFileName}", "beside the run's directory: the process whose engine holds the run"),
             ]);
         builder.AppendLine();
         AppendWrapped(
@@ -2661,21 +2675,59 @@ public static class HelpTopics
         builder.AppendLine($"  {command} {AgentService.DeleteCommand} <o> <a> [--apply] [--json] {paths}");
         builder.AppendLine($"      {rows} {over}");
         builder.AppendLine("      [--discard-uncommitted]");
-        builder.AppendLine($"  {command} {OrchestratorService.ListCommand} [<o>] [--json]");
+        builder.AppendLine($"  {command} {OrchestratorService.ListCommand} [<o>] [--steps] [--questions] [--json]");
         builder.AppendLine($"  {command} {OrchestratorService.DeleteCommand} <o> [--delete-evidence]");
+        builder.AppendLine($"  {command} {FlowService.RunCommand} <workflow> [--run <name>] [--input <k=v>]... [--json]");
+        builder.AppendLine($"  {command} {FlowService.ResumeCommand} <run> [--json]");
+        builder.AppendLine($"  {command} {FlowService.AnswerCommand} <run> <answer> [--question <id>] [--text <text> | --text-file <file>]");
+        builder.AppendLine("      [--again] [--json]");
+        builder.AppendLine($"  {command} {FlowService.PauseCommand} <run> [--all] [--json]");
+        builder.AppendLine($"  {command} {FlowService.StopCommand} <run> [--now] [--json]");
         builder.AppendLine();
         AppendWrapped(
             builder,
             $"{OrchestratorService.ListCommand} lists the orchestrators, or the one named, their agents and where each stands, "
-            + "and the worktrees below an orchestrator's directory that no agent records; --json prints the listing as one JSON "
-            + $"document. {StoppedDocument}");
+            + "and the worktrees below an orchestrator's directory that no agent records; for a run, its own lines from flow.json "
+            + "and what its engine is doing - none, running, pausing while its handoffs are written, recording the machine steps a "
+            + "complete pause left running, or gone, an owner recorded whose process has ended - with each step instance (--steps: "
+            + "its state, visit, attempt, agent and directory) and each question and what became of it (--questions). --json prints "
+            + $"the listing as one JSON document. {StoppedDocument}");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"A run is an orchestrator a workflow's engine drives. {FlowService.RunCommand} validates the workflow and makes the run - "
+            + "r<N>, one more than the highest there, or the name --run gives, held to worktrees.maxNameLength and refused where it is "
+            + "taken - with its record, its state (flow.json), its status (workflow.json), its questions (questions.json), its "
+            + "pre-existing issues and its events, and claims it for its process (<run>.owner.json beside the run's directory). "
+            + "Only one run of a repository is unfinished with work in the tree at once: a start, or a session of another run, is "
+            + $"refused ({HarnessExit.Refused}) while one is, and so it is where an agent's record of another run cannot be read. Each "
+            + $"session drives the run until nothing more can run: done ({HarnessExit.Success}), failed ({HarnessExit.CommandFailed}, or "
+            + $"{HarnessExit.Incomplete} where every failure that ended it was incomplete after its retries), paused on a question "
+            + $"({FlowExit.Paused}), or paused or stopped on request ({HarnessExit.Cancelled}); it writes the run's report (report.md and "
+            + "report.json) and names each record it wrote, in text and in --json, whichever way it ends. "
+            + $"{FlowService.ResumeCommand} goes on with a run under the definition it began with - refused where the repository's entry "
+            + "for it changed since - reclaiming the owner of an engine that has gone and saying so; a record the run is made with "
+            + $"that is missing is refused by name. {FlowService.AnswerCommand} answers a question: handed to the engine running the "
+            + $"run through inbox.json, which it reads every {FlowTimings.Default.PollEvery.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s, "
+            + "or else a session of its own. "
+            + $"{FlowService.PauseCommand} asks that engine for the safe pause through stop.json - its agents hand off, the machine "
+            + "steps finish unless --all, then the run is paused - and waits until it is complete; "
+            + $"{FlowService.StopCommand} asks it to stop where it stands and waits {FlowTimings.Default.StopWait.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s, "
+            + "and --now ends its process: only on this machine, and only the process its owner names by its start. "
+            + $"{OrchestratorService.DeleteCommand} refuses a run a live engine owns, and removes a gone engine's owner with the run. In the terminal "
+            + "a session runs in, the first Ctrl+C - and off Windows SIGTERM or a hang-up - asks the safe pause, which starts no "
+            + "clock: an agent's handoff and a build may take as long as they take. The second stops the run where it stands, and "
+            + $"the command ends within {PointOfNoReturn.SafePauseDrain.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s whatever is left; "
+            + $"what is left then is what a crash leaves, and {FlowService.ResumeCommand} goes on from the records. No step runner is "
+            + "built yet: each step of a run fails, saying no runner serves its type.");
         builder.AppendLine();
         AppendWrapped(
             builder,
             "What a killed process left running. On Linux and macOS a contained child of a step leads a session of its own, "
             + $"which nothing ends when the process that started it is killed, so it is recorded in its step's {OrchestratorLayout.ChildrenDirectoryName}/ "
             + "while it runs and the record taken back once that process ends it. Every command over an orchestrator - the three "
-            + "orchestrator commands and each agent command - first ends each recorded session whose starter has gone, as a stop "
+            + "orchestrator commands, each agent command, and each run verb over a run already made - first ends each recorded "
+            + "session whose starter has gone, as a stop "
             + "ends one (SIGTERM, then SIGKILL five seconds later), removes its record, and says so in a line, and in the document's "
             + "ended where it answers with --json. A session whose starter still runs is left; one whose id a later process "
             + "carries ends nothing, and its record goes; a record that does not read as one is said and left; a starter on another "
@@ -2988,8 +3040,9 @@ public static class HelpTopics
         builder.AppendLine($"A workflow is a flow of typed steps that depend on one another by name, declared by");
         builder.AppendLine($"name under workflows in config.json and defined by a yml file of its own:");
         builder.AppendLine($"{HarnessLayout.WorkflowsDirectoryRelative}/<name>/<name>{HarnessLayout.WorkflowFileExtension}. This build checks a");
-        builder.AppendLine($"workflow's definition, with '{ToolPackage.Command} validate-workflow <name>'; it does not run");
-        builder.AppendLine("one. The engine that runs them is the next thing this tool grows.");
+        builder.AppendLine($"workflow's definition, with '{ToolPackage.Command} validate-workflow <name>', and starts and drives a run");
+        builder.AppendLine($"of one with '{ToolPackage.Command} {FlowService.RunCommand} <name>' (see 'help orchestrators'). No step runner");
+        builder.AppendLine("is built yet, so each step of a run fails, saying no runner serves its type.");
         builder.AppendLine();
         builder.AppendLine("The workflow's directory is the workflow's own - its agent files (agents/<name>.md),");
         builder.AppendLine("its prompts, its schemas, the bar it recommends by (recommendations.md) - and every path");

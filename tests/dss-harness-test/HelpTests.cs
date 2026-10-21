@@ -800,6 +800,60 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The exit codes topic gives the run verbs' own code - a question waiting is 1, which a wrapper that retries 21 would
+    /// otherwise loop on - beside what else a session ends with, from the constants the session exits by.
+    /// </summary>
+    [Fact]
+    public void ExitCodeTopic_SaysARunPausedOnAQuestionExitsOne()
+    {
+        var result = HelpText.Of("exit-codes");
+
+        Assert.Contains($"  {FlowService.RunCommand}, {FlowService.ResumeCommand}, {FlowService.AnswerCommand}", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains($"      {FlowExit.Paused}  paused: a question waits - a step's, or the budget's at its reserve - for {FlowService.AnswerCommand}", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains(
+            "A session otherwise ends 0 done, 20 failed, 21 failed where every failure that ended it was incomplete after its retries, and 130 at a safe pause or a stop",
+            Prose.Words(result.StandardOutput),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The orchestrators topic names the five run verbs as they are typed, the one-unfinished-run rule, the codes a session
+    /// ends with, and what each of the two interrupts does - the first a safe pause that starts no clock - from the code's
+    /// own names and bounds.
+    /// </summary>
+    [Fact]
+    public void OrchestratorsTopic_NamesTheRunVerbs_AndWhatEachInterruptDoes()
+    {
+        var result = HelpText.Of("orchestrators");
+        var prose = Prose.Words(result.StandardOutput);
+
+        foreach (var command in new[] { FlowService.RunCommand, FlowService.ResumeCommand, FlowService.AnswerCommand, FlowService.PauseCommand, FlowService.StopCommand })
+        {
+            Assert.Contains($"  {ToolPackage.Command} {command} ", result.StandardOutput, StringComparison.Ordinal);
+        }
+
+        Assert.Contains($"  {ToolPackage.Command} list-orchestrator [<o>] [--steps] [--questions] [--json]", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains(
+            "Only one run of a repository is unfinished with work in the tree at once: a start, or a session of another run, is refused (13) "
+                + "while one is, and so it is where an agent's record of another run cannot be read.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "done (0), failed (20, or 21 where every failure that ended it was incomplete after its retries), paused on a question (1), or "
+                + "paused or stopped on request (130)",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "In the terminal a session runs in, the first Ctrl+C - and off Windows SIGTERM or a hang-up - asks the safe pause, which starts no "
+                + "clock: an agent's handoff and a build may take as long as they take. The second stops the run where it stands, and the command "
+                + "ends within 90 s whatever is left;",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("which it reads every 2 s", prose, StringComparison.Ordinal);
+        Assert.Contains("waits 30 s, and --now ends its process: only on this machine, and only the process its owner names by its start.", prose, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task ExitCodeTopic_DocumentsEverySharedExitCode()
     {
@@ -2480,7 +2534,8 @@ public sealed partial class HelpTests
             "What a killed process left running. On Linux and macOS a contained child of a step leads a session of its own, "
             + $"which nothing ends when the process that started it is killed, so it is recorded in its step's {OrchestratorLayout.ChildrenDirectoryName}/ "
             + "while it runs and the record taken back once that process ends it. Every command over an orchestrator - the three "
-            + "orchestrator commands and each agent command - first ends each recorded session whose starter has gone, as a stop "
+            + "orchestrator commands, each agent command, and each run verb over a run already made - first ends each recorded "
+            + "session whose starter has gone, as a stop "
             + "ends one (SIGTERM, then SIGKILL five seconds later), removes its record, and says so in a line, and in the document's "
             + "ended where it answers with --json. A session whose starter still runs is left; one whose id a later process "
             + "carries ends nothing, and its record goes; a record that does not read as one is said and left; a starter on another "
@@ -2824,7 +2879,9 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
-            "This build checks a workflow's definition, with 'dssharness validate-workflow <name>'; it does not run one.",
+            "This build checks a workflow's definition, with 'dssharness validate-workflow <name>', and starts and drives a run of one with "
+                + "'dssharness run-orchestrator <name>' (see 'help orchestrators'). No step runner is built yet, so each step of a run fails, "
+                + "saying no runner serves its type.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
