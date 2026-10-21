@@ -3674,6 +3674,15 @@ public sealed class FlowCoordinator
             return;
         }
 
+        if (visit.RaisedBy is { } source && _pendingEndings.TryGetValue(source.Id, out var pending) && pending.Handlers.Contains(visit))
+        {
+            // A handler left before it ended took nothing: the ending it was raised for is not settled by it - its source
+            // is never counted handled by a handler that never ran - and the source's record says it was left, so no
+            // resume rebuilds the ending and settles it by the skipped visit either.
+            _ = _pendingEndings.Remove(source.Id);
+            SetHandlerState(source, visit.Step.Name, "left");
+        }
+
         visit.SkippedBecause = visit.State is FlowInstanceState.NotStarted ? $"withdrawn before it started: {because}" : because;
         End(visit, FlowInstanceState.Skipped, visit.Exit, visit.Error);
     }

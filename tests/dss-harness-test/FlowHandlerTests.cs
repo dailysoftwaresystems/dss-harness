@@ -930,6 +930,80 @@ public sealed class FlowHandlerTests
     }
 
     /// <summary>
+    /// A handler a redirect leaves before it ended took nothing: the failure it was raised for is not counted handled by
+    /// it - the summary names only the failures a handler that ran took - and the source's record says the handler was
+    /// left, so no resume settles the ending by it either.
+    /// </summary>
+    [Fact]
+    public async Task AHandlerARedirectLeaves_SettlesNothing_ItsSourceNotCountedHandled()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: plan
+                type: orient
+              - name: verify
+                type: ci-read
+                dependsOn: [plan]
+              - name: fix
+                type: orient
+                on: {step: verify, outcome: failure}
+                then: plan
+              - name: round
+                dependsOn: [plan]
+                steps:
+                  - name: check
+                    type: orient
+                  - name: mend
+                    type: pause
+                    on: {step: check, outcome: failure}
+                    question: mend it?
+                    options: [go, stop]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+
+        // Made without asynchronous continuations, so the session settles over what its completion posts.
+        var verify = new TaskCompletionSource<FlowStepResult>();
+        var verifying = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new FakeRunner()
+            .On("check", run => run.Instance == "round.check"
+                ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "the check failed")
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success))
+            .OnAsync("verify", run =>
+            {
+                if (run.Visit != 1)
+                {
+                    return Task.FromResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
+                }
+
+                verifying.TrySetResult();
+                return verify.Task;
+            });
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "r1");
+        using var records = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: records);
+
+        var session = coordinator.RunAsync(cancel);
+        await verifying.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        await coordinator.SettledAsync(cancel);
+        await coordinator.SettledAsync(cancel);
+
+        // The check failed and its handler asks; then verify fails, and fix sends the run back past the group.
+        Assert.Equal("round.mend", Assert.Single(coordinator.OpenQuestions).Instance);
+        verify.SetResult(FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "the read failed"));
+
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal("done; 1 failure was handled: verify, by fix", end.Summary);
+        Assert.Equal(FlowInstanceState.Skipped, coordinator.Instances["round.mend"].State);
+        Assert.Null(coordinator.Instances["round.check"].HandledBy);
+        Assert.Equal([new FlowHandlerState("mend", "left")], harness.OrchestrationStore.ReadFlow(layout)!.Steps.Single(step => step.Instance == "round.check").Handlers);
+    }
+
+    /// <summary>
     /// A redirect decided while another waits is kept, never dropped: redirects are made in the order they were decided,
     /// each once nothing it resets is running - here two items of a forEach each send the run back within their own
     /// item, and both go back.

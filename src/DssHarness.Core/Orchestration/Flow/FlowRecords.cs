@@ -271,11 +271,14 @@ public sealed record FlowHandoffRecord(string By, string? Why = null)
 
 /// <summary>One handler of a step's ending, as the source's own record names where it stands.</summary>
 /// <param name="Handler">The handler's name, as its declaration names it.</param>
-/// <param name="State">Where it stands: <c>owed</c> (the ending is written, the raise is not made yet), <c>raised</c>, <c>done</c> or <c>passed</c>.</param>
+/// <param name="State">
+/// Where it stands: <c>owed</c> (the ending is written, the raise is not made yet), <c>raised</c>, <c>done</c>,
+/// <c>passed</c>, or <c>left</c> (a redirect left its visit before it ended: it took nothing, and settles nothing).
+/// </param>
 public sealed record FlowHandlerState(string Handler, string State)
 {
     /// <summary>Every state a handler of an ending can stand in, as the record spells them.</summary>
-    public static readonly IReadOnlyList<string> States = ["owed", "raised", "done", "passed"];
+    public static readonly IReadOnlyList<string> States = ["owed", "raised", "done", "passed", "left"];
 
     /// <summary>What is wrong with this entry; null when nothing is.</summary>
     public string? Problem()

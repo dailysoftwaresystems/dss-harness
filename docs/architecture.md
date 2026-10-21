@@ -1475,7 +1475,8 @@ the resume lists the issue from the triage's answer - once, for one the list alr
 all but its id and time is not listed again. Each record is written before what follows from it - a question before the record of the
 step that waits on it, an answer before what it changes, a visit with what raised it, a failure
 owed until it is decided, every visit a redirect leaves marked `leftBy` before the redirect leaves
-the run's records - so a crash between any two writes leaves records the next session completes: an
+the run's records, and a handler a redirect leaves before it ended marked `left` in its source's
+record, for it took nothing and settles nothing - so a crash between any two writes leaves records the next session completes: an
 answer written is carried out once, a configured answer never written is given, a handler is never
 raised twice, and an ending whose handlers all ended is settled. A session is never said done over a
 step that never ended, nor one its scope never drew. What the session's start writes is held, in the
