@@ -43,6 +43,13 @@ public sealed class FlowCoordinatorTests
             return this;
         }
 
+        /// <summary>Answers <paramref name="step"/> by its script, which sees the whole run and answers when it will.</summary>
+        public FakeRunner OnAsync(string step, Func<FlowStepRun, Task<FlowStepResult>> script)
+        {
+            _scripts[step] = script;
+            return this;
+        }
+
         /// <summary>Answers <paramref name="step"/>'s handoff turn with one account, every time it is asked.</summary>
         public FakeRunner HandsOff(string step, string? account)
         {
@@ -540,6 +547,7 @@ public sealed class FlowCoordinatorTests
         var checks = runner.Hold("checks", run =>
         {
             run.Events.LegPlaced("far", inACopy: true);
+            run.Events.EveryLegPlaced();
             run.Events.LegCopyMade("far");
         });
         var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
@@ -553,6 +561,184 @@ public sealed class FlowCoordinatorTests
 
         checks.Done();
         _ = await session;
+    }
+
+    /// <summary>
+    /// The tree is held until the runner says every leg is placed: a leg placed after an earlier leg's copy was made
+    /// finds the tree still held, and the fold waiting on it goes in only once the last leg in the tree itself ends.
+    /// </summary>
+    [Fact]
+    public async Task TheTreeIsHeld_UntilEveryLegIsPlaced()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: work
+                type: create-agent
+                agent: worker.md
+              - name: checks
+                type: build
+                in: work
+                dependsOn: [work]
+              - name: folding
+                type: fold
+                of: work
+                dependsOn: [work]
+            """);
+        var runner = new FakeRunner();
+        IFlowRunEvents? events = null;
+        var said = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var checks = runner.Hold("checks", run =>
+        {
+            events = run.Events;
+            run.Events.LegPlaced("far", inACopy: true);
+            run.Events.LegCopyMade("far");
+            said.SetResult();
+        });
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var cancel = TestContext.Current.CancellationToken;
+
+        var session = coordinator.RunAsync(cancel);
+        await said.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        // An answer the run refuses is read after every event before it, and after the admission those events led to.
+        Assert.False(await coordinator.OfferAnswerAsync("q0", "go").WaitAsync(TimeSpan.FromSeconds(30), cancel));
+        Assert.DoesNotContain("folding", runner.Started);
+
+        events!.LegPlaced("here", inACopy: false);
+        events.EveryLegPlaced();
+        Assert.False(await coordinator.OfferAnswerAsync("q0", "go").WaitAsync(TimeSpan.FromSeconds(30), cancel));
+        Assert.DoesNotContain("folding", runner.Started);
+
+        events.LegEnded("here");
+        await runner.StartedAsync("folding").WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        checks.Done();
+        _ = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+    }
+
+    /// <summary>
+    /// What an attempt said of its legs is its own: a new attempt that works in a copy alone lets the tree go once its
+    /// copy is made, whatever leg the attempt before it placed in the tree itself.
+    /// </summary>
+    [Fact]
+    public async Task ANewAttemptsLegs_AreItsOwn_NotTheAttemptBeforesLegs()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: work
+                type: create-agent
+                agent: worker.md
+              - name: checks
+                type: build
+                in: work
+                dependsOn: [work]
+              - name: folding
+                type: fold
+                of: work
+                dependsOn: [keeper]
+              - name: keeper
+                type: orient
+                dependsOn: [work]
+            """);
+        var second = new TaskCompletionSource<FlowStepResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondBegan = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new FakeRunner().OnAsync("checks", run =>
+        {
+            if (run.Attempt == 1)
+            {
+                // The first attempt works in the tree itself and ends incomplete: it is run again.
+                run.Events.LegPlaced("here", inACopy: false);
+                run.Events.EveryLegPlaced();
+                return Task.FromResult(Legs(("here", LegVerdict.InputsMoved)));
+            }
+
+            // The second works in a copy alone, and holds on after its copy is made.
+            run.Events.LegPlaced("far", inACopy: true);
+            run.Events.EveryLegPlaced();
+            run.Events.LegCopyMade("far");
+            secondBegan.SetResult();
+            return second.Task;
+        });
+        var keeper = runner.Hold("keeper");
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var cancel = TestContext.Current.CancellationToken;
+
+        var session = coordinator.RunAsync(cancel);
+        await secondBegan.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        // The fold is drawn while the second attempt still runs in its copy, and goes in at once.
+        keeper.Done();
+        await SettledAsync(coordinator, () => coordinator.Instances["keeper"].State == FlowInstanceState.Done, cancel);
+        Assert.Contains("folding", runner.Started);
+        Assert.Equal(FlowInstanceState.Running, coordinator.Instances["checks"].State);
+
+        second.SetResult(Legs(("far", LegVerdict.Passed)));
+        _ = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+    }
+
+    /// <summary>
+    /// Waits until the running session has taken <paramref name="until"/> as true, and has walked its admission once
+    /// after: an answer it refuses is read after every message before it, and after what those messages led to.
+    /// </summary>
+    private static async Task SettledAsync(FlowCoordinator coordinator, Func<bool> until, CancellationToken cancel)
+    {
+        using var bound = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+        bound.CancelAfter(TimeSpan.FromSeconds(30));
+
+        while (!until())
+        {
+            Assert.False(await coordinator.OfferAnswerAsync("q0", "go").WaitAsync(bound.Token));
+        }
+
+        Assert.False(await coordinator.OfferAnswerAsync("q0", "go").WaitAsync(bound.Token));
+    }
+
+    /// <summary>
+    /// A step that names an agent claims that agent's own tree - the one its create-agent made - and not the name the
+    /// step wrote: each item of a forEach makes its own agent, so the items' writing steps share no tree and run at once.
+    /// </summary>
+    [Fact]
+    public async Task EachItemsAgentIsATreeOfItsOwn_SoTheItemsWritingStepsRunAtOnce()
+    {
+        var definition = Parse("""
+            name: flow
+            maxReasoningAgents: 2
+            maxOpenAgents: 2
+            steps:
+              - name: plan
+                type: orient
+              - name: items
+                forEach: plan.list
+                dependsOn: [plan]
+                steps:
+                  - name: maker
+                    type: create-agent
+                    agent: worker.md
+                  - name: work
+                    type: reason
+                    prompt: work.md
+                    outputs: work.json
+                    in: maker
+                    access: write
+                    dependsOn: [maker]
+            """);
+        var runner = new FakeRunner()
+            .On("plan", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"list": ["x", "y"]}""")))
+            .On("maker", run => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject { ["agent"] = $"a{run.Index}" }));
+        var first = runner.Hold("work");
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var cancel = TestContext.Current.CancellationToken;
+
+        var session = coordinator.RunAsync(cancel);
+
+        // Both items' writing steps run at once: neither holds the other's agent.
+        await runner.StartedAsync("items[0].work").WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        await runner.StartedAsync("items[1].work").WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        first.Done();
+        _ = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
     }
 
     /// <summary>A leg that works in the tree itself holds it to that leg's end: a copy made alone does not let the tree go.</summary>
@@ -579,6 +765,7 @@ public sealed class FlowCoordinatorTests
         {
             run.Events.LegPlaced("far", inACopy: true);
             run.Events.LegPlaced("here", inACopy: false);
+            run.Events.EveryLegPlaced();
             run.Events.LegCopyMade("far");
         });
         var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());

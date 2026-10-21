@@ -190,6 +190,9 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
     internal readonly HashSet<string> CopiesMade = [];
     internal readonly HashSet<string> TreeLegsEnded = [];
 
+    /// <summary>Whether this attempt's runner has said every leg it runs is placed.</summary>
+    internal bool EveryLegPlaced;
+
     /// <summary>The instance whose ending raised this one - a handler's source, the step whose failure a recovery took.</summary>
     internal FlowInstance? RaisedBy;
 
@@ -1821,7 +1824,8 @@ public sealed class FlowCoordinator
                 continue;
             }
 
-            var claims = FlowClaims.Of(instance.Step, _runnerFacts);
+            // A step that names an agent claims that agent's own tree, as its instance's create-agent made it.
+            var claims = FlowClaims.Of(instance.Step, _runnerFacts, WorksInOf(instance));
 
             if (claims.Any(claim => held.Concat(reserved).Any(claim.Conflicts)))
             {
@@ -1918,11 +1922,14 @@ public sealed class FlowCoordinator
 
         instance.State = FlowInstanceState.Running;
         instance.StartedAt ??= _clock.GetUtcNow();
+        // What an attempt says of its legs is its own: the attempt before it placed its legs where it did.
         instance.HeldClaims.Clear();
         instance.HeldClaims.AddRange(claims);
         instance.LegsInCopies.Clear();
+        instance.LegsInTree.Clear();
         instance.CopiesMade.Clear();
         instance.TreeLegsEnded.Clear();
+        instance.EveryLegPlaced = false;
         Record(FlowChangeKind.Step, instance, from: was, to: FlowInstanceState.Running, attempt: instance.Attempt);
 
         if (instance.Step.Type == "pause")
@@ -3544,7 +3551,7 @@ public sealed class FlowCoordinator
         }
     }
 
-    /// <summary>Reads one event of a running step's legs: where each works, when each copy is made, when each one's work in the tree itself has ended.</summary>
+    /// <summary>Reads one event of a running step's legs: where each works, that every one is placed, when each copy is made, when each one's work in the tree itself has ended.</summary>
     private void TakeEvent(FlowInstance instance, FlowLegEvent leg)
     {
         if (instance.State is not FlowInstanceState.Running)
@@ -3552,32 +3559,31 @@ public sealed class FlowCoordinator
             return;
         }
 
-        if (leg.CopyMade)
+        switch (leg.Kind)
         {
-            _ = instance.CopiesMade.Add(leg.Leg);
-        }
-        else if (leg.Ended)
-        {
-            _ = instance.TreeLegsEnded.Add(leg.Leg);
-        }
-        else
-        {
-            if (leg.InACopy)
-            {
-                _ = instance.LegsInCopies.Add(leg.Leg);
-            }
-            else
-            {
-                _ = instance.LegsInTree.Add(leg.Leg);
-            }
+            case FlowLegEventKind.PlacedInACopy:
+                _ = instance.LegsInCopies.Add(leg.Leg!);
+                break;
+            case FlowLegEventKind.PlacedInTheTree:
+                _ = instance.LegsInTree.Add(leg.Leg!);
+                break;
+            case FlowLegEventKind.EveryLegPlaced:
+                instance.EveryLegPlaced = true;
+                break;
+            case FlowLegEventKind.CopyMade:
+                _ = instance.CopiesMade.Add(leg.Leg!);
+                break;
+            case FlowLegEventKind.Ended:
+                _ = instance.TreeLegsEnded.Add(leg.Leg!);
+                break;
         }
 
-        // The tree is let go once every leg that works in a copy has its copy made and every leg that works in the
-        // tree itself has ended - and not before the runner has said where its legs work.
-        var known = instance.LegsInCopies.Concat(instance.LegsInTree).ToList();
-
-        if (known.Count > 0
-            && known.All(leg => instance.LegsInCopies.Contains(leg) ? instance.CopiesMade.Contains(leg) : instance.TreeLegsEnded.Contains(leg)))
+        // The tree is let go once the runner has said every leg is placed, every leg that works in a copy has its
+        // copy made and every leg that works in the tree itself has ended - and not before: a leg placed later may
+        // work in the tree itself.
+        if (instance.EveryLegPlaced
+            && instance.LegsInCopies.All(instance.CopiesMade.Contains)
+            && instance.LegsInTree.All(instance.TreeLegsEnded.Contains))
         {
             instance.HeldClaims.RemoveAll(claim => claim.Kind == FlowClaimKind.Run);
         }
@@ -4686,12 +4692,29 @@ public sealed class FlowCoordinator
         return completion.Task;
     }
 
-    /// <summary>One event of one leg of a running step.</summary>
-    /// <param name="Leg">The leg's name.</param>
-    /// <param name="CopyMade">The leg's copy is made.</param>
-    /// <param name="Ended">The leg's work in the tree itself has ended.</param>
-    /// <param name="InACopy">The leg works in a copy of its own, and not in the tree itself.</param>
-    private readonly record struct FlowLegEvent(string Leg, bool CopyMade, bool Ended, bool InACopy);
+    /// <summary>What one event of a running step's legs says.</summary>
+    private enum FlowLegEventKind
+    {
+        /// <summary>The leg works in a copy of its own, and not in the tree itself.</summary>
+        PlacedInACopy,
+
+        /// <summary>The leg works in the tree itself.</summary>
+        PlacedInTheTree,
+
+        /// <summary>Every leg the attempt runs is placed.</summary>
+        EveryLegPlaced,
+
+        /// <summary>The leg's copy is made.</summary>
+        CopyMade,
+
+        /// <summary>The leg's work in the tree itself has ended.</summary>
+        Ended,
+    }
+
+    /// <summary>One event of a running step's legs.</summary>
+    /// <param name="Kind">What it says.</param>
+    /// <param name="Leg">The leg's name; null where the event is of every leg.</param>
+    private readonly record struct FlowLegEvent(FlowLegEventKind Kind, string? Leg);
 
     /// <summary>One retry's time coming.</summary>
     /// <param name="Instance">The instance that waits.</param>
@@ -4704,15 +4727,23 @@ public sealed class FlowCoordinator
     {
         /// <inheritdoc/>
         public void LegPlaced(string leg, bool inACopy)
-            => _ = coordinator._messages.Writer.TryWrite(new Message(instance, null, new FlowLegEvent(leg, CopyMade: false, Ended: false, InACopy: inACopy), Attempt: attempt));
+            => Post(new FlowLegEvent(inACopy ? FlowLegEventKind.PlacedInACopy : FlowLegEventKind.PlacedInTheTree, leg));
+
+        /// <inheritdoc/>
+        public void EveryLegPlaced()
+            => Post(new FlowLegEvent(FlowLegEventKind.EveryLegPlaced, null));
 
         /// <inheritdoc/>
         public void LegCopyMade(string leg)
-            => _ = coordinator._messages.Writer.TryWrite(new Message(instance, null, new FlowLegEvent(leg, CopyMade: true, Ended: false, InACopy: false), Attempt: attempt));
+            => Post(new FlowLegEvent(FlowLegEventKind.CopyMade, leg));
 
         /// <inheritdoc/>
         public void LegEnded(string leg)
-            => _ = coordinator._messages.Writer.TryWrite(new Message(instance, null, new FlowLegEvent(leg, CopyMade: false, Ended: true, InACopy: false), Attempt: attempt));
+            => Post(new FlowLegEvent(FlowLegEventKind.Ended, leg));
+
+        /// <summary>Posts one event of this attempt's legs.</summary>
+        private void Post(FlowLegEvent leg)
+            => _ = coordinator._messages.Writer.TryWrite(new Message(instance, null, leg, Attempt: attempt));
 
         /// <inheritdoc/>
         public void Used(long tokens, double usd)

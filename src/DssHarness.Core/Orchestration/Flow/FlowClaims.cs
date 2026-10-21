@@ -62,17 +62,25 @@ public static class FlowClaims
 
     /// <summary>
     /// The claims <paramref name="step"/> holds while it runs: each string its type's table carries, read for the tree
-    /// it names - the main tree, or the agent's the step's <c>in</c> or <c>of</c> names. A <c>run</c> step whose runner
-    /// writes the tree holds <em>write</em> on it and not run, and a string that names no tree holds none.
+    /// it names - the main tree, or the tree of the agent the step's <c>in</c> or <c>of</c> names - and the forge's
+    /// remote for a push and a pull request. A <c>run</c> step whose runner writes the tree holds <em>write</em> on it
+    /// and not run; a string the cases do not name holds nothing.
     /// </summary>
     /// <param name="step">The step as it was declared.</param>
     /// <param name="runners">What the engine asks of the runners a workflow names.</param>
-    public static IReadOnlyList<FlowClaim> Of(WorkflowStep step, IFlowRunnerFacts runners)
+    /// <param name="agent">
+    /// The agent the step's <c>in</c> or <c>of</c> names, as the run resolved it: the one that step's instance of the
+    /// create-agent made, so each item of a <c>forEach</c> claims its own agent's tree and never a sibling's. Null where
+    /// the step names none, or the run has made none for it yet - the name the step wrote is then the tree, which is
+    /// one tree for every instance that names it.
+    /// </param>
+    public static IReadOnlyList<FlowClaim> Of(WorkflowStep step, IFlowRunnerFacts runners, string? agent = null)
     {
         ArgumentNullException.ThrowIfNull(step);
         ArgumentNullException.ThrowIfNull(runners);
 
         var writesTree = step.Type == "run" && step.Runner is { } runner && runners.WritesTree(runner);
+        var tree = step.In is null && step.Of is null ? Main : agent ?? step.In ?? step.Of!;
         var claims = new List<FlowClaim>();
 
         foreach (var held in TypeOf(step)?.ClaimsOf ?? [])
@@ -86,43 +94,32 @@ public static class FlowClaims
                     claims.Add(new(Main, FlowClaimKind.Write));
                     break;
                 case "run(tree)" when !writesTree:
-                    claims.Add(new(TreeOf(step), FlowClaimKind.Run));
+                    claims.Add(new(tree, FlowClaimKind.Run));
                     break;
                 case "write(tree) where its runner says writesTree" when writesTree:
-                    claims.Add(new(TreeOf(step), FlowClaimKind.Write));
+                    claims.Add(new(tree, FlowClaimKind.Write));
                     break;
                 case "write the agent's tree":
                 case "write its target":
-                    if (TreeOf(step) is { } target)
-                    {
-                        claims.Add(new(target, FlowClaimKind.Write));
-                    }
-
+                    claims.Add(new(tree, FlowClaimKind.Write));
                     break;
                 case "write the agent's tree where its access is write" when step.Access == "write":
-                    if (TreeOf(step) is { } own)
-                    {
-                        claims.Add(new(own, FlowClaimKind.Write));
-                    }
-
+                    claims.Add(new(tree, FlowClaimKind.Write));
                     break;
                 case "the remote resource":
-                    // A push and a pull request hold the forge's remote between them: one at a time.
+                    // A push and a pull request hold the forge's remote between them, one at a time: a claim of its
+                    // own, named apart from every tree.
                     claims.Add(new("the remote", FlowClaimKind.Write));
                     break;
                 default:
-                    // A claim that names no tree - a remote resource, a step the engine reaches another way - holds
-                    // nothing here; the strings that name trees are the cases above.
+                    // A string the cases above do not name - a conditional one whose condition does not hold - holds
+                    // nothing.
                     break;
             }
         }
 
         return claims;
     }
-
-    /// <summary>The tree the step works in: the agent its <c>in</c> or <c>of</c> names, or the main tree where it names none.</summary>
-    private static string TreeOf(WorkflowStep step)
-        => step.In ?? step.Of ?? Main;
 
     /// <summary>The step's type, where it names one.</summary>
     private static WorkflowStepTypes.StepType? TypeOf(WorkflowStep step)

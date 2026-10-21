@@ -84,12 +84,18 @@ public interface IFlowRunEvents
 {
     /// <summary>
     /// One leg of this step works in a copy of its own (<paramref name="inACopy"/> true), and not in the tree itself
-    /// (false): the step's claim of run on the tree ends when every copy is made and every leg in the tree itself has
-    /// ended, and not before.
+    /// (false): the step's claim of run on the tree ends when every leg is placed (<see cref="EveryLegPlaced"/>), every
+    /// copy is made and every leg in the tree itself has ended, and not before.
     /// </summary>
     /// <param name="leg">The leg's name.</param>
     /// <param name="inACopy">Whether the leg works in a copy of its own.</param>
     void LegPlaced(string leg, bool inACopy);
+
+    /// <summary>
+    /// Every leg this attempt runs is placed: <see cref="LegPlaced"/> was said of each. Until it is said the step holds
+    /// its tree whatever the legs placed so far did, for a leg placed later may work in the tree itself.
+    /// </summary>
+    void EveryLegPlaced();
 
     /// <summary>The copy the leg <paramref name="leg"/> works in is made: the tree is let go, for this leg.</summary>
     /// <param name="leg">The leg's name.</param>
