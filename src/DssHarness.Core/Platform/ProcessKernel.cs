@@ -126,6 +126,8 @@ public sealed class ProcessKernel : IProcessKernel
     /// <summary>The program the link <c>/proc/&lt;id&gt;/exe</c> names, its mark taken off; null where the link cannot be read.</summary>
     private string? Linked(int id)
     {
+        // The runtime answers no target where the link cannot be read - EACCES for another user's process, ENOENT for one
+        // that ended, a zombie or a kernel thread (measured in WSL) -; one that throws for them instead is answered the same.
         try
         {
             return new FileInfo(Path.Combine(Of(id), "exe")).LinkTarget is { Length: > 0 } target
@@ -134,7 +136,6 @@ public sealed class ProcessKernel : IProcessKernel
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // EACCES for another user's process, ENOENT for one that ended, a zombie or a kernel thread.
             return null;
         }
     }

@@ -321,6 +321,7 @@ public sealed class ClaudeCodeUpdateServiceTests
     /// </summary>
     [Theory]
     [InlineData("/usr/bin/node")]
+    [InlineData("/usr/bin/nodejs")]
     [InlineData("/opt/homebrew/Cellar/node/22.9.0/bin/node")]
     public async Task AClaudeThatNodeRuns_AsLinuxAndMacOsShowIt_RefusesTheChange(string node)
     {
@@ -390,6 +391,24 @@ public sealed class ClaudeCodeUpdateServiceTests
     }
 
     /// <summary>
+    /// A word on another program's command line that is no path this platform reads - one holding a NUL - is no path into
+    /// the package, read as text or followed: it never stops the update, and never ends it with a crash.
+    /// </summary>
+    [Fact]
+    public async Task AWordThatIsNoPath_OnAnotherProgramsLine_NeverStopsTheUpdate()
+    {
+        using var kit = new Kit(package: "2.1.201", program: "2.1.201");
+        var broken = Path.Combine(kit.Temp.Path, "a\0b.js");
+        kit.Table = new ScriptedTable([[new(7272, 1, "node", null, $"\"{kit.Node}\" {broken}", kit.Node)]]);
+        kit.Runner.OnInstall = () => kit.WritePackage("2.1.287", "2.1.287");
+
+        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, steps: string.Empty, Token);
+
+        Assert.True(answer.Ready);
+        Assert.Contains($"{kit.Node} {kit.RootScript} install -g @anthropic-ai/claude-code@{ClaudeCodeUpdateService.Needed}", kit.Runner.Ran);
+    }
+
+    /// <summary>
     /// A path whose following never ends - a stale network mount under a node's script - holds the update no longer than
     /// its bound: the process is counted as one that cannot be told apart from a session, said as that, and nothing waits
     /// on the file system for good.
@@ -415,8 +434,8 @@ public sealed class ClaudeCodeUpdateServiceTests
 
             Assert.Equal(HarnessExit.Refused, answer.ExitCode);
             Assert.Equal(
-                "a session of Claude Code is running on this machine (pid 6161 (node, a path on whose command line could not be followed "
-                    + "within 10 seconds)); start the run again when they have ended.",
+                "a session of Claude Code is running on this machine (pid 6161 (node, whose paths could not be followed within 10 seconds)); "
+                    + "start the run again when they have ended.",
                 answer.Message);
             Assert.DoesNotContain(kit.Runner.Ran, line => line.Contains(" install ", StringComparison.Ordinal));
         }

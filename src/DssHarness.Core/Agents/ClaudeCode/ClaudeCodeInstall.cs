@@ -79,8 +79,11 @@ public sealed class ClaudeCodeInstall(IFileSystem fileSystem, IProcessRunner pro
     /// <summary>What Claude Code's program, and node running its script, call themselves.</summary>
     private const string Claude = "claude";
 
-    /// <summary>The program that runs the script of an installation older than the native program.</summary>
-    private const string Node = "node";
+    /// <summary>
+    /// What the program that runs the script of an installation older than the native program is called: <c>node</c>,
+    /// and <c>nodejs</c>, the name Debian has given its file.
+    /// </summary>
+    private static readonly string[] Node = ["node", "nodejs"];
 
     /// <summary>
     /// What every <c>claude</c> this tool starts has in its environment, beside what it inherits: Claude Code's own
@@ -244,19 +247,19 @@ public sealed class ClaudeCodeInstall(IFileSystem fileSystem, IProcessRunner pro
         {
             var paths = PathsOf(process);
 
-            if (paths.Any(path => PathContainment.IsStrictlyInside(package, path, comparison)))
+            if (paths.Any(path => Inside(package, path, comparison)))
             {
                 counted[process] = null;
             }
-            else if (Called(process, Claude) && process.Executable is { } program && HostProbes.ListsProcess(program, Node))
+            else if (Called(process, [Claude]) && process.Executable is { } program && IsNode(program))
             {
                 counted[process] = $"run by node '{program}'";
             }
-            else if (Called(process, Claude) && process.Executable is null)
+            else if (Called(process, [Claude]) && process.Executable is null)
             {
                 counted[process] = "whose program could not be read";
             }
-            else if (Called(process, Claude) || Called(process, Node))
+            else if (Called(process, [Claude, .. Node]))
             {
                 unsettled.Add((process, paths));
             }
@@ -273,7 +276,7 @@ public sealed class ClaudeCodeInstall(IFileSystem fileSystem, IProcessRunner pro
 
         foreach (var (process, paths) in unsettled)
         {
-            if (reached is not null && paths.Any(path => followed.GetValueOrDefault(path) is { } at && PathContainment.IsStrictlyInside(reached, at, comparison)))
+            if (reached is not null && paths.Any(path => followed.GetValueOrDefault(path) is { } at && Inside(reached, at, comparison)))
             {
                 counted[process] = null;
             }
@@ -281,7 +284,7 @@ public sealed class ClaudeCodeInstall(IFileSystem fileSystem, IProcessRunner pro
             {
                 counted[process] = string.Create(
                     CultureInfo.InvariantCulture,
-                    $"a path on whose command line could not be followed within {FollowBudget.TotalSeconds:0} seconds");
+                    $"whose paths could not be followed within {FollowBudget.TotalSeconds:0} seconds");
             }
         }
 
@@ -319,9 +322,28 @@ public sealed class ClaudeCodeInstall(IFileSystem fileSystem, IProcessRunner pro
         return new Dictionary<string, string?>(followed, StringComparer.Ordinal);
     }
 
-    /// <summary>Whether a process is called <paramref name="name"/>, by the name it goes by or by its program's.</summary>
-    private static bool Called(SampledProcess process, string name)
-        => HostProbes.ListsProcess(process.Name, name) || (process.Executable is { } program && HostProbes.ListsProcess(program, name));
+    /// <summary>Whether a process is called one of <paramref name="names"/>, by the name it goes by or by its program's.</summary>
+    private static bool Called(SampledProcess process, IReadOnlyList<string> names)
+        => names.Any(name => HostProbes.ListsProcess(process.Name, name) || (process.Executable is { } program && HostProbes.ListsProcess(program, name)));
+
+    /// <summary>Whether <paramref name="program"/> is node, by any name its file goes by.</summary>
+    private static bool IsNode(string program) => Node.Any(name => HostProbes.ListsProcess(program, name));
+
+    /// <summary>
+    /// Whether <paramref name="path"/>, as spelled, lies under <paramref name="root"/>; no, where it is no path this
+    /// platform reads - a word of some other program's command line is never what stops an update.
+    /// </summary>
+    private static bool Inside(string root, string path, StringComparison comparison)
+    {
+        try
+        {
+            return PathContainment.IsStrictlyInside(root, path, comparison);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
 
     /// <summary>The program a process runs, and every full path its command line names, in that order.</summary>
     private static IReadOnlyList<string> PathsOf(SampledProcess process)

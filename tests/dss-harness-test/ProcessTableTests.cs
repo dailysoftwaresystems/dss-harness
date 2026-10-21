@@ -137,7 +137,8 @@ public sealed class ProcessTableTests
     /// The kernel's own reading of a <c>/proc</c> laid out as Linux lays it out: a program whose file was replaced since it
     /// started - <c> (deleted)</c> after its path, as the file an update replaces under a session is - is named by the path
     /// it was started from; a process whose link cannot be read, as a zombie's, a kernel thread's or one that ended, has
-    /// none; an empty command line is none; and what is no process's directory is not listed.
+    /// none; an empty command line is none; what is no process's directory is not listed; and the stat of a process that
+    /// ended - its directory gone - throws the IOException the table passes over it by.
     /// </summary>
     [Fact]
     public void TheKernelsReadingOfProc_NamesTheProgramStartedFrom_AndNoneWhereItCannotBeRead()
@@ -157,7 +158,7 @@ public sealed class ProcessTableTests
         Assert.Equal([7, 8], kernel.Listed().Order());
         Assert.Equal(("claude --resume", "/usr/bin/node"), (kernel.CommandLine(7), kernel.Program(7)));
         Assert.Equal(((string?)null, (string?)null), (kernel.CommandLine(8), kernel.Program(8)));
-        Assert.Throws<FileNotFoundException>(() => kernel.Stat(10));
+        Assert.Throws<DirectoryNotFoundException>(() => kernel.Stat(10));
     }
 
     /// <summary>
