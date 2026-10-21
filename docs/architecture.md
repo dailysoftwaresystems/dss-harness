@@ -1361,7 +1361,30 @@ by the rule `update-tool` refuses such a wait by, `ProgramUpdate.Unread`), bound
 failed as after one that ran, saying what npm holds since. A program the slot names is never
 moved, and a slot that cannot give it is refused, never passed over for npm's; the client's
 `update` key is read by the service, true where nothing is said. The step runner that asks it
-before a run's first step is the engine's, still to come. This build checks workflow definitions and
+before a run's first step is the engine's, still to come. What an agent of a run may do is one
+policy, `Agents\Policy\AgentPolicy`, the same on every client: everything is allowed except the
+root actions, the places no agent reaches and the restrictions, which only ever refuse, from every
+source at once - `agentPolicy.restrictions` in config.json, a workflow's definitions and its steps -
+and never remove one another's. A restriction is one string (`Run(git push *)`, a command prefix
+whose trailing `*` is any arguments and the bare command too; `Write(.github/**)` and
+`Read(secrets/**)`, path patterns as `GlobPattern` reads them, gitignore's grammar, matched against
+the path as it stands under each of the agent's roots, as asked and as resolved so no path reaches
+through a link past a rule written for where it lands). Built in, not configurable: the root
+actions (`sudo`, `su`, `doas`, `pkexec`, `run0`, `gsudo`, `sudoedit`, `runas`, `psexec`,
+PowerShell's `-Verb RunAs`, `wsl -u root`, `systemd-run`, `schtasks` with `/ru`, wherever a command
+names one), writes outside an agent's writable roots, every read and write of a credential slot,
+and any command naming one or a Claude Code directory of the run's; no agent starts while the tool
+itself runs elevated (`IHostPlatform.IsPrivilegedProcess`, the runtime's own answer). A command is
+read whole before it is matched, `Agents\Policy\CommandAnalysis`: a shell string split on `;`,
+`&&`, `||`, `|`, `&` and line ends, its command substitutions, subshells and loop and branch
+bodies read as commands of their own, wrappers (`env`, `nohup`, `time`, `timeout`, `nice`,
+`xargs`, `command`, `builtin`, `exec`, `eval`) stripped with their own options, and it goes into
+`sh -c`, `cmd /c`, `powershell -Command` and a decoded `-EncodedCommand`, to four levels;
+git's own options are dropped before its subcommand, and a `git -c` that names an alias or a key
+naming a program git runs is the `git config` it is. What it cannot read is said in help: the
+inside of a script file a command runs. Where the policy cannot decide a call it denies it, never
+allows - nothing runs while the host that would answer is silent or gone; the clients that ask it
+are the next thing the tool grows. This build checks workflow definitions and
 starts and drives a run of one (see "Running a workflow" below); the step runners - the agents, the
 steps over the services the tool already has - are the next thing the tool grows, and until they land
 each step of a run fails, saying no runner serves its type.

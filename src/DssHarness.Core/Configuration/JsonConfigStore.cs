@@ -64,6 +64,12 @@ public sealed class JsonConfigStore(IFileSystem fileSystem) : IConfigStore
             throw new ConfigException($"'{path}' could not be read: {string.Join(" ", problems)}");
         }
 
+        // The agent policy's own, the same way: a restriction that loads is a restriction the tool reads.
+        if (DssHarness.Core.Agents.Policy.AgentPolicy.RuleProblems(config) is [_, ..] restrictions)
+        {
+            throw new ConfigException($"'{path}' could not be read: {string.Join(" ", restrictions)}");
+        }
+
         HarnessConfigValidator.ThrowIfInvalid(config, path);
         return config;
     }

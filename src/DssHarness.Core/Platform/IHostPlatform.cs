@@ -31,6 +31,14 @@ public interface IHostPlatform
     /// </summary>
     string HomeDirectory { get; }
 
+    /// <summary>
+    /// Whether this process itself runs elevated - as root or as an administrator - which is the
+    /// runtime's own answer. No agent of this tool starts while it does: every rule of the agents'
+    /// policy assumes a user's powers, so a tool elevated past them refuses to start one rather than
+    /// hand an agent powers no rule of its run was written for.
+    /// </summary>
+    bool IsPrivilegedProcess { get; }
+
     /// <summary>How file system paths compare on this platform (case insensitive on Windows).</summary>
     StringComparison PathComparison { get; }
 

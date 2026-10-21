@@ -2430,6 +2430,32 @@ public static class HelpTopics
         builder.AppendLine("the command to run by hand. The clients that reach the companies, and the step runner that");
         builder.AppendLine("readies Claude Code before a run's first step, are what it builds next, and nothing here");
         builder.AppendLine("runs a step.");
+        builder.AppendLine();
+        builder.AppendLine("What an agent may do is one policy, the same on every client: everything is allowed except");
+        builder.AppendLine("the root actions, the places no agent reaches, and the restrictions - which only ever");
+        builder.AppendLine("refuse, from every source at once, and never remove one another's. A restriction is one");
+        builder.AppendLine("string, Run(git push *), Write(.github/**) or Read(secrets/**): Run a command prefix, its");
+        builder.AppendLine("trailing * any arguments and the bare command too; Write and Read path patterns as");
+        builder.AppendLine("gitignore reads them, matched against the path as it stands under each of the agent's");
+        builder.AppendLine("roots. Declared under agentPolicy.restrictions in config.json, and a workflow's");
+        builder.AppendLine("definitions and steps add their own to them, all applied together. Refused always, not");
+        builder.AppendLine("configurable: the root actions (sudo, su, doas, pkexec, run0, gsudo, sudoedit, runas,");
+        builder.AppendLine("psexec, PowerShell's -Verb RunAs, wsl -u root, systemd-run, schtasks with /ru, wherever");
+        builder.AppendLine("a command names one), writes outside an agent's writable roots, every read and write of a");
+        builder.AppendLine("credential slot, and any command naming one or a Claude Code directory of the run's.");
+        builder.AppendLine("No agent starts while this tool itself runs elevated. A shell command is read whole");
+        builder.AppendLine("before it is matched: split on ;, &&, ||, |, & and line ends, its $(...) and backticks,");
+        builder.AppendLine("subshells, loop and branch bodies read as commands of their own, wrappers (env, nohup,");
+        builder.AppendLine("time, timeout, nice, xargs, command, builtin, exec, eval) stripped, and it goes into");
+        builder.AppendLine("sh -c, cmd /c, powershell -Command and a decoded -EncodedCommand, to four levels - so");
+        builder.AppendLine("'git -C x push' is git push, and 'env A=1 git push' is too. What it cannot read is said");
+        builder.AppendLine("here, not guessed at: the inside of a script file a command runs. This is policy, not a");
+        builder.AppendLine("sandbox - a program an agent runs opens files as the user it runs as, a file of the");
+        builder.AppendLine("credential slot among them; what it is never given is a key in its environment, and what");
+        builder.AppendLine("no file tool of an agent touches is the slot itself, in any root. Where this tool cannot");
+        builder.AppendLine("decide a call it denies it, never allows: nothing runs while the host that would answer");
+        builder.AppendLine("is silent or gone. The policy is built and holds every action behind it; the clients");
+        builder.AppendLine("that ask it are what it builds next, and no command of this build runs an agent yet.");
 
         return builder.ToString();
     }
@@ -3396,6 +3422,11 @@ public static class HelpTopics
         builder.AppendLine("                 installs and updates Claude Code with npm; a client holds no model,");
         builder.AppendLine("                 size or price - contextTokens and maxOutputTokens are a model's");
         builder.AppendLine("                 ('help agent-clients')");
+        builder.AppendLine("  agentPolicy    what an agent may do beyond the rules built into the tool:");
+        builder.AppendLine("                 restrictions, each one rule string, that only ever refuse -");
+        builder.AppendLine("                 Run(git push *), Write(.github/**), Read(secrets/**) - applied to");
+        builder.AppendLine("                 every agent of every run under this configuration, beside a");
+        builder.AppendLine("                 workflow's definitions and steps ('help agent-clients')");
         builder.AppendLine();
         builder.AppendLine("A list whose absence means every one of what it names, or a set the tool chooses, is");
         builder.AppendLine("refused given empty, as --legs given no name is: a runner's legs and steps; a tool's");

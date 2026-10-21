@@ -167,6 +167,13 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
 
         Assert.Contains(
+            "agentPolicy what an agent may do beyond the rules built into the tool: restrictions, each one rule string, that only ever refuse - "
+                + "Run(git push *), Write(.github/**), Read(secrets/**) - applied to every agent of every run under this configuration, beside a "
+                + "workflow's definitions and steps ('help agent-clients')",
+            config,
+            StringComparison.Ordinal);
+
+        Assert.Contains(
             "A provider's name and each tier's are held to the orchestration name rule - lower-case letters and digits, single hyphens - "
                 + "and a tier is one name in one case everywhere; a model's code, what is sent to the API, is one word, and its name is the "
                 + "one a person reads.",
@@ -232,6 +239,58 @@ public sealed partial class HelpTests
         Assert.Contains("CLAUDE_EXECUTABLE", prose, StringComparison.Ordinal);
         Assert.Contains("agentClients.<client>.update", prose, StringComparison.Ordinal);
         Assert.Contains("DISABLE_UPDATES", prose, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The agent-clients topic says the agents' policy whole: one policy on every client, default allow except the
+    /// root actions and the restrictions, each root action named, the slot and the Claude Code directories refused,
+    /// the command read whole (with what it cannot read said), policy-not-sandbox, and the fail-closed rule.
+    /// </summary>
+    [Fact]
+    public async Task AgentClientsTopic_SaysTheAgentsPolicy()
+    {
+        var prose = Prose.Words(HelpText.Of("agent-clients").StandardOutput);
+
+        Assert.Contains("What an agent may do is one policy, the same on every client: everything is allowed except", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            "A restriction is one string, Run(git push *), Write(.github/**) or Read(secrets/**): Run a command prefix, its "
+                + "trailing * any arguments and the bare command too; Write and Read path patterns as gitignore reads them",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("Declared under agentPolicy.restrictions in config.json", prose, StringComparison.Ordinal);
+        Assert.Contains("the root actions (sudo, su, doas, pkexec, run0, gsudo, sudoedit, runas,", prose, StringComparison.Ordinal);
+        Assert.Contains("psexec, PowerShell's -Verb RunAs, wsl -u root, systemd-run, schtasks with /ru, wherever", prose, StringComparison.Ordinal);
+        Assert.Contains("writes outside an agent's writable roots, every read and write of a", prose, StringComparison.Ordinal);
+        Assert.Contains("No agent starts while this tool itself runs elevated.", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            "wrappers (env, nohup, time, timeout, nice, xargs, command, builtin, exec, eval) stripped, and it goes into "
+                + "sh -c, cmd /c, powershell -Command and a decoded -EncodedCommand, to four levels",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("the inside of a script file a command runs", prose, StringComparison.Ordinal);
+        Assert.Contains("This is policy, not a sandbox", prose, StringComparison.Ordinal);
+        Assert.Contains("Where this tool cannot decide a call it denies it, never allows", prose, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The README and the architecture say the agents' policy as the help does: one policy, default allow except the
+    /// root actions and the restrictions, the command read whole, and the fail-closed rule - and the architecture
+    /// names its owners (<c>AgentPolicy</c>, <c>CommandAnalysis</c>, <c>GlobPattern</c>).
+    /// </summary>
+    [Fact]
+    public async Task TheDocumentsSayTheAgentsPolicy()
+    {
+        Assert.Contains("What an agent may do is one policy, the same on every client", Prose.Document("README.md"), StringComparison.Ordinal);
+        Assert.Contains("A repository declares them under `agentPolicy.restrictions`", Prose.Document("README.md"), StringComparison.Ordinal);
+        Assert.Contains("This is policy, not a sandbox", Prose.Document("README.md"), StringComparison.Ordinal);
+        Assert.Contains("Where this tool cannot decide a call it denies it, never allows", Prose.Document("README.md"), StringComparison.Ordinal);
+
+        var architecture = Prose.Document("docs", "architecture.md");
+
+        Assert.Contains("What an agent of a run may do is one policy, `Agents\\Policy\\AgentPolicy`, the same on every client", architecture, StringComparison.Ordinal);
+        Assert.Contains("read whole before it is matched, `Agents\\Policy\\CommandAnalysis`", architecture, StringComparison.Ordinal);
+        Assert.Contains("no agent starts while the tool itself runs elevated (`IHostPlatform.IsPrivilegedProcess`", architecture, StringComparison.Ordinal);
+        Assert.Contains("Where the policy cannot decide a call it denies it, never allows", architecture, StringComparison.Ordinal);
     }
 
     /// <summary>

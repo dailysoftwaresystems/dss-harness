@@ -509,6 +509,32 @@ passed over for npm's. A client's `update` key (`agentClients.<client>.update`, 
 and `DISABLE_UPDATES` in the tool's own environment turn installing and updating off, and a run
 that then needs one that is missing or too old will be refused with the command to run by hand.
 
+What an agent may do is one policy, the same on every client: everything is allowed except the
+root actions, the places no agent reaches, and the restrictions - which only ever refuse, from
+every source at once, and never remove one another's. A restriction is one string,
+`Run(git push *)`, `Write(.github/**)` or `Read(secrets/**)`: `Run` a command prefix (its trailing
+`*` any arguments, the bare command too), `Write` and `Read` path patterns as gitignore reads
+them, matched against the path as it stands under each of the agent's roots. A repository
+declares them under `agentPolicy.restrictions`, and a workflow's definitions and steps add their
+own to them, all applied together. Refused always, not configurable: the root actions (`sudo`,
+`su`, `doas`, `pkexec`, `run0`, `gsudo`, `sudoedit`, `runas`, `psexec`, PowerShell's
+`-Verb RunAs`, `wsl -u root`, `systemd-run`, `schtasks` with `/ru`, wherever a command names one),
+writes outside an agent's writable roots, every read and write of a credential slot, and any
+command naming one or a Claude Code directory of the run's. No agent starts while this tool
+itself runs elevated. A shell command is read whole before it is matched - split on `;`, `&&`,
+`||`, `|`, `&` and line ends, its `$(...)`, backticks, subshells and loop and branch bodies read
+as commands of their own, wrappers (`env`, `nohup`, `time`, `timeout`, `nice`, `xargs`,
+`command`, `builtin`, `exec`, `eval`) stripped, and it goes into `sh -c`, `cmd /c`,
+`powershell -Command` and a decoded `-EncodedCommand`, to four levels - so `git -C x push` is
+`git push`, and `env A=1 git push` is too. What it cannot read is said in help, not guessed at:
+the inside of a script file a command runs. This is policy, not a sandbox - a program an agent
+runs opens files as the user it runs as, a file of the credential slot among them; what it is
+never given is a key in its environment, and what no file tool of an agent touches is the slot
+itself, in any root. Where this tool cannot decide a call it denies it, never allows: nothing
+runs while the host that would answer is silent or gone. The policy is built and holds every
+action behind it; the clients that ask it are what comes next, and no command of this build runs
+an agent yet.
+
 ```bash
 dssharness validate-workflow                 # check every declared workflow
 dssharness validate-workflow implementation  # check one

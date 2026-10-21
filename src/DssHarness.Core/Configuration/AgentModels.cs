@@ -18,6 +18,21 @@ public sealed class AgentClientConfig
 }
 
 /// <summary>
+/// What an agent of a run may do, under <c>agentPolicy</c>: the restrictions the repository adds to the rules built
+/// into the tool. A restriction only ever refuses, from every source at once, and never removes one.
+/// </summary>
+public sealed class AgentPolicyConfig
+{
+    /// <summary>
+    /// Restriction rules, each one string - <c>Run(git push *)</c>, <c>Write(.github/**)</c>,
+    /// <c>Read(secrets/**)</c> - applied beside the tool's built-in refusals to every agent of every run under this
+    /// configuration, and added to by a workflow's definitions and steps. Left out where the repository restricts
+    /// nothing, which is the default.
+    /// </summary>
+    public List<string> Restrictions { get; init; } = [];
+}
+
+/// <summary>
 /// A company whose models the tool reaches: the one place a model's API address, its key's name and its client are
 /// said. A provider appoints the NAME of the variable that holds its key, and the value is in the git-ignored slot -
 /// nothing of a key is tracked here.

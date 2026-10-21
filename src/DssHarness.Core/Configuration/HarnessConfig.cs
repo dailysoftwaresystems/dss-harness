@@ -194,6 +194,12 @@ public sealed class HarnessConfig
     /// </summary>
     public Dictionary<string, AgentClientConfig> AgentClients { get; init; } = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// What an agent of a run may do beyond the rules built into the tool: restrictions that only ever refuse.
+    /// Left out where the repository restricts nothing, which is the default.
+    /// </summary>
+    public AgentPolicyConfig? AgentPolicy { get; init; }
+
     private static Dictionary<string, TValue> Map<TValue>() => new(StringComparer.OrdinalIgnoreCase);
 }
 
