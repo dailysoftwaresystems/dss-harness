@@ -33,6 +33,15 @@ public sealed class WorkflowValidationServiceTests
         Assert.Contains("step 'planning.plan' (best): claude-fable-5-1 at xhigh, glm-5.3 at max", report.Lines);
         Assert.Contains("step 'intake.triage' (high): claude-opus-5-5 at high, glm-5.3 at high", report.Lines);
 
+        // Whether each model a step may run on has a price, and when its provider's numbers were read: every model of
+        // the configuration init writes is priced, each provider's line naming its date.
+        Assert.Equal(
+            [
+                "prices of 'anthropic' (USD, read 2026-10-12): all 4 models priced",
+                "prices of 'zai' (USD, read 2026-10-12): glm-5.3 priced",
+            ],
+            report.Lines.Where(line => line.StartsWith("prices of", StringComparison.Ordinal)));
+
         // The slot holds no key in a repository just initialized. Every step's first model is Anthropic's, reached through
         // claude-code, which signs in with the machine's login and reads no key: nothing is said of Anthropic's. GLM is a
         // later model of each tier, reached through glm, which signs each request with Z.AI's key - named once, with
@@ -111,10 +120,14 @@ public sealed class WorkflowValidationServiceTests
         Assert.True(report.Passed);
         Assert.Equal(
             [
+                $"ok {Shown("small")} (2 steps, 2 reasoning)",
+                "step 'think': claude-opus-5-5 at its own default",
+                "step 'write': claude-sonnet-5-5 at its own default",
+                "prices of 'anthropic' (USD, read 2026-10-12): claude-opus-5-5, claude-sonnet-5-5 priced",
                 $"no file under '{DssHarness.Core.Repository.HarnessLayout.WorkflowsEnvSlotRelative}/' declares 'ANTHROPIC_API_KEY', the name provider 'anthropic' appoints for its key (its apiKeyNames); "
                     + "add ANTHROPIC_API_KEY= to a file there, holding the Anthropic API key (it is read from this slot and nowhere else). The steps that would read it: step 'think'",
             ],
-            report.Lines.Where(line => line.StartsWith("no file under", StringComparison.Ordinal)));
+            report.Lines);
     }
 
     /// <summary>
@@ -173,6 +186,9 @@ public sealed class WorkflowValidationServiceTests
                     + "Declared there and appointed by nothing: ZAI_APIKEY",
             ],
             one.Lines.Where(line => line.StartsWith("no file under", StringComparison.Ordinal)));
+
+        // A model with no price is said so, with the run's cost of it unknown, beside the levels.
+        Assert.Contains("prices of 'zai': none; the cost of glm-5.3 is unknown", one.Lines);
 
         File.Delete(slot);
         var none = await Service(repository).CheckAsync(repository.Path, named: null, cancellationToken);
@@ -274,8 +290,9 @@ public sealed class WorkflowValidationServiceTests
                 line.StartsWith("step ", StringComparison.Ordinal)
                     || line.StartsWith("advisor ", StringComparison.Ordinal)
                     || line.StartsWith("reporter ", StringComparison.Ordinal)
+                    || line.StartsWith("prices of", StringComparison.Ordinal)
                     || line.StartsWith("no file under", StringComparison.Ordinal),
-                $"a level or missing-key line: {line}"));
+                $"a level, price or missing-key line: {line}"));
         Assert.Equal(
             [
                 $"{Shown("small")}: 'agents/implementer.md', step 'make''s agent, is not at '.harness-config/workflows/small/agents/implementer.md'; write it there, beside the definition that names it",
@@ -287,6 +304,7 @@ public sealed class WorkflowValidationServiceTests
                 line.StartsWith("step ", StringComparison.Ordinal)
                     || line.StartsWith("advisor ", StringComparison.Ordinal)
                     || line.StartsWith("reporter ", StringComparison.Ordinal)
+                    || line.StartsWith("prices of", StringComparison.Ordinal)
                     || line.StartsWith("no file under", StringComparison.Ordinal)));
         Assert.Equal([true, false], report.Workflows.Select(workflow => workflow.Holds));
 
@@ -627,8 +645,9 @@ public sealed class WorkflowValidationServiceTests
                 line.StartsWith("step ", StringComparison.Ordinal)
                     || line.StartsWith("advisor ", StringComparison.Ordinal)
                     || line.StartsWith("reporter ", StringComparison.Ordinal)
+                    || line.StartsWith("prices of", StringComparison.Ordinal)
                     || line.StartsWith("no file under", StringComparison.Ordinal),
-                $"a level or missing-key line: {line}"));
+                $"a level, price or missing-key line: {line}"));
 
         // Z.AI's key alone: Anthropic's models are reached through claude-code, which reads none.
         Assert.Equal(1, report.Lines.Count(line => line.StartsWith("no file under", StringComparison.Ordinal)));

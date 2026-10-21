@@ -29,6 +29,49 @@ public sealed class DefaultConfigFactoryTests
     }
 
     /// <summary>
+    /// The seeded configuration holds the agent sections whole, as the one template holds them - defaults.agentTier,
+    /// providers and tierConfig - and none of what init writes no value of: no balanceKeyUsage, and no agentClients, each
+    /// client used as it is built in. Saved and loaded back, the sections are what was written.
+    /// </summary>
+    [Fact]
+    public void TheSeededConfiguration_HoldsTheAgentSectionsOfTheTemplate_AndNothingElseOfTheAgents()
+    {
+        var config = DefaultConfigFactory.Create([], Os, Processor);
+        var (agentTier, providers, tierConfig) = DssHarness.Core.Agents.AgentProviderTemplates.Read();
+
+        Assert.Equal("balanced", config.Defaults.AgentTier);
+        Assert.Equal(agentTier, config.Defaults.AgentTier);
+        Assert.Equal(
+            ["anthropic: claude-fable-5-1, claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5", "zai: glm-5.3"],
+            config.Providers.Select(provider => $"{provider.Name}: {string.Join(", ", provider.Models.Select(model => model.Code))}"));
+        Assert.Equal(providers.Select(provider => provider.Name), config.Providers.Select(provider => provider.Name));
+        Assert.Equal(["best", "high", "balanced", "fast"], config.TierConfig.Keys);
+        Assert.All(tierConfig, tier => Assert.Equal(tier.Value, config.TierConfig[tier.Key]));
+        Assert.Null(config.BalanceKeyUsage);
+        Assert.Empty(config.AgentClients);
+
+        using var written = new TempDirectory();
+        var file = written.Combine("config.json");
+        var store = new JsonConfigStore(new PhysicalFileSystem(FilePermissionsFactory.Create()));
+
+        store.Save(file, config);
+
+        var text = File.ReadAllText(file);
+
+        Assert.DoesNotContain("balanceKeyUsage", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("agentClients", text, StringComparison.Ordinal);
+
+        var loaded = store.Load(file);
+
+        Assert.Equal(
+            System.Text.Json.JsonSerializer.Serialize(config.Providers, JsonConfigOptions.Default),
+            System.Text.Json.JsonSerializer.Serialize(loaded.Providers, JsonConfigOptions.Default));
+        Assert.Equal(
+            System.Text.Json.JsonSerializer.Serialize(config.TierConfig, JsonConfigOptions.Default),
+            System.Text.Json.JsonSerializer.Serialize(loaded.TierConfig, JsonConfigOptions.Default));
+    }
+
+    /// <summary>
     /// The seeded configuration declares the implementation workflow by name and nothing else: its definition is the file init
     /// writes under workflows/implementation/, never an entry in config.json, and the seed validates and round-trips with the
     /// declaration in it.

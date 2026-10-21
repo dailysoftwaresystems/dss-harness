@@ -173,6 +173,23 @@ public static class WorkflowValidator
     }
 
     /// <summary>
+    /// Every model an agent of the definition may run on - each reason step, the advisor and the reporter, on the model
+    /// it names or every model of its tier - each once, in the order first met: what <c>validate-workflow</c> says the
+    /// prices of. Resolved as the definition's check resolves them; nothing where what an agent names resolves to none.
+    /// </summary>
+    /// <param name="definition">A workflow's parsed definition.</param>
+    /// <param name="providers">The configuration's providers and tiers, resolved.</param>
+    public static IReadOnlyList<(DssHarness.Core.Configuration.AgentProviderConfig Provider, DssHarness.Core.Configuration.AgentModelConfig Model)> ModelsRunOn(
+        WorkflowDefinition definition,
+        DssHarness.Core.Agents.AgentProviders providers)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(providers);
+
+        return new Check(definition, hasCommitTemplate: false, files: null, providers).Models();
+    }
+
+    /// <summary>
     /// The keys of one provider a definition's steps would read and the slot does not hold, with the steps that would
     /// read them: first as a step's first model, then as a later model of its tier.
     /// </summary>
@@ -2357,6 +2374,25 @@ public static class WorkflowValidator
                 entry.Provider,
                 entry.Missing,
                 [.. entry.First, .. entry.Later.Select(where => $"{where} (a later model of its tier)")]))];
+        }
+
+        /// <summary>Every model an agent may run on, each once, in the order first met.</summary>
+        internal IReadOnlyList<(Configuration.AgentProviderConfig Provider, Configuration.AgentModelConfig Model)> Models()
+        {
+            if (_providers is not { } providers)
+            {
+                return [];
+            }
+
+            IEnumerable<(string? Tier, string? Model)> agents = _entries
+                .Where(entry => entry.Step.Type == "reason")
+                .Select(entry => Inherited(entry) ?? (entry.Step.Tier, entry.Step.Model))
+                .Concat(_definition.Advisor is { } advisor ? [(advisor.Tier, advisor.Model)] : [])
+                .Concat(_definition.Reporter is { } reporter ? [(reporter.Tier, reporter.Model)] : []);
+
+            return [.. agents
+                .SelectMany(agent => ModelsRunOn(providers, agent.Tier, agent.Model))
+                .DistinctBy(entry => entry.Model.Code, StringComparer.Ordinal)];
         }
 
         /// <summary>

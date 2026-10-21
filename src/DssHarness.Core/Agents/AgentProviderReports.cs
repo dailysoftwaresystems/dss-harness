@@ -128,23 +128,7 @@ public static class AgentProviderReports
 
         foreach (var provider in list.Providers)
         {
-            var priced = provider.Models.Where(model => model.Priced).Select(model => model.Code).ToList();
-            var unpriced = provider.Models.Where(model => !model.Priced).Select(model => model.Code).ToList();
-
-            if (priced.Count == provider.Models.Count && priced.Count > 1)
-            {
-                lines.Add($"prices of '{provider.Name}' ({provider.Currency}, read {provider.ReadOn}): all {priced.Count} models priced");
-            }
-            else if (priced.Count > 0)
-            {
-                lines.Add(
-                    $"prices of '{provider.Name}' ({provider.Currency}, read {provider.ReadOn}): {string.Join(", ", priced)} priced"
-                    + (unpriced.Count == 0 ? string.Empty : $"; the cost of {Joined(unpriced)} is unknown"));
-            }
-            else
-            {
-                lines.Add($"prices of '{provider.Name}': none; the cost of {Joined(unpriced)} is unknown");
-            }
+            lines.Add(PriceLine(provider.Name, provider.Currency, provider.ReadOn, [.. provider.Models.Select(model => (model.Code, model.Priced))], everyModel: true));
         }
 
         foreach (var tier in list.Tiers)
@@ -174,6 +158,34 @@ public static class AgentProviderReports
         lines.Add($"keys are read from {list.Slot} ({files}) and from nowhere else");
 
         return lines;
+    }
+
+    /// <summary>
+    /// The one line that says whether a provider's models have a price and when its numbers were read - said by the
+    /// listing of every model, and by <c>validate-workflow</c> of the models a step of the definition may run on: the
+    /// currency and the date beside the priced, and a model with no price named with its cost unknown.
+    /// </summary>
+    /// <param name="provider">The provider's name.</param>
+    /// <param name="currency">Its currency, where it names one.</param>
+    /// <param name="readOn">The date its numbers were read, where it names one.</param>
+    /// <param name="models">The models said, in its order, each with whether it is priced (<see cref="AgentProviders.Priced"/>).</param>
+    /// <param name="everyModel">Whether they are every model it lists, which alone lets every one priced be said as all of them.</param>
+    public static string PriceLine(string provider, string? currency, string? readOn, IReadOnlyList<(string Code, bool Priced)> models, bool everyModel)
+    {
+        ArgumentNullException.ThrowIfNull(models);
+
+        var priced = models.Where(model => model.Priced).Select(model => model.Code).ToList();
+        var unpriced = models.Where(model => !model.Priced).Select(model => model.Code).ToList();
+
+        if (priced.Count == 0)
+        {
+            return $"prices of '{provider}': none; the cost of {Joined(unpriced)} is unknown";
+        }
+
+        return everyModel && unpriced.Count == 0 && priced.Count > 1
+            ? $"prices of '{provider}' ({currency}, read {readOn}): all {priced.Count} models priced"
+            : $"prices of '{provider}' ({currency}, read {readOn}): {string.Join(", ", priced)} priced"
+                + (unpriced.Count == 0 ? string.Empty : $"; the cost of {Joined(unpriced)} is unknown");
     }
 
     /// <summary>A list said as the tool says one: comma-separated, the last apart, "and" before it.</summary>

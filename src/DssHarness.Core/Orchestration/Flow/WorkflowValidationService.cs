@@ -174,14 +174,15 @@ public sealed class WorkflowValidationService(
         }
 
         // The recovery is counted apart: its steps run only where something failed. Under the one line that says the
-        // definition holds, each agent's models and the level each runs at, resolved the same check resolved them, and
-        // the keys a step's model would read that no file of the slot declares, with the steps that would read them.
+        // definition holds, each agent's models and the level each runs at, resolved the same check resolved them, the
+        // prices of the models a step may run on, and the keys a step's model would read that no file of the slot
+        // declares, with the steps that would read them.
         var steps = Count(definition.Steps);
         var recovering = definition.Recover is { } recover ? Count(recover.Steps) : 0;
         var reasons = Count([.. definition.Steps, .. definition.Recover?.Steps ?? []], "reason");
         var recovery = definition.Recover is null ? string.Empty : $", {recovering} recovering";
         IReadOnlyList<string> agents = resolved.Providers is { } providers
-            ? [.. WorkflowValidator.ModelLevels(definition, providers), .. MissingKeys(definition, providers, slot)]
+            ? [.. WorkflowValidator.ModelLevels(definition, providers), .. Prices(definition, providers), .. MissingKeys(definition, providers, slot)]
             : [];
         return new WorkflowCheck(
             name,
@@ -193,6 +194,30 @@ public sealed class WorkflowValidationService(
             Definition = definition,
             Directory = directory,
         };
+    }
+
+    /// <summary>
+    /// One line for each provider whose models a step of the definition may run on: whether each of those models has a
+    /// price, and when the provider's numbers were read - by the one line the listing says it in.
+    /// </summary>
+    private static IEnumerable<string> Prices(WorkflowDefinition definition, DssHarness.Core.Agents.AgentProviders providers)
+    {
+        var models = WorkflowValidator.ModelsRunOn(definition, providers);
+
+        foreach (var provider in providers.Providers)
+        {
+            var runOn = provider.Models.Where(model => models.Any(entry => ReferenceEquals(entry.Model, model))).ToList();
+
+            if (runOn.Count > 0)
+            {
+                yield return DssHarness.Core.Agents.AgentProviderReports.PriceLine(
+                    provider.Name,
+                    provider.Currency,
+                    provider.ReadOn,
+                    [.. runOn.Select(model => (model.Code, DssHarness.Core.Agents.AgentProviders.Priced(model)))],
+                    everyModel: runOn.Count == provider.Models.Count);
+            }
+        }
     }
 
     /// <summary>
