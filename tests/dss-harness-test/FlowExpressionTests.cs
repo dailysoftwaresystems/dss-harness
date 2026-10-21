@@ -463,6 +463,23 @@ public sealed class FlowExpressionTests
         Assert.Throws<UnresolvedReadException>(() => _ = Evaluate("{nowhere}", values).AsBoolean("x"));
     }
 
+    /// <summary>
+    /// A value is the run's own copy: the JSON it was made of can change after and the value does not, and the list it
+    /// hands out is a copy, so nothing that holds one - a step's runner given its work item among them - changes what
+    /// another reads.
+    /// </summary>
+    [Fact]
+    public void AValueIsItsOwnCopy_NothingOutsideItChangesIt()
+    {
+        var made = new JsonObject { ["tags"] = new JsonArray(JsonValue.Create("a")) };
+        var value = FlowValue.Of(made);
+
+        ((JsonArray)made["tags"]!).Add("from outside");
+        value.Member("tags").AsList("tags").Add("from a holder");
+
+        Assert.Equal("""{"tags":["a"]}""", value.ToNode()!.ToJsonString());
+    }
+
     /// <summary>A dotted placeholder is a path like any other: its first name is the root the reader is asked for, and the names after it are walked.</summary>
     [Fact]
     public void ADottedPlaceholder_ReadsItsRootAndWalksTheRest()

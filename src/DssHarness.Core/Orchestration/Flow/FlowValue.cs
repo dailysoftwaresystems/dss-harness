@@ -36,12 +36,17 @@ public readonly record struct FlowValue
     /// <summary>The JSON <see langword="null"/>.</summary>
     public static FlowValue Null { get; } = new(null);
 
-    /// <summary>A value as the run holds it: a scalar, a JSON array or object, or the missing marker.</summary>
+    /// <summary>
+    /// A value as the run holds it: a scalar, a JSON array or object, or the missing marker. A list or an object is
+    /// copied whole as it is taken, so the value is the run's own and nothing that keeps the JSON it was made of - a
+    /// step's output, a runner given its work item - changes it after.
+    /// </summary>
     public static FlowValue Of(object? value) => value switch
     {
         null => Null,
         Nothing marker when ReferenceEquals(marker, NothingAtAll) => Missing,
-        bool or long or double or string or JsonArray or JsonObject => new FlowValue(value),
+        bool or long or double or string => new FlowValue(value),
+        JsonArray or JsonObject => new FlowValue(((JsonNode)value).DeepClone()),
         JsonValue scalar when AsScalar(scalar) is { } plain => new FlowValue(plain),
         _ => throw new ArgumentOutOfRangeException(nameof(value), value, "A value the engine reads is a scalar, a JSON array or a JSON object."),
     };
@@ -82,12 +87,12 @@ public readonly record struct FlowValue
         => _value is bool truth ? truth : throw new UnresolvedReadException($"'{written}' is {InWords()}, and nothing is read as true or as false but true and false");
 
     /// <summary>
-    /// This value as a list, where it is one; anything else - Missing and null among them - refuses the read, for
-    /// <c>any(...)</c> looks into a list.
+    /// This value as a list, where it is one - a copy, so what changes it changes nothing the run holds; anything else -
+    /// Missing and null among them - refuses the read, for <c>any(...)</c> looks into a list.
     /// </summary>
     /// <param name="written">The value as the expression wrote it, named in the refusal.</param>
     public JsonArray AsList(string written)
-        => _value is JsonArray list ? list : throw new UnresolvedReadException($"'{written}' is {InWords()}, and any looks into a list");
+        => _value is JsonArray list ? (JsonArray)list.DeepClone() : throw new UnresolvedReadException($"'{written}' is {InWords()}, and any looks into a list");
 
     /// <summary>
     /// This value as a scalar, where it is one or is <see langword="null"/>: a comparison compares two scalars, or null,
