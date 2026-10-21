@@ -78,6 +78,7 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `list-orchestrator [<o>] [--json]` | List orchestrators, their agents and where each stands |
 | `validate-workflow [<workflow>] [--json]` | Check the workflows `workflows` in config.json declares: that each yml definition reads, holds and names files that are there (`help workflows`). Nothing is run |
 | `export-workflow <workflow> --to <dir> [--shipped] [--json]` | Copy a workflow - its yml and every file it names - into `<dir>/<workflow>/`: a declared one once it holds (12 where it does not), byte for byte, or with `--shipped` the one this tool ships, to make a version of your own. Refused (13) where that folder is there; a file that cannot be written takes back what was written |
+| `list-agent-providers [--template] [--json]` | List the agent sections config.json declares: each provider, its keys' names in the order they are tried with whether the slot holds each - `present` or `missing`, never a value - its models and whether each is priced, the tiers and the clients; exit 0 whatever is missing; `--template` prints the sections as `init` writes them into a new config, to paste into an existing one (`help agent-clients`) |
 | `delete-orchestrator <o> [--delete-evidence]` | Delete an orchestrator once no agent of it stands in the way - a live one with no worktree goes with it - and nothing is left below its directory under the worktrees root - no worktree, and no directory with a `.git` of its own, each named and refused (13) until then; its agents' evidence, transcripts, steps and sessions go only with `--delete-evidence` |
 | `check-root-litter` | Report files left loose at the root of the checkout, ignored ones included |
 | `write-anchor <id> --priority P --trigger TEXT` | Add an anchor: to the pending registry, or to done when closed |
@@ -100,7 +101,7 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `up <name> [--input name=value] [--json]` | Bring a set-up up on this machine: run the `up` command line `setUp` declares for it, at the root of the tree - a program and its arguments, no shell, a line per platform where they differ, its declared inputs filled in with what `--input` gives over their defaults (`help setups`) |
 | `down <name> [--input name=value] [--json]` | Bring a set-up down: run its `down` command line there, with the values it was brought up with; refused (13) while a leg of a run on this machine still uses it in that tree - in any of the repository's, for one the machine shares - whose last leg brings it down |
 | `host-exec --ssh <name> \| --wsl [<distro>] -- <command>` | Run a DssHarness command on an ssh host or in a WSL distribution |
-| `help [topic]` | Explain exit codes, configuration, legs, disk space, heavy-leg admission, worktrees, orchestrators, workflows, anchors, layout, secrets, tools, runners, set-ups, verdicts, mutation testing and CI legs |
+| `help [topic]` | Explain exit codes, configuration, legs, disk space, heavy-leg admission, worktrees, orchestrators, workflows, agent clients, anchors, layout, secrets, tools, runners, set-ups, verdicts, mutation testing and CI legs |
 
 Every command takes `-C, --directory <dir>` and `-v, --verbose`.
 
@@ -440,10 +441,13 @@ shown in the pull request's body and the handoff. Where a workflow has such a st
 build checks that wiring; the engine that raises the triage and writes the list is built next.
 
 A reasoning step's `effort` is one level for every model it may run on, or a map giving each its own -
-`all` for the rest and a model's code for one, so the shipped workflow runs its Claude models at
-`xhigh` and GLM 5.3 at `max`, which is the highest it takes. Each model's level is checked against
-what that model takes, and `validate-workflow` says every step's models and levels under the line
-that says it holds. A `test` step's `filter` names the tests it runs; its `filterWhen` is an
+`all` for the rest and a model's code for one, so the shipped workflow's heaviest steps run their
+Claude models at `xhigh` and GLM 5.3 at `max`, which is the highest it takes, and its other agents
+every model at one level - `high`, or `low` on the `fast` tier. Each model's level is checked against
+what that model takes, and `validate-workflow` says, under the line that says a definition holds,
+every step's models and levels, each provider's prices for the models its steps may run on and the
+date they were read, and each key a step's model would read that the slot lacks. A `test` step's
+`filter` names the tests it runs; its `filterWhen` is an
 expression that switches it - where it reads false the step gives no filter and every test of its
 legs runs, as the shipped `verify` steps do where the run's input `affectedTests` is off, each item
 tested on its own tests only where the run turns it on (`--input affectedTests=on`).

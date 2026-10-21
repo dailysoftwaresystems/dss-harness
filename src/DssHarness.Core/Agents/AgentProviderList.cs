@@ -8,7 +8,7 @@ namespace DssHarness.Core.Agents;
 /// <param name="Slot">The slot's path, relative to the repository's root.</param>
 /// <param name="Files">How many files the slot holds.</param>
 /// <param name="Providers">Each provider the configuration declares, in the order it lists them.</param>
-/// <param name="BalanceKeyUsage">Whether <c>balanceKeyUsage</c> balances each provider's keys.</param>
+/// <param name="BalanceKeyUsage">Whether <c>balanceKeyUsage</c> is on: whether the engine, when it runs a run's steps, is to balance each provider's keys by what each spent.</param>
 /// <param name="Tiers">Each tier the configuration defines, with its models in the order they are tried.</param>
 /// <param name="Clients">Each client a provider names, with how it signs in and the names it appoints.</param>
 /// <param name="Unappointed">The names the slot holds that nothing appoints, in the order their files are read.</param>
@@ -70,8 +70,8 @@ public sealed record AgentModelListing(
 public sealed record AgentTierListing(string Name, IReadOnlyList<(string Code, string Name)> Models);
 
 /// <summary>
-/// One client as the listing holds it: how it signs in, and the names it appoints - by its <c>token</c>, until the
-/// configuration's clients are read (their section is later work) - with whether the slot holds each.
+/// One client as the listing holds it: how it signs in, and the names it appoints with whether the slot holds each -
+/// none for a client that signs in with the machine's login, its provider's keys for one that signs each request.
 /// </summary>
 /// <param name="Name">The client's name, as its providers name it.</param>
 /// <param name="SignIn">How it signs in, said as the listing says it.</param>

@@ -175,6 +175,35 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The agent-clients topic says what this build does with keys and what it leaves to the engine: claude-code reads
+    /// none, choosing one is the engine's and no command runs a step, and validate-workflow says the prices and the
+    /// missing keys of a definition's steps - and the workflows topic that a step's tier is one of tierConfig's.
+    /// </summary>
+    [Fact]
+    public async Task AgentClientsTopic_SaysChoosingAKeyIsTheEngines_AndWhatValidateWorkflowSays_AndAStepsTierIsTierConfigs()
+    {
+        var prose = Prose.Words(HelpText.Of("agent-clients").StandardOutput);
+
+        Assert.Contains(
+            "A client that signs in with the machine's login - claude-code - reads no key at all. Choosing a key is the engine's, "
+                + "when it runs a run's steps, and no command of this build runs a step: a step is to start on the first key the slot holds,",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "validate-workflow says, under the line that says a definition holds, every step's models and levels, each provider's "
+                + "prices for the models its steps may run on and the date they were read, and each key a step's model would read that "
+                + "the slot lacks, with the steps that would read it.",
+            prose,
+            StringComparison.Ordinal);
+
+        // A step's tier is one of tierConfig's, the section the configuration holds tiers under.
+        Assert.Contains(
+            "reason.tier a name for a class of model: one of the configuration's tierConfig, its models in the order they are tried",
+            Prose.Words(HelpText.Of("workflows").StandardOutput),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The agent-clients topic says which Claude Code the tool uses and why - npm's, and never a native launcher -,
     /// that a run which needs it needs npm, what the tool runs to install it and bring it up to date, what it never
     /// runs - beside a session of that installation alone, a claude installed otherwise not counting -, that a slot

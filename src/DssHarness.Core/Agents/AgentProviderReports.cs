@@ -12,8 +12,14 @@ public static class AgentProviderReports
 {
     private static readonly JsonSerializerOptions JsonOptions = ReportJson.Options;
 
-    /// <summary>The widths of the table's columns: a longer value shifts its row, never a shorter one truncates.</summary>
+    /// <summary>
+    /// The widths of the table's columns, each two spaces past its longest usual value: a longer value shifts the rest
+    /// of its row, two spaces still after it, and never truncates.
+    /// </summary>
     private static readonly int[] Columns = [11, 11, 30, 13, 28];
+
+    /// <summary>The fewest spaces after a column's value, where it is as long as its column or longer.</summary>
+    private const int Gap = 2;
 
     /// <summary>What <c>list-agent-providers</c> reports, or the sections as <c>init</c> writes them where asked.</summary>
     /// <param name="list">The listing, every problem already refused.</param>
@@ -121,9 +127,11 @@ public static class AgentProviderReports
                     string.Join(", ", provider.Models.Select(model => model.Code))));
             }
 
+            // Choosing a key is the engine's, when it runs a run's steps: the line says what it is to do, and that no
+            // command of this build does it.
             lines.Add(list.BalanceKeyUsage
-                ? "keys are balanced by what each spent (balanceKeyUsage is on)"
-                : "keys are tried in each provider's order (balanceKeyUsage is off)");
+                ? "balanceKeyUsage is on: a run's steps are to take the key that spent least - no command runs a step in this build"
+                : "balanceKeyUsage is off: a run's steps are to take each provider's keys in order - no command runs a step in this build");
         }
 
         foreach (var provider in list.Providers)
@@ -197,14 +205,19 @@ public static class AgentProviderReports
             _ => $"{string.Join(", ", items.ToArray()[..^1])} and {items[^1]}",
         };
 
-    /// <summary>One row of the table: every column but the last padded to its width, the last said as it is.</summary>
+    /// <summary>
+    /// One row of the table: every column but the last padded to its width, or past its value by the gap where the value
+    /// is as long or longer, the last said as it is.
+    /// </summary>
     private static string Row(params string[] cells)
     {
         var row = new StringBuilder();
 
         for (var at = 0; at < cells.Length; at++)
         {
-            row.Append(at < Columns.Length && at < cells.Length - 1 ? cells[at].PadRight(Columns[at]) : cells[at]);
+            row.Append(at < Columns.Length && at < cells.Length - 1
+                ? cells[at].PadRight(Math.Max(Columns[at], cells[at].Length + Gap))
+                : cells[at]);
         }
 
         return row.ToString().TrimEnd();
