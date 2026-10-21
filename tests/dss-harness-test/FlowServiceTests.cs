@@ -1918,26 +1918,43 @@ public sealed class FlowServiceTests
 
         using var child = Process.Start(start)!;
         var lines = new BlockingCollection<string>();
+        var said = new ConcurrentQueue<string>();
+        var errors = new ConcurrentQueue<string>();
         child.OutputDataReceived += (_, line) =>
         {
             if (line.Data is { } data)
             {
+                said.Enqueue(data);
                 lines.Add(data);
             }
         };
+        child.ErrorDataReceived += (_, line) =>
+        {
+            if (line.Data is { } data)
+            {
+                errors.Enqueue(data);
+            }
+        };
         child.BeginOutputReadLine();
+        child.BeginErrorReadLine();
+
+        // What the child is and said, for a failure to name: whether it ended and with what, every line of its output
+        // and of its error stream.
+        string Child()
+            => $"the child {(child.HasExited ? $"exited {child.ExitCode.ToString(CultureInfo.InvariantCulture)}" : "is still running")}; "
+                + $"it said: [{string.Join(" | ", said)}]; its error stream: [{string.Join(" | ", errors)}]";
 
         try
         {
-            Assert.Equal("started two", Next(lines, line => line.StartsWith("started two", StringComparison.Ordinal)));
+            Assert.Equal("started two", Next(lines, line => line.StartsWith("started two", StringComparison.Ordinal), Child));
             Assert.Equal(0, kill(child.Id, Interrupt));
-            Assert.StartsWith("interrupted: a safe pause was asked", Next(lines, line => line.StartsWith("interrupted", StringComparison.Ordinal)), StringComparison.Ordinal);
-            Assert.True(child.WaitForExit(Bound), "the child ended once the run was paused");
+            Assert.StartsWith("interrupted: a safe pause was asked", Next(lines, line => line.StartsWith("interrupted", StringComparison.Ordinal), Child), StringComparison.Ordinal);
+            Assert.True(child.WaitForExit(Bound), $"the child ended once the run was paused; {Child()}");
 
             var run = RunOf(repository);
             var flow = repository.Harness.OrchestrationStore.ReadFlow(run)!;
 
-            Assert.Equal(HarnessExit.Cancelled, child.ExitCode);
+            Assert.True(child.ExitCode == HarnessExit.Cancelled, Child());
             Assert.Equal("Paused", flow.Status);
             Assert.Equal("interrupt", flow.Pause!.Cause);
             Assert.Null(repository.Harness.OrchestrationStore.ReadOwner(run));
@@ -1990,21 +2007,29 @@ public sealed class FlowServiceTests
         return outcome.ExitCode;
     }
 
-    /// <summary>The next line the child says that <paramref name="matches"/>, within the bound.</summary>
-    private static string Next(BlockingCollection<string> lines, Func<string, bool> matches)
+    /// <summary>The next line the child says that <paramref name="matches"/>, within the bound - or a failure naming what <paramref name="child"/> says of it.</summary>
+    private static string Next(BlockingCollection<string> lines, Func<string, bool> matches, Func<string> child)
     {
         using var bound = CancellationTokenSource.CreateLinkedTokenSource(Token);
         bound.CancelAfter(Bound);
 
-        foreach (var line in lines.GetConsumingEnumerable(bound.Token))
+        try
         {
-            if (matches(line))
+            foreach (var line in lines.GetConsumingEnumerable(bound.Token))
             {
-                return line;
+                if (matches(line))
+                {
+                    return line;
+                }
             }
         }
+        catch (OperationCanceledException) when (!Token.IsCancellationRequested)
+        {
+            // The bound passed: said below, with what the child is.
+        }
 
-        throw new InvalidOperationException("the child said nothing more");
+        Assert.Fail($"the child did not say the line looked for within {Bound.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s; {child()}");
+        return string.Empty;
     }
 
     /// <summary>A process of this test's own that sleeps for five minutes, standing for an engine.</summary>
