@@ -182,6 +182,12 @@ public sealed class FlowInterrupts(Action? stopAsked = null)
 /// drain begins at the second of them, whoever pressed the first - a terminal's signal or a front end's own key.
 /// </para>
 /// <para>
+/// A hang-up keeps the process to pause the run, but leaves nobody to read the terminal, whose writes then fail: from
+/// the hang-up on the terminal says nothing, and every line said while the session runs - an interrupt's, the poller's -
+/// is dropped where the terminal cannot take it (<see cref="Warn"/>), never an exception that ends the process part way.
+/// What happened is in the run's records.
+/// </para>
+/// <para>
 /// Windows ends a process whose console is closed whatever it answers, so the hang-up and SIGTERM are not taken there:
 /// what a closed console leaves is what a crash leaves, and the next session reclaims the run.
 /// </para>
@@ -196,6 +202,7 @@ public sealed class FlowTerminal
     private readonly Lock _gate = new();
     private ITimer? _drainTimer;
     private bool _ended;
+    private volatile bool _hungUp;
 
     /// <summary>The terminal of one session of <paramref name="command"/>.</summary>
     /// <param name="output">Says what each interrupt asked, as a line of <paramref name="command"/>.</param>
@@ -261,13 +268,45 @@ public sealed class FlowTerminal
     {
         var count = Interrupts.Pressed();
 
+        // A terminal that hung up has nobody to tell.
+        if (_hungUp)
+        {
+            return;
+        }
+
         if (count == 1)
         {
-            _output.Warn(_command, "interrupted: a safe pause was asked - the agents hand off and the machine steps finish, then the run is paused; a second interrupt stops it where it stands");
+            Warn(_output, _command, "interrupted: a safe pause was asked - the agents hand off and the machine steps finish, then the run is paused; a second interrupt stops it where it stands");
         }
         else if (count == 2)
         {
-            _output.Warn(_command, $"interrupted again: the run is stopped where it stands, and the command ends within {Seconds(_drain)} s whatever is left");
+            Warn(_output, _command, $"interrupted again: the run is stopped where it stands, and the command ends within {Seconds(_drain)} s whatever is left");
+        }
+    }
+
+    /// <summary>The terminal hung up: an interrupt of the session like any other, and the terminal says nothing from now on.</summary>
+    internal void HungUp()
+    {
+        _hungUp = true;
+        Interrupted();
+    }
+
+    /// <summary>
+    /// Says <paramref name="line"/> while a session runs - an interrupt's, the poller's: the run's records hold what
+    /// happened, so where the terminal can no longer be written to - hung up, its console closed - the line is dropped,
+    /// and never ends the session part way.
+    /// </summary>
+    internal static void Warn(IHarnessOutput output, string command, string line)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+
+        try
+        {
+            output.Warn(command, line);
+        }
+        catch (IOException)
+        {
+            // The terminal is gone: nobody reads the line.
         }
     }
 
@@ -291,7 +330,7 @@ public sealed class FlowTerminal
         if (!OperatingSystem.IsWindows())
         {
             registrations.Add(PosixSignalRegistration.Create(PosixSignal.SIGTERM, Taken));
-            registrations.Add(PosixSignalRegistration.Create(PosixSignal.SIGHUP, Taken));
+            registrations.Add(PosixSignalRegistration.Create(PosixSignal.SIGHUP, TakenHangUp));
         }
 
         return new Registrations(registrations);
@@ -302,6 +341,13 @@ public sealed class FlowTerminal
     {
         signal.Cancel = true;
         Interrupted();
+    }
+
+    /// <summary>A hang-up taken as an interrupt: the process is not ended by it, and the terminal it lost says nothing more.</summary>
+    private void TakenHangUp(PosixSignalContext signal)
+    {
+        signal.Cancel = true;
+        HungUp();
     }
 
     /// <summary>

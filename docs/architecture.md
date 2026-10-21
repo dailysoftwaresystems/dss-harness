@@ -1524,7 +1524,10 @@ of the interrupt whatever is left (`PointOfNoReturn.HardStopBound`, the drain an
 end, so the terminal never cuts off a session the engine is still ending in order) - what a crash
 leaves, which a resume goes on from. A session cut off answers as every command over its run does:
 the run and `resume-orchestrator <run>` named, every record listed in text and `--json`, and its line
-in the run's log. The engine's loop alone applies either,
+in the run's log. A hang-up keeps the process to pause the run but leaves nobody to read the
+terminal: from it on the terminal says nothing, and a line said while the session runs - an
+interrupt's, the poller's (`FlowTerminal.Warn`) - is dropped where the terminal can no longer be
+written to, never an exception that ends the process part way; the run's records hold what happened. The engine's loop alone applies either,
 and a cancellation of the session's token is the second, never a cut-off. Until the step runners
 land, the runner registered is `NoStepRunner`: each step of a run fails, saying no runner serves its
 type (its code 14).

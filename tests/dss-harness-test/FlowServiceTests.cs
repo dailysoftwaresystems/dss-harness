@@ -1186,6 +1186,51 @@ public sealed class FlowServiceTests
         Assert.Equal(HarnessExit.Cancelled, outcome.ExitCode);
     }
 
+    /// <summary>
+    /// A hang-up is the run's interrupt though nothing can be written to the terminal any more: the terminal says nothing
+    /// once it has hung up, and a line the poller says while the session runs is dropped where the terminal cannot take
+    /// it, never an exception that ends the process part way - the run pauses safely, its report written and its owner
+    /// released.
+    /// </summary>
+    [Fact]
+    public async Task AHangUp_PausesTheRunSafely_ThoughTheTerminalCanNoLongerBeWrittenTo()
+    {
+        var (repository, runner) = await RepositoryAsync(InterruptedFlow);
+        using var disposed = repository;
+        var gone = new Warned(repository.Harness.Output, _ => throw new IOException("Input/output error"));
+        var service = Service(repository.Harness, runner, output: gone);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var run = RunOf(repository);
+
+        runner.On("one", FlowStepResult.Ended(passed: true, 0));
+        runner.Holds("two", release.Task);
+
+        var terminal = new FlowTerminal(gone, FlowService.RunCommand);
+        var driving = terminal.RunAsync(
+            (interrupts, token) => service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, interrupts, token),
+            Token,
+            bindSignals: false);
+
+        await runner.WaitStartedAsync("two");
+        terminal.HungUp();
+
+        // A line the poller says to the terminal gone: what it cannot read.
+        repository.Harness.FileSystem.WriteAllTextAtomic(run.InboxFile, "not an inbox");
+        await gone.First.WaitAsync(Bound, Token);
+        File.Delete(run.InboxFile);
+        _ = release.TrySetResult();
+
+        var outcome = await driving.WaitAsync(Bound, Token);
+        var flow = repository.Harness.OrchestrationStore.ReadFlow(run)!;
+
+        Assert.Equal(HarnessExit.Cancelled, outcome.ExitCode);
+        Assert.Equal("Paused", flow.Status);
+        Assert.Equal("interrupt", flow.Pause!.Cause);
+        Assert.Null(repository.Harness.OrchestrationStore.ReadOwner(run));
+        Assert.True(File.Exists(run.ReportFile));
+        Assert.StartsWith("what was asked of the engine of run 'r1' could not be read: ", Assert.Single(gone.Warnings), StringComparison.Ordinal);
+    }
+
     /// <summary>Interrupts pressed before a session is bound count for it - the first asks its pause at once, before anything starts - and the session's end clears the count.</summary>
     [Fact]
     public async Task InterruptsPressedBeforeTheSessionIsBound_CountForIt()
@@ -2179,8 +2224,8 @@ public sealed class FlowServiceTests
         public void Warn(string command, string message)
         {
             _warnings.Enqueue(message);
-            also?.Invoke(message);
             _ = _first.TrySetResult();
+            also?.Invoke(message);
             inner.Warn(command, message);
         }
 

@@ -809,12 +809,12 @@ public sealed class FlowService(
             {
                 if (said.Add(ex.Message))
                 {
-                    _output.Warn(command, $"what was asked of the engine of run '{layout.Name}' could not be read: {ex.Message.TrimEnd('.')}; it is read again at the next poll");
+                    FlowTerminal.Warn(_output, command, $"what was asked of the engine of run '{layout.Name}' could not be read: {ex.Message.TrimEnd('.')}; it is read again at the next poll");
                 }
             }
             catch (Exception ex)
             {
-                _output.Warn(command, $"the engine of run '{layout.Name}' can no longer read what is asked of it ({ex.GetType().Name}: {ex.Message.TrimEnd('.')}); the run is asked to pause");
+                FlowTerminal.Warn(_output, command, $"the engine of run '{layout.Name}' can no longer read what is asked of it ({ex.GetType().Name}: {ex.Message.TrimEnd('.')}); the run is asked to pause");
                 coordinator.RequestPause("command");
                 return;
             }
