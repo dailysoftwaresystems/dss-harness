@@ -4034,6 +4034,15 @@ public sealed class FlowCoordinator
                 return;
             }
 
+            if (message.Instance is not null && message.Usage is { } usage)
+            {
+                // What a reason step's conversation spent as it ran, counted against the run's budget the moment it
+                // is reported - an attempt that is over among them, for what it spent was spent.
+                _spent.Usd += usage.Usd;
+                _spent.Tokens += usage.Tokens;
+                return;
+            }
+
             if (message.Instance is null || message.Attempt != message.Instance.Attempt)
             {
                 // A message of an attempt that is over - the step was stopped and runs again, or was answered - says
@@ -4053,13 +4062,6 @@ public sealed class FlowCoordinator
             else if (message.Leg is { } leg)
             {
                 TakeEvent(message.Instance, leg);
-            }
-            else if (message.Usage is { } usage)
-            {
-                // What a reason step's conversation spent as it ran, counted against the run's budget the moment it
-                // is reported.
-                _spent.Usd += usage.Usd;
-                _spent.Tokens += usage.Tokens;
             }
         }
     }

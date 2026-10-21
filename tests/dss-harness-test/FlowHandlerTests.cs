@@ -930,8 +930,11 @@ public sealed class FlowHandlerTests
             {
                 var bound = coordinator.Instances.Values.Last(instance => instance.Step.Name == "build");
 
+                // Ninety-nine visits ran; the hundredth was refused before it ran.
+                Assert.Equal(100, bound.Visit);
+                Assert.Equal(99, runner.Started.Count(started => started == "build" || started.StartsWith("build+", StringComparison.Ordinal)));
                 Assert.Equal(13, bound.Exit);
-                Assert.Contains("was visited 99 times in its scope", bound.Error, StringComparison.Ordinal);
+                Assert.Equal("'build' was visited 99 times in its scope; at most 99 visits of one step in one scope are allowed", bound.Error);
                 return;
             }
 
@@ -1083,6 +1086,34 @@ public sealed class FlowHandlerRecordsTests
     private static WorkflowDefinition Parse(string text)
         => WorkflowFileParser.Parse("workflows/flow/flow.yml", text);
 
+    /// <summary>The run's records as a test watches them: each write passed on, and a signal once a snapshot holds what the test waits for.</summary>
+    private sealed class Watched(IFlowRecords inner, Func<FlowSnapshot, bool> waitsFor) : IFlowRecords
+    {
+        private readonly TaskCompletionSource _seen = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Completes once a snapshot written holds what the test waits for.</summary>
+        public Task Seen => _seen.Task;
+
+        /// <inheritdoc/>
+        public void Write(FlowChangeKind kind, FlowSnapshot snapshot, string? instance = null, string? from = null, string? to = null, int? attempt = null, string? detail = null)
+        {
+            inner.Write(kind, snapshot, instance, from, to, attempt, detail);
+
+            if (waitsFor(snapshot))
+            {
+                _ = _seen.TrySetResult();
+            }
+        }
+
+        /// <inheritdoc/>
+        public void Question(IReadOnlyList<FlowQuestionEntry> questions)
+            => inner.Question(questions);
+
+        /// <inheritdoc/>
+        public void PreExisting(IReadOnlyList<PreExistingIssue> issues, DateTimeOffset at)
+            => inner.PreExisting(issues, at);
+    }
+
     /// <summary>A runner that answers each step as its test scripted it, holding open the steps the test wants to time.</summary>
     private sealed class Runner : IFlowStepRunner
     {
@@ -1226,12 +1257,13 @@ public sealed class FlowHandlerRecordsTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+            var watched = new Watched(records, snapshot => snapshot.Redirect is not null);
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: watched);
             var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
 
             // The group is in flight when the handler ends done and names it: the redirect is owed, and nothing it
             // resets is cancelled.
-            await Task.Delay(50, TestContext.Current.CancellationToken);
+            await watched.Seen.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
             coordinator.RequestPause("interrupt");
             _ = runner.Release("member");
             var end = await session;
@@ -1283,10 +1315,12 @@ public sealed class FlowHandlerRecordsTests
 
         using (records)
         {
-            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+            var watched = new Watched(records, snapshot => snapshot.Redirect is not null);
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: watched);
             var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
 
-            await Task.Delay(50, TestContext.Current.CancellationToken);
+            // The redirect is owed once the handler has ended done and named the group in flight.
+            await watched.Seen.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
             coordinator.RequestPause("interrupt");
             _ = runner.Release("member");
             var end = await session;

@@ -29,6 +29,9 @@ public sealed class FlowCoordinatorTests
         /// <summary>Every run asked, with the scope it was given.</summary>
         public List<FlowStepRun> Runs { get; } = [];
 
+        /// <summary>The token each instance's last attempt was given, by instance.</summary>
+        public Dictionary<string, CancellationToken> Tokens { get; } = new(StringComparer.Ordinal);
+
         /// <summary>Answers <paramref name="step"/> with one result, every time it is asked.</summary>
         public FakeRunner On(string step, FlowStepResult result)
         {
@@ -101,6 +104,12 @@ public sealed class FlowCoordinatorTests
         {
             Started.Add(run.Instance);
             Runs.Add(run);
+
+            lock (Tokens)
+            {
+                Tokens[run.Instance] = cancellationToken;
+            }
+
             StartOf(run.Instance).TrySetResult();
 
             return _scripts.GetValueOrDefault(run.Step.Name, _ => Task.FromResult(FlowStepResult.Ended(passed: true, HarnessExit.Success)))(run);
@@ -1156,22 +1165,34 @@ public sealed class FlowCoordinatorTests
                 type: orient
                 always: true
             """);
-        var runner = new FakeRunner();
-        var broke = runner.Hold("broke");
+        var cancel = TestContext.Current.CancellationToken;
+
+        // A gate made without asynchronous continuations: the failure is posted before its completion returns.
+        var broke = new TaskCompletionSource<FlowStepResult>();
+        var runner = new FakeRunner().OnAsync("broke", _ => broke.Task);
         var slow = runner.Hold("slow");
         var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
-        var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
-        await runner.StartedAsync("broke");
-        await runner.StartedAsync("slow");
+        var session = coordinator.RunAsync(cancel);
+        await runner.StartedAsync("broke").WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        await runner.StartedAsync("slow").WaitAsync(TimeSpan.FromSeconds(30), cancel);
 
-        broke.Fail(HarnessExit.CommandFailed, "the read failed");
+        _ = broke.TrySetResult(FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "the read failed"));
+        await coordinator.SettledAsync(cancel);
 
-        // The failure stopped the run: nothing more starts, and what is in flight runs to its end before the always
-        // step runs.
+        // The failure stopped the run: nothing more starts, and what is in flight is left to run to its end - never
+        // cancelled - before the always step runs.
+        lock (runner.Tokens)
+        {
+            Assert.False(runner.Tokens["slow"].IsCancellationRequested);
+        }
+
+        Assert.DoesNotContain("teardown", runner.Started);
         slow.Done();
-        await runner.StartedAsync("teardown");
-        var end = await session;
+        await runner.StartedAsync("teardown").WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["slow"].State);
 
         Assert.Equal(FlowInstanceState.NotRun, coordinator.Instances["after"].State);
         Assert.Equal("a step it depends on failed and was neither handled nor passed over", coordinator.Instances["after"].NotRunBecause);
@@ -1633,6 +1654,106 @@ public sealed class FlowCoordinatorTests
         Assert.Equal(FlowInstanceState.Failed, coordinator.Instances["failing-always"].State);
         Assert.Equal(FlowInstanceState.Done, coordinator.Instances["reading-always"].State);
         Assert.Equal(FlowRunStatus.Failed, end.Status);
+    }
+
+    /// <summary>
+    /// A group takes the failure of its first member in declaration order, whatever order the endings were read in: a
+    /// later member's failure read first is replaced by the earlier member's code and words.
+    /// </summary>
+    [Fact]
+    public async Task AGroupTakesItsFirstDeclaredFailingMembersCode_WhateverOrderTheyEnded()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: block
+                steps:
+                  - name: first
+                    type: orient
+                  - name: second
+                    type: orient
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+
+        // Gates made without asynchronous continuations: each ending is posted before its completion returns.
+        var first = new TaskCompletionSource<FlowStepResult>();
+        var second = new TaskCompletionSource<FlowStepResult>();
+        var runner = new FakeRunner()
+            .OnAsync("first", _ => first.Task)
+            .OnAsync("second", _ => second.Task);
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var session = coordinator.RunAsync(cancel);
+        await runner.StartedAsync("block.first").WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        await runner.StartedAsync("block.second").WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        // The second member's failure is read first; the first member, still running, is left to end - and fails too.
+        _ = second.TrySetResult(FlowStepResult.Ended(passed: false, HarnessExit.ConfigInvalid, "the second's config"));
+        await coordinator.SettledAsync(cancel);
+        _ = first.TrySetResult(FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "the first's command"));
+
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        var block = coordinator.Instances["block"];
+        Assert.Equal(FlowInstanceState.Failed, block.State);
+        Assert.Equal(HarnessExit.CommandFailed, block.Exit);
+        Assert.Equal(FlowRunStatus.Failed, end.Status);
+    }
+
+    /// <summary>
+    /// A completion that comes from an attempt that is over - one a stop gave up on once its drain bound passed - is
+    /// dropped: it says nothing of the attempt the run is on now, which ends as its own runner says.
+    /// </summary>
+    [Fact]
+    public async Task ALateCompletionOfAnEarlierAttempt_IsDropped()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: compile
+                type: build
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+
+        // Gates made without asynchronous continuations, and runners deaf to the stop: the first attempt runs on
+        // after it, and its ending is posted before its completion returns.
+        var first = new TaskCompletionSource<FlowStepResult>();
+        var second = new TaskCompletionSource<FlowStepResult>();
+        var secondStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new FakeRunner().OnAsync("compile", run =>
+        {
+            if (run.Attempt == 1)
+            {
+                return first.Task;
+            }
+
+            _ = secondStarted.TrySetResult();
+            return second.Task;
+        });
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var session = coordinator.RunAsync(cancel);
+        await runner.StartedAsync("compile").WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        coordinator.RequestStop();
+        var stopped = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Stopped, stopped.Status);
+
+        session = coordinator.RunAsync(cancel);
+        await secondStarted.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        // The first attempt's runner ends at last, failed: the run is on the second attempt, which it says nothing of.
+        _ = first.TrySetResult(FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "the first attempt's late end"));
+        await coordinator.SettledAsync(cancel);
+        _ = second.TrySetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
+
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        var compile = coordinator.Instances["compile"];
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(FlowInstanceState.Done, compile.State);
+        Assert.Equal(2, compile.Attempt);
+        Assert.Null(compile.Error);
     }
 
     /// <summary>

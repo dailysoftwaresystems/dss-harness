@@ -30,6 +30,9 @@ public sealed class FlowPauseTests
         /// <summary>Every instance asked, in the order the coordinator started it.</summary>
         public List<string> Started { get; } = [];
 
+        /// <summary>Every run asked, in the order the coordinator started it: what each attempt was given.</summary>
+        public List<FlowStepRun> Runs { get; } = [];
+
         /// <summary>Waits until the coordinator has asked for <paramref name="instance"/> once.</summary>
         public Task StartedAsync(string instance)
             => StartOf(instance).Task;
@@ -124,6 +127,12 @@ public sealed class FlowPauseTests
         public async Task<FlowStepResult> RunAsync(FlowStepRun run, CancellationToken cancellationToken)
         {
             Started.Add(run.Instance);
+
+            lock (Runs)
+            {
+                Runs.Add(run);
+            }
+
             StartOf(run.Instance).TrySetResult();
 
             if (_scripts.TryGetValue(run.Step.Name, out var script))
@@ -1507,6 +1516,51 @@ public sealed class FlowPauseTests
 
         Assert.Equal(FlowRunStatus.Done, end.Status);
         Assert.Equal(["think", "think", "after"], runner.Started);
+    }
+
+    /// <summary>
+    /// What an attempt's conversation reports it spent after the attempt was stopped still counts against the budget,
+    /// for it was spent: a late report of the attempt before reaches the reserve while the next one runs.
+    /// </summary>
+    [Fact]
+    public async Task WhatAnEarlierAttemptSpent_StillCountsAgainstTheBudget()
+    {
+        var definition = Parse("""
+            name: flow
+            budget:
+              tokens: 10000
+              reservePercent: 10
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner().HandsOff("think", "half way through");
+        _ = runner.Hold("think");
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var session = coordinator.RunAsync(cancel);
+        await runner.StartedAsync("think").WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        coordinator.RequestPause("interrupt");
+        _ = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        // The first attempt's conversation says what it spent once its attempt is over; the resume's attempt runs.
+        FlowStepRun first;
+
+        lock (runner.Runs)
+        {
+            first = runner.Runs.Single();
+        }
+
+        first.Events.Used(tokens: 9_000, usd: 0);
+
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Equal("budget", end.Pause!.Cause);
+        Assert.Equal("the run has spent 9000 of 10000 tokens (its reserve of 10% was reached)", Assert.Single(coordinator.OpenQuestions).Problem);
     }
 
     /// <summary>The tokens a reason step reports count against the run's budget as its dollars do, and an amount exactly at its reserve has reached it.</summary>

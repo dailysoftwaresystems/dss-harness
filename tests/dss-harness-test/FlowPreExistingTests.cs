@@ -75,13 +75,51 @@ public sealed class FlowPreExistingTests
         {
             Started.Add((run.Instance, run.Issue?.Title));
 
-            return await _scripts.GetValueOrDefault(run.Step.Name, _ => Task.FromResult(FlowStepResult.Ended(passed: true, HarnessExit.Success)))(run);
+            // A held step hears the stop, as a machine step's runner does: one a stop or a pause that says all cancels
+            // ends there, and is not left to run out the stop's drain bound.
+            return await _scripts.GetValueOrDefault(run.Step.Name, _ => Task.FromResult(FlowStepResult.Ended(passed: true, HarnessExit.Success)))(run)
+                .WaitAsync(cancellationToken);
         }
 
         /// <inheritdoc/>
         public Task<string?> HandoffAsync(FlowStepRun run, CancellationToken cancellationToken)
             => Task.FromResult<string?>(null);
     }
+
+    /// <summary>
+    /// The run's records as a test watches them: each write passed on where the run keeps records, and a signal once a
+    /// snapshot holds what the test waits for.
+    /// </summary>
+    private sealed class Watched(IFlowRecords? inner, Func<FlowSnapshot, bool> waitsFor) : IFlowRecords
+    {
+        private readonly TaskCompletionSource _seen = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Completes once a snapshot written holds what the test waits for.</summary>
+        public Task Seen => _seen.Task;
+
+        /// <inheritdoc/>
+        public void Write(FlowChangeKind kind, FlowSnapshot snapshot, string? instance = null, string? from = null, string? to = null, int? attempt = null, string? detail = null)
+        {
+            inner?.Write(kind, snapshot, instance, from, to, attempt, detail);
+
+            if (waitsFor(snapshot))
+            {
+                _ = _seen.TrySetResult();
+            }
+        }
+
+        /// <inheritdoc/>
+        public void Question(IReadOnlyList<FlowQuestionEntry> questions)
+            => inner?.Question(questions);
+
+        /// <inheritdoc/>
+        public void PreExisting(IReadOnlyList<PreExistingIssue> issues, DateTimeOffset at)
+            => inner?.PreExisting(issues, at);
+    }
+
+    /// <summary>Whether both triage instances of a run had ended done when <paramref name="snapshot"/> was written.</summary>
+    private static bool BothTriaged(FlowSnapshot snapshot)
+        => snapshot.Steps.Count(step => step.Step == "triage" && step.State == FlowInstanceState.Done) == 2;
 
     /// <summary>The runners a workflow names, as a test answers them.</summary>
     private sealed class RunnerFacts : IFlowRunnerFacts
@@ -243,25 +281,15 @@ public sealed class FlowPreExistingTests
         var runner = new FakeRunner()
             .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("a broken test"), Issue("a stale document")]));
         runner.Hold("later");
+        runner.On("triage", run => Course(run.Issue!.Title == "a broken test" ? "list" : "unproven", run.Issue.Title));
 
-        // The second issue's answer settles the tally: what waited on the reporter goes on only after it, so the
-        // run's words are settled when they are read.
-        var settled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        runner.On("triage", run =>
-        {
-            var answer = Course(run.Issue!.Title == "a broken test" ? "list" : "unproven", run.Issue.Title);
+        // Both issues' answers settle the tally: what waited on the reporter goes on only once the run has recorded
+        // both triages ended - its own loop reads the release after them - so the run's words are settled when read.
+        var watched = new Watched(null, BothTriaged);
+        _ = watched.Seen.ContinueWith(_ => runner.Release("later"), TaskScheduler.Default);
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
 
-            if (run.Instance == "triage+2")
-            {
-                _ = settled.TrySetResult();
-            }
-
-            return answer;
-        });
-        runner.ReleaseWhen("later", settled);
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
-
-        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
         Assert.Equal(FlowRunStatus.Paused, end.Status);
 
@@ -425,17 +453,22 @@ public sealed class FlowPreExistingTests
             .On("second", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("the second hole")]))
             .On("triage", run => Course("fix", run.Issue!.Title));
         runner.Hold("mend");
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var watched = new Watched(null, snapshot => BothTriaged(snapshot)
+            && snapshot.Steps.Any(step => step.Instance == "recover.mend" && step.State == FlowInstanceState.Running));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
+        var cancel = TestContext.Current.CancellationToken;
 
-        var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
-        await Task.Delay(100, TestContext.Current.CancellationToken);
+        var session = coordinator.RunAsync(cancel);
+        await watched.Seen.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        await coordinator.SettledAsync(cancel);
 
-        // One recovery is at work on the first issue; the second's fix waits for its end.
-        var atWork = coordinator.Instances.Values.Where(instance => instance.Step.Name == "recover").ToList();
-        Assert.Single(atWork, instance => instance.State == FlowInstanceState.Running);
+        // One recovery is at work on the first issue; the second's fix waits for its end, and no second visit is made
+        // while the first works.
+        Assert.Equal(FlowInstanceState.Running, coordinator.Instances["recover"].State);
+        Assert.False(coordinator.Instances.ContainsKey("recover+2"));
 
         _ = runner.Release("mend");
-        var end = await session;
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
 
         // Both issues were fixed, one recovery at a time, and the run ends done.
         Assert.Equal(FlowRunStatus.Done, end.Status);
@@ -675,12 +708,14 @@ public sealed class FlowPreExistingTests
         FlowResumeState taken;
         using (var records = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
         {
-            var coordinator = new FlowCoordinator(definition, first, new RunnerFacts(), clock, records: records);
+            var watched = new Watched(records, BothTriaged);
+            var coordinator = new FlowCoordinator(definition, first, new RunnerFacts(), clock, records: watched);
             var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
 
-            await Task.Delay(100, TestContext.Current.CancellationToken);
+            // Both issues are triaged - the pause is read by the run's own loop after both answers - and then it pauses.
+            await watched.Seen.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
             coordinator.RequestPause("interrupt", all: true);
-            var end = await session;
+            var end = await session.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
             Assert.Equal(FlowRunStatus.Paused, end.Status);
 
