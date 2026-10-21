@@ -237,6 +237,23 @@ public sealed record FlowHandoffRecord(string By, string? Why = null)
     /// </summary>
     public const string EngineMark = "Written by the engine: ";
 
+    /// <summary>
+    /// The record of a handoff whose text is <paramref name="text"/>, read from its first line: the engine's where the
+    /// line carries <see cref="EngineMark"/>, why being the rest of it - as <see cref="FlowHandoff.ByEngine"/> writes it -
+    /// and the agent's otherwise.
+    /// </summary>
+    /// <param name="text">The handoff's text, whole.</param>
+    public static FlowHandoffRecord Of(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+
+        var first = text.Split('\n', 2)[0].TrimEnd('\r');
+
+        return first.StartsWith(EngineMark, StringComparison.Ordinal)
+            ? new FlowHandoffRecord("engine", first[EngineMark.Length..].TrimEnd('.'))
+            : new FlowHandoffRecord("agent");
+    }
+
     /// <summary>What is wrong with this record; null when nothing is.</summary>
     public string? Problem()
         => By is not ("agent" or "engine") ? $"'{By}' is not who writes a handoff"

@@ -763,14 +763,12 @@ public sealed class FlowCoordinator
                 {
                     // The attempt before was cut off and left no handoff - a crash ended the engine, or a stop ended
                     // the run - so the engine writes one, for the next attempt is told what the cut-off one had done,
-                    // on every client and after every kind of stop.
-                    var why = was is FlowInstanceState.Running ? "the engine's process ended" : "the run was stopped";
-
-                    stopped.Handoff = new FlowHandoff(
-                        $"Written by the engine: {why}; attempt {stopped.Attempt.ToString(System.Globalization.CultureInfo.InvariantCulture)} was cut off.",
-                        "engine",
-                        why);
-                    Record(FlowChangeKind.Handoff, stopped, detail: why);
+                    // on every client and after every kind of stop. One the attempt still held - an agent's account no
+                    // prompt holds yet - is never written over: the next attempt is given it.
+                    stopped.Handoff = FlowHandoff.ByEngine(
+                        was is FlowInstanceState.Running ? "the engine's process ended" : "the run was stopped",
+                        $"Attempt {stopped.Attempt.ToString(System.Globalization.CultureInfo.InvariantCulture)} was cut off.");
+                    Record(FlowChangeKind.Handoff, stopped, detail: stopped.Handoff.Why);
                 }
 
                 NewAttempt(stopped);
@@ -1055,10 +1053,18 @@ public sealed class FlowCoordinator
                 }
 
                 // Where the agent gave none the engine writes it, saying why in its first line: the bound passed, the
-                // turn failed - with what it failed with - or the agent's answer held nothing.
+                // turn failed - with what it failed with - or the agent's answer held nothing. An agent's account the
+                // attempt still holds - an earlier pause wrote it, and no prompt holds it yet - is never written over
+                // by the engine's: it stands as written, for the next attempt, and this pause wrote none.
+                if (accounts[at].Text is not { Length: > 0 } && instance.Handoff is { By: "agent" })
+                {
+                    Record(FlowChangeKind.Step, instance, from: FlowInstanceState.Running, to: FlowInstanceState.Stopped, attempt: instance.Attempt, detail: "its handoff stands as the agent wrote it");
+                    continue;
+                }
+
                 instance.Handoff = accounts[at].Text is { Length: > 0 } written
                     ? new FlowHandoff(written, "agent")
-                    : new FlowHandoff($"Written by the engine: {accounts[at].Why}", "engine", accounts[at].Why);
+                    : FlowHandoff.ByEngine(accounts[at].Why);
                 _pause._handoffs.Add(instance.Id);
                 Record(FlowChangeKind.Handoff, instance, detail: instance.Handoff.By);
             }
@@ -5719,9 +5725,10 @@ public sealed class FlowCoordinator
                 || instance.Failure is FlowFailure.PassedOver or FlowFailure.EndedRun or FlowFailure.TakenByGroup
                 || instance.HandledBy is not null;
 
-            if (instance.State is FlowInstanceState.Stopped && record.Handoff is { } handoff)
+            if (instance.State is FlowInstanceState.Stopped or FlowInstanceState.Running && record.Handoff is { } handoff)
             {
-                // The handoff the stop left is in the step's own directory; the resume is given it where it is.
+                // The handoff the stop left is in the step's own directory - and so is one an attempt a crash cut off
+                // still held, no prompt holding it yet: the resume is given it where it is, never one in its place.
                 instance.Handoff = from.Handoffs.TryGetValue(instance.Id, out var text)
                     ? new FlowHandoff(text, handoff.By, handoff.Why)
                     : null;

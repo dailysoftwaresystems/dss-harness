@@ -265,7 +265,7 @@ public sealed class FlowPauseTests
             """);
         var runner = new FakeRunner();
         _ = runner.Hold("think");
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock());
 
         var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
         await runner.StartedAsync("think");
@@ -276,7 +276,7 @@ public sealed class FlowPauseTests
         var think = coordinator.Instances["think"];
         Assert.Equal(FlowInstanceState.Stopped, think.State);
         Assert.Equal("engine", think.Handoff!.By);
-        Assert.Equal("Written by the engine: the agent's answer to its handoff turn held no account", think.Handoff.Text);
+        Assert.Equal("Written by the engine: the agent's answer to its handoff turn held no account.", think.Handoff.Text);
         Assert.Equal("the agent's answer to its handoff turn held no account", think.Handoff.Why);
         Assert.Equal(["think"], end.Pause!.Handoffs);
     }
@@ -311,7 +311,7 @@ public sealed class FlowPauseTests
         Assert.Equal(FlowRunStatus.Paused, end.Status);
         var think = coordinator.Instances["think"];
         Assert.Equal("engine", think.Handoff!.By);
-        Assert.Equal($"Written by the engine: the agent's handoff turn passed its {seconds} s", think.Handoff.Text);
+        Assert.Equal($"Written by the engine: the agent's handoff turn passed its {seconds} s.", think.Handoff.Text);
         Assert.Equal($"the agent's handoff turn passed its {seconds} s", think.Handoff.Why);
     }
 
@@ -330,7 +330,7 @@ public sealed class FlowPauseTests
         var cancel = TestContext.Current.CancellationToken;
         var runner = new FakeRunner().HandoffFails("think", "the client's process ended");
         _ = runner.Hold("think");
-        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new ManualClock());
 
         var session = coordinator.RunAsync(cancel);
         await runner.StartedAsync("think").WaitAsync(TimeSpan.FromSeconds(30), cancel);
@@ -340,7 +340,7 @@ public sealed class FlowPauseTests
 
         var think = coordinator.Instances["think"];
         Assert.Equal("engine", think.Handoff!.By);
-        Assert.Equal("Written by the engine: the agent's handoff turn failed: the client's process ended", think.Handoff.Text);
+        Assert.Equal("Written by the engine: the agent's handoff turn failed: the client's process ended.", think.Handoff.Text);
         Assert.Equal("the agent's handoff turn failed: the client's process ended", think.Handoff.Why);
     }
 

@@ -1438,9 +1438,14 @@ step's own whole wherever there is one, keeping the index's order and adopting w
 directory holds at the end. The graph is rebuilt in that order, never sorted again - `build+10` after
 `build+2`, `rounds#10` after `rounds#2`, a loop's later visit (`rounds+2`) and its items as their own,
 a block's members whatever the block ended - and a record whose scope never comes, or whose state the
-engine does not name, is refused rather than taken for one that runs again; it takes back a handoff a crash left beside its record, and refuses -
-naming the file - a record that names a handoff that is gone, and a missing `questions.json` or
-`pre-existing-issues.json`, never made again empty.
+engine does not name, is refused rather than taken for one that runs again. It takes back a handoff a
+crash left beside its record - the engine's where its first line says so and why, as the engine
+writes every handoff of its own (`FlowHandoff.ByEngine`, read back by `FlowHandoffRecord.Of`), the
+agent's otherwise - reads each handoff back as it was handed, and refuses - naming the file - a record
+that names a handoff that is gone, and a missing `questions.json` or `pre-existing-issues.json`,
+never made again empty. A handoff an attempt still held when it was cut off - an agent's account no
+prompt holds yet, stopped or running - is given to the next attempt; neither a later pause whose turn
+gives none nor the resume writes the engine's over it.
 
 The session then goes on from those records alone, where the run stood, whatever ended the last one
 and whichever engine wrote them. Every question in `questions.json` comes back with every answer it

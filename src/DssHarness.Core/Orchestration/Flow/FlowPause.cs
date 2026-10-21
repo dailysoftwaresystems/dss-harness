@@ -20,7 +20,25 @@ public sealed record FlowPauseRequest(string Cause, bool All)
 /// <param name="Text">The handoff's text, as the step's next attempt is given it.</param>
 /// <param name="By">Who wrote it: <c>agent</c> or <c>engine</c>.</param>
 /// <param name="Why">Why the engine wrote it, where it did: the bound the handoff turn was given, the run stopped, or the engine's process ended.</param>
-public sealed record FlowHandoff(string Text, string By, string? Why = null);
+public sealed record FlowHandoff(string Text, string By, string? Why = null)
+{
+    /// <summary>
+    /// The handoff the engine writes where the agent gave none - the one way it writes one: its first line says so and
+    /// why (<see cref="FlowHandoffRecord.EngineMark"/>), the rest is what it holds. Why is said on that one line, its
+    /// breaks and its closing stop taken out, so what <see cref="FlowHandoffRecord.Of"/> reads back from the text is the
+    /// record this handoff is written with.
+    /// </summary>
+    /// <param name="why">Why the engine wrote it: the bound passed, the turn failed and with what, the run stopped, the engine's process ended.</param>
+    /// <param name="body">What it holds beyond why, on the lines after; null where nothing.</param>
+    public static FlowHandoff ByEngine(string why, string? body = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(why);
+
+        var said = string.Join(' ', why.Split([' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries)).TrimEnd('.');
+
+        return new FlowHandoff($"{FlowHandoffRecord.EngineMark}{said}.{(body is null ? string.Empty : "\n" + body)}", "engine", said);
+    }
+}
 
 /// <summary>
 /// What a run's reasoning has spent against its budget: what the clients reported in tokens and dollars, and the time

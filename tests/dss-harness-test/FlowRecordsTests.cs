@@ -422,6 +422,22 @@ public sealed class FlowRecordsTests
         Assert.True(flow > record, "the run's state is written after the step's own files");
     }
 
+    /// <summary>
+    /// A handoff the engine writes says so and why in its first line, and what its text reads back as is the record it
+    /// was written with - why whole, whatever breaks or closing stop it was given with, and what it holds after.
+    /// </summary>
+    [Theory]
+    [InlineData("the run was stopped", "Attempt 1 was cut off.", "Written by the engine: the run was stopped.\nAttempt 1 was cut off.", "the run was stopped")]
+    [InlineData("the agent's handoff turn failed: the client ended.\r\nexit 3.", null, "Written by the engine: the agent's handoff turn failed: the client ended. exit 3.", "the agent's handoff turn failed: the client ended. exit 3")]
+    public void AHandoffTheEngineWrites_ReadsBackAsTheRecordItWasWrittenWith(string why, string? body, string text, string said)
+    {
+        var handoff = FlowHandoff.ByEngine(why, body);
+
+        Assert.Equal(new FlowHandoff(text, "engine", said), handoff);
+        Assert.Equal(new FlowHandoffRecord("engine", said), FlowHandoffRecord.Of(handoff.Text));
+        Assert.Equal(new FlowHandoffRecord("agent"), FlowHandoffRecord.Of("Written by the agent: what it did"));
+    }
+
     /// <summary>The issues a change lists are written after the run's state and its status and before the event that tells of it: the order of every change of a run.</summary>
     [Fact]
     public void TheIssuesAChangeListsAreWrittenAfterTheStatus_BeforeTheEvent()

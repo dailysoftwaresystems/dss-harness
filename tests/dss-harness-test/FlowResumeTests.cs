@@ -183,7 +183,79 @@ public sealed class FlowResumeTests
             Assert.Equal(2, coordinator.Instances["think"].Attempt);
         }
 
-        Assert.Contains("the engine's process ended", next.Given[2], StringComparison.Ordinal);
+        Assert.Equal("Written by the engine: the engine's process ended.\nAttempt 1 was cut off.", next.Given[2]);
+    }
+
+    /// <summary>
+    /// An agent's account an attempt still holds - an earlier pause wrote it, and no prompt holds it yet - is never
+    /// written over by the engine: not by a later pause whose turn gives none, and not by the resume after a crash.
+    /// Each next attempt is given the agent's account as it wrote it.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AnAgentsAccountNoPromptHoldsYet_IsNeverWrittenOverByTheEngine(bool pausedAgain)
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+            """);
+        const string account = "what the agent did:\n- read the parser\n";
+        var first = new Runner().HandsOff("think", account).Hold("think");
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, first, new RunnerFacts(), records: records);
+            var session = coordinator.RunAsync(Token);
+            await first.StartedAsync("think").WaitAsync(Bound, Token);
+            coordinator.RequestPause("command");
+
+            Assert.Equal(FlowRunStatus.Paused, (await session.WaitAsync(Bound, Token)).Status);
+        }
+
+        // The next attempt starts with the account, and is cut off before its prompt holds it - by a pause whose turn
+        // gives no account, or by a crash.
+        var second = new Runner().Hold("think");
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var coordinator = new FlowCoordinator(definition, second, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            var session = coordinator.RunAsync(Token);
+            await second.StartedAsync("think", 2).WaitAsync(Bound, Token);
+
+            Assert.Equal(account, second.Given[2]);
+
+            if (pausedAgain)
+            {
+                coordinator.RequestPause("command");
+                var paused = await session.WaitAsync(Bound, Token);
+
+                Assert.Equal(FlowRunStatus.Paused, paused.Status);
+                Assert.Empty(paused.Pause!.Handoffs);
+                Assert.Equal(new FlowHandoff(account, "agent"), coordinator.Instances["think"].Handoff);
+            }
+        }
+
+        Assert.Equal(account + "\n", File.ReadAllText(layout.StepHandoffFile("think")));
+
+        var third = new Runner();
+        var (_, _, last) = Records("r1", temp.Path, definition);
+
+        using (last)
+        {
+            var coordinator = new FlowCoordinator(definition, third, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: last);
+
+            Assert.Equal(FlowRunStatus.Done, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+        }
+
+        Assert.Equal(account, third.Given[3]);
     }
 
     /// <summary>The index is reconciled against the step's own record - written first, so the truth where the two differ - and a step directory the index does not name is adopted.</summary>
@@ -450,7 +522,8 @@ public sealed class FlowResumeTests
     /// </summary>
     [Theory]
     [InlineData("what the agent said it was doing", "agent", null)]
-    [InlineData("Written by the engine: the run was stopped; attempt 1 was cut off.", "engine", "the run was stopped; attempt 1 was cut off")]
+    [InlineData("what the agent did:\n- read the parser\n", "agent", null)]
+    [InlineData("Written by the engine: the run was stopped.\nAttempt 1 was cut off.", "engine", "the run was stopped")]
     public async Task AHandoffACrashLeftBesideItsRecord_IsTakenBack(string text, string by, string? why)
     {
         using var temp = new TempDirectory();

@@ -189,14 +189,7 @@ public sealed class FlowResume(OrchestrationStore store, OrchestratorLayout layo
             return record;
         }
 
-        var first = _fileSystem.ReadAllText(handoffFile).Split('\n', 2)[0].TrimEnd('\r');
-
-        return record with
-        {
-            Handoff = first.StartsWith(FlowHandoffRecord.EngineMark, StringComparison.Ordinal)
-                ? new FlowHandoffRecord("engine", first[FlowHandoffRecord.EngineMark.Length..].TrimEnd('.'))
-                : new FlowHandoffRecord("agent"),
-        };
+        return record with { Handoff = FlowHandoffRecord.Of(_fileSystem.ReadAllText(handoffFile)) };
     }
 
     /// <summary>
@@ -222,7 +215,9 @@ public sealed class FlowResume(OrchestrationStore store, OrchestratorLayout layo
                     + $"or delete-orchestrator {_layout.Name} ends it.");
             }
 
-            handoffs[step.Instance] = _fileSystem.ReadAllText(handoffFile).TrimEnd('\n', '\r');
+            // The text as it was handed: the one line end the records write after it taken off, and nothing of its own.
+            var written = _fileSystem.ReadAllText(handoffFile);
+            handoffs[step.Instance] = written.EndsWith('\n') ? written[..^1] : written;
         }
 
         return handoffs;
