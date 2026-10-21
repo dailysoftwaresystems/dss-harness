@@ -31,19 +31,6 @@ public interface IFlowRecords
     /// </summary>
     /// <param name="questions">Every question the run raised, in the order raised, with every answer each was given.</param>
     void Question(IReadOnlyList<FlowQuestionEntry> questions);
-
-    /// <summary>
-    /// Records the run's pre-existing issues, whole, in the run's own file: each entry added at a triage answer
-    /// <c>list</c>, proven, ids <c>pe-&lt;n&gt;</c> in the order added.
-    /// </summary>
-    /// <remarks>
-    /// Written at once, wherever the caller stands: where the change that listed an issue is recorded with
-    /// <see cref="FlowSnapshot.Issues"/> instead, the issues take their place in that change's order - after the run's
-    /// status and before its event - which is the order the run's law names.
-    /// </remarks>
-    /// <param name="issues">Every issue the run listed, in the order it added them.</param>
-    /// <param name="at">When the list was written.</param>
-    void PreExisting(IReadOnlyList<PreExistingIssue> issues, DateTimeOffset at);
 }
 
 /// <summary>
@@ -434,6 +421,8 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
 
         if (!starts)
         {
+            // A resume's first change writes the run's issues only where its list differs from the file's.
+            _issuesWritten = _store.ReadPreExistingIssues(_layout)?.Issues;
             return;
         }
 
@@ -464,14 +453,6 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
     {
         ArgumentNullException.ThrowIfNull(questions);
         _store.WriteFlowQuestions(_layout, new FlowQuestionsFile(1, _context.Run, _clock.GetUtcNow(), questions));
-    }
-
-    /// <inheritdoc/>
-    void IFlowRecords.PreExisting(IReadOnlyList<PreExistingIssue> issues, DateTimeOffset at)
-    {
-        ArgumentNullException.ThrowIfNull(issues);
-        _issues.Write(issues, at);
-        _issuesWritten = [.. issues];
     }
 
     /// <inheritdoc/>

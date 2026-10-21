@@ -1458,8 +1458,12 @@ where the failure no longer blocks it) is drawn again under the same id, and a g
 over such a member, never ended done over it. What the run owed is made before anything runs: a
 failure recorded `owed` - one that ended while a pause recorded what it left running, or before what
 decides it was written - an ending whose handlers its record holds `owed`, issues a step's record
-holds owed their triage (`issuesOwed`), and every redirect in `flow.json`'s `redirects`, each in its
-turn. Each record is written before what follows from it - a question before the record of the
+holds owed their triage (`issuesOwed`), an issue a triage answered fix for whose recovery was never
+raised, and every redirect in `flow.json`'s `redirects`, each in its turn. A triage's answer is
+listed and counted before its end is recorded, so the end's one write carries the run's file of
+issues (`FlowSnapshot.Issues`) in the one order; a crash before that file leaves the end written, and
+the resume lists the issue from the triage's answer - once, for one the list already holds the same in
+all but its id and time is not listed again. Each record is written before what follows from it - a question before the record of the
 step that waits on it, an answer before what it changes, a visit with what raised it, a failure
 owed until it is decided, every visit a redirect leaves marked `leftBy` before the redirect leaves
 the run's records - so a crash between any two writes leaves records the next session completes: an

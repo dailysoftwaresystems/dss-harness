@@ -1108,10 +1108,6 @@ public sealed class FlowHandlerRecordsTests
         /// <inheritdoc/>
         public void Question(IReadOnlyList<FlowQuestionEntry> questions)
             => inner.Question(questions);
-
-        /// <inheritdoc/>
-        public void PreExisting(IReadOnlyList<PreExistingIssue> issues, DateTimeOffset at)
-            => inner.PreExisting(issues, at);
     }
 
     /// <summary>A runner that answers each step as its test scripted it, holding open the steps the test wants to time.</summary>

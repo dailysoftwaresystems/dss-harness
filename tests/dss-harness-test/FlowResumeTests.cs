@@ -850,7 +850,7 @@ public sealed class FlowResumeTests
 
         using (records)
         {
-            var failing = new Intercepted(records, (kind, instance, to) =>
+            var failing = new Intercepted(records, (kind, instance, to, _) =>
             {
                 if (kind is FlowChangeKind.Step && instance == "gate" && to == nameof(FlowInstanceState.Running))
                 {
@@ -1808,6 +1808,179 @@ public sealed class FlowResumeTests
     }
 
     /// <summary>
+    /// The issue a triage lists is in its end's one write, in the one order - its record, then the run's state and
+    /// status, then the run's file of issues: a crash before that file leaves the triage's end written, and a resume
+    /// lists the issue from it, once; a resume after it lists nothing again.
+    /// </summary>
+    [Fact]
+    public async Task AnIssueATriageListed_IsInItsEndsOneWrite_AndListedOnceByAResume()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: mend
+                  type: orient
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                onPreExisting: triage
+              - name: triage
+                type: reason
+                prompt: triage.md
+                outputs: pre-existing.json
+                raised: preExisting
+                onAddress: recover
+            """);
+        var runner = new Runner()
+            .On("think", run => FlowStepResult.Ended(passed: true, 0, preExisting: [new FlowPreExistingReport("a broken test", "what it is", "src/Parser.cs", "read the file and saw it", false)]))
+            .On("triage", run => FlowStepResult.Ended(passed: true, 0, output: new JsonObject
+            {
+                ["course"] = "list",
+                ["title"] = run.Issue!.Title,
+                ["description"] = "what it is",
+                ["why"] = "not related to the work",
+                ["where"] = new JsonArray("src/Parser.cs"),
+                ["proof"] = new JsonObject { ["kind"] = "read", ["at"] = "abc123", ["file"] = "src/Parser.cs", ["lines"] = "10-14", ["quote"] = "the broken thing" },
+            }));
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var none = File.ReadAllText(layout.PreExistingIssuesFile);
+        IReadOnlyList<PreExistingIssue>? atTheEnd = null;
+
+        using (records)
+        {
+            var watched = new Intercepted(records, (kind, instance, to, snapshot) =>
+            {
+                if (kind is FlowChangeKind.Step && instance == "triage" && to == nameof(FlowInstanceState.Done))
+                {
+                    atTheEnd = snapshot.Issues;
+                }
+            });
+
+            Assert.Equal(FlowRunStatus.Done, (await new FlowCoordinator(definition, runner, new RunnerFacts(), records: watched).RunAsync(Token).WaitAsync(Bound, Token)).Status);
+        }
+
+        Assert.Equal(["a broken test"], atTheEnd!.Select(issue => issue.Title));
+
+        // The crash, between the triage's record and the run's file of issues, written after it in the same change.
+        File.WriteAllText(layout.PreExistingIssuesFile, none);
+
+        for (var resume = 0; resume < 2; resume++)
+        {
+            var (_, _, again) = Records("r1", temp.Path, definition);
+
+            using (again)
+            {
+                Assert.Equal(FlowRunStatus.Done, (await new FlowCoordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again).RunAsync(Token).WaitAsync(Bound, Token)).Status);
+            }
+
+            var listed = harness.OrchestrationStore.ReadPreExistingIssues(layout)!.Issues;
+
+            Assert.Equal([("pe-1", "a broken test", "think")], listed.Select(issue => (issue.Id, issue.Title, issue.FoundBy)));
+        }
+    }
+
+    /// <summary>
+    /// An issue a triage answered fix for whose recovery was never raised - a crash came between the triage's end and
+    /// the raise - is given to the recovery by the resume, from the triage's record, and counted fixed once it is.
+    /// </summary>
+    [Fact]
+    public async Task AFixWhoseRecoveryWasNeverRaised_IsGivenToItByAResume()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: mend
+                  type: orient
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                onPreExisting: triage
+              - name: tell
+                type: pause
+                always: true
+                question: 'what was there before: {run.preExisting}'
+                options: [ok, no]
+              - name: triage
+                type: reason
+                prompt: triage.md
+                outputs: pre-existing.json
+                raised: preExisting
+                onAddress: recover
+            """);
+        var runner = new Runner()
+            .On("think", run => FlowStepResult.Ended(passed: true, 0, preExisting: [new FlowPreExistingReport("a broken test", "what it is", "src/Parser.cs", "read the file and saw it", false)]))
+            .On("triage", run => FlowStepResult.Ended(passed: true, 0, output: new JsonObject
+            {
+                ["course"] = "fix",
+                ["title"] = run.Issue!.Title,
+                ["description"] = "what it is",
+                ["why"] = "not related to the work",
+                ["where"] = new JsonArray("src/Parser.cs"),
+                ["proof"] = new JsonObject { ["kind"] = "read", ["at"] = "abc123", ["file"] = "src/Parser.cs", ["lines"] = "10-14", ["quote"] = "the broken thing" },
+            }));
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var cut = new Cut(records, int.MaxValue);
+        var triageDone = 0;
+
+        using (records)
+        {
+            // How many writes the run makes up to the triage's end, the write that records it among them.
+            var counted = new Intercepted(cut, (kind, instance, to, _) =>
+            {
+                if (kind is FlowChangeKind.Step && instance == "triage" && to == nameof(FlowInstanceState.Done))
+                {
+                    triageDone = cut.Made + 1;
+                }
+            });
+
+            _ = await new FlowCoordinator(definition, runner, new RunnerFacts(), records: counted).RunAsync(Token).WaitAsync(Bound, Token);
+        }
+
+        Assert.True(triageDone > 0, "the triage ended done");
+
+        // The same run, cut right after the triage's end: the recovery it asks for is never raised.
+        using var crashed = new TempDirectory();
+        var (crashedHarness, crashedLayout, crashedRecords) = Records("r1", crashed.Path, definition);
+
+        using (crashedRecords)
+        {
+            _ = await new FlowCoordinator(definition, runner, new RunnerFacts(), records: new Cut(crashedRecords, triageDone)).RunAsync(Token).WaitAsync(Bound, Token);
+        }
+
+        Assert.Equal(nameof(FlowInstanceState.Done), crashedHarness.OrchestrationStore.ReadStepRecord(crashedLayout.StepRecordFile("triage"))!.State);
+        Assert.Null(crashedHarness.OrchestrationStore.ReadFlow(crashedLayout)!.Steps.FirstOrDefault(step => step.Instance == "recover"));
+
+        var next = new Runner();
+        var (_, _, again) = Records("r1", crashed.Path, definition);
+
+        using (again)
+        {
+            var coordinator = new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(crashedHarness, crashedLayout, definition), records: again);
+            var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+
+            Assert.Equal(FlowRunStatus.Paused, end.Status);
+            Assert.Equal(FlowInstanceState.Done, coordinator.Instances["recover"].State);
+            Assert.Equal(
+                "what was there before: fixed - a broken test (src/Parser.cs)",
+                coordinator.OpenQuestions.Single(question => question.Kind == "pause").Problem);
+        }
+
+        Assert.Equal(["recover.mend"], next.Started);
+    }
+
+    /// <summary>
     /// Which visit an instance is, is read from its record - never worked out again from its id: the recovery's visits
     /// are counted for each failure it takes, and a resume holds each failure to the recovery's bound by its own count.
     /// </summary>
@@ -2232,30 +2405,19 @@ public sealed class FlowResumeTests
                 inner.Question(questions);
             }
         }
-
-        public void PreExisting(IReadOnlyList<PreExistingIssue> issues, DateTimeOffset at)
-        {
-            if (Interlocked.Increment(ref _made) <= writes)
-            {
-                inner.PreExisting(issues, at);
-            }
-        }
     }
 
     /// <summary>The run's records, each change shown to the test before it is written through - which may fail it there.</summary>
-    private sealed class Intercepted(IFlowRecords inner, Action<FlowChangeKind, string?, string?> before) : IFlowRecords
+    private sealed class Intercepted(IFlowRecords inner, Action<FlowChangeKind, string?, string?, FlowSnapshot> before) : IFlowRecords
     {
         public void Write(FlowChangeKind kind, FlowSnapshot snapshot, string? instance = null, string? from = null, string? to = null, int? attempt = null, string? detail = null)
         {
-            before(kind, instance, to);
+            before(kind, instance, to, snapshot);
             inner.Write(kind, snapshot, instance, from, to, attempt, detail);
         }
 
         public void Question(IReadOnlyList<FlowQuestionEntry> questions)
             => inner.Question(questions);
-
-        public void PreExisting(IReadOnlyList<PreExistingIssue> issues, DateTimeOffset at)
-            => inner.PreExisting(issues, at);
     }
 
     /// <summary>The run's records, watched: each change is written through, and a test waits on the change it times.</summary>
@@ -2301,9 +2463,6 @@ public sealed class FlowResumeTests
 
         public void Question(IReadOnlyList<FlowQuestionEntry> questions)
             => inner.Question(questions);
-
-        public void PreExisting(IReadOnlyList<PreExistingIssue> issues, DateTimeOffset at)
-            => inner.PreExisting(issues, at);
     }
 
     /// <summary>The owner of a run is claimed at the start of a session: a live owner refuses it, a dead one is reclaimed and said, and the run is released where its session leaves it.</summary>

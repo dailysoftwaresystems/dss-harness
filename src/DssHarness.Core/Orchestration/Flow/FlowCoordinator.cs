@@ -851,6 +851,10 @@ public sealed class FlowCoordinator
                 RaiseOwedIssues(reporter);
             }
 
+            // An issue a triage answered fix for whose recovery was never raised - it waited behind a visit at work, or
+            // a crash came between the triage's end and the raise - is given to the recovery now, one at a time.
+            DrainPendingFixes();
+
             // The session is recorded where a run's records are: begun, or taken up from one another left.
             Record(
                 _sessions == 1 ? FlowChangeKind.SessionBegan : FlowChangeKind.Resumed,
@@ -2679,6 +2683,13 @@ public sealed class FlowCoordinator
             instance.IssuesOwed = result.PreExisting;
         }
 
+        if (passed && instance.Step.Raised == WorkflowStep.RaisedByPreExisting)
+        {
+            // A triage instance ends: its answer says what becomes of the issue it was raised for, in the run's list
+            // and tally, and its end is recorded after - one write that carries both, in the one order.
+            TriageOf(instance);
+        }
+
         End(instance, passed ? FlowInstanceState.Done : FlowInstanceState.Failed, exit, error);
 
         if (!passed)
@@ -2697,10 +2708,10 @@ public sealed class FlowCoordinator
             }
         }
 
-        if (instance.Step.Raised == WorkflowStep.RaisedByPreExisting && instance.State == FlowInstanceState.Done)
+        if (instance.Step.Raised == WorkflowStep.RaisedByPreExisting && instance.State == FlowInstanceState.Done && CourseOf(instance) == "fix")
         {
-            // A triage instance ended: its answer says what becomes of the issue it was raised for.
-            TriageOf(instance);
+            // A triage that answered fix gives its issue to the recovery, its end recorded.
+            FixOf(instance);
         }
 
         if (instance.IssuesOwed.Count > 0)
@@ -2800,7 +2811,11 @@ public sealed class FlowCoordinator
     private static string? TextOf(JsonNode? node)
         => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
 
-    /// <summary>Acts on the answer a triage instance gave for its issue: fix goes to the recovery, list to the run's file, duplicate and unproven are recorded and not listed.</summary>
+    /// <summary>
+    /// What a triage instance's answer makes of its issue in the run's list and tally, before its end is recorded - so
+    /// the end's one write carries them, in the one order: list adds it to the run's file, fix counts it being fixed,
+    /// duplicate and unproven are counted and not listed. What fix gives the recovery waits for the end (<see cref="FixOf"/>).
+    /// </summary>
     private void TriageOf(FlowInstance instance)
     {
         var course = CourseOf(instance);
@@ -2808,19 +2823,7 @@ public sealed class FlowCoordinator
         switch (course)
         {
             case "fix":
-                // The issue is given to the recovery, which fixes it at its root as it fixes a failure; where it
-                // blocks the reporting step, that step runs again from where it stopped once the fix is done. A fix
-                // asked while the recovery is already at work waits for that visit's end: the recovery never calls
-                // itself (V50).
                 _tally.Add(new PreExistingTally("being fixed", $"{TitleOf(instance)} ({WhereOf(instance)})", instance));
-
-                if (_created.Any(atWork => IsRecovery(atWork) && atWork.State is FlowInstanceState.Running or FlowInstanceState.Paused or FlowInstanceState.NotStarted))
-                {
-                    _pendingFixes.Add(instance);
-                    return;
-                }
-
-                TakeRecoveryOf(instance);
                 break;
             case "list":
                 ListIssue(instance);
@@ -2835,8 +2838,25 @@ public sealed class FlowCoordinator
                 break;
             default:
                 // Read before the step ended (TriageRefusal): an answer with no course the engine takes failed it.
-                throw new InvalidOperationException($"'{instance.Id}' ended done with the course '{course}', which its ending refuses.");
+                throw new InvalidOperationException($"'{instance.Id}' ends done with the course '{course}', which its ending refuses.");
         }
+    }
+
+    /// <summary>
+    /// Gives the issue a triage answered fix for to the recovery, once the triage's end is recorded: the recovery fixes
+    /// it at its root as it fixes a failure; where it blocks the reporting step, that step runs again from where it
+    /// stopped once the fix is done. A fix asked while the recovery is already at work waits for that visit's end: the
+    /// recovery never calls itself (V50).
+    /// </summary>
+    private void FixOf(FlowInstance instance)
+    {
+        if (_created.Any(atWork => IsRecovery(atWork) && atWork.State is FlowInstanceState.Running or FlowInstanceState.Paused or FlowInstanceState.NotStarted))
+        {
+            _pendingFixes.Add(instance);
+            return;
+        }
+
+        TakeRecoveryOf(instance);
     }
 
     /// <summary>The issue a triage instance was raised for, as the tally names it.</summary>
@@ -2871,16 +2891,32 @@ public sealed class FlowCoordinator
                 TextOf(proof?["output"]) is { } output ? PreExistingIssuesWriter.Cut(output) : null),
             TextOf(instance.Output?["why"]) ?? "none of the three: not related to the work, not critical, and in no step's way",
             instance.RaisedBy?.Id ?? instance.Id,
-            _clock.GetUtcNow());
+            instance.FinishedAt ?? _clock.GetUtcNow());
     }
 
-    /// <summary>Adds the issue a triage instance answered <c>list</c> for to the run's list, proven: the run's own file, whole, in the one order. Its answer was read back before the step ended (<see cref="TriageRefusal"/>).</summary>
+    /// <summary>
+    /// Whether the run's list holds the issue <paramref name="triage"/> answered <c>list</c> for: one the same in all
+    /// but its id and when it was found, for those are the list's own - two the same in all else are one issue.
+    /// </summary>
+    private bool Listed(FlowInstance triage)
+    {
+        var issue = IssueOf(triage);
+
+        return _issues.Any(listed => listed with { Id = issue.Id, FoundAt = issue.FoundAt, Where = issue.Where, Proof = issue.Proof } == issue
+            && listed.Where.SequenceEqual(issue.Where, StringComparer.Ordinal)
+            && listed.Proof == issue.Proof);
+    }
+
+    /// <summary>
+    /// Adds the issue a triage instance answered <c>list</c> for to the run's list, proven - before the triage's end is
+    /// recorded, so that end's one write carries the list, in the one order. Its answer was read back before
+    /// (<see cref="TriageRefusal"/>).
+    /// </summary>
     private void ListIssue(FlowInstance instance)
     {
         var issue = IssueOf(instance);
         _issues.Add(issue);
         _tally.Add(new PreExistingTally("listed", $"{issue.Title} ({string.Join(", ", issue.Where)})"));
-        _records?.PreExisting(_issues, _clock.GetUtcNow());
     }
 
     /// <summary>Writes what an ending owes its handlers, without raising anything: a pause finds it owed, and the resume makes it. Answers whether it owes any.</summary>
@@ -4072,7 +4108,8 @@ public sealed class FlowCoordinator
 
             if (waiting.State == FlowInstanceState.Done)
             {
-                TriageOf(waiting);
+                // Counted being fixed when it ended; now given to the recovery, or waiting again behind it.
+                FixOf(waiting);
             }
         }
     }
@@ -5322,7 +5359,8 @@ public sealed class FlowCoordinator
                 _tally.Count(entry => entry.State == "listed"),
                 _tally.Count(entry => entry.State == "fixed"),
                 _tally.Count(entry => entry.State.StartsWith("duplicate", StringComparison.Ordinal)),
-                _tally.Count(entry => entry.State == "unproven")));
+                _tally.Count(entry => entry.State == "unproven")),
+            [.. _issues]);
     }
 
     /// <summary>One instance, as its records read it, what it waits on as the admission walk said it.</summary>
@@ -5565,19 +5603,30 @@ public sealed class FlowCoordinator
                 _tally.Add(new PreExistingTally("listed", $"{listedIssue.Title} ({string.Join(", ", listedIssue.Where)})"));
             }
 
-            foreach (var triage in _created.Where(created => created.Step.Raised == WorkflowStep.RaisedByPreExisting))
+            foreach (var triage in _created.Where(created => created.Step.Raised == WorkflowStep.RaisedByPreExisting && created.State == FlowInstanceState.Done))
             {
-                var course = CourseOf(triage);
+                switch (CourseOf(triage))
+                {
+                    case "list" when !Listed(triage):
+                        // Its end is written, and the run's file of issues - written after it in the same change - is
+                        // not: the issue is listed from its answer, as the end listed it, and the next write writes it.
+                        ListIssue(triage);
+                        break;
+                    case "fix":
+                        // Fixed where a recovery it raised ended done; being fixed otherwise - and where none was raised
+                        // yet, the issue is owed to the recovery, which this session gives it.
+                        var raised = _created.Where(created => IsRecovery(created) && ReferenceEquals(created.RaisedBy, triage)).ToList();
+                        _tally.Add(new PreExistingTally(raised.Any(created => created.State == FlowInstanceState.Done) ? "fixed" : "being fixed", $"{TitleOf(triage)} ({WhereOf(triage)})", triage));
 
-                if (course is "fix")
-                {
-                    var atWork = _created.Any(created => IsRecovery(created) && ReferenceEquals(created.RaisedBy, triage)
-                        && created.State is FlowInstanceState.Running or FlowInstanceState.Paused or FlowInstanceState.NotStarted);
-                    _tally.Add(new PreExistingTally(atWork ? "being fixed" : "fixed", $"{TitleOf(triage)} ({WhereOf(triage)})", triage));
-                }
-                else if (course is "duplicate" or "unproven")
-                {
-                    _tally.Add(SettledTally(triage, course));
+                        if (raised.Count == 0)
+                        {
+                            _pendingFixes.Add(triage);
+                        }
+
+                        break;
+                    case "duplicate" or "unproven":
+                        _tally.Add(SettledTally(triage, CourseOf(triage)!));
+                        break;
                 }
             }
 

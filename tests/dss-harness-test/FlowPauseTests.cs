@@ -187,11 +187,6 @@ public sealed class FlowPauseTests
         public void Question(IReadOnlyList<FlowQuestionEntry> questions)
         {
         }
-
-        /// <inheritdoc/>
-        public void PreExisting(IReadOnlyList<PreExistingIssue> issues, DateTimeOffset at)
-        {
-        }
     }
 
     /// <summary>A safe pause writes every reason step in flight a handoff, leaves the machine steps to finish and be recorded, and starts nothing more.</summary>

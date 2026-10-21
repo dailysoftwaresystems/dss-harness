@@ -111,10 +111,6 @@ public sealed class FlowPreExistingTests
         /// <inheritdoc/>
         public void Question(IReadOnlyList<FlowQuestionEntry> questions)
             => inner?.Question(questions);
-
-        /// <inheritdoc/>
-        public void PreExisting(IReadOnlyList<PreExistingIssue> issues, DateTimeOffset at)
-            => inner?.PreExisting(issues, at);
     }
 
     /// <summary>Whether both triage instances of a run had ended done when <paramref name="snapshot"/> was written.</summary>
@@ -477,6 +473,66 @@ public sealed class FlowPreExistingTests
         Assert.Equal(
             [("first", null), ("second", null), ("triage", "the first hole"), ("triage+2", "the second hole"), ("recover.mend", null), ("recover+2.mend", null)],
             runner.Started);
+    }
+
+    /// <summary>
+    /// A fix that waited for the recovery's end is counted once: being fixed when its triage ended, and fixed once the
+    /// recovery that took it ended - never counted again when the wait is over.
+    /// </summary>
+    [Fact]
+    public async Task AFixThatWaitedForTheRecovery_IsCountedOnce()
+    {
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: mend
+                  type: orient
+            steps:
+              - name: first
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                onPreExisting: triage
+              - name: second
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                onPreExisting: triage
+              - name: tell
+                type: pause
+                always: true
+                question: 'what was there before: {run.preExisting}'
+                options: [ok, no]
+              - name: triage
+                type: reason
+                prompt: triage.md
+                outputs: pre-existing.json
+                raised: preExisting
+                onAddress: recover
+            """);
+        var runner = new FakeRunner()
+            .On("first", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("the first hole")]))
+            .On("second", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("the second hole")]))
+            .On("triage", run => Course("fix", run.Issue!.Title));
+        runner.Hold("mend");
+        var watched = new Watched(null, snapshot => BothTriaged(snapshot)
+            && snapshot.Steps.Any(step => step.Instance == "recover.mend" && step.State == FlowInstanceState.Running));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock(), records: watched);
+        var cancel = TestContext.Current.CancellationToken;
+
+        var session = coordinator.RunAsync(cancel);
+        await watched.Seen.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        await coordinator.SettledAsync(cancel);
+        _ = runner.Release("mend");
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Equal(
+            "what was there before: fixed - the first hole (src/Parser.cs); fixed - the second hole (src/Parser.cs)",
+            coordinator.OpenQuestions.Single(question => question.Kind == "pause").Problem);
     }
 
     /// <summary>
