@@ -1460,7 +1460,11 @@ owed until it is decided, every visit a redirect leaves marked `leftBy` before t
 the run's records - so a crash between any two writes leaves records the next session completes: an
 answer written is carried out once, a configured answer never written is given, a handler is never
 raised twice, and an ending whose handlers all ended is settled. A session is never said done over a
-step that never ended, nor one its scope never drew.
+step that never ended, nor one its scope never drew. What the session's start writes is held, in the
+order made and each with the run as it stood, until it is known the session goes on: a resume beside
+an open question is refused only where nothing can run until a question is answered, and then it has
+written nothing - no event, no attempt, no state; a session an answer began, and one whose budget
+question is open, are never refused, and end paused on the question left.
 
 Each session ends however it ends with the run's report (`report.md`, `report.json`), its owner
 released in a `finally`, its line in the run's log, and every record it wrote named in text and in

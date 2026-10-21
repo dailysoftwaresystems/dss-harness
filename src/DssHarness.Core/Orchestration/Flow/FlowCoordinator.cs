@@ -346,6 +346,15 @@ public sealed class FlowCoordinator
     private FlowSessionEnd? _last;
     private Task<Message>? _pending;
     private IFlowRecords? _records;
+
+    /// <summary>
+    /// The writes a session's start made, held in the order made - each with the run as it stood at that write - until
+    /// it is known the session goes on: a resume refused writes nothing of itself.
+    /// </summary>
+    private List<Action<IFlowRecords>>? _held;
+
+    /// <summary>An answer was taken before the session began - answer-orchestrator's, or one handed over to an engine that ended: the session it begins goes on, never refused.</summary>
+    private bool _answeredBefore;
     private FlowResumeState? _resume;
     private bool _replaying;
     private int _sessions;
@@ -690,6 +699,10 @@ public sealed class FlowCoordinator
         _endedAt = null;
         _sessions++;
 
+        // What the session's start writes is held until it is known the session goes on: a resume that can run nothing
+        // is refused below, and a refused resume writes nothing of itself.
+        _held = _records is null ? null : [];
+
         try
         {
             foreach (var (waiting, asked) in _carryAtStart.ToList())
@@ -837,14 +850,28 @@ public sealed class FlowCoordinator
                 detail: _resume is null ? null : $"taken up from a run state holding {_resume.File.Steps.Count} steps");
 
             // A resume beside an open question is not refused where something can run; it is refused only where
-            // nothing can until the question is answered.
+            // nothing can until the question is answered - before anything of its own is written, for the held writes
+            // are never made. A session an answer began goes on, as does one whose budget question is open: it is
+            // paused again on that question, which a person answers.
             if (_resume is not null
+                && _sessions == 1
+                && !_answeredBefore
+                && OpenBudgetQuestion is null
                 && NextIds().Count == 0
-                && _created.FirstOrDefault(instance => instance.WaitingQuestion is not null) is { } held)
+                && _created.FirstOrDefault(instance => instance.WaitingQuestion is not null) is { } waitsOnOne)
             {
                 throw new HarnessException(
                     HarnessExit.Refused,
-                    $"nothing of this run can run until the question of step '{held.Id}' is answered; answer-orchestrator answers it");
+                    $"nothing of this run can run until the question of step '{waitsOnOne.Id}' is answered; answer-orchestrator answers it");
+            }
+
+            // The session goes on: what its start wrote is written now, in the order it was made.
+            var held = _held;
+            _held = null;
+
+            foreach (var write in held ?? [])
+            {
+                write(_records!);
             }
 
             while (true)
@@ -935,6 +962,8 @@ public sealed class FlowCoordinator
         }
         finally
         {
+            // A start refused, or ended by a defect, leaves nothing held to be written by whatever comes after it.
+            _held = null;
             _inSession = false;
         }
 
@@ -1304,6 +1333,7 @@ public sealed class FlowCoordinator
     /// </summary>
     private void TakeAnswer(FlowQuestion asked, string answer, string? text, string by, string? where, string? through)
     {
+        _answeredBefore |= !_inSession;
         _ = _open.Remove(asked.Id);
         var instance = _answerable.GetValueOrDefault(asked.Id);
         _ = _answerable.Remove(asked.Id);
@@ -3250,7 +3280,9 @@ public sealed class FlowCoordinator
             return;
         }
 
-        _records.Write(FlowChangeKind.Step, Snapshot(), instance.Id, instance.State.ToString(), instance.State.ToString(), instance.Attempt);
+        var snapshot = Snapshot();
+        var (id, state, attempt) = (instance.Id, instance.State.ToString(), instance.Attempt);
+        Put(records => records.Write(FlowChangeKind.Step, snapshot, id, state, state, attempt));
     }
 
     /// <summary>Whether a handler of an ending has ended, its own failure settled with it.</summary>
@@ -3814,7 +3846,8 @@ public sealed class FlowCoordinator
             return;
         }
 
-        _records.Question([.. _questions.Select(asked => asked.ToEntry())]);
+        List<FlowQuestionEntry> entries = [.. _questions.Select(asked => asked.ToEntry())];
+        Put(records => records.Question(entries));
     }
 
     /// <summary>
@@ -5164,14 +5197,24 @@ public sealed class FlowCoordinator
             return;
         }
 
-        _records.Write(
-            kind,
-            Snapshot(),
-            instance?.Id,
-            from?.ToString(),
-            to?.ToString(),
-            attempt,
-            detail);
+        var snapshot = Snapshot();
+        var id = instance?.Id;
+        Put(records => records.Write(kind, snapshot, id, from?.ToString(), to?.ToString(), attempt, detail));
+    }
+
+    /// <summary>
+    /// Every write of the run's records goes through here: made at once, or - while a session's start is held - kept,
+    /// with the run as it stood when it was made, to be made in the same order once the session goes on.
+    /// </summary>
+    private void Put(Action<IFlowRecords> write)
+    {
+        if (_held is not null)
+        {
+            _held.Add(write);
+            return;
+        }
+
+        write(_records!);
     }
 
     /// <summary>The run whole, as its records read it: every instance with its state and what it waits on, what runs next, and the run's own standing.</summary>

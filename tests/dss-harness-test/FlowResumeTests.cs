@@ -637,6 +637,9 @@ public sealed class FlowResumeTests
         }
 
         var taken2 = TakeUp(harness2, layout2, besideOnly);
+        var flowBefore = File.ReadAllText(layout2.FlowFile);
+        var statusBefore = File.ReadAllText(layout2.WorkflowStatusFile);
+        var eventsBefore = File.ReadAllLines(layout2.EventsFile);
         var (_, _, again2) = Records("r2", other.Path, besideOnly);
 
         using (again2)
@@ -646,7 +649,182 @@ public sealed class FlowResumeTests
             var raised = await Assert.ThrowsAsync<HarnessException>(() => coordinator.RunAsync(TestContext.Current.CancellationToken));
 
             Assert.Equal(HarnessExit.Refused, raised.ExitCode);
-            Assert.Contains("answer-orchestrator", raised.Message, StringComparison.Ordinal);
+            Assert.Equal("nothing of this run can run until the question of step 'asker' is answered; answer-orchestrator answers it", raised.Message);
+        }
+
+        // The refusal came before anything of the session was written: no event of it, the run's state and status as
+        // the last session left them.
+        Assert.Equal(eventsBefore, File.ReadAllLines(layout2.EventsFile));
+        Assert.Equal(flowBefore, File.ReadAllText(layout2.FlowFile));
+        Assert.Equal(statusBefore, File.ReadAllText(layout2.WorkflowStatusFile));
+    }
+
+    /// <summary>
+    /// A resume refused writes nothing of what its start changed: a failure a pause left owed is decided by the start -
+    /// passed over - and with nothing able to run beside the question, its record still says it is owed, for the next
+    /// session to decide.
+    /// </summary>
+    [Fact]
+    public async Task ARefusedResume_WritesNothingItsStartChanged()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: asker
+                type: pause
+                question: which way?
+                options: [left, right]
+              - name: gate
+                type: build
+                onFailure: continue
+            """);
+        var runner = new Runner().Hold("gate");
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var watched = new Watched(records);
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), records: watched);
+            var session = coordinator.RunAsync(Token);
+            await runner.StartedAsync("gate").WaitAsync(Bound, Token);
+            await watched.SeenAsync(snapshot => snapshot.WaitingOn.Count == 1).WaitAsync(Bound, Token);
+            coordinator.RequestPause("command");
+            runner.Fail("gate", "a leg failed");
+
+            Assert.Equal(FlowRunStatus.Paused, (await session.WaitAsync(Bound, Token)).Status);
+        }
+
+        var gateBefore = File.ReadAllText(layout.StepRecordFile("gate"));
+        var eventsBefore = File.ReadAllLines(layout.EventsFile);
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        Assert.Equal("owed", harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("gate"))!.Failure);
+
+        using (again)
+        {
+            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+
+            var raised = await Assert.ThrowsAsync<HarnessException>(() => coordinator.RunAsync(Token)).WaitAsync(Bound, Token);
+
+            Assert.Equal(HarnessExit.Refused, raised.ExitCode);
+            Assert.True(coordinator.Instances["gate"].PassedOver);
+        }
+
+        Assert.Equal(gateBefore, File.ReadAllText(layout.StepRecordFile("gate")));
+        Assert.Equal(eventsBefore, File.ReadAllLines(layout.EventsFile));
+    }
+
+    /// <summary>
+    /// A session an answer began is never refused: the answer was taken, and where another question holds all that is
+    /// left the session ends paused on it, as any session does.
+    /// </summary>
+    [Fact]
+    public async Task ASessionAnAnswerBegan_EndsPausedOnTheQuestionLeft_NeverRefused()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: first
+                type: pause
+                question: which way?
+                options: [left, right]
+              - name: second
+                type: pause
+                question: how far?
+                options: [near, far]
+            """);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), records: records);
+            var paused = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+            Assert.Equal(FlowRunStatus.Paused, paused.Status);
+        }
+
+        var taken = TakeUp(harness, layout, definition);
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), resume: taken, records: again);
+
+            Assert.True(coordinator.TryAnswer("q1", "left", out var problem), problem);
+
+            var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+            Assert.Equal(FlowRunStatus.Paused, end.Status);
+            Assert.Equal(FlowInstanceState.Done, coordinator.Instances["first"].State);
+            Assert.Equal(["q2"], coordinator.OpenQuestions.Select(question => question.Id));
+        }
+    }
+
+    /// <summary>
+    /// A resume with the budget's question open is never refused, though nothing else can run: it is paused again on
+    /// that question, which a person answers.
+    /// </summary>
+    [Fact]
+    public async Task AResumeWithTheBudgetsQuestionOpen_PausesAgain_NeverRefused()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            budget:
+              usd: 50
+              reservePercent: 10
+            steps:
+              - name: asker
+                type: pause
+                question: which way?
+                options: [left, right]
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+              - name: gate
+                type: build
+            """);
+        IFlowRunEvents? spending = null;
+        var runner = new Runner().On("think", run =>
+        {
+            spending = run.Events;
+            return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+        }).Hold("gate");
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var watched = new Watched(records);
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), records: watched);
+            var session = coordinator.RunAsync(Token);
+            await runner.StartedAsync("gate").WaitAsync(Bound, Token);
+            await watched.SeenAsync(snapshot => snapshot.Steps.Any(step => step.Instance == "think" && step.State == FlowInstanceState.Done)).WaitAsync(Bound, Token);
+
+            // What the reasoning spent is counted once it has ended, so the reserve is reached with nothing left that
+            // can run but the build the pause leaves to finish.
+            spending!.Used(tokens: 1_000, usd: 45.10);
+            await watched.SeenAsync(snapshot => snapshot.Pause is not null).WaitAsync(Bound, Token);
+            runner.Complete("gate");
+            var first = await session.WaitAsync(Bound, Token);
+
+            Assert.Equal(FlowRunStatus.Paused, first.Status);
+            Assert.Equal(["pause", "runBudget"], coordinator.OpenQuestions.Select(question => question.Kind));
+        }
+
+        var taken = TakeUp(harness, layout, definition);
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), resume: taken, records: again);
+            var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+            Assert.Equal(FlowRunStatus.Paused, end.Status);
+            Assert.Equal("budget", end.Pause!.Cause);
+            Assert.Equal(["q1", "q2"], coordinator.OpenQuestions.Select(question => question.Id));
         }
     }
 
