@@ -459,8 +459,10 @@ for every appointed name `present` or `missing`, exit 0 whatever is missing; `--
 the agent sections as `init` writes them into a new config, to paste into an existing one. A slot
 file other users can change or read is refused with the command that fixes it, and a name declared
 in two of its files is refused as the runner's value directories refuse one. `validate-workflow`
-names every key no file of the slot declares, with the steps that need it, and still passes - a
-machine that only checks a configuration needs no key. The credential slots - the runner's two
+names every key a step's model would read that no file of the slot declares, with the steps that
+would read it, and still passes - a machine that only checks a configuration needs no key. A model
+reached through `claude-api` or `glm` reads its provider's keys; one reached through `claude-code`
+signs in with the machine's login and reads none. The credential slots - the runner's two
 value directories and this one among them - are never handed to an agent, seeded from the main tree
 or folded back into it, whatever git or the ignore block says.
 

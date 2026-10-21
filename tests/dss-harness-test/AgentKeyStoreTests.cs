@@ -142,8 +142,8 @@ public sealed class AgentKeyStoreTests
         temp.WriteFile(".harness-config/workflows/.env/keys.env", "ZAI_APIKEY=one\n");
         var (_, store) = Store();
 
-        var missing = store.Missing(
-            Layout(temp.Path),
+        var missing = AgentKeyStore.Missing(
+            store.Present(Layout(temp.Path)),
             [ZaiKey, new("ZAI_BACKUP_KEY", "provider 'zai'", "the Z.AI API key")],
             ["ZAI_API_KEY", "ZAI_BACKUP_KEY"],
             ZaiKey);

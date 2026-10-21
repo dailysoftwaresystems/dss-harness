@@ -36,17 +36,24 @@ public sealed class AgentProviderServiceTests
             outcome.Details);
     }
 
+    /// <summary>
+    /// The names the slot holds that nothing appoints are listed, where a misspelt one shows - and a name the tool reads
+    /// itself, the program the claude-code client starts in place of npm's (CLAUDE_EXECUTABLE), is appointed by that
+    /// client and never listed among them.
+    /// </summary>
     [Fact]
     public async Task NamesTheNamesTheSlotHoldsThatNothingAppoints()
     {
         using var repository = await RepositoryAsync();
-        repository.Tree.WriteFile(".harness-config/workflows/.env/keys.env", "ZAI_API_KEY=one\nZAI_APIKEY=two\n");
+        repository.Tree.WriteFile(".harness-config/workflows/.env/keys.env", "ZAI_API_KEY=one\nZAI_APIKEY=two\nCLAUDE_EXECUTABLE=/opt/claude/bin/claude\n");
         var service = Service(repository.Harness);
 
         var outcome = await service.ListAsync(repository.Tree.Path, template: false, json: false, TestContext.Current.CancellationToken);
 
         Assert.Equal(0, outcome.ExitCode);
-        Assert.Contains("declared in the slot and appointed by nothing: ZAI_APIKEY", outcome.Details!);
+        Assert.Equal(
+            ["declared in the slot and appointed by nothing: ZAI_APIKEY"],
+            outcome.Details!.Where(line => line.StartsWith("declared in the slot", StringComparison.Ordinal)));
     }
 
     [Fact]

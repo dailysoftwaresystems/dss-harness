@@ -4,14 +4,25 @@ using DssHarness.Core.Configuration;
 namespace DssHarness.Core.Agents;
 
 /// <summary>
-/// A client kind the tool builds in: its name under <c>agentClients</c>, the provider types it reaches, and the effort
-/// levels its protocol can say. A client names no model - which model, at what effort, where and with whose key is
-/// said by the step, <c>tierConfig</c> and the provider.
+/// A client kind the tool builds in: its name under <c>agentClients</c>, the provider types it reaches, the effort
+/// levels its protocol can say, how it signs in, and the settings of the slot it reads. A client names no model -
+/// which model, at what effort, where and with whose key is said by the step, <c>tierConfig</c> and the provider.
 /// </summary>
 /// <param name="Name">The client's name, as a provider's <c>client</c> names it.</param>
 /// <param name="ProviderType">The provider type it reaches: the one kind of API it speaks.</param>
 /// <param name="Efforts">The effort levels its protocol can say; a model's <c>efforts</c> are one of these.</param>
-public sealed record AgentClientKind(string Name, string ProviderType, IReadOnlyList<string> Efforts);
+/// <param name="SignsInWithLogin">
+/// Whether it signs in with the machine's login and reads no key - <c>claude-code</c>, whose sign-in no configuration
+/// changes in this build (part 03's <c>auth</c> is a later key of <c>agentClients</c>) - rather than signing each
+/// request with its provider's key.
+/// </param>
+/// <param name="Settings">The names of the slot it reads that hold no key - a setting, such as the program it starts - each with what its value is.</param>
+public sealed record AgentClientKind(
+    string Name,
+    string ProviderType,
+    IReadOnlyList<string> Efforts,
+    bool SignsInWithLogin,
+    IReadOnlyList<(string Name, string What)> Settings);
 
 /// <summary>
 /// The configuration's providers and tiers, resolved: the way from a model's code to its provider, its address, its
@@ -25,9 +36,14 @@ public sealed partial class AgentProviders
     /// <summary>The client kinds the tool builds in, each naming no model.</summary>
     public static readonly IReadOnlyList<AgentClientKind> ClientKinds =
     [
-        new("claude-code", "anthropic", ["low", "medium", "high", "xhigh", "max"]),
-        new("claude-api", "anthropic", ["low", "medium", "high", "xhigh", "max"]),
-        new("glm", "zai", ["low", "high", "max"]),
+        new(
+            "claude-code",
+            "anthropic",
+            ["low", "medium", "high", "xhigh", "max"],
+            SignsInWithLogin: true,
+            [(ClaudeCode.ClaudeCodeUpdateService.ExecutableVariable, "the program the claude-code client starts in place of npm's Claude Code")]),
+        new("claude-api", "anthropic", ["low", "medium", "high", "xhigh", "max"], SignsInWithLogin: false, []),
+        new("glm", "zai", ["low", "high", "max"], SignsInWithLogin: false, []),
     ];
 
     private readonly Dictionary<string, (AgentProviderConfig Provider, AgentModelConfig Model)> _models = new(StringComparer.Ordinal);
@@ -134,11 +150,11 @@ public sealed partial class AgentProviders
         {
             var where = $"providers[{at.ToString(CultureInfo.InvariantCulture)}] '{provider.Name}'";
 
-            if (ClientKinds.FirstOrDefault(kind => string.Equals(kind.Name, provider.Client, StringComparison.Ordinal)) is not { } client)
+            if (KindOf(provider.Client) is not { } client)
             {
                 problems.Add($"{where} says client '{provider.Client}', which is not declared; a client is one the tool builds in: {string.Join(", ", ClientKinds.Select(kind => $"'{kind.Name}'"))}");
             }
-            else if (!string.Equals(client.ProviderType, provider.Type, StringComparison.Ordinal))
+            else if (!Reaches(client.Name, provider))
             {
                 problems.Add($"{where} says client '{provider.Client}' ({client.Name}), which does not reach provider type '{provider.Type}'");
             }
@@ -217,6 +233,69 @@ public sealed partial class AgentProviders
     public (AgentProviderConfig Provider, AgentModelConfig Model)? Of(string code)
         => _models.TryGetValue(code, out var entry) ? entry : null;
 
+    /// <summary>
+    /// Whether <paramref name="client"/> signs in with the machine's login and reads no key: its kind's sign-in, which
+    /// no configuration changes in this build. A client the tool does not build in reads nothing either; it is refused
+    /// where the configuration or the definition names it.
+    /// </summary>
+    /// <param name="client">The client's name.</param>
+    public bool SignsInWithLogin(string client)
+        => KindOf(client) is { SignsInWithLogin: true };
+
+    /// <summary>
+    /// The names a model's key is read under on the client that reaches it - <paramref name="client"/> where the step
+    /// names one, else the provider's own - in the order they are tried: the provider's <c>apiKeyNames</c> on a client
+    /// that signs each request with its provider's key (<c>claude-api</c>, <c>glm</c>), and none on one that signs in
+    /// with the machine's login (<c>claude-code</c>). The one place that says what a step's model needs of the slot:
+    /// <c>validate-workflow</c> asks it of every step, and so will the run that refuses a missing key.
+    /// </summary>
+    /// <param name="provider">The provider that lists the model.</param>
+    /// <param name="client">The client the step names, or null where it names none.</param>
+    public IReadOnlyList<string> KeysRead(AgentProviderConfig provider, string? client = null)
+    {
+        ArgumentNullException.ThrowIfNull(provider);
+
+        return SignsInWithLogin(client ?? provider.Client) ? [] : provider.ApiKeyNames;
+    }
+
+    /// <summary>
+    /// Every name the configuration appoints a value of the slot for, of providers and clients both, each with who
+    /// appoints it, what its value is and whether it is a secret: each provider's keys, in its order, and the settings a
+    /// built-in client reads where a provider of the type it reaches is declared - the program the claude-code client
+    /// starts among them. What the slot holds beyond these is appointed by nothing, which a listing and a missing key's
+    /// refusal say, where a misspelt name shows.
+    /// </summary>
+    public IReadOnlyList<Secrets.AppointedKey> Appointed()
+    {
+        var appointed = new List<Secrets.AppointedKey>();
+
+        foreach (var provider in Config.Providers)
+        {
+            appointed.AddRange(provider.ApiKeyNames.Select(name => new Secrets.AppointedKey(name, $"provider '{provider.Name}'", Secrets.AgentKeyStore.WhatHolds(provider))));
+        }
+
+        foreach (var kind in ClientKinds.Where(kind => Config.Providers.Any(provider => string.Equals(provider.Type, kind.ProviderType, StringComparison.Ordinal))))
+        {
+            appointed.AddRange(kind.Settings.Select(setting => new Secrets.AppointedKey(setting.Name, $"client '{kind.Name}'", setting.What, Secret: false)));
+        }
+
+        return appointed;
+    }
+
+    /// <summary>Whether <paramref name="client"/> is one the tool builds in and reaches <paramref name="provider"/>'s type: the one rule of reach, for a provider's own client and a step's alike.</summary>
+    /// <param name="client">The client's name.</param>
+    /// <param name="provider">The provider it would reach.</param>
+    public static bool Reaches(string client, AgentProviderConfig provider)
+    {
+        ArgumentNullException.ThrowIfNull(provider);
+
+        return KindOf(client) is { } kind && string.Equals(kind.ProviderType, provider.Type, StringComparison.Ordinal);
+    }
+
+    /// <summary>The client kind the tool builds in under <paramref name="client"/>; null where it builds in none.</summary>
+    private static AgentClientKind? KindOf(string client)
+        => ClientKinds.FirstOrDefault(kind => string.Equals(kind.Name, client, StringComparison.Ordinal));
+
     /// <summary>Every model of <paramref name="tier"/>, in the order <c>tierConfig</c> says they are tried; empty where the tier is not defined.</summary>
     public IReadOnlyList<(AgentProviderConfig Provider, AgentModelConfig Model)> ModelsOf(string tier)
     {
@@ -262,7 +341,7 @@ public sealed partial class AgentProviders
             problems.Add($"{where} takes no efforts; a model's entry names the efforts it takes, each one of its client's levels");
         }
 
-        if (ClientKinds.FirstOrDefault(kind => string.Equals(kind.Name, provider.Client, StringComparison.Ordinal)) is { } client)
+        if (KindOf(provider.Client) is { } client)
         {
             foreach (var level in model.Efforts.Where(level => !client.Efforts.Contains(level, StringComparer.Ordinal)))
             {

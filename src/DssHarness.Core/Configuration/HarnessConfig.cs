@@ -241,9 +241,9 @@ public sealed class HarnessDefaults
     public string? Project { get; init; }
 
     /// <summary>
-    /// The tier of a step that names neither a tier nor a model, on itself or in its definition, and of a side-task
-    /// that names neither. Nothing is built in: <c>init</c> writes <c>balanced</c>, and where the config names none,
-    /// such a step is refused when the definition is loaded.
+    /// The tier of a step that names neither a tier nor a model. Nothing is built in: <c>init</c> writes
+    /// <c>balanced</c>, and where the config names none, such a step is refused when the definition is checked. (An
+    /// agent definition's own tier or model stands before it once definitions are read - not yet in this build.)
     /// </summary>
     public string? AgentTier { get; init; }
 

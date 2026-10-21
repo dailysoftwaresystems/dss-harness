@@ -33,20 +33,20 @@ public sealed class WorkflowValidationServiceTests
         Assert.Contains("step 'planning.plan' (best): claude-fable-5-1 at xhigh, glm-5.3 at max", report.Lines);
         Assert.Contains("step 'intake.triage' (high): claude-opus-5-5 at high, glm-5.3 at high", report.Lines);
 
-        // The slot holds no key in a repository just initialized, so each provider's key is named as missing with every
-        // step that needs one - every step's first model is Anthropic's, GLM a later model of each tier.
+        // The slot holds no key in a repository just initialized. Every step's first model is Anthropic's, reached through
+        // claude-code, which signs in with the machine's login and reads no key: nothing is said of Anthropic's. GLM is a
+        // later model of each tier, reached through glm, which signs each request with Z.AI's key - named once, with
+        // every step that would read it.
         var missingKeys = report.Lines.Where(line => line.StartsWith("no file under", StringComparison.Ordinal)).ToList();
+        var missing = Assert.Single(missingKeys);
 
-        Assert.Equal(2, missingKeys.Count);
         Assert.StartsWith(
-            $"no file under '{DssHarness.Core.Repository.HarnessLayout.WorkflowsEnvSlotRelative}/' declares 'ANTHROPIC_API_KEY', the name provider 'anthropic' appoints for its key (its apiKeyNames); the steps that need it: step 'intake.priority', step 'intake.triage', step 'planning.plan'",
-            missingKeys[0]);
-        Assert.StartsWith(
-            $"no file under '{DssHarness.Core.Repository.HarnessLayout.WorkflowsEnvSlotRelative}/' declares 'ZAI_API_KEY', the name provider 'zai' appoints for its key (its apiKeyNames); the steps that need it: step 'intake.priority' (a later model of its tier)",
-            missingKeys[1]);
-        Assert.DoesNotContain("(a later model of its tier)", missingKeys[0]);
-        Assert.EndsWith(", advisor, reporter", missingKeys[0]);
-        Assert.EndsWith(", advisor (a later model of its tier), reporter (a later model of its tier)", missingKeys[1]);
+            $"no file under '{DssHarness.Core.Repository.HarnessLayout.WorkflowsEnvSlotRelative}/' declares 'ZAI_API_KEY', the name provider 'zai' appoints for its key (its apiKeyNames); "
+                + "add ZAI_API_KEY= to a file there, holding the Z.AI API key (it is read from this slot and nowhere else). "
+                + "The steps that would read it: step 'intake.priority' (a later model of its tier), step 'intake.triage' (a later model of its tier), step 'planning.plan' (a later model of its tier)",
+            missing);
+        Assert.EndsWith(", advisor (a later model of its tier), reporter (a later model of its tier)", missing);
+        Assert.DoesNotContain(report.Lines, line => line.Contains("ANTHROPIC_API_KEY", StringComparison.Ordinal));
 
         var outcome = WorkflowValidationReports.Render(report, json: false);
 
@@ -67,12 +67,123 @@ public sealed class WorkflowValidationServiceTests
         var report = await Service(repository).CheckAsync(repository.Path, named: null, TestContext.Current.CancellationToken);
 
         Assert.True(report.Passed);
-        var missing = report.Lines.Where(line => line.StartsWith("no file under", StringComparison.Ordinal)).ToList();
+        Assert.DoesNotContain(report.Lines, line => line.StartsWith("no file under", StringComparison.Ordinal));
+    }
 
-        Assert.Single(missing);
-        Assert.StartsWith(
-            $"no file under '{DssHarness.Core.Repository.HarnessLayout.WorkflowsEnvSlotRelative}/' declares 'ANTHROPIC_API_KEY', the name provider 'anthropic' appoints for its key",
-            missing[0]);
+    /// <summary>
+    /// What a step's model needs of the slot is decided by the client that reaches it - the step's own where it names
+    /// one, else its provider's: a step on claude-api reads its provider's key, and a step on claude-code, which signs in
+    /// with the machine's login, reads none, so it is never said to need one.
+    /// </summary>
+    [Fact]
+    public async Task AStepOnTheClaudeApiClient_ReadsItsProvidersKey_WhereOneOnClaudeCodeReadsNone()
+    {
+        using var repository = await RepositoryAsync(new HarnessConfig { Workflows = ["small"] });
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        await WriteAsync(
+            repository,
+            "small",
+            """
+            name: small
+            steps:
+              - name: think
+                type: reason
+                agent: worker
+                model: claude-opus-5-5
+                client: claude-api
+                prompt: prompts/work.md
+                outputs: schemas/work.json
+              - name: write
+                type: reason
+                agent: worker
+                model: claude-sonnet-5-5
+                prompt: prompts/work.md
+                outputs: schemas/work.json
+            """,
+            cancellationToken,
+            "agents/worker.md",
+            "prompts/work.md",
+            "schemas/work.json");
+
+        var report = await Service(repository).CheckAsync(repository.Path, named: null, cancellationToken);
+
+        Assert.True(report.Passed);
+        Assert.Equal(
+            [
+                $"no file under '{DssHarness.Core.Repository.HarnessLayout.WorkflowsEnvSlotRelative}/' declares 'ANTHROPIC_API_KEY', the name provider 'anthropic' appoints for its key (its apiKeyNames); "
+                    + "add ANTHROPIC_API_KEY= to a file there, holding the Anthropic API key (it is read from this slot and nowhere else). The steps that would read it: step 'think'",
+            ],
+            report.Lines.Where(line => line.StartsWith("no file under", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// Every key of a provider the slot does not hold is named, the ones beside a key it holds among them - each name
+    /// by the one builder of the missing-key sentence, ending with the names the slot holds that nothing appoints.
+    /// </summary>
+    [Fact]
+    public async Task EveryKeyTheSlotLacks_IsNamed_BesideAKeyItHolds()
+    {
+        var zai = new AgentProviderConfig
+        {
+            Name = "zai",
+            Type = "zai",
+            Api = "https://api.z.ai/api/paas/v4",
+            ApiKeyNames = ["ZAI_API_KEY", "ZAI_API_KEY_TWO"],
+            Client = "glm",
+            Models = [new AgentModelConfig { Code = "glm-5.3", Name = "GLM 5.3", Tiers = ["balanced"], Efforts = ["low", "high", "max"], ContextTokens = 1_000_000, MaxOutputTokens = 131_072 }],
+        };
+
+        using var repository = await RepositoryAsync(new HarnessConfig
+        {
+            Workflows = ["small"],
+            Providers = [zai],
+            TierConfig = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase) { ["balanced"] = ["glm-5.3"] },
+        });
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        await WriteAsync(
+            repository,
+            "small",
+            """
+            name: small
+            steps:
+              - name: write
+                type: reason
+                agent: worker
+                prompt: prompts/work.md
+                outputs: schemas/work.json
+            """,
+            cancellationToken,
+            "agents/worker.md",
+            "prompts/work.md",
+            "schemas/work.json");
+
+        var slot = Path.Combine(repository.Path, ".harness-config", "workflows", ".env", "keys.env");
+        var prefix = $"no file under '{DssHarness.Core.Repository.HarnessLayout.WorkflowsEnvSlotRelative}/' declares";
+
+        File.WriteAllText(slot, "ZAI_API_KEY=one\nZAI_APIKEY=two\n");
+        var one = await Service(repository).CheckAsync(repository.Path, named: null, cancellationToken);
+
+        Assert.True(one.Passed);
+        Assert.Equal(
+            [
+                $"{prefix} 'ZAI_API_KEY_TWO', the name provider 'zai' appoints for its key (its apiKeyNames); add ZAI_API_KEY_TWO= to a file there, "
+                    + "holding the Z.AI API key (it is read from this slot and nowhere else). The steps that would read it: step 'write'. "
+                    + "Declared there and appointed by nothing: ZAI_APIKEY",
+            ],
+            one.Lines.Where(line => line.StartsWith("no file under", StringComparison.Ordinal)));
+
+        File.Delete(slot);
+        var none = await Service(repository).CheckAsync(repository.Path, named: null, cancellationToken);
+
+        Assert.True(none.Passed);
+        Assert.Equal(
+            [
+                $"{prefix} 'ZAI_API_KEY' or 'ZAI_API_KEY_TWO', the names provider 'zai' appoints for its keys (its apiKeyNames); add ZAI_API_KEY= or ZAI_API_KEY_TWO= "
+                    + "to a file there, holding the Z.AI API key (it is read from this slot and nowhere else). The steps that would read one of them: step 'write'",
+            ],
+            none.Lines.Where(line => line.StartsWith("no file under", StringComparison.Ordinal)));
     }
 
     /// <summary>
@@ -518,7 +629,9 @@ public sealed class WorkflowValidationServiceTests
                     || line.StartsWith("reporter ", StringComparison.Ordinal)
                     || line.StartsWith("no file under", StringComparison.Ordinal),
                 $"a level or missing-key line: {line}"));
-        Assert.Equal(2, report.Lines.Count(line => line.StartsWith("no file under", StringComparison.Ordinal)));
+
+        // Z.AI's key alone: Anthropic's models are reached through claude-code, which reads none.
+        Assert.Equal(1, report.Lines.Count(line => line.StartsWith("no file under", StringComparison.Ordinal)));
     }
 
     /// <summary>A schema the disk will not give up is a problem naming it, with the disk's reason, as a missing one is.</summary>

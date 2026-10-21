@@ -163,8 +163,8 @@ public sealed class WorkflowValidationService(
 
         // The key slot's own problems - a name declared twice, a line that defines nothing - are the configuration's,
         // said where the definition is checked; which names it holds is no problem at all, so a machine that only
-        // checks a configuration needs no key, and the steps that would need one are said under the line that says
-        // the definition holds.
+        // checks a configuration needs no key, and the steps that would read one it lacks are said under the line that
+        // says the definition holds.
         var slot = _keys.Present(context.Layout);
         problems.AddRange(slot.Problems);
 
@@ -175,13 +175,13 @@ public sealed class WorkflowValidationService(
 
         // The recovery is counted apart: its steps run only where something failed. Under the one line that says the
         // definition holds, each agent's models and the level each runs at, resolved the same check resolved them, and
-        // the keys no file of the slot declares, with the steps that need them.
+        // the keys a step's model would read that no file of the slot declares, with the steps that would read them.
         var steps = Count(definition.Steps);
         var recovering = definition.Recover is { } recover ? Count(recover.Steps) : 0;
         var reasons = Count([.. definition.Steps, .. definition.Recover?.Steps ?? []], "reason");
         var recovery = definition.Recover is null ? string.Empty : $", {recovering} recovering";
         IReadOnlyList<string> agents = resolved.Providers is { } providers
-            ? [.. WorkflowValidator.ModelLevels(definition, providers), .. WorkflowValidator.MissingKeys(definition, providers, slot.Names)]
+            ? [.. WorkflowValidator.ModelLevels(definition, providers), .. MissingKeys(definition, providers, slot)]
             : [];
         return new WorkflowCheck(
             name,
@@ -193,6 +193,26 @@ public sealed class WorkflowValidationService(
             Definition = definition,
             Directory = directory,
         };
+    }
+
+    /// <summary>
+    /// One line for each provider with a key the slot lacks that a step of the definition would read: every such name,
+    /// said by the one builder of the missing-key sentence with the steps that would read it - a report under the line
+    /// that says the definition holds, never a problem of it.
+    /// </summary>
+    private static IEnumerable<string> MissingKeys(
+        WorkflowDefinition definition,
+        DssHarness.Core.Agents.AgentProviders providers,
+        DssHarness.Core.Secrets.AgentSlotPresent slot)
+    {
+        var appointed = providers.Appointed();
+
+        return WorkflowValidator.MissingKeys(definition, providers, slot.Names).Select(need => DssHarness.Core.Secrets.AgentKeyStore.Missing(
+            slot,
+            appointed,
+            need.Missing,
+            appointed.First(key => string.Equals(key.Name, need.Missing[0], StringComparison.Ordinal)),
+            need.ReadBy));
     }
 
     /// <summary>

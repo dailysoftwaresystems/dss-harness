@@ -1,6 +1,7 @@
 using DssHarness.Core.Application;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Hosts;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Repository;
@@ -36,6 +37,12 @@ public sealed class AgentProvidersService(
     /// <summary>The command this service answers.</summary>
     public const string ListCommand = "list-agent-providers";
 
+    /// <summary>
+    /// How a configuration that declares no providers is told to add them: the command that prints the sections as
+    /// <c>init</c> writes them - said by the listing, and by <c>validate-workflow</c> of a step that needs a model.
+    /// </summary>
+    public const string TemplateHint = $"{ToolPackage.Command} {ListCommand} --template prints them as init writes them into a new config, to paste";
+
     private readonly IHarnessContextLoader _contextLoader = contextLoader;
     private readonly IHostPlatform _platform = platform;
     private readonly AgentKeyStore _keys = keys;
@@ -52,11 +59,11 @@ public sealed class AgentProvidersService(
 
         var resolved = AgentProviders.Resolve(context.Config);
 
-        if (resolved.Problems is [var problem, ..])
+        if (resolved is not { Providers: { } providers } || resolved.Problems is [_, ..])
         {
             return CommandOutcome.Failed(
                 HarnessExit.ConfigInvalid,
-                $"the agent sections of the configuration do not read: {problem}",
+                $"the agent sections of the configuration do not read: {resolved.Problems[0]}",
                 resolved.Problems);
         }
 
@@ -70,11 +77,11 @@ public sealed class AgentProvidersService(
                 present.Problems);
         }
 
-        return AgentProviderReports.List(List(context.Config, context.Layout, present), json);
+        return AgentProviderReports.List(List(context.Config, providers, present), json);
     }
 
     /// <summary>Builds the listing of one configuration and one slot's presence, every problem already refused.</summary>
-    private AgentProviderList List(HarnessConfig config, HarnessLayout layout, AgentSlotPresent present)
+    private static AgentProviderList List(HarnessConfig config, AgentProviders resolved, AgentSlotPresent present)
     {
         bool Holds(string name) => present.Holds(name);
 
@@ -101,16 +108,16 @@ public sealed class AgentProvidersService(
             [.. tier.Value.Select(code => config.Providers.SelectMany(provider => provider.Models)
                 .FirstOrDefault(model => model.Code == code) is { } named ? (named.Code, named.Name) : (code, code))]))];
 
-        List<string> appointed = [.. config.Providers.SelectMany(provider => provider.ApiKeyNames)];
+        var appointed = resolved.Appointed();
 
         var clients = new List<AgentClientListing>();
 
         foreach (var client in config.Providers.Select(provider => provider.Client).Distinct(StringComparer.Ordinal))
         {
             // Only a client that signs in is said: a pure API client - glm - signs each request with its provider's
-            // key, which the provider's own row says, and appoints no name of its own. Until the configuration's
-            // clients are read (their section is later work), a sign-in client signs in with the machine's login.
-            if (client == "claude-code")
+            // key, which the provider's own row says, and appoints no name of its own. How a client signs in is its
+            // kind's, which no configuration changes in this build (part 03's auth is a later key of agentClients).
+            if (resolved.SignsInWithLogin(client))
             {
                 clients.Add(new AgentClientListing(client, "the machine's login", []));
             }
@@ -133,6 +140,6 @@ public sealed class AgentProvidersService(
             config.BalanceKeyUsage is true,
             tiers,
             clients,
-            [.. present.Names.Where(name => !appointed.Contains(name, StringComparer.OrdinalIgnoreCase))]);
+            [.. present.Names.Where(name => !appointed.Any(key => string.Equals(key.Name, name, StringComparison.OrdinalIgnoreCase)))]);
     }
 }

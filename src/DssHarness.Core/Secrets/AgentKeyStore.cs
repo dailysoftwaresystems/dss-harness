@@ -129,7 +129,7 @@ public sealed class AgentKeyStore(IFileSystem fileSystem, IFilePermissions fileP
         {
             var of = appointed.FirstOrDefault(key => string.Equals(key.Name, name, StringComparison.OrdinalIgnoreCase));
 
-            return new AgentKeyAnswer(null, Missing(layout, appointed, [name], of ?? new(name, "the configuration", "its key's value")));
+            return new AgentKeyAnswer(null, Missing(Present(layout), appointed, [name], of ?? new(name, "the configuration", "its key's value")));
         }
 
         var file = directories.Origins[where];
@@ -148,21 +148,28 @@ public sealed class AgentKeyStore(IFileSystem fileSystem, IFilePermissions fileP
     }
 
     /// <summary>
-    /// The refusal of a key no file of the slot declares, with the names the slot holds that nothing appoints: what a
-    /// run that is being started or resumed is refused with (13), and what a listing says in its place.
+    /// The one builder of the sentence that says a key no file of the slot declares: the names, who appoints them, what
+    /// to add and what it holds, the steps that would read it where the asker names them, and the names the slot holds
+    /// that nothing appoints - where a misspelt one shows. <c>validate-workflow</c> says it of every name a step's model
+    /// would read and the slot lacks; a run that refuses a missing key will be refused with it.
     /// </summary>
-    /// <param name="layout">The repository's layout: the slot is the main checkout's, so worktrees share it.</param>
+    /// <param name="present">What the slot was read to hold.</param>
     /// <param name="appointed">Every name the configuration appoints, of providers and clients both.</param>
     /// <param name="missing">The names to say, in the order their provider lists them.</param>
     /// <param name="of">Who appoints them and what they hold, as the sentence names both.</param>
-    public string Missing(HarnessLayout layout, IReadOnlyList<AppointedKey> appointed, IReadOnlyList<string> missing, AppointedKey of)
+    /// <param name="readBy">The steps that would read them, as the sentence names each; none where the asker names none.</param>
+    public static string Missing(
+        AgentSlotPresent present,
+        IReadOnlyList<AppointedKey> appointed,
+        IReadOnlyList<string> missing,
+        AppointedKey of,
+        IReadOnlyList<string>? readBy = null)
     {
-        ArgumentNullException.ThrowIfNull(layout);
+        ArgumentNullException.ThrowIfNull(present);
         ArgumentNullException.ThrowIfNull(appointed);
         ArgumentNullException.ThrowIfNull(missing);
         ArgumentNullException.ThrowIfNull(of);
 
-        var present = Present(layout);
         var slot = HarnessLayout.WorkflowsEnvSlotRelative + "/";
         var unappointed = string.Join(", ", present.Names
             .Where(held => !appointed.Any(key => string.Equals(key.Name, held, StringComparison.OrdinalIgnoreCase))));
@@ -173,6 +180,7 @@ public sealed class AgentKeyStore(IFileSystem fileSystem, IFilePermissions fileP
         return $"no file under '{slot}' declares {declared}, the name{(one ? string.Empty : "s")} {of.By} appoints "
             + $"for its key{(one ? string.Empty : "s")} (its apiKeyNames); add {add} to a file there, holding {of.What} "
             + $"(it is read from this slot and nowhere else)"
+            + (readBy is not [_, ..] ? string.Empty : $". The steps that would read {(one ? "it" : "one of them")}: {string.Join(", ", readBy)}")
             + (unappointed.Length == 0 ? string.Empty : $". Declared there and appointed by nothing: {unappointed}");
     }
 

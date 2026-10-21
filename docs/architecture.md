@@ -1306,10 +1306,16 @@ reaches the provider, and each model the step may run on is given a level it tak
 every model, or a map of `all` and models' codes, each model's resolved on its own, a code the step
 does not run on refused as dead, and a step that goes on with another's work checked against the tier
 it inherits. Where the definition holds, the check says each agent's models and the level each runs
-at, one line apiece under the line that says it holds, and every key no file of the agent clients'
-slot declares, with the steps that need it - a provider's key as a step's first model, or as a later
-model of its tier - which is a report and not a problem: a machine that only checks a configuration
-needs no key, and starting a run is what refuses. The slot itself
+at, one line apiece under the line that says it holds, and every key a step's model would read that
+no file of the agent clients' slot declares, one beside a key the slot holds among them, with the
+steps that would read it - as a step's first model, or as a later model of its tier. What a model
+reads is decided in one place (`AgentProviders.KeysRead`) by the client that reaches it, the step's
+own or else its provider's: `claude-api` and `glm` sign each request with the provider's key, and
+`claude-code` signs in with the machine's login and reads none, so a step on it is never said to
+need one. Each line is the one sentence a missing key is said in (`AgentKeyStore.Missing`), ending
+with the names the slot holds that nothing appoints. It is a report and not a problem: a machine
+that only checks a configuration needs no key, and no command of this build refuses one - the run
+that will is the engine's, which this build does not yet run. The slot itself
 (`Secrets\AgentKeyStore`, beside the host items' own store) reads the git-ignored
 `.harness-config/workflows/.env/` by the runner's one rule for a directory of dotenv files - every
 file merged, a name declared twice refused in its own words - and from nowhere else, so a stray

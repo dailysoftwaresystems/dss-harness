@@ -93,7 +93,7 @@ public static class AgentProviderReports
 
         if (list.Providers.Count == 0)
         {
-            lines.Add($"no providers are declared; {ToolPackage.Command} {AgentProvidersService.ListCommand} --template prints them as init writes them into a new config, to paste");
+            lines.Add($"no providers are declared; {AgentProvidersService.TemplateHint}");
         }
         else
         {

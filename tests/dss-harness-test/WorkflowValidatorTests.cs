@@ -1691,9 +1691,9 @@ public sealed class WorkflowValidatorTests
                     outputs: schemas/think.json
                 """), hasCommitTemplate: false, files: null, providers));
 
-        // A step that names neither a tier nor a model, where the configuration names neither either.
+        // A step that names neither a tier nor a model, where the configuration names no default tier.
         Assert.Equal(
-            ["workflow 'default' step 'plan' names neither a tier nor a model, and the configuration's defaults.agentTier names neither either; say one on the step, in its agent definition, or under defaults.agentTier"],
+            ["workflow 'default' step 'plan' names neither a tier nor a model, and the configuration names no defaults.agentTier; say one on the step, or under defaults.agentTier"],
             WorkflowValidator.Validate(Parse("""
                 name: default
                 steps:
@@ -1704,9 +1704,16 @@ public sealed class WorkflowValidatorTests
                     outputs: schemas/think.json
                 """), hasCommitTemplate: false, files: null, Providers(agentTier: null)));
 
-        // Where the config declares no providers at all, the sentence says what to paste.
+        // Where the config declares no providers at all, the sentence says what to paste - whatever the step names: a
+        // tier, a model, or neither, the default tier then naming a tier no configuration defines.
+        var none = AgentProviders.Resolve(new HarnessConfig { Defaults = new HarnessDefaults { AgentTier = "balanced" } }).Providers!;
+
         Assert.Equal(
-            ["workflow 'default' step 'plan' names tier 'balanced' and the config declares no providers and no tierConfig: dssharness list-agent-providers --template prints them as init writes them into a new config, to paste"],
+            [
+                "workflow 'default' step 'plan' names tier 'balanced' and the config declares no providers and no tierConfig: dssharness list-agent-providers --template prints them as init writes them into a new config, to paste",
+                "workflow 'default' step 'draft' names model 'glm-5.3' and the config declares no providers and no tierConfig: dssharness list-agent-providers --template prints them as init writes them into a new config, to paste",
+                "workflow 'default' step 'write' names neither a tier nor a model and the config declares no providers and no tierConfig: dssharness list-agent-providers --template prints them as init writes them into a new config, to paste",
+            ],
             WorkflowValidator.Validate(Parse("""
                 name: default
                 steps:
@@ -1716,7 +1723,18 @@ public sealed class WorkflowValidatorTests
                     tier: balanced
                     prompt: prompts/think.md
                     outputs: schemas/think.json
-                """), hasCommitTemplate: false, files: null, AgentProviders.Resolve(new HarnessConfig()).Providers!));
+                  - name: draft
+                    type: reason
+                    agent: thinker
+                    model: glm-5.3
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                  - name: write
+                    type: reason
+                    agent: thinker
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                """), hasCommitTemplate: false, files: null, none));
 
         // With no providers given at all, the half is unchecked: a definition is never checked against a configuration
         // the caller did not choose.

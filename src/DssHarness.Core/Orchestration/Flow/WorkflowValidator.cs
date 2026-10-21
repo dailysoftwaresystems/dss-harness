@@ -173,16 +173,26 @@ public static class WorkflowValidator
     }
 
     /// <summary>
-    /// The keys a definition's steps need that the slot holds none of, one line apiece - for a definition that holds,
-    /// said by <c>validate-workflow</c>, which passes: a machine that only checks a configuration needs no key, and
-    /// starting a run is what refuses. A step needs a provider's key where its first model is the provider's, or where
-    /// one is a later model of its tier; the advisor and the reporter are asked the same. A name the slot holds that
-    /// nothing appoints is not refused.
+    /// The keys of one provider a definition's steps would read and the slot does not hold, with the steps that would
+    /// read them: first as a step's first model, then as a later model of its tier.
+    /// </summary>
+    /// <param name="Provider">The provider that appoints them.</param>
+    /// <param name="Missing">Every name of its <c>apiKeyNames</c> the slot does not hold, in its order.</param>
+    /// <param name="ReadBy">Each step that would read one, as a sentence names it - a later model of its tier said so - each once.</param>
+    public sealed record KeyNeed(DssHarness.Core.Configuration.AgentProviderConfig Provider, IReadOnlyList<string> Missing, IReadOnlyList<string> ReadBy);
+
+    /// <summary>
+    /// The keys a definition's steps would read that the slot does not hold, one need for each provider - for a
+    /// definition that holds, said by <c>validate-workflow</c>, which passes: a machine that only checks a
+    /// configuration needs no key, and no command of this build refuses one. A step would read a provider's keys where
+    /// one of its models is the provider's and the client that reaches it signs each request with the provider's key
+    /// (<see cref="DssHarness.Core.Agents.AgentProviders.KeysRead"/>, the one place that says it); the advisor and the
+    /// reporter are asked the same. Every name the slot lacks is said, one beside a name it holds among them.
     /// </summary>
     /// <param name="definition">A workflow's parsed definition.</param>
     /// <param name="providers">The configuration's providers and tiers, resolved.</param>
     /// <param name="held">The names the slot declares, holding something.</param>
-    public static IReadOnlyList<string> MissingKeys(WorkflowDefinition definition, DssHarness.Core.Agents.AgentProviders providers, IReadOnlyCollection<string> held)
+    public static IReadOnlyList<KeyNeed> MissingKeys(WorkflowDefinition definition, DssHarness.Core.Agents.AgentProviders providers, IReadOnlyCollection<string> held)
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(providers);
@@ -2280,40 +2290,38 @@ public static class WorkflowValidator
         }
 
         /// <summary>
-        /// One line for each provider no key of the slot serves, with every step that needs one - first model and later
-        /// models of a tier apart, for a run refuses only where the first model of one of its steps has no key, and a
-        /// later model is said and passed over.
+        /// One need for each provider with a key the slot lacks that a step would read, with every step that would read
+        /// one - first models before later models of a tier, for a run refuses only where the first model of one of its
+        /// steps has none of its keys, and a later model is said and passed over.
         /// </summary>
-        internal IReadOnlyList<string> Keys(IReadOnlyCollection<string> held)
+        internal IReadOnlyList<KeyNeed> Keys(IReadOnlyCollection<string> held)
         {
             if (_providers is not { } providers)
             {
                 return [];
             }
 
-            var needed = new Dictionary<string, (Configuration.AgentProviderConfig Provider, List<string> First, List<string> Later)>(StringComparer.Ordinal);
+            var needed = new Dictionary<string, (Configuration.AgentProviderConfig Provider, List<string> Missing, List<string> First, List<string> Later)>(StringComparer.Ordinal);
 
-            void Need(string where, string? tier, string? model)
+            void Need(string where, string? tier, string? model, string? client)
             {
-                var models = model is { } named
-                    ? (providers.Of(named) is { } of ? [(of.Provider, of.Model)] : [])
-                    : providers.ModelsOf(tier ?? providers.DefaultTier ?? string.Empty);
-
-                foreach (var (provider, at) in models.Select((entry, at) => (entry.Provider, at)))
+                foreach (var (provider, at) in ModelsRunOn(providers, tier, model).Select((entry, at) => (entry.Provider, at)))
                 {
-                    if (provider.ApiKeyNames.Any(name => held.Contains(name, StringComparer.OrdinalIgnoreCase)))
+                    var missing = providers.KeysRead(provider, client).Where(name => !held.Contains(name, StringComparer.OrdinalIgnoreCase)).ToList();
+
+                    if (missing.Count == 0)
                     {
                         continue;
                     }
 
                     if (!needed.TryGetValue(provider.Name, out var steps))
                     {
-                        steps = (provider, [], []);
+                        steps = (provider, missing, [], []);
                         needed[provider.Name] = steps;
                     }
 
-                    // A step that needs the provider as its first model needs it as a later one too, and a tier that
-                    // tries two of its models says the step once either way.
+                    // A step that reads the provider's keys for its first model reads them for a later one too, and a
+                    // tier that tries two of its models says the step once either way.
                     if (at == 0)
                     {
                         if (!steps.First.Contains(where, StringComparer.Ordinal))
@@ -2332,50 +2340,37 @@ public static class WorkflowValidator
             {
                 var step = entry.Step;
                 var inherited = Inherited(entry);
-                Need($"step '{entry.Path}'", inherited?.Tier ?? step.Tier, inherited?.Model ?? step.Model);
+                Need($"step '{entry.Path}'", inherited?.Tier ?? step.Tier, inherited?.Model ?? step.Model, step.Client);
             }
 
             if (_definition.Advisor is { } advisor)
             {
-                Need("advisor", advisor.Tier, advisor.Model);
+                Need("advisor", advisor.Tier, advisor.Model, advisor.Client);
             }
 
             if (_definition.Reporter is { } reporter)
             {
-                Need("reporter", reporter.Tier, reporter.Model);
+                Need("reporter", reporter.Tier, reporter.Model, reporter.Client);
             }
 
-            var lines = new List<string>();
-
-            foreach (var entry in needed.Values)
-            {
-                var provider = entry.Provider;
-                var missing = Joined(provider.ApiKeyNames.Select(name => $"'{name}'"), "or");
-                var one = provider.ApiKeyNames.Count == 1;
-                var who = string.Join(", ",
-                    [.. entry.First, .. entry.Later.Select(where => $"{where} (a later model of its tier)")]);
-
-                lines.Add(
-                    $"no file under '{DssHarness.Core.Repository.HarnessLayout.WorkflowsEnvSlotRelative}/' declares {missing}, "
-                    + $"the name{(one ? string.Empty : "s")} provider '{provider.Name}' appoints for its key{(one ? string.Empty : "s")} "
-                    + $"(its apiKeyNames); the steps that need it: {who}");
-            }
-
-            return lines;
+            return [.. needed.Values.Select(entry => new KeyNeed(
+                entry.Provider,
+                entry.Missing,
+                [.. entry.First, .. entry.Later.Select(where => $"{where} (a later model of its tier)")]))];
         }
 
-        /// <summary>A list said as the tool says one: comma-separated, the last apart, the separator before it.</summary>
-        private static string Joined(IEnumerable<string> items, string last)
-        {
-            var list = items.ToList();
-
-            return list.Count switch
-            {
-                0 => string.Empty,
-                1 => list[0],
-                _ => $"{string.Join(", ", list[..^1])} {last} {list[^1]}",
-            };
-        }
+        /// <summary>
+        /// The models an agent may run on, in the order they are tried: the model it names, else its tier's, else the
+        /// configuration's default tier's - the one resolution every line said of an agent reads. Empty where what it
+        /// names resolves to nothing, which the checks refuse on their own.
+        /// </summary>
+        private static IReadOnlyList<(Configuration.AgentProviderConfig Provider, Configuration.AgentModelConfig Model)> ModelsRunOn(
+            DssHarness.Core.Agents.AgentProviders providers,
+            string? tier,
+            string? model)
+            => model is { } named
+                ? (providers.Of(named) is { } of ? [(of.Provider, of.Model)] : [])
+                : providers.ModelsOf(tier ?? providers.DefaultTier ?? string.Empty);
 
         private void AddLevels(
             string where,
@@ -2386,9 +2381,7 @@ public static class WorkflowValidator
             DssHarness.Core.Agents.AgentProviders providers,
             List<string> lines)
         {
-            var models = model is { } named
-                ? (providers.Of(named) is { } of ? [(of.Provider, of.Model)] : [])
-                : providers.ModelsOf(tier ?? providers.DefaultTier ?? string.Empty);
+            var models = ModelsRunOn(providers, tier, model);
 
             if (models.Count == 0)
             {
@@ -2412,6 +2405,16 @@ public static class WorkflowValidator
             string? client,
             string where)
         {
+            // A configuration that declares no providers has no model at all, so whatever the step names - a tier, a
+            // model, or neither - it is told how to add them before anything is looked for in them.
+            if (providers.HasNoProvidersAtAll)
+            {
+                var names = model is not null ? $"names model '{model}'" : tier is not null ? $"names tier '{tier}'" : "names neither a tier nor a model";
+
+                _problems.Add($"{where} {names} and the config declares no providers and no tierConfig: {DssHarness.Core.Agents.AgentProvidersService.TemplateHint}");
+                return;
+            }
+
             if (model is not null)
             {
                 if (providers.Of(model) is not { } named)
@@ -2437,10 +2440,11 @@ public static class WorkflowValidator
             if (tier is null)
             {
                 // A step that names neither a tier nor a model runs on the configuration's default tier, which nothing
-                // builds in: where the config names none, the step is refused naming the three places it could be said.
+                // builds in: where the config names none, the step is refused naming the two places this build reads
+                // one from (an agent definition's own tier is read when definitions are, a later slice's).
                 if (providers.DefaultTier is null)
                 {
-                    _problems.Add($"{where} names neither a tier nor a model, and the configuration's defaults.agentTier names neither either; say one on the step, in its agent definition, or under defaults.agentTier");
+                    _problems.Add($"{where} names neither a tier nor a model, and the configuration names no defaults.agentTier; say one on the step, or under defaults.agentTier");
                     return;
                 }
 
@@ -2462,12 +2466,6 @@ public static class WorkflowValidator
                 }
 
                 EffortRules(defaults, providers.DefaultTier, effort, effortByModel, where);
-                return;
-            }
-
-            if (providers.HasNoProvidersAtAll)
-            {
-                _problems.Add($"{where} names tier '{tier}' and the config declares no providers and no tierConfig: dssharness list-agent-providers --template prints them as init writes them into a new config, to paste");
                 return;
             }
 
@@ -2583,8 +2581,7 @@ public static class WorkflowValidator
 
         /// <summary>Whether <paramref name="client"/> is one the tool builds in and reaches <paramref name="provider"/>'s type.</summary>
         private static bool ClientReaches(string client, DssHarness.Core.Configuration.AgentProviderConfig provider)
-            => DssHarness.Core.Agents.AgentProviders.ClientKinds.FirstOrDefault(kind => string.Equals(kind.Name, client, StringComparison.Ordinal)) is { } kind
-                && string.Equals(kind.ProviderType, provider.Type, StringComparison.Ordinal);
+            => DssHarness.Core.Agents.AgentProviders.Reaches(client, provider);
 
         /// <summary>
         /// The work-item group: the <c>forEach</c> group the step <c>amend.whenAddScope</c> names is declared directly in,
