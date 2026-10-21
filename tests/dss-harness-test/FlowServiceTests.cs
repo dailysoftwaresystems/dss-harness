@@ -525,6 +525,43 @@ public sealed class FlowServiceTests
         Assert.Equal("answer-orchestrator", given["through"]!.GetValue<string>());
     }
 
+    /// <summary>
+    /// An answer given where no engine runs the run is applied though the inbox beside it cannot be read: the answer,
+    /// once recorded, stands - the run is driven on, and what could not be read is said and left for the next session -
+    /// never a refusal over an answer already on disk.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerWithNoEngine_OverAnInboxThatCannotBeRead_IsAppliedAndTheRunDrivenOn()
+    {
+        var (repository, service, runner) = await ServiceAsync("""
+            name: flow
+            steps:
+              - name: holding
+                type: pause
+                question: what now?
+                options: [stay, go]
+              - name: after
+                type: orient
+                dependsOn: [holding]
+            """);
+        using var disposed = repository;
+
+        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+        _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var run = RunOf(repository);
+        repository.Harness.FileSystem.WriteAllTextAtomic(run.InboxFile, "not an inbox");
+
+        var outcome = await service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal("done", outcome.Message);
+        Assert.Equal(["after"], runner.Started);
+        Assert.Equal("answered", Assert.Single(repository.Harness.OrchestrationStore.ReadFlowQuestions(run)!.Questions).State);
+        Assert.StartsWith("what was handed to the engine as its session began could not be read: ", outcome.Details![0], StringComparison.Ordinal);
+        Assert.EndsWith("; it stays for the next session of the run", outcome.Details![0], StringComparison.Ordinal);
+    }
+
     /// <summary>An answer to a question no longer open is refused (13), naming what became of the question.</summary>
     [Fact]
     public async Task AnAnswerToAQuestionNoLongerOpenIsRefused()

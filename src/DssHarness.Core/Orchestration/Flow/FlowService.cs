@@ -671,8 +671,10 @@ public sealed class FlowService(
                 throw new HarnessException(HarnessExit.Refused, problem!);
             }
 
-            // What was handed to an engine whose session ended before it took it is this session's to take.
-            inbox |= TakeInbox(layout, coordinator, offered, said).Seen > 0;
+            // What was handed to an engine whose session ended before it took it is this session's to take - and what
+            // cannot be read of it is said and left for the next session: the command's own answer, recorded above,
+            // stands, and the run is driven on.
+            inbox |= Guarded("handed to the engine as its session began", said, () => TakeInbox(layout, coordinator, offered, said)).Seen > 0;
 
             FlowSessionEnd end;
 
@@ -865,8 +867,7 @@ public sealed class FlowService(
     /// </summary>
     /// <returns>How many answers were taken, and how many were read.</returns>
     private (int Taken, int Seen) LastPoll(OrchestratorLayout layout, FlowCoordinator coordinator, Dictionary<string, Task<bool>> offered, List<string> said)
-    {
-        try
+        => Guarded("asked of the engine as its session ended", said, () =>
         {
             if (_store.TakeStopFile(layout) is { } late)
             {
@@ -875,10 +876,22 @@ public sealed class FlowService(
 
             Settle(layout, offered);
             return TakeInbox(layout, coordinator, offered, said);
+        });
+
+    /// <summary>
+    /// Reads what was asked of the engine between its drives - at a session's start or its end - where what cannot be
+    /// read never ends the session: it is said, as <paramref name="what"/>, and left for the next session of the run.
+    /// </summary>
+    /// <returns>How many answers were taken, and how many were read - one unread counted as read, for the inbox is named.</returns>
+    private static (int Taken, int Seen) Guarded(string what, List<string> said, Func<(int Taken, int Seen)> read)
+    {
+        try
+        {
+            return read();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or HarnessException)
         {
-            said.Add($"what was asked of the engine as its session ended could not be read: {ex.Message.TrimEnd('.')}; it stays for the next session of the run");
+            said.Add($"what was {what} could not be read: {ex.Message.TrimEnd('.')}; it stays for the next session of the run");
             return (0, 1);
         }
     }
