@@ -41,7 +41,7 @@ public interface IOrchestratorService : IUseCase
     /// <summary>Lists the orchestrators, or the one named, with their agents and where each stands; a run's own lines from <c>flow.json</c> beside them.</summary>
     /// <param name="startDirectory">A directory in the repository.</param>
     /// <param name="name">The orchestrator to list, or null for all of them.</param>
-    /// <param name="steps">Whether to list each step instance of a run, with its state and its attempt.</param>
+    /// <param name="steps">Whether to list each step instance of a run, with its state, its visit, its attempt, its agent and its own directory.</param>
     /// <param name="questions">Whether to list every question a run raised and what became of it.</param>
     /// <param name="json">Whether to answer with one JSON document rather than lines.</param>
     /// <param name="cancellationToken">Stops it.</param>
@@ -67,6 +67,7 @@ public interface IOrchestratorService : IUseCase
 /// <param name="store">The records.</param>
 /// <param name="log">The logs.</param>
 /// <param name="sessions">Ends what a killed process left of an orchestrator's contained children, first in every command over it.</param>
+/// <param name="identity">How the liveness of a run's engine is told, through the run's one owner of it (<see cref="Flow.FlowRunOwner"/>).</param>
 /// <param name="clock">When an orchestrator is created.</param>
 public sealed class OrchestratorService(
     IHarnessContextLoader contextLoader,
@@ -78,6 +79,7 @@ public sealed class OrchestratorService(
     OrchestrationStore store,
     OrchestrationLog log,
     ChildSessions sessions,
+    Execution.IProcessIdentity identity,
     TimeProvider clock) : IOrchestratorService
 {
     /// <summary>The command that creates one.</summary>
@@ -98,6 +100,7 @@ public sealed class OrchestratorService(
     private readonly OrchestrationStore _store = store;
     private readonly OrchestrationLog _log = log;
     private readonly ChildSessions _sessions = sessions;
+    private readonly Flow.FlowRunOwner _owner = new(store, identity, clock);
     private readonly TimeProvider _clock = clock;
 
     public Task<CommandOutcome> CreateAsync(
@@ -160,9 +163,7 @@ public sealed class OrchestratorService(
             {
                 // Decided under the same hold as the creation, so no other command can take the name between the two.
                 return mustBeNew
-                    ? CommandOutcome.Refused(
-                        $"Orchestrator '{name}' exists already - '{orchestrator.RecordFile}' is its record - and a new one was asked for: name another. "
-                        + "Nothing was changed.")
+                    ? CommandOutcome.Refused(OrchestrationReports.RunExists(orchestrator))
                     : Change(orchestrator, existing, model, parallel, session);
             }
 
@@ -274,12 +275,13 @@ public sealed class OrchestratorService(
                 return CommandOutcome.Refused(OrchestrationReports.NoOrchestrator(name));
             }
 
-            // A run's engine is a live owner: only it records what its steps left running, and the deletion does not
-            // take the run from under it.
-            if (_store.ReadFlow(orchestrator) is not null && _store.ReadOwner(orchestrator) is { } held)
+            // A run's engine that is live owns the run: only it records what its steps left running, and the deletion
+            // does not take the run from under it. Whether it is live is the run's one owner's to tell; an owner whose
+            // engine has gone - a crash, stop-orchestrator --now - goes with the run.
+            if (_owner.Live(orchestrator) is { } held)
             {
                 return CommandOutcome.Refused(
-                    $"Orchestrator '{name}' was not deleted: a live engine owns the run (process {held.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture)} of '{held.Machine}'). "
+                    $"Orchestrator '{name}' was not deleted: a live engine owns the run ({_owner.Named(held)}). "
                     + $"{OrchestrationReports.Line(Flow.FlowService.PauseCommand, name)} pauses it and "
                     + $"{OrchestrationReports.Line(Flow.FlowService.StopCommand, name)} ends it, and once the engine is gone the run can be deleted. Nothing was changed.");
             }
@@ -539,11 +541,40 @@ public sealed class OrchestratorService(
                 [.. listed.Where(worktree => WorktreeAddress.AgentOf(orchestrator.Name, worktree.Name) is { } agent && !agents.Any(entry => entry.Name == agent))],
                 OrchestrationRules.OpenAgents(orchestrator.Name, agents, listed.Select(worktree => worktree.Name)),
                 Run: _store.ReadFlow(orchestrator) is { } flow
-                    ? new FlowRunInventory(flow, _store.ReadFlowQuestions(orchestrator))
+                    ? new FlowRunInventory(flow, _store.ReadFlowQuestions(orchestrator), EngineOf(orchestrator, flow))
                     : null));
         }
 
         return OrchestrationReports.List(inventory, steps, questions, json);
+    }
+
+    /// <summary>
+    /// What a run's engine is doing, as its records and its owner say it: none recorded; running; pausing, its handoffs
+    /// being written; recording the machine steps a completed pause left running; or gone - an owner recorded whose
+    /// process has ended.
+    /// </summary>
+    private FlowEngineState EngineOf(OrchestratorLayout orchestrator, Flow.FlowFile flow)
+    {
+        if (_store.ReadOwner(orchestrator) is not { } held)
+        {
+            return new FlowEngineState(FlowEngineState.None, null, []);
+        }
+
+        if (!_owner.Stands(held))
+        {
+            return new FlowEngineState(FlowEngineState.Gone, _owner.Named(held), []);
+        }
+
+        // Once the pause is complete, what its record still holds as running is what the pause left to finish: the
+        // machine steps, the only ones a pause lets run on.
+        var machine = flow.Steps.Where(step => !step.Group && step.State == nameof(Flow.FlowInstanceState.Running)).Select(step => step.Instance).ToList();
+
+        return flow.Pause switch
+        {
+            { CompletedAt: null } => new FlowEngineState(FlowEngineState.Pausing, _owner.Named(held), []),
+            { CompletedAt: not null } => new FlowEngineState(FlowEngineState.Recording, _owner.Named(held), machine),
+            _ => new FlowEngineState(FlowEngineState.Running, _owner.Named(held), []),
+        };
     }
 
     /// <summary>
@@ -643,10 +674,42 @@ public sealed record OrchestratorInventory(
 /// </summary>
 /// <param name="Flow">The run's state in one file.</param>
 /// <param name="Questions">The run's questions and answers, where it holds them.</param>
-public sealed record FlowRunInventory(Flow.FlowFile Flow, Flow.FlowQuestionsFile? Questions)
+/// <param name="Engine">What the run's engine is doing.</param>
+public sealed record FlowRunInventory(Flow.FlowFile Flow, Flow.FlowQuestionsFile? Questions, FlowEngineState Engine)
 {
     /// <summary>The run's status, lower-case, as the listing says it.</summary>
     public string Status => Flow.Status.ToLower(System.Globalization.CultureInfo.InvariantCulture);
+}
+
+/// <summary>What a run's engine is doing, as <c>list-orchestrator</c> says it.</summary>
+/// <param name="State">One of <see cref="None"/>, <see cref="Running"/>, <see cref="Pausing"/>, <see cref="Recording"/> and <see cref="Gone"/>.</param>
+/// <param name="Process">The engine's process as a line names it; null where none is recorded.</param>
+/// <param name="LeftRunning">The machine steps a completed pause left running, which the engine stays to record; empty in every other state.</param>
+public sealed record FlowEngineState(string State, string? Process, IReadOnlyList<string> LeftRunning)
+{
+    /// <summary>No engine is recorded: the run is between sessions.</summary>
+    public const string None = "none";
+
+    /// <summary>A live engine drives the run.</summary>
+    public const string Running = "running";
+
+    /// <summary>A live engine is pausing the run: its handoffs are being written.</summary>
+    public const string Pausing = "pausing";
+
+    /// <summary>The pause is complete, and the live engine stays only to record the machine steps it left running.</summary>
+    public const string Recording = "recording";
+
+    /// <summary>An engine is recorded whose process has ended: what a crash or <c>stop-orchestrator --now</c> leaves, reclaimed by the next session.</summary>
+    public const string Gone = "gone";
+
+    /// <summary>The engine in words, as the listing's line says it.</summary>
+    public string Said => State switch
+    {
+        None => "no engine",
+        Gone => $"its engine ({Process}) is gone",
+        Recording => $"its engine ({Process}) is recording {LeftRunning.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)} machine step{(LeftRunning.Count == 1 ? string.Empty : "s")}{(LeftRunning.Count == 0 ? string.Empty : $": {string.Join(", ", LeftRunning)}")}",
+        _ => $"its engine ({Process}) is {State}",
+    };
 }
 
 /// <summary>One agent, as list-orchestrator reports it.</summary>

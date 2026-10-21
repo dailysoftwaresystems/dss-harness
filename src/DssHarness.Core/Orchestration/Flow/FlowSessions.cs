@@ -1,8 +1,10 @@
 using System.Globalization;
+using DssHarness.Core.Build;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Legs;
+using DssHarness.Core.Mutations;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
@@ -11,9 +13,10 @@ using DssHarness.Core.Worktrees;
 namespace DssHarness.Core.Orchestration.Flow;
 
 /// <summary>
-/// The start of a run and of every session of it: one unfinished run at a time, the run's name, its record and its
-/// first status - all decided inside the one repository-wide section, so two starts can never both pass the test, two
-/// can never take one name, and <c>--run</c> never takes over a run that has finished.
+/// The start of a run and of every session of it: one unfinished run at a time, the run's name, its record, its first
+/// status and its owner - all decided inside the one repository-wide section, so two starts can never both pass the
+/// test, two can never take one name, two sessions can never both claim one run, and <c>--run</c> never takes over a
+/// run that has finished or a directory that holds none.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -22,18 +25,20 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// different ones and both pass. A session is refused (13) while any other run of the repository is unfinished and has
 /// work in the tree: a live owner, or - paused, stopped or failed - an agent with a worktree still open or a fold in
 /// its ledger not yet committed. Two would fold into one main tree, and that is as true of a run waiting on an answer
-/// as of one that is running.
+/// as of one that is running. What cannot be told of another run - an agent whose record does not read - refuses as
+/// work in the tree does, by a sentence that says so: it is never read as nothing.
 /// </para>
 /// <para>
 /// The test is made at the start of every session - a run, a resume and an answer - and leaves out the run the session
 /// is for: so a resume or an answer of <c>r2</c> while <c>r1</c> holds work in the tree is refused as a second run is,
-/// and no two engines ever fold into one main tree.
+/// and no two engines ever fold into one main tree. The owner is claimed in the same section, after the test: a run
+/// is never without an owner between the section and the claim, where another session's test would read it as idle.
 /// </para>
 /// </remarks>
 /// <param name="store">Reads and writes the records, strictly.</param>
 /// <param name="fileSystem">Reads the runs' directories.</param>
 /// <param name="identity">This process, and how another's liveness is told.</param>
-/// <param name="clock">When the run's record and its first status are written.</param>
+/// <param name="clock">When the run's record, its first status and its owner are written.</param>
 public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSystem, IProcessIdentity identity, TimeProvider? clock = null)
 {
     private readonly OrchestrationStore _store = store ?? throw new ArgumentNullException(nameof(store));
@@ -43,7 +48,8 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
 
     /// <summary>
     /// The one repository-wide section: no other process decides about the repository's runs at once. The scan for
-    /// unfinished runs, the choice of a run's name and the creation of its record are each made inside it.
+    /// unfinished runs, the choice of a run's name, the creation of its record and the claim of a run's owner are each
+    /// made inside it.
     /// </summary>
     /// <param name="layout">The repository.</param>
     /// <param name="work">The reading, the decision and the writing, all synchronous.</param>
@@ -57,25 +63,32 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
 
     /// <summary>
     /// Starts a run: inside the repository's one section, the test for another unfinished run, the name - a
-    /// <paramref name="wantedName"/> that is taken refused (13, as <c>MustBeNew</c> refuses it: naming its record and
-    /// the way on with that one), else the first free <c>r&lt;N&gt;</c> - the run's record (model <c>flow-engine</c>,
-    /// parallel the workflow's open-agent bound), and its first status, every step of the definition NotStarted.
+    /// <paramref name="wantedName"/> that is taken refused (13, <see cref="OrchestrationReports.RunExists"/>, naming its
+    /// record and the way on with that one), one whose directory is there holding no run's record refused as well, else
+    /// one more than the highest <c>r&lt;N&gt;</c> there - the run's record (model <c>flow-engine</c>, parallel the
+    /// workflow's open-agent bound), its first status, every step of the definition NotStarted, and its owner: this
+    /// process.
     /// </summary>
     /// <param name="layout">The repository.</param>
     /// <param name="definition">The workflow, as it was read.</param>
-    /// <param name="wantedName">The name <c>--run</c> gave, or null for the first free r&lt;N&gt;.</param>
+    /// <param name="wantedName">The name <c>--run</c> gave, or null for the next r&lt;N&gt;.</param>
     /// <param name="inputs">The values the run is started with, by input name.</param>
     /// <param name="startCommit">The commit the run starts from; null where it starts beside the tree's history.</param>
     /// <param name="branch">The branch the run starts on.</param>
+    /// <param name="refusal">
+    /// What the run's name chosen is still held to before anything of it is written - its path budget - as a refusal's
+    /// sentence; null where nothing refuses it.
+    /// </param>
     /// <returns>The run's layout and what the run is, as its records name it.</returns>
-    /// <exception cref="HarnessException">Another run of the repository is unfinished, or the name is taken (<see cref="HarnessExit.Refused"/>).</exception>
+    /// <exception cref="HarnessException">Another run of the repository is unfinished, the name is taken, or <paramref name="refusal"/> refuses it (<see cref="HarnessExit.Refused"/>).</exception>
     public (OrchestratorLayout Run, FlowRunContext Context) Create(
         HarnessLayout layout,
         WorkflowDefinition definition,
         string? wantedName = null,
         IReadOnlyDictionary<string, string>? inputs = null,
         string? startCommit = null,
-        string? branch = null)
+        string? branch = null,
+        Func<string, string?>? refusal = null)
     {
         ArgumentNullException.ThrowIfNull(layout);
         ArgumentNullException.ThrowIfNull(definition);
@@ -84,13 +97,12 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
         {
             RefuseAnotherUnfinished(layout, leavingOut: null);
 
-            var name = wantedName is { } given
-                ? _fileSystem.KindOf(OrchestratorLayout.Of(layout, given).RecordFile) == PathKind.File
-                    ? throw new HarnessException(
-                        HarnessExit.Refused,
-                        $"run '{given}' exists; --run names a new run, and resume-orchestrator {given} goes on with that one")
-                    : given
-                : FirstFree(layout);
+            var name = wantedName is { } given ? New(layout, given) : NextName(layout);
+
+            if (refusal?.Invoke(name) is { } refused)
+            {
+                throw new HarnessException(HarnessExit.Refused, refused);
+            }
 
             var run = OrchestratorLayout.Of(layout, name);
 
@@ -119,31 +131,64 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
                     []),
                 _clock.GetUtcNow());
 
+            // Claimed before the section is left: a run made here is never, for a moment, a run nobody owns.
+            _ = new FlowRunOwner(_store, _identity, _clock).Claim(run);
+
             return (run, context);
         });
     }
 
     /// <summary>
-    /// The test at the start of every session - a run, a resume and an answer alike - leaving out the run the session
-    /// is for: refused (13) where any other run of the repository is unfinished and has work in the tree, naming it and
-    /// the ways on with it.
+    /// The start of every session of a run already made - a resume and an answer alike - inside the repository's one
+    /// section: the test for another unfinished run, leaving out <paramref name="run"/>, the run's owner claimed -
+    /// refused where a live one holds it, a dead one reclaimed and said - and a request no engine took removed, so it
+    /// never reaches this session.
     /// </summary>
     /// <param name="layout">The repository.</param>
-    /// <param name="run">The run the session is for, left out of the test.</param>
-    /// <exception cref="HarnessException">Another run of the repository is unfinished (<see cref="HarnessExit.Refused"/>).</exception>
-    public void Guard(HarnessLayout layout, string run)
+    /// <param name="run">The run the session is for.</param>
+    /// <returns>What is said of a dead owner reclaimed; null where none was recorded.</returns>
+    /// <exception cref="HarnessException">Another run of the repository is unfinished, or a live engine owns the run (<see cref="HarnessExit.Refused"/>).</exception>
+    public string? Claim(HarnessLayout layout, OrchestratorLayout run)
     {
         ArgumentNullException.ThrowIfNull(layout);
-        ArgumentException.ThrowIfNullOrWhiteSpace(run);
+        ArgumentNullException.ThrowIfNull(run);
 
-        _ = AcrossRuns(layout, () =>
+        return AcrossRuns(layout, () =>
         {
-            RefuseAnotherUnfinished(layout, run);
-            return false;
+            RefuseAnotherUnfinished(layout, run.Name);
+
+            var reclaimed = new FlowRunOwner(_store, _identity, _clock).Claim(run);
+
+            // A pause or a stop asked of an engine that ended before it took it was asked of that engine, and of no
+            // session after it.
+            _ = _store.TakeStopFile(run);
+
+            return reclaimed;
         });
     }
 
-    /// <summary>Refuses where any run but <paramref name="leavingOut"/> is unfinished and has work in the tree: a live owner, or a paused, stopped or failed run whose agents still hold worktrees.</summary>
+    /// <summary>The name <c>--run</c> gave, where nothing is there by it: a run's record refused as taken, and a directory that holds none refused as well.</summary>
+    private string New(HarnessLayout layout, string given)
+    {
+        var run = OrchestratorLayout.Of(layout, given);
+
+        if (_fileSystem.KindOf(run.RecordFile) == PathKind.File)
+        {
+            throw new HarnessException(HarnessExit.Refused, OrchestrationReports.RunExists(run));
+        }
+
+        if (_fileSystem.KindOf(run.Directory) != PathKind.None)
+        {
+            throw new HarnessException(
+                HarnessExit.Refused,
+                $"'{run.Directory}' is there and holds no run's record ('{run.RecordFile}'); --run names a new run, and a run is never made over what something else left there. "
+                + "Nothing was changed: remove it, or name the run otherwise.");
+        }
+
+        return given;
+    }
+
+    /// <summary>Refuses where any run but <paramref name="leavingOut"/> is unfinished and has work in the tree, or where what it holds cannot be told.</summary>
     private void RefuseAnotherUnfinished(HarnessLayout layout, string? leavingOut)
     {
         foreach (var other in _store.Orchestrators(layout))
@@ -162,34 +207,42 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
         }
     }
 
-    /// <summary>Why <paramref name="other"/> is unfinished and holds work in the tree; null where it is not the run this test refuses.</summary>
+    /// <summary>Why <paramref name="other"/> is unfinished and holds work in the tree, or cannot be told not to; null where it is not the run this test refuses.</summary>
     private string? Unfinished(OrchestratorLayout other)
     {
-        if (_store.ReadOwner(other) is { } held)
+        if (new FlowRunOwner(_store, _identity, _clock).Live(other) is not null)
         {
-            if (_identity.Stands(held.Machine, held.ProcessId, held.Stamp))
-            {
-                return "running; owned by a live engine";
-            }
+            return "running; owned by a live engine";
         }
 
         var file = _store.ReadFlow(other);
 
-        if (file is null || file.Status is not ("Running" or "Paused" or "Stopped" or "Failed"))
+        if (file is null || file.Status is not (nameof(FlowRunStatus.Running) or nameof(FlowRunStatus.Paused) or nameof(FlowRunStatus.Stopped) or nameof(FlowRunStatus.Failed)))
         {
             return null;
         }
 
-        var open = _store.Agents(other)
-            .Count(entry => entry.Record is { State: AgentStates.Live } record && record.Worktree is not null);
+        var status = file.Status.ToLower(CultureInfo.InvariantCulture);
+        var agents = _store.Agents(other);
+
+        if (agents.FirstOrDefault(entry => entry.Record is null) is { } unreadable)
+        {
+            return $"{status}, and whether its agent '{unreadable.Name}' holds a worktree cannot be told: {unreadable.Problem!.TrimEnd('.')}";
+        }
+
+        var open = agents.Count(entry => entry.Record is { State: AgentStates.Live } record && record.Worktree is not null);
 
         return open > 0
-            ? $"{file.Status.ToLower(CultureInfo.InvariantCulture)}; {open.ToString(CultureInfo.InvariantCulture)} agent{(open == 1 ? string.Empty : "s")} with worktree{(open == 1 ? string.Empty : "s")} still open"
+            ? $"{status}; {open.ToString(CultureInfo.InvariantCulture)} agent{(open == 1 ? string.Empty : "s")} with worktree{(open == 1 ? string.Empty : "s")} still open"
             : null;
     }
 
-    /// <summary>The first free <c>r&lt;N&gt;</c>: one more than the highest taken, so a deleted run's name is never reused and the count never runs back.</summary>
-    private string FirstFree(HarnessLayout layout)
+    /// <summary>
+    /// The next <c>r&lt;N&gt;</c>: one more than the highest under the orchestrators directory, so a run's name is never
+    /// one in use and names grow with the runs while they are kept; a deleted run's name is given again only where no
+    /// later run was made.
+    /// </summary>
+    private string NextName(HarnessLayout layout)
     {
         var highest = 0;
 
@@ -213,57 +266,141 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
 /// <summary>
 /// The path budget at a run's start: the longest worktree path the run makes - counted with each
 /// <c>.legs/&lt;key&gt;</c> copy its legs work in and each <c>.mutations/&lt;key&gt;&lt;mark&gt;-&lt;n&gt;</c> worker its
-/// sweeps keep, as a copy's own check counts the build below it - stays within this machine's path limit, with the
-/// margin to spare. A copy whose build passes the limit fails as compile errors in files nobody touched, so it is
-/// asked before the run makes one.
+/// sweeps keep, each with its variant's build below it as a copy's own check counts it (<see cref="CopyPathBudget"/>) -
+/// stays within this machine's path limit, with the margin to spare. A copy whose build passes the limit fails as
+/// compile errors in files nobody touched, so it is asked before the run makes one.
 /// </summary>
 public static class FlowRunPaths
 {
+    /// <summary>The step types that run legs, each in the tree its step names.</summary>
+    private static readonly IReadOnlySet<string> LegSteps = new HashSet<string>(StringComparer.Ordinal) { "build", "test", "run", "check-mutations" };
+
     /// <summary>
     /// Checks the longest path the run's worktrees and the copies and workers inside them make, against the margin and
     /// the limit the repository's settings declare.
     /// </summary>
     /// <param name="budget">Reckons a path against this machine's limit.</param>
-    /// <param name="settings">The repository's worktree settings: the margin, and a limit of its own where it declares one.</param>
+    /// <param name="settings">The repository's worktree settings: the margin, the reserve, and a limit of its own where it declares one.</param>
     /// <param name="worktreesRoot">Where the run's agents' worktrees are made.</param>
     /// <param name="agentName">The longest agent name the run makes.</param>
-    /// <param name="legKeys">Each leg key a leg of the run works under, <c>.legs/&lt;key&gt;</c> below its tree.</param>
-    /// <param name="mutationKeys">Each mutation key a sweep of the run keeps a worker under, with its mark and count.</param>
-    /// <param name="reserve">The longest path a build of the project makes below its build directory.</param>
+    /// <param name="copied">Each variant a leg of the run builds in a copy, <c>.legs/&lt;key&gt;</c> below its tree.</param>
+    /// <param name="swept">Each variant a sweep of the run keeps workers of, <c>.mutations/&lt;key&gt;&lt;mark&gt;-&lt;n&gt;</c> below its tree.</param>
     /// <returns>Whether the longest path stays within the budget, with what it needs and what it may have.</returns>
     public static PathBudgetResult Check(
         IPathBudget budget,
         WorktreeSettings settings,
         string worktreesRoot,
         string agentName,
-        IReadOnlyList<string> legKeys,
-        IReadOnlyList<string> mutationKeys,
-        int reserve)
+        IReadOnlyList<VariantKey> copied,
+        IReadOnlyList<VariantKey> swept)
     {
         ArgumentNullException.ThrowIfNull(budget);
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentException.ThrowIfNullOrWhiteSpace(worktreesRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(agentName);
+        ArgumentNullException.ThrowIfNull(copied);
+        ArgumentNullException.ThrowIfNull(swept);
 
         // The deepest tree the run works in: the longest agent's worktree.
         var tree = Path.Combine(worktreesRoot, agentName);
 
-        // The longest thing kept inside a tree the run works in: a copy a leg works in, or a mutation worker - each
-        // below its tree, each with a variant's build directory below it and the build below that.
+        // The longest thing kept inside a tree the run works in, below the tree: a copy a leg works in, or a mutation
+        // worker - each with its variant's build directory below it and the build below that.
         var inside = 0;
 
-        foreach (var key in legKeys)
+        foreach (var variant in copied)
         {
-            var copy = Path.Combine(tree, HarnessLayout.LegsDirectoryName, key);
-            inside = Math.Max(inside, copy.Length + 1 + reserve);
+            inside = Math.Max(inside, Below(tree, LegCopies.PathOf(tree, variant), variant, settings.PathBudgetReserve));
         }
 
-        foreach (var key in mutationKeys)
+        foreach (var variant in swept)
         {
-            var worker = Path.Combine(tree, HarnessLayout.MutationsDirectoryName, key);
-            inside = Math.Max(inside, worker.Length + 1 + reserve);
+            inside = Math.Max(inside, Below(tree, MutationWorkers.PathOf(tree, variant, 1), variant, settings.PathBudgetReserve));
         }
 
         return budget.Check(tree, inside, settings.PathBudgetMargin, settings.PathLimit);
+    }
+
+    /// <summary>
+    /// The path budget of a run of <paramref name="definition"/> at its start: its agents' worktrees under the
+    /// repository's worktrees root, the longest name it gives an agent (<see cref="OrchestrationRules.LongestGeneratedAgentName"/>),
+    /// and the variants of every leg this machine runs that a leg step of the run may name - every leg a step names
+    /// through its <c>legs</c>, leg sets read out, and every declared leg where one names none - copied, and swept where
+    /// a <c>check-mutations</c> step names them.
+    /// </summary>
+    /// <param name="budget">Reckons a path against this machine's limit.</param>
+    /// <param name="config">The repository's configuration.</param>
+    /// <param name="layout">The repository.</param>
+    /// <param name="run">The run's name.</param>
+    /// <param name="definition">The workflow, as it was read.</param>
+    /// <param name="platformKey">This machine's operating system, as a leg names one.</param>
+    /// <returns>What a refusal says where the longest path passes the budget; null where it stays within it.</returns>
+    public static string? RefusalAtStart(IPathBudget budget, HarnessConfig config, HarnessLayout layout, string run, WorkflowDefinition definition, string platformKey)
+    {
+        var (result, tree) = AtStart(budget, config, layout, run, definition, platformKey);
+
+        return result.IsWithinBudget
+            ? null
+            : $"run '{run}' of '{definition.Name}' would work in paths too long for this machine - the deepest of its agents' worktrees with the copies and workers its leg steps keep inside it: "
+                + $"{result.Describe(tree)} Nothing was made.";
+    }
+
+    /// <summary>The path budget of a run of <paramref name="definition"/> at its start, and the deepest worktree it reckons from; see <see cref="RefusalAtStart"/>.</summary>
+    /// <param name="budget">Reckons a path against this machine's limit.</param>
+    /// <param name="config">The repository's configuration.</param>
+    /// <param name="layout">The repository.</param>
+    /// <param name="run">The run's name.</param>
+    /// <param name="definition">The workflow, as it was read.</param>
+    /// <param name="platformKey">This machine's operating system, as a leg names one.</param>
+    /// <returns>Whether the longest path stays within the budget, with what it needs and what it may have, and the worktree it was reckoned from.</returns>
+    public static (PathBudgetResult Result, string Tree) AtStart(IPathBudget budget, HarnessConfig config, HarnessLayout layout, string run, WorkflowDefinition definition, string platformKey)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        ArgumentNullException.ThrowIfNull(layout);
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentException.ThrowIfNullOrWhiteSpace(run);
+
+        var settings = config.Worktrees;
+        var digits = OrchestrationRules.LongestGeneratedAgentName(definition.MaxInstances ?? WorkflowDefinition.DefaultMaxInstances) - OrchestrationRules.GeneratedAgentPrefix.Length;
+        var agent = OrchestrationRules.GeneratedAgentPrefix + new string('9', digits);
+        var copied = new List<VariantKey>();
+        var swept = new List<VariantKey>();
+
+        foreach (var step in WorkflowFiles.Steps(definition).Select(entry => entry.Step).Where(step => step.Type is { } type && LegSteps.Contains(type)))
+        {
+            foreach (var leg in LegsOf(step, config).Where(leg => leg.Os == platformKey && leg.Wsl is null && leg.Ssh is null))
+            {
+                var variant = VariantKey.For(config, leg, platformKey);
+                copied.Add(variant);
+
+                if (step.Type == "check-mutations")
+                {
+                    swept.Add(variant);
+                }
+            }
+        }
+
+        var root = WorktreeAddress.Plain(run).PathUnder(layout.WorktreesDirectoryUnder(settings.Root));
+
+        return (Check(budget, settings, root, agent, copied, swept), Path.Combine(root, agent));
+    }
+
+    /// <summary>What a copy or a worker inside <paramref name="tree"/> adds below it: its own path, its variant's build directory, and the build below that.</summary>
+    private static int Below(string tree, string copy, VariantKey variant, int reserve)
+        => copy.Length - Path.TrimEndingDirectorySeparator(tree).Length + CopyPathBudget.BuildBelow(copy, variant, reserve);
+
+    /// <summary>The legs <paramref name="step"/> may name: those its <c>legs</c> names, leg sets read out; every declared leg where it names none.</summary>
+    private static IEnumerable<LegConfig> LegsOf(WorkflowStep step, HarnessConfig config)
+    {
+        if (step.Legs.Count == 0)
+        {
+            return config.Legs.Values;
+        }
+
+        return step.Legs
+            .SelectMany(name => config.LegSets.TryGetValue(name, out var set) ? set : [name])
+            .Distinct(StringComparer.Ordinal)
+            .Where(config.Legs.ContainsKey)
+            .Select(name => config.Legs[name]);
     }
 }

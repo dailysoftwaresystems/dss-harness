@@ -91,4 +91,21 @@ public sealed class PointOfNoReturnTests
     [InlineData(FlowService.StopCommand, false)]
     public void TheRunVerbsThatPauseSafely_AreOnThatListAndNoOther(string command, bool pauses)
         => Assert.Equal(pauses, PointOfNoReturn.PausesSafely.Contains(command));
+
+    /// <summary>
+    /// The run verbs that pause safely count their own interrupts, so the command line's own handling of termination -
+    /// which cancels at the first interrupt and ends the process when its clock runs out - is turned off for them alone:
+    /// a deletion keeps its grace, and every other command its short wait.
+    /// </summary>
+    [Theory]
+    [InlineData(new[] { FlowService.RunCommand, "implementation" }, true)]
+    [InlineData(new[] { FlowService.ResumeCommand, "r1" }, true)]
+    [InlineData(new[] { FlowService.AnswerCommand, "r1", "more" }, true)]
+    [InlineData(new[] { FlowService.PauseCommand, "r1" }, false)]
+    [InlineData(new[] { FlowService.StopCommand, "r1" }, false)]
+    [InlineData(new[] { WorktreeService.DeleteCommand, "w" }, false)]
+    [InlineData(new[] { "build" }, false)]
+    [InlineData(new string[0], false)]
+    public void OnlyTheRunVerbsThatPauseSafely_CountTheirOwnInterrupts(string[] commandLine, bool counted)
+        => Assert.Equal(counted, PointOfNoReturn.CountsItsOwnInterrupts(commandLine));
 }

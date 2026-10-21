@@ -56,7 +56,7 @@ public sealed class FlowRecordsTests
         var owner = new RunOwner(string.Empty, 0, DateTimeOffset.UtcNow);
         Assert.NotNull(owner.Problem());
 
-        var file = new FlowFile(2, "r1", "flow", "digest", new Dictionary<string, string>(), "Running", new FlowBudgetRecord(0, 0, 0), 0, [], ["nope"]);
+        var file = new FlowFile(2, "r1", "flow", "digest", new Dictionary<string, string>(), "Running", new FlowBudgetRecord(0, 0, 0), 0, [], ["nope"], DateTimeOffset.UnixEpoch);
         Assert.Contains("its schema is 2", file.Problem(), StringComparison.Ordinal);
         Assert.Contains("next names an instance the file does not hold", (file with { Schema = 1 }).Problem(), StringComparison.Ordinal);
     }
@@ -70,13 +70,13 @@ public sealed class FlowRecordsTests
 
         using (var log = FlowEventLog.Open(Files(), file))
         {
-            Assert.Equal(1, log.Append(DateTimeOffset.UtcNow, "sessionBegan").Seq);
-            Assert.Equal(2, log.Append(DateTimeOffset.UtcNow, "step", "one", "one", "NotStarted", "Running", 1).Seq);
+            Assert.Equal(1, log.Append(DateTimeOffset.UtcNow, FlowChangeKind.SessionBegan).Seq);
+            Assert.Equal(2, log.Append(DateTimeOffset.UtcNow, FlowChangeKind.Step, "one", "one", "NotStarted", "Running", 1).Seq);
         }
 
         using (var again = FlowEventLog.Open(Files(), file))
         {
-            Assert.Equal(3, again.Append(DateTimeOffset.UtcNow, "sessionEnded", to: "Done").Seq);
+            Assert.Equal(3, again.Append(DateTimeOffset.UtcNow, FlowChangeKind.SessionEnded, to: "Done").Seq);
         }
 
         var (events, torn) = FlowEventLog.Read(Files(), file);
@@ -99,7 +99,7 @@ public sealed class FlowRecordsTests
 
         using (var log = FlowEventLog.Open(files, file))
         {
-            _ = log.Append(DateTimeOffset.UtcNow, "sessionBegan");
+            _ = log.Append(DateTimeOffset.UtcNow, FlowChangeKind.SessionBegan);
         }
 
         files.WriteAllTextAtomic(file, files.ReadAllText(file) + """{"seq": 2, "at": "2026-10-19 12""");
@@ -112,12 +112,155 @@ public sealed class FlowRecordsTests
 
         using (var again = FlowEventLog.Open(files, file))
         {
-            Assert.Equal(2, again.Append(DateTimeOffset.UtcNow, "resumed").Seq);
+            Assert.Equal(2, again.Append(DateTimeOffset.UtcNow, FlowChangeKind.Resumed).Seq);
         }
 
         var (whole, _) = FlowEventLog.Read(files, file);
 
         Assert.Equal([1, 2], whole.Select(read => read.Seq));
+    }
+
+    /// <summary>
+    /// The engine's own values are held to the engine's own names, exactly: a number, two names joined and a name the
+    /// engine does not have are each refused - which a parse of the enumeration would let through - and a question's id
+    /// is held to the one rule of its shape.
+    /// </summary>
+    [Theory]
+    [InlineData("7")]
+    [InlineData("99")]
+    [InlineData("Done, Failed")]
+    [InlineData("done")]
+    public void ANameTheEngineDoesNotHaveIsRefused_NeverParsed(string name)
+    {
+        var step = new FlowStepRecord("one", "one", false, name, 1, 1, [], []);
+        var file = new FlowFile(1, "r1", "flow", "digest", new Dictionary<string, string>(), name, new FlowBudgetRecord(0, 0, 0), 0, [], [], DateTimeOffset.UnixEpoch);
+
+        Assert.Equal($"'{name}' is not an instance state", step.Problem());
+        Assert.Equal($"'{name}' is not a run status", file.Problem());
+        Assert.False(FlowRecordNames.Is<FlowInstanceState>(name));
+        Assert.Throws<InvalidOperationException>(() => FlowRecordNames.Of<FlowInstanceState>(name));
+    }
+
+    /// <summary>A question's id a record names is held to the one rule of its shape, not to its first letter.</summary>
+    [Fact]
+    public void AQuestionsIdIsHeldToItsOneRule()
+    {
+        var step = new FlowStepRecord("one", "one", false, "Paused", 1, 1, [], []);
+
+        Assert.Equal("'qx' is not a question's id", (step with { Question = "qx" }).Problem());
+        Assert.Equal("'not an id' names neither an instance nor a question", (step with { HandledBy = "not an id" }).Problem());
+        Assert.Null((step with { Question = "q12", HandledBy = "q3" }).Problem());
+    }
+
+    /// <summary>Every kind of event is the engine's own kind of change, by its camelCase name - one list, and a kind that is not one is never written.</summary>
+    [Fact]
+    public void EveryKindOfEventIsAKindOfChange_ByItsName()
+    {
+        Assert.Equal(["sessionBegan", "resumed", "step", "pauseBegan", "handoff", "pauseCompleted", "sessionEnded", "answer"], FlowEvent.Kinds);
+        Assert.Throws<ArgumentOutOfRangeException>(() => FlowEvent.KindOf((FlowChangeKind)99));
+    }
+
+    /// <summary>The records nested in a record are checked with it: a pause asked by nobody the engine knows, a redirect to nowhere, and an engine's handoff that says no why are refused.</summary>
+    [Fact]
+    public void TheRecordsNestedInARecordAreCheckedWithIt()
+    {
+        var file = new FlowFile(1, "r1", "flow", "digest", new Dictionary<string, string>(), "Paused", new FlowBudgetRecord(0, 0, 0), 0, [], [], DateTimeOffset.UnixEpoch);
+        var step = new FlowStepRecord("one", "one", false, "Stopped", 1, 1, [], []);
+
+        Assert.Equal("its pause: 'someone' is not who asks for a pause", (file with { Pause = new FlowPauseRecord("someone", false, DateTimeOffset.UnixEpoch, []) }).Problem());
+        Assert.Equal("its redirect: it names no step to go to", (file with { Redirect = new FlowRedirectRecord("one", " ", []) }).Problem());
+        Assert.Equal("its handoff: a handoff the engine wrote says why", (step with { Handoff = new FlowHandoffRecord("engine") }).Problem());
+        Assert.Null((step with { Handoff = new FlowHandoffRecord("agent") }).Problem());
+    }
+
+    /// <summary>
+    /// Every time a run's records hold is written in the one form, and one that has not come yet is written null, never
+    /// left out: a step's record, the run's state and its pause have the same members whatever has happened.
+    /// </summary>
+    [Fact]
+    public void EveryTimeIsWrittenInTheOneForm_AndOneNotYetComeIsWrittenNull()
+    {
+        var at = new DateTimeOffset(2026, 10, 19, 12, 30, 45, TimeSpan.Zero);
+        var step = JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(new FlowStepRecord("one", "one", false, "NotStarted", 1, 1, [], []), JsonStateFile.Options))!.AsObject();
+        var file = JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(
+            new FlowFile(1, "r1", "flow", "digest", new Dictionary<string, string>(), "Paused", new FlowBudgetRecord(0, 0, 0), 0, [], [], at, Pause: new FlowPauseRecord("command", false, at, [])),
+            JsonStateFile.Options))!.AsObject();
+
+        Assert.Contains("startedAt", step.Select(member => member.Key));
+        Assert.Contains("finishedAt", step.Select(member => member.Key));
+        Assert.Null(step["startedAt"]);
+        Assert.Null(step["finishedAt"]);
+        Assert.Equal("2026-10-19 12:30:45", file["startedAt"]!.GetValue<string>());
+        Assert.Equal("2026-10-19 12:30:45", file["pause"]!["at"]!.GetValue<string>());
+        Assert.Contains("completedAt", file["pause"]!.AsObject().Select(member => member.Key));
+        Assert.Null(file["pause"]!["completedAt"]);
+        Assert.Equal("2026-10-19 12:30:45", FlowTimeConverter.Written(at.ToOffset(TimeSpan.FromHours(-3))));
+    }
+
+    /// <summary>A whole line of the log that is not an event is refused by its number, never skipped: history is never guessed at.</summary>
+    [Fact]
+    public void ACorruptWholeLineIsRefusedByItsNumber_NeverSkipped()
+    {
+        using var temp = new TempDirectory();
+        var files = Files();
+        var file = temp.Combine("events.jsonl");
+
+        using (var log = FlowEventLog.Open(files, file))
+        {
+            _ = log.Append(DateTimeOffset.UtcNow, FlowChangeKind.SessionBegan);
+        }
+
+        files.WriteAllTextAtomic(file, files.ReadAllText(file) + "not an event\n" + """{"seq": 3, "at": "2026-10-19 12:00:00", "kind": "resumed"}""" + "\n");
+
+        var corrupt = Assert.Throws<DssHarness.Core.Results.HarnessException>(() => FlowEventLog.Read(files, file));
+
+        Assert.Equal(DssHarness.Core.Results.HarnessExit.Refused, corrupt.ExitCode);
+        Assert.StartsWith($"line 2 of '{file}', the run's events, does not read as its next event: ", corrupt.Message, StringComparison.Ordinal);
+        Assert.Throws<DssHarness.Core.Results.HarnessException>(() => FlowEventLog.Open(files, file));
+    }
+
+    /// <summary>A whole line whose seq is not the one after the line before it is refused by its number: a reopened log never numbers from an earlier event.</summary>
+    [Fact]
+    public void ALineNotNumberedOneAfterTheLastIsRefused()
+    {
+        using var temp = new TempDirectory();
+        var files = Files();
+        var file = temp.Combine("events.jsonl");
+
+        files.WriteAllTextAtomic(file, """{"seq": 1, "at": "2026-10-19 12:00:00", "kind": "sessionBegan"}""" + "\n" + """{"seq": 3, "at": "2026-10-19 12:00:01", "kind": "resumed"}""" + "\n");
+
+        var refused = Assert.Throws<DssHarness.Core.Results.HarnessException>(() => FlowEventLog.Read(files, file));
+
+        Assert.Equal(
+            $"line 2 of '{file}', the run's events, does not read as its next event: its seq is 3, and the event before it was 1. Nothing was changed: an event is never guessed at, "
+            + "and the run's state files - not its events - are what a resume reads; move the file aside to go on with a log of its own.",
+            refused.Message);
+    }
+
+    /// <summary>A last line with no newline is set aside even where it holds a whole event: it was never durable, so its seq is never taken, and the next writer numbers from the last whole line.</summary>
+    [Fact]
+    public void ATornLastLineThatIsWholeJson_IsSetAside_AndItsSeqNeverTaken()
+    {
+        using var temp = new TempDirectory();
+        var files = Files();
+        var file = temp.Combine("events.jsonl");
+
+        using (var log = FlowEventLog.Open(files, file))
+        {
+            _ = log.Append(DateTimeOffset.UtcNow, FlowChangeKind.SessionBegan);
+        }
+
+        files.WriteAllTextAtomic(file, files.ReadAllText(file) + """{"seq": 7, "at": "2026-10-19 12:00:00", "kind": "resumed"}""");
+
+        var (events, torn) = FlowEventLog.Read(files, file);
+
+        Assert.Equal([1], events.Select(read => read.Seq));
+        Assert.Equal("""the log's last line has no newline and was set aside: '{"seq": 7, "at": "2026-10-19 12:00:00", "kind": "resumed"}'""", torn);
+
+        using (var again = FlowEventLog.Open(files, file))
+        {
+            Assert.Equal(2, again.Append(DateTimeOffset.UtcNow, FlowChangeKind.Resumed).Seq);
+        }
     }
 
     /// <summary>Each step's directory is where the rule puts it: a step that names an agent with in or of inside that agent's, the create-agent that made it under the run, and every step that names none under the run.</summary>
@@ -244,6 +387,80 @@ public sealed class FlowRecordsTests
         Assert.Equal("Done", events[^1].To);
         Assert.Equal("one", events.First(read => read.Kind == "step" && read.To == "Done").Instance);
     }
+
+    /// <summary>
+    /// A handoff's file is written before the record that names it, so a record never says a step holds a handoff its
+    /// directory does not - and a crash between the two leaves the file for the next resume to read back.
+    /// </summary>
+    [Fact]
+    public void AHandoffsFileIsWrittenBeforeTheRecordThatNamesIt()
+    {
+        using var temp = new TempDirectory();
+        var clock = new ManualClock();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+            """);
+        var (_, layout, watched, records) = Records("r1", temp.Path, definition, clock);
+
+        using (records)
+        {
+            IFlowRecords writer = records;
+            writer.Write(FlowChangeKind.Handoff, Snapshot([StepOf("think", FlowInstanceState.Stopped, new FlowHandoff("what it was doing", "agent", null))]), "think");
+        }
+
+        var handoff = watched.Writes.IndexOf(layout.StepHandoffFile("think"));
+        var record = watched.Writes.IndexOf(layout.StepRecordFile("think"));
+        var flow = watched.Writes.LastIndexOf(layout.FlowFile);
+
+        Assert.NotEqual(-1, handoff);
+        Assert.Equal(handoff + 1, record);
+        Assert.True(flow > record, "the run's state is written after the step's own files");
+    }
+
+    /// <summary>The issues a change lists are written after the run's state and its status and before the event that tells of it: the order of every change of a run.</summary>
+    [Fact]
+    public void TheIssuesAChangeListsAreWrittenAfterTheStatus_BeforeTheEvent()
+    {
+        using var temp = new TempDirectory();
+        var clock = new ManualClock();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: triage
+                type: orient
+            """);
+        var (harness, layout, watched, records) = Records("r1", temp.Path, definition, clock);
+        var issue = new PreExistingIssue("pe-1", "a broken test", "it fails on the base commit", ["tests/a.c"], new PreExistingProof("ran", "abc123", Command: "make test", Output: "1 failed"), "in no step's way", "triage", clock.GetUtcNow());
+
+        using (records)
+        {
+            IFlowRecords writer = records;
+            var before = watched.Writes.Count;
+            writer.Write(FlowChangeKind.Step, Snapshot([StepOf("triage", FlowInstanceState.Done)]) with { Issues = [issue] }, "triage", "Running", "Done");
+
+            var written = watched.Writes.Skip(before).Select(Path.GetFileName).ToList();
+
+            Assert.Equal(["step.json", "flow.json", "workflow.json", "pre-existing-issues.json"], written);
+        }
+
+        var (events, _) = FlowEventLog.Read(harness.FileSystem, layout.EventsFile);
+
+        Assert.Equal("triage", Assert.Single(events).Instance);
+        Assert.Equal(["pe-1"], harness.OrchestrationStore.ReadPreExistingIssues(layout)!.Issues.Select(listed => listed.Id));
+    }
+
+    /// <summary>A snapshot of a run holding <paramref name="steps"/>, as the coordinator hands one to its records.</summary>
+    private static FlowSnapshot Snapshot(IReadOnlyList<FlowSnapshotStep> steps)
+        => new(FlowRunStatus.Running, null, new FlowBudgetSpent(), 0, null, steps, [], []);
+
+    /// <summary>One step of a snapshot, as little as a record of it needs.</summary>
+    private static FlowSnapshotStep StepOf(string instance, FlowInstanceState state, FlowHandoff? handoff = null)
+        => new(instance, instance, "orient", false, state, 1, 1, null, null, null, null, null, null, false, false, null, null, null, null, handoff, null, FlowValue.Missing, null, null, [], []);
 
     /// <summary>What a run is, is frozen: the definition as it ran is written once, read back whole, and the digest of it names it.</summary>
     [Fact]

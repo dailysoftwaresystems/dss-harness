@@ -109,7 +109,10 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <summary>The name of the file a run's report is written in as one JSON document, beside its markdown.</summary>
     public const string ReportJsonFileName = "report.json";
 
-    /// <summary>The directory one call of <c>ask-orchestrator</c> or <c>ask-orchestrator-status</c> is kept in. The engine never reads it.</summary>
+    /// <summary>
+    /// The directory one call of the planned <c>ask-orchestrator</c> and <c>ask-orchestrator-status</c> will be kept in -
+    /// neither command is built yet, so nothing writes it. The engine never reads it.
+    /// </summary>
     public const string AsksDirectoryName = "asks";
 
     /// <summary>The name of the file a run's live owner is kept in, beside the run's directory.</summary>
@@ -260,7 +263,10 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <param name="name">The keeping's own name: the moment it was made.</param>
     public static string KeptEvidence(string name) => $"{EvidenceDirectoryName}/{name}";
 
-    /// <summary>The run's state in one file: every step instance and what runs next. Shaped for a resume; written before every other record of a change.</summary>
+    /// <summary>
+    /// The run's state in one file: every step instance and what runs next. Shaped for a resume; written after the
+    /// changed step's own files and before every other record of a change - the run's status, its issues and the event.
+    /// </summary>
     public string FlowFile => Path.Combine(Directory, FlowFileName);
 
     /// <summary>The run's status, for a person and a client to read: every step of the definition with its status, times and instances, the run's own, and the progress of it.</summary>
@@ -278,7 +284,7 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <summary>Every question the run raised and every answer it was given, the open ones among them: the one owner of what a question said.</summary>
     public string QuestionsFile => Path.Combine(Directory, QuestionsFileName);
 
-    /// <summary>What another process asked of the running engine: a safe pause, or a stop. Read by the engine every two seconds, and taken.</summary>
+    /// <summary>What another process asked of the running engine: a safe pause, or a stop. Read by the engine at its poll, and taken.</summary>
     public string StopFile => Path.Combine(Directory, StopFileName);
 
     /// <summary>What a person gave from another terminal while the engine runs, read as <see cref="StopFile"/> is, and emptied of each thing once the engine has written it where it belongs.</summary>
@@ -290,7 +296,10 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <summary>The run's report as one JSON document, beside its markdown.</summary>
     public string ReportJsonFile => Path.Combine(Directory, ReportJsonFileName);
 
-    /// <summary>The calls of <c>ask-orchestrator</c> and <c>ask-orchestrator-status</c>, one directory each. The engine never reads them.</summary>
+    /// <summary>
+    /// Where the calls of the planned <c>ask-orchestrator</c> and <c>ask-orchestrator-status</c> will be kept, one
+    /// directory each - neither command is built yet, so nothing writes it. The engine never reads them.
+    /// </summary>
     public string AsksDirectory => Path.Combine(Directory, AsksDirectoryName);
 
     /// <summary>
@@ -298,6 +307,22 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// is reclaimed and said.
     /// </summary>
     public string OwnerFile => Path.Combine(Path.GetDirectoryName(Directory) ?? Directory, Name + OwnerFileName);
+
+    /// <summary>
+    /// Where one step instance's own directory is - the one owner of where a step is kept: inside the agent it names
+    /// with <c>in</c> or <c>of</c>, a reason step's too, and under the run for every step that names none.
+    /// </summary>
+    /// <param name="instance">The step instance's id, as <see cref="Flow.FlowInstanceId"/> spells it.</param>
+    /// <param name="agent">The agent the step names; null where it names none.</param>
+    public string InstanceDirectory(string instance, string? agent)
+        => agent is null
+            ? StepDirectory(Flow.FlowInstanceId.DirectoryOf(instance))
+            : AgentStepDirectory(agent, Flow.FlowInstanceId.DirectoryOf(instance));
+
+    /// <summary>The handoff of one step instance, in its own directory (<see cref="InstanceDirectory"/>).</summary>
+    /// <param name="instance">The step instance's id, as <see cref="Flow.FlowInstanceId"/> spells it.</param>
+    /// <param name="agent">The agent the step names; null where it names none.</param>
+    public string InstanceHandoffFile(string instance, string? agent) => Path.Combine(InstanceDirectory(instance, agent), HandoffFileName);
 
     /// <summary>The record of one step the run keeps and no agent owns, in the step's own directory, named as the run spells an instance on disk.</summary>
     /// <param name="instance">The step instance's id, as <see cref="Flow.FlowInstanceId"/> spells it.</param>

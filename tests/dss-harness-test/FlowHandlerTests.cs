@@ -858,7 +858,7 @@ public sealed class FlowHandlerRecordsTests
             Assert.NotNull(harness.OrchestrationStore.ReadFlow(layout)?.Redirect);
         }
 
-        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load();
+        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
 
         using (var again = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))
         {

@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using DssHarness.Core.Build;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.Orchestration;
@@ -32,9 +33,16 @@ public sealed class FlowSessionsTests
                 dependsOn: [one]
             """);
 
-    /// <summary>A run starts with the first free name, its record written, and its first status: every step of the definition NotStarted, the run Running.</summary>
+    /// <summary>The run's owner, released as the session that made the run releases it at its end.</summary>
+    private static void Released(HarnessFactory harness, OrchestratorLayout run)
+        => new FlowRunOwner(harness.OrchestrationStore, harness.Identity).Release(run);
+
+    /// <summary>
+    /// A run starts with one more than the highest r&lt;N&gt;, its record written, its first status - every step of the
+    /// definition NotStarted, the run Running - and its owner: this process, claimed before the section is left.
+    /// </summary>
     [Fact]
-    public void ARunStartsWithTheFirstFreeName_ItsRecordAndItsFirstStatus()
+    public void ARunStartsWithTheNextName_ItsRecordItsFirstStatusAndItsOwner()
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
@@ -45,6 +53,7 @@ public sealed class FlowSessionsTests
 
         Assert.Equal("r1", run.Name);
         Assert.Equal("r1", context.Run);
+        Assert.Equal(Environment.ProcessId, harness.OrchestrationStore.ReadOwner(run)!.ProcessId);
 
         var record = harness.OrchestrationStore.ReadOrchestrator(run);
 
@@ -59,11 +68,15 @@ public sealed class FlowSessionsTests
         Assert.Equal(["one", "two"], status.Steps.Keys.Order(StringComparer.Ordinal));
         Assert.All(status.Steps.Values, step => Assert.Equal("NotStarted", step.Status));
 
-        // The next run takes the next name, and the one after the next: a deleted run's name is never reused.
-        Assert.Equal("r2", sessions.Create(layout, Definition()).Run.Name);
+        // The next run takes one more than the highest name there, whatever lies between.
+        Released(harness, run);
+        Directory.CreateDirectory(Path.Combine(layout.OrchestratorsDirectory, "r7"));
+        Directory.Delete(run.Directory, recursive: true);
+
+        Assert.Equal("r8", sessions.Create(layout, Definition()).Run.Name);
     }
 
-    /// <summary>A <c>--run</c> name that is taken is refused, naming its record and the way on with that one.</summary>
+    /// <summary>A <c>--run</c> name that is taken is refused, naming its record and the way on with that one, by the one sentence create-orchestrator says it with.</summary>
     [Fact]
     public void ARunNameThatIsTakenIsRefused_NamingItsRecordAndTheWayOn()
     {
@@ -72,12 +85,53 @@ public sealed class FlowSessionsTests
         var layout = new HarnessLayout(temp.Path, temp.Path);
         var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity);
 
-        _ = sessions.Create(layout, Definition(), wantedName: "mine");
+        var (mine, _) = sessions.Create(layout, Definition(), wantedName: "mine");
+        Released(harness, mine);
 
         var raised = Assert.Throws<HarnessException>(() => sessions.Create(layout, Definition(), wantedName: "mine"));
 
         Assert.Equal(HarnessExit.Refused, raised.ExitCode);
-        Assert.Contains("run 'mine' exists; --run names a new run, and resume-orchestrator mine goes on with that one", raised.Message, StringComparison.Ordinal);
+        Assert.Equal(OrchestrationReports.RunExists(mine), raised.Message);
+        Assert.Equal($"run 'mine' exists - '{mine.RecordFile}' is its record; --run names a new run, and resume-orchestrator mine goes on with that one. Nothing was changed.", raised.Message);
+    }
+
+    /// <summary>A <c>--run</c> name whose directory is there holding no run's record is refused: a run is never made over what something else left there.</summary>
+    [Fact]
+    public void ARunNameWhoseDirectoryHoldsNoRecordIsRefused()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var layout = new HarnessLayout(temp.Path, temp.Path);
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity);
+        var left = OrchestratorLayout.Of(layout, "left");
+
+        Directory.CreateDirectory(left.Directory);
+        File.WriteAllText(left.DefinitionFile, "{}");
+
+        var raised = Assert.Throws<HarnessException>(() => sessions.Create(layout, Definition(), wantedName: "left"));
+
+        Assert.Equal(HarnessExit.Refused, raised.ExitCode);
+        Assert.Equal(
+            $"'{left.Directory}' is there and holds no run's record ('{left.RecordFile}'); --run names a new run, and a run is never made over what something else left there. "
+            + "Nothing was changed: remove it, or name the run otherwise.",
+            raised.Message);
+        Assert.Equal("{}", File.ReadAllText(left.DefinitionFile));
+    }
+
+    /// <summary>A start that its refusal check refuses - its path budget - writes nothing: the name is chosen, and nothing of a run is made by it.</summary>
+    [Fact]
+    public void AStartItsCheckRefuses_WritesNothing()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var layout = new HarnessLayout(temp.Path, temp.Path);
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity);
+
+        var raised = Assert.Throws<HarnessException>(() => sessions.Create(layout, Definition(), refusal: name => $"run '{name}' is too deep"));
+
+        Assert.Equal("run 'r1' is too deep", raised.Message);
+        Assert.False(Directory.Exists(OrchestratorLayout.Of(layout, "r1").Directory));
+        Assert.False(File.Exists(OrchestratorLayout.Of(layout, "r1").OwnerFile));
     }
 
     /// <summary>A session is refused while another run of the repository is unfinished over a live owner, and the refusal names the run and the ways on with it.</summary>
@@ -89,9 +143,8 @@ public sealed class FlowSessionsTests
         var layout = new HarnessLayout(temp.Path, temp.Path);
         var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity);
 
-        var (other, _) = sessions.Create(layout, Definition());
-
-        _ = new FlowRunOwner(harness.OrchestrationStore, harness.Identity).Claim(other);
+        // The run's engine holds it: its owner was claimed with it.
+        _ = sessions.Create(layout, Definition());
 
         var raised = Assert.Throws<HarnessException>(() => sessions.Create(layout, Definition(), wantedName: "second"));
 
@@ -111,6 +164,9 @@ public sealed class FlowSessionsTests
         var definition = Definition();
 
         var (other, context) = sessions.Create(layout, definition);
+
+        // Its session has ended: nothing holds it but its records.
+        Released(harness, other);
 
         // The run pauses with an agent still open: its state file says Paused, and its agent holds a worktree.
         using (var records = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, other, context))
@@ -152,7 +208,11 @@ public sealed class FlowSessionsTests
         Assert.Equal("second", second.Run.Name);
     }
 
-    /// <summary>The test is made at the start of every session - a resume, an answer alike - and leaves out the run the session is for.</summary>
+    /// <summary>
+    /// The test is made at the start of every session - a resume, an answer alike - and leaves out the run the session
+    /// is for; the session's owner is claimed in the same section, and a stop asked of an engine that ended before it
+    /// took it is taken back, so it reaches no later session.
+    /// </summary>
     [Fact]
     public void TheTestIsMadeAtTheStartOfEverySession_LeavingOutTheRunItself()
     {
@@ -162,60 +222,184 @@ public sealed class FlowSessionsTests
         var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity);
 
         var (first, _) = sessions.Create(layout, Definition());
+        Released(harness, first);
         var (second, _) = sessions.Create(layout, Definition());
+        Released(harness, second);
 
-        // While the first runs, a session of the second is refused - and a session of the first is not, for the test
-        // leaves out the run it is for.
+        // While the first runs, a session of the second is refused.
         _ = new FlowRunOwner(harness.OrchestrationStore, harness.Identity).Claim(first);
 
-        var raised = Assert.Throws<HarnessException>(() => sessions.Guard(layout, second.Name));
+        var raised = Assert.Throws<HarnessException>(() => sessions.Claim(layout, second));
 
         Assert.Contains($"run '{first.Name}' of this repository is unfinished", raised.Message, StringComparison.Ordinal);
+        Assert.Null(harness.OrchestrationStore.ReadOwner(second));
 
-        sessions.Guard(layout, first.Name);
+        // Once its engine has left, a session of the first is not refused - the test leaves out the run it is for - and
+        // a stop asked of the engine that left reaches this session no more.
+        Released(harness, first);
+        harness.OrchestrationStore.WriteStopFile(first, new FlowStopFile(1, Stop: new FlowStopStop(DateTimeOffset.UtcNow)));
+
+        Assert.Null(sessions.Claim(layout, first));
+        Assert.Equal(Environment.ProcessId, harness.OrchestrationStore.ReadOwner(first)!.ProcessId);
+        Assert.Null(harness.OrchestrationStore.ReadStopFile(first));
     }
 
-    /// <summary>The path budget at a run's start counts each copy and worker its work keeps inside its trees: the longest of them, checked as a copy's own check checks the build below it.</summary>
+    /// <summary>
+    /// What another run holds that cannot be told - an agent whose record does not read - refuses a session as work in
+    /// the tree does, by a sentence that says so: it is never read as nothing.
+    /// </summary>
     [Fact]
-    public void ThePathBudgetAtAStartCountsEachCopyAndWorker()
+    public async Task AnotherRunsUnreadableAgent_RefusesBySayingSo()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var layout = new HarnessLayout(temp.Path, temp.Path);
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity);
+        var definition = Definition();
+
+        var (other, context) = sessions.Create(layout, definition);
+        Released(harness, other);
+
+        using (var records = new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, other, context))
+        {
+            _ = await new FlowCoordinator(definition, new Runner(), new Facts(), records: records).RunAsync(TestContext.Current.CancellationToken);
+        }
+
+        harness.OrchestrationStore.WriteFlow(other, harness.OrchestrationStore.ReadFlow(other)! with { Status = "Paused" });
+        Directory.CreateDirectory(other.AgentDirectory("a1"));
+        File.WriteAllText(other.AgentRecordFile("a1"), "not a record");
+
+        var raised = Assert.Throws<HarnessException>(() => sessions.Create(layout, definition, wantedName: "second"));
+
+        Assert.StartsWith("run 'r1' of this repository is unfinished (paused, and whether its agent 'a1' holds a worktree cannot be told: ", raised.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Two starts at once on two threads - the section is a machine-wide one, which lets the same thread in twice - make
+    /// one run: the other is refused, naming it.
+    /// </summary>
+    [Fact]
+    public void TwoStartsAtOnce_OneIsRefusedNamingTheOther()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var layout = new HarnessLayout(temp.Path, temp.Path);
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity);
+        var results = AtOnce(
+            () => sessions.Create(layout, Definition(), wantedName: "left").Run.Name,
+            () => sessions.Create(layout, Definition(), wantedName: "right").Run.Name);
+
+        var made = Assert.Single(results, result => result.Made is not null).Made!;
+        var refused = Assert.Single(results, result => result.Refused is not null).Refused!;
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.StartsWith($"run '{made}' of this repository is unfinished (running; owned by a live engine)", refused.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>Two sessions of one run at once, on two threads, claim it once: the other is refused by the live owner the first wrote.</summary>
+    [Fact]
+    public void TwoResumesAtOnce_OnlyOneClaimsTheRun()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var layout = new HarnessLayout(temp.Path, temp.Path);
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity);
+        var (run, _) = sessions.Create(layout, Definition());
+        Released(harness, run);
+
+        var results = AtOnce(
+            () => sessions.Claim(layout, run) ?? "claimed",
+            () => sessions.Claim(layout, run) ?? "claimed");
+
+        Assert.Single(results, result => result.Made == "claimed");
+        Assert.StartsWith("run 'r1' is owned by a live engine (process ", Assert.Single(results, result => result.Refused is not null).Refused!.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>Runs two pieces of work on two threads of their own, let go at one moment, and says what each made or why it was refused.</summary>
+    private static IReadOnlyList<(string? Made, HarnessException? Refused)> AtOnce(Func<string> left, Func<string> right)
+    {
+        using var barrier = new Barrier(2);
+        var results = new (string? Made, HarnessException? Refused)[2];
+        var works = new[] { left, right };
+        var threads = Enumerable.Range(0, 2).Select(at => new Thread(() =>
+        {
+            barrier.SignalAndWait(TimeSpan.FromSeconds(30));
+
+            try
+            {
+                results[at] = (works[at](), null);
+            }
+            catch (HarnessException ex)
+            {
+                results[at] = (null, ex);
+            }
+        })).ToList();
+
+        threads.ForEach(thread => thread.Start());
+        Assert.All(threads, thread => Assert.True(thread.Join(TimeSpan.FromSeconds(60)), "a thread did not end within a minute"));
+
+        return results;
+    }
+
+    /// <summary>
+    /// The path budget at a run's start counts each copy and worker its work keeps inside its deepest tree, as a copy's
+    /// own check counts it - its build below it, once - and the longest of them is what it is held to.
+    /// </summary>
+    [Fact]
+    public void ThePathBudgetAtAStartCountsEachCopyAndWorker_AsACopysOwnCheckDoes()
     {
         var budget = new PathBudget(new HostPlatform());
-        var settings = new WorktreeSettings { PathLimit = 200 };
-        var within = FlowRunPaths.Check(
-            budget,
-            settings,
-            worktreesRoot: "C:\\trees",
-            agentName: "a1",
-            legKeys: ["long-leg-key"],
-            mutationKeys: ["sweep"],
-            reserve: 20);
+        var settings = new WorktreeSettings { PathLimit = 600 };
+        var root = Path.Combine(Path.GetTempPath(), "trees", "r1");
+        var tree = Path.Combine(root, "a99");
+        var plain = new VariantKey("x64", "gcc", "Debug", null);
+        var longer = new VariantKey("x64", "gcc-with-a-much-longer-toolchain-name", "RelWithDebInfo", "address");
 
-        Assert.True(within.IsWithinBudget);
+        var copied = FlowRunPaths.Check(budget, settings, root, "a99", [plain], []);
+        var copy = DssHarness.Core.Legs.LegCopies.PathOf(tree, plain);
 
-        var over = FlowRunPaths.Check(
-            budget,
-            new WorktreeSettings { PathLimit = within.RequiredLength - 1 },
-            worktreesRoot: "C:\\trees",
-            agentName: "a1",
-            legKeys: ["long-leg-key"],
-            mutationKeys: ["sweep"],
-            reserve: 20);
+        Assert.True(copied.IsWithinBudget);
+        Assert.Equal(DssHarness.Core.Legs.CopyPathBudget.Check(budget, settings, copy, plain, settings.PathBudgetReserve).RequiredLength, copied.RequiredLength);
+
+        // A worker is reckoned beside the copy, and the longest variant is what the run is held to.
+        var swept = FlowRunPaths.Check(budget, settings, root, "a99", [plain], [plain]);
+        var worker = DssHarness.Core.Mutations.MutationWorkers.PathOf(tree, plain, 1);
+
+        Assert.Equal(Math.Max(copied.RequiredLength, DssHarness.Core.Legs.CopyPathBudget.Check(budget, settings, worker, plain, settings.PathBudgetReserve).RequiredLength), swept.RequiredLength);
+        Assert.True(FlowRunPaths.Check(budget, settings, root, "a99", [plain, longer], []).RequiredLength > copied.RequiredLength, "the longer variant is the one reckoned");
+
+        var over = FlowRunPaths.Check(budget, new WorktreeSettings { PathLimit = copied.RequiredLength }, root, "a99", [plain], []);
 
         Assert.False(over.IsWithinBudget);
+    }
 
-        // A longer mutation key than every leg key is what the budget counts: each is reckoned, the longest wins.
-        var byWorker = FlowRunPaths.Check(
-            budget,
-            settings,
-            worktreesRoot: "C:\\trees",
-            agentName: "a1",
-            legKeys: ["a"],
-            mutationKeys: ["a-much-longer-mutation-key"],
-            reserve: 20);
+    /// <summary>
+    /// A run's start is held to the path budget of the legs this machine runs that its leg steps may name, under its
+    /// deepest agent's worktree: refused by a sentence naming that worktree where it passes the limit.
+    /// </summary>
+    [Fact]
+    public void ARunsStartIsHeldToThePathBudgetOfItsLegSteps()
+    {
+        var platform = new HostPlatform();
+        var layout = new HarnessLayout(Path.Combine(Path.GetTempPath(), "repo"), Path.Combine(Path.GetTempPath(), "repo"));
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: build
+                type: build
+            """);
+        var leg = new LegConfig { Os = platform.PlatformKey, Processor = "x64", Toolchain = "gcc", Config = "Debug" };
+        HarnessConfig Limited(int limit) => new() { Legs = new Dictionary<string, LegConfig>(StringComparer.Ordinal) { ["local"] = leg }, Worktrees = new WorktreeSettings { PathLimit = limit } };
+        var config = Limited(40);
 
-        Assert.Equal(
-            FlowRunPaths.Check(budget, settings, "C:\\trees", "a1", ["a-much-longer-mutation-key"], ["a-much-longer-mutation-key"], 20).RequiredLength,
-            byWorker.RequiredLength);
+        var refusal = FlowRunPaths.RefusalAtStart(new PathBudget(platform), config, layout, "r1", definition, platform.PlatformKey);
+        var (_, tree) = FlowRunPaths.AtStart(new PathBudget(platform), config, layout, "r1", definition, platform.PlatformKey);
+
+        Assert.NotNull(refusal);
+        Assert.StartsWith("run 'r1' of 'flow' would work in paths too long for this machine - the deepest of its agents' worktrees with the copies and workers its leg steps keep inside it: ", refusal, StringComparison.Ordinal);
+        Assert.EndsWith(" Nothing was made.", refusal, StringComparison.Ordinal);
+        Assert.Contains($"'{tree}'", refusal, StringComparison.Ordinal);
+        Assert.Null(FlowRunPaths.RefusalAtStart(new PathBudget(platform), Limited(2000), layout, "r1", definition, platform.PlatformKey));
     }
 
     /// <summary>A runner that answers every step as asked.</summary>

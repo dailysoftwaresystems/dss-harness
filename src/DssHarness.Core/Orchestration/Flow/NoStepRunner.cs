@@ -28,8 +28,8 @@ public sealed class NoStepRunner : IFlowStepRunner
 /// <summary>
 /// The runner facts this build serves the engine with: no runner writes the tree, for no runner is served. Where a
 /// workflow names a <c>run</c> step whose runner would write the tree, the engine would under-claim - so the
-/// configuration's own facts (which slice 17 wires, as the seam every fact is read through) replace this before the
-/// first real runner lands.
+/// configuration's own facts (each runner's <c>writesTree</c>) replace this in the slice that lands the machine step
+/// runners, before the first real runner serves a step.
 /// </summary>
 public sealed class NoRunnerFacts : IFlowRunnerFacts
 {

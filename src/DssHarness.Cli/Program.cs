@@ -91,10 +91,17 @@ async Task<int> RunAsync(string[] arguments, CancellationToken cancellationToken
     // A command past its point of no return goes on after Ctrl+C - a deletion, a fold, a hand-over or a
     // move of an agent's base is never left half written, a host agent can be running one for another
     // machine, and a run asked to set up brings down what it brought up - so each is waited for as long
-    // as it asks. No other command is any slower to stop.
+    // as it asks. No other command is any slower to stop. A run's session counts its own interrupts -
+    // the first a safe pause, which starts no clock - so the parser's own handling, which cancels at the
+    // first and ends the process when its clock runs out, is turned off for it.
     var invocation = new InvocationConfiguration();
+    string[] commandLine = [parseResult.CommandResult.Command.Name, .. parseResult.Tokens.Select(token => token.Value)];
 
-    if (PointOfNoReturn.GraceFor([parseResult.CommandResult.Command.Name, .. parseResult.Tokens.Select(token => token.Value)]) is { } grace)
+    if (PointOfNoReturn.CountsItsOwnInterrupts(commandLine))
+    {
+        invocation.ProcessTerminationTimeout = null;
+    }
+    else if (PointOfNoReturn.GraceFor(commandLine) is { } grace)
     {
         invocation.ProcessTerminationTimeout = grace;
     }

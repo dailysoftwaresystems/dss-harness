@@ -13,7 +13,7 @@ public static class OrchestrationReports
 {
     /// <summary>What list-orchestrator reports.</summary>
     /// <param name="orchestrators">The orchestrators listed.</param>
-    /// <param name="steps">Whether to list each step instance of a run, with its state and its attempt.</param>
+    /// <param name="steps">Whether to list each step instance of a run, with its state, its visit, its attempt, its agent and its own directory.</param>
     /// <param name="questions">Whether to list every question a run raised and what became of it.</param>
     /// <param name="json">Whether to answer with one JSON document rather than lines.</param>
     public static CommandOutcome List(IReadOnlyList<OrchestratorInventory> orchestrators, bool steps, bool questions, bool json)
@@ -39,26 +39,12 @@ public static class OrchestrationReports
     /// <summary>
     /// The flow document a run verb answers with where it stops before its session - a bad name, a --directory that is
     /// not there, a definition the repository does not declare: the session it would have run, empty, after the code it
-    /// exits with and the line it ends on.
+    /// exits with and the line it ends on - the document a session's end fills (<see cref="Flow.FlowReports.Document"/>).
     /// </summary>
     /// <param name="exitCode">The code the command exits with.</param>
     /// <param name="summary">The line it ends on.</param>
     public static string FlowStopped(int exitCode, string summary)
-        => ReportJson.Stopped(
-            exitCode,
-            summary,
-            new JsonObject
-            {
-                ["run"] = null,
-                ["status"] = null,
-                ["questions"] = new JsonArray(),
-                ["answered"] = new JsonArray(),
-                ["passedOver"] = new JsonArray(),
-                ["handoffs"] = new JsonArray(),
-                ["leftForAPerson"] = new JsonArray(),
-                ["spent"] = null,
-                ["records"] = new JsonObject(),
-            });
+        => Flow.FlowReports.Document(Flow.FlowRunResult.Empty(exitCode, summary));
 
     private static IEnumerable<string> Lines(IReadOnlyList<OrchestratorInventory> orchestrators, bool steps, bool questions)
     {
@@ -95,7 +81,7 @@ public static class OrchestrationReports
 
         var flow = run.Flow;
 
-        yield return $"run of '{flow.Definition}': {run.Status}";
+        yield return $"run of '{flow.Definition}': {run.Status}, {run.Engine.Said}";
 
         if (flow.Next.Count > 0)
         {
@@ -114,7 +100,7 @@ public static class OrchestrationReports
         {
             foreach (var step in flow.Steps)
             {
-                yield return $"step {step.Instance}: {step.State.ToLower(CultureInfo.InvariantCulture)} (attempt {step.Attempt.ToString(CultureInfo.InvariantCulture)}){(step.Agent is { } agent ? $", agent {agent}" : string.Empty)}";
+                yield return $"step {step.Instance}: {step.State.ToLower(CultureInfo.InvariantCulture)} (visit {step.Visit.ToString(CultureInfo.InvariantCulture)}, attempt {step.Attempt.ToString(CultureInfo.InvariantCulture)}){(step.Agent is { } agent ? $", agent {agent}" : string.Empty)} at '{orchestrator.Layout.InstanceDirectory(step.Instance, step.Agent)}'";
             }
         }
 
@@ -183,15 +169,15 @@ public static class OrchestrationReports
                 ["log"] = orchestrator.Layout.LogFile(record.Name),
                 ["agents"] = agents,
                 ["worktreesWithoutAgent"] = worktrees,
-                ["run"] = RunNode(orchestrator.Run, steps, questions),
+                ["run"] = RunNode(orchestrator.Layout, orchestrator.Run, steps, questions),
             });
         }
 
         return new JsonObject { ["orchestrators"] = list };
     }
 
-    /// <summary>A run as the listing's document holds it: its definition, its status, what runs next, its open questions - and each step instance and every question where asked for.</summary>
-    private static JsonNode? RunNode(FlowRunInventory? run, bool steps, bool questions)
+    /// <summary>A run as the listing's document holds it: its definition, its status, its engine, what runs next, its open questions - and each step instance and every question where asked for.</summary>
+    private static JsonNode? RunNode(OrchestratorLayout layout, FlowRunInventory? run, bool steps, bool questions)
     {
         if (run is null)
         {
@@ -202,14 +188,22 @@ public static class OrchestrationReports
         {
             ["definition"] = run.Flow.Definition,
             ["status"] = run.Flow.Status,
+            ["engine"] = new JsonObject
+            {
+                ["state"] = run.Engine.State,
+                ["process"] = run.Engine.Process,
+                ["leftRunning"] = new JsonArray([.. run.Engine.LeftRunning.Select(id => (JsonNode?)id)]),
+            },
             ["next"] = new JsonArray([.. run.Flow.Next.Select(next => (JsonNode?)next)]),
             ["openQuestions"] = new JsonArray([.. (run.Questions?.Open ?? []).Select(question => (JsonNode?)question.Id)]),
             ["steps"] = steps ? new JsonArray([.. run.Flow.Steps.Select(step => new JsonObject
             {
                 ["instance"] = step.Instance,
                 ["state"] = step.State,
+                ["visit"] = step.Visit,
                 ["attempt"] = step.Attempt,
                 ["agent"] = step.Agent,
+                ["directory"] = layout.InstanceDirectory(step.Instance, step.Agent),
             })]) : null,
             ["questions"] = questions && run.Questions is { } held ? new JsonArray([.. held.Questions.Select(question => new JsonObject
             {
@@ -560,6 +554,20 @@ public static class OrchestrationReports
     /// <param name="name">The orchestrator's name, as it was asked for.</param>
     internal static string NoOrchestrator(string name)
         => $"No orchestrator named '{name}'. Create it with {Line(OrchestratorService.CreateCommand, name, "--model", "<model>")}.";
+
+    /// <summary>
+    /// What is said where a new run - an orchestrator that must be new (<see cref="OrchestratorCreateRequest.MustBeNew"/>)
+    /// - is asked by a name that is taken: its record named, the way on with that one, and that nothing was changed. The
+    /// one wording, for <c>run-orchestrator --run</c> and the use case alike.
+    /// </summary>
+    /// <param name="orchestrator">The run whose name is taken.</param>
+    public static string RunExists(OrchestratorLayout orchestrator)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+
+        return $"run '{orchestrator.Name}' exists - '{orchestrator.RecordFile}' is its record; --run names a new run, and "
+            + $"resume-orchestrator {orchestrator.Name} goes on with that one. Nothing was changed.";
+    }
 
     /// <summary>The delete-agent command line a message names for an agent, quoted.</summary>
     /// <param name="orchestrator">The agent's orchestrator.</param>

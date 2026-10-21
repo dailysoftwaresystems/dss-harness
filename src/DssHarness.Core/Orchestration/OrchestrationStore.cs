@@ -409,31 +409,42 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
         return Read<FlowStopFile>(orchestrator.StopFile, StopFileKind, file => file.Problem());
     }
 
-    /// <summary>Writes what a process asks of the running engine; one request at a time.</summary>
+    /// <summary>Writes what a process asks of the running engine, inside the run's own section; one request at a time.</summary>
     /// <param name="orchestrator">The run's orchestrator.</param>
     /// <param name="file">The request, which must be one.</param>
     public void WriteStopFile(OrchestratorLayout orchestrator, FlowStopFile file)
     {
         ArgumentNullException.ThrowIfNull(orchestrator);
         ArgumentNullException.ThrowIfNull(file);
-        Write(orchestrator.StopFile, StopFileKind, file, file.Problem());
+
+        _ = Exclusively(orchestrator, () =>
+        {
+            Write(orchestrator.StopFile, StopFileKind, file, file.Problem());
+            return true;
+        });
     }
 
-    /// <summary>Takes what another process asked of the running engine: the request read, and the file removed, so it is applied once.</summary>
+    /// <summary>
+    /// Takes what another process asked of the running engine, inside the run's own section: the request read, and the
+    /// file removed, so it is applied once.
+    /// </summary>
     /// <param name="orchestrator">The run's orchestrator.</param>
     /// <returns>The request taken, or null where none waited.</returns>
     public FlowStopFile? TakeStopFile(OrchestratorLayout orchestrator)
     {
         ArgumentNullException.ThrowIfNull(orchestrator);
 
-        var taken = ReadStopFile(orchestrator);
-
-        if (taken is not null)
+        return Exclusively(orchestrator, () =>
         {
-            _fileSystem.DeleteFile(orchestrator.StopFile);
-        }
+            var taken = ReadStopFile(orchestrator);
 
-        return taken;
+            if (taken is not null)
+            {
+                _fileSystem.DeleteFile(orchestrator.StopFile);
+            }
+
+            return taken;
+        });
     }
 
     /// <summary>What a person gave from another terminal that the engine has not taken yet, or null where none is there.</summary>
@@ -455,42 +466,58 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
         Write(orchestrator.InboxFile, InboxKind, file, file.Problem());
     }
 
-    /// <summary>Adds an answer to the run's inbox, keeping what is there, whole.</summary>
+    /// <summary>
+    /// Adds an answer to the run's inbox, keeping what is there, whole: read and written inside the run's own section, so
+    /// two answers handed over at once are both kept.
+    /// </summary>
     /// <param name="orchestrator">The run's orchestrator.</param>
-    /// <param name="answer">The answer on its way to the engine.</param>
+    /// <param name="answer">The answer on its way to the engine, under an id of its own.</param>
     public void AddToInbox(OrchestratorLayout orchestrator, FlowInboxAnswer answer)
     {
         ArgumentNullException.ThrowIfNull(orchestrator);
         ArgumentNullException.ThrowIfNull(answer);
 
-        var inbox = ReadInbox(orchestrator) ?? new FlowInboxFile(1, []);
-        WriteInbox(orchestrator, inbox with { Answers = [.. inbox.Answers, answer] });
+        _ = Exclusively(orchestrator, () =>
+        {
+            var inbox = ReadInbox(orchestrator) ?? new FlowInboxFile(1, []);
+            WriteInbox(orchestrator, inbox with { Answers = [.. inbox.Answers, answer] });
+            return true;
+        });
     }
 
-    /// <summary>Removes an answer from the run's inbox once the engine has written it where it belongs; the file itself where the inbox empties.</summary>
+    /// <summary>
+    /// Removes one answer from the run's inbox by its id, once the engine has written it where it belongs - read and
+    /// written inside the run's own section, so an answer added meanwhile is kept - and the file itself where the inbox
+    /// empties.
+    /// </summary>
     /// <param name="orchestrator">The run's orchestrator.</param>
-    /// <param name="at">When the answer was given, as its entry names it.</param>
-    public void RemoveFromInbox(OrchestratorLayout orchestrator, DateTimeOffset at)
+    /// <param name="id">The answer's id, as its entry names it.</param>
+    /// <returns>Whether the inbox held the answer.</returns>
+    public bool RemoveFromInbox(OrchestratorLayout orchestrator, string id)
     {
         ArgumentNullException.ThrowIfNull(orchestrator);
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
 
-        var inbox = ReadInbox(orchestrator);
-
-        if (inbox is null)
+        return Exclusively(orchestrator, () =>
         {
-            return;
-        }
+            if (ReadInbox(orchestrator) is not { } inbox || inbox.Answers.All(answer => !string.Equals(answer.Id, id, StringComparison.Ordinal)))
+            {
+                return false;
+            }
 
-        List<FlowInboxAnswer> left = [.. inbox.Answers.Where(answer => answer.At != at)];
+            List<FlowInboxAnswer> left = [.. inbox.Answers.Where(answer => !string.Equals(answer.Id, id, StringComparison.Ordinal))];
 
-        if (left.Count == 0)
-        {
-            _fileSystem.DeleteFile(orchestrator.InboxFile);
-        }
-        else
-        {
-            WriteInbox(orchestrator, inbox with { Answers = left });
-        }
+            if (left.Count == 0)
+            {
+                _fileSystem.DeleteFile(orchestrator.InboxFile);
+            }
+            else
+            {
+                WriteInbox(orchestrator, inbox with { Answers = left });
+            }
+
+            return true;
+        });
     }
 
     private T? Read<T>(string path, string what, Func<T, string?> problemOf)

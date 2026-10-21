@@ -6,14 +6,21 @@ using System.Text.Json.Serialization;
 namespace DssHarness.Core.Orchestration.Flow;
 
 /// <summary>
-/// How every time a run's records hold is written and read: UTC, <c>yyyy-MM-dd HH:mm:ss</c> (the user, 2026-10-17:
-/// "sql datetime"), so a client parses one form; and a time that has not come yet is written <see langword="null"/>,
-/// never left out, so every entry has the same members.
+/// How every time a run's records hold is written and read - <c>flow.json</c>, each <c>step.json</c>,
+/// <c>workflow.json</c>, <c>pre-existing-issues.json</c>, the events, <c>questions.json</c>, <c>stop.json</c>,
+/// <c>inbox.json</c>, the owner and the report: UTC, <c>yyyy-MM-dd HH:mm:ss</c> (the user, 2026-10-17: "sql datetime"),
+/// so a client parses one form. A time a record keeps that has not come yet is written <see langword="null"/>, never
+/// left out, so every entry has the same members: each such member says so with
+/// <see cref="JsonIgnoreCondition.Never"/>, which the state files' own rule of leaving nulls out would otherwise drop.
 /// </summary>
 public sealed class FlowTimeConverter : JsonConverter<DateTimeOffset>
 {
     /// <summary>The one form a time is written in.</summary>
     public const string Form = "yyyy-MM-dd HH:mm:ss";
+
+    /// <summary>A time in the one form, as a document that writes it by hand (the report's) writes it.</summary>
+    /// <param name="at">The time.</param>
+    public static string Written(DateTimeOffset at) => at.ToUniversalTime().ToString(Form, CultureInfo.InvariantCulture);
 
     /// <summary>Reads a time as it is written; anything else refuses, for a record is never guessed at.</summary>
     public override DateTimeOffset Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
@@ -24,7 +31,33 @@ public sealed class FlowTimeConverter : JsonConverter<DateTimeOffset>
 
     /// <summary>Writes a time in the one form.</summary>
     public override void Write(Utf8JsonWriter writer, DateTimeOffset value, JsonSerializerOptions options)
-        => writer.WriteStringValue(value.ToUniversalTime().ToString(Form, CultureInfo.InvariantCulture));
+        => writer.WriteStringValue(Written(value));
+}
+
+/// <summary>
+/// How a run's records spell the engine's own values - an instance's state, the run's status, an event's kind: each
+/// list owned once, by the engine's enumeration, and a record's member held to exactly one of its names. Never a
+/// number, never two names joined, never a name the engine does not have - which <see cref="Enum.TryParse{TEnum}(string?, out TEnum)"/>
+/// would all let through - so a record that says something the engine cannot mean is refused, not guessed at.
+/// </summary>
+public static class FlowRecordNames
+{
+    /// <summary>Whether <paramref name="name"/> is exactly the name of one of <typeparamref name="T"/>'s values.</summary>
+    /// <typeparam name="T">The engine's enumeration that owns the list.</typeparam>
+    /// <param name="name">The name a record holds.</param>
+    public static bool Is<T>(string? name)
+        where T : struct, Enum
+        => name is not null && Enum.GetNames<T>().Contains(name, StringComparer.Ordinal);
+
+    /// <summary>The value <paramref name="name"/> names; refused where it is not exactly one of <typeparamref name="T"/>'s names.</summary>
+    /// <typeparam name="T">The engine's enumeration that owns the list.</typeparam>
+    /// <param name="name">The name a record holds, read strictly already.</param>
+    /// <exception cref="InvalidOperationException"><paramref name="name"/> is not one of the names.</exception>
+    public static T Of<T>(string name)
+        where T : struct, Enum
+        => Is<T>(name)
+            ? Enum.Parse<T>(name)
+            : throw new InvalidOperationException($"'{name}' is not one of the {typeof(T).Name} names a run's records hold: {string.Join(", ", Enum.GetNames<T>())}.");
 }
 
 /// <summary>
@@ -33,7 +66,7 @@ public sealed class FlowTimeConverter : JsonConverter<DateTimeOffset>
 /// </summary>
 /// <param name="Seq">The event's number in the run, from 1.</param>
 /// <param name="At">When it happened.</param>
-/// <param name="Kind">What kind of event it is: <c>sessionBegan</c>, <c>step</c>, <c>pauseBegan</c>, <c>handoff</c>, <c>pauseCompleted</c>, <c>resumed</c>, <c>sessionEnded</c>.</param>
+/// <param name="Kind">What kind of event it is: one of <see cref="FlowChangeKind"/>'s names in camelCase (<see cref="KindOf"/>).</param>
 /// <param name="Instance">The step instance it tells of; null for the run's own events.</param>
 /// <param name="Step">The instance's declaration path; null where no instance is named.</param>
 /// <param name="From">The state the instance stood in before it; null where none applies.</param>
@@ -51,8 +84,15 @@ public sealed record FlowEvent(
     int? Attempt = null,
     string? Detail = null)
 {
-    /// <summary>Every kind of event a run appends.</summary>
-    public static readonly IReadOnlyList<string> Kinds = ["sessionBegan", "step", "pauseBegan", "handoff", "pauseCompleted", "resumed", "sessionEnded", "answer"];
+    /// <summary>Every kind of event a run appends: one for each kind of change the coordinator hands the records, and no other.</summary>
+    public static readonly IReadOnlyList<string> Kinds = [.. Enum.GetValues<FlowChangeKind>().Select(KindOf)];
+
+    /// <summary>The kind an event of <paramref name="change"/> is written as: its name in camelCase.</summary>
+    /// <param name="change">What changed.</param>
+    public static string KindOf(FlowChangeKind change)
+        => Enum.IsDefined(change)
+            ? JsonNamingPolicy.CamelCase.ConvertName(change.ToString())
+            : throw new ArgumentOutOfRangeException(nameof(change), change, "not a change a run records");
 
     /// <summary>What is wrong with this event; null when nothing is.</summary>
     public string? Problem()
@@ -69,14 +109,14 @@ public sealed record FlowEvent(
 /// <param name="Instance">The instance's id, as <see cref="FlowInstanceId"/> spells it.</param>
 /// <param name="Step">The declaration's path among the flow.</param>
 /// <param name="Group">Whether this is a group's own record - of an expansion or of an iteration.</param>
-/// <param name="State">How the instance stands, as the engine's identifier spells it.</param>
+/// <param name="State">How the instance stands: one of <see cref="FlowInstanceState"/>'s names, exactly.</param>
 /// <param name="Attempt">Which attempt of this visit has run: 1 for the first, one more for each retry.</param>
 /// <param name="Visit">Which visit of the step this is.</param>
 /// <param name="Answers">The answers the questions of this visit were given, in the order they were given.</param>
 /// <param name="WaitsOn">What the instance waits on, where it waits: a dependency, a claim, a counter, a question, the resume.</param>
 /// <param name="Type">The step's type; null for a group's own record.</param>
-/// <param name="StartedAt">When this attempt began; null until it has.</param>
-/// <param name="FinishedAt">When the instance ended; null until it has.</param>
+/// <param name="StartedAt">When this attempt began; written null until it has.</param>
+/// <param name="FinishedAt">When the instance ended; written null until it has.</param>
 /// <param name="Exit">The code the step's own work ended with; null until it has.</param>
 /// <param name="Error">Why the step ended as it did, where the code alone cannot say.</param>
 /// <param name="SkippedBecause">Why the flow decided not to run it, where it is Skipped.</param>
@@ -106,8 +146,8 @@ public sealed record FlowStepRecord(
     IReadOnlyList<FlowAnswerGiven> Answers,
     IReadOnlyList<string> WaitsOn,
     string? Type = null,
-    [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset? StartedAt = null,
-    [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset? FinishedAt = null,
+    [property: JsonConverter(typeof(FlowTimeConverter)), JsonIgnore(Condition = JsonIgnoreCondition.Never)] DateTimeOffset? StartedAt = null,
+    [property: JsonConverter(typeof(FlowTimeConverter)), JsonIgnore(Condition = JsonIgnoreCondition.Never)] DateTimeOffset? FinishedAt = null,
     int? Exit = null,
     string? Error = null,
     string? SkippedBecause = null,
@@ -135,51 +175,32 @@ public sealed record FlowStepRecord(
     public string? Problem()
         => !FlowInstanceId.IsWellFormed(Instance) ? $"'{Instance}' is not an instance id"
             : string.IsNullOrWhiteSpace(Step) ? "it names no step"
-            : !Enum.TryParse<States>(State, out _) ? $"'{State}' is not an instance state"
+            : !FlowRecordNames.Is<FlowInstanceState>(State) ? $"'{State}' is not an instance state"
             : Attempt < 1 ? $"its attempt is {Attempt.ToString(CultureInfo.InvariantCulture)}, and the first is 1"
             : Visit < 1 ? $"its visit is {Visit.ToString(CultureInfo.InvariantCulture)}, and the first is 1"
             : Failure is { } failure && !Failures.Contains(failure, StringComparer.Ordinal) ? $"'{failure}' is not where a failure leaves the run"
-            : Question is not null && !Question.StartsWith('q') ? $"'{Question}' is not a question's id"
+            : Question is not null && !FlowQuestionIds.IsWellFormed(Question) ? $"'{Question}' is not a question's id"
             : Item is not null && Index is null ? "it holds an item without its index"
             : Answers.Any(answer => string.IsNullOrWhiteSpace(answer.Question) || string.IsNullOrWhiteSpace(answer.Answer)) ? "an answer names neither its question nor its answer"
             : Handlers is { Count: > 0 } && Handlers.Any(handler => handler.Problem() is not null) ? $"its handlers hold one that is not a state: {Handlers.First(handler => handler.Problem() is not null).Problem()}"
-            : HandledBy is not null && !FlowInstanceId.IsWellFormed(HandledBy) && !HandledBy.StartsWith('q') ? $"'{HandledBy}' names neither an instance nor a question"
+            : HandledBy is not null && !FlowInstanceId.IsWellFormed(HandledBy) && !FlowQuestionIds.IsWellFormed(HandledBy) ? $"'{HandledBy}' names neither an instance nor a question"
             : RaisedBy is not null && !FlowInstanceId.IsWellFormed(RaisedBy) ? $"'{RaisedBy}' is not an instance id"
+            : Handoff?.Problem() is { } handoff ? $"its handoff: {handoff}"
             : null;
-
-    /// <summary>The instance states, as the record and the engine's identifiers spell them.</summary>
-    public enum States
-    {
-        /// <summary>Declared, and the run has not reached it.</summary>
-        NotStarted,
-
-        /// <summary>Running now, or between two attempts of one visit.</summary>
-        Running,
-
-        /// <summary>Its work ended as the run wanted it.</summary>
-        Done,
-
-        /// <summary>The flow decided not to run it.</summary>
-        Skipped,
-
-        /// <summary>Its work ended failed, and nothing passed the failure over.</summary>
-        Failed,
-
-        /// <summary>Waiting on a question it asked or its failure raised.</summary>
-        Paused,
-
-        /// <summary>A stop ended it where it stood; it runs again at the resume.</summary>
-        Stopped,
-
-        /// <summary>Never reached.</summary>
-        NotRun,
-    }
 }
 
 /// <summary>The handoff a step's record names: who wrote it and why, for the file is its own record beside the step's.</summary>
 /// <param name="By">Who wrote it: <c>agent</c> or <c>engine</c>.</param>
 /// <param name="Why">Why the engine wrote it, where it did; null where the agent answered.</param>
-public sealed record FlowHandoffRecord(string By, string? Why = null){
+public sealed record FlowHandoffRecord(string By, string? Why = null)
+{
+    /// <summary>
+    /// How a handoff the engine wrote begins, its first line saying so (part 04: "says so in its first line"): the one
+    /// spelling the engine writes and a resume reads back, where a crash left a handoff's file beside a record that does
+    /// not name it yet.
+    /// </summary>
+    public const string EngineMark = "Written by the engine: ";
+
     /// <summary>What is wrong with this record; null when nothing is.</summary>
     public string? Problem()
         => By is not ("agent" or "engine") ? $"'{By}' is not who writes a handoff"
@@ -226,11 +247,12 @@ public sealed record FlowRedirectRecord(string Handler, string Target, IReadOnly
 /// <param name="Definition">The definition's name.</param>
 /// <param name="DefinitionDigest">The SHA-256 of the definition as it ran, frozen in <c>definition.json</c>.</param>
 /// <param name="Inputs">The values the run was started with, by input name.</param>
-/// <param name="Status">How the run stands, as the engine's identifier spells it.</param>
+/// <param name="Status">How the run stands: one of <see cref="FlowRunStatus"/>'s names, exactly.</param>
 /// <param name="Spent">What the run's reasoning has spent against its budget: usd, tokens and minutes.</param>
 /// <param name="BudgetGranted">How many times the budget was answered <c>more</c>.</param>
 /// <param name="Steps">Every step instance, in the order the run made them.</param>
 /// <param name="Next">The steps that would start now, in the order they would start.</param>
+/// <param name="StartedAt">When the run began: what a resume carries on with, for <c>workflow.json</c> is written for a person and never read by one.</param>
 /// <param name="StartCommit">The commit the run started from; null where it started beside the tree's history.</param>
 /// <param name="Branch">The branch the run started on.</param>
 /// <param name="Pause">The safe pause the run is under or was ended by: cause, all, at, completedAt; null where none.</param>
@@ -246,6 +268,7 @@ public sealed record FlowFile(
     int BudgetGranted,
     IReadOnlyList<FlowStepRecord> Steps,
     IReadOnlyList<string> Next,
+    [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset StartedAt,
     string? StartCommit = null,
     string? Branch = null,
     FlowPauseRecord? Pause = null,
@@ -257,31 +280,14 @@ public sealed record FlowFile(
             : string.IsNullOrWhiteSpace(Run) ? "it names no run"
             : string.IsNullOrWhiteSpace(Definition) ? "it names no definition"
             : string.IsNullOrWhiteSpace(DefinitionDigest) ? "it names no digest of its definition"
-            : !Enum.TryParse<StatusOf>(Status, out _) ? $"'{Status}' is not a run status"
+            : !FlowRecordNames.Is<FlowRunStatus>(Status) ? $"'{Status}' is not a run status"
             : BudgetGranted < 0 ? "the budget was granted more a negative number of times"
             : Steps.Any(step => step.Problem() is { } problem) ? $"its steps hold one that is not a record: {Steps.First(step => step.Problem() is not null).Problem()}"
             : Steps.GroupBy(step => step.Instance, StringComparer.Ordinal).Any(group => group.Count() > 1) ? "it holds an instance twice"
             : Next.Any(id => Steps.All(step => !string.Equals(step.Instance, id, StringComparison.Ordinal))) ? "next names an instance the file does not hold"
+            : Pause?.Problem() is { } pause ? $"its pause: {pause}"
+            : Redirect?.Problem() is { } redirect ? $"its redirect: {redirect}"
             : null;
-
-    /// <summary>The run's statuses, as the record and the engine's identifiers spell them.</summary>
-    public enum StatusOf
-    {
-        /// <summary>Steps are running, or nothing has ended the run yet.</summary>
-        Running,
-
-        /// <summary>Everything ended as asked.</summary>
-        Done,
-
-        /// <summary>A failure nothing passed over ended it.</summary>
-        Failed,
-
-        /// <summary>A question is open, and nothing more can run until it is answered.</summary>
-        Paused,
-
-        /// <summary>A stop ended it; it goes on at a resume.</summary>
-        Stopped,
-    }
 }
 
 /// <summary>What a run's reasoning spent, as <c>flow.json</c> holds it.</summary>
@@ -294,14 +300,14 @@ public sealed record FlowBudgetRecord(double Usd, long Tokens, double Minutes);
 /// <param name="Cause">Who asked for the pause.</param>
 /// <param name="All">Whether the machine steps were stopped too.</param>
 /// <param name="At">When the pause began.</param>
-/// <param name="CompletedAt">When the pause completed - its last handoff written and everything it left running recorded; null while it records.</param>
+/// <param name="CompletedAt">When the pause completed - its last handoff written and everything it left running recorded; written null while it records.</param>
 /// <param name="Handoffs">Every step that handed off, in the order the handoffs were written.</param>
 public sealed record FlowPauseRecord(
     string Cause,
     bool All,
     [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset At,
     IReadOnlyList<string> Handoffs,
-    [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset? CompletedAt = null)
+    [property: JsonConverter(typeof(FlowTimeConverter)), JsonIgnore(Condition = JsonIgnoreCondition.Never)] DateTimeOffset? CompletedAt = null)
 {
     /// <summary>What is wrong with this record; null when nothing is.</summary>
     public string? Problem()
@@ -318,13 +324,13 @@ public sealed record FlowPauseRecord(
 /// <param name="Schema">The file's schema; 1.</param>
 /// <param name="Run">The run's name.</param>
 /// <param name="Workflow">The workflow's name.</param>
-/// <param name="Status">How the run stands, as the engine's identifier spells it.</param>
+/// <param name="Status">How the run stands: one of <see cref="FlowRunStatus"/>'s names, exactly, as a client switches on them.</param>
 /// <param name="StartedAt">When the run began.</param>
 /// <param name="UpdatedAt">When this status was written.</param>
 /// <param name="Progress">Every instance of the run by its state, and their total.</param>
 /// <param name="Steps">Every step of the definition, by its path, from the moment the run is created.</param>
-/// <param name="FinishedAt">When the run ended; null while it runs.</param>
-/// <param name="WaitingOn">What the run waits on: the open questions' ids, or the safe pause; null where it waits on nothing.</param>
+/// <param name="FinishedAt">When the run ended; written null while it runs.</param>
+/// <param name="WaitingOn">What the run waits on: the open questions' ids, or the safe pause; written null where it waits on nothing.</param>
 public sealed record WorkflowStatus(
     int Schema,
     string Run,
@@ -334,21 +340,18 @@ public sealed record WorkflowStatus(
     [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset UpdatedAt,
     WorkflowProgress Progress,
     IReadOnlyDictionary<string, WorkflowStepStatus> Steps,
-    [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset? FinishedAt = null,
-    IReadOnlyList<string>? WaitingOn = null)
+    [property: JsonConverter(typeof(FlowTimeConverter)), JsonIgnore(Condition = JsonIgnoreCondition.Never)] DateTimeOffset? FinishedAt = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] IReadOnlyList<string>? WaitingOn = null)
 {
     /// <summary>What is wrong with this status; null when nothing is.</summary>
     public string? Problem()
         => Schema != 1 ? $"its schema is {Schema.ToString(CultureInfo.InvariantCulture)}, and this build reads 1"
             : string.IsNullOrWhiteSpace(Run) ? "it names no run"
             : string.IsNullOrWhiteSpace(Workflow) ? "it names no workflow"
-            : !RunStatuses.Contains(Status, StringComparer.Ordinal) ? $"'{Status}' is not a run status"
+            : !FlowRecordNames.Is<FlowRunStatus>(Status) ? $"'{Status}' is not a run status"
             : Progress.Problem() is { } progress ? progress
             : Steps.Values.Any(step => step.Problem() is { } problem) ? Steps.Values.First(step => step.Problem() is not null).Problem()
             : null;
-
-    /// <summary>The run's statuses, as a client switches on them.</summary>
-    public static readonly IReadOnlyList<string> RunStatuses = ["Running", "Paused", "Done", "Failed", "Stopped"];
 }
 
 /// <summary>The run's pre-existing issues by what became of them, as <c>workflow.json</c> counts them.</summary>
@@ -362,7 +365,7 @@ public sealed record WorkflowPreExisting(int Listed, int Fixed, int Duplicate, i
 /// <param name="Steps">How many instances the run has made.</param>
 /// <param name="NotStarted">How many have not begun.</param>
 /// <param name="Running">How many are running, or between two attempts of one visit.</param>
-/// <param name="Recovering">How many a recovery works on; none until the recovery is built.</param>
+/// <param name="Recovering">How many failed instances the recovery works on now: each whose failure a recovery visit took that has not ended.</param>
 /// <param name="Paused">How many wait on a question.</param>
 /// <param name="Done">How many ended as asked.</param>
 /// <param name="Failed">How many ended failed.</param>
@@ -391,20 +394,23 @@ public sealed record WorkflowProgress(
 }
 
 /// <summary>One step of the definition in <c>workflow.json</c>: its own status, times and seconds - its instances' together - and each instance under its id.</summary>
-/// <param name="Status">The status the run would show for the step, as the engine's identifier spells it.</param>
+/// <param name="Status">The status the run would show for the step: one of <see cref="StepStatuses"/>, exactly.</param>
 /// <param name="Instances">Each instance of the step, by its id.</param>
-/// <param name="StartedAt">Its instances' first start; null until one has.</param>
-/// <param name="FinishedAt">Its instances' last finish; null until one has.</param>
-/// <param name="Seconds">What the step's instances took together; null until it finished.</param>
+/// <param name="StartedAt">Its instances' first start; written null until one has.</param>
+/// <param name="FinishedAt">Its instances' last finish; written null until every instance has finished.</param>
+/// <param name="Seconds">What the step's instances took together; written null until every instance has finished.</param>
 public sealed record WorkflowStepStatus(
     string Status,
     IReadOnlyDictionary<string, WorkflowInstanceStatus> Instances,
-    [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset? StartedAt = null,
-    [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset? FinishedAt = null,
-    long? Seconds = null)
+    [property: JsonConverter(typeof(FlowTimeConverter)), JsonIgnore(Condition = JsonIgnoreCondition.Never)] DateTimeOffset? StartedAt = null,
+    [property: JsonConverter(typeof(FlowTimeConverter)), JsonIgnore(Condition = JsonIgnoreCondition.Never)] DateTimeOffset? FinishedAt = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] long? Seconds = null)
 {
-    /// <summary>The step statuses, as a client switches on them.</summary>
-    public static readonly IReadOnlyList<string> StepStatuses = ["NotStarted", "Running", "Recovering", "Paused", "Done", "Failed", "Skipped", "Stopped", "NotRun"];
+    /// <summary>The status of a failed instance the recovery works on now: the one status a client sees that is no instance state of the engine's.</summary>
+    public const string Recovering = "Recovering";
+
+    /// <summary>The step statuses, as a client switches on them: every instance state of the engine's (<see cref="FlowInstanceState"/>), and <see cref="Recovering"/>.</summary>
+    public static readonly IReadOnlyList<string> StepStatuses = [.. Enum.GetNames<FlowInstanceState>(), Recovering];
 
     /// <summary>What is wrong with this status; null when nothing is.</summary>
     public string? Problem()
@@ -414,21 +420,22 @@ public sealed record WorkflowStepStatus(
 }
 
 /// <summary>One instance of a step in <c>workflow.json</c>.</summary>
-/// <param name="Status">How the instance stands, as the engine's identifier spells it.</param>
+/// <param name="Status">How the instance stands: one of <see cref="WorkflowStepStatus.StepStatuses"/>, exactly.</param>
 /// <param name="Visit">Which visit of the step this is.</param>
 /// <param name="Attempt">Which attempt of this visit has run.</param>
-/// <param name="Recoveries">How many times a recovery was given its failure; none until the recovery is built.</param>
-/// <param name="StartedAt">When this instance began; null until it has.</param>
-/// <param name="FinishedAt">When this instance ended; null until it has.</param>
-/// <param name="Seconds">What the instance took; null until it finished.</param>
+/// <param name="Recoveries">How many times a recovery was given its failure.</param>
+/// <param name="StartedAt">When this instance began; written null until it has.</param>
+/// <param name="FinishedAt">When this instance ended; written null until it has.</param>
+/// <param name="Seconds">What the instance took; written null until it finished.</param>
 /// <param name="Recovery">The recovery it is under, where one holds it; null otherwise.</param>
-public sealed record WorkflowInstanceStatus(    string Status,
+public sealed record WorkflowInstanceStatus(
+    string Status,
     int Visit,
     int Attempt,
     int Recoveries,
-    [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset? StartedAt = null,
-    [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset? FinishedAt = null,
-    long? Seconds = null,
+    [property: JsonConverter(typeof(FlowTimeConverter)), JsonIgnore(Condition = JsonIgnoreCondition.Never)] DateTimeOffset? StartedAt = null,
+    [property: JsonConverter(typeof(FlowTimeConverter)), JsonIgnore(Condition = JsonIgnoreCondition.Never)] DateTimeOffset? FinishedAt = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] long? Seconds = null,
     WorkflowRecovery? Recovery = null)
 {
     /// <summary>What is wrong with this status; null when nothing is.</summary>
@@ -438,10 +445,13 @@ public sealed record WorkflowInstanceStatus(    string Status,
             : null;
 }
 
-/// <summary>The recovery an instance is under, as <c>workflow.json</c> holds it; none until the recovery is built.</summary>
-/// <param name="Visit">Which visit the recovery sent the run back for.</param>
-/// <param name="MaxVisits">The most visits the step may be given.</param>
-/// <param name="Course">What the recovery works on it as.</param>
+/// <summary>
+/// The recovery an instance is under, as <c>workflow.json</c> holds it: the visit the recovery is on and the most it is
+/// given. Written for each instance whose status is <see cref="WorkflowStepStatus.Recovering"/>.
+/// </summary>
+/// <param name="Visit">Which visit of the recovery takes the instance's failure now.</param>
+/// <param name="MaxVisits">The most visits the recovery is given of one step in one scope, as the definition bounds it; answers of <c>more</c> to its bound add to it.</param>
+/// <param name="Course">What the recovery works on it as: <c>fix</c>, its failure put right at its root - the one course a recovery takes.</param>
 public sealed record WorkflowRecovery(int Visit, int MaxVisits, string Course);
 
 /// <summary>
@@ -584,6 +594,11 @@ public enum FlowChangeKind
 /// <param name="WaitingOn">The questions the run holds open, in the order they were raised.</param>
 /// <param name="Redirect">The redirect the run owes and has not made yet; null where none is owed.</param>
 /// <param name="PreExisting">The run's pre-existing issues by what became of them; null until it has one.</param>
+/// <param name="Issues">
+/// Every pre-existing issue the run has listed, whole, where the change holds them: the records write the run's file of
+/// them in this change's own order - after the run's status, before the event - where the list differs from the one
+/// last written; null where the change says nothing of them.
+/// </param>
 public sealed record FlowSnapshot(
     FlowRunStatus Status,
     DateTimeOffset? EndedAt,
@@ -594,7 +609,8 @@ public sealed record FlowSnapshot(
     IReadOnlyList<string> Next,
     IReadOnlyList<string> WaitingOn,
     FlowRedirectRecord? Redirect = null,
-    WorkflowPreExisting? PreExisting = null);
+    WorkflowPreExisting? PreExisting = null,
+    IReadOnlyList<PreExistingIssue>? Issues = null);
 
 /// <summary>One step instance as the snapshot holds it: everything its own record and the index say of it.</summary>
 /// <param name="Instance">The instance's id.</param>

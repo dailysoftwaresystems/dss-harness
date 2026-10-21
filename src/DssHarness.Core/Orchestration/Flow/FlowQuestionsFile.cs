@@ -4,28 +4,6 @@ using System.Text.Json.Serialization;
 
 namespace DssHarness.Core.Orchestration.Flow;
 
-/// <summary>
-/// How every time <c>questions.json</c> holds is written and read: UTC, ISO 8601 to the second with a
-/// <c>Z</c> (<c>2026-10-12T14:02:11Z</c>), as the file's own shape spells it - apart from the run's other records,
-/// which hold <see cref="FlowTimeConverter"/>'s form.
-/// </summary>
-public sealed class FlowIsoTimeConverter : JsonConverter<DateTimeOffset>
-{
-    /// <summary>The one form a time is written in.</summary>
-    public const string Form = "yyyy-MM-ddTHH:mm:ssZ";
-
-    /// <summary>Reads a time as it is written; anything else refuses, for a record is never guessed at.</summary>
-    public override DateTimeOffset Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
-        => reader.TokenType == JsonTokenType.String
-            && DateTimeOffset.TryParseExact(reader.GetString(), Form, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var at)
-                ? at
-                : throw new JsonException($"a time is written '{Form}' (UTC)");
-
-    /// <summary>Writes a time in the one form.</summary>
-    public override void Write(Utf8JsonWriter writer, DateTimeOffset value, JsonSerializerOptions options)
-        => writer.WriteStringValue(value.ToUniversalTime().ToString(Form, CultureInfo.InvariantCulture));
-}
-
 /// <summary>Who raised a question: a step (a <c>pause</c> step, or a step whose ending did), or the engine itself.</summary>
 /// <param name="Who">Who raised it: <c>step</c> or <c>engine</c>.</param>
 /// <param name="Step">The instance it is about, where one is; null for the run's own (<c>runBudget</c>).</param>
@@ -67,7 +45,7 @@ public sealed record FlowRecommendation(
     string? Advice = null)
 {
     /// <summary>The one recommendation this build's questions carry: none sought, said plainly.</summary>
-    public static FlowRecommendation NotSought { get; } = new("notSought", Why: "no recommendation was sought: this build names no advisor");
+    public static FlowRecommendation NotSought { get; } = new("notSought", Why: "no recommendation was sought: this build does not ask an advisor yet");
 }
 
 /// <summary>Who gave an answer: a person (and through what), the configuration (and where), or the run's input.</summary>
@@ -86,11 +64,11 @@ public sealed record FlowAnswerBy(string Who, string? Through = null, string? Wh
 /// <param name="ReplacedAt">When a later answer replaced it, where one did; null while it stands.</param>
 public sealed record FlowAnswerRecord(
     string Answer,
-    [property: JsonConverter(typeof(FlowIsoTimeConverter))] DateTimeOffset At,
+    [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset At,
     string? Text = null,
     FlowAnswerBy? By = null,
     string? Did = null,
-    [property: JsonConverter(typeof(FlowIsoTimeConverter))] DateTimeOffset? ReplacedAt = null);
+    [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset? ReplacedAt = null);
 
 /// <summary>One question a step's output wrote or an agent asked, in the shape every question holds; empty for the engine's own.</summary>
 /// <param name="Question">What is asked.</param>
@@ -128,7 +106,7 @@ public sealed record FlowQuestionEntry(
     string Id,
     string State,
     string Kind,
-    [property: JsonConverter(typeof(FlowIsoTimeConverter))] DateTimeOffset RaisedAt,
+    [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset RaisedAt,
     IReadOnlyList<FlowAgentQuestion> Questions,
     IReadOnlyList<FlowQuestionOption> Options,
     IReadOnlyList<FlowAnswerRecord> Answers,
@@ -163,8 +141,9 @@ public static class FlowQuestionIds
 /// <summary>
 /// <c>questions.json</c>: every question the run raised and every answer it was given, the open ones among them - the
 /// one owner of what a question said, what was recommended, who answered and what the engine did. Written whole each
-/// time, masked, outside every directory an agent may write; a step's own record lists only the ids of the questions
-/// its step raised.
+/// time, outside every directory an agent may write; a step's own record lists only the ids of the questions its step
+/// raised. Its texts are not masked yet: a run carries no secret to mask until its steps are served by the step runners
+/// and the agent clients, which give the run the mask its records are written with.
 /// </summary>
 /// <param name="Schema">The file's schema, 1.</param>
 /// <param name="Run">The run's name.</param>
@@ -173,7 +152,7 @@ public static class FlowQuestionIds
 public sealed record FlowQuestionsFile(
     int Schema,
     string Run,
-    [property: JsonConverter(typeof(FlowIsoTimeConverter))] DateTimeOffset UpdatedAt,
+    [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset UpdatedAt,
     IReadOnlyList<FlowQuestionEntry> Questions)
 {
     /// <summary>What is wrong with this file; null when nothing is.</summary>

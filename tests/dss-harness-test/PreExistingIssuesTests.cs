@@ -85,14 +85,22 @@ public sealed class PreExistingIssuesTests
         }
     }
 
-    /// <summary>A quote or an output is cut to 4,000 characters, and the cut is said.</summary>
+    /// <summary>
+    /// A quote or an output is cut to 4,000 characters with the cut said inside them - so what is cut is a proof the
+    /// reader takes - and one that fits is kept whole.
+    /// </summary>
     [Fact]
-    public void AQuoteOrAnOutputIsCutToWhatItMayHold_TheCutSaid()
+    public void AQuoteOrAnOutputIsCutToWhatItMayHold_TheCutSaid_AndTheReaderTakesIt()
     {
         var cut = PreExistingIssuesWriter.Cut(new string('x', PreExistingProof.Most + 100));
+        var exactly = new string('y', PreExistingProof.Most);
 
-        Assert.Equal(PreExistingProof.Most + $"… (cut at {PreExistingProof.Most} characters)".Length, cut.Length);
-        Assert.EndsWith($"… (cut at 4000 characters)", cut, StringComparison.Ordinal);
+        Assert.Equal(PreExistingProof.Most, cut.Length);
+        Assert.EndsWith("… (cut to 4000 characters)", cut, StringComparison.Ordinal);
+        Assert.Equal(new string('x', PreExistingProof.Most - PreExistingIssuesWriter.CutMark.Length), cut[..^PreExistingIssuesWriter.CutMark.Length]);
+        Assert.Null(new PreExistingProof("ran", "abc123", Command: "make", Output: cut).Problem());
+        Assert.Null(new PreExistingProof("read", "abc123", "a.c", "1-2", Quote: cut).Problem());
+        Assert.Equal(exactly, PreExistingIssuesWriter.Cut(exactly));
         Assert.Equal("short", PreExistingIssuesWriter.Cut("short"));
     }
 

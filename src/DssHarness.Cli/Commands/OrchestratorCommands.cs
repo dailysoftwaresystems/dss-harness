@@ -183,7 +183,7 @@ internal static class ListOrchestratorCommand
 
     private static readonly Option<bool> StepsOption = new("--steps")
     {
-        Description = "For a run, each step instance with its state, its attempt and its agent, from flow.json.",
+        Description = "For a run, each step instance with its state, its visit, its attempt, its agent and its own directory, from flow.json.",
     };
 
     private static readonly Option<bool> QuestionsOption = new("--questions")
@@ -196,7 +196,7 @@ internal static class ListOrchestratorCommand
 
     internal static Command Create()
     {
-        var command = new Command(Name, "List orchestrators, their agents and where each stands, a run's own lines from flow.json, and worktrees below an orchestrator's directory that no agent records.");
+        var command = new Command(Name, "List orchestrators, their agents and where each stands, a run's own lines from flow.json with what its engine is doing, and worktrees below an orchestrator's directory that no agent records.");
         command.Arguments.Add(NameArgument);
         command.Options.Add(StepsOption);
         command.Options.Add(QuestionsOption);

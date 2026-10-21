@@ -497,7 +497,7 @@ public sealed class FlowPreExistingTests
             Assert.Equal(["pe-1", "pe-2"], issues.Issues.Select(issue => issue.Id));
             Assert.Equal(["a broken test", "a stale document"], issues.Issues.Select(issue => issue.Title));
 
-            taken = new FlowResume(store, layout, harness.FileSystem).Load();
+            taken = new FlowResume(store, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
         }
 
         using (var again = new FlowRunRecords(harness.FileSystem, store, layout, FlowRunContext.Of("r1", definition, startedAt: clock.GetUtcNow()), clock))

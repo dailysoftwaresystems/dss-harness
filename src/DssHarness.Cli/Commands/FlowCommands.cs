@@ -1,34 +1,37 @@
 using System.CommandLine;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
+using DssHarness.Core.Output;
+using DssHarness.Core.Results;
 
 namespace DssHarness.Cli.Commands;
 
 /// <summary>
 /// Wires the five run verbs: <c>run-orchestrator</c>, <c>resume-orchestrator</c>, <c>answer-orchestrator</c>,
-/// <c>pause-orchestrator</c> and <c>stop-orchestrator</c>. The three sessions count two interrupts: the first asks
-/// the engine for a safe pause, the second stops it where it stands.
+/// <c>pause-orchestrator</c> and <c>stop-orchestrator</c>. The three sessions count two interrupts through their
+/// terminal (<see cref="FlowTerminal"/>): the first asks the engine for a safe pause, the second stops it where it stands.
 /// </summary>
 internal static class FlowCommands
 {
     /// <summary>The flow document each of the five verbs answers with where it stops before its session: the session it would have run, empty.</summary>
     internal static readonly JsonAnswer Answer = new(OrchestrationArguments.Json, (_, exitCode, summary, _, _) => OrchestrationReports.FlowStopped(exitCode, summary));
 
-    /// <summary>Counts the interrupts of a session the terminal delivers: Ctrl+C here, SIGTERM and a closed terminal on Linux and macOS.</summary>
-    /// <param name="interrupts">The session's interrupts.</param>
-    /// <returns>The handler, and whether to keep the process running past the press.</returns>
-    internal static (ConsoleCancelEventHandler Handler, Action Detach) InterruptsOf(FlowInterrupts interrupts)
-    {
-        ConsoleCancelEventHandler handler = (_, pressed) =>
-        {
-            pressed.Cancel = true;
-            interrupts.Pressed();
-        };
-
-        Console.CancelKeyPress += handler;
-
-        return (handler, () => Console.CancelKeyPress -= handler);
-    }
+    /// <summary>
+    /// Runs one session of a run with the terminal's interrupts counted for it - Ctrl+C, and off Windows SIGTERM and a
+    /// hang-up - and the command line's own token kept from it: an interrupt reaches the session as one counted, never
+    /// as a cancellation.
+    /// </summary>
+    /// <param name="context">The command's context.</param>
+    /// <param name="command">The run verb.</param>
+    /// <param name="session">The session, given its interrupts and the token it is driven by.</param>
+    /// <param name="commandToken">The command line's own token, which the session is not given.</param>
+    /// <returns>The session's outcome, or the hard stop's where the session did not end within its drain.</returns>
+    internal static Task<CommandOutcome> SessionAsync(
+        CommandContext context,
+        string command,
+        Func<FlowInterrupts, CancellationToken, Task<CommandOutcome>> session,
+        CancellationToken commandToken)
+        => new FlowTerminal(context.Get<IHarnessOutput>(), command).RunAsync(session, commandToken);
 }
 
 /// <summary>Wires <c>DssHarness run-orchestrator</c>.</summary>
@@ -43,13 +46,13 @@ internal static class RunOrchestratorCommand
 
     private static readonly Option<string?> RunOption = new("--run")
     {
-        Description = "The run's name, which names its directory under .orchestrators; the first free r<N> where none is given. A name that is taken is refused, never reused.",
+        Description = "The run's name, which names its directory under .orchestrators; one more than the highest r<N> there where none is given. A name that is taken is refused, never taken over.",
     };
 
     private static readonly Option<string[]> InputOption = new("--input")
     {
         HelpName = "k=v",
-        Description = "An input the run is started with, as name=value; @<file> gives a text input a file's text. Once for each input.",
+        Description = "An input the run is started with, as name=value; name=@<file> gives a text input the text of a file, read relative to --directory. Once for each input.",
     };
 
     internal static Command Create()
@@ -63,68 +66,22 @@ internal static class RunOrchestratorCommand
 
         CommandRunner.Wire(
             command,
-            async (context, run, cancellationToken) =>
-            {
-                var interrupts = new FlowInterrupts();
-                var (handler, detach) = FlowCommands.InterruptsOf(interrupts);
-
-                try
-                {
-                    return await context.Get<IFlowService>()
-                        .RunAsync(
-                            context.Directory,
-                            context.ParseResult.GetRequiredValue(DefinitionArgument),
-                            context.ParseResult.GetValue(RunOption),
-                            Inputs(context.ParseResult.GetValue(InputOption)),
-                            context.Json,
-                            interrupts,
-                            cancellationToken)
-                        .ConfigureAwait(false);
-                }
-                finally
-                {
-                    detach();
-                    _ = handler;
-                }
-            },
-            beginsRun: run => true, FlowCommands.Answer);
+            (context, run, cancellationToken) => FlowCommands.SessionAsync(
+                context,
+                Name,
+                (interrupts, token) => context.Get<IFlowService>().RunAsync(
+                    context.Directory,
+                    context.ParseResult.GetRequiredValue(DefinitionArgument),
+                    context.ParseResult.GetValue(RunOption),
+                    context.ParseResult.GetValue(InputOption),
+                    context.Json,
+                    interrupts,
+                    token),
+                cancellationToken),
+            beginsRun: run => true,
+            FlowCommands.Answer);
 
         return command;
-    }
-
-    /// <summary>The inputs the command line gave, by name; <c>@file</c> reads the file's text.</summary>
-    internal static IReadOnlyDictionary<string, string>? Inputs(string[]? given)
-    {
-        if (given is null || given.Length == 0)
-        {
-            return null;
-        }
-
-        var inputs = new Dictionary<string, string>(StringComparer.Ordinal);
-
-        foreach (var input in given)
-        {
-            var at = input.IndexOf('=', StringComparison.Ordinal);
-
-            if (at <= 0 || at == input.Length - 1)
-            {
-                throw new DssHarness.Core.Results.HarnessException(
-                    DssHarness.Core.Results.HarnessExit.UsageError,
-                    $"'{input}' is not an input as name=value; --input k=v gives one, and @<file> a text input a file's text");
-            }
-
-            var name = input[..at];
-            var value = input[(at + 1)..];
-
-            if (value.Length > 1 && value[0] == '@')
-            {
-                value = File.ReadAllText(value[1..]);
-            }
-
-            inputs[name] = value;
-        }
-
-        return inputs;
     }
 }
 
@@ -137,30 +94,20 @@ internal static class ResumeOrchestratorCommand
 
     internal static Command Create()
     {
-        var command = new Command(Name, "Go on with a run: what a stop, a crash or an answer left, each stopped step from its own handoff, refused while another run of the repository is unfinished with work in the tree.");
+        var command = new Command(Name, "Go on with a run: what a stop, a crash or an answer left, each stopped step from its own handoff, under the definition it began with; refused while another run of the repository is unfinished with work in the tree.");
         command.Arguments.Add(RunArgument);
         command.Options.Add(OrchestrationArguments.Json);
         GlobalOptions.AddTo(command);
 
         CommandRunner.Wire(
             command,
-            async (context, run, cancellationToken) =>
-            {
-                var interrupts = new FlowInterrupts();
-                var (_, detach) = FlowCommands.InterruptsOf(interrupts);
-
-                try
-                {
-                    return await context.Get<IFlowService>()
-                        .ResumeAsync(context.Directory, context.ParseResult.GetRequiredValue(RunArgument), context.Json, interrupts, cancellationToken)
-                        .ConfigureAwait(false);
-                }
-                finally
-                {
-                    detach();
-                }
-            },
-            beginsRun: run => true, FlowCommands.Answer);
+            (context, run, cancellationToken) => FlowCommands.SessionAsync(
+                context,
+                Name,
+                (interrupts, token) => context.Get<IFlowService>().ResumeAsync(context.Directory, context.ParseResult.GetRequiredValue(RunArgument), context.Json, interrupts, token),
+                cancellationToken),
+            beginsRun: run => true,
+            FlowCommands.Answer);
 
         return command;
     }
@@ -186,7 +133,7 @@ internal static class AnswerOrchestratorCommand
 
     private static readonly Option<bool> AgainOption = new("--again")
     {
-        Description = "Change the last answer a person gave, within the window the configuration sets.",
+        Description = "Change an answer already given. This build takes no plan update yet, so it is refused.",
     };
 
     private static readonly Option<string?> TextOption = new("--text")
@@ -197,7 +144,7 @@ internal static class AnswerOrchestratorCommand
     private static readonly Option<string?> TextFileOption = new("--text-file")
     {
         HelpName = "path",
-        Description = "A file holding the text an answer that takes one is given.",
+        Description = "A file holding the text an answer that takes one is given, read relative to --directory.",
     };
 
     internal static Command Create()
@@ -214,45 +161,23 @@ internal static class AnswerOrchestratorCommand
 
         CommandRunner.Wire(
             command,
-            async (context, run, cancellationToken) =>
-            {
-                var text = context.ParseResult.GetValue(TextOption);
-                var file = context.ParseResult.GetValue(TextFileOption);
-
-                if (text is not null && file is not null)
-                {
-                    return DssHarness.Core.Results.CommandOutcome.Usage("--text and --text-file are one answer's text given two ways; give one");
-                }
-
-                if (file is not null)
-                {
-                    text = File.ReadAllText(file);
-                }
-
-                var interrupts = new FlowInterrupts();
-                var (_, detach) = FlowCommands.InterruptsOf(interrupts);
-
-                try
-                {
-                    return await context.Get<IFlowService>()
-                        .AnswerAsync(
-                            context.Directory,
-                            context.ParseResult.GetRequiredValue(RunArgument),
-                            context.ParseResult.GetRequiredValue(AnswerArgument),
-                            context.ParseResult.GetValue(QuestionOption),
-                            text,
-                            context.ParseResult.GetValue(AgainOption),
-                            context.Json,
-                            interrupts,
-                            cancellationToken)
-                        .ConfigureAwait(false);
-                }
-                finally
-                {
-                    detach();
-                }
-            },
-            beginsRun: run => true, FlowCommands.Answer);
+            (context, run, cancellationToken) => FlowCommands.SessionAsync(
+                context,
+                Name,
+                (interrupts, token) => context.Get<IFlowService>().AnswerAsync(
+                    context.Directory,
+                    context.ParseResult.GetRequiredValue(RunArgument),
+                    context.ParseResult.GetRequiredValue(AnswerArgument),
+                    context.ParseResult.GetValue(QuestionOption),
+                    context.ParseResult.GetValue(TextOption),
+                    context.ParseResult.GetValue(TextFileOption),
+                    context.ParseResult.GetValue(AgainOption),
+                    context.Json,
+                    interrupts,
+                    token),
+                cancellationToken),
+            beginsRun: run => true,
+            FlowCommands.Answer);
 
         return command;
     }
@@ -297,12 +222,12 @@ internal static class StopOrchestratorCommand
 
     internal static readonly Option<bool> NowOption = new("--now")
     {
-        Description = "End the engine's process and every child its steps recorded, without asking it: for an engine that no longer answers.",
+        Description = "End the engine's process and all it started, without asking it - only an engine of this machine, and only the process its owner names by its start: for an engine that no longer answers. What its steps' contained children left is ended with it.",
     };
 
     internal static Command Create()
     {
-        var command = new Command(Name, "The hard stop: once a pause is complete, the stop of the machine steps it left running; --now ends the engine's process where it stands.");
+        var command = new Command(Name, "The hard stop, asked of the engine running the run and waited for 30 s: what is in flight is stopped where it stands; once a pause is complete, the machine steps it left running. --now ends the engine's process where it stands.");
         command.Arguments.Add(RunArgument);
         command.Options.Add(NowOption);
         command.Options.Add(OrchestrationArguments.Json);

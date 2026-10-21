@@ -8,9 +8,10 @@ namespace DssHarness.Core.Orchestration.Flow;
 
 /// <summary>
 /// The one who records a run on disk: everything the coordinator tells it, in the one order the run's law names - a
-/// step's own files first (its output, then its record, then its handoff where one was written), then the run's state
-/// in one file, then its status, then its pre-existing issues where they changed, and the event that tells of it last,
-/// so a client woken by an event reads the files that tell of it already written.
+/// step's own files first (its output, its handoff where one was written, then its record, which names the handoff
+/// only once the file is there), then the run's state in one file, then its status, then its pre-existing issues where
+/// they changed, and the event that tells of it last, so a client woken by an event reads the files that tell of it
+/// already written.
 /// </summary>
 public interface IFlowRecords
 {
@@ -35,6 +36,11 @@ public interface IFlowRecords
     /// Records the run's pre-existing issues, whole, in the run's own file: each entry added at a triage answer
     /// <c>list</c>, proven, ids <c>pe-&lt;n&gt;</c> in the order added.
     /// </summary>
+    /// <remarks>
+    /// Written at once, wherever the caller stands: where the change that listed an issue is recorded with
+    /// <see cref="FlowSnapshot.Issues"/> instead, the issues take their place in that change's order - after the run's
+    /// status and before its event - which is the order the run's law names.
+    /// </remarks>
     /// <param name="issues">Every issue the run listed, in the order it added them.</param>
     /// <param name="at">When the list was written.</param>
     void PreExisting(IReadOnlyList<PreExistingIssue> issues, DateTimeOffset at);
@@ -43,8 +49,8 @@ public interface IFlowRecords
 /// <summary>
 /// What a run is, as its records name it: its name, the definition it runs and the digest of the definition as it ran,
 /// the values it was started with, the commit and the branch it started from, and when. The digest freezes the
-/// definition: a resume runs <c>definition.json</c>, never the file the command read, and a config whose entry now
-/// differs is refused with a pointer to a new run.
+/// definition: a resume runs <c>definition.json</c>, never the file the command read, keeps the digest the run began
+/// with, and is refused, with a pointer to a new run, where the repository's entry now differs.
 /// </summary>
 /// <param name="Run">The run's name.</param>
 /// <param name="Definition">The definition, as it ran.</param>
@@ -73,11 +79,33 @@ public sealed record FlowRunContext(
         => new(
             run,
             definition ?? throw new ArgumentNullException(nameof(definition)),
-            DigestOf(JsonSerializer.Serialize(definition, JsonStateFile.Options)),
+            DigestOf(definition),
             inputs ?? new Dictionary<string, string>(),
             startCommit,
             branch,
             startedAt ?? DateTimeOffset.UtcNow);
+
+    /// <summary>
+    /// What a run is as a resume takes it up: everything its state in one file says of it - the digest it began with,
+    /// never one worked out again, its values, its commit and branch, and when it began - with the definition it froze.
+    /// </summary>
+    /// <param name="definition">The definition as it ran, read from <c>definition.json</c>.</param>
+    /// <param name="file">The run's state in one file.</param>
+    public static FlowRunContext Resumed(WorkflowDefinition definition, FlowFile file)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(file);
+
+        return new(file.Run, definition, file.DefinitionDigest, file.Inputs, file.StartCommit, file.Branch, file.StartedAt);
+    }
+
+    /// <summary>The SHA-256 of <paramref name="definition"/> as this build freezes it: the digest a run begins with, and the one a resume compares the repository's entry by.</summary>
+    /// <param name="definition">The definition.</param>
+    public static string DigestOf(WorkflowDefinition definition)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        return DigestOf(JsonSerializer.Serialize(definition, JsonStateFile.Options));
+    }
 
     /// <summary>The SHA-256 of the definition as this build freezes it, spelt in lower-case hex.</summary>
     /// <param name="frozen">The definition, serialized as <c>definition.json</c> holds it.</param>
@@ -132,11 +160,23 @@ public sealed class WorkflowStatusWriter
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(snapshot);
 
+        // The recovery's visits, each the group the recovery declares raised by the instance whose failure it took: how
+        // many each instance was given, and the one at work on it now, which shows the instance Recovering.
+        var visits = snapshot.Steps
+            .Where(step => step.Group && string.Equals(step.Step, FlowScope.Recovery, StringComparison.Ordinal) && step.RaisedBy is not null)
+            .ToList();
+        var maxVisits = context.Definition.Recover?.MaxVisits ?? FlowRecover.MostVisits;
+        var recoveries = new RecoveryView(
+            visits.GroupBy(visit => visit.RaisedBy!, StringComparer.Ordinal).ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal),
+            visits.Where(visit => visit.State is FlowInstanceState.NotStarted or FlowInstanceState.Running or FlowInstanceState.Paused)
+                .GroupBy(visit => visit.RaisedBy!, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => new WorkflowRecovery(group.Max(visit => visit.Visit), maxVisits, "fix"), StringComparer.Ordinal));
+
         var steps = new Dictionary<string, WorkflowStepStatus>(StringComparer.Ordinal);
 
         foreach (var path in FlowScope.Declared(context.Definition).Select(declared => declared.Path))
         {
-            steps[path] = StepStatusOf([.. snapshot.Steps.Where(step => string.Equals(step.Step, path, StringComparison.Ordinal))]);
+            steps[path] = StepStatusOf([.. snapshot.Steps.Where(step => string.Equals(step.Step, path, StringComparison.Ordinal))], recoveries);
         }
 
         var waiting = new List<string>(snapshot.WaitingOn);
@@ -145,12 +185,6 @@ public sealed class WorkflowStatusWriter
         {
             waiting.Insert(0, $"safe pause ({pause.Cause})");
         }
-
-        // The recovery the run is in, where a failure it took is being put right: one instance of the run is at work
-        // on it, and the progress says so.
-        var recovering = snapshot.Steps.Any(step => step.Instance == FlowScope.Recovery || step.Instance.StartsWith(FlowScope.Recovery + "+", StringComparison.Ordinal))
-            && snapshot.Steps.Any(step => (step.Instance == FlowScope.Recovery || step.Instance.StartsWith(FlowScope.Recovery + "+", StringComparison.Ordinal))
-                && step.State is FlowInstanceState.NotStarted or FlowInstanceState.Running or FlowInstanceState.Paused);
 
         return new WorkflowStatus(
             1,
@@ -163,7 +197,7 @@ public sealed class WorkflowStatusWriter
                 snapshot.Steps.Count,
                 snapshot.Steps.Count(step => step.State is FlowInstanceState.NotStarted),
                 snapshot.Steps.Count(step => step.State is FlowInstanceState.Running),
-                recovering ? 1 : 0,
+                snapshot.Steps.Count(step => step.State is FlowInstanceState.Failed && recoveries.Current.ContainsKey(step.Instance)),
                 snapshot.Steps.Count(step => step.State is FlowInstanceState.Paused),
                 snapshot.Steps.Count(step => step.State is FlowInstanceState.Done),
                 snapshot.Steps.Count(step => step.State is FlowInstanceState.Failed),
@@ -176,46 +210,64 @@ public sealed class WorkflowStatusWriter
             waiting.Count == 0 ? null : waiting);
     }
 
-    /// <summary>One step of the definition, as its instances together stand: the first start, the last finish, and the status the run would show for it.</summary>
-    private static WorkflowStepStatus StepStatusOf(IReadOnlyList<FlowSnapshotStep> instances)
+    /// <summary>
+    /// One step of the definition, as its instances together stand: the status the run would show for it, the first
+    /// start, and the last finish and the seconds they took together once every one of them has finished - null while
+    /// one has not.
+    /// </summary>
+    private static WorkflowStepStatus StepStatusOf(IReadOnlyList<FlowSnapshotStep> instances, RecoveryView recoveries)
     {
         var perInstance = new Dictionary<string, WorkflowInstanceStatus>(StringComparer.Ordinal);
+        var shown = new List<string>();
 
         foreach (var instance in instances)
         {
+            var recovery = instance.State is FlowInstanceState.Failed ? recoveries.Current.GetValueOrDefault(instance.Instance) : null;
+            var status = recovery is null ? instance.State.ToString() : WorkflowStepStatus.Recovering;
+            shown.Add(status);
+
             perInstance[instance.Instance] = new WorkflowInstanceStatus(
-                instance.State.ToString(),
+                status,
                 instance.Visit,
                 instance.Attempt,
-                0,
+                recoveries.Given.GetValueOrDefault(instance.Instance),
                 instance.StartedAt,
                 instance.FinishedAt,
-                SecondsOf(instance.StartedAt, instance.FinishedAt));
+                SecondsOf(instance.StartedAt, instance.FinishedAt),
+                recovery);
         }
 
+        var finished = instances.Count > 0 && instances.All(instance => instance.FinishedAt is not null);
+
         return new WorkflowStepStatus(
-            instances.Select(instance => instance.State).DefaultIfEmpty(FlowInstanceState.NotStarted).Aggregate(Worst).ToString(),
+            shown.DefaultIfEmpty(nameof(FlowInstanceState.NotStarted)).Aggregate(Worst),
             perInstance,
-            instances.Count == 0 ? null : instances.Min(instance => instance.StartedAt),
-            instances.Count == 0 ? null : instances.Max(instance => instance.FinishedAt),
-            instances.Count == 0 ? null : instances.Sum(instance => SecondsOf(instance.StartedAt, instance.FinishedAt)));
+            instances.Where(instance => instance.StartedAt is not null).Select(instance => instance.StartedAt).Min(),
+            finished ? instances.Max(instance => instance.FinishedAt) : null,
+            finished ? instances.Sum(instance => SecondsOf(instance.StartedAt, instance.FinishedAt) ?? 0) : null);
     }
 
-    /// <summary>What the run would show for a step that holds one of each of two states.</summary>
-    private static FlowInstanceState Worst(FlowInstanceState left, FlowInstanceState right) => Rank(left) >= Rank(right) ? left : right;
+    /// <summary>What the run would show for a step that holds one of each of two statuses.</summary>
+    private static string Worst(string left, string right) => Rank(left) >= Rank(right) ? left : right;
 
     /// <summary>The order of what the run would show: what still moves first, what ended worst next, what never ran last.</summary>
-    private static int Rank(FlowInstanceState state) => state switch
+    private static int Rank(string status) => status switch
     {
-        FlowInstanceState.Running => 8,
-        FlowInstanceState.Paused => 7,
-        FlowInstanceState.Stopped => 6,
-        FlowInstanceState.Failed => 5,
-        FlowInstanceState.Done => 4,
-        FlowInstanceState.Skipped => 3,
-        FlowInstanceState.NotRun => 2,
+        nameof(FlowInstanceState.Running) => 9,
+        WorkflowStepStatus.Recovering => 8,
+        nameof(FlowInstanceState.Paused) => 7,
+        nameof(FlowInstanceState.Stopped) => 6,
+        nameof(FlowInstanceState.Failed) => 5,
+        nameof(FlowInstanceState.Done) => 4,
+        nameof(FlowInstanceState.Skipped) => 3,
+        nameof(FlowInstanceState.NotRun) => 2,
         _ => 1,
     };
+
+    /// <summary>What the recovery did for the run's instances: how many visits each was given, and the visit at work on each now.</summary>
+    /// <param name="Given">How many visits of the recovery each instance's failure was given, by instance id.</param>
+    /// <param name="Current">The recovery at work on each instance now, by instance id.</param>
+    private sealed record RecoveryView(IReadOnlyDictionary<string, int> Given, IReadOnlyDictionary<string, WorkflowRecovery> Current);
 
     /// <summary>What an instance took, in seconds; null until it finished.</summary>
     private static long? SecondsOf(DateTimeOffset? startedAt, DateTimeOffset? finishedAt)
@@ -307,13 +359,20 @@ public sealed class PreExistingIssuesWriter
         return entry;
     }
 
-    /// <summary>Cuts a quote or an output to the most it may hold, the cut said.</summary>
+    /// <summary>What a cut quote or output ends with: the cut, said.</summary>
+    public static readonly string CutMark = $"… (cut to {PreExistingProof.Most.ToString(System.Globalization.CultureInfo.InvariantCulture)} characters)";
+
+    /// <summary>
+    /// Cuts a quote or an output to the most it may hold, the cut said: the text and the words that say it was cut
+    /// together hold no more than <see cref="PreExistingProof.Most"/> characters, so what is cut is what the reader of the
+    /// issue takes.
+    /// </summary>
     /// <param name="text">What was read or run.</param>
     public static string Cut(string text)
     {
         ArgumentNullException.ThrowIfNull(text);
 
-        return text.Length <= PreExistingProof.Most ? text : text[..PreExistingProof.Most] + $"… (cut at {PreExistingProof.Most.ToString(System.Globalization.CultureInfo.InvariantCulture)} characters)";
+        return text.Length <= PreExistingProof.Most ? text : text[..(PreExistingProof.Most - CutMark.Length)] + CutMark;
     }
 }
 
@@ -339,13 +398,21 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
     private readonly PreExistingIssuesWriter _issues;
     private readonly FlowEventLog _events;
 
+    /// <summary>The issues last written, so a change whose snapshot holds the same list writes no file for it.</summary>
+    private IReadOnlyList<PreExistingIssue>? _issuesWritten;
+
     /// <summary>One writer of the run's status, and of nothing else.</summary>
     public WorkflowStatusWriter Status => _status;
 
     /// <summary>One writer of the run's pre-existing issues, and of nothing else.</summary>
     public PreExistingIssuesWriter Issues => _issues;
 
-    /// <summary>Opens the run's records: the run's directory, its event log once for every change this session appends to, and the definition frozen where it is not there.</summary>
+    /// <summary>
+    /// Opens the run's records: the run's directory and its event log, once for every change this session appends to.
+    /// At the run's start - where its state in one file is not on disk yet - the definition is frozen and the run's
+    /// issues and questions are created empty; a resume creates none of them, for a resume that found one missing has
+    /// been refused already by name (<see cref="FlowResume"/>), never handed an empty one in its place.
+    /// </summary>
     /// <param name="fileSystem">Writes the files.</param>
     /// <param name="store">Writes the records, strictly.</param>
     /// <param name="layout">The run's layout.</param>
@@ -362,10 +429,16 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
         _issues = new PreExistingIssuesWriter(store, layout, context.Run);
 
         _fileSystem.CreateDirectory(_layout.Directory);
+        var starts = _fileSystem.KindOf(_layout.FlowFile) == PathKind.None;
         _events = FlowEventLog.Open(_fileSystem, _layout.EventsFile);
 
+        if (!starts)
+        {
+            return;
+        }
+
         // The definition is what runs: frozen at the run's start, and never the file the command read. A resume runs
-        // this one and checks nothing else.
+        // this one, and checks the repository's entry against the digest the run began with.
         if (_store.ReadDefinition(_layout) is null)
         {
             _store.WriteDefinition(_layout, _context.Definition);
@@ -375,6 +448,7 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
         if (_store.ReadPreExistingIssues(_layout) is null)
         {
             _issues.Write([], _clock.GetUtcNow());
+            _issuesWritten = [];
         }
 
         // The run's questions and answers are created empty with it too: the one owner of what every question said
@@ -397,6 +471,7 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
     {
         ArgumentNullException.ThrowIfNull(issues);
         _issues.Write(issues, at);
+        _issuesWritten = [.. issues];
     }
 
     /// <inheritdoc/>
@@ -415,30 +490,27 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
 
         if (kind is FlowChangeKind.Handoff && step is not null)
         {
-            // The handoff is the step's own file too, and its record says who wrote it: both are written before
-            // anything says the handoff was.
-            WriteStepFiles(step);
+            // The handoff is the step's own file too, written before the record that names it: a record never says a
+            // step holds a handoff its directory does not, so a resume that finds one missing knows something removed
+            // it - and a crash between the two leaves a file the next resume reads back by its first line.
             WriteHandoffFile(step);
+            WriteStepFiles(step);
         }
 
-        // Then the run's state in one file, then its status.
+        // Then the run's state in one file, then its status, then its issues where the change listed one.
         _store.WriteFlow(_layout, FlowOf(snapshot));
         _status.Write(snapshot, at);
+
+        if (snapshot.Issues is { } issues && (_issuesWritten is null || !issues.SequenceEqual(_issuesWritten)))
+        {
+            _issues.Write(issues, at);
+            _issuesWritten = [.. issues];
+        }
 
         // Then the event that tells of it, last: a client woken by it reads the files already written.
         _ = _events.Append(
             at,
-            kind switch
-            {
-                FlowChangeKind.SessionBegan => "sessionBegan",
-                FlowChangeKind.Resumed => "resumed",
-                FlowChangeKind.PauseBegan => "pauseBegan",
-                FlowChangeKind.Handoff => "handoff",
-                FlowChangeKind.PauseCompleted => "pauseCompleted",
-                FlowChangeKind.SessionEnded => "sessionEnded",
-                FlowChangeKind.Answer => "answer",
-                _ => "step",
-            },
+            kind,
             step?.Instance,
             step?.Step,
             from,
@@ -464,6 +536,7 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
             snapshot.BudgetGranted,
             [.. snapshot.Steps.Select(StepRecordOf)],
             [.. snapshot.Next],
+            _context.StartedAt,
             _context.StartCommit,
             _context.Branch,
             snapshot.Pause is { } pause
@@ -513,18 +586,14 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
 
     /// <summary>
     /// Where one step's own directory is: inside the agent it names with <c>in</c> or <c>of</c> - for a reason step
-    /// too, where it names one - and under the run for every step that names none.
+    /// too, where it names one - and under the run for every step that names none (<see cref="OrchestratorLayout.InstanceDirectory"/>).
     /// </summary>
     /// <param name="step">The step, whole.</param>
     public string StepDirectoryOf(FlowSnapshotStep step)
     {
         ArgumentNullException.ThrowIfNull(step);
 
-        var onDisk = FlowInstanceId.DirectoryOf(step.Instance);
-
-        return step.Agent is { } agent
-            ? _layout.AgentStepDirectory(agent, onDisk)
-            : _layout.StepDirectory(onDisk);
+        return _layout.InstanceDirectory(step.Instance, step.Agent);
     }
 
     /// <summary>Closes the run's records: its event log, its last line whole.</summary>
@@ -539,14 +608,14 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
 
         if (step.Output is not null)
         {
-            _fileSystem.WriteAllTextAtomic(Path.Combine(directory, "output.json"), JsonSerializer.Serialize(step.Output, JsonStateFile.Options) + "\n");
+            _fileSystem.WriteAllTextAtomic(Path.Combine(directory, OrchestratorLayout.StepOutputFileName), JsonSerializer.Serialize(step.Output, JsonStateFile.Options) + "\n");
         }
 
-        _store.WriteStepRecord(Path.Combine(directory, "step.json"), StepRecordOf(step));
+        _store.WriteStepRecord(Path.Combine(directory, OrchestratorLayout.StepRecordFileName), StepRecordOf(step));
 
         // The handoff is spent where the record says the step holds none: the file is removed once the attempt it was
         // written for has been given it, and the record is the truth of whether it holds one.
-        var handoff = Path.Combine(directory, "handoff.md");
+        var handoff = Path.Combine(directory, OrchestratorLayout.HandoffFileName);
 
         if (step.Handoff is null && _fileSystem.KindOf(handoff) == PathKind.File)
         {
@@ -565,6 +634,6 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
         var directory = StepDirectoryOf(step);
 
         _fileSystem.CreateDirectory(directory);
-        _fileSystem.WriteAllTextAtomic(Path.Combine(directory, "handoff.md"), handoff.Text + "\n");
+        _fileSystem.WriteAllTextAtomic(Path.Combine(directory, OrchestratorLayout.HandoffFileName), handoff.Text + "\n");
     }
 }

@@ -30,8 +30,8 @@ public sealed class FlowResumeTests
     }
 
     /// <summary>What a run left, taken up: the records read, reconciled, and handed back with the handoffs of its stopped steps.</summary>
-    private static FlowResumeState TakeUp(HarnessFactory harness, OrchestratorLayout layout, string? digest = null)
-        => new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(digest);
+    private static FlowResumeState TakeUp(HarnessFactory harness, OrchestratorLayout layout, WorkflowDefinition definition, string? digest = null)
+        => new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(digest ?? FlowRunContext.DigestOf(definition));
 
     /// <summary>A run that ends writes its state whole: every instance with its state and what it waits on, next empty, the pause it ended by, and the events in order.</summary>
     [Fact]
@@ -107,7 +107,7 @@ public sealed class FlowResumeTests
             Assert.Equal(FlowRunStatus.Paused, end.Status);
         }
 
-        var taken = TakeUp(harness, layout);
+        var taken = TakeUp(harness, layout, definition);
         var handoff = layout.StepHandoffFile("think");
 
         Assert.Equal(["think"], taken.File.Pause!.Handoffs);
@@ -162,7 +162,7 @@ public sealed class FlowResumeTests
             // The crash: the engine's process ended, and its records stand as its last whole writes left them.
         }
 
-        var taken = TakeUp(harness, layout);
+        var taken = TakeUp(harness, layout, definition);
 
         Assert.Equal("Running", taken.File.Steps.Single(step => step.Instance == "think").State);
 
@@ -217,17 +217,265 @@ public sealed class FlowResumeTests
         harness.FileSystem.CreateDirectory(Path.GetDirectoryName(orphan)!);
         harness.OrchestrationStore.WriteStepRecord(orphan, new FlowStepRecord("extra", "extra", false, "Done", 1, 1, [], []));
 
-        var taken = TakeUp(harness, layout);
+        var taken = TakeUp(harness, layout, definition);
 
         Assert.Equal(["two"], taken.Differing);
         Assert.Equal(["extra"], taken.Adopted);
-        Assert.Equal(["extra", "one", "two"], taken.File.Steps.Select(step => step.Instance));
+        Assert.Equal(["one", "two", "extra"], taken.File.Steps.Select(step => step.Instance));
 
         var written = harness.OrchestrationStore.ReadFlow(layout);
 
         Assert.NotNull(written);
-        Assert.Equal(["extra", "one", "two"], written.Steps.Select(step => step.Instance));
+        Assert.Equal(["one", "two", "extra"], written.Steps.Select(step => step.Instance));
         Assert.Equal("Done", written.Steps.Single(step => step.Instance == "two").State);
+    }
+
+    /// <summary>
+    /// The index's own order is kept - the order the run made its steps - never sorted again: <c>b+10</c> stays after
+    /// <c>b+2</c> where the run made it so, and what the index never named goes after all it did.
+    /// </summary>
+    [Fact]
+    public async Task TheIndexsOwnOrderIsKept_NeverSortedAgain()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: z
+                type: orient
+              - name: a
+                type: orient
+            """);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            await new FlowCoordinator(definition, new Runner(), new RunnerFacts(), records: records).RunAsync(TestContext.Current.CancellationToken);
+        }
+
+        var file = harness.OrchestrationStore.ReadFlow(layout)!;
+        harness.OrchestrationStore.WriteFlow(layout, file with { Steps = [.. file.Steps.OrderByDescending(step => step.Instance, StringComparer.Ordinal)] });
+
+        var taken = TakeUp(harness, layout, definition);
+
+        Assert.Equal(["z", "a"], taken.File.Steps.Select(step => step.Instance));
+        Assert.Equal(["z", "a"], harness.OrchestrationStore.ReadFlow(layout)!.Steps.Select(step => step.Instance));
+    }
+
+    /// <summary>
+    /// A step's own record is taken whole wherever it says anything the index does not - not only its state, attempt,
+    /// exit, question or output: a crash after a handler was written owed, before the index was, leaves the five equal and
+    /// the record ahead, and the record is the truth.
+    /// </summary>
+    [Fact]
+    public async Task AStepsOwnRecordIsTakenWhole_WhereItSaysAnythingTheIndexDoesNot()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: one
+                type: orient
+            """);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            await new FlowCoordinator(definition, new Runner(), new RunnerFacts(), records: records).RunAsync(TestContext.Current.CancellationToken);
+        }
+
+        // The crash's cut: the step's own record written with its handler owed and an answer it was given, the index not.
+        var own = harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("one"))!;
+        harness.OrchestrationStore.WriteStepRecord(layout.StepRecordFile("one"), own with { Handlers = [new FlowHandlerState("tidy", "owed")], Answers = [new FlowAnswerGiven("q1", "go")] });
+
+        var taken = TakeUp(harness, layout, definition);
+        var step = Assert.Single(taken.File.Steps);
+
+        Assert.Equal(["one"], taken.Differing);
+        Assert.Equal([new FlowHandlerState("tidy", "owed")], step.Handlers);
+        Assert.Equal("go", Assert.Single(step.Answers).Answer);
+    }
+
+    /// <summary>
+    /// The cut between the run's state and its status, and the one before the event: a resume reads neither the status
+    /// nor the events, so it goes on from the state alone - its start taken from the state, never from the status a person
+    /// reads - and the events go on numbered from their last whole line.
+    /// </summary>
+    [Fact]
+    public async Task AResumeGoesOnFromTheStateAlone_WhereTheStatusOrTheLastEventIsMissing()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: one
+                type: orient
+            """);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            await new FlowCoordinator(definition, new Runner(), new RunnerFacts(), records: records).RunAsync(TestContext.Current.CancellationToken);
+        }
+
+        var began = harness.OrchestrationStore.ReadFlow(layout)!.StartedAt;
+        var (events, _) = FlowEventLog.Read(harness.FileSystem, layout.EventsFile);
+        var lines = File.ReadAllLines(layout.EventsFile);
+
+        File.Delete(layout.WorkflowStatusFile);
+        File.WriteAllText(layout.EventsFile, string.Join("\n", lines[..^1]) + "\n");
+
+        var taken = TakeUp(harness, layout, definition);
+        var context = FlowRunContext.Resumed(definition, taken.File);
+
+        Assert.Equal(began, context.StartedAt);
+        Assert.Equal(FlowRunContext.DigestOf(definition), context.DefinitionDigest);
+
+        using (var again = FlowEventLog.Open(harness.FileSystem, layout.EventsFile))
+        {
+            Assert.Equal(events.Count, again.Append(DateTimeOffset.UtcNow, FlowChangeKind.Resumed).Seq);
+        }
+    }
+
+    /// <summary>A step directory inside an agent's that the index does not name is adopted too, after every step the index named.</summary>
+    [Fact]
+    public async Task AStepRecordInsideAnAgentsDirectory_TheIndexMissed_IsAdopted()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: one
+                type: orient
+            """);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            await new FlowCoordinator(definition, new Runner(), new RunnerFacts(), records: records).RunAsync(TestContext.Current.CancellationToken);
+        }
+
+        var inAgent = layout.AgentStepRecordFile("a1", "work");
+        Directory.CreateDirectory(Path.GetDirectoryName(inAgent)!);
+        harness.OrchestrationStore.WriteStepRecord(inAgent, new FlowStepRecord("work", "work", false, "Running", 1, 1, [], [], Type: "build", Agent: "a1"));
+
+        var taken = TakeUp(harness, layout, definition);
+
+        Assert.Equal(["work"], taken.Adopted);
+        Assert.Equal(["one", "work"], taken.File.Steps.Select(step => step.Instance));
+        Assert.Equal("a1", taken.File.Steps[1].Agent);
+    }
+
+    /// <summary>A run's questions or issues missing are refused by name, never made again empty: a step waiting on a question would wait for ever.</summary>
+    [Theory]
+    [InlineData("questions.json", "its questions and answers")]
+    [InlineData("pre-existing-issues.json", "its pre-existing issues")]
+    public async Task ARunsQuestionsOrIssuesMissing_AreRefusedByName(string missing, string what)
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: one
+                type: orient
+            """);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            await new FlowCoordinator(definition, new Runner(), new RunnerFacts(), records: records).RunAsync(TestContext.Current.CancellationToken);
+        }
+
+        var file = Path.Combine(layout.Directory, missing);
+        File.Delete(file);
+
+        var refused = Assert.Throws<HarnessException>(() => TakeUp(harness, layout, definition));
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.StartsWith($"'{file}' is not there, so run 'r1' holds no record of {what}", refused.Message, StringComparison.Ordinal);
+        Assert.False(File.Exists(file));
+
+        using (new FlowRunRecords(harness.FileSystem, harness.OrchestrationStore, layout, FlowRunContext.Of("r1", definition)))
+        {
+            // Opened over a run already made: nothing is created in the missing one's place.
+        }
+
+        Assert.False(File.Exists(file));
+    }
+
+    /// <summary>A record that names a handoff its directory does not hold is refused, naming the file: the engine never writes one of its own in the place of the agent's account.</summary>
+    [Fact]
+    public async Task ARecordNamingAHandoffItsDirectoryDoesNotHold_IsRefusedNamingTheFile()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+            """);
+        var runner = new Runner().Hold("think").HandsOff("think", "halfway through");
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), records: records);
+            var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
+            await runner.StartedAsync("think").WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+            coordinator.RequestPause("command");
+            _ = await session.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        }
+
+        File.Delete(layout.StepHandoffFile("think"));
+
+        var refused = Assert.Throws<HarnessException>(() => TakeUp(harness, layout, definition));
+
+        Assert.Equal(
+            $"step 'think' of run 'r1' holds a handoff written by the agent, and '{layout.StepHandoffFile("think")}' is not there. "
+            + "Nothing was changed: a handoff is never written again in the place of one that was lost; put the file back to go on with the run, "
+            + "or delete-orchestrator r1 ends it.",
+            refused.Message);
+    }
+
+    /// <summary>
+    /// A handoff's file a crash left beside a record that does not name it yet - the file is written first - is taken
+    /// back: the agent's, or the engine's where its first line says the engine wrote it, and why.
+    /// </summary>
+    [Theory]
+    [InlineData("what the agent said it was doing", "agent", null)]
+    [InlineData("Written by the engine: the run was stopped; attempt 1 was cut off.", "engine", "the run was stopped; attempt 1 was cut off")]
+    public async Task AHandoffACrashLeftBesideItsRecord_IsTakenBack(string text, string by, string? why)
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+            """);
+        var runner = new Runner().Hold("think");
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), records: records);
+            _ = coordinator.RunAsync(TestContext.Current.CancellationToken);
+            await runner.StartedAsync("think").WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+            // The crash, between the handoff's file and the record that would name it.
+        }
+
+        File.WriteAllText(layout.StepHandoffFile("think"), text + "\n");
+
+        var taken = TakeUp(harness, layout, definition);
+        var step = Assert.Single(taken.File.Steps);
+
+        Assert.Equal(new FlowHandoffRecord(by, why), step.Handoff);
+        Assert.Equal(text, taken.Handoffs["think"]);
     }
 
     /// <summary>A config whose entry now differs from the one the run began under is refused with a pointer to a new run.</summary>
@@ -249,11 +497,13 @@ public sealed class FlowResumeTests
             await coordinator.RunAsync(TestContext.Current.CancellationToken);
         }
 
-        var raised = Assert.Throws<HarnessException>(() => TakeUp(harness, layout, digest: "another digest entirely"));
+        var raised = Assert.Throws<HarnessException>(() => TakeUp(harness, layout, definition, digest: "another digest entirely"));
 
         Assert.Equal(HarnessExit.Refused, raised.ExitCode);
-        Assert.Contains("has changed since run 'r1' began", raised.Message, StringComparison.Ordinal);
-        Assert.Contains("start a new run", raised.Message, StringComparison.Ordinal);
+        Assert.Equal(
+            "workflow 'flow', as the repository's config declares it now, has changed since run 'r1' began, and a run goes on only under the definition it began with; "
+            + "run-orchestrator flow starts a new run of it. Nothing of run 'r1' was changed.",
+            raised.Message);
     }
 
     /// <summary>The graph is rebuilt over the items and iterations the records name: a taken-up forEach holds each item's value, and what a finished item wrote is read by what comes after.</summary>
@@ -292,7 +542,7 @@ public sealed class FlowResumeTests
             // The crash, between one item's end and another's.
         }
 
-        var taken = TakeUp(harness, layout);
+        var taken = TakeUp(harness, layout, definition);
         var next = new Runner().On("work", run => FlowStepResult.Ended(passed: true, 0, output: JsonNode.Parse("{\"done\": \"" + run.Item.AsTemplateText() + "\"}")));
         var (_, _, again) = Records("r1", temp.Path, definition);
 
@@ -346,7 +596,7 @@ public sealed class FlowResumeTests
             // The crash, with the question open and the build still running.
         }
 
-        var taken = TakeUp(harness, layout);
+        var taken = TakeUp(harness, layout, definition);
         var (_, _, again) = Records("r1", temp.Path, definition);
 
         using (again)
@@ -381,7 +631,7 @@ public sealed class FlowResumeTests
             Assert.Equal(FlowRunStatus.Paused, session.Status);
         }
 
-        var taken2 = TakeUp(harness2, layout2);
+        var taken2 = TakeUp(harness2, layout2, besideOnly);
         var (_, _, again2) = Records("r2", other.Path, besideOnly);
 
         using (again2)

@@ -225,6 +225,65 @@ public sealed class WorkflowStatusTests
         Assert.DoesNotContain("\"output\"", text, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A failure the recovery is at work on shows Recovering - its instance with the visit at work, and the visits it was
+    /// given - and the progress counts it; once the recovery is done the failure shows Failed again, its visits kept. An
+    /// instance still running has no seconds yet, and a step none of whose instances has finished has none either.
+    /// </summary>
+    [Fact]
+    public async Task AFailureTheRecoveryIsAtWorkOn_ShowsRecovering_AndARunningInstanceHasNoSecondsYet()
+    {
+        using var temp = new TempDirectory();
+        var clock = new ManualClock();
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              maxVisits: 2
+              steps:
+                - name: mend
+                  type: orient
+            steps:
+              - name: build
+                type: orient
+                onFailure: recover
+            """);
+        var (harness, layout, records) = Records("r1", temp.Path, definition, clock);
+        var runner = new HeldRunner();
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+            var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
+
+            await runner.StartedAsync("build").WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+            runner.Fail("build");
+            await runner.StartedAsync("recover.mend").WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+            var recovering = harness.OrchestrationStore.ReadWorkflowStatus(layout)!;
+
+            Assert.Equal("Recovering", recovering.Steps["build"].Status);
+            Assert.Equal(new WorkflowInstanceStatus("Recovering", 1, 1, 1, clock.GetUtcNow(), clock.GetUtcNow(), 0, new WorkflowRecovery(1, 2, "fix")), recovering.Steps["build"].Instances["build"]);
+            Assert.Equal(1, recovering.Progress.Recovering);
+            Assert.Equal(1, recovering.Progress.Failed);
+            Assert.Equal("Running", recovering.Steps["recover.mend"].Instances["recover.mend"].Status);
+            Assert.Null(recovering.Steps["recover.mend"].Instances["recover.mend"].Seconds);
+            Assert.Null(recovering.Steps["recover.mend"].Seconds);
+
+            runner.Complete("recover.mend");
+            await runner.StartedAsync("build+2").WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+            runner.Complete("build+2");
+            await session.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        }
+
+        var recovered = harness.OrchestrationStore.ReadWorkflowStatus(layout)!;
+
+        Assert.Equal(new WorkflowInstanceStatus("Failed", 1, 1, 1, clock.GetUtcNow(), clock.GetUtcNow(), 0), recovered.Steps["build"].Instances["build"]);
+        Assert.Equal("Done", recovered.Steps["build"].Instances["build+2"].Status);
+        Assert.Equal(0, recovered.Progress.Recovering);
+    }
+
     /// <summary>A resume rewrites the status from the run's state and its step records before it goes on, so after a crash it is never behind.</summary>
     [Fact]
     public async Task AResumeRewritesTheStatusBeforeItGoesOn()
@@ -252,7 +311,7 @@ public sealed class WorkflowStatusTests
             // The crash: the session never ends, and the records stop where they stand - the last whole writes.
         }
 
-        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load();
+        var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
 
         var (_, _, again) = Records("r1", temp.Path, definition, clock);
 
@@ -326,6 +385,20 @@ public sealed class WorkflowStatusTests
                 }
 
                 gate.TrySetResult(FlowStepResult.Ended(passed: true, 0));
+            }
+        }
+
+        public void Fail(string instance)
+        {
+            lock (_gates)
+            {
+                if (!_gates.TryGetValue(instance, out var gate))
+                {
+                    gate = new TaskCompletionSource<FlowStepResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+                    _gates.Add(instance, gate);
+                }
+
+                gate.TrySetResult(FlowStepResult.Ended(passed: false, DssHarness.Core.Results.HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"));
             }
         }
 

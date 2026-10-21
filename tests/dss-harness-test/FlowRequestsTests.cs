@@ -39,9 +39,9 @@ public sealed class FlowRequestsTests
         Assert.Null(Questions(Entry(), Entry(id: "q2", state: "answered")).Problem());
     }
 
-    /// <summary>A question's times are ISO 8601 to the second with a Z, and the file round-trips through its own serialization.</summary>
+    /// <summary>A question's times are in the one form every record of a run holds, and the file round-trips through its own serialization.</summary>
     [Fact]
-    public void AQuestionsFileRoundTrips_WithIsoTimes()
+    public void AQuestionsFileRoundTrips_InTheOneTimeForm()
     {
         var questions = Questions(
             Entry(),
@@ -69,7 +69,11 @@ public sealed class FlowRequestsTests
         Assert.Equal(["q1"], read.Open.Select(question => question.Id));
         Assert.Equal("go", read.Of("q2")!.Answers[0].Answer);
         Assert.Equal("answer-orchestrator", read.Of("q2")!.Answers[0].By!.Through);
-        Assert.Contains("2026-10-20T11:30:00Z", JsonSerializer.Serialize(questions, DssHarness.Core.FileSystem.JsonStateFile.Options), StringComparison.Ordinal);
+        var written = System.Text.Json.Nodes.JsonNode.Parse(JsonSerializer.Serialize(questions, DssHarness.Core.FileSystem.JsonStateFile.Options))!;
+
+        Assert.Equal("2026-10-20 11:30:00", written["questions"]![1]!["raisedAt"]!.GetValue<string>());
+        Assert.Equal("2026-10-20 11:31:00", written["questions"]![1]!["answers"]![0]!["at"]!.GetValue<string>());
+        Assert.Equal("2026-10-20 10:00:00", written["updatedAt"]!.GetValue<string>());
     }
 
     /// <summary>The stop file asks for one thing at a time: a pause and a stop together is refused, and so is nothing.</summary>
@@ -85,17 +89,47 @@ public sealed class FlowRequestsTests
         Assert.Contains("schema is 2", new FlowStopFile(2, new FlowStopPause(false, at)).Problem(), StringComparison.Ordinal);
     }
 
-    /// <summary>The inbox holds answers on their way to the engine, each naming a question and an answer; anything else is refused.</summary>
+    /// <summary>
+    /// The inbox holds answers on their way to the engine, each under an id of its own and naming a question and an
+    /// answer - two given in the same second are two entries - and anything else is refused.
+    /// </summary>
     [Fact]
     public void TheInboxHoldsAnswersOnTheirWayToTheEngine()
     {
         var at = DateTimeOffset.Parse("2026-10-20T10:00:00Z", System.Globalization.CultureInfo.InvariantCulture);
-        var inbox = new FlowInboxFile(1, [new FlowInboxAnswer("q1", "more", at)]);
+        var inbox = new FlowInboxFile(1, [new FlowInboxAnswer("a", "q1", "more", at), new FlowInboxAnswer("b", "q2", "more", at)]);
 
         Assert.Null(inbox.Problem());
-        Assert.Contains("not a question's id", new FlowInboxFile(1, [new FlowInboxAnswer("one", "more", at)]).Problem(), StringComparison.Ordinal);
-        Assert.Contains("answer is empty", new FlowInboxFile(1, [new FlowInboxAnswer("q1", "", at)]).Problem(), StringComparison.Ordinal);
-        Assert.Contains("schema is 3", new FlowInboxFile(3, []).Problem(), StringComparison.Ordinal);
+        Assert.Equal("its answer 'one': 'one' is not a question's id", new FlowInboxFile(1, [new FlowInboxAnswer("a", "one", "more", at)]).Problem());
+        Assert.Equal("its answer 'q1': its answer is empty", new FlowInboxFile(1, [new FlowInboxAnswer("a", "q1", "", at)]).Problem());
+        Assert.Equal("its answer 'q1': it names no id", new FlowInboxFile(1, [new FlowInboxAnswer(" ", "q1", "more", at)]).Problem());
+        Assert.Equal("one id holds two answers", new FlowInboxFile(1, [new FlowInboxAnswer("a", "q1", "more", at), new FlowInboxAnswer("a", "q2", "more", at)]).Problem());
+        Assert.Equal("its schema is 3, and this build reads 1", new FlowInboxFile(3, []).Problem());
+        Assert.NotEqual(FlowInboxAnswer.NewId(), FlowInboxAnswer.NewId());
+    }
+
+    /// <summary>
+    /// An answer is emptied from the inbox by its own id, under the run's section: an answer given in the same second as
+    /// another is kept until its own turn, and one added while another is removed is never lost.
+    /// </summary>
+    [Fact]
+    public void AnAnswerIsEmptiedFromTheInboxByItsId_NeverByItsSecond()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var store = harness.OrchestrationStore;
+        var layout = DssHarness.Core.Orchestration.OrchestratorLayout.Of(new DssHarness.Core.Repository.HarnessLayout(temp.Path, temp.Path), "r1");
+        var at = DateTimeOffset.Parse("2026-10-20T10:00:00Z", System.Globalization.CultureInfo.InvariantCulture);
+
+        Directory.CreateDirectory(layout.Directory);
+        store.AddToInbox(layout, new FlowInboxAnswer("first", "q1", "more", at));
+        store.AddToInbox(layout, new FlowInboxAnswer("second", "q2", "more", at));
+
+        Assert.True(store.RemoveFromInbox(layout, "first"));
+        Assert.Equal(["second"], store.ReadInbox(layout)!.Answers.Select(answer => answer.Id));
+        Assert.False(store.RemoveFromInbox(layout, "first"));
+        Assert.True(store.RemoveFromInbox(layout, "second"));
+        Assert.False(File.Exists(layout.InboxFile));
     }
 
     /// <summary>What each answer does is said in one sentence, and no answer is made up.</summary>

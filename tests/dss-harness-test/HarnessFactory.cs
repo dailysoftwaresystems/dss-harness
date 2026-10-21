@@ -95,7 +95,7 @@ public sealed class HarnessFactory
         OrchestrationLog = new OrchestrationLog(FileSystem, TimeProvider.System, Output);
         Transcripts = TranscriptsOver(FileSystem);
         ChildSessions = SessionsOver(FileSystem);
-        OrchestratorService = new OrchestratorService(ContextLoader, GitClient, FileSystem, Platform, Output, WorktreeService, OrchestrationStore, OrchestrationLog, ChildSessions, TimeProvider.System);
+        OrchestratorService = new OrchestratorService(ContextLoader, GitClient, FileSystem, Platform, Output, WorktreeService, OrchestrationStore, OrchestrationLog, ChildSessions, Identity, TimeProvider.System);
         AgentService = Agents(FileSystem, AnchorRegistryService);
     }
 
