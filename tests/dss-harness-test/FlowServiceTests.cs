@@ -1701,6 +1701,44 @@ public sealed class FlowServiceTests
             Assert.Single(warned.Warnings));
     }
 
+    /// <summary>
+    /// An answer the loop took stays the poller's until the inbox lets it go: a removal that fails is tried again at the
+    /// next poll, and the answer is never offered to the engine again and recorded as one it refused.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerTakenWhoseRemovalFails_IsRemovedAtTheNextPoll_NeverOfferedAgain()
+    {
+        var (repository, runner) = await RepositoryAsync(Waiting);
+        using var disposed = repository;
+
+        var files = new Signalling(repository.Harness.FileSystem);
+        var service = Service(repository.Harness, runner, fileSystem: files);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var run = RunOf(repository);
+
+        runner.Holds("slow", release.Task);
+        files.FailsDeleteOnce(run.InboxFile);
+
+        var driving = service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token);
+
+        await runner.WaitStartedAsync("slow");
+
+        var handed = await service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token);
+
+        Assert.Equal(HarnessExit.Success, handed.ExitCode);
+
+        await runner.WaitStartedAsync("after");
+        await files.Deleted(run.InboxFile).WaitAsync(Bound, Token);
+        _ = release.TrySetResult();
+
+        var outcome = await driving.WaitAsync(Bound, Token);
+        var (events, _) = FlowEventLog.Read(repository.Harness.FileSystem, run.EventsFile);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.DoesNotContain(events, read => read.Kind == "answer");
+        Assert.False(File.Exists(run.InboxFile));
+    }
+
     /// <summary>A workflow whose question opens while a machine step holds the session open: the engine is running while the question waits.</summary>
     private const string Waiting = """
         name: flow
@@ -2275,6 +2313,10 @@ public sealed class FlowServiceTests
         private readonly ConcurrentDictionary<string, TaskCompletionSource> _written = new(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, TaskCompletionSource> _deleted = new(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, bool> _broken = new(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, bool> _failsOnce = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Makes the next deletion of <paramref name="path"/> fail, as a file held open by another process does.</summary>
+        public void FailsDeleteOnce(string path) => _failsOnce[Path.GetFullPath(path)] = true;
 
         /// <summary>Completes once <paramref name="path"/> is written.</summary>
         public Task Written(string path) => Of(_written, path).Task;
@@ -2296,6 +2338,11 @@ public sealed class FlowServiceTests
 
         public override void DeleteFile(string path)
         {
+            if (_failsOnce.TryRemove(Path.GetFullPath(path), out _))
+            {
+                throw new IOException($"The process cannot access the file '{path}' because it is being used by another process.");
+            }
+
             base.DeleteFile(path);
             _ = Of(_deleted, path).TrySetResult();
         }

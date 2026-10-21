@@ -885,18 +885,20 @@ public sealed class FlowService(
 
     /// <summary>
     /// Empties from the inbox each answer whose offer the loop settled - taken, or refused and recorded as an event - and
-    /// forgets each it cancelled, which stays in the inbox for whoever takes it next.
+    /// forgets each it cancelled, which stays in the inbox for whoever takes it next. A settled answer is forgotten only
+    /// once the inbox has let it go: a removal that fails leaves it offered, tried again at the next poll, and never
+    /// offered to the engine a second time.
     /// </summary>
     private void Settle(OrchestratorLayout layout, Dictionary<string, Task<bool>> offered)
     {
         foreach (var (id, offer) in offered.Where(pair => pair.Value.IsCompleted).ToList())
         {
-            _ = offered.Remove(id);
-
             if (offer.IsCompletedSuccessfully)
             {
                 _ = _store.RemoveFromInbox(layout, id);
             }
+
+            _ = offered.Remove(id);
         }
     }
 
