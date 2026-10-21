@@ -267,8 +267,10 @@ public sealed class OrchestratorService(
             : new WorktreesBelow([], []);
 
         // Decided and done with no other command deciding about this orchestrator meanwhile: an agent made beside this
-        // deletion would be made into a directory being removed.
-        var outcome = _store.Exclusively(orchestrator, () =>
+        // deletion would be made into a directory being removed. Inside the repository's one section too, taken before
+        // the orchestrator's own - as a session's claim of a run takes it - so no claim comes between the look at the
+        // run's owner and the run's removal: a session never goes on over records being deleted.
+        var outcome = _store.AcrossRuns(layout, () => _store.Exclusively(orchestrator, () =>
         {
             if (_store.ReadOrchestrator(orchestrator) is null)
             {
@@ -380,7 +382,7 @@ public sealed class OrchestratorService(
                     .. went.Length == 0 ? [] : new[] { $"with the history of {string.Join(" and ", went)}" },
                     .. kept.Count == 0 ? [] : new[] { $"and {KeptOf.Said(kept)}" },
                 ]);
-        });
+        }));
 
         return outcome.Succeeded
             ? outcome with { Details = [.. outcome.Details ?? [], .. RemoveEmptyGroup(group)], Facts = new OrchestratorDeleted(name, deleteEvidence) }

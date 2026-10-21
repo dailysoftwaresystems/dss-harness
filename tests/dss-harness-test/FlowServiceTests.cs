@@ -1844,6 +1844,91 @@ public sealed class FlowServiceTests
         Assert.False(File.Exists(run.OwnerFile));
     }
 
+    /// <summary>
+    /// A session's claim is made in the repository's one section and holds the run to being there: a run deleted since the
+    /// session looked at it is refused by name, and no owner is written beside a run that is gone.
+    /// </summary>
+    [Fact]
+    public async Task AClaimOfARunDeletedSinceItsSessionLooked_IsRefused_WritingNoOwner()
+    {
+        var (repository, service, runner) = await ServiceAsync();
+        using var disposed = repository;
+
+        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+        _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var run = RunOf(repository);
+        var deleted = await repository.Harness.OrchestratorService.DeleteAsync(repository.Path, "r1", deleteEvidence: true, Token);
+        var sessions = new FlowSessions(repository.Harness.OrchestrationStore, repository.Harness.FileSystem, repository.Harness.Identity);
+
+        Assert.Equal(HarnessExit.Success, deleted.ExitCode);
+
+        var refused = Assert.Throws<HarnessException>(() => sessions.Claim(new DssHarness.Core.Repository.HarnessLayout(repository.Path, repository.Path), run));
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal(OrchestrationReports.NoOrchestrator("r1"), refused.Message);
+        Assert.False(File.Exists(run.OwnerFile));
+    }
+
+    /// <summary>
+    /// A deletion decides and removes inside the repository's one section, which a session's claim is made in: taken
+    /// before the run's own, so no claim can come between the deletion's look at the owner and its removal of the run.
+    /// </summary>
+    [Fact]
+    public async Task ADeletion_DecidesAndRemovesInsideTheRepositorysOneSection_SoNoClaimComesBetween()
+    {
+        var (repository, service, runner) = await ServiceAsync();
+        using var disposed = repository;
+
+        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+        _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var run = RunOf(repository);
+        var harness = repository.Harness;
+        var section = OrchestrationStore.RunsSectionFile(new DssHarness.Core.Repository.HarnessLayout(repository.Path, repository.Path));
+        var removing = new Removing(harness.FileSystem, run.RecordFile, section);
+        var orchestrators = new OrchestratorService(harness.ContextLoader, harness.GitClient, removing, harness.Platform, harness.Output, harness.WorktreeService, harness.OrchestrationStore, harness.OrchestrationLog, harness.ChildSessions, harness.Identity, TimeProvider.System);
+
+        var deleted = await orchestrators.DeleteAsync(repository.Path, "r1", deleteEvidence: true, Token);
+
+        Assert.Equal(HarnessExit.Success, deleted.ExitCode);
+        Assert.True(removing.SectionHeld);
+    }
+
+    /// <summary>
+    /// A file system that, as the run's record is removed, asks from another thread whether the repository's one section
+    /// is free - without waiting: held, a claim there would wait for the deletion to end.
+    /// </summary>
+    private sealed class Removing(IFileSystem inner, string record, string section) : PassThroughFileSystem(inner)
+    {
+        /// <summary>Whether the section was held as the record was removed; null until it was.</summary>
+        public bool? SectionHeld { get; private set; }
+
+        public override void DeleteFile(string path)
+        {
+            if (string.Equals(Path.GetFullPath(path), Path.GetFullPath(record), StringComparison.OrdinalIgnoreCase))
+            {
+                var asked = new Thread(() =>
+                {
+                    try
+                    {
+                        _ = MachineWideFile.Update(section, TimeSpan.Zero, () => true);
+                        SectionHeld = false;
+                    }
+                    catch (HarnessException)
+                    {
+                        SectionHeld = true;
+                    }
+                });
+
+                asked.Start();
+                Assert.True(asked.Join(Bound), "the look at the section ended");
+            }
+
+            base.DeleteFile(path);
+        }
+    }
+
     /// <summary>A run's own steps and report are kept records: deleted only with --delete-evidence, and the owner file beside the directory goes with the run.</summary>
     [Fact]
     public async Task ARunsStepsAndReportAreKeptRecords_DeletedOnlyWithEvidence()

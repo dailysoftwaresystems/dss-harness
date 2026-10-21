@@ -252,7 +252,15 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
         ArgumentNullException.ThrowIfNull(layout);
         ArgumentNullException.ThrowIfNull(work);
 
-        return MachineWideFile.Update(Path.Combine(layout.OrchestratorsDirectory, ".runs"), Window, work);
+        return MachineWideFile.Update(RunsSectionFile(layout), Window, work);
+    }
+
+    /// <summary>The file that names the repository's one section across its runs (<see cref="AcrossRuns{T}"/>).</summary>
+    /// <param name="layout">The repository.</param>
+    public static string RunsSectionFile(HarnessLayout layout)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+        return Path.Combine(layout.OrchestratorsDirectory, ".runs");
     }
 
     /// <summary>The run's state in one file, or null where the run holds none.</summary>

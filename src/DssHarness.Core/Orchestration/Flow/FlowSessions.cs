@@ -140,14 +140,15 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
 
     /// <summary>
     /// The start of every session of a run already made - a resume and an answer alike - inside the repository's one
-    /// section: the test for another unfinished run, leaving out <paramref name="run"/>, the run's owner claimed -
-    /// refused where a live one holds it, a dead one reclaimed and said - and a request no engine took removed, so it
-    /// never reaches this session.
+    /// section, which a deletion decides in too: the run still there - one deleted since the session looked at it
+    /// refused by name, with no owner written beside it - the test for another unfinished run, leaving out
+    /// <paramref name="run"/>, the run's owner claimed - refused where a live one holds it, a dead one reclaimed and said -
+    /// and a request no engine took removed, so it never reaches this session.
     /// </summary>
     /// <param name="layout">The repository.</param>
     /// <param name="run">The run the session is for.</param>
     /// <returns>What is said of a dead owner reclaimed; null where none was recorded.</returns>
-    /// <exception cref="HarnessException">Another run of the repository is unfinished, or a live engine owns the run (<see cref="HarnessExit.Refused"/>).</exception>
+    /// <exception cref="HarnessException">The run is gone, another run of the repository is unfinished, or a live engine owns the run (<see cref="HarnessExit.Refused"/>).</exception>
     public string? Claim(HarnessLayout layout, OrchestratorLayout run)
     {
         ArgumentNullException.ThrowIfNull(layout);
@@ -155,6 +156,11 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
 
         return AcrossRuns(layout, () =>
         {
+            if (_store.ReadOrchestrator(run) is null)
+            {
+                throw new HarnessException(HarnessExit.Refused, OrchestrationReports.NoOrchestrator(run.Name));
+            }
+
             RefuseAnotherUnfinished(layout, run.Name);
 
             var reclaimed = new FlowRunOwner(_store, _identity, _clock).Claim(run);
