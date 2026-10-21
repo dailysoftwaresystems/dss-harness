@@ -33,9 +33,10 @@ public sealed record FlowStopFile(int Schema, FlowStopPause? Pause = null, FlowS
 }
 
 /// <summary>
-/// One answer on its way to an engine that is running the run, in <c>inbox.json</c>: taken by the engine, written
-/// into <c>questions.json</c>, and removed from the inbox by its id once it has been - so two answers handed in the same
-/// second are two entries, each removed alone.
+/// One answer on its way to an engine that is running the run, in <c>inbox.json</c>: weighed by the engine, what became
+/// of it written into <c>questions.json</c> under its id - the answer taken, or its refusal - and removed from the inbox
+/// by its id once it has been - so two answers handed in the same second are two entries, each removed alone, and an
+/// entry the run's records hold is only removed by a session that finds it still there, never weighed again.
 /// </summary>
 /// <param name="Id">What tells this entry from every other the inbox ever held: given by the command that handed it over.</param>
 /// <param name="Question">The question's id.</param>
@@ -78,4 +79,17 @@ public sealed record FlowInboxFile(int Schema, IReadOnlyList<FlowInboxAnswer> An
             : Answers.Any(answer => answer.Problem() is { } problem) ? $"its answer '{Answers.First(answer => answer.Problem() is not null).Question}': {Answers.First(answer => answer.Problem() is not null).Problem()}"
             : Answers.GroupBy(answer => answer.Id, StringComparer.Ordinal).Any(group => group.Count() > 1) ? "one id holds two answers"
             : null;
+}
+
+/// <summary>What became of an answer handed over to the run (<see cref="FlowCoordinator.AnswerHandedOver"/>).</summary>
+public enum FlowHandedOver
+{
+    /// <summary>The run took it: written into <c>questions.json</c>, under its inbox entry's id where one handed it over, and carried out.</summary>
+    Taken,
+
+    /// <summary>The run did not take it: the refusal written into <c>questions.json</c> under its inbox entry's id where one handed it over, and told as an <c>answer</c> event naming why.</summary>
+    Refused,
+
+    /// <summary>The run's records already hold what it did with the inbox entry it came under - taken or refused before - so it was not weighed again, and nothing was written.</summary>
+    RecordedAlready,
 }

@@ -84,7 +84,7 @@ public sealed class FlowQuestion(string Id, string Kind, string Instance, string
                 entry.Answer,
                 entry.At ?? RaisedAt,
                 entry.Text,
-                new FlowAnswerBy(entry.By, entry.Through, entry.Where, entry.Input),
+                new FlowAnswerBy(entry.By, entry.Through, entry.Where, entry.Input, entry.Inbox),
                 entry.Did,
                 entry.ReplacedAt))],
             RaisedBy,
@@ -130,7 +130,8 @@ public sealed class FlowQuestion(string Id, string Kind, string Instance, string
             answer.At,
             answer.Did,
             answer.By?.Input,
-            answer.ReplacedAt)));
+            answer.ReplacedAt,
+            answer.By?.Inbox)));
 
         return question;
     }
@@ -152,6 +153,7 @@ public sealed class FlowQuestion(string Id, string Kind, string Instance, string
 /// <param name="Did">What the engine did with it; null where it has not been applied.</param>
 /// <param name="Input">The entry of a pre-answer that held, where the run's input gave it; null for every other answer.</param>
 /// <param name="ReplacedAt">When a later answer replaced it, where one did; null while it stands.</param>
+/// <param name="Inbox">The id of the <c>inbox.json</c> entry a person's answer was handed over under; null for every answer no inbox handed over.</param>
 public sealed record FlowAnswerEntry(
     string Answer,
     string? Text,
@@ -161,7 +163,8 @@ public sealed record FlowAnswerEntry(
     DateTimeOffset? At = null,
     string? Did = null,
     string? Input = null,
-    DateTimeOffset? ReplacedAt = null);
+    DateTimeOffset? ReplacedAt = null,
+    string? Inbox = null);
 
 /// <summary>
 /// The question kinds' own rules, beside the coordinator that raises and answers them: which answers a kind offers a

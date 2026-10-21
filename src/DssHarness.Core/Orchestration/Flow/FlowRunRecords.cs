@@ -31,7 +31,8 @@ public interface IFlowRecords
     /// and before the event, for a client woken by either reads what was asked already on disk.
     /// </summary>
     /// <param name="questions">Every question the run raised, in the order raised, with every answer each was given.</param>
-    void Question(IReadOnlyList<FlowQuestionEntry> questions);
+    /// <param name="refused">Every answer handed over through the inbox that the run did not take, in the order refused; null where none was.</param>
+    void Question(IReadOnlyList<FlowQuestionEntry> questions, IReadOnlyList<FlowRefusedAnswer>? refused);
 }
 
 /// <summary>
@@ -454,10 +455,10 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
     }
 
     /// <inheritdoc/>
-    void IFlowRecords.Question(IReadOnlyList<FlowQuestionEntry> questions)
+    void IFlowRecords.Question(IReadOnlyList<FlowQuestionEntry> questions, IReadOnlyList<FlowRefusedAnswer>? refused)
     {
         ArgumentNullException.ThrowIfNull(questions);
-        _store.WriteFlowQuestions(_layout, new FlowQuestionsFile(1, _context.Run, _clock.GetUtcNow(), questions));
+        _store.WriteFlowQuestions(_layout, new FlowQuestionsFile(1, _context.Run, _clock.GetUtcNow(), questions, refused is { Count: > 0 } ? refused : null));
     }
 
     /// <inheritdoc/>

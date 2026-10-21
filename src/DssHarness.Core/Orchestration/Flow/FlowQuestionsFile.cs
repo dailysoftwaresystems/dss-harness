@@ -53,7 +53,38 @@ public sealed record FlowRecommendation(
 /// <param name="Through">How a person gave it: <c>answer-orchestrator</c> or <c>front-end</c>; null for every other.</param>
 /// <param name="Where">Where the configuration says so, as the run's records name it; null for a person's and an input's.</param>
 /// <param name="Input">The entry of a pre-answer that held, with the values it read and the words it quotes; null for every other.</param>
-public sealed record FlowAnswerBy(string Who, string? Through = null, string? Where = null, string? Input = null);
+/// <param name="Inbox">
+/// The id of the <c>inbox.json</c> entry a person's answer was handed over under, to an engine running the run: written
+/// with the answer, so the entry is settled as long as the run is - a session that finds it in the inbox only empties it
+/// from there. Null for every answer no inbox handed over.
+/// </param>
+public sealed record FlowAnswerBy(string Who, string? Through = null, string? Where = null, string? Input = null, string? Inbox = null);
+
+/// <summary>
+/// One answer handed over through <c>inbox.json</c> that the run did not take, as <c>questions.json</c> keeps it: the
+/// entry's id, what it answered, when and why it was refused - written before the <c>answer</c> event that tells of it, so
+/// the entry is settled as long as the run is, and a session that finds it in the inbox only empties it from there.
+/// </summary>
+/// <param name="Inbox">The id of the entry the answer was handed over under.</param>
+/// <param name="Question">The question it named.</param>
+/// <param name="Answer">The answer, as it was handed over.</param>
+/// <param name="At">When the run refused it.</param>
+/// <param name="Why">Why the run did not take it.</param>
+public sealed record FlowRefusedAnswer(
+    string Inbox,
+    string Question,
+    string Answer,
+    [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset At,
+    string Why)
+{
+    /// <summary>What is wrong with this entry; null when nothing is.</summary>
+    public string? Problem()
+        => string.IsNullOrWhiteSpace(Inbox) ? "it names no inbox entry"
+            : !FlowQuestionIds.IsWellFormed(Question) ? $"'{Question}' is not a question's id"
+            : string.IsNullOrWhiteSpace(Answer) ? "its answer is empty"
+            : string.IsNullOrWhiteSpace(Why) ? "it says not why it was refused"
+            : null;
+}
 
 /// <summary>One answer a question was given, in order: the answer, the text with it, who gave it, and what the engine did.</summary>
 /// <param name="Answer">The answer, spelled as the question's options spell it.</param>
@@ -145,20 +176,23 @@ public static class FlowQuestionIds
 
 /// <summary>
 /// <c>questions.json</c>: every question the run raised and every answer it was given, the open ones among them - the
-/// one owner of what a question said, what was recommended, who answered and what the engine did. Written whole each
-/// time, outside every directory an agent may write; a step's own record lists only the ids of the questions its step
-/// raised. Its texts are not masked yet: a run carries no secret to mask until its steps are served by the step runners
-/// and the agent clients, which give the run the mask its records are written with.
+/// one owner of what a question said, what was recommended, who answered and what the engine did, an answer handed over
+/// through the inbox among them: one it took under its entry's id (<see cref="FlowAnswerBy.Inbox"/>), one it refused in
+/// <see cref="Refused"/>. Written whole each time, outside every directory an agent may write; a step's own record lists
+/// only the ids of the questions its step raised. Its texts are not masked yet: a run carries no secret to mask until its
+/// steps are served by the step runners and the agent clients, which give the run the mask its records are written with.
 /// </summary>
 /// <param name="Schema">The file's schema, 1.</param>
 /// <param name="Run">The run's name.</param>
 /// <param name="UpdatedAt">When the file was last written.</param>
 /// <param name="Questions">Every question in the order raised, answered, open and withdrawn alike.</param>
+/// <param name="Refused">Every answer handed over through the inbox that the run did not take, in the order refused; null where none was.</param>
 public sealed record FlowQuestionsFile(
     int Schema,
     string Run,
     [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset UpdatedAt,
-    IReadOnlyList<FlowQuestionEntry> Questions)
+    IReadOnlyList<FlowQuestionEntry> Questions,
+    IReadOnlyList<FlowRefusedAnswer>? Refused = null)
 {
     /// <summary>What is wrong with this file; null when nothing is.</summary>
     public string? Problem()
@@ -167,7 +201,15 @@ public sealed record FlowQuestionsFile(
             : Questions.Any(question => question.Problem() is { } problem) ? $"its question '{Questions.First(question => question.Problem() is not null).Id}': {Questions.First(question => question.Problem() is not null).Problem()}"
             : Questions.Select(question => question.Id).GroupBy(id => id, StringComparer.Ordinal).Any(group => group.Count() > 1)
                 ? "one id holds two questions"
+            : (Refused ?? []).FirstOrDefault(refused => refused.Problem() is not null) is { } wrong ? $"its refused answer '{wrong.Inbox}': {wrong.Problem()}"
+            : InboxEntries().GroupBy(id => id, StringComparer.Ordinal).FirstOrDefault(group => group.Count() > 1) is { } twice
+                ? $"inbox entry '{twice.Key}' is recorded twice, and the run weighs an entry once"
                 : null;
+
+    /// <summary>The id of every inbox entry the run recorded what it did with: each answer it took under one, then each it refused.</summary>
+    private IEnumerable<string> InboxEntries()
+        => Questions.SelectMany(question => question.Answers).Select(answer => answer.By?.Inbox).OfType<string>()
+            .Concat((Refused ?? []).Select(refused => refused.Inbox));
 
     /// <summary>The questions the run leaves open, in the order raised.</summary>
     public IReadOnlyList<FlowQuestionEntry> Open => [.. Questions.Where(question => question.State == "open")];

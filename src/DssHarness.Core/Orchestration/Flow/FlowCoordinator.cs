@@ -311,6 +311,9 @@ public sealed class FlowCoordinator
     private readonly List<FlowInstance> _created = [];
     private readonly List<Scope> _scopes = [];
     private readonly List<FlowQuestion> _questions = [];
+
+    /// <summary>Every answer handed over through the inbox that the run refused, in the order refused: written into <c>questions.json</c> with the questions.</summary>
+    private readonly List<FlowRefusedAnswer> _refused = [];
     private readonly HashSet<string> _open = new(StringComparer.Ordinal);
     private readonly Dictionary<string, FlowInstance?> _answerable = new(StringComparer.Ordinal);
     private readonly List<Wake> _wakes = [];
@@ -1331,6 +1334,10 @@ public sealed class FlowCoordinator
     /// <param name="through">How a person gave it: <c>answer-orchestrator</c> or <c>front-end</c>; null where not said.</param>
     /// <returns>Whether the answer was taken.</returns>
     public bool TryAnswer(string question, string answer, string? text, out string? problem, string? through = null)
+        => TryAnswer(question, answer, text, out problem, through, inbox: null);
+
+    /// <summary>Answers a question the run asked, as a person's answer, recorded with the inbox entry it was handed over under where one was.</summary>
+    private bool TryAnswer(string question, string answer, string? text, out string? problem, string? through, string? inbox)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(question);
         ArgumentException.ThrowIfNullOrWhiteSpace(answer);
@@ -1367,39 +1374,73 @@ public sealed class FlowCoordinator
 
         problem = null;
         _last = null;
-        TakeAnswer(asked, answer, string.IsNullOrWhiteSpace(text) ? null : text, "person", where: null, through);
+        TakeAnswer(asked, answer, string.IsNullOrWhiteSpace(text) ? null : text, "person", where: null, through, inbox);
         return true;
     }
 
+    /// <summary>What the refusal of an answer that changes one already given says: the plan update it would raise, which this build does not take.</summary>
+    internal const string PlanUpdateRefused = "changes an answer already given, which raises a plan update; this build takes no plan update yet";
+
     /// <summary>
-    /// Answers a question with an answer handed over - through the run's inbox, to a running session or between two -
-    /// as a person's: where the run does not take it, the refusal is recorded as an <c>answer</c> event naming why, so the
-    /// run's own history says what became of an answer nobody saw refused.
+    /// Weighs an answer handed over - through the run's inbox, to a running session or between two - as a person's, and
+    /// records what became of it before anything else is said of it: taken, the answer is written into
+    /// <c>questions.json</c> under the inbox entry's id; refused - its question no longer open, or it changes an answer
+    /// already given - the refusal is written there under the id too, then told as an <c>answer</c> event naming why, so
+    /// the run's own history says what became of an answer nobody saw refused. The one owner of an entry weighed once: one
+    /// whose id the run's records already hold - taken or refused by this session or any before it, its removal from the
+    /// inbox having failed or been cut off - is never weighed again, and nothing is written for it.
     /// </summary>
     /// <param name="question">The question's id.</param>
     /// <param name="answer">The answer, spelled as the question's options spell it.</param>
     /// <param name="text">The text given with the answer, where it takes one.</param>
-    /// <param name="problem">Why the answer was not taken, where it was not.</param>
+    /// <param name="problem">Why the answer was not taken, where it was refused.</param>
     /// <param name="through">How a person gave it; <c>answer-orchestrator</c> where the command handed it over.</param>
-    /// <returns>Whether the answer was taken.</returns>
-    public bool TryAnswerHandedOver(string question, string answer, string? text, out string? problem, string? through = "answer-orchestrator")
+    /// <param name="inbox">The id of the inbox entry it was handed over under; null for an answer no inbox handed over, which is weighed as it comes, its refusal told by its event alone, for no entry waits to be settled.</param>
+    /// <param name="again">Whether it changes an answer already given: a plan update, which this build refuses.</param>
+    /// <returns>What became of it.</returns>
+    public FlowHandedOver AnswerHandedOver(string question, string answer, string? text, out string? problem, string? through = "answer-orchestrator", string? inbox = null, bool again = false)
     {
-        var taken = TryAnswer(question, answer, text, out problem, through);
+        ArgumentException.ThrowIfNullOrWhiteSpace(question);
+        ArgumentException.ThrowIfNullOrWhiteSpace(answer);
 
-        if (!taken)
+        if (inbox is not null && Recorded(inbox))
         {
-            Record(FlowChangeKind.Answer, detail: problem);
+            problem = null;
+            return FlowHandedOver.RecordedAlready;
         }
 
-        return taken;
+        if (again)
+        {
+            problem = $"it {PlanUpdateRefused}";
+        }
+        else if (TryAnswer(question, answer, text, out problem, through, inbox))
+        {
+            return FlowHandedOver.Taken;
+        }
+
+        if (inbox is not null)
+        {
+            // The refusal is the run's state before it is its history: on disk under the entry's id first, so a session
+            // that meets the entry again - its removal from the inbox failed, or was cut off - only empties it.
+            _refused.Add(new FlowRefusedAnswer(inbox, question, answer, _clock.GetUtcNow(), problem!));
+            WriteQuestions();
+        }
+
+        Record(FlowChangeKind.Answer, detail: problem);
+        return FlowHandedOver.Refused;
     }
+
+    /// <summary>Whether the run's records hold what it did with the inbox entry <paramref name="inbox"/>: an answer taken under it, or its refusal.</summary>
+    private bool Recorded(string inbox)
+        => _refused.Any(refused => string.Equals(refused.Inbox, inbox, StringComparison.Ordinal))
+            || _questions.Any(question => question.Given.Any(given => string.Equals(given.Inbox, inbox, StringComparison.Ordinal)));
 
     /// <summary>
     /// Takes one answer to an open question - a person's, or the configuration's in a person's place - by the one path:
     /// the question no longer open, the answer recorded and carried out, and the record of the step that waited on it
     /// written after, from what the answer changed.
     /// </summary>
-    private void TakeAnswer(FlowQuestion asked, string answer, string? text, string by, string? where, string? through)
+    private void TakeAnswer(FlowQuestion asked, string answer, string? text, string by, string? where, string? through, string? inbox = null)
     {
         _answeredAtStart |= !_inSession || _starting;
         _ = _open.Remove(asked.Id);
@@ -1412,7 +1453,7 @@ public sealed class FlowCoordinator
         }
 
         var was = instance?.State;
-        ApplyAnswer(instance, asked, answer, text, by, where, through);
+        ApplyAnswer(instance, asked, answer, text, by, where, through, inbox);
 
         if (instance is not null)
         {
@@ -1424,12 +1465,13 @@ public sealed class FlowCoordinator
     /// Applies one answer to the question that waits on it, recording who gave it: a <c>person</c> (a caller of
     /// <see cref="TryAnswer(string, string, out string?)"/>), and through what, or the <c>configuration</c>, which
     /// answered the kind beforehand, and where. The question's own kind says what the answer does; the run's own
-    /// question, its budget's, is about no step, and <paramref name="instance"/> is null for it.
+    /// question, its budget's, is about no step, and <paramref name="instance"/> is null for it. An answer handed over
+    /// through the inbox is written with its entry's id (<paramref name="inbox"/>), in the one write that records it.
     /// </summary>
-    private void ApplyAnswer(FlowInstance? instance, FlowQuestion asked, string answer, string? text, string by, string? where, string? through)
+    private void ApplyAnswer(FlowInstance? instance, FlowQuestion asked, string answer, string? text, string by, string? where, string? through, string? inbox = null)
     {
         var did = asked.Kind == "runBudget" ? answer == "more" ? "each amount is allowed once again" : "the run ends stopped" : null;
-        asked._given.Add(new FlowAnswerEntry(answer, text, by, where, through, _clock.GetUtcNow(), did));
+        asked._given.Add(new FlowAnswerEntry(answer, text, by, where, through, _clock.GetUtcNow(), did, Inbox: inbox));
         asked.State = "answered";
 
         if (answer == "abort")
@@ -4017,7 +4059,7 @@ public sealed class FlowCoordinator
         return waiting.Count == 0 ? null : $"'{string.Join("', '", waiting)}' wait{(waiting.Count == 1 ? "s" : string.Empty)} on this";
     }
 
-    /// <summary>Writes the run's questions and answers, whole, through the records seam: the one owner of what every question said.</summary>
+    /// <summary>Writes the run's questions and answers, whole, through the records seam: the one owner of what every question said, and of what became of every answer handed over.</summary>
     private void WriteQuestions()
     {
         if (_records is null)
@@ -4026,7 +4068,8 @@ public sealed class FlowCoordinator
         }
 
         List<FlowQuestionEntry> entries = [.. _questions.Select(asked => asked.ToEntry())];
-        Put(records => records.Question(entries));
+        List<FlowRefusedAnswer> refused = [.. _refused];
+        Put(records => records.Question(entries, refused));
     }
 
     /// <summary>
@@ -4567,7 +4610,7 @@ public sealed class FlowCoordinator
         {
             // An answer from outside the session - taken from the run's inbox while the engine runs. The loop
             // alone applies it, for the graph is the loop's alone to change.
-            _ = offered.Completion.TrySetResult(TryAnswerHandedOver(offered.Question, offered.Answer, offered.Text, out _, offered.Through));
+            _ = offered.Completion.TrySetResult(AnswerHandedOver(offered.Question, offered.Answer, offered.Text, out _, offered.Through, offered.Inbox));
             return;
         }
 
@@ -5760,6 +5803,10 @@ public sealed class FlowCoordinator
             // the asking instance waiting as its own record says; the next question takes the id after the highest of
             // any state, never one a step's record already names; and what the answers granted - a counted answer a
             // configuration spent, one more iteration, visit or recovery - is counted again from them.
+            // What the run did with each answer handed over through the inbox is its file's too - one taken under its
+            // entry's id comes back with its question, one refused here - so no session weighs an entry twice.
+            _refused.AddRange(resume.Refused ?? []);
+
             foreach (var entry in resume.Questions ?? [])
             {
                 var asked = FlowQuestion.FromEntry(entry);
@@ -5972,28 +6019,30 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>One thing the coordinator learns while it waits: a step's ending, or an event of one of its legs.</summary>
-    private readonly record struct Message(FlowInstance Instance, FlowStepResult? Result, FlowLegEvent? Leg, (double Usd, long Tokens)? Usage = null, int Attempt = 0, (string Question, string Answer, string? Text, string? Through, TaskCompletionSource<bool> Completion)? Offered = null, bool HandoffTaken = false);
+    private readonly record struct Message(FlowInstance Instance, FlowStepResult? Result, FlowLegEvent? Leg, (double Usd, long Tokens)? Usage = null, int Attempt = 0, (string Question, string Answer, string? Text, string? Through, string? Inbox, TaskCompletionSource<FlowHandedOver> Completion)? Offered = null, bool HandoffTaken = false);
 
     /// <summary>
     /// Offers an answer to a running session from outside it - taken from the run's inbox while the engine runs, by
     /// the same hand a person at the terminal is answered by. The loop alone applies it, for the graph is the loop's
     /// alone to change; where the question is no longer open - a redirect withdrew it, or another answer came first -
-    /// the answer is refused and said. One offered before a session begins - the first, or the next - is taken at that
-    /// session's start, before anything is admitted; one left unread as a session ends is handed back cancelled -
+    /// the answer is refused and said. One offered under an inbox entry the run's records already hold is never weighed
+    /// again (<see cref="AnswerHandedOver"/>). One offered before a session begins - the first, or the next - is taken at
+    /// that session's start, before anything is admitted; one left unread as a session ends is handed back cancelled -
     /// never refused, for it was never weighed - so it stays where it was handed over for whoever takes it next.
     /// </summary>
     /// <param name="question">The question's id.</param>
     /// <param name="answer">The answer, spelled as the question's options spell it.</param>
     /// <param name="text">The text given with the answer, where it takes one.</param>
     /// <param name="through">How a person gave it; <c>answer-orchestrator</c> where the command handed it over.</param>
-    /// <returns>Whether the answer was taken, once the session has applied it or refused it; cancelled where no session weighed it.</returns>
-    public Task<bool> OfferAnswerAsync(string question, string answer, string? text = null, string? through = "answer-orchestrator")
+    /// <param name="inbox">The id of the inbox entry it was handed over under; null for an answer no inbox handed over.</param>
+    /// <returns>What became of the answer, once the session has weighed it; cancelled where no session weighed it.</returns>
+    public Task<FlowHandedOver> OfferAnswerAsync(string question, string answer, string? text = null, string? through = "answer-orchestrator", string? inbox = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(question);
         ArgumentException.ThrowIfNullOrWhiteSpace(answer);
 
-        var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _ = _messages.Writer.TryWrite(new Message(null!, null, null, null, 0, (question, answer, text, through, completion)));
+        var completion = new TaskCompletionSource<FlowHandedOver>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _ = _messages.Writer.TryWrite(new Message(null!, null, null, null, 0, (question, answer, text, through, inbox, completion)));
         return completion.Task;
     }
 

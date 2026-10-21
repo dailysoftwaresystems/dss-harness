@@ -15,5 +15,5 @@ internal static class FlowSettling
     /// <param name="coordinator">The coordinator whose session runs.</param>
     /// <param name="cancellationToken">The test's own token.</param>
     public static async Task SettledAsync(this FlowCoordinator coordinator, CancellationToken cancellationToken)
-        => Assert.False(await coordinator.OfferAnswerAsync("q0", "go").WaitAsync(TimeSpan.FromSeconds(30), cancellationToken));
+        => Assert.Equal(FlowHandedOver.Refused, await coordinator.OfferAnswerAsync("q0", "go").WaitAsync(TimeSpan.FromSeconds(30), cancellationToken));
 }

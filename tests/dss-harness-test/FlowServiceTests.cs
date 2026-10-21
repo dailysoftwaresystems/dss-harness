@@ -1510,7 +1510,7 @@ public sealed class FlowServiceTests
         Assert.Equal(["after"], runner.Started);
     }
 
-    /// <summary>An answer handed to a running engine is taken by its poller, applied by the loop as a person's through the command, and emptied from the inbox.</summary>
+    /// <summary>An answer handed to a running engine is taken by its poller, applied by the loop as a person's through the command - recorded under the id of the inbox entry that handed it over - and emptied from the inbox.</summary>
     [Fact]
     public async Task AnInboxAnswerIsTakenByThePoller_AppliedAndRemoved()
     {
@@ -1538,7 +1538,8 @@ public sealed class FlowServiceTests
 
         Assert.Equal(HarnessExit.Success, outcome.ExitCode);
         Assert.Equal("go", answer.Answer);
-        Assert.Equal(new FlowAnswerBy("person", "answer-orchestrator"), answer.By);
+        Assert.Equal(new FlowAnswerBy("person", "answer-orchestrator"), answer.By! with { Inbox = null });
+        Assert.Matches("^[0-9a-f]{32}$", answer.By.Inbox);
         Assert.False(File.Exists(run.InboxFile));
     }
 
@@ -1861,6 +1862,157 @@ public sealed class FlowServiceTests
         Assert.False(File.Exists(run.InboxFile));
     }
 
+    /// <summary>
+    /// An answer a session took whose removal from the inbox fails to the session's very end is never weighed again by the
+    /// next session: the run's records hold it under its entry's id, so the next session only empties it from the inbox -
+    /// no answer event, no line saying it was not taken.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerWhoseRemovalFailsToTheSessionsEnd_IsOnlyEmptiedByTheNextSession_NeverRefused()
+    {
+        var (repository, runner) = await RepositoryAsync("""
+            name: flow
+            steps:
+              - name: first
+                type: orient
+              - name: holding
+                type: pause
+                question: what now?
+                options: [stay, go]
+                dependsOn: [first]
+              - name: after
+                type: orient
+                dependsOn: [holding]
+              - name: closing
+                type: pause
+                question: is it done?
+                options: [yes, no]
+                dependsOn: [after]
+            """);
+        using var disposed = repository;
+
+        // The poller reads once, at each drive's start; the inbox lets nothing go until the next session.
+        var files = new Signalling(repository.Harness.FileSystem);
+        var service = Service(repository.Harness, runner, timings: new FlowTimings(TimeSpan.FromHours(1), TimeSpan.FromMilliseconds(10), TimeSpan.FromSeconds(30)), fileSystem: files);
+        var run = RunOf(repository);
+
+        files.FailsEveryDelete(run.InboxFile);
+        runner.OnStart("first", () => repository.Harness.OrchestrationStore.AddToInbox(run, new FlowInboxAnswer(FlowInboxAnswer.NewId(), "q1", "go", DateTimeOffset.UtcNow)));
+
+        var first = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(FlowExit.Paused, first.ExitCode);
+        Assert.True(File.Exists(run.InboxFile));
+
+        files.Deletes(run.InboxFile);
+
+        var next = await service.AnswerAsync(repository.Path, "r1", "yes", question: "q2", text: null, textFile: null, again: false, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+        var (events, _) = FlowEventLog.Read(repository.Harness.FileSystem, run.EventsFile);
+
+        Assert.Equal(HarnessExit.Success, next.ExitCode);
+        Assert.Equal(["first", "after"], runner.Started);
+        Assert.Equal(
+            ["the answer 'go' handed over for question 'q1' was recorded by the run already, so it is only emptied from the inbox"],
+            (next.Details ?? []).Where(line => line.StartsWith("the answer ", StringComparison.Ordinal)));
+        Assert.DoesNotContain(events, read => read.Kind == "answer");
+        Assert.False(File.Exists(run.InboxFile));
+        Assert.Equal(
+            [$"1 answer(s) this session settled could not be emptied from '{run.InboxFile}': The process cannot access the file '{run.InboxFile}' because it is being used by another process; it stays there, and the next session of the run only empties it"],
+            (first.Details ?? []).Where(line => line.Contains(" could not be emptied ", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// An answer taken from the inbox by a session that ended before the inbox let it go - a crash between the take and
+    /// the removal - is never weighed again by the next session: the run's records hold it under its entry's id, so the
+    /// next session only empties it from the inbox, and goes on with the run as the answer left it.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerACrashLeftInTheInboxAfterItsTake_IsOnlyEmptiedByTheNextSession_NeverRefused()
+    {
+        var (repository, runner) = await RepositoryAsync("""
+            name: flow
+            steps:
+              - name: first
+                type: orient
+              - name: holding
+                type: pause
+                question: what now?
+                options: [stay, go]
+                dependsOn: [first]
+              - name: after
+                type: orient
+                dependsOn: [holding]
+            """);
+        using var disposed = repository;
+
+        // The poller reads once, at the session's start: the last poll takes the answer, and the process ends where the
+        // inbox would let it go.
+        var files = new Signalling(repository.Harness.FileSystem);
+        var service = Service(repository.Harness, runner, timings: new FlowTimings(TimeSpan.FromHours(1), TimeSpan.FromMilliseconds(10), TimeSpan.FromSeconds(30)), fileSystem: files);
+        var run = RunOf(repository);
+
+        files.EndsAtDeleteOnce(run.InboxFile);
+        runner.OnStart("first", () => repository.Harness.OrchestrationStore.AddToInbox(run, new FlowInboxAnswer(FlowInboxAnswer.NewId(), "q1", "go", DateTimeOffset.UtcNow)));
+
+        _ = await Assert.ThrowsAsync<Crashed>(() => service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token)).WaitAsync(Bound, Token);
+
+        Assert.True(File.Exists(run.InboxFile));
+        Assert.Equal("go", Assert.Single(repository.Harness.OrchestrationStore.ReadFlowQuestions(run)!.Of("q1")!.Answers).Answer);
+
+        var resumed = await service.ResumeAsync(repository.Path, "r1", json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+        var (events, _) = FlowEventLog.Read(repository.Harness.FileSystem, run.EventsFile);
+
+        Assert.Equal(HarnessExit.Success, resumed.ExitCode);
+        Assert.Equal(["first", "after"], runner.Started);
+        Assert.Equal(
+            ["the answer 'go' handed over for question 'q1' was recorded by the run already, so it is only emptied from the inbox"],
+            (resumed.Details ?? []).Where(line => line.StartsWith("the answer ", StringComparison.Ordinal)));
+        Assert.DoesNotContain(events, read => read.Kind == "answer");
+        Assert.False(File.Exists(run.InboxFile));
+    }
+
+    /// <summary>
+    /// An answer handed over that changes one already given is refused by the engine as any answer it does not take is:
+    /// said, its refusal written under its inbox entry's id and told as an answer event, and emptied from the inbox.
+    /// </summary>
+    [Fact]
+    public async Task AChangedAnswerHandedOver_IsRefusedAndRecordedUnderItsEntry_AsAnyAnswerTheRunDoesNotTake()
+    {
+        var (repository, runner) = await RepositoryAsync("""
+            name: flow
+            steps:
+              - name: holding
+                type: pause
+                question: what now?
+                options: [stay, go]
+              - name: after
+                type: orient
+                dependsOn: [holding]
+            """);
+        using var disposed = repository;
+
+        var service = Service(repository.Harness, runner);
+
+        _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var run = RunOf(repository);
+        var changed = new FlowInboxAnswer(FlowInboxAnswer.NewId(), "q1", "stay", DateTimeOffset.UtcNow, Again: true);
+        repository.Harness.OrchestrationStore.AddToInbox(run, changed);
+
+        var answered = await service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+        var (events, _) = FlowEventLog.Read(repository.Harness.FileSystem, run.EventsFile);
+        var refused = Assert.Single(repository.Harness.OrchestrationStore.ReadFlowQuestions(run)!.Refused!);
+        const string Why = "it changes an answer already given, which raises a plan update; this build takes no plan update yet";
+
+        Assert.Equal(HarnessExit.Success, answered.ExitCode);
+        Assert.Equal(
+            [$"the answer 'stay' handed over for question 'q1' was not taken: {Why}"],
+            (answered.Details ?? []).Where(line => line.StartsWith("the answer ", StringComparison.Ordinal)));
+        Assert.Equal((changed.Id, "q1", "stay", Why), (refused.Inbox, refused.Question, refused.Answer, refused.Why));
+        Assert.Equal([Why], events.Where(read => read.Kind == "answer").Select(read => read.Detail));
+        Assert.False(File.Exists(run.InboxFile));
+    }
+
     /// <summary>A workflow whose question opens while a machine step holds the session open: the engine is running while the question waits.</summary>
     private const string Waiting = """
         name: flow
@@ -1913,7 +2065,7 @@ public sealed class FlowServiceTests
             var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
 
             Assert.Equal(FlowRunStatus.Done, end.Status);
-            Assert.True(await offered.WaitAsync(Bound, Token));
+            Assert.Equal(FlowHandedOver.Taken, await offered.WaitAsync(Bound, Token));
         }
 
         var questions = harness.OrchestrationStore.ReadFlowQuestions(run)!;
@@ -2436,9 +2588,20 @@ public sealed class FlowServiceTests
         private readonly ConcurrentDictionary<string, TaskCompletionSource> _deleted = new(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, bool> _broken = new(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, bool> _failsOnce = new(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, bool> _failsAlways = new(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, bool> _endsOnce = new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>Makes the next deletion of <paramref name="path"/> fail, as a file held open by another process does.</summary>
         public void FailsDeleteOnce(string path) => _failsOnce[Path.GetFullPath(path)] = true;
+
+        /// <summary>Makes every deletion of <paramref name="path"/> fail, as a file another process keeps open does, until <see cref="Deletes"/>.</summary>
+        public void FailsEveryDelete(string path) => _failsAlways[Path.GetFullPath(path)] = true;
+
+        /// <summary>Deletes <paramref name="path"/> as it is again.</summary>
+        public void Deletes(string path) => _failsAlways.TryRemove(Path.GetFullPath(path), out _);
+
+        /// <summary>Makes the next deletion of <paramref name="path"/> end the session where it stands, as a crash of its process there would.</summary>
+        public void EndsAtDeleteOnce(string path) => _endsOnce[Path.GetFullPath(path)] = true;
 
         /// <summary>Completes once <paramref name="path"/> is written.</summary>
         public Task Written(string path) => Of(_written, path).Task;
@@ -2460,9 +2623,14 @@ public sealed class FlowServiceTests
 
         public override void DeleteFile(string path)
         {
-            if (_failsOnce.TryRemove(Path.GetFullPath(path), out _))
+            if (_failsOnce.TryRemove(Path.GetFullPath(path), out _) || _failsAlways.ContainsKey(Path.GetFullPath(path)))
             {
                 throw new IOException($"The process cannot access the file '{path}' because it is being used by another process.");
+            }
+
+            if (_endsOnce.TryRemove(Path.GetFullPath(path), out _))
+            {
+                throw new Crashed();
             }
 
             base.DeleteFile(path);
@@ -2477,6 +2645,9 @@ public sealed class FlowServiceTests
         private static TaskCompletionSource Of(ConcurrentDictionary<string, TaskCompletionSource> signals, string path)
             => signals.GetOrAdd(Path.GetFullPath(path), _ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
     }
+
+    /// <summary>What a session's process meets where a test makes it end, as a crash would end it: nothing of the session catches it.</summary>
+    private sealed class Crashed() : Exception("the process ended here");
 
     /// <summary>An output that keeps every warning it is given, says when the first comes, and passes everything on.</summary>
     private sealed class Warned(IHarnessOutput inner, Action<string>? also = null) : IHarnessOutput

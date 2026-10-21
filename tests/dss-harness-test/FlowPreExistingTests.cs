@@ -109,8 +109,8 @@ public sealed class FlowPreExistingTests
         }
 
         /// <inheritdoc/>
-        public void Question(IReadOnlyList<FlowQuestionEntry> questions)
-            => inner?.Question(questions);
+        public void Question(IReadOnlyList<FlowQuestionEntry> questions, IReadOnlyList<FlowRefusedAnswer>? refused)
+            => inner?.Question(questions, refused);
     }
 
     /// <summary>Whether both triage instances of a run had ended done when <paramref name="snapshot"/> was written.</summary>

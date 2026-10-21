@@ -1019,7 +1019,7 @@ public sealed class FlowResumeTests
             var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
 
             Assert.Equal(FlowRunStatus.Done, end.Status);
-            Assert.True(await offered.WaitAsync(Bound, Token));
+            Assert.Equal(FlowHandedOver.Taken, await offered.WaitAsync(Bound, Token));
         }
     }
 
@@ -1043,7 +1043,7 @@ public sealed class FlowResumeTests
             """);
         var (_, _, records) = Records("r1", temp.Path, definition);
         FlowCoordinator coordinator = null!;
-        Task<bool>? offered = null;
+        Task<FlowHandedOver>? offered = null;
 
         using (records)
         {
@@ -1066,6 +1066,78 @@ public sealed class FlowResumeTests
 
         Assert.NotNull(offered);
         Assert.True(offered.IsCanceled);
+    }
+
+    /// <summary>
+    /// What the run did with an answer handed over is written under its inbox entry's id - the answer taken with it, the
+    /// refusal in the run's file of questions before the event that tells of it - so an answer handed over again under an
+    /// entry the run recorded, by a later session's poll or its take between two drives, is never weighed again, and
+    /// nothing more is written of it.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerHandedOverUnderAnEntryTheRunRecorded_IsNeverWeighedAgain()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: holding
+                type: pause
+                question: what now?
+                options: [stay, go]
+              - name: closing
+                type: pause
+                question: is it done?
+                options: [yes, no]
+                dependsOn: [holding]
+            """);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var refusedAtEachEvent = new List<IReadOnlyList<FlowRefusedAnswer>?>();
+
+        using (records)
+        {
+            var told = new Intercepted(records, (kind, _, _, _) =>
+            {
+                if (kind is FlowChangeKind.Answer)
+                {
+                    refusedAtEachEvent.Add(harness.OrchestrationStore.ReadFlowQuestions(layout)!.Refused);
+                }
+            });
+            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), records: told);
+
+            Assert.Equal(FlowRunStatus.Paused, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+            Assert.Equal(FlowHandedOver.Taken, coordinator.AnswerHandedOver("q1", "go", null, out var none, inbox: "e-taken"));
+            Assert.Null(none);
+            Assert.Equal(FlowHandedOver.Refused, coordinator.AnswerHandedOver("q1", "stay", null, out var refusal, inbox: "e-refused"));
+            Assert.Equal("'q1' is not a question this run leaves open", refusal);
+        }
+
+        var written = harness.OrchestrationStore.ReadFlowQuestions(layout)!;
+        var refused = Assert.Single(written.Refused!);
+
+        Assert.Equal(["e-refused"], Assert.Single(refusedAtEachEvent)!.Select(entry => entry.Inbox));
+        Assert.Equal(("e-refused", "q1", "stay", "'q1' is not a question this run leaves open"), (refused.Inbox, refused.Question, refused.Answer, refused.Why));
+        Assert.Equal("e-taken", Assert.Single(written.Of("q1")!.Answers).By!.Inbox);
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            var offered = coordinator.OfferAnswerAsync("q1", "go", inbox: "e-taken");
+
+            Assert.Equal(FlowHandedOver.RecordedAlready, coordinator.AnswerHandedOver("q1", "stay", null, out var said, inbox: "e-refused"));
+            Assert.Null(said);
+            Assert.Equal(FlowRunStatus.Paused, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+            Assert.Equal(FlowHandedOver.RecordedAlready, await offered.WaitAsync(Bound, Token));
+        }
+
+        var after = harness.OrchestrationStore.ReadFlowQuestions(layout)!;
+        var (events, _) = FlowEventLog.Read(harness.FileSystem, layout.EventsFile);
+
+        Assert.Equal(["e-refused"], after.Refused!.Select(entry => entry.Inbox));
+        Assert.Equal("e-taken", Assert.Single(after.Of("q1")!.Answers).By!.Inbox);
+        Assert.Equal(["'q1' is not a question this run leaves open"], events.Where(read => read.Kind == "answer").Select(read => read.Detail));
     }
 
     /// <summary>
@@ -2629,11 +2701,11 @@ public sealed class FlowResumeTests
             }
         }
 
-        public void Question(IReadOnlyList<FlowQuestionEntry> questions)
+        public void Question(IReadOnlyList<FlowQuestionEntry> questions, IReadOnlyList<FlowRefusedAnswer>? refused)
         {
             if (Interlocked.Increment(ref _made) <= writes)
             {
-                inner.Question(questions);
+                inner.Question(questions, refused);
             }
         }
     }
@@ -2647,8 +2719,8 @@ public sealed class FlowResumeTests
             inner.Write(kind, snapshot, instance, from, to, attempt, detail);
         }
 
-        public void Question(IReadOnlyList<FlowQuestionEntry> questions)
-            => inner.Question(questions);
+        public void Question(IReadOnlyList<FlowQuestionEntry> questions, IReadOnlyList<FlowRefusedAnswer>? refused)
+            => inner.Question(questions, refused);
     }
 
     /// <summary>The run's records, watched: each change is written through, and a test waits on the change it times.</summary>
@@ -2692,8 +2764,8 @@ public sealed class FlowResumeTests
             }
         }
 
-        public void Question(IReadOnlyList<FlowQuestionEntry> questions)
-            => inner.Question(questions);
+        public void Question(IReadOnlyList<FlowQuestionEntry> questions, IReadOnlyList<FlowRefusedAnswer>? refused)
+            => inner.Question(questions, refused);
     }
 
     /// <summary>The owner of a run is claimed at the start of a session: a live owner refuses it, a dead one is reclaimed and said, and the run is released where its session leaves it.</summary>

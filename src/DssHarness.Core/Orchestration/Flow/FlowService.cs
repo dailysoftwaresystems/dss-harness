@@ -124,7 +124,7 @@ public sealed class FlowService(
     public const string StopCommand = "stop-orchestrator";
 
     /// <summary>The refusal of <c>answer-orchestrator --again</c>, worded once.</summary>
-    internal const string AgainRefused = "--again changes an answer already given, which raises a plan update; this build takes no plan update yet";
+    internal const string AgainRefused = $"--again {FlowCoordinator.PlanUpdateRefused}";
 
     private readonly IHarnessContextLoader _contextLoader = contextLoader;
     private readonly IHostPlatform _platform = platform;
@@ -664,7 +664,7 @@ public sealed class FlowService(
             using var records = new FlowRunRecords(_fileSystem, _store, layout, runContext, _clock);
             var coordinator = new FlowCoordinator(definition, _runner, _runnerFacts, _clock, runContext.Inputs, records, resume, layout.Name);
             var before = _store.ReadFlowQuestions(layout);
-            var offered = new Dictionary<string, Task<bool>>(StringComparer.Ordinal);
+            var offered = new Dictionary<string, Task<FlowHandedOver>>(StringComparer.Ordinal);
 
             if (answered is { } given && !coordinator.TryAnswer(given.Question, given.Answer, given.Text, out var problem, AnswerCommand))
             {
@@ -698,7 +698,8 @@ public sealed class FlowService(
             }
 
             // An answer offered that the loop never weighed stays for the next session; one the session settled - taken,
-            // or refused and recorded - that the inbox would not let go is said apart, for it was weighed.
+            // or refused and recorded - that the inbox would not let go is said apart, for it was weighed: the run's records
+            // hold it under its entry's id, so the next session only empties it from the inbox.
             var handed = offered.Count(pair => !pair.Value.IsCompletedSuccessfully);
             var settled = offered.Count - handed;
 
@@ -711,7 +712,7 @@ public sealed class FlowService(
             if (unemptied is not null && settled > 0)
             {
                 inbox = true;
-                said.Add($"{ReportText.Counted(settled, "answer")} this session settled could not be emptied from '{layout.InboxFile}': {unemptied}; {(settled == 1 ? "it stays" : "they stay")} there");
+                said.Add($"{ReportText.Counted(settled, "answer")} this session settled could not be emptied from '{layout.InboxFile}': {unemptied}; {(settled == 1 ? "it stays there, and the next session of the run only empties it" : "they stay there, and the next session of the run only empties them")}");
             }
 
             var flow = _store.ReadFlow(layout)
@@ -781,7 +782,7 @@ public sealed class FlowService(
         string command,
         FlowCoordinator coordinator,
         FlowInterrupts? interrupts,
-        Dictionary<string, Task<bool>> offered,
+        Dictionary<string, Task<FlowHandedOver>> offered,
         CancellationToken cancellationToken)
     {
         using var poll = new CancellationTokenSource();
@@ -810,7 +811,7 @@ public sealed class FlowService(
     /// at the next; anything else is said, and the run is asked to pause rather than be left with nobody reading what
     /// is asked of it.
     /// </summary>
-    private async Task PollAsync(OrchestratorLayout layout, string command, FlowCoordinator coordinator, Dictionary<string, Task<bool>> offered, CancellationToken cancellationToken)
+    private async Task PollAsync(OrchestratorLayout layout, string command, FlowCoordinator coordinator, Dictionary<string, Task<FlowHandedOver>> offered, CancellationToken cancellationToken)
     {
         var said = new HashSet<string>(StringComparer.Ordinal);
 
@@ -845,8 +846,12 @@ public sealed class FlowService(
         }
     }
 
-    /// <summary>One poll: the request taken and handed on, the answers the loop has settled emptied from the inbox, and each answer not yet offered offered.</summary>
-    private void Tick(OrchestratorLayout layout, FlowCoordinator coordinator, Dictionary<string, Task<bool>> offered)
+    /// <summary>
+    /// One poll: the request taken and handed on, the answers the loop has settled emptied from the inbox, and each answer
+    /// not yet offered offered under its entry's id - which the loop weighs once, never again where the run's records
+    /// already hold it.
+    /// </summary>
+    private void Tick(OrchestratorLayout layout, FlowCoordinator coordinator, Dictionary<string, Task<FlowHandedOver>> offered)
     {
         switch (_store.TakeStopFile(layout))
         {
@@ -868,7 +873,7 @@ public sealed class FlowService(
             // An answer that changes another is a plan update, which the session's end says it does not take.
             if (!entry.Again && !offered.ContainsKey(entry.Id))
             {
-                offered[entry.Id] = coordinator.OfferAnswerAsync(entry.Question, entry.Answer, entry.Text, AnswerCommand);
+                offered[entry.Id] = coordinator.OfferAnswerAsync(entry.Question, entry.Answer, entry.Text, AnswerCommand, entry.Id);
             }
         }
     }
@@ -881,7 +886,7 @@ public sealed class FlowService(
     /// unsays an answer taken.
     /// </summary>
     /// <returns>How many answers were taken, and how many were read.</returns>
-    private (int Taken, int Seen) LastPoll(OrchestratorLayout layout, FlowCoordinator coordinator, Dictionary<string, Task<bool>> offered, List<string> said)
+    private (int Taken, int Seen) LastPoll(OrchestratorLayout layout, FlowCoordinator coordinator, Dictionary<string, Task<FlowHandedOver>> offered, List<string> said)
         => Guarded("asked of the engine as its session ended", said, () =>
         {
             if (_store.TakeStopFile(layout) is { } late)
@@ -898,7 +903,7 @@ public sealed class FlowService(
     /// again - and its removal is tried again by the next drive's poller, where the session goes on.
     /// </summary>
     /// <returns>Why the inbox could not be emptied of what the session settled; null where it was.</returns>
-    private string? Empty(OrchestratorLayout layout, Dictionary<string, Task<bool>> offered)
+    private string? Empty(OrchestratorLayout layout, Dictionary<string, Task<FlowHandedOver>> offered)
     {
         try
         {
@@ -930,13 +935,14 @@ public sealed class FlowService(
     }
 
     /// <summary>
-    /// Empties from the inbox each answer the session settled - an offer the loop took, or refused and recorded as an
-    /// event, and one taken between two drives (<see cref="TakeInbox"/>) - and forgets each offer the loop handed back,
-    /// which stays in the inbox for whoever takes it next. The one owner of a settled answer: it is forgotten only once
+    /// Empties from the inbox each answer the session settled - an offer the loop took, refused or found recorded already,
+    /// and one weighed between two drives (<see cref="TakeInbox"/>) - and forgets each offer the loop handed back, which
+    /// stays in the inbox for whoever takes it next. The one owner of emptying a settled answer: it is forgotten only once
     /// the inbox has let it go - a removal that fails leaves it settled, tried again at the next poll or the next drive's
-    /// end, and never offered to the engine nor taken a second time.
+    /// end, and never offered to the engine nor taken a second time; one the inbox still holds as the session ends is
+    /// settled by the run's records, under its entry's id, so the next session only empties it.
     /// </summary>
-    private void Settle(OrchestratorLayout layout, Dictionary<string, Task<bool>> offered)
+    private void Settle(OrchestratorLayout layout, Dictionary<string, Task<FlowHandedOver>> offered)
     {
         foreach (var (id, offer) in offered.Where(pair => pair.Value.IsCompleted).ToList())
         {
@@ -950,18 +956,20 @@ public sealed class FlowService(
     }
 
     /// <summary>Whether the loop handed <paramref name="offer"/> back, never weighing it - cancelled as its session ended: the answer is no longer the session's, and stays in the inbox.</summary>
-    private static bool HandedBack(Task<bool> offer)
+    private static bool HandedBack(Task<FlowHandedOver> offer)
         => offer is { IsCompleted: true, IsCompletedSuccessfully: false };
 
     /// <summary>
     /// Takes every answer in the inbox the session does not hold - never offered to the loop, or handed back by it -
-    /// between two drives: each applied as a person's through <c>answer-orchestrator</c>, or - where the run does not take
-    /// it - said and recorded as an <c>answer</c> event, as the loop records one it refuses. Each is settled as one the
-    /// loop weighed is - held as an offer completed - and counted then, so <see cref="Settle"/> empties it from the inbox
-    /// and tries again where that fails, and nothing takes or offers it a second time.
+    /// between two drives, each weighed by the engine under its entry's id (<see cref="FlowCoordinator.AnswerHandedOver"/>):
+    /// applied as a person's through <c>answer-orchestrator</c>; or - where the run does not take it - said, its refusal
+    /// recorded as the loop records one it refuses; or, where the run's records hold it already - a session before this
+    /// one weighed it, and its removal failed or was cut off - only emptied from the inbox. Each is settled as one the loop
+    /// weighed is - held as an offer completed - and counted then, so <see cref="Settle"/> empties it from the inbox and
+    /// tries again where that fails, and nothing takes or offers it a second time.
     /// </summary>
     /// <returns>How many answers were taken, and how many were read.</returns>
-    private (int Taken, int Seen) TakeInbox(OrchestratorLayout layout, FlowCoordinator coordinator, Dictionary<string, Task<bool>> offered, List<string> said)
+    private (int Taken, int Seen) TakeInbox(OrchestratorLayout layout, FlowCoordinator coordinator, Dictionary<string, Task<FlowHandedOver>> offered, List<string> said)
     {
         var taken = 0;
         var seen = 0;
@@ -975,24 +983,24 @@ public sealed class FlowService(
             }
 
             seen++;
-            var took = false;
+            var handed = coordinator.AnswerHandedOver(entry.Question, entry.Answer, entry.Text, out var problem, AnswerCommand, entry.Id, entry.Again);
+            var about = $"the answer '{entry.Answer}' handed over for question '{entry.Question}'";
 
-            if (entry.Again)
+            switch (handed)
             {
-                said.Add($"the answer '{entry.Answer}' handed over for question '{entry.Question}' changes one already given, which raises a plan update; this build takes no plan update yet, so it was not taken");
-            }
-            else if (coordinator.TryAnswerHandedOver(entry.Question, entry.Answer, entry.Text, out var problem, AnswerCommand))
-            {
-                took = true;
-                taken++;
-                said.Add($"the answer '{entry.Answer}' handed over for question '{entry.Question}' was taken from the inbox");
-            }
-            else
-            {
-                said.Add($"the answer '{entry.Answer}' handed over for question '{entry.Question}' was not taken: {problem}");
+                case FlowHandedOver.Taken:
+                    taken++;
+                    said.Add($"{about} was taken from the inbox");
+                    break;
+                case FlowHandedOver.Refused:
+                    said.Add($"{about} was not taken: {problem}");
+                    break;
+                default:
+                    said.Add($"{about} was recorded by the run already, so it is only emptied from the inbox");
+                    break;
             }
 
-            offered[entry.Id] = Task.FromResult(took);
+            offered[entry.Id] = Task.FromResult(handed);
         }
 
         return (taken, seen);

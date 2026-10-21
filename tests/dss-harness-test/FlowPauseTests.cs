@@ -184,7 +184,7 @@ public sealed class FlowPauseTests
             => written(kind, snapshot, instance, to);
 
         /// <inheritdoc/>
-        public void Question(IReadOnlyList<FlowQuestionEntry> questions)
+        public void Question(IReadOnlyList<FlowQuestionEntry> questions, IReadOnlyList<FlowRefusedAnswer>? refused)
         {
         }
     }

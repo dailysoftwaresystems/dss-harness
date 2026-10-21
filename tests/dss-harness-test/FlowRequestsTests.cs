@@ -76,6 +76,48 @@ public sealed class FlowRequestsTests
         Assert.Equal("2026-10-20 10:00:00", written["updatedAt"]!.GetValue<string>());
     }
 
+    /// <summary>
+    /// The questions file keeps what the run did with each inbox entry under the entry's id - an answer taken carries it
+    /// in who gave it, a refusal stands in the file's own list - and refuses a file that holds one entry twice, for the run
+    /// weighs an entry once. A file written before either was kept reads as it did, and one that refused nothing writes
+    /// no list.
+    /// </summary>
+    [Fact]
+    public void TheQuestionsFileKeepsEachInboxEntryOnce_AndReadsOneWrittenBefore()
+    {
+        var at = DateTimeOffset.Parse("2026-10-20T11:31:00Z", System.Globalization.CultureInfo.InvariantCulture);
+        var answered = Entry(id: "q2", state: "answered") with
+        {
+            Answers = [new FlowAnswerRecord("more", at, By: new FlowAnswerBy("person", Through: "answer-orchestrator", Inbox: "e1"))],
+        };
+        var refusal = new FlowRefusedAnswer("e2", "q2", "abort", at, "'q2' is not a question this run leaves open");
+        var file = Questions(Entry(), answered) with { Refused = [refusal] };
+        var options = DssHarness.Core.FileSystem.JsonStateFile.Options;
+
+        var read = JsonSerializer.Deserialize<FlowQuestionsFile>(JsonSerializer.Serialize(file, options), options)!;
+        var written = System.Text.Json.Nodes.JsonNode.Parse(JsonSerializer.Serialize(file, options))!;
+
+        Assert.Null(read.Problem());
+        Assert.Equal("e1", read.Of("q2")!.Answers[0].By!.Inbox);
+        Assert.Equal(refusal, Assert.Single(read.Refused!));
+        Assert.Equal("e2", written["refused"]![0]!["inbox"]!.GetValue<string>());
+        Assert.Equal("2026-10-20 11:31:00", written["refused"]![0]!["at"]!.GetValue<string>());
+
+        Assert.Equal("inbox entry 'e1' is recorded twice, and the run weighs an entry once", (file with { Refused = [refusal with { Inbox = "e1" }] }).Problem());
+        Assert.Equal("inbox entry 'e2' is recorded twice, and the run weighs an entry once", (file with { Refused = [refusal, refusal] }).Problem());
+        Assert.Equal("its refused answer 'e2': it says not why it was refused", (file with { Refused = [refusal with { Why = " " }] }).Problem());
+        Assert.Equal("its refused answer 'e2': 'q0' is not a question's id", (file with { Refused = [refusal with { Question = "q0" }] }).Problem());
+
+        var before = JsonSerializer.Deserialize<FlowQuestionsFile>(
+            """{"schema":1,"run":"r1","updatedAt":"2026-10-20 10:00:00","questions":[]}""",
+            options)!;
+        var none = (System.Text.Json.Nodes.JsonObject)System.Text.Json.Nodes.JsonNode.Parse(JsonSerializer.Serialize(Questions(Entry()), options))!;
+
+        Assert.Null(before.Problem());
+        Assert.Null(before.Refused);
+        Assert.False(none.ContainsKey("refused"));
+    }
+
     /// <summary>The stop file asks for one thing at a time: a pause and a stop together is refused, and so is nothing.</summary>
     [Fact]
     public void TheStopFileAsksForOneThingAtATime()

@@ -18,13 +18,15 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="Handoffs">Each stopped step's handoff, by instance id, read from its own directory where it holds one.</param>
 /// <param name="Questions">Every question the run raised and every answer it was given, the open ones among them, as the run's one file of them holds it.</param>
 /// <param name="Issues">Every pre-existing issue the run listed, proven, as the run's own file of them holds it.</param>
+/// <param name="Refused">Every answer handed over through the inbox that the run refused, as its file of questions holds them; null where none was.</param>
 public sealed record FlowResumeState(
     FlowFile File,
     IReadOnlyList<string> Differing,
     IReadOnlyList<string> Adopted,
     IReadOnlyDictionary<string, string> Handoffs,
     IReadOnlyList<FlowQuestionEntry>? Questions = null,
-    IReadOnlyList<PreExistingIssue>? Issues = null);
+    IReadOnlyList<PreExistingIssue>? Issues = null,
+    IReadOnlyList<FlowRefusedAnswer>? Refused = null);
 
 /// <summary>
 /// Reads what a killed or stopped run left and hands it to a resume: the run's state in one file checked against the
@@ -130,7 +132,7 @@ public sealed class FlowResume(OrchestrationStore store, OrchestratorLayout layo
 
         _store.WriteFlow(_layout, reconciled);
 
-        return new FlowResumeState(reconciled, differing, adopted, handoffs, questions.Questions, issues.Issues);
+        return new FlowResumeState(reconciled, differing, adopted, handoffs, questions.Questions, issues.Issues, questions.Refused);
     }
 
     /// <summary>Every step record the run's directories hold - the run's, then each agent's - by instance id, each with any handoff its record does not name yet taken back.</summary>

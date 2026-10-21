@@ -1506,11 +1506,17 @@ asks the run to pause; a last poll at the session's end takes what came late, an
 takes what is left. The engine takes an answer offered before a session begins at its start, before
 anything is admitted - so a resume is never refused over the question it settles - and hands one left
 unread as its session ends back cancelled, never refused, so it stays in the inbox for whoever takes it
-next; what a step spent that came late is counted. An answer handed over that the run does not take
-is recorded as an `answer` event naming why, whether a session's loop or the inbox taken between two
-sessions refused it (`FlowCoordinator.TryAnswerHandedOver`). An answer a session weighed - its loop's, or
-one taken between two drives - is counted then and leaves the inbox once the file lets it go: a removal
-that fails is tried again at the next poll or drive's end, and the answer is never offered or taken twice. Where the engine leaves before it takes a request, the command answers from the
+next; what a step spent that came late is counted. Every answer handed over is weighed by one owner
+(`FlowCoordinator.AnswerHandedOver`), whether a session's loop or the inbox taken between two drives
+meets it, and what became of it is written into `questions.json` under its inbox entry's id before
+anything else is said of it: an answer taken carries the id in who gave it (`by.inbox`), and one the
+run does not take - its question no longer open, or it changes an answer already given - is kept in
+the file's `refused` list, then recorded as an `answer` event naming why. An answer a session weighed
+is counted then and leaves the inbox once the file lets it go: a removal that fails is tried again at
+the next poll or drive's end, and one the inbox still holds as the session ends - the removal failed
+to the last, or a crash came between the take and the removal - is settled by the run's records, so a
+later session that meets the entry only empties it from the inbox: no answer is weighed, offered or
+taken twice. Where the engine leaves before it takes a request, the command answers from the
 run's state and takes the request back. `stop-orchestrator --now` ends the engine's process tree -
 only on this machine, and only the process whose start matches the one its owner recorded - and
 removes the owner once it is gone. Whether a run's engine is live is asked of one owner
