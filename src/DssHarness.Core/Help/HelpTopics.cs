@@ -2380,6 +2380,10 @@ public static class HelpTopics
         builder.AppendLine("--template' prints the agent sections as init writes them into a new config, to paste into");
         builder.AppendLine("an existing one.");
         builder.AppendLine();
+        builder.AppendLine("A provider's name and each tier's are held to the orchestration name rule - lower-case");
+        builder.AppendLine("letters and digits, single hyphens - and a tier is one name in one case everywhere; a");
+        builder.AppendLine("model's code, what is sent to the API, is one word, and its name is the one a person reads.");
+        builder.AppendLine();
         builder.AppendLine("The tiers a step runs on are tierConfig's: each tier its models in the order they are");
         builder.AppendLine("tried, the first serving a step on the tier and the rest its fallback. A step's effort is");
         builder.AppendLine("its own - one level for every model of its tier, or a map giving each its own: all for the");
@@ -3317,6 +3321,11 @@ public static class HelpTopics
         builder.AppendLine("  balanceKeyUsage  off unless turned on: a provider's keys balanced by what each");
         builder.AppendLine("                 spent in the last seven days, a step starting on the one that spent");
         builder.AppendLine("                 least");
+        builder.AppendLine("  agentClients   the clients the tool builds in (claude-code, claude-api, glm), each");
+        builder.AppendLine("                 by its name: update, claude-code's alone, says whether the tool");
+        builder.AppendLine("                 installs and updates Claude Code with npm; a client holds no model,");
+        builder.AppendLine("                 size or price - contextTokens and maxOutputTokens are a model's");
+        builder.AppendLine("                 ('help agent-clients')");
         builder.AppendLine();
         builder.AppendLine("A list whose absence means every one of what it names, or a set the tool chooses, is");
         builder.AppendLine("refused given empty, as --legs given no name is: a runner's legs and steps; a tool's");

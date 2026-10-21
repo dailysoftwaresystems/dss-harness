@@ -48,15 +48,23 @@ public sealed partial class AgentProviders
 
     private readonly Dictionary<string, (AgentProviderConfig Provider, AgentModelConfig Model)> _models = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// Each tier with its models' codes, by its name exactly: a tier's name is held to the orchestration name rule and
+    /// is one name in one case everywhere - <c>tierConfig</c>, a model's <c>tiers</c>, <c>defaults.agentTier</c> and a
+    /// step - whatever case the section's reader folds its keys in.
+    /// </summary>
+    private readonly Dictionary<string, List<string>> _tiers;
+
     private AgentProviders(HarnessConfig config)
     {
         Config = config;
+        _tiers = new Dictionary<string, List<string>>(config.TierConfig, StringComparer.Ordinal);
 
         foreach (var provider in config.Providers)
         {
             foreach (var model in provider.Models)
             {
-                _models[model.Code] = (provider, model);
+                _models.TryAdd(model.Code, (provider, model));
             }
         }
     }
@@ -67,7 +75,7 @@ public sealed partial class AgentProviders
     public IReadOnlyList<AgentProviderConfig> Providers => Config.Providers;
 
     /// <summary>Every tier the configuration defines, in no order in particular.</summary>
-    public IReadOnlyList<string> Tiers => [.. Config.TierConfig.Keys];
+    public IReadOnlyList<string> Tiers => [.. _tiers.Keys];
 
     /// <summary>The tier of a step that names neither a tier nor a model; null where the configuration names none.</summary>
     public string? DefaultTier => Config.Defaults.AgentTier;
@@ -97,16 +105,27 @@ public sealed partial class AgentProviders
 
         foreach (var (provider, at) in providers.Select((entry, at) => (entry, at)))
         {
-            var where = $"providers[{at.ToString(CultureInfo.InvariantCulture)}] '{provider.Name}'";
+            var place = $"providers[{at.ToString(CultureInfo.InvariantCulture)}]";
+
+            // A provider's name is the orchestration name rule's, as a name the tool keeps is.
+            if (string.IsNullOrWhiteSpace(provider.Name))
+            {
+                problems.Add($"{place} has no name; a provider is named once in providers, by the orchestration name rule");
+            }
+            else if (Orchestration.OrchestrationRules.NameProblem(provider.Name) is { } shape)
+            {
+                problems.Add($"{place} '{provider.Name}' is not named by the orchestration name rule: {shape}");
+            }
 
             if (provider.Models.Count == 0)
             {
-                problems.Add($"{where} declares no models; a provider is the models it lists, and it lists at least one");
+                problems.Add($"{place} '{provider.Name}' declares no models; a provider is the models it lists, and it lists at least one");
             }
         }
 
         // A provider's name is listed once; a model's code is listed once, across every provider; a key's variable is
-        // appointed once - for a second key of a company is a second name in its provider's apiKeyNames.
+        // appointed once - for a second key of a company is a second name in its provider's apiKeyNames. Listed twice
+        // by one provider, each is said of that provider alone, never as two providers that share it.
         foreach (var twice in providers.GroupBy(provider => provider.Name, StringComparer.Ordinal).Where(group => group.Count() > 1))
         {
             var ats = providers.Select((provider, at) => (provider, at)).Where(entry => string.Equals(entry.provider.Name, twice.Key, StringComparison.Ordinal)).Select(entry => entry.at + 1);
@@ -115,9 +134,17 @@ public sealed partial class AgentProviders
 
         var resolved = new AgentProviders(config);
 
-        foreach (var twice in providers.SelectMany(provider => provider.Models.Select(model => (provider, model))).GroupBy(entry => entry.model.Code, StringComparer.Ordinal).Where(group => group.Count() > 1))
+        foreach (var provider in providers)
         {
-            problems.Add($"model '{twice.Key}' is listed by providers '{string.Join("' and '", twice.Select(entry => entry.provider.Name))}': a model's code is listed once, across every provider");
+            foreach (var twice in provider.Models.GroupBy(model => model.Code, StringComparer.Ordinal).Where(group => group.Key.Length > 0 && group.Count() > 1))
+            {
+                problems.Add($"provider '{provider.Name}' lists model '{twice.Key}' twice: a model's code is listed once, across every provider");
+            }
+        }
+
+        foreach (var shared in SharedAcross(providers, provider => provider.Models.Select(model => model.Code).Where(code => code.Length > 0)))
+        {
+            problems.Add($"model '{shared.Name}' is listed by providers '{string.Join("' and '", shared.By.Select(provider => provider.Name))}': a model's code is listed once, across every provider");
         }
 
         foreach (var provider in providers)
@@ -128,9 +155,9 @@ public sealed partial class AgentProviders
             }
         }
 
-        foreach (var twice in providers.SelectMany(provider => provider.ApiKeyNames.Select(name => (provider, name))).GroupBy(entry => entry.name, StringComparer.Ordinal).Where(group => group.Count() > 1))
+        foreach (var shared in SharedAcross(providers, provider => provider.ApiKeyNames))
         {
-            problems.Add($"providers '{string.Join("' and '", twice.Select(entry => entry.provider.Name))}' both appoint '{twice.Key}' for a key: a second key is another variable's name");
+            problems.Add($"providers '{string.Join("' and '", shared.By.Select(provider => provider.Name))}' both appoint '{shared.Name}' for a key: a second key is another variable's name");
         }
 
         // A client is one the tool builds in, its kind; the keys of one entry are read by the slices that build what
@@ -174,17 +201,23 @@ public sealed partial class AgentProviders
                 problems.Add($"{where} apiKeyNames '{name}' is not a variable's name: {Secrets.AgentKeyStore.VariableNameShape}, a name and never a key");
             }
 
-            if (provider.Models.Any(model => Priced(model)) && string.IsNullOrWhiteSpace(provider.Currency))
+            // Every price is in the provider's currency, with the date its numbers were read: a model's flat prices, its
+            // large-prompt prices and the provider's own price of a thousand searches alike, each said once for the
+            // provider rather than again for every model that holds one.
+            var holdsAPrice = provider.PricePerThousandSearches is not null || provider.Models.Any(model => PricesOf(model).Any());
+
+            if (holdsAPrice && string.IsNullOrWhiteSpace(provider.Currency))
             {
                 problems.Add($"{where} holds prices and names no currency; a provider says once the currency of every price of its models, three capital letters");
             }
 
-            if (provider.Models.Any(model => Priced(model)) && string.IsNullOrWhiteSpace(provider.ReadOn))
+            if (holdsAPrice && string.IsNullOrWhiteSpace(provider.ReadOn))
             {
                 problems.Add($"{where} holds prices and names no readOn; the date its numbers were read (YYYY-MM-DD) is shown wherever a price is, so an old number is not taken for today's");
             }
 
-            if (provider.ReadOn is { Length: > 0 } read && !DateOnly.TryParse(read, CultureInfo.InvariantCulture, out _))
+            // One form of a date, read the same on every machine: the one the refusal names.
+            if (provider.ReadOn is { Length: > 0 } read && !DateOnly.TryParseExact(read, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out _))
             {
                 problems.Add($"{where} readOn '{read}' is no date; the date its numbers were read is YYYY-MM-DD");
             }
@@ -194,13 +227,31 @@ public sealed partial class AgentProviders
                 problems.Add($"{where} currency '{currency}' is not three capital letters");
             }
 
-            foreach (var model in provider.Models)
+            foreach (var (model, number) in provider.Models.Select((model, index) => (model, index + 1)))
             {
-                ModelRules(config, provider, model, $"{where} model '{model.Code}'", problems);
+                // A code is what is sent to the API and how every step, tier and effort names the model: required, and
+                // one word. A name is the one a person reads beside it: required.
+                if (string.IsNullOrWhiteSpace(model.Code))
+                {
+                    problems.Add($"{where} model #{number.ToString(CultureInfo.InvariantCulture)} has no code; a model's code is what is sent to the API, and how everything names it");
+                    continue;
+                }
+
+                if (model.Code.Any(char.IsWhiteSpace))
+                {
+                    problems.Add($"{where} model '{model.Code}' code holds a space; a model's code is what is sent to the API, one word");
+                }
+
+                if (string.IsNullOrWhiteSpace(model.Name))
+                {
+                    problems.Add($"{where} model '{model.Code}' has no name; a model's name is the one a person reads, shown beside its code");
+                }
+
+                ModelRules(resolved._tiers, provider, model, $"{where} model '{model.Code}'", problems);
             }
         }
 
-        TierRules(config, resolved, problems);
+        TierRules(resolved, problems);
         BalanceRules(config, problems);
 
         return (problems.Count == 0 ? resolved : null, problems);
@@ -299,7 +350,7 @@ public sealed partial class AgentProviders
     /// <summary>Every model of <paramref name="tier"/>, in the order <c>tierConfig</c> says they are tried; empty where the tier is not defined.</summary>
     public IReadOnlyList<(AgentProviderConfig Provider, AgentModelConfig Model)> ModelsOf(string tier)
     {
-        if (!Config.TierConfig.TryGetValue(tier, out var codes))
+        if (!_tiers.TryGetValue(tier, out var codes))
         {
             return [];
         }
@@ -324,7 +375,20 @@ public sealed partial class AgentProviders
     [System.Text.RegularExpressions.GeneratedRegex("^[A-Z]{3}$")]
     private static partial System.Text.RegularExpressions.Regex CurrencyName();
 
-    private static void ModelRules(HarnessConfig config, AgentProviderConfig provider, AgentModelConfig model, string where, List<string> problems)
+    /// <summary>
+    /// Each name more than one provider lists - one provider listing it twice is that provider's own problem, said
+    /// apart - with the providers that list it, each once, in the order they are listed.
+    /// </summary>
+    private static IEnumerable<(string Name, IReadOnlyList<AgentProviderConfig> By)> SharedAcross(
+        IReadOnlyList<AgentProviderConfig> providers,
+        Func<AgentProviderConfig, IEnumerable<string>> names)
+        => providers
+            .SelectMany(provider => names(provider).Distinct(StringComparer.Ordinal).Select(name => (provider, name)))
+            .GroupBy(entry => entry.name, StringComparer.Ordinal)
+            .Where(group => group.Count() > 1)
+            .Select(group => (group.Key, (IReadOnlyList<AgentProviderConfig>)[.. group.Select(entry => entry.provider)]));
+
+    private static void ModelRules(IReadOnlyDictionary<string, List<string>> tiers, AgentProviderConfig provider, AgentModelConfig model, string where, List<string> problems)
     {
         // 'all' is the word a step's effort uses for every model it does not name (part 04), so no model may take it
         // as its code: a step could never name it and every map would mean two things.
@@ -356,14 +420,15 @@ public sealed partial class AgentProviders
             problems.Add($"{where} maxOutputTokens {model.MaxOutputTokens.ToString(CultureInfo.InvariantCulture)} is not a positive whole number");
         }
 
-        if (model.MaxOutputTokens > model.ContextTokens)
+        // An output over the context is said only of sizes that are each a size: a context that is none is said alone.
+        if (model.ContextTokens > 0 && model.MaxOutputTokens > model.ContextTokens)
         {
             problems.Add($"{where} maxOutputTokens {model.MaxOutputTokens.ToString(CultureInfo.InvariantCulture)} is over its contextTokens {model.ContextTokens.ToString(CultureInfo.InvariantCulture)}; the most a reply holds is at most what the context holds");
         }
 
-        foreach (var tier in model.Tiers.Where(tier => !config.TierConfig.ContainsKey(tier)))
+        foreach (var tier in model.Tiers.Where(tier => !tiers.ContainsKey(tier)))
         {
-            problems.Add($"{where} serves tier '{tier}', which tierConfig does not define. Defined: {string.Join(", ", config.TierConfig.Keys.OrderBy(key => key, StringComparer.Ordinal))}");
+            problems.Add($"{where} serves tier '{tier}', which tierConfig does not define. Defined: {string.Join(", ", tiers.Keys.OrderBy(key => key, StringComparer.Ordinal))}");
         }
 
         foreach (var price in PricesOf(model).Where(price => price.Value < 0))
@@ -379,15 +444,6 @@ public sealed partial class AgentProviders
         if (model.LargePrompt is { } large && large.OverTokens <= 0)
         {
             problems.Add($"{where} largePrompt.overTokens {large.OverTokens.ToString(CultureInfo.InvariantCulture)} is not a positive whole number");
-        }
-
-        foreach (var price in PricesOf(model).Where(price => price.Value >= 0 && price.Key.StartsWith("price", StringComparison.Ordinal)))
-        {
-            if (string.IsNullOrWhiteSpace(provider.Currency) || string.IsNullOrWhiteSpace(provider.ReadOn))
-            {
-                problems.Add($"{where} names {price.Key} and its provider names no currency or no readOn; a price is said once for the provider, with the date its numbers were read");
-                break;
-            }
         }
     }
 
@@ -457,10 +513,25 @@ public sealed partial class AgentProviders
         }
     }
 
-    private static void TierRules(HarnessConfig config, AgentProviders resolved, List<string> problems)
+    /// <summary>
+    /// tierConfig's own rules, each tier by its name exactly: a tier is named by the orchestration name rule, its list
+    /// holds at least one model, each once, each one a provider lists and whose tiers name the tier; and a model serving a
+    /// tier tierConfig defines is in that tier's list. A model serving a tier tierConfig does not define is said where
+    /// the model is (<see cref="ModelRules"/>), once: there is no list of it to put the model in.
+    /// </summary>
+    private static void TierRules(AgentProviders resolved, List<string> problems)
     {
-        foreach (var (tier, codes) in config.TierConfig)
+        foreach (var (tier, codes) in resolved._tiers)
         {
+            if (string.IsNullOrWhiteSpace(tier))
+            {
+                problems.Add("tierConfig has a tier with no name; a tier is named by the orchestration name rule");
+            }
+            else if (Orchestration.OrchestrationRules.NameProblem(tier) is { } shape)
+            {
+                problems.Add($"tierConfig '{tier}' is not named by the orchestration name rule: {shape}");
+            }
+
             if (codes.Count == 0)
             {
                 problems.Add($"tierConfig.{tier} is empty; a tier's list is its models in the order they are tried, and it holds at least one");
@@ -471,7 +542,7 @@ public sealed partial class AgentProviders
                 problems.Add($"tierConfig.{tier} lists '{twice.Key}' twice");
             }
 
-            foreach (var code in codes)
+            foreach (var code in codes.Distinct(StringComparer.Ordinal))
             {
                 if (!resolved._models.TryGetValue(code, out var entry))
                 {
@@ -486,7 +557,7 @@ public sealed partial class AgentProviders
 
         foreach (var (code, entry) in resolved._models)
         {
-            foreach (var tier in entry.Model.Tiers.Where(tier => !config.TierConfig.TryGetValue(tier, out var codes) || !codes.Contains(code, StringComparer.Ordinal)))
+            foreach (var tier in entry.Model.Tiers.Distinct(StringComparer.Ordinal).Where(tier => resolved._tiers.TryGetValue(tier, out var codes) && !codes.Contains(code, StringComparer.Ordinal)))
             {
                 problems.Add($"model '{code}' serves tier '{tier}', and tierConfig.{tier} does not list it: put it in the list where it is to be tried");
             }

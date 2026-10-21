@@ -151,6 +151,30 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The config topic names every agent section of the file's top level, agentClients among them - its one key, and
+    /// that a client holds no size, a model's sizes being its own - and the agent-clients topic the name rules.
+    /// </summary>
+    [Fact]
+    public async Task ConfigTopic_NamesTheAgentClientsSection_AndTheAgentClientsTopicTheNameRules()
+    {
+        var config = Prose.Words(HelpText.Of("config").StandardOutput);
+
+        Assert.Contains(
+            "agentClients the clients the tool builds in (claude-code, claude-api, glm), each by its name: update, claude-code's alone, says "
+                + "whether the tool installs and updates Claude Code with npm; a client holds no model, size or price - contextTokens and "
+                + "maxOutputTokens are a model's ('help agent-clients')",
+            config,
+            StringComparison.Ordinal);
+
+        Assert.Contains(
+            "A provider's name and each tier's are held to the orchestration name rule - lower-case letters and digits, single hyphens - "
+                + "and a tier is one name in one case everywhere; a model's code, what is sent to the API, is one word, and its name is the "
+                + "one a person reads.",
+            Prose.Words(HelpText.Of("agent-clients").StandardOutput),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The agent-clients topic says which Claude Code the tool uses and why - npm's, and never a native launcher -,
     /// that a run which needs it needs npm, what the tool runs to install it and bring it up to date, what it never
     /// runs - beside a session of that installation alone, a claude installed otherwise not counting -, that a slot

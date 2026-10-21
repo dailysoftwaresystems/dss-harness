@@ -48,15 +48,11 @@ internal static class MisplacedKeys
 
         using (document)
         {
-            List<string> keys = [];
-
-            if (RetiredAgentSection(document.RootElement) is { } agent)
-            {
-                keys.Add(agent);
-            }
+            List<string> keys = [.. RetiredAgentSections(document.RootElement)];
 
             keys.AddRange(Retired(document.RootElement));
             keys.AddRange(RetiredProviderKeys(document.RootElement));
+            keys.AddRange(RetiredClientKeys(document.RootElement));
             keys.AddRange(StepKeysOnPhases(document.RootElement));
             return keys;
         }
@@ -71,12 +67,46 @@ internal static class MisplacedKeys
     /// <summary>As <see cref="AgentProviders"/>, for the tiers.</summary>
     private const string AgentTiers = "agentTiers";
 
-    private static string? RetiredAgentSection(JsonElement root)
-        => Property(root, AgentProviders) is not null
-            ? $"{AgentProviders} is no longer read: a provider and its models are declared under providers, and a step names none of it - a model's code is listed by one provider, which it names"
-            : Property(root, AgentTiers) is not null
-                ? $"{AgentTiers} is no longer read: which models a tier runs on, in the order they are tried, is declared under tierConfig"
-                : null;
+    /// <summary>Each retired agent section the file holds, each said: one never hides the other.</summary>
+    private static IEnumerable<string> RetiredAgentSections(JsonElement root)
+    {
+        if (Property(root, AgentProviders) is not null)
+        {
+            yield return $"{AgentProviders} is no longer read: a provider and its models are declared under providers, and a step names none of it - a model's code is listed by one provider, which it names";
+        }
+
+        if (Property(root, AgentTiers) is not null)
+        {
+            yield return $"{AgentTiers} is no longer read: which models a tier runs on, in the order they are tried, is declared under tierConfig";
+        }
+    }
+
+    /// <summary>
+    /// A client's sizes, keys of a client of the plan before 2026-10-19, each with what it says now and where: no key of a
+    /// client holds a size, which is its model's, on the model's entry under its provider.
+    /// </summary>
+    private static readonly (string Key, string Now)[] RetiredClientSizes =
+    [
+        ("contextTokens", "what a model's context holds is its own entry's contextTokens, under its provider"),
+        ("maxOutputTokens", "the most a model's reply holds is its own entry's maxOutputTokens, under its provider"),
+    ];
+
+    /// <summary>Every client entry that still holds a size, each key said with the model's key that took its place.</summary>
+    private static IEnumerable<string> RetiredClientKeys(JsonElement root)
+    {
+        if (Property(root, "agentClients") is not { ValueKind: JsonValueKind.Object } clients)
+        {
+            yield break;
+        }
+
+        foreach (var client in clients.EnumerateObject())
+        {
+            foreach (var (key, now) in RetiredClientSizes.Where(size => Property(client.Value, size.Key) is not null))
+            {
+                yield return $"agentClients '{client.Name}': '{key}' is no key of a client: {now}";
+            }
+        }
+    }
 
     private static IEnumerable<string> Retired(JsonElement root)
         => (Property(root, Exec) is null
