@@ -102,6 +102,10 @@ public sealed record FlowAgentQuestion(
 /// <param name="Options">The answers it takes, each with what it does.</param>
 /// <param name="Recommendation">The recommendation and who wrote it.</param>
 /// <param name="Answers">Every answer it was given, in order.</param>
+/// <param name="Handler">
+/// The handler a <c>visitBound</c> question is about, by its name: what its <c>more</c> grants one more visit, and what a
+/// configured answer of it is counted for; null for every other kind.
+/// </param>
 public sealed record FlowQuestionEntry(
     string Id,
     string State,
@@ -112,7 +116,8 @@ public sealed record FlowQuestionEntry(
     IReadOnlyList<FlowAnswerRecord> Answers,
     FlowQuestionRaisedBy? RaisedBy = null,
     [property: JsonPropertyName("problem")] FlowQuestionProblem? ProblemShown = null,
-    FlowRecommendation? Recommendation = null)
+    FlowRecommendation? Recommendation = null,
+    string? Handler = null)
 {
     /// <summary>The states a question stands in.</summary>
     public static readonly IReadOnlyList<string> States = ["open", "answered", "withdrawn"];

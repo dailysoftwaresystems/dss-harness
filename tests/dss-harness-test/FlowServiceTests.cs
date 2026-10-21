@@ -1021,6 +1021,51 @@ public sealed class FlowServiceTests
     }
 
     /// <summary>
+    /// <c>--again</c> finds the question it would change - an answered one, which the run's file keeps with every answer
+    /// it was given through every later session - and is refused for the plan update it would raise, never for a
+    /// question the file lost or for being answered.
+    /// </summary>
+    [Fact]
+    public async Task AgainFindsTheAnsweredQuestion_ThroughLaterSessions_AndIsRefusedForThePlanUpdate()
+    {
+        var (repository, service, runner) = await ServiceAsync("""
+            name: flow
+            steps:
+              - name: approval
+                type: pause
+                question: go on?
+                options: [stay, go]
+              - name: middle
+                type: orient
+                dependsOn: [approval]
+              - name: second
+                type: pause
+                question: and now?
+                options: [stay, go]
+                dependsOn: [middle]
+            """);
+        using var disposed = repository;
+
+        Assert.Equal(FlowExit.Paused, (await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token)).ExitCode);
+
+        runner.Holds("middle", new TaskCompletionSource().Task);
+        var answering = service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token);
+        await runner.WaitStartedAsync("middle");
+        _ = await service.StopAsync(repository.Path, "r1", now: false, json: false, Token).WaitAsync(Bound, Token);
+        _ = await answering.WaitAsync(Bound, Token);
+
+        var resumed = await service.ResumeAsync(repository.Path, "r1", json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(FlowExit.Paused, resumed.ExitCode);
+
+        var again = await service.AnswerAsync(repository.Path, "r1", "no", question: "q1", text: null, textFile: null, again: true, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Refused, again.ExitCode);
+        Assert.Equal(FlowService.AgainRefused, again.Message);
+        Assert.Equal(["answered", "open"], repository.Harness.OrchestrationStore.ReadFlowQuestions(RunOf(repository))!.Questions.Select(question => question.State));
+    }
+
+    /// <summary>
     /// A resume refused inside its session - nothing can run until a question is answered - leaves no owner behind,
     /// answers as a refusal, and is in the run's log: the next command over the run is never refused by a dead owner.
     /// </summary>

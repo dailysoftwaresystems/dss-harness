@@ -1,4 +1,6 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
+using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Results;
@@ -78,6 +80,38 @@ public sealed class FlowQuestionsTests
     /// <summary>A fold family step's dry run, as its runner reports it over the verbs' own facts.</summary>
     private static FlowStepResult Dry(RequestStanding standing, ConsentKind[] consents, string[] named, RefusalKind[] refusals, string summary)
         => FlowStepResult.Standing(new FlowDryRun(standing, consents, named, refusals, summary));
+
+    /// <summary>
+    /// A question's record read back as the question the engine holds and written again is the same record, every member
+    /// of it - who raised it and the agent, what an agent asked, the answers it takes with their texts, every answer with
+    /// who gave it, through what, where, from which input and when it was replaced, the recommendation and the handler a
+    /// bound is about: the one pair of conversions loses nothing, so no later write of the run's file ever does.
+    /// </summary>
+    [Fact]
+    public void AQuestionsRecord_ReadAsAQuestionAndWrittenAgain_IsTheSameRecord()
+    {
+        var at = new DateTimeOffset(2026, 10, 21, 8, 30, 0, TimeSpan.Zero);
+        var entry = new FlowQuestionEntry(
+            "q7",
+            "answered",
+            "visitBound",
+            at,
+            [new FlowAgentQuestion("which way?", "two ways stand", ["left", "right"], "left", "it is shorter", "the map", "the route")],
+            [new FlowQuestionOption("more", "one more of what was bounded"), new FlowQuestionOption("direct", "the fix given", Text: true), new FlowQuestionOption("abort", "the run ends")],
+            [
+                new FlowAnswerRecord("more", at.AddMinutes(1), "go on", new FlowAnswerBy("person", "front-end"), "one more visit", at.AddMinutes(5)),
+                new FlowAnswerRecord("more", at.AddMinutes(2), By: new FlowAnswerBy("configuration", Where: "step 'fix'")),
+                new FlowAnswerRecord("accept", at.AddMinutes(3), By: new FlowAnswerBy("input", Input: "preapproved")),
+            ],
+            new FlowQuestionRaisedBy("step", "rounds#2.items[1].build", "a3"),
+            new FlowQuestionProblem("it failed again", "two visits of the fix", "'ship' waits on this"),
+            new FlowRecommendation("given", "more", "go on", "the last visit narrowed it", "advisor", "advisor", "the advisor's model", "steps/build/advice/1"),
+            "fix");
+
+        var again = FlowQuestion.FromEntry(entry).ToEntry();
+
+        Assert.Equal(JsonSerializer.Serialize(entry, JsonStateFile.Options), JsonSerializer.Serialize(again, JsonStateFile.Options));
+    }
 
     /// <summary>Each kind's answers, as the coordinator offers them: the kind's own, and skip only where the step is skippable.</summary>
     [Fact]

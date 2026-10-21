@@ -123,6 +123,9 @@ public sealed class FlowService(
     /// <summary>The command that stops one where it stands.</summary>
     public const string StopCommand = "stop-orchestrator";
 
+    /// <summary>The refusal of <c>answer-orchestrator --again</c>, worded once.</summary>
+    internal const string AgainRefused = "--again changes an answer already given, which raises a plan update; this build takes no plan update yet";
+
     private readonly IHarnessContextLoader _contextLoader = contextLoader;
     private readonly IHostPlatform _platform = platform;
     private readonly IFileSystem _fileSystem = fileSystem;
@@ -332,12 +335,24 @@ public sealed class FlowService(
                 return Refuse(layout, AnswerCommand, $"run '{run}' holds no question '{named}'", json);
             }
 
+            // A changed answer is asked of a question already answered, which the run's file keeps with every answer
+            // it was given: it is found, and refused for what it would raise, never for being answered.
+            if (again)
+            {
+                return Refuse(layout, AnswerCommand, AgainRefused, json);
+            }
+
             if (entry.State != "open")
             {
                 return Refuse(layout, AnswerCommand, $"question '{named}' of run '{run}' is {entry.State}{(open.Count > 0 ? $"; what is open now: {string.Join(", ", open.Select(one => one.Id))}" : string.Empty)}", json);
             }
 
             asked = entry;
+        }
+        else if (again)
+        {
+            // The answer it would change is one already given, not an open question's.
+            return Refuse(layout, AnswerCommand, AgainRefused, json);
         }
         else if (open.Count == 0)
         {
@@ -352,11 +367,6 @@ public sealed class FlowService(
         else
         {
             asked = open[0];
-        }
-
-        if (again)
-        {
-            return Refuse(layout, AnswerCommand, "--again changes an answer already given, which raises a plan update; this build takes no plan update yet", json);
         }
 
         // The answer is checked against the question's answers before anything of the run is touched: a usage error,

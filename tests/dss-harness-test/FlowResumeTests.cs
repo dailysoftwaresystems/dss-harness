@@ -18,6 +18,11 @@ namespace DssHarness.Tests;
 /// </summary>
 public sealed class FlowResumeTests
 {
+    /// <summary>Every bound a test of a session waits for: a session that hangs fails the test rather than the run's minutes.</summary>
+    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
+
+    private static CancellationToken Token => TestContext.Current.CancellationToken;
+
     private static WorkflowDefinition Parse(string text)
         => WorkflowFileParser.Parse("workflows/flow/flow.yml", text);
 
@@ -645,6 +650,141 @@ public sealed class FlowResumeTests
         }
     }
 
+    /// <summary>
+    /// The questions a run raised survive every session: a question answered, the session that answered it stopped, and
+    /// a resume that asks again - the answered question is still in the run's file with who answered it and through
+    /// what, and the new question takes the id after the highest any question took, never one a record already names.
+    /// </summary>
+    [Fact]
+    public async Task AnsweredQuestionsSurviveEverySession_AndIdsGoOnFromTheHighest()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: approval
+                type: pause
+                question: go on?
+                options: [yes, no]
+              - name: work
+                type: build
+                dependsOn: [approval]
+              - name: second
+                type: pause
+                question: and now?
+                options: [yes, no]
+                dependsOn: [work]
+            """);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var end = await new FlowCoordinator(definition, new Runner(), new RunnerFacts(), records: records).RunAsync(Token).WaitAsync(Bound, Token);
+
+            Assert.Equal(FlowRunStatus.Paused, end.Status);
+        }
+
+        // The answer's own session: the question answered through the command, the build it frees started, and the
+        // session stopped while the build runs.
+        var held = new Runner().Hold("work");
+        var (_, _, answering) = Records("r1", temp.Path, definition);
+
+        using (answering)
+        {
+            var coordinator = new FlowCoordinator(definition, held, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: answering);
+
+            Assert.True(coordinator.TryAnswer("q1", "yes", null, out _, FlowService.AnswerCommand));
+
+            var session = coordinator.RunAsync(Token);
+            await held.StartedAsync("work").WaitAsync(Bound, Token);
+            coordinator.RequestStop();
+
+            Assert.Equal(FlowRunStatus.Stopped, (await session.WaitAsync(Bound, Token)).Status);
+        }
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+
+            Assert.Equal(FlowRunStatus.Paused, end.Status);
+            Assert.Equal("q2", Assert.Single(end.OpenQuestions).Id);
+        }
+
+        var questions = harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions;
+
+        Assert.Equal(["q1", "q2"], questions.Select(question => question.Id));
+        Assert.Equal(["answered", "open"], questions.Select(question => question.State));
+        Assert.Equal(["approval", "second"], questions.Select(question => question.RaisedBy!.Step));
+
+        var answer = Assert.Single(questions[0].Answers);
+
+        Assert.Equal("yes", answer.Answer);
+        Assert.Equal(new FlowAnswerBy("person", FlowService.AnswerCommand), answer.By);
+        Assert.Empty(questions[1].Answers);
+    }
+
+    /// <summary>
+    /// A counted answer a configuration gave is spent across sessions as within one: <c>retry</c> given its one time,
+    /// the run cut off, and at the resume the same question is given the entry's <c>then</c> - never the counted answer
+    /// again, which would let a configuration go on for ever across resumes.
+    /// </summary>
+    [Fact]
+    public async Task ACountedAnswerTheConfigurationSpent_IsNotGivenAgainAfterAResume()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: fold
+                type: fold
+                of: made
+                answers:
+                  foldNewRows:
+                    answer: retry
+                    times: 1
+                    then: fail
+              - name: made
+                type: create-agent
+                agent: worker.md
+            """);
+        var lacking = FlowStepResult.Standing(new FlowDryRun(RequestStanding.NeedsConsent, [ConsentKind.FoldNewRows], ["row 12"], [], "1 new row"));
+        var runner = new Runner().OnAsync("fold", (run, cancellationToken) => run.Attempt == 1
+            ? Task.FromResult(lacking)
+            : new TaskCompletionSource<FlowStepResult>().Task.WaitAsync(cancellationToken));
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), records: records);
+            _ = coordinator.RunAsync(Token);
+            await runner.StartedAsync("fold", attempt: 2).WaitAsync(Bound, Token);
+
+            // The crash, while the attempt the configured retry made runs.
+        }
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var coordinator = new FlowCoordinator(definition, new Runner().On("fold", _ => lacking), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+            var fold = coordinator.Instances["fold"];
+
+            Assert.Equal(FlowRunStatus.Failed, end.Status);
+            Assert.Equal(3, fold.Attempt);
+            Assert.Equal(FlowInstanceState.Failed, fold.State);
+            Assert.Equal("foldNewRows", fold.EndedByQuestion);
+        }
+
+        var questions = harness.OrchestrationStore.ReadFlowQuestions(layout)!.Questions;
+
+        Assert.Equal(["retry", "fail"], questions.Select(question => Assert.Single(question.Answers).Answer));
+        Assert.All(questions, question => Assert.Equal(new FlowAnswerBy("configuration", Where: "step 'fold'"), question.Answers[0].By));
+    }
+
     /// <summary>The owner of a run is claimed at the start of a session: a live owner refuses it, a dead one is reclaimed and said, and the run is released where its session leaves it.</summary>
     [Fact]
     public void TheOwnerIsClaimed_ALiveOwnerRefusesAndADeadOneIsReclaimed()
@@ -693,6 +833,7 @@ public sealed class FlowResumeTests
         private readonly Dictionary<string, TaskCompletionSource<FlowStepResult>> _gates = new(StringComparer.Ordinal);
         private readonly Dictionary<string, TaskCompletionSource> _starts = new(StringComparer.Ordinal);
         private readonly Dictionary<string, Func<FlowStepRun, FlowStepResult>> _scripts = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, Func<FlowStepRun, CancellationToken, Task<FlowStepResult>>> _asyncScripts = new(StringComparer.Ordinal);
         private readonly HashSet<string> _asking = new(StringComparer.Ordinal);
 
         /// <summary>Every instance asked, in order.</summary>
@@ -706,6 +847,17 @@ public sealed class FlowResumeTests
 
         public Task StartedAsync(string instance)
             => StartOf(instance).Task;
+
+        /// <summary>Completes once the runner has been asked for <paramref name="attempt"/> of <paramref name="instance"/>.</summary>
+        public Task StartedAsync(string instance, int attempt)
+            => StartOf($"{instance}@{attempt.ToString(System.Globalization.CultureInfo.InvariantCulture)}").Task;
+
+        /// <summary>Answers <paramref name="step"/> by its script, which sees the whole run and may hold it on a task of its own.</summary>
+        public Runner OnAsync(string step, Func<FlowStepRun, CancellationToken, Task<FlowStepResult>> script)
+        {
+            _asyncScripts[step] = script;
+            return this;
+        }
 
         private TaskCompletionSource StartOf(string instance)
         {
@@ -770,12 +922,18 @@ public sealed class FlowResumeTests
             {
                 Started.Add(run.Instance);
                 StartOf(run.Instance).TrySetResult();
+                StartOf($"{run.Instance}@{run.Attempt.ToString(System.Globalization.CultureInfo.InvariantCulture)}").TrySetResult();
                 Given[run.Attempt] = run.Handoff;
 
                 if (run.Step.Name == "work")
                 {
                     ItemsWorked.Add(run.Item.AsTemplateText());
                 }
+            }
+
+            if (_asyncScripts.TryGetValue(run.Step.Name, out var held))
+            {
+                return held(run, cancellationToken);
             }
 
             if (_asking.Contains(run.Step.Name))

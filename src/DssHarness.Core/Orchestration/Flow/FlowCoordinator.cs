@@ -236,12 +236,6 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
 
     /// <summary>The fix a person gave for the failure a recovery of this instance works on, where recoveryBound was answered direct.</summary>
     internal string? Direction;
-
-    /// <summary>Where a visit of the recovery sends the run once its steps are done: the step that gave it its failure, which runs again.</summary>
-    internal FlowInstance? Rerun;
-
-    /// <summary>The pre-existing issue a visit of the recovery was given to fix, where it was given one; null for a failure.</summary>
-    internal FlowPreExistingReport? RecoveryIssue;
 }
 
 /// <summary>
@@ -286,10 +280,13 @@ public sealed class FlowCoordinator
     private readonly List<Wake> _wakes = [];
     private readonly Dictionary<string, FlowInstance> _agentsOpen = new(StringComparer.Ordinal);
     private readonly Dictionary<string, int> _declarationOrder = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// How many times a configuration has given each counted answer, by where it is counted
+    /// (<see cref="FlowQuestions.CountedAt"/>): counted as the engine gives each, and counted again by a resume from the
+    /// answers <c>questions.json</c> holds, so a count spent in one session stays spent in every later one.
+    /// </summary>
     private readonly Dictionary<string, int> _answerSpent = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, string> _answerWhere = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, string?> _answerThrough = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, IReadOnlyList<FlowQuestionOption>> _optionsHeld = new(StringComparer.Ordinal);
 
     private Scope _top = null!;
     private bool _stopping;
@@ -325,7 +322,6 @@ public sealed class FlowCoordinator
     private readonly List<FlowInstance> _handled = [];
     private readonly Dictionary<(string Scope, string Step), int> _recoveryVisits = new();
     private readonly Dictionary<(string Scope, string Step), int> _recoveryExtra = new();
-    private readonly Dictionary<string, string> _askedSubject = new(StringComparer.Ordinal);
     private readonly List<FlowInstance> _owedEndings = [];
 
     /// <summary>The pre-existing issues a step reported while nothing could be started - a pause or a stop under way - owed to the next session, which raises their triage.</summary>
@@ -1087,9 +1083,7 @@ public sealed class FlowCoordinator
         {
             var asked = BudgetQuestion(hit);
             _questions.Add(asked);
-            _optionsHeld[asked.Id] = HeldOptionsOf(null, "runBudget", asked.Options);
-            _answerWhere[asked.Id] = configured.Where;
-            ApplyAnswer(null, asked, configured.Answer, null, by: "configuration");
+            ApplyAnswer(null, asked, configured.Answer, null, "configuration", configured.Where, through: null);
             WriteQuestions();
             return;
         }
@@ -1129,9 +1123,9 @@ public sealed class FlowCoordinator
         var reserve = _definition.Budget?.ReservePercent ?? 10;
         var run = _runName is { Length: > 0 } name ? $"run '{name}'" : "the run";
         return new FlowQuestion(
-            $"q{++_questionsRaised}",
+            FlowQuestionIds.Of(++_questionsRaised),
             "runBudget",
-            "run",
+            FlowQuestions.RunsOwn,
             $"{run} has spent {reached.SpentOf} (its reserve of {reserve}% was reached)",
             FlowQuestions.OptionsOf("runBudget", null))
         {
@@ -1169,7 +1163,6 @@ public sealed class FlowCoordinator
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(question);
         ArgumentException.ThrowIfNullOrWhiteSpace(answer);
-        _answerThrough[question] = through;
 
         if (!_open.Contains(question))
         {
@@ -1185,8 +1178,9 @@ public sealed class FlowCoordinator
             return false;
         }
 
-        var needsText = (asked.Kind == "pause" && _answerable[question]?.Step.Text.Contains(answer, StringComparer.Ordinal) == true)
-            || (asked.Kind == "recoveryBound" && answer == "direct");
+        // Which answer takes a text is the question's own record of its answers: the one owner answer-orchestrator
+        // reads too.
+        var needsText = asked.Held.Any(option => option.Text && string.Equals(option.Answer, answer, StringComparison.Ordinal));
 
         if (needsText && string.IsNullOrWhiteSpace(text))
         {
@@ -1212,7 +1206,7 @@ public sealed class FlowCoordinator
         }
 
         var was = instance?.State;
-        ApplyAnswer(instance, asked, answer, string.IsNullOrWhiteSpace(text) ? null : text, by: null);
+        ApplyAnswer(instance, asked, answer, string.IsNullOrWhiteSpace(text) ? null : text, "person", where: null, through);
         WriteQuestions();
 
         if (instance is not null)
@@ -1224,15 +1218,15 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// Applies one answer to the question that waits on it, recording who gave it: a person (a caller of
-    /// <see cref="TryAnswer(string, string, out string?)"/>) or the configuration, which answered the kind beforehand where <paramref name="by"/>
-    /// says so. The question's own kind says what the answer does; the run's own question, its budget's, is about no
-    /// step, and <paramref name="instance"/> is null for it.
+    /// Applies one answer to the question that waits on it, recording who gave it: a <c>person</c> (a caller of
+    /// <see cref="TryAnswer(string, string, out string?)"/>), and through what, or the <c>configuration</c>, which
+    /// answered the kind beforehand, and where. The question's own kind says what the answer does; the run's own
+    /// question, its budget's, is about no step, and <paramref name="instance"/> is null for it.
     /// </summary>
-    private void ApplyAnswer(FlowInstance? instance, FlowQuestion asked, string answer, string? text, string? by)
+    private void ApplyAnswer(FlowInstance? instance, FlowQuestion asked, string answer, string? text, string by, string? where, string? through)
     {
         var did = asked.Kind == "runBudget" ? answer == "more" ? "each amount is allowed once again" : "the run ends stopped" : null;
-        asked._given.Add(new FlowAnswerEntry(answer, text, by ?? "person", by is null ? null : _answerWhere[asked.Id], by is null ? _answerThrough.GetValueOrDefault(asked.Id) : null, _clock.GetUtcNow(), did));
+        asked._given.Add(new FlowAnswerEntry(answer, text, by, where, through, _clock.GetUtcNow(), did));
         asked.State = "answered";
 
         if (answer == "abort")
@@ -1252,7 +1246,7 @@ public sealed class FlowCoordinator
         if (instance is null)
         {
             // No step changed: the run's own counts did, and the records hold them.
-            Record(FlowChangeKind.Answer, detail: $"'{asked.Id}' answered '{answer}' by {by ?? "a person"}");
+            Record(FlowChangeKind.Answer, detail: $"'{asked.Id}' answered '{answer}' by {(by == "person" ? "a person" : by)}");
             return;
         }
 
@@ -1297,7 +1291,7 @@ public sealed class FlowCoordinator
     /// </summary>
     private void AnswerVisitBound(FlowInstance instance, FlowQuestion asked, string answer)
     {
-        var handler = _askedSubject.GetValueOrDefault(asked.Id);
+        var handler = asked.Handler;
         var failed = instance.State == FlowInstanceState.Failed;
 
         switch (answer)
@@ -1343,18 +1337,13 @@ public sealed class FlowCoordinator
     /// </summary>
     private void AnswerRecoveryBound(FlowInstance instance, string answer, string? text)
     {
-        var key = (instance.DeclaredScope!.Id, instance.Path);
-
         if (answer is "more" or "direct")
         {
+            var key = RecoveryOf(instance).Key;
             _recoveryExtra[key] = _recoveryExtra.GetValueOrDefault(key) + 1;
 
             // A direct answer's text is the fix the next visit is given, and that visit's alone.
-            TakeRecoveryOf(
-                instance,
-                instance.Issue is null ? instance : instance.Issue.Blocks == true ? instance.RaisedBy : null,
-                instance.Issue,
-                answer == "direct" ? text ?? string.Empty : null);
+            TakeRecoveryOf(instance, answer == "direct" ? text ?? string.Empty : null);
             return;
         }
 
@@ -1505,7 +1494,7 @@ public sealed class FlowCoordinator
 
         if (IsRecovery(instance) && instance.RaisedBy is { } source)
         {
-            TakeRecoveryOf(source, instance.Rerun, instance.RecoveryIssue);
+            TakeRecoveryOf(source);
             return;
         }
 
@@ -2568,7 +2557,7 @@ public sealed class FlowCoordinator
                     return;
                 }
 
-                TakeRecoveryOf(instance, instance.Issue?.Blocks == true ? instance.RaisedBy : null, instance.Issue);
+                TakeRecoveryOf(instance);
                 break;
             case "list":
                 ListIssue(instance);
@@ -3287,22 +3276,36 @@ public sealed class FlowCoordinator
     /// advisor's recommendation as every question carries one.
     /// </summary>
     private void TakeRecovery(FlowInstance failed)
-        => TakeRecoveryOf(failed, failed, null);
+        => TakeRecoveryOf(failed);
 
     /// <summary>
-    /// Takes one thing to the workflow's recovery: a failure (the step that failed is what runs again once the
-    /// recovery is done), or an issue a triage answered <c>fix</c> for (the reporting step runs again where the issue
-    /// blocked it, and the run simply goes on where it did not).
+    /// What a visit of the recovery taken for <paramref name="source"/> is for - the one owner every place that takes
+    /// one, answers its bound, runs it again or rebuilds it at a resume asks, so all of them read the same from the
+    /// records alone: a failed step's failure, the step itself running again once the recovery is done; or the issue a
+    /// triage instance that ended done sent to fix, its reporter running again where the issue blocks it and the run
+    /// simply going on where it does not. With where its visits are counted against the recovery's bound: the failed
+    /// step's declaration in its scope, or the triage instance itself.
+    /// </summary>
+    private (FlowInstance? Rerun, FlowPreExistingReport? Issue, (string Scope, string Step) Key) RecoveryOf(FlowInstance source)
+    {
+        var scope = (source.DeclaredScope ?? _top).Id;
+
+        return source.State != FlowInstanceState.Failed && source.Issue is { } issue
+            ? (issue.Blocks ? source.RaisedBy : null, issue, (scope, source.Id))
+            : (source, null, (scope, source.Path));
+    }
+
+    /// <summary>
+    /// Takes one thing to the workflow's recovery, as <see cref="RecoveryOf"/> says what it is: a failure, or an issue a
+    /// triage answered <c>fix</c> for.
     /// </summary>
     /// <param name="source">The step whose failure it takes, or the triage instance whose issue it fixes: what its steps read as <c>source</c>.</param>
-    /// <param name="rerun">What runs again once the recovery is done; null where the run only goes on.</param>
-    /// <param name="issue">The issue a triage sent, where one did; null for a failure.</param>
     /// <param name="direction">The fix a person gave this visit, answering the bound direct; null for none.</param>
-    private void TakeRecoveryOf(FlowInstance source, FlowInstance? rerun, FlowPreExistingReport? issue, string? direction = null)
+    private void TakeRecoveryOf(FlowInstance source, string? direction = null)
     {
         var recover = _definition.Recover!;
         var scope = source.DeclaredScope ?? _top;
-        var key = (scope.Id, issue is null ? source.Path : source.Id);
+        var (_, issue, key) = RecoveryOf(source);
         var visits = _recoveryVisits.TryGetValue(key, out var taken) ? taken + 1 : 1;
         var allowed = (recover.MaxVisits ?? FlowRecover.MostVisits) + _recoveryExtra.GetValueOrDefault(key);
 
@@ -3325,8 +3328,6 @@ public sealed class FlowCoordinator
         var declaration = RecoveryDeclaration();
         var instance = NewVisit(scope, declaration, FlowInstanceState.Running);
         instance.RaisedBy = source;
-        instance.Rerun = rerun;
-        instance.RecoveryIssue = issue;
         instance.Visit = visits;
         instance.Direction = direction;
 
@@ -3429,26 +3430,21 @@ public sealed class FlowCoordinator
     /// <param name="subject">What a counted answer of this question is counted for, where it is not the instance alone: a handler's name, a source's own.</param>
     private string Ask(FlowInstance instance, string kind, string problem, IReadOnlyList<string> options, string? subject = null)
     {
-        var id = $"q{++_questionsRaised}";
+        var id = FlowQuestionIds.Of(++_questionsRaised);
         var asked = new FlowQuestion(id, kind, instance.Id, problem, options)
         {
             RaisedAt = _clock.GetUtcNow(),
             Tried = TriedOf(instance),
             Means = MeansOf(instance),
+            Held = FlowQuestions.HeldOptionsOf(kind, instance.Step, options),
+            Handler = subject,
         };
         _questions.Add(asked);
-        _optionsHeld[id] = HeldOptionsOf(instance.Step, kind, options);
-
-        if (subject is not null)
-        {
-            _askedSubject[id] = subject;
-        }
 
         if (ConfiguredAnswer(instance, kind, options, subject) is { } configured)
         {
-            _answerWhere[id] = configured.Where;
             _answeredAtOnce = true;
-            ApplyAnswer(instance, asked, configured.Answer, null, by: "configuration");
+            ApplyAnswer(instance, asked, configured.Answer, null, "configuration", configured.Where, through: null);
             WriteQuestions();
             return id;
         }
@@ -3507,10 +3503,6 @@ public sealed class FlowCoordinator
         return waiting.Count == 0 ? null : $"'{string.Join("', '", waiting)}' wait{(waiting.Count == 1 ? "s" : string.Empty)} on this";
     }
 
-    /// <summary>The answers a question takes as its file holds them: what each does, and whether it takes a text.</summary>
-    private IReadOnlyList<FlowQuestionOption> HeldOptionsOf(WorkflowStep? step, string kind, IReadOnlyList<string> options)
-        => [.. options.Select(option => new FlowQuestionOption(option, FlowAnswerDoes.Of(option), kind == "pause" && (step?.Text.Contains(option, StringComparer.Ordinal) ?? false)))];
-
     /// <summary>Writes the run's questions and answers, whole, through the records seam: the one owner of what every question said.</summary>
     private void WriteQuestions()
     {
@@ -3519,29 +3511,8 @@ public sealed class FlowCoordinator
             return;
         }
 
-        _records.Question([.. _questions.Select(EntryOf)]);
+        _records.Question([.. _questions.Select(asked => asked.ToEntry())]);
     }
-
-    /// <summary>One question as the run's file holds it, from what the coordinator knows.</summary>
-    private FlowQuestionEntry EntryOf(FlowQuestion asked)
-        => new(
-            asked.Id,
-            asked.State,
-            asked.Kind,
-            asked.RaisedAt,
-            [],
-            _optionsHeld.TryGetValue(asked.Id, out var options)
-                ? options
-                : [.. asked.Options.Select(option => new FlowQuestionOption(option, FlowAnswerDoes.Of(option)))],
-            [.. asked.Given.Select(entry => new FlowAnswerRecord(
-                entry.Answer,
-                entry.At ?? asked.RaisedAt,
-                entry.Text,
-                new FlowAnswerBy(entry.By, entry.By == "person" ? entry.Through ?? _answerThrough.GetValueOrDefault(asked.Id) : null, entry.By == "configuration" ? entry.Where : null),
-                entry.Did))],
-            RaisedBy: asked.Instance == "run" ? new FlowQuestionRaisedBy("engine") : new FlowQuestionRaisedBy("step", asked.Instance),
-            ProblemShown: new FlowQuestionProblem(asked.Problem, asked.Tried, asked.Means),
-            Recommendation: FlowRecommendation.NotSought);
 
     /// <summary>
     /// The answer the configuration gives at once to a question of <paramref name="kind"/> on <paramref name="instance"/>
@@ -3560,8 +3531,7 @@ public sealed class FlowCoordinator
 
         var (entry, where) = configured;
 
-        var place = subject is null ? FlowQuestions.PlaceOf(kind, instance) : $"{FlowQuestions.PlaceOf(kind, instance)}:{subject}";
-        var key = $"{kind}|{place}";
+        var key = FlowQuestions.CountedAt(kind, instance?.Id, subject);
         var given = _answerSpent.GetValueOrDefault(key);
         var counted = WorkflowValidator.GoesOn.Contains(entry.Answer, StringComparer.Ordinal) && given < (entry.Times ?? 1);
         var answer = entry.Answer == "direct"
@@ -3714,7 +3684,7 @@ public sealed class FlowCoordinator
                 }
             }
 
-            if (instance.Rerun is { } target && target.DeclaredScope is { } targetScope && ResolveStep(targetScope, target.Step.Name) is { } declaration)
+            if (RecoveryOf(again).Rerun is { } target && target.DeclaredScope is { } targetScope && ResolveStep(targetScope, target.Step.Name) is { } declaration)
             {
                 DecideRedirectOf(instance, targetScope, declaration);
             }
@@ -3861,7 +3831,6 @@ public sealed class FlowCoordinator
             var reached = ReachedOf(_definition.Budget!);
             var question = BudgetQuestion(reached ?? ("usd", "its budget"));
             _questions.Add(question);
-            _optionsHeld[question.Id] = HeldOptionsOf(null, "runBudget", question.Options);
             WaitOn(null, question);
             WriteQuestions();
         }
@@ -5059,8 +5028,7 @@ public sealed class FlowCoordinator
 
             foreach (var visit in _created.Where(created => IsRecovery(created) && created.RaisedBy is not null))
             {
-                var failed = visit.RaisedBy!;
-                var key = (failed.DeclaredScope!.Id, failed.Path);
+                var key = RecoveryOf(visit.RaisedBy!).Key;
                 _recoveryVisits[key] = Math.Max(_recoveryVisits.GetValueOrDefault(key), visit.Visit);
             }
 
@@ -5134,35 +5102,26 @@ public sealed class FlowCoordinator
                 }
             }
 
-            // The run's open questions are its file's, restored here: the file is the one owner of what every
-            // question said, and the run goes on answering them by id as it did. The asking instance waits as it
-            // was, for what it waits on is its own record's.
-            if (resume.Questions is { } entries)
+            // Every question the run raised is its file's, restored whole - answered, withdrawn and open alike, each
+            // with every answer it was given: the file is the one owner of what every question said and who answered
+            // it, and the next write of it is made from these. The run goes on answering the open ones by id as it did,
+            // the asking instance waiting as its own record says; the next question takes the id after the highest of
+            // any state, never one a step's record already names; and what the answers granted - a counted answer a
+            // configuration spent, one more iteration, visit or recovery - is counted again from them.
+            foreach (var entry in resume.Questions ?? [])
             {
-                foreach (var entry in entries.Where(entry => entry.State == "open"))
-                {
-                    var asked = new FlowQuestion(
-                        entry.Id,
-                        entry.Kind,
-                        entry.RaisedBy?.Step ?? "run",
-                        entry.ProblemShown?.Happened ?? entry.Kind,
-                        [.. entry.Options.Select(option => option.Answer)])
-                    {
-                        RaisedAt = entry.RaisedAt,
-                        Tried = entry.ProblemShown?.Tried,
-                        Means = entry.ProblemShown?.Means,
-                    };
-                    _questions.Add(asked);
-                    _optionsHeld[asked.Id] = entry.Options;
-                    _open.Add(asked.Id);
-                    _answerable[asked.Id] = _instances.TryGetValue(asked.Instance, out var waiting) ? waiting : null;
+                var asked = FlowQuestion.FromEntry(entry);
+                _questions.Add(asked);
+                _questionsRaised = Math.Max(_questionsRaised, int.Parse(asked.Id[1..], System.Globalization.CultureInfo.InvariantCulture));
 
-                    if (int.TryParse(asked.Id[1..], System.Globalization.CultureInfo.InvariantCulture, out var raised))
-                    {
-                        _questionsRaised = Math.Max(_questionsRaised, raised);
-                    }
+                if (asked.State == "open")
+                {
+                    _open.Add(asked.Id);
+                    _answerable[asked.Id] = _instances.GetValueOrDefault(asked.Instance);
                 }
             }
+
+            CountTheAnswers();
 
             if (resume.File.Pause is { } pause && pause.CompletedAt is not null)
             {
@@ -5215,6 +5174,52 @@ public sealed class FlowCoordinator
                 instance.Handoff = from.Handoffs.TryGetValue(instance.Id, out var text)
                     ? new FlowHandoff(text, handoff.By, handoff.Why)
                     : null;
+            }
+        }
+    }
+
+    /// <summary>
+    /// What the answers <c>questions.json</c> holds granted, counted again over the graph a resume rebuilt: each counted
+    /// answer a configuration gave, where it is counted, so its <c>times</c> are spent across sessions as within one;
+    /// each <c>more</c> a repeat's bound was answered, one more iteration of that repeat; each <c>more</c> a handler's
+    /// bound was answered, one more visit of that handler in its scope; and each <c>more</c> or <c>direct</c> the
+    /// recovery's bound was answered, one more visit of it. The answers are the one record of these grants.
+    /// </summary>
+    private void CountTheAnswers()
+    {
+        foreach (var asked in _questions)
+        {
+            var about = _instances.GetValueOrDefault(asked.Instance);
+
+            foreach (var given in asked.Given)
+            {
+                if (given.By == "configuration" && WorkflowValidator.GoesOn.Contains(given.Answer, StringComparer.Ordinal))
+                {
+                    var counted = FlowQuestions.CountedAt(asked.Kind, asked.Instance, asked.Handler);
+                    _answerSpent[counted] = _answerSpent.GetValueOrDefault(counted) + 1;
+                }
+
+                switch (asked.Kind, given.Answer)
+                {
+                    case ("loopBound", "more") when about is not null:
+                    {
+                        about.ExtraIterations++;
+                        break;
+                    }
+
+                    case ("visitBound", "more") when about?.DeclaredScope is { } scope && asked.Handler is { } handler:
+                    {
+                        scope.ExtraVisits[handler] = scope.ExtraVisits.GetValueOrDefault(handler) + 1;
+                        break;
+                    }
+
+                    case ("recoveryBound", "more" or "direct") when about is not null:
+                    {
+                        var key = RecoveryOf(about).Key;
+                        _recoveryExtra[key] = _recoveryExtra.GetValueOrDefault(key) + 1;
+                        break;
+                    }
+                }
             }
         }
     }
