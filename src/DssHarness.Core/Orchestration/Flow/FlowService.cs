@@ -1032,7 +1032,7 @@ public sealed class FlowService(
     {
         var pause = flow.Pause!;
         var handoffs = FlowReports.HandoffsOf(layout, flow).Where(handoff => pause.Handoffs.Contains(handoff.Instance, StringComparer.Ordinal)).ToList();
-        var machine = flow.Steps.Where(step => !step.Group && step.State == nameof(FlowInstanceState.Running)).Select(step => step.Instance).ToList();
+        var machine = flow.MachineStepsRunning();
         var records = new FlowRecordPath[] { new("stop", layout.StopFile), new("state", layout.FlowFile), new("status", layout.WorkflowStatusFile) };
 
         var outcome = CommandOutcome.Ok(

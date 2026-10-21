@@ -426,6 +426,24 @@ public sealed class FlowRecordsTests
         Assert.True(flow > record, "the run's state is written after the step's own files");
     }
 
+    /// <summary>The machine steps a run's state holds running are its steps running that are no group's own record: the one rule every command reads.</summary>
+    [Fact]
+    public void TheMachineStepsAStateHoldsRunning_AreItsRunningStepsThatAreNoGroup()
+    {
+        var flow = new FlowFile(
+            1, "r1", "flow", "digest", new Dictionary<string, string>(), "Paused", new FlowBudgetRecord(0, 0, 0), 0,
+            [
+                new FlowStepRecord("round", "round", true, "Running", 1, 1, [], []),
+                new FlowStepRecord("round.build", "round.build", false, "Running", 1, 1, [], [], "build"),
+                new FlowStepRecord("think", "think", false, "Stopped", 1, 1, [], [], "reason"),
+                new FlowStepRecord("test", "test", false, "Running", 1, 1, [], [], "test"),
+            ],
+            [],
+            DateTimeOffset.UnixEpoch);
+
+        Assert.Equal(["round.build", "test"], flow.MachineStepsRunning());
+    }
+
     /// <summary>
     /// A handoff the engine writes says so and why in its first line, and what its text reads back as is the record it
     /// was written with - why whole, whatever breaks or closing stop it was given with, and what it holds after.

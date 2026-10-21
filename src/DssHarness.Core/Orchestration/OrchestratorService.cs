@@ -567,12 +567,10 @@ public sealed class OrchestratorService(
 
         // Once the pause is complete, what its record still holds as running is what the pause left to finish: the
         // machine steps, the only ones a pause lets run on.
-        var machine = flow.Steps.Where(step => !step.Group && step.State == nameof(Flow.FlowInstanceState.Running)).Select(step => step.Instance).ToList();
-
         return flow.Pause switch
         {
             { CompletedAt: null } => new FlowEngineState(FlowEngineState.Pausing, _owner.Named(held), []),
-            { CompletedAt: not null } => new FlowEngineState(FlowEngineState.Recording, _owner.Named(held), machine),
+            { CompletedAt: not null } => new FlowEngineState(FlowEngineState.Recording, _owner.Named(held), flow.MachineStepsRunning()),
             _ => new FlowEngineState(FlowEngineState.Running, _owner.Named(held), []),
         };
     }

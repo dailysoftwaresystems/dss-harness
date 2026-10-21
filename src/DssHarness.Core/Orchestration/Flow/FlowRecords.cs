@@ -343,6 +343,14 @@ public sealed record FlowFile(
     FlowPauseRecord? Pause = null,
     IReadOnlyList<FlowRedirectRecord>? Redirects = null)
 {
+    /// <summary>
+    /// The steps the file holds running that are no group's own record, by instance: once a pause is complete, the
+    /// machine steps it left to finish, which the engine stays to record - the one rule <c>pause-orchestrator</c> and
+    /// <c>list-orchestrator</c> both read.
+    /// </summary>
+    public IReadOnlyList<string> MachineStepsRunning()
+        => [.. Steps.Where(step => !step.Group && step.State == nameof(FlowInstanceState.Running)).Select(step => step.Instance)];
+
     /// <summary>What is wrong with this file; null when nothing is.</summary>
     public string? Problem()
         => Schema != 1 ? $"its schema is {Schema.ToString(CultureInfo.InvariantCulture)}, and this build reads 1"
