@@ -804,6 +804,73 @@ public sealed class FlowCoordinatorTests
         Assert.Equal(FlowInstanceState.Failed, refusedRun.Instances["pointed"].State);
     }
 
+    /// <summary>
+    /// A leg refused over a lock another run holds is run again by the lock's own row - the verdict says the cause,
+    /// whether or not the runner set one beside the code - and a step that ends incomplete past its retries says what
+    /// its legs ended with and how often it ran, never that it is run again.
+    /// </summary>
+    [Fact]
+    public async Task ARefusedLockedLeg_IsRunAgainByTheLocksRow_AndPastItsRetriesSaysSoTruly()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: suite
+                type: test
+            """);
+        var attempts = 0;
+        var runner = new FakeRunner().On("suite", run => ++attempts == 1
+            ? Legs(("here", LegVerdict.RefusedLocked))
+            : Legs(("here", LegVerdict.Passed)));
+        var clock = new JumpingClock();
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock);
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["suite"].State);
+        Assert.Equal(2, coordinator.Instances["suite"].Attempt);
+        Assert.Equal([TimeSpan.FromSeconds(5)], clock.Waits);
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+
+        var capped = Parse("""
+            name: flow
+            steps:
+              - name: suite
+                type: test
+                retries: 1
+            """);
+        var cappedRun = new FlowCoordinator(capped, new FakeRunner().On("suite", Legs(("here", LegVerdict.InputsMoved))), new RunnerFacts(), new JumpingClock());
+
+        _ = await cappedRun.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        var suite = cappedRun.Instances["suite"];
+        Assert.Equal(FlowInstanceState.Failed, suite.State);
+        Assert.Equal("leg 'here' ended inputs-moved (3), and still so after 2 attempts", suite.Error);
+    }
+
+    /// <summary>
+    /// The retry cap stops a step that keeps ending incomplete at its retries, though the table's row would run it
+    /// again: with retries 1 a 21 runs twice, where the row alone would run it four times.
+    /// </summary>
+    [Fact]
+    public async Task TheRetryCap_StopsARowThatWouldRunOn()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: reader
+                type: ci-read
+                retries: 1
+            """);
+        var runner = new FakeRunner().On("reader", FlowStepResult.Ended(passed: false, HarnessExit.Incomplete));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        _ = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, runner.Started.Count);
+        Assert.Equal(FlowInstanceState.Failed, coordinator.Instances["reader"].State);
+    }
+
     /// <summary>An unwitnessed, log-held or poisoned leg fails the step whatever failOn says, and is not retried: running it again would change nothing.</summary>
     [Theory]
     [InlineData(LegVerdict.Unwitnessed, LegExit.Unwitnessed)]
@@ -1761,5 +1828,69 @@ public sealed class FlowCoordinatorTests
             "group 'fix' would bring this run to 5 step instances, and at most 4 are allowed (maxInstances). A step instance is one run of a step: one for each work item, each iteration and each visit. Raise maxInstances, or lower a loop's bounds",
             coordinator.Instances["fix"].Error);
         Assert.Equal(FlowRunStatus.Failed, end.Status);
+    }
+
+    /// <summary>
+    /// A repeat at its own bound asks its loop's question, though its next iteration would also pass the instance
+    /// bound: the bound it was written with is said first, for an answer of more is what the instance bound then holds.
+    /// </summary>
+    [Fact]
+    public async Task ARepeatAtItsBound_AsksBeforeTheInstanceBoundRefuses()
+    {
+        var definition = Parse("""
+            name: flow
+            maxInstances: 5
+            steps:
+              - name: fix
+                repeat:
+                  until: attempt.ok
+                  maxIterations: 2
+                steps:
+                  - name: attempt
+                    type: orient
+            """);
+        var runner = new FakeRunner().On("attempt", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"ok": false}""")));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.Equal(["fix#1.attempt", "fix#2.attempt"], runner.Started);
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Equal("loopBound", coordinator.OpenQuestions.Single().Kind);
+    }
+
+    /// <summary>
+    /// A rounds repeat whose blockersLimitRounds is false has no bound past its rounds but the budget: it runs on while
+    /// blocking holds, asking nothing, until its until reads true.
+    /// </summary>
+    [Fact]
+    public async Task ARoundsRepeatWithNoBlockersLimit_RunsOnWhileBlockingHolds()
+    {
+        var definition = Parse("""
+            name: flow
+            budget:
+              usd: 50
+            steps:
+              - name: loop
+                repeat:
+                  until: review.passed
+                  rounds: 1
+                  blocking: review.blocking
+                  blockersLimitRounds: false
+                steps:
+                  - name: review
+                    type: orient
+            """);
+        var runner = new FakeRunner().On("review", run => FlowStepResult.Ended(
+            passed: true,
+            HarnessExit.Success,
+            output: Output(run.Iteration == 5 ? """{"passed": true, "blocking": true}""" : """{"passed": false, "blocking": true}""")));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(5, runner.Started.Count);
+        Assert.Empty(coordinator.Questions);
     }
 }

@@ -69,6 +69,23 @@ public sealed class FlowLegVerdictsTests
         Assert.Equal([.. legs], FlowLegVerdicts.OfClass(legs, FlowLegClass.None));
     }
 
+    /// <summary>
+    /// A verdict is incomplete exactly where the retry table runs its ending again, its code read with the cause the
+    /// verdict itself says - a lock another run holds for refused-locked - so the class and the retry never disagree.
+    /// </summary>
+    [Fact]
+    public void AVerdictIsIncomplete_ExactlyWhereTheRetryTableRunsItAgain()
+    {
+        Assert.Equal(OutcomeCause.LockHeld, FlowLegVerdicts.CauseOf(LegVerdict.RefusedLocked));
+
+        foreach (var verdict in Enum.GetValues<LegVerdict>().Where(verdict => FlowLegVerdicts.ClassOf(verdict) != FlowLegClass.Red))
+        {
+            Assert.Equal(
+                FlowRetry.RunsAgain(FlowLegVerdicts.CodeOf(verdict), FlowLegVerdicts.CauseOf(verdict)),
+                FlowLegVerdicts.ClassOf(verdict) == FlowLegClass.Incomplete);
+        }
+    }
+
     /// <summary>A failure that is not red keeps its own code: unwitnessed 5, log-held 6, poisoned 70.</summary>
     [Fact]
     public void AFailureThatIsNotRed_KeepsItsOwnCode()

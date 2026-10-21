@@ -36,9 +36,10 @@ public enum FlowLegClass
 /// verdict come from <see cref="Verdicts"/>, the one table, and nothing here spells a verdict's meaning of its own.
 /// </para>
 /// <para>
-/// An incomplete leg is run again (by the step's retries, and past them the step fails with the worst incomplete leg's
-/// code); a failure that is not red - unwitnessed, log-held, poisoned - fails the step whatever <c>failOn</c> says, for
-/// running it again would change nothing, and is not retried.
+/// An incomplete leg is one <see cref="FlowRetry"/> - the one owner of which endings run again - runs again, read with
+/// the cause its verdict says (<see cref="CauseOf"/>); it is run again by the step's retries, and past them the step
+/// fails with the worst incomplete leg's code. A failure that is not red - unwitnessed, log-held, poisoned - fails the
+/// step whatever <c>failOn</c> says, for running it again would change nothing, and is not retried.
 /// </para>
 /// </remarks>
 public static class FlowLegVerdicts
@@ -59,17 +60,26 @@ public static class FlowLegVerdicts
             return FlowLegClass.Red;
         }
 
-        if (info.IsFailure)
+        // Incomplete is the retry table's own answer, asked of the verdict's code with the cause the verdict says: a
+        // leg whose ending the table runs again - a failure such as inputs that moved, or a verdict reached without one
+        // of its own, whose code is 21. The failures that remain - unwitnessed, log-held, poisoned - fail the step as
+        // they are, and a leg that passed or nobody asked for decides nothing.
+        if (FlowRetry.RunsAgain(info.ExitCode, CauseOf(verdict)))
         {
-            // Only a failure whose code the retry table runs again is incomplete; the rest - unwitnessed, log-held,
-            // poisoned - fail the step as they are.
-            return info.ExitCode is LegExit.InputsMoved or LegExit.Contended or LegExit.NotAdmitted or HarnessExit.Refused
-                ? FlowLegClass.Incomplete
-                : FlowLegClass.FailureThatIsNotRed;
+            return FlowLegClass.Incomplete;
         }
 
-        return Verdicts.ReachedNone(verdict) ? FlowLegClass.Incomplete : FlowLegClass.None;
+        return info.IsFailure ? FlowLegClass.FailureThatIsNotRed : FlowLegClass.None;
     }
+
+    /// <summary>
+    /// The typed cause <paramref name="verdict"/> says beside its code, as the retry table reads a refusal: a leg refused
+    /// because another run holds its lock is refused over that lock and nothing else, whatever its runner set beside
+    /// the command's code; every other verdict says none.
+    /// </summary>
+    /// <param name="verdict">One leg's own verdict.</param>
+    public static OutcomeCause CauseOf(LegVerdict verdict)
+        => verdict == LegVerdict.RefusedLocked ? OutcomeCause.LockHeld : OutcomeCause.None;
 
     /// <summary>Every leg of one class, in the order they were given.</summary>
     /// <param name="legs">Every leg the step ran, with its verdict.</param>

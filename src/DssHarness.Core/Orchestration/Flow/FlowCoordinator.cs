@@ -1570,8 +1570,9 @@ public sealed class FlowCoordinator
     {
         var repeat = declaration.Repeat!;
 
+        // blockersLimitRounds: false is no bound but the budget: no count of iterations ever reaches it.
         return repeat.Rounds is { } rounds
-            ? rounds + (repeat.BlockersUnbounded ? int.MaxValue : repeat.BlockersLimitRounds ?? 3) + instance.ExtraIterations
+            ? repeat.BlockersUnbounded ? int.MaxValue : rounds + (repeat.BlockersLimitRounds ?? 3) + instance.ExtraIterations
             : (repeat.MaxIterations ?? 0) + instance.ExtraIterations;
     }
 
@@ -1582,12 +1583,8 @@ public sealed class FlowCoordinator
         var bound = BoundOf(declaration, instance);
         var wouldBring = _created.Count + 1 + SubtreeSize(PathOf(scope, declaration));
 
-        if (wouldBring > Limit().MaxInstances)
-        {
-            FailGroup(instance, HarnessExit.Refused, InstanceBound(instance.Id, wouldBring, Limit().MaxInstances), instance.Path);
-            return true;
-        }
-
+        // The loop's own bound is said first: at it the run asks, and only an iteration the loop may have is held to
+        // the instance bound.
         if (iteration > bound)
         {
             var said = declaration.Repeat!.Rounds is { } rounds
@@ -1599,6 +1596,12 @@ public sealed class FlowCoordinator
                 $"'{instance.Id}' has run {iteration - 1} iterations and its until still reads false; {said}{(instance.ExtraIterations > 0 ? $", and {instance.ExtraIterations.ToString(System.Globalization.CultureInfo.InvariantCulture)} more were given by its answers" : string.Empty)}",
                 WorkflowValidator.AnswersOf["loopBound"]);
             return false;
+        }
+
+        if (wouldBring > Limit().MaxInstances)
+        {
+            FailGroup(instance, HarnessExit.Refused, InstanceBound(instance.Id, wouldBring, Limit().MaxInstances), instance.Path);
+            return true;
         }
 
         var body = NewScope($"{instance.Id}#{iteration}", PathOf(scope, declaration), scope, declaration, FlowValue.Missing, null, iteration, instance);
@@ -2008,7 +2011,7 @@ public sealed class FlowCoordinator
             return;
         }
 
-        var (passed, exit, error) = Ends(instance.Step, result);
+        var (passed, exit, error, cause) = Ends(instance.Step, result);
         instance.Legs = result.Legs;
         instance.RedLegs = FlowLegVerdicts.OfClass(result.Legs, FlowLegClass.Red);
         instance.Output = result.Output;
@@ -2025,7 +2028,7 @@ public sealed class FlowCoordinator
         // one that ends incomplete with retries left is stopped where it stands and runs again at the resume.
         if (!passed
             && instance.Step.Type != "reason"
-            && FlowRetry.Wait(exit, result.Cause, instance.Attempt - 1) is { } wait
+            && FlowRetry.Wait(exit, cause, instance.Attempt - 1) is { } wait
             && instance.Attempt <= RetryCap(instance.Step))
         {
             if (_pausing)
@@ -2040,6 +2043,13 @@ public sealed class FlowCoordinator
             Release(instance);
             _wakes.Add(new Wake(instance, _clock.GetUtcNow() + wait, wait == TimeSpan.Zero ? Task.CompletedTask : Task.Delay(wait, _clock)));
             return;
+        }
+
+        // An ending the table would run again that ends here - its retries spent - says how often it ran: the error is
+        // worded once the retry was decided, and never says the step runs again where it does not.
+        if (!passed && instance.Step.Type != "reason" && instance.Attempt > 1 && FlowRetry.RunsAgain(exit, cause))
+        {
+            error = $"{error ?? $"it ended {exit.ToString(System.Globalization.CultureInfo.InvariantCulture)}"}, and still so after {instance.Attempt.ToString(System.Globalization.CultureInfo.InvariantCulture)} attempts";
         }
 
         Release(instance);
@@ -2200,11 +2210,12 @@ public sealed class FlowCoordinator
     /// code; under <c>never</c> red is no failure, and the legs that still decide - a failure that is not red, an
     /// incomplete one - decide as they would without it.
     /// </summary>
-    private static (bool Passed, int Exit, string? Error) Ends(WorkflowStep step, FlowStepResult result)
+    /// <returns>Whether it passed, its code, its error, and the typed cause its code is read with: the runner's for a step with no legs, the worst incomplete leg's own for one whose legs ended so.</returns>
+    private static (bool Passed, int Exit, string? Error, OutcomeCause Cause) Ends(WorkflowStep step, FlowStepResult result)
     {
         if (result.Legs.Count == 0)
         {
-            return (result.Passed, result.Exit, result.Error);
+            return (result.Passed, result.Exit, result.Error, result.Cause);
         }
 
         var red = FlowLegVerdicts.OfClass(result.Legs, FlowLegClass.Red);
@@ -2214,28 +2225,30 @@ public sealed class FlowCoordinator
         if (red.Count > 0 && (step.FailOn ?? WorkflowStepTypes.Find(step.Type ?? string.Empty)?.FailOnDefault) == "red")
         {
             var code = FlowLegVerdicts.CodeOf(FlowLegVerdicts.Worst(red)!.Value);
-            return (false, code, WorstLine(red, code));
+            return (false, code, WorstLine(red, code), OutcomeCause.None);
         }
 
         if (notRed.Count > 0)
         {
             var code = FlowLegVerdicts.CodeOf(FlowLegVerdicts.Worst(notRed)!.Value);
-            return (false, code, WorstLine(notRed, code));
+            return (false, code, WorstLine(notRed, code), OutcomeCause.None);
         }
 
         if (incomplete.Count > 0)
         {
+            // What the step ends with; whether it is run again is the retry table's to say, and the error says it after.
             var worst = FlowLegVerdicts.Worst(incomplete)!.Value;
-            return (false, FlowLegVerdicts.CodeOf(worst), $"leg '{incomplete.First(leg => leg.Verdict == worst).Leg}' ended {Verdicts.Display(worst)}; it is run again");
+            var code = FlowLegVerdicts.CodeOf(worst);
+            return (false, code, WorstLine(incomplete, code), FlowLegVerdicts.CauseOf(worst));
         }
 
         if (red.Count > 0)
         {
             var code = FlowLegVerdicts.CodeOf(FlowLegVerdicts.Worst(red)!.Value);
-            return (true, code, WorstLine(red, code));
+            return (true, code, WorstLine(red, code), OutcomeCause.None);
         }
 
-        return (true, HarnessExit.Success, null);
+        return (true, HarnessExit.Success, null, OutcomeCause.None);
     }
 
     /// <summary>The line that says what the worst of <paramref name="legs"/> found, as the step's error keeps it.</summary>
