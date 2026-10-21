@@ -542,7 +542,7 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
             snapshot.Pause is { } pause
                 ? new FlowPauseRecord(pause.Cause, pause.All, pause.BeganAt, [.. pause.Handoffs], pause.CompletedAt)
                 : null,
-            snapshot.Redirect);
+            snapshot.Redirects);
     }
 
     /// <summary>One step's own record, from the coordinator's snapshot of it.</summary>
@@ -567,7 +567,7 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
             step.Error,
             step.SkippedBecause,
             step.NotRunBecause,
-            step.PassedOver ? "passedOver" : step.EndedRun ? "endedRun" : null,
+            step.Failure is { } failure ? FlowStepRecord.NameOf(failure) : null,
             step.EndedByQuestion,
             step.Agent,
             step.Made,
@@ -581,7 +581,11 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
             step.HandledBy,
             step.Leftover?.DeepClone(),
             step.RaisedBy,
-            step.Direction);
+            step.Direction,
+            step.NotRunCause?.ToString(),
+            step.Issue,
+            step.IssuesOwed,
+            step.LeftBy);
     }
 
     /// <summary>

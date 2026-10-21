@@ -54,6 +54,32 @@ public enum FlowNotRunCause
     RunEnded,
 }
 
+/// <summary>
+/// Where a step's failure left the run: one fact, held once on the instance and named once in its record
+/// (<c>failure</c>), so a resume reads from the records alone which failures stand, which it runs again and which it
+/// still owes. A failure a handler took says so by its <c>handledBy</c>, and one waiting on a question by the question.
+/// </summary>
+public enum FlowFailure
+{
+    /// <summary>The run passed it over (<c>onFailure: continue</c>): what depends on it runs on its output as Missing.</summary>
+    PassedOver,
+
+    /// <summary>
+    /// Nothing handled it and its policy ended the run (<c>stop</c>): the session ended failed over it, and the next
+    /// session runs it again, as a new attempt - save one an answer <c>fail</c> ended, which stands.
+    /// </summary>
+    EndedRun,
+
+    /// <summary>
+    /// It ended while a safe pause recorded the machine steps the pause left running, when nothing is raised and nothing
+    /// asked: what its failure owes - its handlers, its policy - is the next session's to make, before anything runs.
+    /// </summary>
+    Owed,
+
+    /// <summary>It wrote no <c>onFailure</c> and handed its failure to its group, which starts nothing more and ends failed with its code.</summary>
+    TakenByGroup,
+}
+
 /// <summary>How a whole run stands.</summary>
 public enum FlowRunStatus
 {
@@ -134,8 +160,11 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
     /// <summary>Which kind of reason <see cref="NotRunBecause"/> says, where the step is <see cref="FlowInstanceState.NotRun"/>; null otherwise.</summary>
     public FlowNotRunCause? NotRunCause { get; internal set; }
 
+    /// <summary>Where this step's failure left the run, where it failed and a standing was reached; null for every other ending.</summary>
+    public FlowFailure? Failure { get; internal set; }
+
     /// <summary>Whether the run passed this failure over (<c>onFailure: continue</c>), so what depends on it runs on its output as Missing.</summary>
-    public bool PassedOver { get; internal set; }
+    public bool PassedOver => Failure == FlowFailure.PassedOver;
 
     /// <summary>
     /// The kind of the question whose <c>fail</c> answer ended this step, where one did: the engine's fact
@@ -202,6 +231,12 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
 
     /// <summary>The pre-existing issue this instance was raised to triage, where it is one; null for every step the schedule starts.</summary>
     public FlowPreExistingReport? Issue { get; internal set; }
+
+    /// <summary>The pre-existing issues this step reported whose triage is not raised yet, in the order reported; empty where none is owed.</summary>
+    public IReadOnlyList<FlowPreExistingReport> IssuesOwed { get; internal set; } = [];
+
+    /// <summary>The handler whose redirect sent the run back past this visit, by its instance id; null where none did.</summary>
+    public string? LeftBy { get; internal set; }
 
     internal readonly List<FlowAnswerGiven> _answers = [];
     internal Scope? DeclaredScope;
@@ -275,8 +310,6 @@ public sealed class FlowCoordinator
     private readonly List<FlowQuestion> _questions = [];
     private readonly HashSet<string> _open = new(StringComparer.Ordinal);
     private readonly Dictionary<string, FlowInstance?> _answerable = new(StringComparer.Ordinal);
-    private readonly List<FlowInstance> _passedOver = [];
-    private readonly List<FlowInstance> _failed = [];
     private readonly List<Wake> _wakes = [];
     private readonly Dictionary<string, FlowInstance> _agentsOpen = new(StringComparer.Ordinal);
     private readonly Dictionary<string, int> _declarationOrder = new(StringComparer.Ordinal);
@@ -305,7 +338,6 @@ public sealed class FlowCoordinator
     private readonly FlowBudgetSpent _spent = new();
     private readonly string? _runName;
     private readonly Dictionary<string, DateTimeOffset> _reasonStarted = new(StringComparer.Ordinal);
-    private readonly List<FlowInstance> _owedFailures = [];
     private readonly List<CancellationTokenSource> _handoffBounds = [];
     private int _budgetGranted;
     private bool _pauseAllAsked;
@@ -319,13 +351,12 @@ public sealed class FlowCoordinator
     private int _sessions;
     private DateTimeOffset? _endedAt;
     private readonly Dictionary<string, PendingEnding> _pendingEndings = new(StringComparer.Ordinal);
-    private readonly List<FlowInstance> _handled = [];
     private readonly Dictionary<(string Scope, string Step), int> _recoveryVisits = new();
     private readonly Dictionary<(string Scope, string Step), int> _recoveryExtra = new();
-    private readonly List<FlowInstance> _owedEndings = [];
 
-    /// <summary>The pre-existing issues a step reported while nothing could be started - a pause or a stop under way - owed to the next session, which raises their triage.</summary>
-    private readonly List<(FlowInstance Reporter, string Triage, IReadOnlyList<FlowPreExistingReport> Issues)> _owedIssues = [];
+    /// <summary>The answers a resume found written whose change the step's record does not hold yet: the next session carries each out at its start, once.</summary>
+    private readonly List<(FlowInstance Waiting, FlowQuestion Asked)> _carryAtStart = [];
+
     private readonly List<PreExistingIssue> _issues = [];
     private readonly List<PreExistingTally> _tally = [];
     private readonly List<FlowInstance> _pendingFixes = [];
@@ -424,6 +455,24 @@ public sealed class FlowCoordinator
     /// <summary>The questions the run leaves open, in the order raised.</summary>
     public IReadOnlyList<FlowQuestion> OpenQuestions => [.. _questions.Where(question => _open.Contains(question.Id))];
 
+    /// <summary>The failures that stand as <paramref name="failure"/> says, in the order they ended: read from each instance's own standing, the one owner of it.</summary>
+    private List<FlowInstance> Standing(FlowFailure failure)
+        => [.. _created.Where(instance => instance.Failure == failure).OrderBy(instance => instance.FinishedAt ?? DateTimeOffset.MaxValue)];
+
+    /// <summary>The failures a handler - or an answer that accepted an ending at its bound - took, in the order they ended.</summary>
+    private List<FlowInstance> Handled
+        => [.. _created.Where(instance => instance.State is FlowInstanceState.Failed && instance.HandledBy is not null).OrderBy(instance => instance.FinishedAt ?? DateTimeOffset.MaxValue)];
+
+    /// <summary>
+    /// Sets where <paramref name="instance"/>'s failure left the run, and writes its own record with it: the standing is
+    /// on disk the moment it is reached, for a resume reads it from the step's own record, never from memory.
+    /// </summary>
+    private void SetFailure(FlowInstance instance, FlowFailure? failure)
+    {
+        instance.Failure = failure;
+        WriteStepRecordOf(instance);
+    }
+
     /// <summary>How the run stands now.</summary>
     public FlowRunStatus Status
     {
@@ -439,7 +488,7 @@ public sealed class FlowCoordinator
                 return FlowRunStatus.Running;
             }
 
-            return _open.Count > 0 ? FlowRunStatus.Paused : _hardStop ? FlowRunStatus.Stopped : _pausing ? FlowRunStatus.Paused : _stopping || _failed.Count > 0 ? FlowRunStatus.Failed : FlowRunStatus.Done;
+            return _open.Count > 0 ? FlowRunStatus.Paused : _hardStop ? FlowRunStatus.Stopped : _pausing ? FlowRunStatus.Paused : _stopping || Standing(FlowFailure.EndedRun).Count > 0 ? FlowRunStatus.Failed : FlowRunStatus.Done;
         }
     }
 
@@ -643,9 +692,24 @@ public sealed class FlowCoordinator
 
         try
         {
+            foreach (var (waiting, asked) in _carryAtStart.ToList())
+            {
+                // An answer written whose change the step's record does not hold yet: carried out now, once, as it would
+                // have been had the session that took it gone on.
+                _ = _carryAtStart.Remove((waiting, asked));
+                var last = asked.Given[^1];
+                var was = waiting.State;
+                Carry(waiting, asked, last.Answer, last.Text, last.By);
+                Record(FlowChangeKind.Step, waiting, from: was, to: waiting.State, attempt: waiting.Attempt, detail: $"'{asked.Id}' answered '{last.Answer}', carried out at the resume");
+            }
+
             if (stopPending)
             {
                 ApplyTheStop();
+            }
+            else
+            {
+                AnswerWhatTheConfigurationAnswers();
             }
 
             // A group stands open over its members whatever stopped them, and goes on as it was: it is no step that
@@ -692,6 +756,33 @@ public sealed class FlowCoordinator
                 Record(FlowChangeKind.Step, stopped, from: was, to: FlowInstanceState.NotStarted, attempt: stopped.Attempt);
             }
 
+            if (!stopPending)
+            {
+                // A failure that ended the run - nothing handled it, its policy stopped the run - runs again, as a new
+                // attempt, as what a stop stopped does: the session it ended is over, and this one goes on where the run
+                // stood. A group runs again as a retry opens it, a new visit whole, its failed visit standing as it
+                // ended. One an answer fail ended stands, and the run stays stopped on it.
+                foreach (var failed in Standing(FlowFailure.EndedRun).Where(instance => instance.EndedByQuestion is null))
+                {
+                    if (failed.Step.IsGroup)
+                    {
+                        SetFailure(failed, null);
+                        Retry(failed);
+                        continue;
+                    }
+
+                    NewAttempt(failed);
+                    Record(FlowChangeKind.Step, failed, from: FlowInstanceState.Failed, to: FlowInstanceState.NotStarted, attempt: failed.Attempt);
+                }
+
+                _stopping = Standing(FlowFailure.EndedRun).Count > 0;
+
+                if (!_stopping)
+                {
+                    RedrawWhatTheStopLeft();
+                }
+            }
+
             // The always steps run once per session, however the run went: those an earlier session ran are drawn
             // again in this one's always phase, as new visits, the visits they had standing as they ended.
             foreach (var scope in _scopes.Where(ScopeLive).ToList())
@@ -706,17 +797,16 @@ public sealed class FlowCoordinator
                 }
             }
 
-            foreach (var owed in _owedFailures.ToList())
+            // What a pause left owed, its records say, and it is made now, before anything else runs: each failure
+            // recorded while the pause recorded what it left running - its handlers, its policy - and then each ending
+            // whose raise it found owed, save one whose question is open, which the answer makes.
+            foreach (var owed in Standing(FlowFailure.Owed))
             {
-                _ = _owedFailures.Remove(owed);
-                _ = _owedEndings.Remove(owed);
                 HandleFailure(owed);
             }
 
-            foreach (var owed in _owedEndings.ToList())
+            foreach (var owed in _created.Where(instance => instance.Step.On is null && instance.WaitingQuestion is null && instance._handlers.Any(handler => handler.State == "owed")).ToList())
             {
-                _ = _owedEndings.Remove(owed);
-
                 if (owed.State == FlowInstanceState.Failed)
                 {
                     HandleFailure(owed);
@@ -727,10 +817,18 @@ public sealed class FlowCoordinator
                 }
             }
 
-            foreach (var (reporter, triage, issues) in _owedIssues.ToList())
+            foreach (var pending in _pendingEndings.Values.Where(pending => pending.Handlers.All(Ended)).ToList())
             {
-                _ = _owedIssues.Remove((reporter, triage, issues));
-                RaiseIssues(reporter, triage, issues);
+                // An ending whose handlers have all ended and that its record does not say settled: a crash came between
+                // the last handler's end and the source's record. It is settled now, as that end would have settled it.
+                SettleEnding(pending);
+            }
+
+            foreach (var reporter in _created.Where(instance => instance.IssuesOwed.Count > 0).ToList())
+            {
+                // The issues a step reported while nothing could be started - a pause or a stop under way, or a crash
+                // before their triage was raised - are owed in its own record, and their triage is raised now.
+                RaiseOwedIssues(reporter);
             }
 
             // The session is recorded where a run's records are: begun, or taken up from one another left.
@@ -1084,7 +1182,6 @@ public sealed class FlowCoordinator
             var asked = BudgetQuestion(hit);
             _questions.Add(asked);
             ApplyAnswer(null, asked, configured.Answer, null, "configuration", configured.Where, through: null);
-            WriteQuestions();
             return;
         }
 
@@ -1194,11 +1291,22 @@ public sealed class FlowCoordinator
             return false;
         }
 
-        _open.Remove(question);
         problem = null;
         _last = null;
-        var instance = _answerable[question];
-        _ = _answerable.Remove(question);
+        TakeAnswer(asked, answer, string.IsNullOrWhiteSpace(text) ? null : text, "person", where: null, through);
+        return true;
+    }
+
+    /// <summary>
+    /// Takes one answer to an open question - a person's, or the configuration's in a person's place - by the one path:
+    /// the question no longer open, the answer recorded and carried out, and the record of the step that waited on it
+    /// written after, from what the answer changed.
+    /// </summary>
+    private void TakeAnswer(FlowQuestion asked, string answer, string? text, string by, string? where, string? through)
+    {
+        _ = _open.Remove(asked.Id);
+        var instance = _answerable.GetValueOrDefault(asked.Id);
+        _ = _answerable.Remove(asked.Id);
 
         if (instance is not null)
         {
@@ -1206,15 +1314,12 @@ public sealed class FlowCoordinator
         }
 
         var was = instance?.State;
-        ApplyAnswer(instance, asked, answer, string.IsNullOrWhiteSpace(text) ? null : text, "person", where: null, through);
-        WriteQuestions();
+        ApplyAnswer(instance, asked, answer, text, by, where, through);
 
         if (instance is not null)
         {
-            Record(FlowChangeKind.Step, instance, from: was, to: instance.State, detail: $"'{asked.Id}' answered '{answer}'");
+            Record(FlowChangeKind.Step, instance, from: was, to: instance.State, detail: by == "person" ? $"'{asked.Id}' answered '{answer}'" : $"'{asked.Id}' answered '{answer}' by the configuration");
         }
-
-        return true;
     }
 
     /// <summary>
@@ -1231,10 +1336,29 @@ public sealed class FlowCoordinator
 
         if (answer == "abort")
         {
-            // abort is taken for any question, and ends the run as a hard stop ends it: everything in flight is
-            // cancelled and ends stopped. It settles nothing: the question is open again, the abort kept among its
-            // answers, and its step waits on it as it did - so the resume goes on with the question asked.
+            // abort settles nothing: the question is open again, the abort kept among its answers, and its step waits
+            // on it as it did - so the resume goes on with the question asked.
             WaitOn(instance, asked);
+        }
+
+        // The answer is on disk before anything it changes, as a question is before the record of the step that waits
+        // on it: a crash between the two leaves the answer written, and the next session carries out what it changes
+        // from the step's own record, which still names the question.
+        WriteQuestions();
+        Carry(instance, asked, answer, text, by);
+    }
+
+    /// <summary>
+    /// Carries out what an answer changes, once it is recorded: the question's own kind says what it does. Where an
+    /// answer reached <c>questions.json</c> and the record of the step that waited on it was not written after - a crash
+    /// between the two - the next session carries it out from there, once.
+    /// </summary>
+    private void Carry(FlowInstance? instance, FlowQuestion asked, string answer, string? text, string by)
+    {
+        if (answer == "abort")
+        {
+            // abort is taken for any question, and ends the run as a hard stop ends it: everything in flight is
+            // cancelled and ends stopped.
             BeginHardStop();
         }
         else if (asked.Kind == "runBudget")
@@ -1312,12 +1436,15 @@ public sealed class FlowCoordinator
                 {
                     instance.HandledBy = asked.Id;
                     instance.FailureSettled = true;
-                    _handled.Add(instance);
                     WriteStepRecordOf(instance);
                 }
 
                 break;
             case "fail" when failed:
+                // The answer decided the failure stands: it is one a person answered fail, which a later session
+                // does not run again whatever its policy makes of it.
+                instance.EndedByQuestion = asked.Kind;
+                PassOwed(instance);
                 ApplyPolicy(instance);
                 break;
             case "fail":
@@ -1377,7 +1504,6 @@ public sealed class FlowCoordinator
             {
                 source.HandledBy = handler.Step.Name;
                 source.FailureSettled = true;
-                _handled.Add(source);
                 WriteStepRecordOf(source);
             }
 
@@ -1535,6 +1661,7 @@ public sealed class FlowCoordinator
         instance.Exit = null;
         instance.Error = null;
         instance.EndedByQuestion = null;
+        instance.Failure = null;
         instance.FinishedAt = null;
     }
 
@@ -1602,6 +1729,59 @@ public sealed class FlowCoordinator
         }
 
         return stopped.Count > 0;
+    }
+
+    /// <summary>
+    /// Considers afresh, at a session that goes on with no failure standing to stop it, what a failure's <c>stop</c> left
+    /// NotRun: a step the run ended before, and one a failed dependency blocked where that dependency no longer blocks it
+    /// - it runs again, or was itself drawn afresh. Each is drawn again by the schedule, as it would have been had the
+    /// run not ended, under the same id: what it waits on, its <c>when</c>, its group. One its group's failure or a
+    /// failure that still stands blocks stays NotRun, and so does a handler's place-holder whose source is not drawn
+    /// again; one whose source is, goes with it, for the source's ending decides it.
+    /// </summary>
+    private void RedrawWhatTheStopLeft()
+    {
+        var drawn = true;
+
+        while (drawn)
+        {
+            drawn = false;
+
+            foreach (var notRun in _created.Where(instance => instance is { State: FlowInstanceState.NotRun, DeclaredScope: { } scope, Step.On: null }
+                    && ScopeLive(scope)
+                    && ReferenceEquals(scope.Members.GetValueOrDefault(instance.Step.Name), instance)
+                    && (instance.NotRunCause is FlowNotRunCause.RunEnded
+                        || instance.NotRunCause is FlowNotRunCause.DependencyFailed && !WaitsOf(instance.Step, scope, instance.IsAlways).Unreachable)).ToList())
+            {
+                Redraw(notRun);
+                drawn = true;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Takes a NotRun place-holder back out of its scope, so the schedule draws its declaration again under the same id:
+    /// it never ran, holds nothing and wrote nothing, and its record is written over by the instance drawn in its place.
+    /// The place-holders it left its handlers go with it.
+    /// </summary>
+    private void Redraw(FlowInstance notRun)
+    {
+        var scope = notRun.DeclaredScope!;
+
+        _ = scope.Members.Remove(notRun.Step.Name);
+        _ = scope.Instantiated.Remove(notRun.Step.Name);
+        scope.Visits[notRun.Step.Name] = notRun.Visit - 1;
+        _ = _instances.Remove(notRun.Id);
+        _ = _created.Remove(notRun);
+
+        foreach (var follower in DeclarationsOf(scope)
+            .Where(declaration => declaration.On?.Step == notRun.Step.Name)
+            .Select(declaration => scope.Members.GetValueOrDefault(declaration.Name))
+            .Where(follower => follower is { State: FlowInstanceState.NotRun, RaisedBy: null, RaisedByRecord: null })
+            .ToList())
+        {
+            Redraw(follower!);
+        }
     }
 
     /// <summary>The reason a step a failed dependency blocks for ever is NotRun, as its record says it.</summary>
@@ -1674,8 +1854,9 @@ public sealed class FlowCoordinator
                 // run, and is then its reason; otherwise the run ended before it.
                 scope.Instantiated.Add(declaration.Name);
                 var blocked = WaitsOf(declaration, scope, always: false).Unreachable;
-                NotRun(
-                    Create(scope, declaration, FlowInstanceState.NotRun),
+                CreateNotRun(
+                    scope,
+                    declaration,
                     blocked ? FlowNotRunCause.DependencyFailed : FlowNotRunCause.RunEnded,
                     blocked ? DependencyFailedLine : "the run ended before it");
                 changed = true;
@@ -1694,7 +1875,7 @@ public sealed class FlowCoordinator
             if (unreachable)
             {
                 scope.Instantiated.Add(declaration.Name);
-                NotRun(Create(scope, declaration, FlowInstanceState.NotRun), FlowNotRunCause.DependencyFailed, DependencyFailedLine);
+                CreateNotRun(scope, declaration, FlowNotRunCause.DependencyFailed, DependencyFailedLine);
                 changed = true;
                 continue;
             }
@@ -1722,9 +1903,11 @@ public sealed class FlowCoordinator
 
                 if (problem is not null)
                 {
-                    var unread = Create(scope, declaration, FlowInstanceState.Failed);
-                    unread.Exit = HarnessExit.ConfigInvalid;
-                    unread.Error = Unreadable("when", unread.Id, problem);
+                    var unread = Create(scope, declaration, FlowInstanceState.Failed, made: unread =>
+                    {
+                        unread.Exit = HarnessExit.ConfigInvalid;
+                        unread.Error = Unreadable("when", unread.Id, problem);
+                    });
                     HandleFailure(unread);
                     changed = true;
                     continue;
@@ -1732,8 +1915,7 @@ public sealed class FlowCoordinator
 
                 if (!read.AsBoolean(when))
                 {
-                    var skipped = Create(scope, declaration, FlowInstanceState.Skipped);
-                    skipped.SkippedBecause = "its when read false";
+                    var skipped = Create(scope, declaration, FlowInstanceState.Skipped, made: skipped => skipped.SkippedBecause = "its when read false");
                     HandlersFollow(skipped, FlowInstanceState.Skipped);
                     changed = true;
                     continue;
@@ -1749,8 +1931,7 @@ public sealed class FlowCoordinator
 
             if (declaration.Type == "push" && declaration.Checkpoint == true && _definition.PushCheckpoints != true)
             {
-                var off = Create(scope, declaration, FlowInstanceState.Skipped);
-                off.SkippedBecause = "checkpoint pushes are off (pushCheckpoints)";
+                var off = Create(scope, declaration, FlowInstanceState.Skipped, made: off => off.SkippedBecause = "checkpoint pushes are off (pushCheckpoints)");
                 HandlersFollow(off, FlowInstanceState.Skipped);
                 changed = true;
                 continue;
@@ -1760,8 +1941,7 @@ public sealed class FlowCoordinator
             {
                 // A create-agent step visited again in the same scope, while the agent it made is live, is Done at once
                 // with that agent and makes nothing: the agent's slot passes to the new visit.
-                var made = Create(scope, declaration, FlowInstanceState.NotStarted);
-                made.Made = live.Made;
+                var made = Create(scope, declaration, FlowInstanceState.NotStarted, made: made => made.Made = live.Made);
                 _ = _agentsOpen.Remove(live.Id);
                 End(made, FlowInstanceState.Done, HarnessExit.Success, null);
                 changed = true;
@@ -1968,7 +2148,7 @@ public sealed class FlowCoordinator
         {
             var scopes = ScopesOf(instance);
 
-            if (_pausing && scopes.Any(scope => scope.Members.Values.Any(member => _owedFailures.Contains(member))))
+            if (_pausing && scopes.Any(scope => scope.Members.Values.Any(member => member.Failure == FlowFailure.Owed)))
             {
                 // A member the pause left running ended failed and its policy is owed to the resume: the group does
                 // not end over it now, for what its failure owes has yet to decide the group.
@@ -2438,17 +2618,25 @@ public sealed class FlowCoordinator
         }
 
         Release(instance);
+
+        if (result.PreExisting.Count > 0 && instance.Step.OnPreExisting is not null)
+        {
+            // The issues it reported are owed their triage in its own record from its ending's first write, so no crash
+            // before their triage is raised loses them.
+            instance.IssuesOwed = result.PreExisting;
+        }
+
         End(instance, passed ? FlowInstanceState.Done : FlowInstanceState.Failed, exit, error);
 
         if (!passed)
         {
             if (_pausing)
             {
-                // A machine step the pause left running ended failed: it is recorded as it ended, and what its ending
-                // owes - its policy, the handler it would raise - waits for the resume, for nothing is started and no
-                // question is asked while the run records what it left running.
+                // A machine step the pause left running ended failed: it is recorded as it ended, its failure owed, and
+                // what its ending owes - its policy, the handler it would raise - waits for the next session, for
+                // nothing is started and no question is asked while the run records what it left running.
                 _ = OweHandlers(instance);
-                _owedFailures.Add(instance);
+                instance.FailureSettled = false;
             }
             else
             {
@@ -2462,25 +2650,35 @@ public sealed class FlowCoordinator
             TriageOf(instance);
         }
 
-        if (result.PreExisting.Count > 0 && instance.Step.OnPreExisting is { } triage)
+        if (instance.IssuesOwed.Count > 0)
         {
             if (_pausing || _stopping || _hardStop)
             {
-                // Nothing is started while a pause records what it left or a stop ends the run: the issues are owed
-                // to the next session, which raises their triage, and the step's record says so meanwhile.
-                _owedIssues.Add((instance, triage, result.PreExisting));
-                Record(FlowChangeKind.Step, instance, detail: $"{result.PreExisting.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)} pre-existing issue(s) reported, their triage owed to the resume");
+                // Nothing is started while a pause records what it left or a stop ends the run: the issues stay owed
+                // in the step's own record, and the next session raises their triage.
+                Record(FlowChangeKind.Step, instance, detail: $"{instance.IssuesOwed.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)} pre-existing issue(s) reported, their triage owed to the resume");
             }
             else
             {
                 // Each issue a reason step's answer reports raises one instance of the step its onPreExisting names,
                 // which triages it: one visit of it for each issue, in the order the answer held them.
-                RaiseIssues(instance, triage, result.PreExisting);
+                RaiseOwedIssues(instance);
             }
         }
     }
 
-    /// <summary>Raises one instance of the triage step for each issue a reporting step's answer reported, with the reporting step as its source.</summary>
+    /// <summary>
+    /// Raises the triage of the issues <paramref name="reporter"/>'s record holds owed, and then writes them raised: a
+    /// crash between the two leaves them owed, and the next session raises only those no triage was raised for yet.
+    /// </summary>
+    private void RaiseOwedIssues(FlowInstance reporter)
+    {
+        RaiseIssues(reporter, reporter.Step.OnPreExisting!, reporter.IssuesOwed);
+        reporter.IssuesOwed = [];
+        WriteStepRecordOf(reporter);
+    }
+
+    /// <summary>Raises one instance of the triage step for each issue a reporting step's answer reported, with the reporting step as its source - once for each.</summary>
     private void RaiseIssues(FlowInstance reported, string triage, IReadOnlyList<FlowPreExistingReport> issues)
     {
         var declaration = _definition.Steps.FirstOrDefault(step => step.Name == triage);
@@ -2490,11 +2688,23 @@ public sealed class FlowCoordinator
             return;
         }
 
+        // A triage already raised for an issue - a crash came between raising it and the reporter's record - is that
+        // issue's, each claimed once, so an issue reported twice is still triaged twice.
+        var raisedAlready = _created.Where(raised => ReferenceEquals(raised.RaisedBy, reported) && raised.Step.Name == triage).ToList();
+
         foreach (var issue in issues)
         {
-            var raised = NewVisit(_top, declaration, FlowInstanceState.NotStarted);
-            raised.RaisedBy = reported;
-            raised.Issue = issue;
+            if (raisedAlready.FirstOrDefault(raised => raised.Issue == issue) is { } claimed)
+            {
+                _ = raisedAlready.Remove(claimed);
+                continue;
+            }
+
+            _ = NewVisit(_top, declaration, FlowInstanceState.NotStarted, made: raised =>
+            {
+                raised.RaisedBy = reported;
+                raised.Issue = issue;
+            });
         }
     }
 
@@ -2707,6 +2917,9 @@ public sealed class FlowCoordinator
     /// </summary>
     private void HandleFailure(FlowInstance instance)
     {
+        // What decides the failure writes where it left the run: a handler raised for it, a policy, a question.
+        ClearOwed(instance);
+
         if (RaiseFor(instance))
         {
             return;
@@ -2718,6 +2931,7 @@ public sealed class FlowCoordinator
     /// <summary>The failure policy of <paramref name="instance"/>, where no handler took its failure.</summary>
     private void ApplyPolicy(FlowInstance instance)
     {
+        ClearOwed(instance);
         instance.FailureSettled = true;
 
         if (instance.Step.OnFailure == WorkflowStep.Recover)
@@ -2745,7 +2959,9 @@ public sealed class FlowCoordinator
 
             // A member that wrote no onFailure hands its failure to its group: nothing more of the group starts, its
             // members in flight run to their end, and the group ends failed with that member's code - the first in
-            // declaration order where several did so.
+            // declaration order where several did so. The member's record says its group took it, which a resume
+            // reads to fail the group again where it is still open.
+            SetFailure(instance, FlowFailure.TakenByGroup);
             FailGroup(group, instance.Exit ?? HarnessExit.InternalError, instance.Error, instance.Path);
             MaybeSettle(instance);
             return;
@@ -2754,6 +2970,15 @@ public sealed class FlowCoordinator
         // A workflow that declares a recovery pauses at the top where nothing else decides, for a person is asked.
         Apply(instance, _definition.Recover is null ? "stop" : "pause");
         MaybeSettle(instance);
+    }
+
+    /// <summary>Takes back the owed mark a failure is recorded with as it ends, once it is being decided: what decides it writes the step's record.</summary>
+    private static void ClearOwed(FlowInstance instance)
+    {
+        if (instance.Failure is FlowFailure.Owed)
+        {
+            instance.Failure = null;
+        }
     }
 
     /// <summary>The first <c>onFailure</c> written on <paramref name="scope"/> or any scope around it, and where the scope holds none.</summary>
@@ -2807,6 +3032,14 @@ public sealed class FlowCoordinator
         {
             var on = handler.On!;
 
+            if (RaisedFor(instance, handler, scope) is not null)
+            {
+                // Raised for this ending already: a crash after the handler's visit was made and before the source's
+                // record said so left the raise made, and it is never made twice.
+                fitting.Add(handler);
+                continue;
+            }
+
             if ((on.Outcome != "end" && on.Outcome != outcome)
                 || (on.Codes.Count > 0 && (instance.Exit is not { } code || !on.Codes.Contains(code))))
             {
@@ -2827,10 +3060,12 @@ public sealed class FlowCoordinator
 
                 if (problem is not null)
                 {
-                    var unread = NewVisit(scope, handler, FlowInstanceState.Failed);
-                    unread.RaisedBy = instance;
-                    unread.Exit = HarnessExit.ConfigInvalid;
-                    unread.Error = Unreadable("when", unread.Id, problem);
+                    var unread = NewVisit(scope, handler, FlowInstanceState.Failed, made: unread =>
+                    {
+                        unread.RaisedBy = instance;
+                        unread.Exit = HarnessExit.ConfigInvalid;
+                        unread.Error = Unreadable("when", unread.Id, problem);
+                    });
                     End(unread, FlowInstanceState.Failed, unread.Exit, unread.Error);
                     ApplyPolicy(unread);
                     SetHandlerState(instance, handler.Name, "raised");
@@ -2886,8 +3121,9 @@ public sealed class FlowCoordinator
 
         foreach (var handler in fitting)
         {
-            var raised = NewVisit(scope, handler, FlowInstanceState.NotStarted);
-            raised.RaisedBy = instance;
+            // One visit for each handler raised: the one a when that could not be read failed is that visit, and so is
+            // one an earlier raise of this ending made.
+            var raised = RaisedFor(instance, handler, scope) ?? NewVisit(scope, handler, FlowInstanceState.NotStarted, made: raised => raised.RaisedBy = instance);
             raisedFor.Add(raised);
             SetHandlerState(instance, handler.Name, "raised");
 
@@ -2898,9 +3134,25 @@ public sealed class FlowCoordinator
         }
 
         instance.FailureSettled = !failed;
-        _pendingEndings[instance.Id] = new PendingEnding(instance, failed, raisedFor, then);
+        var pending = new PendingEnding(instance, failed, raisedFor, then);
+        _pendingEndings[instance.Id] = pending;
+
+        if (raisedFor.All(Ended))
+        {
+            // Every handler it raised has ended already - one whose when could not be read, one an earlier raise made
+            // that ended before the crash: the ending is settled now, for no handler's end is left to settle it.
+            SettleEnding(pending);
+        }
+
         return true;
     }
+
+    /// <summary>
+    /// The visit of <paramref name="handler"/> raised for <paramref name="source"/>'s ending, where one was made: a source
+    /// raises each handler once for an ending, so one found is that raise.
+    /// </summary>
+    private FlowInstance? RaisedFor(FlowInstance source, WorkflowStep handler, Scope scope)
+        => _created.LastOrDefault(visit => ReferenceEquals(visit.DeclaredScope, scope) && visit.Step.Name == handler.Name && ReferenceEquals(visit.RaisedBy, source));
 
     /// <summary>
     /// How many times <paramref name="handler"/> was raised in <paramref name="scope"/>: its visits an ending raised, and
@@ -2922,8 +3174,7 @@ public sealed class FlowCoordinator
         }
 
         scope.Instantiated.Add(handler.Name);
-        var passed = Create(scope, handler, FlowInstanceState.Skipped);
-        passed.SkippedBecause = reason;
+        _ = Create(scope, handler, FlowInstanceState.Skipped, made: passed => passed.SkippedBecause = reason);
     }
 
     /// <summary>
@@ -2946,17 +3197,18 @@ public sealed class FlowCoordinator
             }
 
             scope.Instantiated.Add(handler.Name);
-            var made = Create(scope, handler, state);
-
-            if (state == FlowInstanceState.Skipped)
+            _ = Create(scope, handler, state, made: made =>
             {
-                made.SkippedBecause = $"not raised: '{source.Step.Name}' was skipped";
-            }
-            else if (state == FlowInstanceState.NotRun)
-            {
-                made.NotRunBecause = source.NotRunBecause is { } because ? $"'{source.Step.Name}': {because}" : $"'{source.Step.Name}' was not run";
-                made.NotRunCause = source.NotRunCause ?? FlowNotRunCause.DependencyFailed;
-            }
+                if (state == FlowInstanceState.Skipped)
+                {
+                    made.SkippedBecause = $"not raised: '{source.Step.Name}' was skipped";
+                }
+                else if (state == FlowInstanceState.NotRun)
+                {
+                    made.NotRunBecause = source.NotRunBecause is { } because ? $"'{source.Step.Name}': {because}" : $"'{source.Step.Name}' was not run";
+                    made.NotRunCause = source.NotRunCause ?? FlowNotRunCause.DependencyFailed;
+                }
+            });
         }
     }
 
@@ -2976,6 +3228,18 @@ public sealed class FlowCoordinator
         }
 
         WriteStepRecordOf(source);
+    }
+
+    /// <summary>
+    /// Passes every handler an ending still owes where its question was settled without raising them - answered
+    /// <c>fail</c>, or withdrawn by a redirect - so no later session finds them owed in its record and raises them.
+    /// </summary>
+    private void PassOwed(FlowInstance source)
+    {
+        foreach (var owed in source._handlers.Where(handler => handler.State == "owed").ToList())
+        {
+            SetHandlerState(source, owed.Handler, "passed");
+        }
     }
 
     /// <summary>Writes the source's own record alone, so what its ending owes stands on disk the moment it changes.</summary>
@@ -3006,25 +3270,32 @@ public sealed class FlowCoordinator
     {
         _ = _pendingEndings.Remove(pending.Source.Id);
 
+        if (pending.Then is { } then && then.State == FlowInstanceState.Done && then.Step.Then is not null && !_redirects.Any(owed => ReferenceEquals(owed.Handler, then)))
+        {
+            // The redirect a then names is decided first, written to the run's records before the source's own record
+            // says its ending is settled: a crash between the two leaves the ending to settle again, and the redirect
+            // is decided once.
+            DecideRedirect(then);
+        }
+
+        var source = pending.Source;
+
         foreach (var handler in pending.Handlers)
         {
-            SetHandlerState(pending.Source, handler.Step.Name, "done");
+            source._handlers.RemoveAll(entry => entry.Handler == handler.Step.Name);
+            source._handlers.Add(new FlowHandlerState(handler.Step.Name, "done"));
         }
 
         if (pending.Failed)
         {
             // The failure counts as handled - by the handler that took it, whatever the handler went on to do with
             // its then - and what depends on the source starts on what it left.
-            pending.Source.HandledBy = pending.Handlers[0].Step.Name;
-            pending.Source.FailureSettled = true;
-            _handled.Add(pending.Source);
-            WriteStepRecordOf(pending.Source);
+            source.HandledBy = pending.Handlers[0].Step.Name;
+            source.FailureSettled = true;
         }
 
-        if (pending.Then is { } then && then.State == FlowInstanceState.Done && then.Step.Then is not null)
-        {
-            DecideRedirect(then);
-        }
+        // The ending settled in one record: every handler done, and the failure handled.
+        WriteStepRecordOf(source);
     }
 
     /// <summary>Where an instance's ending leaves what waits on it: a handler that ended settles its source's ending.</summary>
@@ -3199,7 +3470,6 @@ public sealed class FlowCoordinator
     /// </summary>
     private void ApplyRedirect(PendingRedirect redirect)
     {
-        _ = _redirects.Remove(redirect);
         var because = $"the run was sent back to '{redirect.Target}' by '{redirect.Handler.Step.Name}', leaving this visit";
         var reset = 0;
 
@@ -3207,13 +3477,18 @@ public sealed class FlowCoordinator
         {
             if (scope.Members.Remove(declaration.Name, out var current))
             {
+                // The visit left says so in its own record, so a resume draws the next one from the records alone
+                // whatever came after: the redirect leaves the run's records only once each visit it resets says it.
+                current.LeftBy = redirect.Handler.Id;
                 Leave(current, because);
+                WriteStepRecordOf(current);
             }
 
             _ = scope.Instantiated.Remove(declaration.Name);
             reset++;
         }
 
+        _ = _redirects.Remove(redirect);
         Record(FlowChangeKind.Step, redirect.Handler, detail: reset == 0
             ? $"the run was not sent to '{redirect.Target}': an earlier redirect left the scope it would reset"
             : $"the run was sent to '{redirect.Target}', resetting {reset.ToString(System.Globalization.CultureInfo.InvariantCulture)} of its scope");
@@ -3230,6 +3505,7 @@ public sealed class FlowCoordinator
         if (visit.WaitingQuestion is { } question)
         {
             Withdraw(question);
+            PassOwed(visit);
         }
 
         if (visit.Step.IsGroup && visit.State is FlowInstanceState.Running or FlowInstanceState.Paused)
@@ -3255,19 +3531,22 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>Makes a new visit of <paramref name="declaration"/> in <paramref name="scope"/>, and fails it where the run would visit a step more than 99 times in one scope.</summary>
-    private FlowInstance NewVisit(Scope scope, WorkflowStep declaration, FlowInstanceState state)
+    private FlowInstance NewVisit(Scope scope, WorkflowStep declaration, FlowInstanceState state, Action<FlowInstance>? made = null)
     {
         if (scope.Visits.GetValueOrDefault(declaration.Name) + 1 > 99)
         {
-            var bound = Create(scope, declaration, FlowInstanceState.Failed);
-            bound.Exit = HarnessExit.Refused;
-            bound.Error = $"'{declaration.Name}' was visited 99 times in its scope; at most 99 visits of one step in one scope are allowed";
+            var bound = Create(scope, declaration, FlowInstanceState.Failed, made: bound =>
+            {
+                made?.Invoke(bound);
+                bound.Exit = HarnessExit.Refused;
+                bound.Error = $"'{declaration.Name}' was visited 99 times in its scope; at most 99 visits of one step in one scope are allowed";
+            });
             End(bound, FlowInstanceState.Failed, bound.Exit, bound.Error);
             HandleFailure(bound);
             return bound;
         }
 
-        return Create(scope, declaration, state);
+        return Create(scope, declaration, state, made: made);
     }
 
     /// <summary>
@@ -3325,11 +3604,16 @@ public sealed class FlowCoordinator
         _recoveryVisits[key] = visits;
         source.FailureSettled = false;
 
+        // The source's own record says its failure - or its issue - is the recovery's now, before the visit is made.
+        WriteStepRecordOf(source);
+
         var declaration = RecoveryDeclaration();
-        var instance = NewVisit(scope, declaration, FlowInstanceState.Running);
-        instance.RaisedBy = source;
-        instance.Visit = visits;
-        instance.Direction = direction;
+        var instance = NewVisit(scope, declaration, FlowInstanceState.Running, made: visit =>
+        {
+            visit.RaisedBy = source;
+            visit.Visit = visits;
+            visit.Direction = direction;
+        });
 
         // A block of its own in the scope the source stands in: its steps are scheduled as any scope's are, and read
         // the source - the failed step, or the triage instance and its issue - as source and {issue}.
@@ -3378,7 +3662,7 @@ public sealed class FlowCoordinator
             foreach (var declaration in DeclarationsOf(scope).Where(declaration => !scope.Instantiated.Contains(declaration.Name) && !IsAlways(declaration, scope)).ToList())
             {
                 scope.Instantiated.Add(declaration.Name);
-                NotRun(Create(scope, declaration, FlowInstanceState.NotRun), FlowNotRunCause.GroupFailed, $"'{failed}' failed and its group took the failure");
+                CreateNotRun(scope, declaration, FlowNotRunCause.GroupFailed, $"'{failed}' failed and its group took the failure");
             }
         }
 
@@ -3394,8 +3678,7 @@ public sealed class FlowCoordinator
         switch (policy)
         {
             case "continue":
-                instance.PassedOver = true;
-                _passedOver.Add(instance);
+                SetFailure(instance, FlowFailure.PassedOver);
                 break;
             case "pause":
                 _ = Ask(
@@ -3409,7 +3692,7 @@ public sealed class FlowCoordinator
                 break;
             default:
                 _stopping = true;
-                _failed.Add(instance);
+                SetFailure(instance, FlowFailure.EndedRun);
                 break;
         }
     }
@@ -3441,22 +3724,42 @@ public sealed class FlowCoordinator
         };
         _questions.Add(asked);
 
-        if (ConfiguredAnswer(instance, kind, options, subject) is { } configured)
-        {
-            _answeredAtOnce = true;
-            ApplyAnswer(instance, asked, configured.Answer, null, "configuration", configured.Where, through: null);
-            WriteQuestions();
-            return id;
-        }
-
         var was = instance.State;
+        var configured = ConfiguredAnswer(instance, kind, options, subject);
         WaitOn(instance, asked);
 
         // The question is on disk before the step's own record and before the event: a client woken by either reads
         // what was asked already written.
         WriteQuestions();
         Record(FlowChangeKind.Step, instance, from: was, to: instance.State, attempt: instance.Attempt, detail: kind);
+
+        if (configured is { } atOnce)
+        {
+            // A configuration that answered the kind beforehand answers at once, in a person's place, by the path a
+            // person's answer takes: asked and waiting first, then answered - so a crash at any point between leaves
+            // records the next session completes, never an answer whose change no record holds.
+            _answeredAtOnce = true;
+            TakeAnswer(asked, atOnce.Answer, null, "configuration", atOnce.Where, through: null);
+        }
+
         return id;
+    }
+
+    /// <summary>
+    /// Answers, at a session's start, each question left open with no answer that the configuration answers: a crash
+    /// came between the question and its configured answer, and the configuration gives it now, as it would have then.
+    /// The run's budget is asked of its configuration at its reserve alone, and one answered already - an abort that
+    /// opened it again - waits for a person.
+    /// </summary>
+    private void AnswerWhatTheConfigurationAnswers()
+    {
+        foreach (var asked in OpenQuestions.Where(asked => asked.Given.Count == 0 && asked.Kind != "runBudget"))
+        {
+            if (_answerable.GetValueOrDefault(asked.Id) is { } about && ConfiguredAnswer(about, asked.Kind, asked.Options, asked.Handler) is { } configured)
+            {
+                TakeAnswer(asked, configured.Answer, null, "configuration", configured.Where, through: null);
+            }
+        }
     }
 
     /// <summary>
@@ -3611,6 +3914,13 @@ public sealed class FlowCoordinator
         instance.Error ??= error;
         instance.FinishedAt ??= _clock.GetUtcNow();
 
+        if (state is FlowInstanceState.Failed && instance.DeclaredScope is not null)
+        {
+            // A failure is recorded owed as it ends, and what decides it - a handler, its policy, a question - writes
+            // where it left the run over that: a crash between the two leaves it owed, and the next session decides it.
+            instance.Failure = FlowFailure.Owed;
+        }
+
         if (state is FlowInstanceState.Done or FlowInstanceState.Skipped or FlowInstanceState.NotRun)
         {
             // A done attempt was given its handoff, and a visit that will not run again has no use for one. A failed
@@ -3646,12 +3956,8 @@ public sealed class FlowCoordinator
         {
             case FlowInstanceState.Done when _pausing:
                 // Nothing is raised while a pause records what it left running: what the ending owes is written owed,
-                // and the resume raises it.
-                if (OweHandlers(instance))
-                {
-                    _owedEndings.Add(instance);
-                }
-
+                // and the next session raises it from that record.
+                _ = OweHandlers(instance);
                 break;
             case FlowInstanceState.Done:
                 // A done ending raises its handlers too: every one that fits, though a failure is the usual case.
@@ -3841,17 +4147,25 @@ public sealed class FlowCoordinator
             .ToList();
 
         var open = OpenQuestions;
+        var passedOver = Standing(FlowFailure.PassedOver);
+        var failed = Standing(FlowFailure.EndedRun);
+        var handled = Handled;
         var status = _hardStop ? FlowRunStatus.Stopped
             : _pausing ? FlowRunStatus.Paused
-            : _stopping || _failed.Count > 0 ? FlowRunStatus.Failed
+            : _stopping || failed.Count > 0 ? FlowRunStatus.Failed
             : open.Count > 0 || waiting.Count > 0 ? FlowRunStatus.Paused
             : FlowRunStatus.Done;
 
-        // Done says everything ended as asked: a step left unended - never started, still open, paused on nothing -
-        // makes the session failed, and says which, never done over work that never ran.
+        // Done says everything ended as asked: a step left unended - never started, still open, paused on nothing, or
+        // never even drawn though its scope still draws - makes the session failed, and says which, never done over
+        // work that never ran. A handler is drawn by its source's ending and a triage step by an issue, never by the
+        // schedule, so neither is owed a drawing.
         var unended = status == FlowRunStatus.Done
-            ? _created.Where(instance => instance.State is FlowInstanceState.NotStarted or FlowInstanceState.Running or FlowInstanceState.Paused).Select(instance => instance.Id).ToList()
-            : [];
+            ? [.. _created.Where(instance => instance.State is FlowInstanceState.NotStarted or FlowInstanceState.Running or FlowInstanceState.Paused).Select(instance => instance.Id),
+                .. _scopes.Where(ScopeLive).SelectMany(scope => DeclarationsOf(scope)
+                    .Where(declaration => declaration.On is null && declaration.Raised is null && !scope.Instantiated.Contains(declaration.Name))
+                    .Select(declaration => MemberId(scope, declaration)))]
+            : new List<string>();
 
         if (unended.Count > 0)
         {
@@ -3862,16 +4176,16 @@ public sealed class FlowCoordinator
         {
             FlowRunStatus.Stopped => "stopped",
             FlowRunStatus.Paused when _pausing => PausedSummary(open),
-            FlowRunStatus.Done when _passedOver.Count > 0 && _handled.Count > 0 => $"done; {HandledLine()}, and {(_passedOver.Count == 1 ? "1 step failed and was passed over" : $"{_passedOver.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)} steps failed and were passed over")}: {string.Join(", ", _passedOver.Select(instance => instance.Id))}",
-            FlowRunStatus.Done when _passedOver.Count > 0 => _passedOver.Count == 1
-                ? $"done; 1 step failed and was passed over: {_passedOver[0].Id}"
-                : $"done; {_passedOver.Count} steps failed and were passed over: {string.Join(", ", _passedOver.Select(instance => instance.Id))}",
-            FlowRunStatus.Done when _handled.Count > 0 => $"done; {HandledLine()}",
+            FlowRunStatus.Done when passedOver.Count > 0 && handled.Count > 0 => $"done; {HandledLine()}, and {(passedOver.Count == 1 ? "1 step failed and was passed over" : $"{passedOver.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)} steps failed and were passed over")}: {string.Join(", ", passedOver.Select(instance => instance.Id))}",
+            FlowRunStatus.Done when passedOver.Count > 0 => passedOver.Count == 1
+                ? $"done; 1 step failed and was passed over: {passedOver[0].Id}"
+                : $"done; {passedOver.Count} steps failed and were passed over: {string.Join(", ", passedOver.Select(instance => instance.Id))}",
+            FlowRunStatus.Done when handled.Count > 0 => $"done; {HandledLine()}",
             FlowRunStatus.Done => "done",
             FlowRunStatus.Failed when unended.Count > 0 => $"failed; the session ended with steps that never ended: {string.Join(", ", unended)}",
-            FlowRunStatus.Failed => _failed.Count == 1
-                ? $"failed; 1 step failed: {_failed[0].Id}"
-                : $"failed; {_failed.Count} steps failed: {string.Join(", ", _failed.Select(instance => instance.Id))}",
+            FlowRunStatus.Failed => failed.Count == 1
+                ? $"failed; 1 step failed: {failed[0].Id}"
+                : $"failed; {failed.Count} steps failed: {string.Join(", ", failed.Select(instance => instance.Id))}",
             _ => $"paused; waiting on {string.Join(", ", open.Count > 0 ? open.Select(question => question.Id) : waiting)}",
         };
 
@@ -3880,8 +4194,8 @@ public sealed class FlowCoordinator
 
         return new FlowSessionEnd(
             status,
-            [.. _passedOver.Select(instance => instance.Id)],
-            [.. _failed.Select(instance => instance.Id)],
+            [.. passedOver.Select(instance => instance.Id)],
+            [.. failed.Select(instance => instance.Id)],
             open,
             summary,
             _pause);
@@ -3894,9 +4208,9 @@ public sealed class FlowCoordinator
         }
 
         string HandledLine()
-            => _handled.Count == 1
-                ? $"1 failure was handled: {_handled[0].Step.Name}, by {_handled[0].HandledBy}"
-                : $"{_handled.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)} failures were handled: {string.Join(", ", _handled.Select(instance => $"{instance.Step.Name}, by {instance.HandledBy}"))}";
+            => handled.Count == 1
+                ? $"1 failure was handled: {handled[0].Step.Name}, by {handled[0].HandledBy}"
+                : $"{handled.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)} failures were handled: {string.Join(", ", handled.Select(instance => $"{instance.Step.Name}, by {instance.HandledBy}"))}";
     }
 
     /// <summary>Waits for the next thing the run learns - a completion, an event of a leg, a retry's time coming, or the budget's tick - and takes it. One read of the channel is kept open across the waits a retry's turn takes, so no message is read by a wait that no longer stands.</summary>
@@ -4098,7 +4412,11 @@ public sealed class FlowCoordinator
     /// <param name="state">How the instance begins.</param>
     /// <param name="scopeId">The id of the instance a loop's item or iteration scope is; null for a member.</param>
     /// <param name="memberId">The id of a member a resume holds, visits spelled as the record spells them; null where this visit is new.</param>
-    private FlowInstance Create(Scope scope, WorkflowStep declaration, FlowInstanceState state, string? scopeId = null, string? memberId = null)
+    /// <param name="made">
+    /// What the instance is made with beyond its declaration - what raised it, why it was skipped or not run, its code -
+    /// set before its first record is written, so no crash leaves a record of it without them.
+    /// </param>
+    private FlowInstance Create(Scope scope, WorkflowStep declaration, FlowInstanceState state, string? scopeId = null, string? memberId = null, Action<FlowInstance>? made = null)
     {
         var member = scopeId is null;
         var name = member ? declaration.Name : scopeId!.Split(['[', '#', '+'], 2)[0];
@@ -4116,6 +4434,7 @@ public sealed class FlowCoordinator
         {
             State = state,
             Visit = visit,
+            Failure = member && state is FlowInstanceState.Failed && !_replaying ? FlowFailure.Owed : null,
             DeclaredScope = member ? scope : null,
             GroupOf = member && scope.Group is not null ? GroupInstanceIn(scope) : null,
             IsAlways = IsAlways(declaration, scope),
@@ -4139,10 +4458,22 @@ public sealed class FlowCoordinator
             scope.GroupInstance = instance;
         }
 
+        made?.Invoke(instance);
         Record(FlowChangeKind.Step, instance, to: state, attempt: instance.Attempt);
 
         return instance;
     }
+
+    /// <summary>Draws <paramref name="declaration"/> in <paramref name="scope"/> NotRun, its first record saying why and of which kind.</summary>
+    private void CreateNotRun(Scope scope, WorkflowStep declaration, FlowNotRunCause cause, string because)
+        => NotRun(
+            Create(scope, declaration, FlowInstanceState.NotRun, made: notRun =>
+            {
+                notRun.NotRunCause = cause;
+                notRun.NotRunBecause = because;
+            }),
+            cause,
+            because);
 
     /// <summary>The id of a member of <paramref name="scope"/>: its name under the scope's path.</summary>
     private static string MemberId(Scope scope, WorkflowStep declaration)
@@ -4214,12 +4545,17 @@ public sealed class FlowCoordinator
     /// Whether every declaration of <paramref name="scope"/> has been instantiated and every one of its members has
     /// ended, with no question of its ending open and no redirect owed that will reset a step of it: that work is to
     /// be done again. A redirect that resets the group itself lets this visit end as it stands, and draws a new one.
+    /// A member a failure's <c>stop</c> left unfinished - the failure that ended the run, which the next session runs
+    /// again, and a step NotRun because the run ended before it - has not ended its work: the group stands open over
+    /// it, as over a stopped one, and is never ended done over work the next session does.
     /// </summary>
     private bool ScopeEnded(Scope scope)
         => !_redirects.Any(redirect => redirect.Set.Any(entry => ReferenceEquals(entry.Scope, scope)))
             && DeclarationsOf(scope).All(declaration => scope.Instantiated.Contains(declaration.Name))
             && scope.Members.Values.All(member => member.WaitingQuestion is null
-                && member.State is not (FlowInstanceState.NotStarted or FlowInstanceState.Running or FlowInstanceState.Paused or FlowInstanceState.Stopped));
+                && member.State is not (FlowInstanceState.NotStarted or FlowInstanceState.Running or FlowInstanceState.Paused or FlowInstanceState.Stopped)
+                && member.Failure is not FlowFailure.EndedRun
+                && member.NotRunCause is not FlowNotRunCause.RunEnded);
 
     /// <summary>The scopes of a group: a block's own one, or every item and iteration of a loop.</summary>
     private static IReadOnlyList<Scope> ScopesOf(FlowInstance group)
@@ -4497,7 +4833,7 @@ public sealed class FlowCoordinator
     private JsonObject RunValues()
     {
         var main = _created.Where(instance => !instance.IsAlways).ToList();
-        var failed = _failed.Any(instance => !instance.IsAlways);
+        var failed = Standing(FlowFailure.EndedRun).Any(instance => !instance.IsAlways);
         var paused = _open.Count > 0 || main.Any(instance => instance.State is FlowInstanceState.Paused);
         var leftover = string.Join("; ", _created
             .Where(instance => instance.Step.Repeat?.Leftover is not null && instance.Leftover is not null)
@@ -4864,9 +5200,13 @@ public sealed class FlowCoordinator
             [.. _created.Select(instance => SnapshotStepOf(instance, decided))],
             [.. walk.Where(decision => decision.Starts).Select(decision => decision.Instance.Id)],
             waiting,
-            _redirects.FirstOrDefault() is { } redirect
-                ? new FlowRedirectRecord(redirect.Handler.Id, redirect.Target, [.. redirect.Set.Select(entry => entry.Scope.Members.GetValueOrDefault(entry.Declaration.Name)?.Id ?? entry.Declaration.Name)])
-                : null,
+            _redirects.Count == 0
+                ? null
+                : [.. _redirects.Select(redirect => new FlowRedirectRecord(
+                    redirect.Handler.Id,
+                    redirect.Target,
+                    [.. redirect.Set.Select(entry => entry.Scope.Members.GetValueOrDefault(entry.Declaration.Name)?.Id ?? MemberId(entry.Scope, entry.Declaration))],
+                    redirect.Asking))],
             _tally.Count == 0 ? null : new WorkflowPreExisting(
                 _tally.Count(entry => entry.State == "listed"),
                 _tally.Count(entry => entry.State == "fixed"),
@@ -4890,12 +5230,11 @@ public sealed class FlowCoordinator
             instance.Error,
             instance.SkippedBecause,
             instance.NotRunBecause,
-            instance.PassedOver,
-            _failed.Contains(instance),
+            instance.Failure,
             instance.EndedByQuestion,
             WorksInOf(instance),
             instance.Made,
-            instance.State is FlowInstanceState.Paused ? instance.WaitingQuestion : null,
+            instance.WaitingQuestion,
             instance.Handoff,
             instance.Output?.DeepClone(),
             instance.Item,
@@ -4907,7 +5246,11 @@ public sealed class FlowCoordinator
             instance.HandledBy,
             instance.Leftover?.DeepClone(),
             instance.RaisedBy?.Id,
-            instance.Direction);
+            instance.Direction,
+            instance.NotRunCause,
+            instance.Issue,
+            instance.IssuesOwed.Count == 0 ? null : [.. instance.IssuesOwed],
+            instance.LeftBy);
 
     /// <summary>The agent this step works in: the one its <c>in</c> or <c>of</c> names, made by its create-agent; null for the create-agent itself and every step that names none.</summary>
     private string? WorksInOf(FlowInstance instance)
@@ -4980,7 +5323,7 @@ public sealed class FlowCoordinator
                     if (_instances.TryGetValue(outerId, out var outer) && outer.Step == declaration)
                     {
                         var scope = record.Index is { } index
-                            ? NewScope($"{outer.Id}[{index.ToString(System.Globalization.CultureInfo.InvariantCulture)}]", PathOf(declaring, declaration), declaring, declaration, record.Item is { } item ? FlowValue.Of(item.DeepClone()) : FlowValue.Missing, index, null, outer)
+                            ? NewScope($"{outer.Id}[{index.ToString(System.Globalization.CultureInfo.InvariantCulture)}]", PathOf(declaring, declaration), declaring, declaration, FlowValue.Of(record.Item?.DeepClone()), index, null, outer)
                             : NewScope($"{outer.Id}#{record.Iteration?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "1"}", PathOf(declaring, declaration), declaring, declaration, FlowValue.Missing, null, record.Iteration, outer);
 
                         outer.Children.Add(scope);
@@ -5016,7 +5359,7 @@ public sealed class FlowCoordinator
                 Apply(instance, record, resume);
             }
 
-            foreach (var raised in _created.Where(created => created.RaisedBy is not null))
+            foreach (var raised in _created.Where(created => created.RaisedByRecord is not null))
             {
                 // What raised what: a handler's source, the step whose failure a recovery took - read back from the
                 // records, for both may be drawn before what raised them.
@@ -5032,14 +5375,18 @@ public sealed class FlowCoordinator
                 _recoveryVisits[key] = Math.Max(_recoveryVisits.GetValueOrDefault(key), visit.Visit);
             }
 
+            foreach (var member in _created.Where(created => created.Failure == FlowFailure.TakenByGroup && created.GroupOf is { State: FlowInstanceState.Running or FlowInstanceState.Stopped }).ToList())
+            {
+                // A member that handed its failure to a group still open: the group starts nothing more and ends failed
+                // with the first such member's code once its members in flight have ended, as it would have had the
+                // session gone on - its own record says it took the failure, never the memory of the session before.
+                FailGroup(member.GroupOf!, member.Exit ?? HarnessExit.InternalError, member.Error, member.Path);
+            }
+
             foreach (var source in _created.Where(created => created.Step is { On: null } && created._handlers.Any(handler => handler.State is "owed" or "raised")))
             {
-                if (source._handlers.Any(handler => handler.State == "owed"))
-                {
-                    // A raise or a redirect the pause found owed stays owed, and the resume makes it.
-                    _owedEndings.Add(source);
-                }
-                else if (source._handlers.Any(handler => handler.State == "raised"))
+                // A raise the pause found owed stays owed in the source's record, and the session makes it from there.
+                if (!source._handlers.Any(handler => handler.State == "owed") && source._handlers.Any(handler => handler.State == "raised"))
                 {
                     // An ending whose handlers were raised and not all done: the run goes on waiting for them.
                     var handlers = _created.Where(created => created.RaisedBy == source).ToList();
@@ -5052,27 +5399,22 @@ public sealed class FlowCoordinator
                 }
             }
 
-            if (resume.File.Redirect is { } owed && _instances.TryGetValue(owed.Handler, out var handler) && ResolveStep(handler.DeclaredScope ?? _top, owed.Target) is { } target)
+            foreach (var scope in _scopes)
             {
-                // The redirect the run owed, written before the first reset: the resume makes it, once nothing it
-                // resets is running.
-                var redirect = new PendingRedirect(handler, owed.Target);
-                redirect.Set.AddRange(owed.Steps
-                    .Select(id => _instances.GetValueOrDefault(id))
-                    .Where(instance => instance is not null && instance.DeclaredScope is not null)
-                    .Select(instance => (instance!.DeclaredScope!, instance.Step)));
-
-                if (redirect.Set.Count > 0)
+                foreach (var name in scope.Members.Where(member => member.Value.LeftBy is not null).Select(member => member.Key).ToList())
                 {
-                    FrozenOf(redirect);
-                    _redirects.Add(redirect);
+                    // A redirect took the run back past this visit, and its next visit is not drawn yet: the schedule
+                    // draws it, as it would have had the session gone on - the redirect itself may be gone from the
+                    // run's records, which it leaves once every visit it resets says so.
+                    _ = scope.Members.Remove(name);
+                    _ = scope.Instantiated.Remove(name);
                 }
             }
+
 
             _spent.Usd = resume.File.Spent.Usd;
             _spent.Tokens = resume.File.Spent.Tokens;
             _spent.Minutes = resume.File.Spent.Minutes;
-            _budgetGranted = resume.File.BudgetGranted;
 
             // The issues the run listed are its file's, restored whole; what became of each the tally rebuilds from
             // the triage instances' own records, for the file holds only the listed ones.
@@ -5114,11 +5456,63 @@ public sealed class FlowCoordinator
                 _questions.Add(asked);
                 _questionsRaised = Math.Max(_questionsRaised, int.Parse(asked.Id[1..], System.Globalization.CultureInfo.InvariantCulture));
 
-                if (asked.State == "open")
+                if (asked.State != "open")
                 {
-                    _open.Add(asked.Id);
-                    _answerable[asked.Id] = _instances.GetValueOrDefault(asked.Instance);
+                    continue;
                 }
+
+                var about = _instances.GetValueOrDefault(asked.Instance);
+                _open.Add(asked.Id);
+                _answerable[asked.Id] = about;
+
+                if (about is not null)
+                {
+                    // A question is written before the record of the step that waits on it: a crash between the two
+                    // leaves the question open and the record behind it, which is completed from the question - the
+                    // step waits on it, paused where its own work asked, never run again beside it.
+                    about.WaitingQuestion = asked.Id;
+
+                    if (!FlowQuestions.AsksOfAnEnding(asked.Kind) && about.State is FlowInstanceState.NotStarted or FlowInstanceState.Running or FlowInstanceState.Stopped)
+                    {
+                        about.State = FlowInstanceState.Paused;
+                    }
+                }
+            }
+
+            foreach (var waiting in _created.Where(created => created.WaitingQuestion is { } question && !_open.Contains(question)).ToList())
+            {
+                // A step whose record still waits on a question the file holds answered: the answer was written and the
+                // record that follows what it changed was not. The next session carries the answer out, once; one the
+                // file holds withdrawn waits on nothing.
+                var asked = _questions.FirstOrDefault(question => question.Id == waiting.WaitingQuestion);
+                waiting.WaitingQuestion = null;
+
+                if (asked is { State: "answered", Given.Count: > 0 })
+                {
+                    _carryAtStart.Add((waiting, asked));
+                }
+            }
+
+            foreach (var owed in resume.File.Redirects ?? [])
+            {
+                // Every redirect the run owed, in the order decided, each written before its first reset: the session
+                // makes each in its turn, once nothing it resets is running - one asking about an open agent waits
+                // for the answer, the ones after it behind it.
+                var handler = _instances.GetValueOrDefault(owed.Handler)
+                    ?? throw new HarnessException(
+                        HarnessExit.Refused,
+                        $"the run owes a redirect by '{owed.Handler}', which its state holds no record of; the run's state is not whole, and a record is never guessed at");
+                var redirect = new PendingRedirect(handler, owed.Target) { Asking = owed.Question is { } question && _open.Contains(question) ? question : null };
+
+                foreach (var id in owed.Steps)
+                {
+                    redirect.Set.Add(ResetOf(id) ?? throw new HarnessException(
+                        HarnessExit.Refused,
+                        $"the redirect by '{owed.Handler}' resets '{id}', which names no step of the run's state; the run's state and the definition do not agree, and a record is never guessed at"));
+                }
+
+                FrozenOf(redirect);
+                _redirects.Add(redirect);
             }
 
             CountTheAnswers();
@@ -5141,15 +5535,37 @@ public sealed class FlowCoordinator
         static FlowInstanceState StateOf(FlowStepRecord record)
             => Enum.TryParse<FlowInstanceState>(record.State, out var state) ? state : FlowInstanceState.NotStarted;
 
+        // What one id a redirect's record resets names: a visit the state holds, or - for a step not drawn yet - the
+        // declaration its first visit would be, under the scope its id names.
+        (Scope Scope, WorkflowStep Declaration)? ResetOf(string id)
+        {
+            if (_instances.TryGetValue(id, out var visit))
+            {
+                return visit.DeclaredScope is { } declared ? (declared, visit.Step) : null;
+            }
+
+            var dot = id.LastIndexOf('.');
+            var scopeId = dot < 0 ? string.Empty : id[..dot];
+            var name = dot < 0 ? id : id[(dot + 1)..];
+
+            return _scopes.FirstOrDefault(scope => scope.Id == scopeId) is { } at && DeclarationsOf(at).FirstOrDefault(declaration => declaration.Name == name) is { } declaration
+                ? (at, declaration)
+                : null;
+        }
+
         void Apply(FlowInstance instance, FlowStepRecord record, FlowResumeState from)
         {
             instance.State = StateOf(record);
             instance.Attempt = record.Attempt;
+            instance.Visit = record.Visit;
+            instance.Issue = record.Issue;
+            instance.IssuesOwed = record.IssuesOwed ?? [];
             instance.Exit = record.Exit;
             instance.Error = record.Error;
             instance.SkippedBecause = record.SkippedBecause;
             instance.NotRunBecause = record.NotRunBecause;
-            instance.PassedOver = record.Failure == "passedOver";
+            instance.NotRunCause = record.NotRunCause is { } cause ? FlowRecordNames.Of<FlowNotRunCause>(cause) : null;
+            instance.Failure = record.FailureOf();
             instance.EndedByQuestion = record.EndedByQuestion;
             instance.Output = record.Output?.DeepClone();
             instance.StartedAt = record.StartedAt;
@@ -5159,14 +5575,17 @@ public sealed class FlowCoordinator
             instance.HandledBy = record.HandledBy;
             instance.Leftover = record.Leftover?.DeepClone();
             instance.Direction = record.Direction;
+            instance.LeftBy = record.LeftBy;
             instance.RaisedByRecord = record.RaisedBy;
             instance.FromResume = true;
             instance._handlers.AddRange(record.Handlers ?? []);
+            instance._answers.AddRange(record.Answers);
+
+            // Whether a failure is settled is read from where it left the run: passed over, ended the run, taken by its
+            // group or by a handler. One still owed, or waiting on what raised for it, is not.
             instance.FailureSettled = instance.State != FlowInstanceState.Failed
-                || instance.PassedOver
-                || instance.HandledBy is not null
-                || instance.EndedByQuestion is not null
-                || instance._handlers.Any(handler => handler.State is "owed" or "raised");
+                || instance.Failure is FlowFailure.PassedOver or FlowFailure.EndedRun or FlowFailure.TakenByGroup
+                || instance.HandledBy is not null;
 
             if (instance.State is FlowInstanceState.Stopped && record.Handoff is { } handoff)
             {
@@ -5187,9 +5606,12 @@ public sealed class FlowCoordinator
     /// </summary>
     private void CountTheAnswers()
     {
+        _budgetGranted = 0;
+
         foreach (var asked in _questions)
         {
             var about = _instances.GetValueOrDefault(asked.Instance);
+            var carried = _carryAtStart.Any(pending => ReferenceEquals(pending.Asked, asked));
 
             foreach (var given in asked.Given)
             {
@@ -5197,6 +5619,18 @@ public sealed class FlowCoordinator
                 {
                     var counted = FlowQuestions.CountedAt(asked.Kind, asked.Instance, asked.Handler);
                     _answerSpent[counted] = _answerSpent.GetValueOrDefault(counted) + 1;
+                }
+
+                if (asked.Kind == "runBudget" && given.Answer == "more")
+                {
+                    // Each more the budget was answered allows each amount once again: the answers are the one record of it.
+                    _budgetGranted++;
+                }
+
+                if (carried && ReferenceEquals(given, asked.Given[^1]))
+                {
+                    // What the answer the session carries out at its start grants, the carrying grants.
+                    continue;
                 }
 
                 switch (asked.Kind, given.Answer)

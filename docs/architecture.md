@@ -1439,6 +1439,26 @@ directory holds at the end; it takes back a handoff a crash left beside its reco
 naming the file - a record that names a handoff that is gone, and a missing `questions.json` or
 `pre-existing-issues.json`, never made again empty.
 
+The session then goes on from those records alone, where the run stood, whatever ended the last one
+and whichever engine wrote them. Every question in `questions.json` comes back with every answer it
+was given - the next id after the highest of any state, and what a configuration's counted answers
+spent and every `more` a bound was granted counted again from the answers - and a step waits on each
+one still open. What was running or stopped runs again as a new attempt, and so does a failure that
+ended the run (its record's `failure` is `endedRun`) save one an answer `fail` ended, which stands and
+keeps the run stopped; what that stop left NotRun (`notRunCause` `RunEnded`, or `DependencyFailed`
+where the failure no longer blocks it) is drawn again under the same id, and a group stands open
+over such a member, never ended done over it. What the run owed is made before anything runs: a
+failure recorded `owed` - one that ended while a pause recorded what it left running, or before what
+decides it was written - an ending whose handlers its record holds `owed`, issues a step's record
+holds owed their triage (`issuesOwed`), and every redirect in `flow.json`'s `redirects`, each in its
+turn. Each record is written before what follows from it - a question before the record of the
+step that waits on it, an answer before what it changes, a visit with what raised it, a failure
+owed until it is decided, every visit a redirect leaves marked `leftBy` before the redirect leaves
+the run's records - so a crash between any two writes leaves records the next session completes: an
+answer written is carried out once, a configured answer never written is given, a handler is never
+raised twice, and an ending whose handlers all ended is settled. A session is never said done over a
+step that never ended, nor one its scope never drew.
+
 Each session ends however it ends with the run's report (`report.md`, `report.json`), its owner
 released in a `finally`, its line in the run's log, and every record it wrote named in text and in
 `--json` (`FlowRunResult`, `FlowReports.Document`): `0` done, `20` failed - `21` where every failure

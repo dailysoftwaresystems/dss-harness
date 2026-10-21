@@ -244,7 +244,9 @@ public sealed class FlowPreExistingTests
 
         _ = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
-        Assert.Equal([("broke", null), ("think", null), ("triage", "a broken test")], runner.Started);
+        // The next session raises the triage the issue is owed - beside the failure that ended the run, which it runs
+        // again as a new attempt.
+        Assert.Equal([("broke", null), ("think", null), ("broke", null), ("triage", "a broken test")], runner.Started);
     }
 
     /// <summary>An issue the triage answers list for is added to the run's own file, proven, and {run.preExisting} says what became of each.</summary>

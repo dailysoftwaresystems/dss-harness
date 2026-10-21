@@ -1218,7 +1218,7 @@ public sealed class FlowHandlerRecordsTests
         var flow = harness.OrchestrationStore.ReadFlow(layout);
 
         Assert.NotNull(flow);
-        Assert.Null(flow.Redirect);
+        Assert.Null(flow.Redirects);
         Assert.Equal("fix", flow.Steps.Single(step => step.Instance == "build").HandledBy);
 
         // The report says what handled the failure, apart from the steps passed over.
@@ -1257,7 +1257,7 @@ public sealed class FlowHandlerRecordsTests
 
         using (records)
         {
-            var watched = new Watched(records, snapshot => snapshot.Redirect is not null);
+            var watched = new Watched(records, snapshot => snapshot.Redirects is { Count: > 0 });
             var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: watched);
             var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -1270,7 +1270,7 @@ public sealed class FlowHandlerRecordsTests
 
             Assert.Equal(FlowRunStatus.Paused, end.Status);
 
-            var owed = harness.OrchestrationStore.ReadFlow(layout)?.Redirect;
+            var owed = Assert.Single(harness.OrchestrationStore.ReadFlow(layout)?.Redirects ?? []);
 
             Assert.NotNull(owed);
             Assert.Equal("fix", owed.Handler);
@@ -1281,7 +1281,7 @@ public sealed class FlowHandlerRecordsTests
             var done = await coordinator.RunAsync(TestContext.Current.CancellationToken);
 
             Assert.Equal(FlowRunStatus.Done, done.Status);
-            Assert.Null(harness.OrchestrationStore.ReadFlow(layout)?.Redirect);
+            Assert.Null(harness.OrchestrationStore.ReadFlow(layout)?.Redirects);
             Assert.Equal(FlowInstanceState.Done, coordinator.Instances["round"].State);
             Assert.Equal(FlowInstanceState.Done, coordinator.Instances["round+2"].State);
             Assert.Contains("round+2.member", ((Runner)runner).Started, StringComparer.Ordinal);
@@ -1315,7 +1315,7 @@ public sealed class FlowHandlerRecordsTests
 
         using (records)
         {
-            var watched = new Watched(records, snapshot => snapshot.Redirect is not null);
+            var watched = new Watched(records, snapshot => snapshot.Redirects is { Count: > 0 });
             var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: watched);
             var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
 
@@ -1326,7 +1326,7 @@ public sealed class FlowHandlerRecordsTests
             var end = await session;
 
             Assert.Equal(FlowRunStatus.Paused, end.Status);
-            Assert.NotNull(harness.OrchestrationStore.ReadFlow(layout)?.Redirect);
+            Assert.Single(harness.OrchestrationStore.ReadFlow(layout)?.Redirects ?? []);
         }
 
         var taken = new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(FlowRunContext.DigestOf(definition));
@@ -1337,7 +1337,7 @@ public sealed class FlowHandlerRecordsTests
             var done = await resumed.RunAsync(TestContext.Current.CancellationToken);
 
             Assert.Equal(FlowRunStatus.Done, done.Status);
-            Assert.Null(harness.OrchestrationStore.ReadFlow(layout)?.Redirect);
+            Assert.Null(harness.OrchestrationStore.ReadFlow(layout)?.Redirects);
             Assert.Equal(FlowInstanceState.Done, resumed.Instances["round+2"].State);
             Assert.Contains("round+2.member", resumed.Instances.Keys, StringComparer.Ordinal);
         }

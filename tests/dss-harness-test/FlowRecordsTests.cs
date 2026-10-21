@@ -168,7 +168,7 @@ public sealed class FlowRecordsTests
         var step = new FlowStepRecord("one", "one", false, "Stopped", 1, 1, [], []);
 
         Assert.Equal("its pause: 'someone' is not who asks for a pause", (file with { Pause = new FlowPauseRecord("someone", false, DateTimeOffset.UnixEpoch, []) }).Problem());
-        Assert.Equal("its redirect: it names no step to go to", (file with { Redirect = new FlowRedirectRecord("one", " ", []) }).Problem());
+        Assert.Equal("its redirects: it names no step to go to", (file with { Redirects = [new FlowRedirectRecord("one", "two", ["one"]), new FlowRedirectRecord("one", " ", [])] }).Problem());
         Assert.Equal("its handoff: a handoff the engine wrote says why", (step with { Handoff = new FlowHandoffRecord("engine") }).Problem());
         Assert.Null((step with { Handoff = new FlowHandoffRecord("agent") }).Problem());
     }
@@ -460,7 +460,7 @@ public sealed class FlowRecordsTests
 
     /// <summary>One step of a snapshot, as little as a record of it needs.</summary>
     private static FlowSnapshotStep StepOf(string instance, FlowInstanceState state, FlowHandoff? handoff = null)
-        => new(instance, instance, "orient", false, state, 1, 1, null, null, null, null, null, null, false, false, null, null, null, null, handoff, null, FlowValue.Missing, null, null, [], []);
+        => new(instance, instance, "orient", false, state, 1, 1, null, null, null, null, null, null, null, null, null, null, null, handoff, null, FlowValue.Missing, null, null, [], []);
 
     /// <summary>What a run is, is frozen: the definition as it ran is written once, read back whole, and the digest of it names it.</summary>
     [Fact]

@@ -94,7 +94,7 @@ internal static class ResumeOrchestratorCommand
 
     internal static Command Create()
     {
-        var command = new Command(Name, "Go on with a run: what a stop, a crash or an answer left, each stopped step from its own handoff, under the definition it began with; refused while another run of the repository is unfinished with work in the tree.");
+        var command = new Command(Name, "Go on with a run from its records alone, where it stood: what a stop, a crash or an answer left - each stopped step from its own handoff, a failure that ended the run run again, what the run owed made first - under the definition it began with; refused while another run of the repository is unfinished with work in the tree.");
         command.Arguments.Add(RunArgument);
         command.Options.Add(OrchestrationArguments.Json);
         GlobalOptions.AddTo(command);

@@ -121,7 +121,12 @@ public sealed record FlowEvent(
 /// <param name="Error">Why the step ended as it did, where the code alone cannot say.</param>
 /// <param name="SkippedBecause">Why the flow decided not to run it, where it is Skipped.</param>
 /// <param name="NotRunBecause">Why the run never reached it, where it is NotRun.</param>
-/// <param name="Failure">Where a failure left the run: <c>passedOver</c> (the run went on over it), <c>endedRun</c> (its failure ended the session failed); null for every other ending.</param>
+/// <param name="Failure">
+/// Where a failure left the run (<see cref="FlowFailure"/>): <c>passedOver</c> (the run went on over it), <c>endedRun</c>
+/// (it ended the session failed, and the next session runs it again unless an answer <c>fail</c> ended it),
+/// <c>owed</c> (it ended while a pause recorded what it left running, and its handlers and policy are the next
+/// session's to make) or <c>takenByGroup</c> (its group took it); null for every other ending.
+/// </param>
 /// <param name="EndedByQuestion">The kind of the question whose <c>fail</c> answer ended this step, where one did.</param>
 /// <param name="Agent">The agent the step works in - as its <c>in</c> or <c>of</c> names, made by its create-agent - where it names one.</param>
 /// <param name="Made">The agent a create-agent step made, as its output names it; null for every other step.</param>
@@ -136,6 +141,20 @@ public sealed record FlowEvent(
 /// <param name="Leftover">What a repeat that ended with its until still false says it left, as its leftover expression read it; null where the loop names none.</param>
 /// <param name="RaisedBy">The instance whose ending raised this one - a handler's source, the step whose failure a recovery took; null for every step the schedule starts.</param>
 /// <param name="Direction">The fix a person gave for the failure this instance's recovery works on, where recoveryBound was answered direct; null on every other visit.</param>
+/// <param name="NotRunCause">
+/// Which kind of reason the step is NotRun for, one of <see cref="FlowNotRunCause"/>'s names exactly: a resume runs one
+/// NotRun because the run ended before it (<c>RunEnded</c>), and one whose failed dependency runs again, and leaves one a
+/// standing failure or its group's failure blocks; null for every other state.
+/// </param>
+/// <param name="Issue">The pre-existing issue this instance was raised to triage, whole, as the reporting step reported it; null for every step the schedule starts.</param>
+/// <param name="IssuesOwed">
+/// The pre-existing issues this step reported whose triage is not raised yet - a pause or a stop was under way, or the
+/// record was written before the triage was - in the order reported; the next session raises them. Null where none is owed.
+/// </param>
+/// <param name="LeftBy">
+/// The handler whose redirect sent the run back past this visit, by its instance id: a resume draws the step's next visit
+/// where this one is still its newest. Null where no redirect left it.
+/// </param>
 public sealed record FlowStepRecord(
     string Instance,
     string Step,
@@ -166,10 +185,25 @@ public sealed record FlowStepRecord(
     string? HandledBy = null,
     JsonNode? Leftover = null,
     string? RaisedBy = null,
-    string? Direction = null)
+    string? Direction = null,
+    string? NotRunCause = null,
+    FlowPreExistingReport? Issue = null,
+    IReadOnlyList<FlowPreExistingReport>? IssuesOwed = null,
+    string? LeftBy = null)
 {
-    /// <summary>Where a failure can leave the run, as the record names it.</summary>
-    public static readonly IReadOnlyList<string> Failures = ["passedOver", "endedRun"];
+    /// <summary>Where a failure can leave the run, as the record names each of <see cref="FlowFailure"/>'s values.</summary>
+    public static readonly IReadOnlyList<string> Failures = [.. Enum.GetValues<FlowFailure>().Select(NameOf)];
+
+    /// <summary>How the record names <paramref name="failure"/>: its name in camelCase, <c>passedOver</c>, <c>endedRun</c>, <c>owed</c>, <c>takenByGroup</c>.</summary>
+    /// <param name="failure">Where the failure left the run.</param>
+    public static string NameOf(FlowFailure failure) => JsonNamingPolicy.CamelCase.ConvertName(failure.ToString());
+
+    /// <summary>Where this record's failure left the run, read strictly; null where it names none.</summary>
+    /// <exception cref="InvalidOperationException">The record names a failure that is none of <see cref="Failures"/>.</exception>
+    public FlowFailure? FailureOf()
+        => Failure is null ? null
+            : Enum.GetValues<FlowFailure>().Where(value => string.Equals(NameOf(value), Failure, StringComparison.Ordinal)).Cast<FlowFailure?>().FirstOrDefault()
+                ?? throw new InvalidOperationException($"'{Failure}' is not where a failure leaves the run: {string.Join(", ", Failures)}.");
 
     /// <summary>What is wrong with this record; null when nothing is.</summary>
     public string? Problem()
@@ -179,12 +213,14 @@ public sealed record FlowStepRecord(
             : Attempt < 1 ? $"its attempt is {Attempt.ToString(CultureInfo.InvariantCulture)}, and the first is 1"
             : Visit < 1 ? $"its visit is {Visit.ToString(CultureInfo.InvariantCulture)}, and the first is 1"
             : Failure is { } failure && !Failures.Contains(failure, StringComparer.Ordinal) ? $"'{failure}' is not where a failure leaves the run"
+            : NotRunCause is { } cause && !FlowRecordNames.Is<FlowNotRunCause>(cause) ? $"'{cause}' is not a reason a step is NotRun for"
             : Question is not null && !FlowQuestionIds.IsWellFormed(Question) ? $"'{Question}' is not a question's id"
             : Item is not null && Index is null ? "it holds an item without its index"
             : Answers.Any(answer => string.IsNullOrWhiteSpace(answer.Question) || string.IsNullOrWhiteSpace(answer.Answer)) ? "an answer names neither its question nor its answer"
             : Handlers is { Count: > 0 } && Handlers.Any(handler => handler.Problem() is not null) ? $"its handlers hold one that is not a state: {Handlers.First(handler => handler.Problem() is not null).Problem()}"
             : HandledBy is not null && !FlowInstanceId.IsWellFormed(HandledBy) && !FlowQuestionIds.IsWellFormed(HandledBy) ? $"'{HandledBy}' names neither an instance nor a question"
             : RaisedBy is not null && !FlowInstanceId.IsWellFormed(RaisedBy) ? $"'{RaisedBy}' is not an instance id"
+            : LeftBy is not null && !FlowInstanceId.IsWellFormed(LeftBy) ? $"'{LeftBy}' is not an instance id"
             : Handoff?.Problem() is { } handoff ? $"its handoff: {handoff}"
             : null;
 }
@@ -226,14 +262,19 @@ public sealed record FlowHandlerState(string Handler, string State)
 /// <summary>A redirect the run owes and has not made yet, as <c>flow.json</c> holds it: written before the first reset, made once.</summary>
 /// <param name="Handler">The handler that named it, by its instance id.</param>
 /// <param name="Target">The step the run goes to, by its name.</param>
-/// <param name="Steps">The instances the redirect resets, by their ids, in the order they were computed.</param>
-public sealed record FlowRedirectRecord(string Handler, string Target, IReadOnlyList<string> Steps)
+/// <param name="Steps">
+/// What the redirect resets, in the order it was computed: each by the id of its visit now - or, for one not drawn yet,
+/// by the id its first visit takes.
+/// </param>
+/// <param name="Question">The question it asks before it goes, where it would leave an agent open and none answered yet; null otherwise.</param>
+public sealed record FlowRedirectRecord(string Handler, string Target, IReadOnlyList<string> Steps, string? Question = null)
 {
     /// <summary>What is wrong with this record; null when nothing is.</summary>
     public string? Problem()
         => !FlowInstanceId.IsWellFormed(Handler) ? $"'{Handler}' is not an instance id"
             : string.IsNullOrWhiteSpace(Target) ? "it names no step to go to"
             : Steps.Any(id => !FlowInstanceId.IsWellFormed(id)) ? "it resets an instance its id does not name"
+            : Question is not null && !FlowQuestionIds.IsWellFormed(Question) ? $"'{Question}' is not a question's id"
             : null;
 }
 
@@ -256,7 +297,10 @@ public sealed record FlowRedirectRecord(string Handler, string Target, IReadOnly
 /// <param name="StartCommit">The commit the run started from; null where it started beside the tree's history.</param>
 /// <param name="Branch">The branch the run started on.</param>
 /// <param name="Pause">The safe pause the run is under or was ended by: cause, all, at, completedAt; null where none.</param>
-/// <param name="Redirect">The redirect the run owes and has not made yet, written before the first reset; null where none is owed.</param>
+/// <param name="Redirects">
+/// Every redirect the run owes and has not made yet, in the order they were decided - each made in its turn - each
+/// written before its first reset; null where none is owed.
+/// </param>
 public sealed record FlowFile(
     int Schema,
     string Run,
@@ -272,7 +316,7 @@ public sealed record FlowFile(
     string? StartCommit = null,
     string? Branch = null,
     FlowPauseRecord? Pause = null,
-    FlowRedirectRecord? Redirect = null)
+    IReadOnlyList<FlowRedirectRecord>? Redirects = null)
 {
     /// <summary>What is wrong with this file; null when nothing is.</summary>
     public string? Problem()
@@ -286,7 +330,7 @@ public sealed record FlowFile(
             : Steps.GroupBy(step => step.Instance, StringComparer.Ordinal).Any(group => group.Count() > 1) ? "it holds an instance twice"
             : Next.Any(id => Steps.All(step => !string.Equals(step.Instance, id, StringComparison.Ordinal))) ? "next names an instance the file does not hold"
             : Pause?.Problem() is { } pause ? $"its pause: {pause}"
-            : Redirect?.Problem() is { } redirect ? $"its redirect: {redirect}"
+            : Redirects?.Select(redirect => redirect.Problem()).FirstOrDefault(problem => problem is not null) is { } redirect ? $"its redirects: {redirect}"
             : null;
 }
 
@@ -592,7 +636,7 @@ public enum FlowChangeKind
 /// <param name="Steps">Every step instance, in the order the run made them.</param>
 /// <param name="Next">The steps that would start now, in the order they would start.</param>
 /// <param name="WaitingOn">The questions the run holds open, in the order they were raised.</param>
-/// <param name="Redirect">The redirect the run owes and has not made yet; null where none is owed.</param>
+/// <param name="Redirects">Every redirect the run owes and has not made yet, in the order decided; null where none is owed.</param>
 /// <param name="PreExisting">The run's pre-existing issues by what became of them; null until it has one.</param>
 /// <param name="Issues">
 /// Every pre-existing issue the run has listed, whole, where the change holds them: the records write the run's file of
@@ -608,7 +652,7 @@ public sealed record FlowSnapshot(
     IReadOnlyList<FlowSnapshotStep> Steps,
     IReadOnlyList<string> Next,
     IReadOnlyList<string> WaitingOn,
-    FlowRedirectRecord? Redirect = null,
+    IReadOnlyList<FlowRedirectRecord>? Redirects = null,
     WorkflowPreExisting? PreExisting = null,
     IReadOnlyList<PreExistingIssue>? Issues = null);
 
@@ -626,8 +670,7 @@ public sealed record FlowSnapshot(
 /// <param name="Error">Why the step ended as it did, where the code alone cannot say.</param>
 /// <param name="SkippedBecause">Why the flow decided not to run it, where it is Skipped.</param>
 /// <param name="NotRunBecause">Why the run never reached it, where it is NotRun.</param>
-/// <param name="PassedOver">Whether the run passed this failure over.</param>
-/// <param name="EndedRun">Whether this failure ended the session failed.</param>
+/// <param name="Failure">Where this step's failure left the run; null for every other ending.</param>
 /// <param name="EndedByQuestion">The kind of the question whose fail answer ended this step, where one did.</param>
 /// <param name="Agent">The agent the step works in, where it names one with in or of.</param>
 /// <param name="Made">The agent a create-agent step made; null for every other step.</param>
@@ -644,6 +687,10 @@ public sealed record FlowSnapshot(
 /// <param name="Leftover">What a repeat that ended with its until still false says it left; null where the loop names none.</param>
 /// <param name="RaisedBy">The instance whose ending raised this one; null for every step the schedule starts.</param>
 /// <param name="Direction">The fix a person gave for the failure this instance's recovery works on; null on every other visit.</param>
+/// <param name="NotRunCause">Which kind of reason the step is NotRun for, where it is; null otherwise.</param>
+/// <param name="Issue">The pre-existing issue this instance was raised to triage; null for every step the schedule starts.</param>
+/// <param name="IssuesOwed">The pre-existing issues this step reported whose triage is not raised yet; null where none is owed.</param>
+/// <param name="LeftBy">The handler whose redirect sent the run back past this visit; null where none did.</param>
 public sealed record FlowSnapshotStep(
     string Instance,
     string Step,
@@ -658,8 +705,7 @@ public sealed record FlowSnapshotStep(
     string? Error,
     string? SkippedBecause,
     string? NotRunBecause,
-    bool PassedOver,
-    bool EndedRun,
+    FlowFailure? Failure,
     string? EndedByQuestion,
     string? Agent,
     string? Made,
@@ -675,4 +721,8 @@ public sealed record FlowSnapshotStep(
     string? HandledBy = null,
     JsonNode? Leftover = null,
     string? RaisedBy = null,
-    string? Direction = null);
+    string? Direction = null,
+    FlowNotRunCause? NotRunCause = null,
+    FlowPreExistingReport? Issue = null,
+    IReadOnlyList<FlowPreExistingReport>? IssuesOwed = null,
+    string? LeftBy = null);
