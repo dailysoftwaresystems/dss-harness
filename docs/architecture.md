@@ -1515,8 +1515,10 @@ A session's interrupts are its own (`FlowTerminal`, `FlowInterrupts`): Ctrl+C, a
 SIGTERM and a hang-up, are taken by `PosixSignalRegistration` and never end the process, and the
 command line's own termination handling is turned off for the three session verbs
 (`PointOfNoReturn.CountsItsOwnInterrupts`), since it cancels at the first interrupt and starts a
-clock. The first asks the engine for the safe pause, which starts no clock; the second asks it to
-stop where it stands: the engine records a step whose runner does not end within 90 s of applying
+clock. They are counted once, for the whole session - every drive of it, the one an answer taken as
+it ended begins among them - and the terminal's bound begins at the second of that one count,
+whoever pressed the first; only the session's end clears it. The first asks the engine for the safe
+pause, which starts no clock; the second asks it to stop where it stands: the engine records a step whose runner does not end within 90 s of applying
 the stop as stopped all the same (`PointOfNoReturn.SafePauseDrain`), and the command ends within 120 s
 of the interrupt whatever is left (`PointOfNoReturn.HardStopBound`, the drain and 30 s to write the
 end, so the terminal never cuts off a session the engine is still ending in order) - what a crash

@@ -743,6 +743,8 @@ public sealed class FlowService(
         }
         finally
         {
+            // The session's interrupts are counted for the whole of it, every drive of it alike, and cleared at its end.
+            interrupts?.SessionEnded();
             _owner.Release(layout);
         }
     }

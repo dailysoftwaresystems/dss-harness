@@ -19,15 +19,20 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// own key handling. Tests drive it the same way, so the counting is asserted without a terminal.
 /// </para>
 /// <para>
-/// The count is a session's: interrupts pressed while no session is bound - before the first is driven - count for the
-/// session that is bound next, and a session's end clears it, so a front end that hands one to one command after another
-/// never stops the next session at its first press.
+/// The count is a session's, and the one count of it - the terminal bounds the hard stop by it too: interrupts pressed
+/// while no drive of the session is bound - before the first, or between one that ended and the one an answer taken as
+/// it ended begins - count for the session and are applied to its engine once bound, each once; only the session's end
+/// clears it, so a front end that hands one to one command after another never stops the next session at its first
+/// press.
 /// </para>
 /// </remarks>
-public sealed class FlowInterrupts
+/// <param name="stopAsked">Told once the count reaches the second interrupt, the hard stop: how a terminal begins bounding it.</param>
+public sealed class FlowInterrupts(Action? stopAsked = null)
 {
     private readonly Lock _gate = new();
+    private readonly Action? _stopAsked = stopAsked;
     private int _pressed;
+    private int _applied;
     private FlowCoordinator? _coordinator;
 
     /// <summary>How many interrupts the session bound, or about to be, has been given.</summary>
@@ -46,37 +51,42 @@ public sealed class FlowInterrupts
     /// <returns>How many interrupts the session has been given, this one counted.</returns>
     public int Pressed()
     {
-        Action? apply;
+        List<Action> apply;
         int count;
 
         lock (_gate)
         {
             count = ++_pressed;
-            apply = MeaningOf(count, _coordinator);
+            apply = UnappliedLocked();
         }
 
-        apply?.Invoke();
+        foreach (var meaning in apply)
+        {
+            meaning();
+        }
+
+        if (count == 2)
+        {
+            _stopAsked?.Invoke();
+        }
+
         return count;
     }
 
     /// <summary>
-    /// Binds the interrupts to the session they count for; called by the service that drives it. Interrupts pressed
-    /// while none was bound are this session's: the first asks its pause, a second its stop.
+    /// Binds the interrupts to the drive of the session they count for; called by the service that drives it. Interrupts
+    /// pressed while none was bound are this session's, and are applied now: the first asks its pause, a second its stop.
     /// </summary>
     internal void BoundTo(FlowCoordinator coordinator)
     {
         ArgumentNullException.ThrowIfNull(coordinator);
 
-        var apply = new List<Action>();
+        List<Action> apply;
 
         lock (_gate)
         {
             _coordinator = coordinator;
-
-            for (var count = 1; count <= Math.Min(_pressed, 2); count++)
-            {
-                apply.Add(MeaningOf(count, coordinator)!);
-            }
+            apply = UnappliedLocked();
         }
 
         foreach (var meaning in apply)
@@ -85,21 +95,42 @@ public sealed class FlowInterrupts
         }
     }
 
-    /// <summary>Unbinds the session that ended, and clears its count: the next session's interrupts are counted afresh.</summary>
+    /// <summary>Unbinds a drive of the session that ended; the count stays the session's, for another drive of it may follow.</summary>
     internal void Unbound()
     {
         lock (_gate)
         {
             _coordinator = null;
-            _pressed = 0;
         }
     }
 
-    /// <summary>What the <paramref name="count"/>-th interrupt asks of a bound session; nothing where none is bound.</summary>
-    private static Action? MeaningOf(int count, FlowCoordinator? coordinator)
-        => coordinator is null ? null
-            : count == 1 ? () => coordinator.RequestPause("interrupt")
-            : coordinator.RequestStop;
+    /// <summary>The session ended: unbound, and its count cleared, so the next session's interrupts are counted afresh.</summary>
+    internal void SessionEnded()
+    {
+        lock (_gate)
+        {
+            _coordinator = null;
+            _pressed = 0;
+            _applied = 0;
+        }
+    }
+
+    /// <summary>What each interrupt not yet applied asks of the bound session's engine, each counted applied; nothing where none is bound. Under the lock the caller holds.</summary>
+    private List<Action> UnappliedLocked()
+    {
+        var apply = new List<Action>();
+
+        if (_coordinator is { } coordinator)
+        {
+            while (_applied < _pressed)
+            {
+                _applied++;
+                apply.Add(_applied == 1 ? () => coordinator.RequestPause("interrupt") : coordinator.RequestStop);
+            }
+        }
+
+        return apply;
+    }
 }
 
 /// <summary>
@@ -117,27 +148,41 @@ public sealed class FlowInterrupts
 /// interrupt for the hard stop.
 /// </para>
 /// <para>
+/// The session's count is the one the terminal reads: an interrupt is counted once, by the session's interrupts, and the
+/// drain begins at the second of them, whoever pressed the first - a terminal's signal or a front end's own key.
+/// </para>
+/// <para>
 /// Windows ends a process whose console is closed whatever it answers, so the hang-up and SIGTERM are not taken there:
 /// what a closed console leaves is what a crash leaves, and the next session reclaims the run.
 /// </para>
 /// </remarks>
-/// <param name="output">Says what each interrupt asked, as a line of <paramref name="command"/>.</param>
-/// <param name="command">The run verb the session is of.</param>
-/// <param name="clock">How the drain after the second interrupt is timed.</param>
-/// <param name="drain">How long the session may take to end after the second interrupt; <see cref="PointOfNoReturn.HardStopBound"/> where not given.</param>
-public sealed class FlowTerminal(IHarnessOutput output, string command, TimeProvider? clock = null, TimeSpan? drain = null)
+public sealed class FlowTerminal
 {
-    private readonly IHarnessOutput _output = output ?? throw new ArgumentNullException(nameof(output));
-    private readonly string _command = command ?? throw new ArgumentNullException(nameof(command));
-    private readonly TimeProvider _clock = clock ?? TimeProvider.System;
-    private readonly TimeSpan _drain = drain ?? PointOfNoReturn.HardStopBound;
+    private readonly IHarnessOutput _output;
+    private readonly string _command;
+    private readonly TimeProvider _clock;
+    private readonly TimeSpan _drain;
     private readonly TaskCompletionSource _drained = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Lock _gate = new();
-    private int _presses;
     private ITimer? _drainTimer;
+    private bool _ended;
 
-    /// <summary>The session's interrupts, as the terminal counts them.</summary>
-    public FlowInterrupts Interrupts { get; } = new();
+    /// <summary>The terminal of one session of <paramref name="command"/>.</summary>
+    /// <param name="output">Says what each interrupt asked, as a line of <paramref name="command"/>.</param>
+    /// <param name="command">The run verb the session is of.</param>
+    /// <param name="clock">How the drain after the second interrupt is timed.</param>
+    /// <param name="drain">How long the session may take to end after the second interrupt; <see cref="PointOfNoReturn.HardStopBound"/> where not given.</param>
+    public FlowTerminal(IHarnessOutput output, string command, TimeProvider? clock = null, TimeSpan? drain = null)
+    {
+        _output = output ?? throw new ArgumentNullException(nameof(output));
+        _command = command ?? throw new ArgumentNullException(nameof(command));
+        _clock = clock ?? TimeProvider.System;
+        _drain = drain ?? PointOfNoReturn.HardStopBound;
+        Interrupts = new FlowInterrupts(BeginDrain);
+    }
+
+    /// <summary>The session's interrupts: the one count of them, which the terminal bounds the hard stop by.</summary>
+    public FlowInterrupts Interrupts { get; }
 
     /// <summary>
     /// Runs <paramref name="session"/> with the terminal's interrupts counted for it: handed the interrupts and no token
@@ -176,27 +221,16 @@ public sealed class FlowTerminal(IHarnessOutput output, string command, TimeProv
         {
             lock (_gate)
             {
+                _ended = true;
                 _drainTimer?.Dispose();
             }
         }
     }
 
-    /// <summary>One interrupt of the terminal: counted for the session, said, and - at the second - the drain begun.</summary>
+    /// <summary>One interrupt of the terminal: counted for the session, and said by its place in the session's count.</summary>
     internal void Interrupted()
     {
-        int count;
-
-        lock (_gate)
-        {
-            count = ++_presses;
-
-            if (count == 2)
-            {
-                _drainTimer = _clock.CreateTimer(_ => _drained.TrySetResult(), null, _drain, Timeout.InfiniteTimeSpan);
-            }
-        }
-
-        _ = Interrupts.Pressed();
+        var count = Interrupts.Pressed();
 
         if (count == 1)
         {
@@ -205,6 +239,18 @@ public sealed class FlowTerminal(IHarnessOutput output, string command, TimeProv
         else if (count == 2)
         {
             _output.Warn(_command, $"interrupted again: the run is stopped where it stands, and the command ends within {Seconds(_drain)} s whatever is left");
+        }
+    }
+
+    /// <summary>The session's second interrupt, whoever pressed it: the drain of the hard stop begins.</summary>
+    private void BeginDrain()
+    {
+        lock (_gate)
+        {
+            if (!_ended)
+            {
+                _drainTimer ??= _clock.CreateTimer(_ => _drained.TrySetResult(), null, _drain, Timeout.InfiniteTimeSpan);
+            }
         }
     }
 

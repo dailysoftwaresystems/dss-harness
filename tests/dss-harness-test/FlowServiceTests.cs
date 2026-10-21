@@ -1053,6 +1053,65 @@ public sealed class FlowServiceTests
             outcome.Message);
     }
 
+    /// <summary>
+    /// The interrupts are counted once, for the whole session: a drive of it that ends - an answer taken as it ended drives
+    /// it again - keeps the count, so the next interrupt is the second, the hard stop, applied to the session's engine;
+    /// only the session's end clears it.
+    /// </summary>
+    [Fact]
+    public async Task TheCount_IsTheSessions_KeptBetweenItsDrives_ClearedAtItsEnd()
+    {
+        var definition = WorkflowFileParser.Parse("flow.yml", """
+            name: flow
+            steps:
+              - name: one
+                type: orient
+            """);
+        var runner = new SteppedRunner();
+        var coordinator = new FlowCoordinator(definition, runner, new WritesNothing(), new ManualClock());
+        var interrupts = new FlowInterrupts();
+
+        interrupts.BoundTo(coordinator);
+        Assert.Equal(1, interrupts.Pressed());
+        interrupts.Unbound();
+
+        Assert.Equal(1, interrupts.Presses);
+
+        interrupts.BoundTo(coordinator);
+        Assert.Equal(2, interrupts.Pressed());
+        interrupts.Unbound();
+
+        // The second was the hard stop: the engine applies it, and nothing of the run starts.
+        var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(FlowRunStatus.Stopped, end.Status);
+        Assert.Empty(runner.Started);
+
+        interrupts.SessionEnded();
+        Assert.Equal(0, interrupts.Presses);
+    }
+
+    /// <summary>
+    /// The terminal bounds the hard stop by the session's one count: an interrupt a front end pressed through the
+    /// interrupts, then one the terminal took, is the second - the drain begun and the command cut off once it passes.
+    /// </summary>
+    [Fact]
+    public async Task TheTerminalsDrain_StartsAtTheSessionsSecondInterrupt_WhoeverPressedTheFirst()
+    {
+        var harness = new HarnessFactory();
+        var terminal = new FlowTerminal(harness.Output, FlowService.RunCommand, new JumpingClock());
+        var never = new TaskCompletionSource<CommandOutcome>();
+
+        var running = terminal.RunAsync((_, _) => never.Task, Token, bindSignals: false);
+
+        Assert.Equal(1, terminal.Interrupts.Pressed());
+        terminal.Interrupted();
+
+        var outcome = await running.WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Cancelled, outcome.ExitCode);
+    }
+
     /// <summary>Interrupts pressed before a session is bound count for it - the first asks its pause at once, before anything starts - and the session's end clears the count.</summary>
     [Fact]
     public async Task InterruptsPressedBeforeTheSessionIsBound_CountForIt()
