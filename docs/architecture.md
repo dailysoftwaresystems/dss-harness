@@ -1512,11 +1512,14 @@ meets it, and what became of it is written into `questions.json` under its inbox
 anything else is said of it: an answer taken carries the id in who gave it (`by.inbox`), and one the
 run does not take - its question no longer open, or it changes an answer already given - is kept in
 the file's `refused` list, then recorded as an `answer` event naming why. An answer a session weighed
-is counted then and leaves the inbox once the file lets it go: a removal that fails is tried again at
-the next poll or drive's end, and one the inbox still holds as the session ends - the removal failed
-to the last, or a crash came between the take and the removal - is settled by the run's records, so a
-later session that meets the entry only empties it from the inbox: no answer is weighed, offered or
-taken twice. Where the engine leaves before it takes a request, the command answers from the
+leaves the inbox only once what became of it is written: one weighed at a session's start, whose writes
+are held until it is known the session goes on, is settled when they are made, and handed back - left in
+the inbox, and said - where they never are, a refused resume writing nothing; so nothing empties from
+the inbox an answer the run's records do not hold. Once settled it is counted, and leaves the inbox
+once the file lets it go: a removal that fails is tried again at the next poll or drive's end, and one
+the inbox still holds as the session ends - the removal failed to the last, or a crash came between the
+take and the removal - is settled by the run's records, so a later session that meets the entry only
+empties it from the inbox: no answer is weighed, offered or taken twice. Where the engine leaves before it takes a request, the command answers from the
 run's state and takes the request back. `stop-orchestrator --now` ends the engine's process tree -
 only on this machine, and only the process whose start matches the one its owner recorded - and
 removes the owner once it is gone. Whether a run's engine is live is asked of one owner

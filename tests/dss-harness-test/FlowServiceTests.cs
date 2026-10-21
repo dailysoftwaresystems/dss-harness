@@ -2013,6 +2013,83 @@ public sealed class FlowServiceTests
         Assert.False(File.Exists(run.InboxFile));
     }
 
+    /// <summary>
+    /// An answer the poller offers as a resume begins is weighed at the resume's start, whose writes are held until it is
+    /// known the session goes on - and leaves the inbox only once what became of it is on disk: where the resume is
+    /// refused, which writes nothing, an answer weighed and refused at its start is never written, so it stays in the
+    /// inbox - though the poller polled again after the loop weighed it - and the next session weighs it and records what
+    /// became of it. Nothing handed over is lost between the two.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerWeighedAtTheStartOfARefusedResume_StaysInTheInbox_AndTheNextSessionRecordsIt()
+    {
+        var (repository, runner) = await RepositoryAsync("""
+            name: flow
+            steps:
+              - name: holding
+                type: pause
+                question: what now?
+                options: [stay, go]
+              - name: after
+                type: orient
+                dependsOn: [holding]
+            """);
+        using var disposed = repository;
+
+        // The poller polls at once and then only where the clock makes it: at each read of the time the session makes
+        // while the poller waits.
+        var clock = new PolledAtEachRead(TimeSpan.FromHours(1));
+        var files = new Signalling(repository.Harness.FileSystem);
+        var service = Service(repository.Harness, runner, clock: clock, timings: new FlowTimings(TimeSpan.FromHours(1), TimeSpan.FromMilliseconds(10), TimeSpan.FromSeconds(30)), fileSystem: files);
+        var run = RunOf(repository);
+        var store = repository.Harness.OrchestrationStore;
+
+        Assert.Equal(FlowExit.Paused, (await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token)).ExitCode);
+
+        // Two answers the run does not take are handed over just after the resume looked at the inbox: the poller offers
+        // both at its first poll, the loop weighs them at the resume's start - the time read for each refusal - and the
+        // poller polls again at each.
+        FlowInboxAnswer[] late =
+        [
+            new(FlowInboxAnswer.NewId(), "q8", "go", DateTimeOffset.UtcNow),
+            new(FlowInboxAnswer.NewId(), "q9", "go", DateTimeOffset.UtcNow),
+        ];
+
+        files.AfterLookingAt(run.InboxFile, () =>
+        {
+            foreach (var answer in late)
+            {
+                store.AddToInbox(run, answer);
+            }
+        });
+
+        clock.Polls = true;
+        var refused = await service.ResumeAsync(repository.Path, "r1", json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+        clock.Polls = false;
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal("nothing of this run can run until the question of step 'holding' is answered; answer-orchestrator answers it", refused.Message);
+        Assert.Equal(late.Select(answer => answer.Id), store.ReadInbox(run)!.Answers.Select(answer => answer.Id));
+        Assert.Null(store.ReadFlowQuestions(run)!.Refused);
+        Assert.Equal(
+            [
+                $"2 answer(s) handed to this engine were not taken before its session ended; they stay in '{run.InboxFile}', and the next session of the run takes them",
+                $"inbox: {run.InboxFile}",
+            ],
+            (refused.Details ?? []).Where(line => line.Contains("inbox", StringComparison.Ordinal)));
+
+        var answered = await service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+        var (events, _) = FlowEventLog.Read(repository.Harness.FileSystem, run.EventsFile);
+
+        Assert.Equal(HarnessExit.Success, answered.ExitCode);
+        Assert.Equal(["after"], runner.Started);
+        Assert.Equal(late.Select(answer => (answer.Id, answer.Question)), store.ReadFlowQuestions(run)!.Refused!.Select(entry => (entry.Inbox, entry.Question)));
+        Assert.Equal(
+            ["'q8' is not a question this run leaves open", "'q9' is not a question this run leaves open"],
+            events.Where(read => read.Kind == "answer").Select(read => read.Detail));
+        Assert.False(File.Exists(run.InboxFile));
+    }
+
     /// <summary>A workflow whose question opens while a machine step holds the session open: the engine is running while the question waits.</summary>
     private const string Waiting = """
         name: flow
@@ -2590,6 +2667,10 @@ public sealed class FlowServiceTests
         private readonly ConcurrentDictionary<string, bool> _failsOnce = new(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, bool> _failsAlways = new(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, bool> _endsOnce = new(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, Action> _afterLooking = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Does <paramref name="what"/> once, right after the next look at whether <paramref name="path"/> is there: as another process writing it just after this one looked.</summary>
+        public void AfterLookingAt(string path, Action what) => _afterLooking[Path.GetFullPath(path)] = what;
 
         /// <summary>Makes the next deletion of <paramref name="path"/> fail, as a file held open by another process does.</summary>
         public void FailsDeleteOnce(string path) => _failsOnce[Path.GetFullPath(path)] = true;
@@ -2642,8 +2723,67 @@ public sealed class FlowServiceTests
                 ? throw new InvalidOperationException("the disk said something no one expected.")
                 : base.ReadAllText(path);
 
+        public override PathKind KindOf(string path)
+        {
+            var kind = base.KindOf(path);
+
+            if (_afterLooking.TryRemove(Path.GetFullPath(path), out var what))
+            {
+                what();
+            }
+
+            return kind;
+        }
+
         private static TaskCompletionSource Of(ConcurrentDictionary<string, TaskCompletionSource> signals, string path)
             => signals.GetOrAdd(Path.GetFullPath(path), _ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+    }
+
+    /// <summary>
+    /// A clock whose waits end only when it is moved (<see cref="TimerClock"/>) - and which, while it <see cref="Polls"/>,
+    /// moves itself past the wait that stands each time the time is read, and gives the time only once a wait stands
+    /// again: so the engine's poller, the one that waits on it, polls exactly where the session reads the time, and has
+    /// polled before the session goes on.
+    /// </summary>
+    /// <param name="poll">How far each read moves it: the poller's own wait.</param>
+    private sealed class PolledAtEachRead(TimeSpan poll) : TimeProvider
+    {
+        private readonly TimerClock _clock = new();
+        private volatile bool _polls;
+        private int _moving;
+
+        /// <summary>Whether each read of the time makes the waiting poller poll.</summary>
+        public bool Polls
+        {
+            get => _polls;
+            set => _polls = value;
+        }
+
+        public override long TimestampFrequency => _clock.TimestampFrequency;
+
+        public override long GetTimestamp() => _clock.GetTimestamp();
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+            => _clock.CreateTimer(callback, state, dueTime, period);
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            // Only a read made while the poller waits moves the clock, and never one made inside the poll it starts.
+            if (_polls && _clock.Waiting > 0 && Interlocked.Exchange(ref _moving, 1) == 0)
+            {
+                try
+                {
+                    _clock.Advance(poll);
+                    _clock.WaitingAsync().WaitAsync(Bound, Token).GetAwaiter().GetResult();
+                }
+                finally
+                {
+                    _ = Interlocked.Exchange(ref _moving, 0);
+                }
+            }
+
+            return _clock.GetUtcNow();
+        }
     }
 
     /// <summary>What a session's process meets where a test makes it end, as a crash would end it: nothing of the session catches it.</summary>

@@ -355,9 +355,10 @@ public sealed class FlowCoordinator
 
     /// <summary>
     /// The writes a session's start made, held in the order made - each with the run as it stood at that write - until
-    /// it is known the session goes on: a resume refused writes nothing of itself.
+    /// it is known the session goes on: a resume refused writes nothing of itself. Each answer weighed meanwhile is held
+    /// with them, settled once what became of it is written and handed back where the hold is dropped.
     /// </summary>
-    private List<Action<IFlowRecords>>? _held;
+    private List<HeldWrite>? _held;
 
     /// <summary>
     /// An answer was taken before the session's first admit - answer-orchestrator's, one handed over to an engine that
@@ -787,14 +788,8 @@ public sealed class FlowCoordinator
             }
 
             // The session goes on: what its start wrote is written now, in the order it was made.
-            var held = _held;
-            _held = null;
             _starting = false;
-
-            foreach (var write in held ?? [])
-            {
-                write(_records!);
-            }
+            MakeTheHold();
 
             while (true)
             {
@@ -884,9 +879,12 @@ public sealed class FlowCoordinator
         }
         finally
         {
-            // A start refused, or ended by a defect, leaves nothing held to be written by whatever comes after it; and
-            // what reached the loop after its last read is handed back or counted, however the session ended.
+            // A start refused, or ended by a defect, leaves nothing held to be written by whatever comes after it - an
+            // answer it weighed handed back, for nothing records it; and what reached the loop after its last read is
+            // handed back or counted, however the session ended.
+            var dropped = _held;
             _held = null;
+            Drop(dropped ?? []);
             _starting = false;
             HandBackWhatIsLeft();
             _inSession = false;
@@ -4609,8 +4607,11 @@ public sealed class FlowCoordinator
         if (message.Offered is { } offered)
         {
             // An answer from outside the session - taken from the run's inbox while the engine runs. The loop
-            // alone applies it, for the graph is the loop's alone to change.
-            _ = offered.Completion.TrySetResult(AnswerHandedOver(offered.Question, offered.Answer, offered.Text, out _, offered.Through, offered.Inbox));
+            // alone applies it, for the graph is the loop's alone to change - and settles it only once what became
+            // of it is written: at once, or after the writes of a session's start it was weighed in; a start refused
+            // writes none of them, and hands it back.
+            var handed = AnswerHandedOver(offered.Question, offered.Answer, offered.Text, out _, offered.Through, offered.Inbox);
+            Put(_ => offered.Completion.TrySetResult(handed), dropped: () => offered.Completion.TrySetCanceled());
             return;
         }
 
@@ -5455,18 +5456,63 @@ public sealed class FlowCoordinator
 
     /// <summary>
     /// Every write of the run's records goes through here: made at once, or - while a session's start is held - kept,
-    /// with the run as it stood when it was made, to be made in the same order once the session goes on.
+    /// with the run as it stood when it was made, to be made in the same order once the session goes on, or
+    /// <paramref name="dropped"/> where it never will be.
     /// </summary>
-    private void Put(Action<IFlowRecords> write)
+    /// <param name="write">The write.</param>
+    /// <param name="dropped">What is done instead where the hold it is kept in is dropped; null for nothing.</param>
+    private void Put(Action<IFlowRecords> write, Action? dropped = null)
     {
         if (_held is not null)
         {
-            _held.Add(write);
+            _held.Add(new HeldWrite(write, dropped));
             return;
         }
 
         write(_records!);
     }
+
+    /// <summary>
+    /// Makes what a session's start held, in the order it was held - an answer weighed in it settled after what became of
+    /// it is written - and ends the hold. Where a write fails, what it had not made yet is dropped, as a refused start's
+    /// is: an answer whose record was not written is handed back, never settled.
+    /// </summary>
+    private void MakeTheHold()
+    {
+        if (_held is not { } held)
+        {
+            return;
+        }
+
+        _held = null;
+        var made = 0;
+
+        try
+        {
+            for (; made < held.Count; made++)
+            {
+                held[made].Write(_records!);
+            }
+        }
+        finally
+        {
+            Drop(held.Skip(made));
+        }
+    }
+
+    /// <summary>Drops what a session's start held and will never write: each held answer handed back, as one the loop never read is.</summary>
+    private static void Drop(IEnumerable<HeldWrite> held)
+    {
+        foreach (var write in held)
+        {
+            write.Dropped?.Invoke();
+        }
+    }
+
+    /// <summary>One write a session's start holds, and what is done instead where the hold is dropped.</summary>
+    /// <param name="Write">The write, made with the run as it stood when it was held.</param>
+    /// <param name="Dropped">What is done where it will never be made: an answer weighed handed back; null for nothing.</param>
+    private sealed record HeldWrite(Action<IFlowRecords> Write, Action? Dropped);
 
     /// <summary>The run whole, as its records read it: every instance with its state and what it waits on, what runs next, and the run's own standing.</summary>
     private FlowSnapshot Snapshot()
@@ -6028,14 +6074,16 @@ public sealed class FlowCoordinator
     /// the answer is refused and said. One offered under an inbox entry the run's records already hold is never weighed
     /// again (<see cref="AnswerHandedOver"/>). One offered before a session begins - the first, or the next - is taken at
     /// that session's start, before anything is admitted; one left unread as a session ends is handed back cancelled -
-    /// never refused, for it was never weighed - so it stays where it was handed over for whoever takes it next.
+    /// never refused, for it was never weighed - so it stays where it was handed over for whoever takes it next. What
+    /// became of it is told only once it is written: one weighed at a session's start, whose writes are held, is told
+    /// when they are made, and handed back cancelled where they never are - a resume refused writes nothing of itself.
     /// </summary>
     /// <param name="question">The question's id.</param>
     /// <param name="answer">The answer, spelled as the question's options spell it.</param>
     /// <param name="text">The text given with the answer, where it takes one.</param>
     /// <param name="through">How a person gave it; <c>answer-orchestrator</c> where the command handed it over.</param>
     /// <param name="inbox">The id of the inbox entry it was handed over under; null for an answer no inbox handed over.</param>
-    /// <returns>What became of the answer, once the session has weighed it; cancelled where no session weighed it.</returns>
+    /// <returns>What became of the answer, once the session has weighed it and written what it did; cancelled where no session weighed it, or none wrote it.</returns>
     public Task<FlowHandedOver> OfferAnswerAsync(string question, string answer, string? text = null, string? through = "answer-orchestrator", string? inbox = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(question);

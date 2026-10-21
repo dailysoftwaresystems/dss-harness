@@ -1024,6 +1024,125 @@ public sealed class FlowResumeTests
     }
 
     /// <summary>
+    /// An answer offered as a resume begins is weighed at its start, whose writes are held - and is settled only once they
+    /// are made: a resume refused, which writes nothing, hands it back cancelled, so it stays where it was handed over and
+    /// nothing says it was weighed; a resume that goes on settles it after what became of it is on disk, its event the
+    /// last of it.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerWeighedAtAResumesStart_IsSettledOnlyOnceTheStartIsWritten()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: holding
+                type: pause
+                question: what now?
+                options: [stay, go]
+            """);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), records: records);
+
+            Assert.Equal(FlowRunStatus.Paused, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+        }
+
+        var (_, _, refusedResume) = Records("r1", temp.Path, definition);
+
+        using (refusedResume)
+        {
+            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: refusedResume);
+            var offered = coordinator.OfferAnswerAsync("q9", "go", inbox: "e-refused");
+
+            var raised = await Assert.ThrowsAsync<HarnessException>(() => coordinator.RunAsync(Token)).WaitAsync(Bound, Token);
+
+            Assert.Equal(HarnessExit.Refused, raised.ExitCode);
+            Assert.Equal(TaskStatus.Canceled, offered.Status);
+        }
+
+        Assert.Null(harness.OrchestrationStore.ReadFlowQuestions(layout)!.Refused);
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+        Task<FlowHandedOver>? refusedOffer = null;
+        var settledAtItsEvent = new List<bool>();
+
+        using (again)
+        {
+            var told = new Intercepted(again, (kind, _, _, _) =>
+            {
+                if (kind is FlowChangeKind.Answer)
+                {
+                    settledAtItsEvent.Add(refusedOffer!.IsCompleted);
+                }
+            });
+            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: told);
+            refusedOffer = coordinator.OfferAnswerAsync("q9", "go", inbox: "e-refused");
+            var taken = coordinator.OfferAnswerAsync("q1", "go", inbox: "e-taken");
+
+            Assert.Equal(FlowRunStatus.Done, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+            Assert.Equal(FlowHandedOver.Refused, await refusedOffer.WaitAsync(Bound, Token));
+            Assert.Equal(FlowHandedOver.Taken, await taken.WaitAsync(Bound, Token));
+        }
+
+        var written = harness.OrchestrationStore.ReadFlowQuestions(layout)!;
+
+        Assert.Equal([false], settledAtItsEvent);
+        Assert.Equal(["e-refused"], written.Refused!.Select(entry => entry.Inbox));
+        Assert.Equal("e-taken", Assert.Single(written.Of("q1")!.Answers).By!.Inbox);
+    }
+
+    /// <summary>
+    /// Answers weighed at a resume's start whose held writes fail as they are made are handed back cancelled - the one
+    /// whose own event failed, and the one after it - never settled and never left waiting: what records them is not
+    /// all written, so each stays where it was handed over for whoever takes it next.
+    /// </summary>
+    [Fact]
+    public async Task AnswersWeighedAtAResumesStart_WhoseWritesFailAsTheyAreMade_AreHandedBack()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: holding
+                type: pause
+                question: what now?
+                options: [stay, go]
+            """);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), records: records);
+
+            Assert.Equal(FlowRunStatus.Paused, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+        }
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var failing = new Intercepted(again, (kind, _, _, _) =>
+            {
+                if (kind is FlowChangeKind.Answer)
+                {
+                    throw new IOException("the disk is full");
+                }
+            });
+            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: failing);
+            var refused = coordinator.OfferAnswerAsync("q9", "go", inbox: "e-refused");
+            var taken = coordinator.OfferAnswerAsync("q1", "go", inbox: "e-taken");
+
+            var failed = await Assert.ThrowsAsync<IOException>(() => coordinator.RunAsync(Token)).WaitAsync(Bound, Token);
+
+            Assert.Equal("the disk is full", failed.Message);
+            Assert.Equal((TaskStatus.Canceled, TaskStatus.Canceled), (refused.Status, taken.Status));
+        }
+    }
+
+    /// <summary>
     /// An answer left unread as a session ends - here one that ends by a write that failed - is handed back cancelled,
     /// never refused and never left waiting: it stays where it was handed over, for whoever takes it next.
     /// </summary>

@@ -647,6 +647,7 @@ public sealed class FlowService(
     {
         var said = new List<string>();
         var inbox = false;
+        var offered = new Dictionary<string, Task<FlowHandedOver>>(StringComparer.Ordinal);
 
         if (reclaimed is not null)
         {
@@ -664,7 +665,6 @@ public sealed class FlowService(
             using var records = new FlowRunRecords(_fileSystem, _store, layout, runContext, _clock);
             var coordinator = new FlowCoordinator(definition, _runner, _runnerFacts, _clock, runContext.Inputs, records, resume, layout.Name);
             var before = _store.ReadFlowQuestions(layout);
-            var offered = new Dictionary<string, Task<FlowHandedOver>>(StringComparer.Ordinal);
 
             if (answered is { } given && !coordinator.TryAnswer(given.Question, given.Answer, given.Text, out var problem, AnswerCommand))
             {
@@ -697,17 +697,11 @@ public sealed class FlowService(
                 break;
             }
 
-            // An answer offered that the loop never weighed stays for the next session; one the session settled - taken,
+            // An answer offered that the session never settled stays for the next session; one the session settled - taken,
             // or refused and recorded - that the inbox would not let go is said apart, for it was weighed: the run's records
             // hold it under its entry's id, so the next session only empties it from the inbox.
-            var handed = offered.Count(pair => !pair.Value.IsCompletedSuccessfully);
-            var settled = offered.Count - handed;
-
-            if (handed > 0)
-            {
-                inbox = true;
-                said.Add($"{ReportText.Counted(handed, "answer")} handed to this engine {(handed == 1 ? "was" : "were")} not taken before its session ended; {(handed == 1 ? "it stays" : "they stay")} in '{layout.InboxFile}', and the next session of the run takes {(handed == 1 ? "it" : "them")}");
-            }
+            inbox |= SayUnsettled(layout, offered, said);
+            var settled = offered.Count(pair => pair.Value.IsCompletedSuccessfully);
 
             if (unemptied is not null && settled > 0)
             {
@@ -741,7 +735,9 @@ public sealed class FlowService(
         {
             // A refusal met inside the session - an answer the run does not take, a state that cannot be taken up, a
             // definition changed - is answered as a refusal, naming the run's records as they stand; the report is the
-            // last session's, for a refused session is none.
+            // last session's, for a refused session is none. An answer handed over that a refused start weighed was
+            // handed back, for the start wrote nothing: it stays in the inbox, said as one the session never settled.
+            inbox |= SayUnsettled(layout, offered, said);
             var flow = SafeRead(() => _store.ReadFlow(layout));
             var records = flow is null ? [] : RecordsOf(layout, inbox);
             var outcome = new CommandOutcome(ex.ExitCode, ex.Message, [.. said, .. records.Select(record => $"{record.What}: {record.Path}")]);
@@ -917,6 +913,24 @@ public sealed class FlowService(
     }
 
     /// <summary>
+    /// Says the answers handed over that the session never settled - never weighed, or handed back by the loop, as a
+    /// refused start hands back what it weighed - each of which stays in the inbox for the next session of the run.
+    /// </summary>
+    /// <returns>Whether there was one, so the inbox is named among the session's records.</returns>
+    private static bool SayUnsettled(OrchestratorLayout layout, Dictionary<string, Task<FlowHandedOver>> offered, List<string> said)
+    {
+        var handed = offered.Count(pair => !pair.Value.IsCompletedSuccessfully);
+
+        if (handed == 0)
+        {
+            return false;
+        }
+
+        said.Add($"{ReportText.Counted(handed, "answer")} handed to this engine {(handed == 1 ? "was" : "were")} not taken before its session ended; {(handed == 1 ? "it stays" : "they stay")} in '{layout.InboxFile}', and the next session of the run takes {(handed == 1 ? "it" : "them")}");
+        return true;
+    }
+
+    /// <summary>
     /// Reads what was asked of the engine between its drives - at a session's start or its end - where what cannot be
     /// read never ends the session: it is said, as <paramref name="what"/>, and left for the next session of the run.
     /// </summary>
@@ -936,11 +950,13 @@ public sealed class FlowService(
 
     /// <summary>
     /// Empties from the inbox each answer the session settled - an offer the loop took, refused or found recorded already,
-    /// and one weighed between two drives (<see cref="TakeInbox"/>) - and forgets each offer the loop handed back, which
-    /// stays in the inbox for whoever takes it next. The one owner of emptying a settled answer: it is forgotten only once
-    /// the inbox has let it go - a removal that fails leaves it settled, tried again at the next poll or the next drive's
-    /// end, and never offered to the engine nor taken a second time; one the inbox still holds as the session ends is
-    /// settled by the run's records, under its entry's id, so the next session only empties it.
+    /// which it settles only once what became of it is written (a session's start holds its writes, and hands back what
+    /// it weighed where it is refused), and one weighed between two drives (<see cref="TakeInbox"/>) - and forgets each
+    /// offer the loop handed back, which stays in the inbox for whoever takes it next. The one owner of emptying a
+    /// settled answer: it is forgotten only once the inbox has let it go - a removal that fails leaves it settled, tried
+    /// again at the next poll or the next drive's end, and never offered to the engine nor taken a second time; one the
+    /// inbox still holds as the session ends is settled by the run's records, under its entry's id, so the next session
+    /// only empties it.
     /// </summary>
     private void Settle(OrchestratorLayout layout, Dictionary<string, Task<FlowHandedOver>> offered)
     {
@@ -955,7 +971,7 @@ public sealed class FlowService(
         }
     }
 
-    /// <summary>Whether the loop handed <paramref name="offer"/> back, never weighing it - cancelled as its session ended: the answer is no longer the session's, and stays in the inbox.</summary>
+    /// <summary>Whether the loop handed <paramref name="offer"/> back - cancelled as its session ended, never weighed, or weighed by a start that wrote nothing: the answer is no longer the session's, and stays in the inbox.</summary>
     private static bool HandedBack(Task<FlowHandedOver> offer)
         => offer is { IsCompleted: true, IsCompletedSuccessfully: false };
 
