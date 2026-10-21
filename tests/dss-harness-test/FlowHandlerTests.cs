@@ -623,6 +623,37 @@ public sealed class FlowHandlerTests
         Assert.Equal("its when read false", again.SkippedBecause);
     }
 
+    /// <summary>A step drawn again by a redirect reads, in its when, the visit it will be: {visit} is 2 for the second.</summary>
+    [Fact]
+    public async Task ARedirectedStepsWhen_ReadsTheVisitItWillBe()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: gate
+                type: orient
+                when: visit == 1
+              - name: verify
+                type: ci-read
+                dependsOn: [gate]
+              - name: fix
+                type: orient
+                on: {step: verify, outcome: failure}
+                then: gate
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner().On("verify", run => run.Visit == 1
+            ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "the read failed")
+            : FlowStepResult.Ended(passed: true, HarnessExit.Success));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(["gate", "verify", "fix", "verify+2"], runner.Started);
+        Assert.Equal(FlowInstanceState.Skipped, coordinator.Instances["gate+2"].State);
+    }
+
     /// <summary>While a question of a source's ending is open - its handler at its bound after a success - what depends on the source waits for the answer.</summary>
     [Fact]
     public async Task AQuestionOfASourcesEnding_HoldsWhatDependsOnIt_UntilAnswered()

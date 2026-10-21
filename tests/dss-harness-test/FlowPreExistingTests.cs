@@ -313,6 +313,45 @@ public sealed class FlowPreExistingTests
         Assert.Equal(FlowInstanceState.Done, coordinator.Instances["think+2"].State);
     }
 
+    /// <summary>The recovery's steps read the issue they fix in a template as in an expression: a question reading {issue.title} is filled with it.</summary>
+    [Fact]
+    public async Task TheRecoverysSteps_ReadTheIssueTheyFix_InATemplate()
+    {
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              steps:
+                - name: confirm
+                  type: pause
+                  question: 'fix {issue.title} in {source.step}?'
+                  options: [yes]
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                onPreExisting: triage
+              - name: triage
+                type: reason
+                prompt: triage.md
+                outputs: pre-existing.json
+                raised: preExisting
+                onAddress: recover
+            """);
+        var runner = new FakeRunner()
+            .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, preExisting: [Issue("a hole in the parser")]))
+            .On("triage", run => Course("fix", run.Issue!.Title));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        var asked = Assert.Single(coordinator.OpenQuestions);
+        Assert.Equal("fix a hole in the parser in triage?", asked.Problem);
+    }
+
     /// <summary>An issue that blocks nothing leaves the reporting step as it ended: the run simply goes on once the fix is done.</summary>
     [Fact]
     public async Task AnIssueThatBlocksNothing_LeavesTheReporterAsItEnded()

@@ -325,7 +325,6 @@ public sealed class FlowCoordinator
     private readonly List<FlowInstance> _handled = [];
     private readonly Dictionary<(string Scope, string Step), int> _recoveryVisits = new();
     private readonly Dictionary<(string Scope, string Step), int> _recoveryExtra = new();
-    private readonly Dictionary<string, string> _direction = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _askedSubject = new(StringComparer.Ordinal);
     private readonly List<FlowInstance> _owedEndings = [];
 
@@ -1307,15 +1306,12 @@ public sealed class FlowCoordinator
         {
             _recoveryExtra[key] = _recoveryExtra.GetValueOrDefault(key) + 1;
 
-            if (answer == "direct")
-            {
-                _direction[instance.Path] = text ?? string.Empty;
-            }
-
+            // A direct answer's text is the fix the next visit is given, and that visit's alone.
             TakeRecoveryOf(
                 instance,
                 instance.Issue is null ? instance : instance.Issue.Blocks == true ? instance.RaisedBy : null,
-                instance.Issue);
+                instance.Issue,
+                answer == "direct" ? text ?? string.Empty : null);
             return;
         }
 
@@ -1443,7 +1439,7 @@ public sealed class FlowCoordinator
 
             if (instance.Step.When is { } when && instance.DeclaredScope is { } declared)
             {
-                var read = Evaluate(when, declared, out var problem, RaisedSourceIn(declared, instance));
+                var read = Evaluate(when, declared, out var problem, reader: instance);
 
                 if (problem is not null)
                 {
@@ -1480,10 +1476,24 @@ public sealed class FlowCoordinator
 
     /// <summary>
     /// The ending a step reads as <c>source</c>: what raised the step itself, or - for a member of a handler that is a
-    /// group, or of a visit of the recovery - what raised the group around it.
+    /// group, or of a visit of the recovery, however deep - what raised the nearest such group around it.
     /// </summary>
     private static FlowInstance? RaisedSourceIn(Scope scope, FlowInstance? reader = null)
-        => reader?.RaisedBy ?? scope.OwnGroupInstance?.RaisedBy ?? scope.GroupInstance?.RaisedBy;
+        => reader?.RaisedBy ?? RaisedGroupOf(scope)?.RaisedBy;
+
+    /// <summary>The nearest group around <paramref name="scope"/> an ending raised - a handler that is a group, a visit of the recovery - or null outside every one.</summary>
+    private static FlowInstance? RaisedGroupOf(Scope scope)
+    {
+        for (var at = scope; at is not null; at = at.Parent)
+        {
+            if ((at.OwnGroupInstance ?? at.GroupInstance) is { RaisedBy: not null } raised)
+            {
+                return raised;
+            }
+        }
+
+        return null;
+    }
 
     /// <summary>Makes <paramref name="instance"/>'s next attempt of its visit, not yet started: what the attempt before it ended with is its own.</summary>
     private static void NewAttempt(FlowInstance instance)
@@ -1676,7 +1686,7 @@ public sealed class FlowCoordinator
             {
                 // A handler's or a recovery's steps read the source that raised them, in a when as anywhere else: the
                 // block's own instance carries it.
-                var read = Evaluate(when, scope, out var problem, RaisedSourceIn(scope));
+                var read = Evaluate(when, scope, out var problem, drawing: scope.Visits.GetValueOrDefault(declaration.Name) + 1);
 
                 if (problem is not null)
                 {
@@ -2212,7 +2222,7 @@ public sealed class FlowCoordinator
                 {
                     try
                     {
-                        var read = Evaluate(filterWhen, instance.DeclaredScope!, out var problem, RaisedSourceIn(instance.DeclaredScope!, instance));
+                        var read = Evaluate(filterWhen, instance.DeclaredScope!, out var problem, reader: instance);
 
                         if (problem is not null)
                         {
@@ -2719,7 +2729,7 @@ public sealed class FlowCoordinator
 
             if (handler.When is { } when)
             {
-                var read = Evaluate(when, scope, out var problem, instance);
+                var read = Evaluate(when, scope, out var problem, instance, drawing: scope.Visits.GetValueOrDefault(handler.Name) + 1);
 
                 if (problem is not null)
                 {
@@ -3182,7 +3192,8 @@ public sealed class FlowCoordinator
     /// <param name="source">The step whose failure it takes, or the triage instance whose issue it fixes: what its steps read as <c>source</c>.</param>
     /// <param name="rerun">What runs again once the recovery is done; null where the run only goes on.</param>
     /// <param name="issue">The issue a triage sent, where one did; null for a failure.</param>
-    private void TakeRecoveryOf(FlowInstance source, FlowInstance? rerun, FlowPreExistingReport? issue)
+    /// <param name="direction">The fix a person gave this visit, answering the bound direct; null for none.</param>
+    private void TakeRecoveryOf(FlowInstance source, FlowInstance? rerun, FlowPreExistingReport? issue, string? direction = null)
     {
         var recover = _definition.Recover!;
         var scope = source.DeclaredScope ?? _top;
@@ -3212,7 +3223,7 @@ public sealed class FlowCoordinator
         instance.Rerun = rerun;
         instance.RecoveryIssue = issue;
         instance.Visit = visits;
-        instance.Direction = _direction.GetValueOrDefault(source.Path);
+        instance.Direction = direction;
 
         // A block of its own in the scope the source stands in: its steps are scheduled as any scope's are, and read
         // the source - the failed step, or the triage instance and its issue - as source and {issue}.
@@ -4077,14 +4088,19 @@ public sealed class FlowCoordinator
     /// </summary>
     /// <param name="path">The path being read.</param>
     /// <param name="scope">The scope the read is made in.</param>
-    /// <param name="source">The instance a handler or a recovery reads as <c>source</c>; null where none raised what the read is for.</param>
-    /// <param name="reader">The instance whose template is being filled, where one is; its visit is what <c>visit</c> reads.</param>
+    /// <param name="source">The ending a handler's when reads as <c>source</c>, where the read is of a step it would answer; null for what raised the reader or the group around it.</param>
+    /// <param name="reader">The instance the read is made for, where one is: whose template is being filled, or whose when is read again.</param>
+    /// <param name="drawing">The visit a declaration being drawn will be, where its when is read as it is drawn.</param>
     /// <returns>
     /// What the root yields - or, for a step's name, what the step the read names yields, a group's member walked down
     /// to by the names after the group's - and how many of the path's steps that walk consumed: the tree walks the rest.
     /// </returns>
-    private FlowExpression.PathRead Read(FlowExpression.Path path, Scope scope, FlowInstance? source = null, FlowInstance? reader = null)
+    private FlowExpression.PathRead Read(FlowExpression.Path path, Scope scope, FlowInstance? source = null, FlowInstance? reader = null, int? drawing = null)
     {
+        // The ending a read means by source: the one it is given - a handler's when, read of the step it would answer -
+        // or what raised the reader, or the raised group around it.
+        source ??= RaisedSourceIn(scope, reader);
+
         switch (path.Root)
         {
             case "input":
@@ -4098,7 +4114,9 @@ public sealed class FlowCoordinator
             case "iteration":
                 return new(scope.Iteration is { } iteration ? FlowValue.Of((long)iteration) : FlowValue.Missing, 0);
             case "visit":
-                return new(FlowValue.Of((long)(reader?.Visit ?? 1)), 0);
+                // A raised step's own visit; inside a handler that is a group, or a visit of the recovery, that visit;
+                // else the reader's, or - read in a when as it is drawn - the visit it will be.
+                return new(FlowValue.Of((long)(reader is { RaisedBy: not null } ? reader.Visit : RaisedGroupOf(scope)?.Visit ?? reader?.Visit ?? drawing ?? 1)), 0);
             case "issue":
             {
                 // The issue a raised instance or the recovery over it triages: the item itself, as a read sees it.
@@ -4124,7 +4142,7 @@ public sealed class FlowCoordinator
             case "run":
                 return new(FlowValue.Of(RunValues()), 0);
             case "source":
-                return new(source is null ? FlowValue.Missing : FlowValue.Of(SourceFacts(source)), 0);
+                return new(source is null ? FlowValue.Missing : FlowValue.Of(SourceFacts(source, RaisedGroupOf(scope))), 0);
             default:
                 return StepRead(path, keysFrom: -1, scope, scope);
         }
@@ -4164,9 +4182,9 @@ public sealed class FlowCoordinator
     /// <summary>
     /// The facts a handler or a recovery reads of its source: its output beside the engine's own facts of how it ended
     /// - outcome, code, error, question - and, for a recovery, the step as the report names it and the fix a person
-    /// gave where its bound was answered direct.
+    /// gave where its bound was answered direct - for the visit it was given to, and empty on every other.
     /// </summary>
-    private JsonObject SourceFacts(FlowInstance source)
+    private static JsonObject SourceFacts(FlowInstance source, FlowInstance? raised)
     {
         var facts = new JsonObject();
 
@@ -4191,7 +4209,8 @@ public sealed class FlowCoordinator
         facts["error"] = source.Error;
         facts["question"] = source.EndedByQuestion;
         facts["step"] = source.Id;
-        facts["direction"] = _direction.GetValueOrDefault(source.Path) ?? string.Empty;
+        // The fix a person gave is the visit's of the recovery it was given to, and that visit's alone.
+        facts["direction"] = raised?.Direction ?? string.Empty;
 
         return facts;
     }
@@ -4403,12 +4422,14 @@ public sealed class FlowCoordinator
     /// <param name="expression">The expression, as the definition wrote it.</param>
     /// <param name="scope">The scope the expression is read in.</param>
     /// <param name="problem">Why the expression could not be read, where it could not.</param>
-    /// <param name="source">The instance a handler's or a recovery's expression reads as <c>source</c>, where one raised what is being read for.</param>
-    private FlowValue Evaluate(string expression, Scope scope, out string? problem, FlowInstance? source = null)
+    /// <param name="source">The ending a handler's when reads as <c>source</c>; null for what raised the reader or the group around it.</param>
+    /// <param name="reader">The instance the expression is read for, where one is.</param>
+    /// <param name="drawing">The visit a declaration being drawn will be, where its when is read as it is drawn.</param>
+    private FlowValue Evaluate(string expression, Scope scope, out string? problem, FlowInstance? source = null, FlowInstance? reader = null, int? drawing = null)
     {
         try
         {
-            var value = FlowExpression.Parse(expression).Evaluate(path => Read(path, scope, source));
+            var value = FlowExpression.Parse(expression).Evaluate(path => Read(path, scope, source, reader, drawing));
 
             if (value.IsMissing)
             {
@@ -4509,7 +4530,7 @@ public sealed class FlowCoordinator
 
             try
             {
-                var value = FlowExpression.Parse(name).Evaluate(path => Read(path, instance.DeclaredScope!, instance.RaisedBy, instance));
+                var value = FlowExpression.Parse(name).Evaluate(path => Read(path, instance.DeclaredScope!, reader: instance));
 
                 if (value.IsMissing)
                 {
@@ -4842,11 +4863,6 @@ public sealed class FlowCoordinator
                 var failed = visit.RaisedBy!;
                 var key = (failed.DeclaredScope!.Id, failed.Path);
                 _recoveryVisits[key] = Math.Max(_recoveryVisits.GetValueOrDefault(key), visit.Visit);
-
-                if (visit.Direction is { } direction)
-                {
-                    _direction[failed.Path] = direction;
-                }
             }
 
             foreach (var source in _created.Where(created => created.Step is { On: null } && created._handlers.Any(handler => handler.State is "owed" or "raised")))

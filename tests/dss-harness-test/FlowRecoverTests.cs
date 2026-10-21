@@ -167,6 +167,59 @@ public sealed class FlowRecoverTests
         Assert.Contains(coordinator.OpenQuestions, question => question.Kind == "recoveryBound");
     }
 
+    /// <summary>
+    /// The recovery's steps - however deep in it - read, in a template as in an expression, the step that gave the
+    /// failure ({source.step}), the recovery's own visit for it ({visit}), and the fix a person gave for that visit
+    /// alone ({source.direction}): empty on every other visit.
+    /// </summary>
+    [Fact]
+    public async Task TheRecoverysSteps_ReadTheirSource_TheirVisit_AndAFixGivenForThatVisitAlone()
+    {
+        var definition = Parse("""
+            name: flow
+            recover:
+              onSuccess: failed-step
+              onFailure: pause
+              maxVisits: 1
+              steps:
+                - name: inner
+                  steps:
+                    - name: say
+                      type: pause
+                      question: 'visit {visit} of {source.step}, told [{source.direction}]'
+                      options: [ok]
+            steps:
+              - name: build
+                type: orient
+                onFailure: recover
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner().On("build", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        _ = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        var first = One(coordinator.OpenQuestions, question => question.Kind == "pause");
+        Assert.Equal("visit 1 of build, told []", first.Problem);
+        Assert.True(coordinator.TryAnswer(first.Id, "ok", out _));
+
+        _ = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        var bound = One(coordinator.OpenQuestions, question => question.Kind == "recoveryBound");
+        Assert.True(coordinator.TryAnswer(bound.Id, "direct", "use the cache", out _));
+
+        _ = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        var second = One(coordinator.OpenQuestions, question => question.Kind == "pause");
+        Assert.Equal("visit 2 of build+2, told [use the cache]", second.Problem);
+        Assert.True(coordinator.TryAnswer(second.Id, "ok", out _));
+
+        _ = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        var again = One(coordinator.OpenQuestions, question => question.Kind == "recoveryBound");
+        Assert.True(coordinator.TryAnswer(again.Id, "more", out _));
+
+        _ = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        var third = One(coordinator.OpenQuestions, question => question.Kind == "pause");
+        Assert.Equal("visit 3 of build+3, told []", third.Problem);
+    }
+
     /// <summary>A step that fails again is recovered again, until it passes or a person is asked.</summary>
     [Fact]
     public async Task AStepThatFailsAgainIsRecoveredAgain_UntilItPasses()
