@@ -1119,9 +1119,57 @@ public sealed class FlowCoordinatorTests
         Assert.Equal(FlowInstanceState.Done, coordinator.Instances["notes+2"].State);
     }
 
-    /// <summary>A group that takes a member's failure still runs its always members, in the always phase; only then does it end failed.</summary>
+    /// <summary>
+    /// An always member a session ran inside a group still open is drawn again at the resume, and the group's ending does
+    /// not wait for it: the group ends once its work is done, what depends on it runs, and only then the always member
+    /// runs again, in that session's always phase.
+    /// </summary>
     [Fact]
-    public async Task AFailedGroupsAlwaysMember_StillRuns_BeforeTheGroupEndsFailed()
+    public async Task AnAlwaysMemberRunAgainAtTheResume_KeepsNoGroupOpen_ItRunsAfterWhatDependsOnTheGroup()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: work
+                steps:
+                  - name: approve
+                    type: pause
+                    question: go on?
+                    options: [go]
+                  - name: build
+                    type: orient
+                    dependsOn: [approve]
+                  - name: tidy
+                    type: orient
+                    always: true
+              - name: after
+                type: orient
+                dependsOn: [work]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner();
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Equal(["work.tidy"], runner.Started);
+        Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", out _));
+
+        end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(["work.tidy", "work.build", "after", "work.tidy+2"], runner.Started);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["work"].State);
+    }
+
+    /// <summary>
+    /// A group's ending never waits on its always members: one that takes a member's failure ends failed before the
+    /// always phase, its policy decided and what depends on it run, and its always member runs in that phase beside the
+    /// run's own always steps - each reading run statuses the group's failure has already settled.
+    /// </summary>
+    [Fact]
+    public async Task AFailedGroupsAlwaysMember_RunsInTheAlwaysPhase_AfterTheGroupEndedFailedAndWhatDependsOnItRan()
     {
         var definition = Parse("""
             name: flow
@@ -1134,6 +1182,13 @@ public sealed class FlowCoordinatorTests
                   - name: tidy
                     type: orient
                     always: true
+              - name: after
+                type: orient
+                dependsOn: [work]
+              - name: notes
+                type: orient
+                always: true
+                when: run.passedOver == 1
             """);
         var cancel = TestContext.Current.CancellationToken;
         var runner = new FakeRunner().On("gate", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "a leg failed"));
@@ -1141,10 +1196,47 @@ public sealed class FlowCoordinatorTests
 
         var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
 
-        Assert.Equal(["work.gate", "work.tidy"], runner.Started);
+        Assert.Equal(["work.gate", "after", "work.tidy", "notes"], runner.Started);
         Assert.Equal(FlowInstanceState.Done, coordinator.Instances["work.tidy"].State);
         Assert.Equal(FlowInstanceState.Failed, coordinator.Instances["work"].State);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["notes"].State);
         Assert.Equal(["work"], end.PassedOver);
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+    }
+
+    /// <summary>
+    /// An always member that fails after its group ended is decided where the group's own failure would be - the group,
+    /// done, is never failed over a step that ran after it: here the group's onFailure passes it over.
+    /// </summary>
+    [Fact]
+    public async Task AnAlwaysMemberFailingAfterItsGroupEnded_IsDecidedByTheGroupsPolicy_TheGroupStandingDone()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: work
+                onFailure: continue
+                steps:
+                  - name: build
+                    type: build
+                  - name: tidy
+                    type: ci-read
+                    always: true
+              - name: after
+                type: orient
+                dependsOn: [work]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner().On("tidy", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "the read failed"));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(["work.build", "after", "work.tidy"], runner.Started);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["work"].State);
+        Assert.Equal(FlowInstanceState.Failed, coordinator.Instances["work.tidy"].State);
+        Assert.Equal(["work.tidy"], end.PassedOver);
+        Assert.Equal("done; 1 step failed and was passed over: work.tidy", end.Summary);
     }
 
     /// <summary>onFailure stop ends the run failed: nothing more is started, what runs finishes, the always steps run, and what was never started is NotRun.</summary>
