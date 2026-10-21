@@ -34,6 +34,7 @@ public sealed class FlowInterrupts(Action? stopAsked = null)
     private int _pressed;
     private int _applied;
     private FlowCoordinator? _coordinator;
+    private Func<TimeSpan, CommandOutcome>? _cutOff;
 
     /// <summary>How many interrupts the session bound, or about to be, has been given.</summary>
     public int Presses
@@ -104,7 +105,7 @@ public sealed class FlowInterrupts(Action? stopAsked = null)
         }
     }
 
-    /// <summary>The session ended: unbound, and its count cleared, so the next session's interrupts are counted afresh.</summary>
+    /// <summary>The session ended: unbound, its count cleared and its answer to a cut-off let go, so the next session's interrupts are counted afresh.</summary>
     internal void SessionEnded()
     {
         lock (_gate)
@@ -112,7 +113,36 @@ public sealed class FlowInterrupts(Action? stopAsked = null)
             _coordinator = null;
             _pressed = 0;
             _applied = 0;
+            _cutOff = null;
         }
+    }
+
+    /// <summary>
+    /// How the session answers being cut off by its terminal, once it has a run to answer for: as every command over a
+    /// run answers - the run and its records named, its line in the run's log, its document where --json asked for it.
+    /// Called by the service that drives it; let go at the session's end.
+    /// </summary>
+    internal void CutOffAnsweredBy(Func<TimeSpan, CommandOutcome> answer)
+    {
+        ArgumentNullException.ThrowIfNull(answer);
+
+        lock (_gate)
+        {
+            _cutOff = answer;
+        }
+    }
+
+    /// <summary>The session's own answer to being cut off <paramref name="drain"/> after the second interrupt; null where it has no run to answer for yet.</summary>
+    internal CommandOutcome? CutOff(TimeSpan drain)
+    {
+        Func<TimeSpan, CommandOutcome>? answer;
+
+        lock (_gate)
+        {
+            answer = _cutOff;
+        }
+
+        return answer?.Invoke(drain);
     }
 
     /// <summary>What each interrupt not yet applied asks of the bound session's engine, each counted applied; nothing where none is bound. Under the lock the caller holds.</summary>
@@ -212,10 +242,9 @@ public sealed class FlowTerminal
                 return await running.ConfigureAwait(false);
             }
 
-            return CommandOutcome.Failed(
-                HarnessExit.Cancelled,
-                $"the run did not stop within {Seconds(_drain)} s of the second interrupt, and the command ends where it stands: what is left is what a crash leaves, "
-                + $"and {FlowService.ResumeCommand} reclaims the run and goes on from its records");
+            // The session answers for its run where it has one - the run and its records named, the run's log told - and
+            // the terminal for a command cut off before any run was made or taken up.
+            return Interrupts.CutOff(_drain) ?? CommandOutcome.Failed(HarnessExit.Cancelled, CutOffLine(_drain, run: null));
         }
         finally
         {
@@ -274,6 +303,14 @@ public sealed class FlowTerminal
         signal.Cancel = true;
         Interrupted();
     }
+
+    /// <summary>
+    /// What a command cut off <paramref name="drain"/> after its second interrupt says: the one line, naming
+    /// <paramref name="run"/> and the command that goes on with it where there is one.
+    /// </summary>
+    internal static string CutOffLine(TimeSpan drain, string? run)
+        => $"{(run is null ? "the run" : $"run '{run}'")} did not stop within {Seconds(drain)} s of the second interrupt, and the command ends where it stands: "
+            + $"what is left is what a crash leaves, and {FlowService.ResumeCommand}{(run is null ? string.Empty : $" {run}")} reclaims the run and goes on from its records";
 
     private static string Seconds(TimeSpan span) => span.TotalSeconds.ToString("0", CultureInfo.InvariantCulture);
 

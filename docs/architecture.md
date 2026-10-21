@@ -1522,7 +1522,9 @@ pause, which starts no clock; the second asks it to stop where it stands: the en
 the stop as stopped all the same (`PointOfNoReturn.SafePauseDrain`), and the command ends within 120 s
 of the interrupt whatever is left (`PointOfNoReturn.HardStopBound`, the drain and 30 s to write the
 end, so the terminal never cuts off a session the engine is still ending in order) - what a crash
-leaves, which a resume goes on from. The engine's loop alone applies either,
+leaves, which a resume goes on from. A session cut off answers as every command over its run does:
+the run and `resume-orchestrator <run>` named, every record listed in text and `--json`, and its line
+in the run's log. The engine's loop alone applies either,
 and a cancellation of the session's token is the second, never a cut-off. Until the step runners
 land, the runner registered is `NoStepRunner`: each step of a run fails, saying no runner serves its
 type (its code 14).

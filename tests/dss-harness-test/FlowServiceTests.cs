@@ -1031,6 +1031,80 @@ public sealed class FlowServiceTests
         _ = deaf.TrySetResult();
     }
 
+    /// <summary>
+    /// A session the terminal cuts off answers as every command over a run does: the line names the run and the command
+    /// that goes on with it, the text and the --json document name every record the run holds, and the run's log has
+    /// the command's line.
+    /// </summary>
+    [Fact]
+    public async Task ASessionCutOffByTheTerminal_NamesTheRunAndItsRecords_InTextJsonAndItsLog()
+    {
+        var (repository, runner) = await RepositoryAsync(InterruptedFlow);
+        using var disposed = repository;
+        var clock = new TimerClock();
+        var service = Service(repository.Harness, runner, clock);
+        var deaf = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<CommandOutcome>? session = null;
+
+        runner.On("one", FlowStepResult.Ended(passed: true, 0));
+        runner.HoldsDeaf("two", deaf.Task);
+
+        var terminal = new FlowTerminal(repository.Harness.Output, FlowService.RunCommand, clock, TimeSpan.FromSeconds(10));
+        var driving = terminal.RunAsync(
+            (interrupts, token) => session = service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: true, interrupts, token),
+            Token,
+            bindSignals: false);
+
+        await runner.WaitStartedAsync("two");
+        await clock.WaitingAsync(1).WaitAsync(Bound, Token);
+        terminal.Interrupted();
+        terminal.Interrupted();
+        await clock.WaitingAsync(3).WaitAsync(Bound, Token);
+        clock.Advance(TimeSpan.FromSeconds(10));
+
+        var outcome = await driving.WaitAsync(Bound, Token);
+        var run = RunOf(repository);
+
+        Assert.Equal(HarnessExit.Cancelled, outcome.ExitCode);
+        Assert.Equal(
+            "run 'r1' did not stop within 10 s of the second interrupt, and the command ends where it stands: what is left is what a crash leaves, and resume-orchestrator r1 reclaims the run and goes on from its records",
+            outcome.Message);
+        Assert.Equal(
+            [
+                $"run: {run.Directory}",
+                $"state: {run.FlowFile}",
+                $"status: {run.WorkflowStatusFile}",
+                $"questions: {run.QuestionsFile}",
+                $"issues: {run.PreExistingIssuesFile}",
+                $"definition: {run.DefinitionFile}",
+                $"events: {run.EventsFile}",
+                $"report: {run.ReportFile}",
+                $"reportJson: {run.ReportJsonFile}",
+                $"log {run.LogFile("r1")}",
+            ],
+            outcome.Details);
+
+        var document = JsonNode.Parse(Assert.Single(outcome.Data))!.AsObject();
+
+        Assert.True(outcome.Quiet);
+        Assert.Equal(130, document["exitCode"]!.GetValue<int>());
+        Assert.Equal("r1", document["run"]!.GetValue<string>());
+        Assert.Equal("Running", document["status"]!.GetValue<string>());
+        Assert.Equal(
+            ["run", "state", "status", "questions", "issues", "definition", "events", "report", "reportJson", "log"],
+            document["records"]!.AsObject().Select(member => member.Key));
+
+        var logged = repository.Harness.OrchestrationLog.Read(run.LogFile("r1"))[^1];
+
+        Assert.Equal(FlowService.RunCommand, logged.Command);
+        Assert.Equal(HarnessExit.Cancelled, logged.ExitCode);
+
+        // The session cut off goes on behind the command, as it would in a process that ended: let it end before the
+        // repository goes.
+        _ = deaf.TrySetResult();
+        _ = await session!.WaitAsync(Bound, Token);
+    }
+
     /// <summary>The drain of a hard stop is bounded: a session that has not ended within it after the second interrupt is left where it stands, and the command answers 130 saying so.</summary>
     [Fact]
     public async Task TheHardStopsDrainIsBounded()

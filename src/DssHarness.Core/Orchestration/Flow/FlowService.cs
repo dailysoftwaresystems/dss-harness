@@ -653,6 +653,10 @@ public sealed class FlowService(
             said.Add(reclaimed);
         }
 
+        // Cut off by its terminal, the session answers for the run as every command over it does, the session itself
+        // left where it stands.
+        interrupts?.CutOffAnsweredBy(drain => CutOff(layout, command, drain, inbox, json));
+
         try
         {
             var (definition, runContext, resume) = begin();
@@ -1007,6 +1011,19 @@ public sealed class FlowService(
             Questions = questions?.Open ?? [],
             Spent = flow?.Spent,
         };
+    }
+
+    /// <summary>
+    /// What a session its terminal cut off answers, <paramref name="drain"/> after the second interrupt, while the session
+    /// goes on behind it: the run and the command that goes on with it named, every record the run holds, the run's state
+    /// as its records hold it, and the command's line in the run's log - what is left is what a crash leaves.
+    /// </summary>
+    private CommandOutcome CutOff(OrchestratorLayout layout, string command, TimeSpan drain, bool inbox, bool json)
+    {
+        var records = RecordsOf(layout, inbox);
+        var outcome = CommandOutcome.Failed(HarnessExit.Cancelled, FlowTerminal.CutOffLine(drain, layout.Name), [.. records.Select(record => $"{record.What}: {record.Path}")]);
+
+        return Ended(layout, command, outcome, ResultOf(layout, outcome) with { Records = records }, json);
     }
 
     /// <summary>A refusal of a command over a run, in the run's log and its document.</summary>
