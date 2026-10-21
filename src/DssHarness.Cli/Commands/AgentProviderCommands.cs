@@ -18,10 +18,15 @@ internal static class ListAgentProviderCommand
         Description = "Print the listing as one JSON document.",
     };
 
-    /// <summary>Its --json, which a listing that stops before it lists anything answers with its listing for, listing nothing.</summary>
+    /// <summary>
+    /// Its --json, which a listing that stops before it lists anything answers with its listing for, listing nothing -
+    /// and --template, whose document is its own, with the template's, printing none.
+    /// </summary>
     private static readonly JsonAnswer JsonAnswerOfList = new(
         JsonOption,
-        (_, exitCode, summary, _, _) => AgentProviderReports.Stopped(exitCode, summary));
+        (flags, exitCode, summary, _, _) => flags.IsSet(TemplateOption)
+            ? AgentProviderReports.TemplateStopped(exitCode, summary)
+            : AgentProviderReports.Stopped(exitCode, summary));
 
     internal static Command Create()
     {

@@ -1327,8 +1327,9 @@ build calls yet), who may reach the file each name came from is asked by the one
 the host items' files are held to (`ItemEnvironment.Unprotected`): never a file others can change,
 and never one others can read while it holds a secret - a name the configuration appoints as a key,
 not a setting such as the program a client starts. `list-agent-providers` says the same configuration without saying one key: each
-provider, client and tier, every appointed name present or missing, `--template` the sections as
-`init` writes them, exit 0 whatever is missing. The Claude Code the clients will drive is npm's own:
+provider, client and tier, every appointed name present or missing, exit 0 whatever is missing;
+`--template` the sections as `init` writes them, answered before any repository is read - outside
+one, and where the configuration it is printed to repair does not load. The Claude Code the clients will drive is npm's own:
 `NpmClient` finds npm (a program, or on Windows what `npm.cmd` would have started - the tool never
 starts a batch file - with npm and the node that starts it looked for on one PATH by the tool's one
 walk of a PATH), `ClaudeCodeInstall` reads the package it holds and the version its program
@@ -2631,7 +2632,9 @@ tool replaces, where a green result had quietly stopped meaning anything.
   (`run-orchestrator`, `resume-orchestrator`, `answer-orchestrator`, `pause-orchestrator`,
   `stop-orchestrator`) with the flow document - the session they would have run, empty
   (`OrchestrationReports.FlowStopped`);
-  `check-mutations --list` with its listing, no legs; and `read-anchor` and `read-anchors`,
+  `check-mutations --list` with its listing, no legs; `list-agent-providers` with its listing, no
+  provider - and with `--template` with the template's own document, `template` null
+  (`AgentProviderReports.Stopped`, `AgentProviderReports.TemplateStopped`); and `read-anchor` and `read-anchors`,
   whose document is an array, with that array empty - the process's exit code and the line it
   ends on say the rest. Each command registers which where it is wired (`CommandRunner.Wire`,
   `JsonAnswer`), so the plumbing answers for it without choosing by its name: where the parser
@@ -2644,8 +2647,9 @@ tool replaces, where a green result had quietly stopped meaning anything.
   with a value each.
 - One reader reads a command line's flags wherever the parser may have refused it
   (`CommandFlags`): whether `--json` is set, and each flag a stopped document says -
-  `fix-line-endings`' `check`, `install-missing-tools`' `dryRun`, and whether `check-mutations`
-  answers with its listing. It never throws: a flag whose own value the parser refused, given
+  `fix-line-endings`' `check`, `install-missing-tools`' `dryRun`, whether `check-mutations`
+  answers with its listing, and whether `list-agent-providers` answers with its template. It
+  never throws: a flag whose own value the parser refused, given
   twice with a value each, reads as not given. A command's body reads `--json` as that reader
   read it where the command was wired (`CommandContext.Json`), never from the option again.
 - The one exit of a command asked for `--json` without its document is its usage: `--help`, `-h`

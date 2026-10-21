@@ -49,13 +49,24 @@ public static class AgentProviderReports
 
         if (json)
         {
-            var document = new JsonObject { ["template"] = text };
-
-            return CommandOutcome.Ok("the agent sections as init writes them into a new config") with { Data = [document.ToJsonString(JsonOptions)], Quiet = true };
+            return CommandOutcome.Ok("the agent sections as init writes them into a new config") with { Data = [TemplateDocument(text).ToJsonString(JsonOptions)], Quiet = true };
         }
 
         return CommandOutcome.Ok("the agent sections as init writes them into a new config", [text]);
     }
+
+    /// <summary>
+    /// The template's own document where <c>--template</c> stops before it prints anything - a <c>--directory</c> that
+    /// does not exist, a command line the parser refuses: its shape, no template, after the code it exits with and the
+    /// line it ends on - never the listing's.
+    /// </summary>
+    /// <param name="exitCode">The code the command exits with.</param>
+    /// <param name="summary">The line it ends on.</param>
+    public static string TemplateStopped(int exitCode, string summary)
+        => ReportJson.Stopped(exitCode, summary, TemplateDocument(text: null));
+
+    /// <summary>The one shape of the template's document: the sections' text, or null where none was printed.</summary>
+    private static JsonObject TemplateDocument(string? text) => new() { ["template"] = text };
 
     /// <summary>
     /// The listing the command answers with where it stops before it lists anything - a directory that does not

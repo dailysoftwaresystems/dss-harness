@@ -121,6 +121,68 @@ public sealed class AgentProviderServiceTests
         Assert.Equal(written!["providers"]!.ToJsonString(), printed["providers"]!.ToJsonString());
         Assert.Equal(written!["tierConfig"]!.ToJsonString(), printed["tierConfig"]!.ToJsonString());
         Assert.Equal(["defaults", "providers", "tierConfig"], ((JsonObject)printed).Select(pair => pair.Key));
+
+        // What the person pastes names each provider's keys as a list of names, the date its numbers were read and
+        // Anthropic's price of a thousand searches.
+        Assert.Equal(["ANTHROPIC_API_KEY"], printed["providers"]![0]!["apiKeyNames"]!.AsArray().Select(name => (string?)name));
+        Assert.Equal(["ZAI_API_KEY"], printed["providers"]![1]!["apiKeyNames"]!.AsArray().Select(name => (string?)name));
+        Assert.Equal(["2026-10-12", "2026-10-12"], printed["providers"]!.AsArray().Select(provider => (string?)provider!["readOn"]));
+        Assert.Equal(10, (int?)printed["providers"]![0]!["pricePerThousandSearches"]);
+    }
+
+    /// <summary>
+    /// The template is the sections as init writes them, and needs no repository to say so: it is answered outside one,
+    /// and where the repository's own configuration does not load - the very configuration it is printed to repair.
+    /// </summary>
+    [Fact]
+    public async Task TheTemplate_IsAnsweredOutsideARepository_AndWhereTheConfigurationDoesNotLoad()
+    {
+        using var outside = new TempDirectory();
+        var harness = new HarnessFactory();
+
+        var nowhere = await Service(harness).ListAsync(outside.Path, template: true, json: true, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HarnessExit.Success, nowhere.ExitCode);
+        var document = JsonNode.Parse(Assert.Single(nowhere.Data!))!.AsObject();
+
+        Assert.Equal(["template"], document.Select(member => member.Key));
+        Assert.Equal(["defaults", "providers", "tierConfig"], JsonNode.Parse((string)document["template"]!)!.AsObject().Select(member => member.Key));
+
+        using var repository = await RepositoryAsync();
+        var file = Path.Combine(repository.Tree.Path, ".harness-config", "config.json");
+        var config = JsonNode.Parse(File.ReadAllText(file))!.AsObject();
+        config["providers"]![0]!["api"] = "api.anthropic.com";
+        File.WriteAllText(file, config.ToJsonString(DssHarness.Core.Output.ReportJson.Options));
+
+        var broken = await Service(repository.Harness).ListAsync(repository.Tree.Path, template: true, json: false, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HarnessExit.Success, broken.ExitCode);
+        Assert.Equal(["defaults", "providers", "tierConfig"], JsonNode.Parse(Assert.Single(broken.Details!))!.AsObject().Select(member => member.Key));
+    }
+
+    /// <summary>
+    /// --template asked for --json answers in its own document's shape on every exit, stopped ones included - a
+    /// --directory that is not there, a command line the parser refuses - never in the listing's.
+    /// </summary>
+    [Fact]
+    public async Task TheTemplateStopped_AnswersInItsOwnDocumentsShape()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        var missing = await CliRunner.RunAsync(["list-agent-providers", "--template", "--json", "--directory", temp.Combine("does-not-exist")], cancellationToken);
+        var refused = await CliRunner.RunAsync(["list-agent-providers", "--template", "--json", "--no-such-option"], cancellationToken, workingDirectory: temp.Path);
+
+        foreach (var result in new[] { missing, refused })
+        {
+            Assert.Equal(HarnessExit.UsageError, result.ExitCode);
+
+            var document = JsonNode.Parse(result.StandardOutput.TrimEnd())!.AsObject();
+
+            Assert.Equal(["exitCode", "summary", "template"], document.Select(member => member.Key));
+            Assert.Equal(HarnessExit.UsageError, (int)document["exitCode"]!);
+            Assert.Null(document["template"]);
+        }
     }
 
     [Fact]

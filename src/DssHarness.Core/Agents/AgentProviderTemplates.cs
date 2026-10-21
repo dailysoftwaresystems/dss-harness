@@ -6,8 +6,11 @@ namespace DssHarness.Core.Agents;
 /// <summary>
 /// The agent sections <c>init</c> writes into a new config - <c>defaults.agentTier</c>, <c>providers</c> and
 /// <c>tierConfig</c> - read from the one template the tool holds, <c>Templates/agent-providers.json</c>: the prices
-/// and sizes it holds are data with their date, the one file of the tool that holds a price. Nothing reads the
-/// template but <c>init</c> and <c>list-agent-providers --template</c>.
+/// and sizes it holds are data with their date, the one file of the tool that holds a price. Three things read it,
+/// each through <see cref="Read"/>: <c>init</c>, which writes the sections into a new config;
+/// <c>list-agent-providers --template</c>, which prints them serialized by the writer that writes a config, so what is
+/// pasted is what <c>init</c> wrote; and <c>help agent-clients</c>, whose sample file for the key slot names the keys
+/// the template's providers appoint.
 /// </summary>
 public static class AgentProviderTemplates
 {
@@ -26,19 +29,6 @@ public static class AgentProviderTemplates
             ?? throw new InvalidOperationException("the agent providers template does not read back");
 
         return (template.Defaults?.AgentTier, template.Providers, template.TierConfig);
-    }
-
-    /// <summary>
-    /// The template's own text, as <c>list-agent-providers --template</c> prints it and <c>init</c> derives from it:
-    /// byte for byte what the assembly holds.
-    /// </summary>
-    public static string Text()
-    {
-        using var stream = typeof(AgentProviderTemplates).Assembly.GetManifestResourceStream("DssHarness.Core.AgentProviders")
-            ?? throw new InvalidOperationException("the agent providers template is not embedded in this build");
-
-        using var reader = new StreamReader(stream);
-        return reader.ReadToEnd();
     }
 
     private sealed class AgentSections

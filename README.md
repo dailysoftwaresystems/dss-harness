@@ -456,7 +456,8 @@ are `apiKeyNames`, the names of the variables that hold them in the git-ignored 
 second name in the list, and no key is read from the process environment - a CI machine writes the
 file. `list-agent-providers` says it all without saying one key: each provider, client and tier, and
 for every appointed name `present` or `missing`, exit 0 whatever is missing; `--template` prints
-the agent sections as `init` writes them into a new config, to paste into an existing one. A name
+the agent sections as `init` writes them into a new config, to paste into an existing one - outside
+a repository too, and where the configuration it is to repair does not load. A name
 declared in two of the slot's files is refused as the runner's value directories refuse one, a line
 whose name is no variable's name (`[A-Z][A-Z0-9_]*`) is refused by its line number alone - it may be
 part of a key pasted on its own - and a file where the slot's directory should be is refused rather

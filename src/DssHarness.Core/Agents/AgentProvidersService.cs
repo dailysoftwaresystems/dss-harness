@@ -19,7 +19,7 @@ public interface IAgentProviders : IUseCase
     /// <summary>
     /// Lists the providers, models, tiers, clients and appointed names of the configuration at
     /// <paramref name="startDirectory"/>'s repository, or the sections as <c>init</c> writes them where
-    /// <paramref name="template"/> is asked.
+    /// <paramref name="template"/> is asked - the tool's own, answered before any repository is looked for.
     /// </summary>
     /// <param name="startDirectory">A directory inside the repository.</param>
     /// <param name="template">Print the agent sections as <c>init</c> writes them into a new config, to paste into an existing one.</param>
@@ -50,13 +50,15 @@ public sealed class AgentProvidersService(
     /// <inheritdoc/>
     public async Task<CommandOutcome> ListAsync(string startDirectory, bool template, bool json, CancellationToken cancellationToken = default)
     {
-        var context = await MainTree.LoadAsync(_contextLoader, _platform, startDirectory, cancellationToken).ConfigureAwait(false);
-
+        // The sections as init writes them are the tool's own, read from no repository: answered before anything is
+        // loaded, so a configuration refused for its agent sections - the one the template is printed to repair - and a
+        // directory no repository holds both get them.
         if (template)
         {
             return AgentProviderReports.Template(json);
         }
 
+        var context = await MainTree.LoadAsync(_contextLoader, _platform, startDirectory, cancellationToken).ConfigureAwait(false);
         var resolved = AgentProviders.Resolve(context.Config);
 
         if (resolved is not { Providers: { } providers } || resolved.Problems is [_, ..])

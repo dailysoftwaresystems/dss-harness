@@ -452,7 +452,9 @@ public sealed class StoppedDocumentTests
                 + "(`run-orchestrator`, `resume-orchestrator`, `answer-orchestrator`, `pause-orchestrator`, "
                 + "`stop-orchestrator`) with the flow document - the session they would have run, empty "
                 + "(`OrchestrationReports.FlowStopped`); `check-mutations --list` with "
-                + "its listing, no legs; and `read-anchor` and `read-anchors`, whose document is an array, with that array empty - the "
+                + "its listing, no legs; `list-agent-providers` with its listing, no provider - and with `--template` with the template's "
+                + "own document, `template` null (`AgentProviderReports.Stopped`, `AgentProviderReports.TemplateStopped`); and "
+                + "`read-anchor` and `read-anchors`, whose document is an array, with that array empty - the "
                 + "process's exit code and the line it ends on say the rest. Each command registers which where it is wired "
                 + "(`CommandRunner.Wire`, `JsonAnswer`), so the plumbing answers for it without choosing by its name: where the parser "
                 + "refuses its command line, the first error the line it ends on, wherever the parser itself read `--json` as that "
@@ -464,8 +466,9 @@ public sealed class StoppedDocumentTests
             StringComparison.Ordinal);
         Assert.Contains(
             "One reader reads a command line's flags wherever the parser may have refused it (`CommandFlags`): whether `--json` is "
-                + "set, and each flag a stopped document says - `fix-line-endings`' `check`, `install-missing-tools`' `dryRun`, and "
-                + "whether `check-mutations` answers with its listing. It never throws: a flag whose own value the parser refused, "
+                + "set, and each flag a stopped document says - `fix-line-endings`' `check`, `install-missing-tools`' `dryRun`, "
+                + "whether `check-mutations` answers with its listing, and whether `list-agent-providers` answers with its template. "
+                + "It never throws: a flag whose own value the parser refused, "
                 + "given twice with a value each, reads as not given. A command's body reads `--json` as that reader read it where "
                 + "the command was wired (`CommandContext.Json`), never from the option again.",
             architecture,

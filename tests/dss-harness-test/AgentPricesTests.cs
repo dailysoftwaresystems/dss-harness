@@ -150,17 +150,6 @@ public sealed class AgentModelTests
         Assert.Equal(["claude-haiku-5-5", "glm-5.3"], tierConfig["fast"]);
     }
 
-    /// <summary>The template's text is what the tool holds, byte for byte, prices and dates with it.</summary>
-    [Fact]
-    public void TheTemplatesTextIsWhatTheToolHolds()
-    {
-        var text = AgentProviderTemplates.Text();
-
-        Assert.Contains("\"readOn\": \"2026-10-12\"", text, StringComparison.Ordinal);
-        Assert.Contains("\"apiKeyNames\": [\"ANTHROPIC_API_KEY\"]", text, StringComparison.Ordinal);
-        Assert.Contains("\"apiKeyNames\": [\"ZAI_API_KEY\"]", text, StringComparison.Ordinal);
-        Assert.Contains("\"pricePerThousandSearches\": 10", text, StringComparison.Ordinal);
-    }
 
     /// <summary>init writes the sections whole into a new config, and changes nothing in an existing one.</summary>
     [Fact]
