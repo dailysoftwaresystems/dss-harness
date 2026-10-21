@@ -70,8 +70,14 @@ a POSIX implementation and a Windows implementation, and no third.
 its start time and its command line, which is what a leg's contention check reads, and the
 full path of the program it runs, which is how an update tells a session of the installation
 it would replace from a program of the same name installed elsewhere - a command line need
-not name its program by a path at all.
-Windows publishes it through WMI, Linux through `/proc`, macOS through `ps`. Behind the
+not name its program by a path at all, and a process may write its own name and line over, as
+node running Claude Code calls itself `claude` on Linux and macOS.
+Windows publishes it through WMI, Linux through `/proc`, macOS through `ps` - whose name for a
+process is the first word it was started with, never its program - and libproc's
+`proc_pidpath`, which names the program. The kernel's own answers (`IProcessKernel`: `/proc`'s
+files, libproc's path) sit behind a seam of their own, so a test scripts the ones a machine
+cannot be made to give - another user's program, which Linux keeps from this user, a process
+that ended, a zombie - and the table carries each as none. Behind the
 seam so that nothing above it branches on the operating system to find out, and so a test
 can say what the machine was running without the machine having to be running it.
 

@@ -21,17 +21,18 @@ namespace DssHarness.Core.Platform;
 /// </param>
 /// <param name="Executable">
 /// The full path of the program it runs, where the platform reports one: Windows' image path, the link
-/// <c>/proc/&lt;id&gt;/exe</c> names on Linux, the program <c>ps</c> names on macOS. Read beside the command line
-/// because a command line need not name its program by a path at all - on Linux a program a shell found on the PATH is
-/// started under its bare name - and Windows' own path is the image's, spelled whole whatever the line that started it
-/// said.
+/// <c>/proc/&lt;id&gt;/exe</c> names on Linux, libproc's <c>proc_pidpath</c> on macOS - none for a process whose
+/// program this user may not read, as another user's on Linux, or that ended. Read beside the command line because a
+/// command line need not name its program by a path at all - on Linux a program a shell found on the PATH is started
+/// under its bare name - and a process may write its own name and line over: node running Claude Code calls itself
+/// <c>claude</c> on Linux and macOS, and only this still says node.
 /// </param>
 public sealed record SampledProcess(int Id, int? ParentId, string Name, DateTimeOffset? StartedUtc, string? CommandLine, string? Executable = null);
 
 /// <summary>Reading the machine's process table.</summary>
 /// <remarks>
 /// A seam for the same reason file permissions are one: every platform answers this question, and
-/// each answers it its own way — WMI on Windows, <c>/proc</c> on Linux, <c>ps</c> on macOS. Behind
+/// each answers it its own way — WMI on Windows, <c>/proc</c> on Linux, <c>ps</c> and libproc on macOS. Behind
 /// the seam, so nothing above it observes the operating system, and so a test can say what the
 /// machine was running without the machine having to be running it.
 /// </remarks>
@@ -79,10 +80,14 @@ public static class ProcessTableFactory
 }
 
 /// <inheritdoc cref="IProcessTable"/>
-public sealed class ProcessTable(IHostPlatform platform, IProcessRunner processRunner) : IProcessTable
+/// <param name="platform">Says which machine this is.</param>
+/// <param name="processRunner">Starts the program a platform has to be asked through: PowerShell on Windows, ps on macOS.</param>
+/// <param name="kernel">What the kernel says in place - Linux's <c>/proc</c>, macOS's libproc -; this machine's where none is given.</param>
+public sealed class ProcessTable(IHostPlatform platform, IProcessRunner processRunner, IProcessKernel? kernel = null) : IProcessTable
 {
     private readonly IHostPlatform _platform = platform;
     private readonly IProcessRunner _processRunner = processRunner;
+    private readonly IProcessKernel _kernel = kernel ?? new ProcessKernel(platform);
 
     /// <summary>Why a platform query failed, in one line, with what it said.</summary>
     private static string HostFailure(string what, ProcessResult result)
@@ -186,23 +191,18 @@ public sealed class ProcessTable(IHostPlatform platform, IProcessRunner processR
     }
 
     /// <summary>
-    /// The table from <c>/proc</c>, read directly: the kernel already publishes every field needed,
-    /// so no other program has to be installed for a leg to know what else is running.
+    /// The table from <c>/proc</c>, read in place through the kernel's seam: the kernel already publishes every field
+    /// needed, so no other program has to be installed for a leg to know what else is running.
     /// </summary>
-    private static (IReadOnlyList<SampledProcess> Table, string? Problem) LinuxTable()
+    private (IReadOnlyList<SampledProcess> Table, string? Problem) LinuxTable()
     {
         var processes = new List<SampledProcess>();
 
-        foreach (var directory in Directory.EnumerateDirectories("/proc"))
+        foreach (var id in _kernel.Listed())
         {
-            if (!int.TryParse(Path.GetFileName(directory), CultureInfo.InvariantCulture, out var id))
-            {
-                continue;
-            }
-
             try
             {
-                var stat = File.ReadAllText(Path.Combine(directory, "stat"));
+                var stat = _kernel.Stat(id);
 
                 var fields = ProcStat.FieldsAfterName(stat);
                 if (fields is null)
@@ -223,9 +223,7 @@ public sealed class ProcessTable(IHostPlatform platform, IProcessRunner processR
                     ? DateTimeOffset.UnixEpoch.AddSeconds(ticks / ProcStat.TicksPerSecond)
                     : null;
 
-                var commandLine = ReadCommandLine(Path.Combine(directory, "cmdline"));
-
-                processes.Add(new SampledProcess(id, parent, CleanName(name), started, commandLine, ReadExecutable(Path.Combine(directory, "exe"))));
+                processes.Add(new SampledProcess(id, parent, CleanName(name), started, _kernel.CommandLine(id), _kernel.Program(id)));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -238,15 +236,22 @@ public sealed class ProcessTable(IHostPlatform platform, IProcessRunner processR
     }
 
     /// <summary>
-    /// The table from <c>ps</c>, which is where macOS publishes another process's command line.
-    /// <c>lstart</c> rather than elapsed time, because an identity must not shift between samples.
+    /// The table from <c>ps</c>, which is where macOS publishes another process's command line, and the program each
+    /// runs from libproc. <c>lstart</c> rather than elapsed time, because an identity must not shift between samples.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Asked twice, because <c>ps</c> separates its columns with spaces and the path of a program may hold one: in the
     /// one listing nothing says where a program ends and its first argument begins, and named by the first word of its
     /// line a tool kept under <c>/Volumes/My Disk</c> was a process called <c>My</c> - which an update of that tool
-    /// then did not count as running. The second listing holds the program alone, last on its line. A process that
+    /// then did not count as running. The second listing holds the name alone, last on its line. A process that
     /// started between the two is in one of them only, and is named by its line's first word, as all were.
+    /// </para>
+    /// <para>
+    /// That name is the first word the process was started with - <c>claude</c> for a claude typed in a shell, <c>-zsh</c>
+    /// for a login shell - and never the program it runs, which only libproc says (<see cref="IProcessKernel.Program"/>):
+    /// read from ps's name, every claude a shell started was one whose program could not be read.
+    /// </para>
     /// </remarks>
     private async Task<(IReadOnlyList<SampledProcess> Table, string? Problem)> MacTableAsync(CancellationToken cancellationToken)
     {
@@ -263,15 +268,15 @@ public sealed class ProcessTable(IHostPlatform platform, IProcessRunner processR
             return ([], HostFailure("the process table could not be read from ps", named));
         }
 
-        var programs = new Dictionary<int, string>();
+        var names = new Dictionary<int, string>();
 
         foreach (var line in Lines(named.StandardOutput))
         {
-            var (fields, program) = SplitLeading(line, 1);
+            var (fields, name) = SplitLeading(line, 1);
 
-            if (fields.Count == 1 && program.Length > 0 && int.TryParse(fields[0], CultureInfo.InvariantCulture, out var id))
+            if (fields.Count == 1 && name.Length > 0 && int.TryParse(fields[0], CultureInfo.InvariantCulture, out var id))
             {
-                programs[id] = program;
+                names[id] = name;
             }
         }
 
@@ -306,15 +311,15 @@ public sealed class ProcessTable(IHostPlatform platform, IProcessRunner processR
                 ? startedAt
                 : (DateTimeOffset?)null;
 
-            programs.TryGetValue(id, out var itsProgram);
+            names.TryGetValue(id, out var itsName);
 
             processes.Add(new SampledProcess(
                 id,
                 int.TryParse(fields[1], CultureInfo.InvariantCulture, out var parent) ? parent : null,
-                CleanName(itsProgram ?? FirstToken(commandLine)),
+                CleanName(itsName ?? FirstToken(commandLine)),
                 started,
                 commandLine.Length == 0 ? null : commandLine,
-                itsProgram is not null && itsProgram.StartsWith('/') ? itsProgram : null));
+                _kernel.Program(id)));
         }
 
         return (processes, null);
@@ -352,39 +357,6 @@ public sealed class ProcessTable(IHostPlatform platform, IProcessRunner processR
         }
 
         return processes;
-    }
-
-    private static string? ReadCommandLine(string path)
-    {
-        try
-        {
-            // NUL-separated arguments, exactly as the process was started with, which is what makes
-            // this readable at all: no shell has re-quoted it.
-            var raw = File.ReadAllText(path);
-            var line = raw.Replace('\0', ' ').Trim();
-            return line.Length == 0 ? null : line;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// The program a Linux process runs, as the kernel names it through <c>/proc/&lt;id&gt;/exe</c>: its whole path, links
-    /// already followed - with <c> (deleted)</c> after it where the file was replaced since the program started - or
-    /// null where this user may not read another user's.
-    /// </summary>
-    private static string? ReadExecutable(string path)
-    {
-        try
-        {
-            return new FileInfo(path).LinkTarget is { Length: > 0 } target ? target : null;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return null;
-        }
     }
 
     private static IEnumerable<string> Lines(string text)
