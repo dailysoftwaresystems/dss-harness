@@ -1192,6 +1192,62 @@ public sealed class FlowServiceTests
         Assert.Equal(before, File.ReadAllText(run.FlowFile));
     }
 
+    /// <summary>
+    /// The definition tree is the main checkout, wherever a command is typed: a run begun there is resumed and answered
+    /// from another tree of the repository - one holding the same workflow file at a path of its own, then an edited copy
+    /// - under the entry it began with, never refused as changed, and never held to the other tree's copy.
+    /// </summary>
+    [Fact]
+    public async Task ARunIsResumedAndAnsweredFromAnotherTree_HeldToTheMainCheckoutsEntry()
+    {
+        const string Flow = """
+            name: flow
+            steps:
+              - name: holding
+                type: pause
+                question: what now?
+                options: [stay, go]
+              - name: after
+                type: orient
+                dependsOn: [holding]
+            """;
+
+        var (repository, service, runner) = await ServiceAsync(Flow);
+        using var disposed = repository;
+        using var elsewhere = new TempDirectory();
+
+        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+
+        _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var tree = Path.Combine(elsewhere.Path, "tree");
+        await repository.Harness.RunGitAsync(repository.Path, ["worktree", "add", "--quiet", "--detach", tree], Token);
+        var copy = Path.Combine(tree, ".harness-config", "workflows", Workflow, $"{Workflow}.yml");
+        Directory.CreateDirectory(Path.GetDirectoryName(copy)!);
+        File.WriteAllText(copy, Flow);
+
+        // The run is taken up, and answers for its open question - never refused as changed.
+        var resumed = await service.ResumeAsync(tree, "r1", json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal("nothing of this run can run until the question of step 'holding' is answered; answer-orchestrator answers it", resumed.Message);
+        Assert.Equal(HarnessExit.Refused, resumed.ExitCode);
+
+        // The other tree's own copy, edited, is no part of the run: the main checkout's entry is what it is held to.
+        File.WriteAllText(copy, Flow + "  - name: added\n    type: orient\n");
+
+        var answered = await service.AnswerAsync(tree, "r1", "go", question: null, text: null, textFile: null, again: false, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Success, answered.ExitCode);
+        Assert.Equal("done", answered.Message);
+        Assert.Equal(["after"], runner.Started);
+
+        // A run started from the other tree is of the main checkout's entry too, never of the tree's edited copy.
+        _ = await service.RunAsync(tree, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(["holding", "after"], repository.Harness.OrchestrationStore.ReadDefinition(RunOf(repository, "r2"))!.Steps.Select(step => step.Name));
+        Assert.Equal(["after"], runner.Started);
+    }
+
     /// <summary>An answer handed to a running engine is taken by its poller, applied by the loop as a person's through the command, and emptied from the inbox.</summary>
     [Fact]
     public async Task AnInboxAnswerIsTakenByThePoller_AppliedAndRemoved()

@@ -87,17 +87,21 @@ public sealed record FlowRunContext(
         return new(file.Run, definition, file.DefinitionDigest, file.Inputs, file.StartCommit, file.Branch, file.StartedAt);
     }
 
-    /// <summary>The SHA-256 of <paramref name="definition"/> as this build freezes it: the digest a run begins with, and the one a resume compares the repository's entry by.</summary>
+    /// <summary>
+    /// The SHA-256 of <paramref name="definition"/> as this build freezes it: the digest a run begins with, and the one a
+    /// resume compares the repository's entry by. Where the file was read from is no part of what the definition says:
+    /// the same entry read at another path - the checkout moved - digests the same.
+    /// </summary>
     /// <param name="definition">The definition.</param>
     public static string DigestOf(WorkflowDefinition definition)
     {
         ArgumentNullException.ThrowIfNull(definition);
-        return DigestOf(JsonSerializer.Serialize(definition, JsonStateFile.Options));
+        return DigestOf(JsonSerializer.Serialize(definition with { Path = string.Empty }, JsonStateFile.Options));
     }
 
     /// <summary>The SHA-256 of the definition as this build freezes it, spelt in lower-case hex.</summary>
     /// <param name="frozen">The definition, serialized as <c>definition.json</c> holds it.</param>
-    public static string DigestOf(string frozen)
+    private static string DigestOf(string frozen)
         => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(frozen)));
 }
 

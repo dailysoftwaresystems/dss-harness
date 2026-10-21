@@ -524,7 +524,29 @@ public sealed class FlowRecordsTests
 
         Assert.NotNull(frozen);
         Assert.Equal("flow", frozen.Name);
-        Assert.Equal(FlowRunContext.Of("r1", definition).DefinitionDigest, FlowRunContext.DigestOf(System.Text.Json.JsonSerializer.Serialize(frozen, JsonStateFile.Options)));
+        Assert.Equal(FlowRunContext.Of("r1", definition).DefinitionDigest, FlowRunContext.DigestOf(frozen));
+    }
+
+    /// <summary>
+    /// A definition's digest is of what it says, never of where its file was read from: the same entry read at another
+    /// path - the checkout moved, or the command typed in another tree - digests the same, and a change of a word does not.
+    /// </summary>
+    [Fact]
+    public void TheDigest_IsOfWhatTheDefinitionSays_NeverOfWhereItWasRead()
+    {
+        const string Text = """
+            name: flow
+            steps:
+              - name: one
+                type: orient
+            """;
+
+        var here = Parse(Text);
+        var moved = WorkflowFileParser.Parse(Path.Combine("elsewhere", "workflows", "flow", "flow.yml"), Text);
+        var changed = Parse(Text.Replace("name: one", "name: two", StringComparison.Ordinal));
+
+        Assert.Equal(FlowRunContext.DigestOf(here), FlowRunContext.DigestOf(moved));
+        Assert.NotEqual(FlowRunContext.DigestOf(here), FlowRunContext.DigestOf(changed));
     }
 
     /// <summary>A runner that answers each step as its test scripted it, holding open the steps the test wants to time and recording the handoffs its attempts are given.</summary>

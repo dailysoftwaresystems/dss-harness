@@ -1412,7 +1412,8 @@ left behind - or the refusal says why it could not be taken back.
 
 A run is an orchestrator the engine drives (`FlowService`, a use case of Core; the CLI only wires
 it). `run-orchestrator <workflow>` checks the definition as `validate-workflow` does (12 where it
-does not hold), reads `--input` - `name=@<file>` through `IFileSystem`, relative to `--directory`,
+does not hold) - read from the definition tree, the main checkout, whichever tree the command was
+typed in, as every later session of the run reads it - reads `--input` - `name=@<file>` through `IFileSystem`, relative to `--directory`,
 a missing file a usage error - and checks the inputs against the definition before anything is
 made, by the one owner of what an input takes (`FlowInputs.Resolve`, which the engine holds its run
 to as well); then, inside the repository's one section (`FlowSessions.AcrossRuns`), it refuses another
@@ -1424,7 +1425,9 @@ them (`FlowRunPaths`), makes the run's record, its status and its owner
 (`.orchestrators/<run>.owner.json`), and leaves the section. A session of a run already made -
 `resume-orchestrator`, or `answer-orchestrator` where no engine runs the run - first sweeps what a
 killed engine's steps left running (`ChildSessions`), refuses a definition the repository's entry
-no longer matches, and claims the run inside the same section: refused while a live engine owns
+in the main checkout no longer matches - compared by digest of what the definition says
+(`FlowRunContext.DigestOf`), never of where its file was read from, so a checkout that moved or a
+command typed in another tree is no change - and claims the run inside the same section: refused while a live engine owns
 it, a dead owner reclaimed and said, a request no engine took removed. Two starts, or two sessions
 of one run, can never both pass.
 

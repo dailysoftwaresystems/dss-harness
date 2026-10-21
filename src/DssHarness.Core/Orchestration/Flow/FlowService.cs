@@ -179,12 +179,13 @@ public sealed class FlowService(
 
         // The definition is checked as validate-workflow checks it, and nothing runs of one that does not hold. A
         // workflow not declared of the repository is a refusal naming what is (13); one declared that does not hold
-        // is the configuration's own answer (12).
+        // is the configuration's own answer (12). It is read from the definition tree - the main checkout, whichever
+        // tree the command was typed in - as every later session of the run reads it.
         WorkflowValidationReport report;
 
         try
         {
-            report = await _validation.CheckAsync(startDirectory, definition, cancellationToken).ConfigureAwait(false);
+            report = await _validation.CheckAsync(context.Layout.RepositoryRoot, definition, cancellationToken).ConfigureAwait(false);
         }
         catch (HarnessException ex)
         {
@@ -253,7 +254,7 @@ public sealed class FlowService(
             return refused;
         }
 
-        var (digest, changed) = await EntryDigestAsync(startDirectory, layout, cancellationToken).ConfigureAwait(false);
+        var (digest, changed) = await EntryDigestAsync(context.Layout.RepositoryRoot, layout, cancellationToken).ConfigureAwait(false);
 
         if (changed is not null)
         {
@@ -408,7 +409,7 @@ public sealed class FlowService(
         }
 
         // The session is held to the definition it began with, as a resume is.
-        var (digest, changed) = await EntryDigestAsync(startDirectory, layout, cancellationToken).ConfigureAwait(false);
+        var (digest, changed) = await EntryDigestAsync(context.Layout.RepositoryRoot, layout, cancellationToken).ConfigureAwait(false);
 
         if (changed is not null)
         {
@@ -583,10 +584,11 @@ public sealed class FlowService(
     }
 
     /// <summary>
-    /// The digest of the repository's entry for the workflow the run began with, as it reads now - or the refusal (13)
-    /// where the entry is no longer one that holds: a run goes on only under the definition it began with.
+    /// The digest of the repository's entry for the workflow the run began with, as it reads now in the definition tree
+    /// - the main checkout, <paramref name="definitionTree"/>, whichever tree the command was typed in - or the refusal
+    /// (13) where the entry is no longer one that holds: a run goes on only under the definition it began with.
     /// </summary>
-    private async Task<(string? Digest, CommandOutcome? Refused)> EntryDigestAsync(string startDirectory, OrchestratorLayout layout, CancellationToken cancellationToken)
+    private async Task<(string? Digest, CommandOutcome? Refused)> EntryDigestAsync(string definitionTree, OrchestratorLayout layout, CancellationToken cancellationToken)
     {
         var frozen = _store.ReadDefinition(layout);
 
@@ -599,7 +601,7 @@ public sealed class FlowService(
 
         try
         {
-            report = await _validation.CheckAsync(startDirectory, frozen.Name, cancellationToken).ConfigureAwait(false);
+            report = await _validation.CheckAsync(definitionTree, frozen.Name, cancellationToken).ConfigureAwait(false);
         }
         catch (HarnessException ex)
         {
