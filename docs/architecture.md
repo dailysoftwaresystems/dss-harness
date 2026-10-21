@@ -1477,7 +1477,10 @@ waits until the pause is complete; `stop-orchestrator`, which waits 30 s) and `i
 (`answer-orchestrator` to a running engine, each answer under an id of its own). The poller never
 waits on what it hands the engine; what it cannot read is said once and read again, anything else
 asks the run to pause; a last poll at the session's end takes what came late, and the next session
-takes what is left. Where the engine leaves before it takes a request, the command answers from the
+takes what is left. The engine takes an answer offered before a session begins at its start, before
+anything is admitted - so a resume is never refused over the question it settles - and hands one left
+unread as its session ends back cancelled, never refused, so it stays in the inbox for whoever takes it
+next; what a step spent that came late is counted. Where the engine leaves before it takes a request, the command answers from the
 run's state and takes the request back. `stop-orchestrator --now` ends the engine's process tree -
 only on this machine, and only the process whose start matches the one its owner recorded - and
 removes the owner once it is gone. Whether a run's engine is live is asked of one owner

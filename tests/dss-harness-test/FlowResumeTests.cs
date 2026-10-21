@@ -716,6 +716,89 @@ public sealed class FlowResumeTests
     }
 
     /// <summary>
+    /// An answer offered before a resume begins is taken at its start, before anything is admitted: the resume is not
+    /// refused over the question the answer settles, and the run goes on with it.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerOfferedBeforeAResume_IsTakenAtItsStart_NeverRefused()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: holding
+                type: pause
+                question: what now?
+                options: [stay, go]
+            """);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), records: records);
+
+            Assert.Equal(FlowRunStatus.Paused, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+        }
+
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            var offered = coordinator.OfferAnswerAsync("q1", "go");
+            var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+            Assert.True(await offered.WaitAsync(Bound, Token));
+        }
+    }
+
+    /// <summary>
+    /// An answer left unread as a session ends - here one that ends by a write that failed - is handed back cancelled,
+    /// never refused and never left waiting: it stays where it was handed over, for whoever takes it next.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerLeftUnreadAsASessionEnds_IsHandedBackCancelled()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: holding
+                type: pause
+                question: what now?
+                options: [stay, go]
+              - name: gate
+                type: build
+            """);
+        var (_, _, records) = Records("r1", temp.Path, definition);
+        FlowCoordinator coordinator = null!;
+        Task<bool>? offered = null;
+
+        using (records)
+        {
+            var failing = new Intercepted(records, (kind, instance, to) =>
+            {
+                if (kind is FlowChangeKind.Step && instance == "gate" && to == nameof(FlowInstanceState.Running))
+                {
+                    // An answer comes in as the session's write fails: it is on the channel, and the loop never reads
+                    // it again.
+                    offered = coordinator.OfferAnswerAsync("q1", "go");
+                    throw new IOException("the disk is full");
+                }
+            });
+            coordinator = new FlowCoordinator(definition, new Runner(), new RunnerFacts(), records: failing);
+
+            var failed = await Assert.ThrowsAsync<IOException>(() => coordinator.RunAsync(Token)).WaitAsync(Bound, Token);
+
+            Assert.Equal("the disk is full", failed.Message);
+        }
+
+        Assert.NotNull(offered);
+        Assert.True(offered.IsCanceled);
+    }
+
+    /// <summary>
     /// A session an answer began is never refused: the answer was taken, and where another question holds all that is
     /// left the session ends paused on it, as any session does.
     /// </summary>
@@ -2084,6 +2167,22 @@ public sealed class FlowResumeTests
                 inner.PreExisting(issues, at);
             }
         }
+    }
+
+    /// <summary>The run's records, each change shown to the test before it is written through - which may fail it there.</summary>
+    private sealed class Intercepted(IFlowRecords inner, Action<FlowChangeKind, string?, string?> before) : IFlowRecords
+    {
+        public void Write(FlowChangeKind kind, FlowSnapshot snapshot, string? instance = null, string? from = null, string? to = null, int? attempt = null, string? detail = null)
+        {
+            before(kind, instance, to);
+            inner.Write(kind, snapshot, instance, from, to, attempt, detail);
+        }
+
+        public void Question(IReadOnlyList<FlowQuestionEntry> questions)
+            => inner.Question(questions);
+
+        public void PreExisting(IReadOnlyList<PreExistingIssue> issues, DateTimeOffset at)
+            => inner.PreExisting(issues, at);
     }
 
     /// <summary>The run's records, watched: each change is written through, and a test waits on the change it times.</summary>

@@ -353,8 +353,16 @@ public sealed class FlowCoordinator
     /// </summary>
     private List<Action<IFlowRecords>>? _held;
 
-    /// <summary>An answer was taken before the session began - answer-orchestrator's, or one handed over to an engine that ended: the session it begins goes on, never refused.</summary>
-    private bool _answeredBefore;
+    /// <summary>
+    /// An answer was taken before the session's first admit - answer-orchestrator's, one handed over to an engine that
+    /// ended, one offered before the session began, or the configuration's at its start: the session goes on, never
+    /// refused.
+    /// </summary>
+    private bool _answeredAtStart;
+
+    /// <summary>The session is at its start: taking up what the run owes, before its first admit.</summary>
+    private bool _starting;
+
     private FlowResumeState? _resume;
     private bool _replaying;
     private int _sessions;
@@ -702,6 +710,7 @@ public sealed class FlowCoordinator
         // What the session's start writes is held until it is known the session goes on: a resume that can run nothing
         // is refused below, and a refused resume writes nothing of itself.
         _held = _records is null ? null : [];
+        _starting = true;
 
         try
         {
@@ -849,13 +858,17 @@ public sealed class FlowCoordinator
                 _sessions == 1 ? FlowChangeKind.SessionBegan : FlowChangeKind.Resumed,
                 detail: _resume is null ? null : $"taken up from a run state holding {_resume.File.Steps.Count} steps");
 
+            // What waits for the loop already is taken before its first admit: an answer offered before the session
+            // began is taken by it, and what a step spent is counted.
+            EachQueued(TakeMessage);
+
             // A resume beside an open question is not refused where something can run; it is refused only where
             // nothing can until the question is answered - before anything of its own is written, for the held writes
             // are never made. A session an answer began goes on, as does one whose budget question is open: it is
             // paused again on that question, which a person answers.
             if (_resume is not null
                 && _sessions == 1
-                && !_answeredBefore
+                && !_answeredAtStart
                 && OpenBudgetQuestion is null
                 && NextIds().Count == 0
                 && _created.FirstOrDefault(instance => instance.WaitingQuestion is not null) is { } waitsOnOne)
@@ -868,6 +881,7 @@ public sealed class FlowCoordinator
             // The session goes on: what its start wrote is written now, in the order it was made.
             var held = _held;
             _held = null;
+            _starting = false;
 
             foreach (var write in held ?? [])
             {
@@ -962,8 +976,11 @@ public sealed class FlowCoordinator
         }
         finally
         {
-            // A start refused, or ended by a defect, leaves nothing held to be written by whatever comes after it.
+            // A start refused, or ended by a defect, leaves nothing held to be written by whatever comes after it; and
+            // what reached the loop after its last read is handed back or counted, however the session ended.
             _held = null;
+            _starting = false;
+            HandBackWhatIsLeft();
             _inSession = false;
         }
 
@@ -1333,7 +1350,7 @@ public sealed class FlowCoordinator
     /// </summary>
     private void TakeAnswer(FlowQuestion asked, string answer, string? text, string by, string? where, string? through)
     {
-        _answeredBefore |= !_inSession;
+        _answeredAtStart |= !_inSession || _starting;
         _ = _open.Remove(asked.Id);
         var instance = _answerable.GetValueOrDefault(asked.Id);
         _ = _answerable.Remove(asked.Id);
@@ -4259,7 +4276,7 @@ public sealed class FlowCoordinator
         {
             if (_pending is { IsCompleted: true })
             {
-                Take(_pending.Result);
+                TakeMessage(_pending.Result);
                 _pending = null;
                 return;
             }
@@ -4276,7 +4293,7 @@ public sealed class FlowCoordinator
         {
             if (_wakes.Count == 0 && tick is null)
             {
-                Take(await _pending.ConfigureAwait(false));
+                TakeMessage(await _pending.ConfigureAwait(false));
                 _pending = null;
                 return;
             }
@@ -4314,7 +4331,7 @@ public sealed class FlowCoordinator
         }
 
         // Awaited, not read: a read the session's token cancelled ends the session cancelled, as every wait does.
-        Take(await _pending.ConfigureAwait(false));
+        TakeMessage(await _pending.ConfigureAwait(false));
         _pending = null;
 
         void Woken(Wake earliest)
@@ -4331,54 +4348,99 @@ public sealed class FlowCoordinator
 
             NewAttempt(earliest.Instance);
         }
+    }
 
-        void Take(Message message)
+    /// <summary>
+    /// Reads every message already waiting for the loop - what an earlier read holds, then what the channel holds - and
+    /// hands each to <paramref name="take"/>, waiting on nothing. A read still armed takes the channel's next message
+    /// as it comes, so the channel holds none meanwhile and is left to it.
+    /// </summary>
+    private void EachQueued(Action<Message> take)
+    {
+        if (_pending is { IsCompleted: true } read)
+        {
+            _pending = null;
+
+            if (read.IsCompletedSuccessfully)
+            {
+                take(read.Result);
+            }
+        }
+
+        while (_pending is null && _messages.Reader.TryRead(out var message))
+        {
+            take(message);
+        }
+    }
+
+    /// <summary>
+    /// What reached the loop after its last read, as its session ends however it ends: an answer offered is handed back
+    /// cancelled - never refused, for it was never weighed, and it stays in the inbox for whoever takes it next - and
+    /// what a reason step spent is counted, for it was spent. What else was left speaks of an attempt that is over. An
+    /// answer offered after this is the next session's, taken at its start.
+    /// </summary>
+    private void HandBackWhatIsLeft()
+    {
+        EachQueued(message =>
         {
             if (message.Offered is { } offered)
             {
-                // An answer from outside the session - taken from the run's inbox while the engine runs. The loop
-                // alone applies it, for the graph is the loop's alone to change; where the question is no longer
-                // open the answer is refused and said, naming what became of it.
-                var taken = TryAnswer(offered.Question, offered.Answer, offered.Text, out var problem, offered.Through);
-
-                if (!taken)
-                {
-                    Record(FlowChangeKind.Answer, detail: problem);
-                }
-
-                _ = offered.Completion.TrySetResult(taken);
-                return;
+                _ = offered.Completion.TrySetCanceled();
             }
-
-            if (message.Instance is not null && message.Usage is { } usage)
+            else if (message.Usage is not null)
             {
-                // What a reason step's conversation spent as it ran, counted against the run's budget the moment it
-                // is reported - an attempt that is over among them, for what it spent was spent.
-                _spent.Usd += usage.Usd;
-                _spent.Tokens += usage.Tokens;
-                return;
+                TakeMessage(message);
             }
+        });
+    }
 
-            if (message.Instance is null || message.Attempt != message.Instance.Attempt)
+    /// <summary>Takes one message of the channel, as the loop alone does: an answer offered, what a step spent, or what a running attempt says.</summary>
+    private void TakeMessage(Message message)
+    {
+        if (message.Offered is { } offered)
+        {
+            // An answer from outside the session - taken from the run's inbox while the engine runs. The loop
+            // alone applies it, for the graph is the loop's alone to change; where the question is no longer
+            // open the answer is refused and said, naming what became of it.
+            var taken = TryAnswer(offered.Question, offered.Answer, offered.Text, out var problem, offered.Through);
+
+            if (!taken)
             {
-                // A message of an attempt that is over - the step was stopped and runs again, or was answered - says
-                // nothing about the attempt the run is on now.
-                return;
+                Record(FlowChangeKind.Answer, detail: problem);
             }
 
-            if (message.Result is { } result)
-            {
-                _ = _wakes.RemoveAll(wake => ReferenceEquals(wake.Instance, message.Instance));
-                Complete(message.Instance, result);
-            }
-            else if (message.HandoffTaken)
-            {
-                TakeHandoff(message.Instance);
-            }
-            else if (message.Leg is { } leg)
-            {
-                TakeEvent(message.Instance, leg);
-            }
+            _ = offered.Completion.TrySetResult(taken);
+            return;
+        }
+
+        if (message.Instance is not null && message.Usage is { } usage)
+        {
+            // What a reason step's conversation spent as it ran, counted against the run's budget the moment it
+            // is reported - an attempt that is over among them, for what it spent was spent.
+            _spent.Usd += usage.Usd;
+            _spent.Tokens += usage.Tokens;
+            return;
+        }
+
+        if (message.Instance is null || message.Attempt != message.Instance.Attempt)
+        {
+            // A message of an attempt that is over - the step was stopped and runs again, or was answered - says
+            // nothing about the attempt the run is on now.
+            return;
+        }
+
+        if (message.Result is { } result)
+        {
+            _ = _wakes.RemoveAll(wake => ReferenceEquals(wake.Instance, message.Instance));
+            Complete(message.Instance, result);
+        }
+        else if (message.HandoffTaken)
+        {
+            TakeHandoff(message.Instance);
+        }
+        else if (message.Leg is { } leg)
+        {
+            TakeEvent(message.Instance, leg);
         }
     }
 
@@ -5735,13 +5797,15 @@ public sealed class FlowCoordinator
     /// Offers an answer to a running session from outside it - taken from the run's inbox while the engine runs, by
     /// the same hand a person at the terminal is answered by. The loop alone applies it, for the graph is the loop's
     /// alone to change; where the question is no longer open - a redirect withdrew it, or another answer came first -
-    /// the answer is refused and said.
+    /// the answer is refused and said. One offered before a session begins - the first, or the next - is taken at that
+    /// session's start, before anything is admitted; one left unread as a session ends is handed back cancelled -
+    /// never refused, for it was never weighed - so it stays where it was handed over for whoever takes it next.
     /// </summary>
     /// <param name="question">The question's id.</param>
     /// <param name="answer">The answer, spelled as the question's options spell it.</param>
     /// <param name="text">The text given with the answer, where it takes one.</param>
     /// <param name="through">How a person gave it; <c>answer-orchestrator</c> where the command handed it over.</param>
-    /// <returns>Whether the answer was taken, once the session has applied it or refused it.</returns>
+    /// <returns>Whether the answer was taken, once the session has applied it or refused it; cancelled where no session weighed it.</returns>
     public Task<bool> OfferAnswerAsync(string question, string answer, string? text = null, string? through = "answer-orchestrator")
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(question);
