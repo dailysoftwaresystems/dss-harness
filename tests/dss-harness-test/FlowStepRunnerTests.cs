@@ -299,6 +299,19 @@ public sealed class FlowStepRunnerTests : IDisposable
             .AddDssHarness(new SessionOptions { Command = "test" }, OperationId.New())
             .BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true });
         Assert.Equal(FlowStepRunners.Served, provider.GetServices<IFlowStepTypeRunner>().Select(runner => runner.Type));
+        Assert.Contains(
+            $"the steps `FlowStepRunners.Served` lists are served - {string.Join(", ", FlowStepRunners.Served.Select(type => $"`{type}`"))} - and a step of any other type fails until its runner lands",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
+
+        // The README counts them in words and names each.
+        string[] words = ["Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen", "Twenty"];
+        var readme = Prose.Document("README.md");
+        var served = readme.IndexOf($"{words[FlowStepRunners.Served.Count]} steps are served so far:", StringComparison.Ordinal);
+
+        Assert.True(served >= 0, "the README counts the steps served");
+        var listed = readme[served..readme.IndexOf("A check that finds red", served, StringComparison.Ordinal)];
+        Assert.All(FlowStepRunners.Served, type => Assert.Contains($"`{type}`", listed, StringComparison.Ordinal));
         Assert.IsType<FlowStepRunners>(provider.GetRequiredService<IFlowStepRunner>());
     }
 

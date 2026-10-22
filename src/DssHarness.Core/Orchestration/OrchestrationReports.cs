@@ -755,6 +755,15 @@ public static class OrchestrationReports
                     ["handed"] = Texts(planned.Handed),
                     ["merged"] = Texts(planned.Merged),
                     ["armRegistry"] = planned.ArmRegistry,
+                    ["written"] = Texts(planned.Written),
+                    ["deleted"] = Texts(planned.Deleted),
+                    ["registries"] = Texts(planned.Registries),
+                    ["rows"] = Texts(planned.Rows),
+                    ["mergeable"] = Texts(planned.Mergeable),
+                    ["conflicting"] = Texts(planned.Conflicting),
+                    ["newRows"] = Texts(planned.NewRows),
+                    ["lostCells"] = Texts(planned.LostCells),
+                    ["overCells"] = Texts(planned.OverCells),
                 },
         }.ToJsonString(ReportJson.Options);
 

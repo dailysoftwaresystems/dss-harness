@@ -469,7 +469,8 @@ public static partial class OrchestrationRules
     /// <summary>
     /// The name a run gives the next agent it makes: <see cref="GeneratedAgentPrefix"/> and one past the highest number any
     /// of <paramref name="taken"/> carries - the run's agent directories and the names its steps' records hold - so a
-    /// name is never given twice, a deleted agent's included. Names of another shape are no number, and count for none.
+    /// name is never given twice, a deleted agent's included. Names of another shape are no number, and count for none,
+    /// a number too large to give among them.
     /// </summary>
     /// <param name="taken">Every name the run has given or holds.</param>
     public static string NextAgentName(IEnumerable<string> taken)
@@ -477,16 +478,37 @@ public static partial class OrchestrationRules
         ArgumentNullException.ThrowIfNull(taken);
 
         var highest = taken
-            .Where(name => name.Length > GeneratedAgentPrefix.Length
-                && name.StartsWith(GeneratedAgentPrefix, StringComparison.Ordinal)
-                && name[GeneratedAgentPrefix.Length] != '0'
-                && name.Skip(GeneratedAgentPrefix.Length).All(char.IsAsciiDigit))
-            .Select(name => long.TryParse(name.AsSpan(GeneratedAgentPrefix.Length), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var number) ? number : long.MaxValue - 1)
+            .Select(NumberOf)
+            .OfType<long>()
+            .Where(number => number < long.MaxValue)
             .DefaultIfEmpty(0)
             .Max();
 
         return GeneratedAgentPrefix + (highest + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
     }
+
+    /// <summary>
+    /// The order agents' names go in where a run takes its agents in turn: the names it gives, <see cref="GeneratedAgentPrefix"/>
+    /// and a number, by that number - <c>a2</c> before <c>a10</c> - and every other name after them, as ordinal text orders it.
+    /// </summary>
+    public static IComparer<string> AgentNameOrder { get; } = Comparer<string>.Create((one, other) =>
+        (NumberOf(one), NumberOf(other)) switch
+        {
+            ({ } first, { } second) when first != second => first.CompareTo(second),
+            ({ }, null) => -1,
+            (null, { }) => 1,
+            _ => string.CompareOrdinal(one, other),
+        });
+
+    /// <summary>The number a name the run gave carries after <see cref="GeneratedAgentPrefix"/>; null for a name of another shape.</summary>
+    private static long? NumberOf(string name)
+        => name.Length > GeneratedAgentPrefix.Length
+            && name.StartsWith(GeneratedAgentPrefix, StringComparison.Ordinal)
+            && name[GeneratedAgentPrefix.Length] != '0'
+            && name.Skip(GeneratedAgentPrefix.Length).All(char.IsAsciiDigit)
+            && long.TryParse(name.AsSpan(GeneratedAgentPrefix.Length), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var number)
+                ? number
+                : null;
 
     /// <summary>What is wrong with an agent's name beside its orchestrator's: never the same, since the two would share a log and a plans directory.</summary>
     /// <param name="orchestrator">The orchestrator's name.</param>

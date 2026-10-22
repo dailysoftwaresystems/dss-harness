@@ -2804,7 +2804,7 @@ public sealed partial class HelpTests
             orchestrators,
             StringComparison.Ordinal);
         Assert.Contains(
-            "The steps served so far are orient, validate-plan, create-agent, build, test, run, check-mutations, anchor-balance, anchor-citations, ci-read, ci-wait ('dssharness help workflows'): a step of any other type fails, saying no runner serves its type.",
+            "The steps served so far are orient, validate-plan, create-agent, build, test, run, check-mutations, anchor-balance, anchor-citations, ci-read, ci-wait, fold, delete-agent, refresh, rebase ('dssharness help workflows'): a step of any other type fails, saying no runner serves its type.",
             orchestrators,
             StringComparison.Ordinal);
     }
@@ -3053,8 +3053,14 @@ public sealed partial class HelpTests
             + "merges alone says 'conflict' and nothing else; folded says what the --apply of a fold and of a deletion did, gone "
             + "through or stopped part way after writing some of it - what it wrote, deleted, merged and handed, the arm registry "
             + "merged by arm, the registries and rows it applied, and the cells --accept-over took - and is null for every other "
-            + "answer and where it did nothing at all; planned says what the plan of a refresh or a rebase takes, keeps, hands and "
-            + "merges, and is null for a fold and a deletion. An --apply refused at its hold answers the same "
+            + "answer and where it did nothing at all; planned says what the plan of the verb names, its dry run's and its "
+            + "--apply's alike - what a rebase takes and keeps, what a refresh or a fold hands, what each merges, what a fold, a "
+            + "deletion's among them, writes and deletes, the registry files its rows change, as git names them, and the rows it "
+            + "applies - and what each consent it lacks and each conflict it meets is about: mergeable, the paths both trees "
+            + "changed whose clean merge nobody asked for; conflicting, those whose merge conflicts; newRows, lostCells and "
+            + "overCells; null where no plan was measured, a deletion that folds nothing among them. A refresh or a rebase over a "
+            + "path both trees changed whose merge is clean lacks --merge as a fold does - needs-consent, its code 13 still - and "
+            + "one over conflicting paths alone is refused for a conflict. An --apply refused at its hold answers the same "
             + "document, applied true: request 'sound', and the run it met in heldNow. Stopped before "
             + "anything is weighed - a command line the parser refuses, a --directory that is not there, a repository not "
             + "initialised, another usage error, or a refusal met before then, an agent that is not there among them - it "
@@ -3154,6 +3160,42 @@ public sealed partial class HelpTests
     private static partial Regex ExamplePattern();
 
     /// <summary>
+    /// The workflows topic says what the fold family's steps do - read their dry run's standing, ask with what it names,
+    /// hold the apply to it and a fold to its ledger and its within, take others in turn - and the orchestrators topic
+    /// names the files they keep, each from the code's own names.
+    /// </summary>
+    [Fact]
+    public void TheHelp_SaysWhatTheFoldFamilysStepsDo_AndTheFilesTheyKeep()
+    {
+        var workflows = Prose.Words(HelpText.Of("workflows").StandardOutput);
+        var orchestrators = Prose.Words(HelpText.Of("orchestrators").StandardOutput);
+
+        Assert.Contains(
+            "fold, delete-agent, refresh and rebase make their verb's dry run first and read what it stood, typed, never its "
+                + "code: sound, they apply with exactly what it named; a run holding the tree the apply takes is waited out, as a held "
+                + $"lock is ({HarnessExit.Refused} after the retries), and one holding only a copy a deletion removes is run again, as an "
+                + $"incomplete step is ({HarnessExit.Incomplete} after them);",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"is weighed again, {FoldFamilyStepRunner.MostPasses} times at most. A fold, and a deletion that folds, write each path "
+                + $"they mean to write, with what the main tree holds there, to the run's ledger ({OrchestratorLayout.FoldsFileName}) "
+                + "before the verb is called, and what they left after",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"recorded in the step's directory ({OrchestratorLayout.StepTargetsDirectoryName}/<agent>/), one closed before its turn "
+                + "passed over; a target that fails ends its own turn, and the step ends done, or failed with the code of the first "
+                + "that failed, once each has had its turn. Each step keeps what its dry run named and how its apply ended in its "
+                + $"directory ({OrchestratorLayout.StepFoldFileName}).",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains($"{OrchestratorLayout.FoldsFileName} the ledger of the run's folds:", orchestrators, StringComparison.Ordinal);
+        Assert.Contains($"<step>/{OrchestratorLayout.StepFoldFileName} a fold, delete-agent, refresh or rebase step:", orchestrators, StringComparison.Ordinal);
+        Assert.Contains($"<step>/{OrchestratorLayout.StepTargetsDirectoryName}/<agent>/ a refresh or a rebase of others:", orchestrators, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The workflows topic says what a workflow is, where it lives, what this build does with one and what it does not,
     /// and lists every key from the tables the reader itself reads - so what is listed is what is read.
     /// </summary>
@@ -3172,7 +3214,8 @@ public sealed partial class HelpTests
         Assert.Contains(
             "This build checks a workflow's definition, with 'dssharness validate-workflow <name>', and starts and drives a run of one with "
                 + "'dssharness run-orchestrator <name>' (see 'help orchestrators'). The steps served so far are orient, validate-plan, "
-                + "create-agent, build, test, run, check-mutations, anchor-balance, anchor-citations, ci-read, ci-wait, each below; a step of "
+                + "create-agent, build, test, run, check-mutations, anchor-balance, anchor-citations, ci-read, ci-wait, fold, delete-agent, "
+                + "refresh, rebase, each below; a step of "
                 + "any other type fails, saying no runner serves its type.",
             prose,
             StringComparison.Ordinal);

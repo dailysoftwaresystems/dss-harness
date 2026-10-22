@@ -62,7 +62,14 @@ public sealed record RebaseAgentRequest(string StartDirectory, string Orchestrat
 /// <param name="Allowances">What the person folding it lets through that the fold otherwise refuses.</param>
 /// <param name="Apply">Whether to do the work rather than weigh it.</param>
 /// <param name="Json">Whether to answer with one JSON document.</param>
-public sealed record FoldAgentRequest(string StartDirectory, string Orchestrator, string Agent, FoldAllowances Allowances, bool Apply, bool Json = false);
+public sealed record FoldAgentRequest(string StartDirectory, string Orchestrator, string Agent, FoldAllowances Allowances, bool Apply, bool Json = false)
+{
+    /// <summary>
+    /// What its dry run named, where an <c>--apply</c> is to write exactly that: measured again under its hold and found to
+    /// write anything else, it is refused (13) and writes nothing. Null from the command line, which holds it to nothing.
+    /// </summary>
+    public AgentPlanned? Expected { get; init; }
+}
 
 /// <summary>What deleting an agent was asked, beside the allowances its last fold is let through with.</summary>
 /// <param name="StartDirectory">The directory the command was run from.</param>
@@ -72,4 +79,11 @@ public sealed record FoldAgentRequest(string StartDirectory, string Orchestrator
 /// <param name="Apply">Whether to do the work rather than weigh it.</param>
 /// <param name="DiscardUncommitted">Whether to abandon its work with nothing folded.</param>
 /// <param name="Json">Whether to answer with one JSON document.</param>
-public sealed record DeleteAgentRequest(string StartDirectory, string Orchestrator, string Agent, FoldAllowances Allowances, bool Apply, bool DiscardUncommitted, bool Json = false);
+public sealed record DeleteAgentRequest(string StartDirectory, string Orchestrator, string Agent, FoldAllowances Allowances, bool Apply, bool DiscardUncommitted, bool Json = false)
+{
+    /// <summary>
+    /// What its dry run named of the fold it makes, where an <c>--apply</c> is to fold exactly that: measured again under its
+    /// hold and found to fold anything else, it is refused (13) and writes nothing. Null from the command line.
+    /// </summary>
+    public AgentPlanned? Expected { get; init; }
+}

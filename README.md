@@ -130,8 +130,10 @@ where `heldNow` names a holder), `needs-consent` or `refused` - and whose `heldN
 holder, those copies' among them. Beside them `needs` names each consent the request lacks
 (`fold-new-rows`, `fold-lost-rows`, `fold-over-cells`, `fold-two-changes`), `refusals` each reason
 it is refused for (`conflict` where a path both trees changed has a merge that conflicts, `other`
-for anything else), `folded` what a fold's `--apply` wrote, merged, handed and applied, and `planned` what a
-refresh's or a rebase's plan takes, keeps, hands and merges. An
+for anything else), `folded` what a fold's `--apply` wrote, merged, handed and applied, and `planned` what the
+verb's plan names - what a rebase takes and keeps, a refresh or a fold hands, each merges, a fold writes and deletes,
+the registry files its rows change and the rows it applies - and what each consent it lacks and each conflict it meets
+is about. A refresh or a rebase over a path both trees changed whose merge is clean lacks `--merge` as a fold does. An
 `--apply` refused at its hold answers the same document, `sound`, with the run it met in
 `heldNow`. Either way a dry run still prints all it weighed.
 `dssharness help orchestrators` explains seeding, rebasing, folding and deleting agents, and the five verbs of a run.
@@ -639,7 +641,7 @@ update (`cause`, `since`, `work`) and a piece (`kind`, `changed`, `keep`, `undo`
 rest), which a template reads and an expression does not. The engine starts and drives a run of a workflow
 (`run-orchestrator`, `dssharness help orchestrators`), from the main checkout's HEAD on a branch of its own: a start is
 refused where HEAD is detached, where the checkout is on the branch the run's pull request goes to, where a merge is under
-way and where changes are staged. Eleven steps are served so far: `orient`, which reads what the repository is and has once
+way and where changes are staged. Fifteen steps are served so far: `orient`, which reads what the repository is and has once
 (its branch and the pull request's base branch, the commit the run started on, a remote, legs and how each tests, anchors,
 CI, mutation arms, what is dirty, the open agents and who holds the tree); `validate-plan`, the machine's check of a plan's
 work items; `create-agent`, which makes the agent the engine named for it (`a<N>`, never twice) for the model its
@@ -651,7 +653,11 @@ tree go once its copy is made, and keep the ledger, and in an agent's worktree e
 directory; the checks `anchor-balance` and `anchor-citations`, each held to the rows or files a step names; `ci-read`,
 the legs `check-ci-legs` reads; and `ci-wait`, which waits for every check the forge runs on a commit - the one the run
 last pushed where it names none - ends at the first red one with its job's failing step and whole log, and asks where
-none appeared, some are still running, or one ended neither green nor red. A check that finds red fails its step under
+none appeared, some are still running, or one ended neither green nor red; and the fold family - `fold`, `delete-agent`,
+`refresh` and `rebase` - which make their verb's dry run first, read what it stood, typed, and ask what it lacks - a
+consent, a path outside a fold's `within`, conflicting merges - with what it is about, apply only what it named, write
+each path a fold means to write to the run's ledger of its folds (`folds.json`) before the verb and what it left after,
+and, of `others`, work on each other open agent of the run in turn. A check that finds red fails its step under
 `failOn: red`, every check's default but `ci-read`'s. Every text a step hands on is filled where it starts, and one that
 reads nothing fails the step (12). Every call of `gh` is started so it cannot ask, and ended after five minutes or the
 step's `timeoutMinutes` (21). A step of any other type fails, saying no runner serves its type; the rest are the next

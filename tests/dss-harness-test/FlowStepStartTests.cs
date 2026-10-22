@@ -312,6 +312,136 @@ public sealed class FlowStepStartTests
     }
 
     /// <summary>
+    /// A fold's keys given as expressions are read where it starts and handed on as names under their keys - within,
+    /// allow.new and allow.merge. The ones a consent is given with may read nothing, and name none; within reads what it
+    /// holds the fold to, and one that reads nothing fails the step as an unreadable expression does, its runner never asked.
+    /// </summary>
+    [Fact]
+    public async Task TheFoldFamilysKeys_AreReadWhereTheStepStarts()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: find
+                type: orient
+              - name: made
+                type: create-agent
+                agent: worker.md
+              - name: fold
+                type: fold
+                of: made
+                dependsOn: [find, made]
+                within: 'find.paths'
+                allow:
+                  new: 'find.rows'
+                  merge: 'find.missing'
+              - name: lenient
+                type: fold
+                of: made
+                dependsOn: [find, made]
+                allow:
+                  new: 'find.missing'
+              - name: blind
+                type: fold
+                of: made
+                dependsOn: [fold]
+                within: 'find.missing'
+            """);
+        var runner = new Runner().On("find", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: JsonNode.Parse("""{"paths": ["src/a.cs"], "rows": ["A-ONE"], "none": null}""")));
+        var coordinator = Coordinator(definition, runner);
+
+        _ = await coordinator.RunAsync(Token);
+
+        string Read(string instance, string key) => runner.Runs.Single(run => run.Instance == instance).Read![key].ToNode()!.ToJsonString();
+
+        Assert.Equal("""["src/a.cs"]""", Read("fold", "within"));
+        Assert.Equal("""["A-ONE"]""", Read("fold", "allow.new"));
+        Assert.Equal("[]", Read("fold", "allow.merge"));
+        Assert.Equal("[]", Read("lenient", "allow.new"));
+        Assert.DoesNotContain(runner.Runs, run => run.Instance == "blind");
+        Assert.Equal((FlowInstanceState.Failed, HarnessExit.ConfigInvalid), (coordinator.Instances["blind"].State, coordinator.Instances["blind"].Exit));
+        Assert.StartsWith("expression 'within' of 'blind': ", coordinator.Instances["blind"].Error, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A refresh's and a rebase's keys given as expressions are read where each starts, under their keys: a refresh's paths,
+    /// except and stale, which name none where they read null, and the merge of either, which may read nothing.
+    /// </summary>
+    [Fact]
+    public async Task ARefreshsAndARebasesKeys_AreReadWhereEachStarts()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: find
+                type: orient
+              - name: made
+                type: create-agent
+                agent: worker.md
+              - name: refresh
+                type: refresh
+                of: made
+                dependsOn: [find, made]
+                paths: 'find.paths'
+                except: 'find.none'
+                stale: 'find.none'
+                merge: 'find.missing'
+              - name: rebase
+                type: rebase
+                of: made
+                dependsOn: [refresh]
+                merge: 'find.rows'
+            """);
+        var runner = new Runner().On("find", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: JsonNode.Parse("""{"paths": ["src/a.cs"], "rows": ["A-ONE"], "none": null}""")));
+        var coordinator = Coordinator(definition, runner);
+
+        _ = await coordinator.RunAsync(Token);
+
+        string Read(string instance, string key) => runner.Runs.Single(run => run.Instance == instance).Read![key].ToNode()!.ToJsonString();
+
+        Assert.Equal("""["src/a.cs"]""", Read("refresh", "paths"));
+        Assert.Equal("[]", Read("refresh", "except"));
+        Assert.Equal("[]", Read("refresh", "stale"));
+        Assert.Equal("[]", Read("refresh", "merge"));
+        Assert.Equal("""["A-ONE"]""", Read("rebase", "merge"));
+    }
+
+    /// <summary>
+    /// A refresh's paths, except and stale say what it weighs, so one that reads nothing fails the step as an unreadable
+    /// expression does, its runner never asked.
+    /// </summary>
+    [Theory]
+    [InlineData("paths")]
+    [InlineData("except")]
+    [InlineData("stale")]
+    public async Task ARefreshsPathsExceptOrStaleReadingNothing_FailsTheStep(string key)
+    {
+        var definition = Parse($$"""
+            name: flow
+            steps:
+              - name: find
+                type: orient
+              - name: made
+                type: create-agent
+                agent: worker.md
+              - name: refresh
+                type: refresh
+                of: made
+                dependsOn: [find, made]
+                {{key}}: 'find.missing'
+            """);
+        var runner = new Runner().On("find", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: JsonNode.Parse("""{"paths": ["src/a.cs"]}""")));
+        var coordinator = Coordinator(definition, runner);
+
+        _ = await coordinator.RunAsync(Token);
+        var refresh = coordinator.Instances["refresh"];
+
+        Assert.DoesNotContain(runner.Runs, run => run.Instance == "refresh");
+        Assert.Equal((FlowInstanceState.Failed, HarnessExit.ConfigInvalid), (refresh.State, refresh.Exit));
+        Assert.StartsWith($"expression '{key}' of 'refresh': ", refresh.Error, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A ci-wait that names no commit is handed the one the run last pushed - the sha of the push step that ended done
     /// last - and one that names its own, or of a run that pushed nothing, is handed none.
     /// </summary>
@@ -595,6 +725,7 @@ public sealed class FlowStepStartTests
     [InlineData(new[] { "a1", "a2" }, "a3")]
     [InlineData(new[] { "a9", "a10", "a2" }, "a11")]
     [InlineData(new[] { "a01", "ab", "b7", "a", "a-1", "A5" }, "a1")]
+    [InlineData(new[] { "a4", "a99999999999999999999", "a9223372036854775807" }, "a5")]
     public void TheNextAgentName_IsOnePastTheHighest(string[] taken, string next)
         => Assert.Equal(next, OrchestrationRules.NextAgentName(taken));
 

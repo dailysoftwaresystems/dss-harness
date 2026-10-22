@@ -1,0 +1,155 @@
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Results;
+
+namespace DssHarness.Core.Orchestration.Flow;
+
+/// <summary>
+/// The one writer of the run's ledger of its folds (<see cref="FlowFoldLedgerFile"/>): a fold's intent - every path it
+/// means to write with what the main tree holds there - appended before the verb is called, and what it left there
+/// recorded after, so nothing reaches the main tree unrecorded, and a crash between the two leaves an intent the next
+/// attempt of the step settles from what the tree holds.
+/// </summary>
+/// <param name="store">Reads and writes the ledger, inside the run's own section.</param>
+/// <param name="fileSystem">Reads what the main tree holds at each path.</param>
+/// <param name="clock">Says when each entry was written.</param>
+public sealed class FoldLedger(OrchestrationStore store, IFileSystem fileSystem, TimeProvider clock)
+{
+    /// <summary>
+    /// Appends the intent of one fold: every path <paramref name="planned"/> writes, merges, removes, and every registry
+    /// file its rows change, each with the digest the main tree holds there now - written before the verb is called.
+    /// </summary>
+    /// <param name="layout">The run's orchestrator.</param>
+    /// <param name="main">The main tree's root.</param>
+    /// <param name="instance">The step instance that folds.</param>
+    /// <param name="attempt">Its attempt.</param>
+    /// <param name="type">The step's type: <c>fold</c> or <c>delete-agent</c>.</param>
+    /// <param name="agent">The agent whose work it folds.</param>
+    /// <param name="planned">What its dry run named, which its apply is held to.</param>
+    /// <param name="cancellationToken">Cancels the reads before anything is written.</param>
+    /// <returns>The id of the entry written.</returns>
+    public async Task<string> IntendAsync(
+        OrchestratorLayout layout,
+        string main,
+        string instance,
+        int attempt,
+        string type,
+        string agent,
+        AgentPlanned planned,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+        ArgumentNullException.ThrowIfNull(planned);
+
+        var paths = new List<FlowFoldPath>();
+        var named = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var (path, what) in PathsOf(planned))
+        {
+            if (named.Add(path))
+            {
+                paths.Add(new FlowFoldPath(path, what, await FileContentHash.OfFileAsync(fileSystem, Path.Combine(main, path), cancellationToken).ConfigureAwait(false)));
+            }
+        }
+
+        var written = store.UpdateFolds(layout, ledger => ledger with
+        {
+            Folds =
+            [
+                .. ledger.Folds,
+                new FlowFoldEntry(FlowFoldEntry.IdOf(ledger.Folds.Count + 1), instance, attempt, type, agent, FlowFoldEntry.Intended, clock.GetUtcNow(), paths, planned.Rows),
+            ],
+        });
+
+        return written.Folds[^1].Id;
+    }
+
+    /// <summary>
+    /// Records what became of the fold <paramref name="id"/> once its verb answered <paramref name="exitCode"/>: applied
+    /// (0) or stopped part way (21), with what the main tree holds at each path now; refused, having written nothing, for
+    /// every other answer. Never cancelled: what was written is recorded whatever stops the step.
+    /// </summary>
+    /// <param name="layout">The run's orchestrator.</param>
+    /// <param name="main">The main tree's root.</param>
+    /// <param name="id">The entry's id, as <see cref="IntendAsync"/> gave it.</param>
+    /// <param name="exitCode">The code the verb answered with.</param>
+    public async Task SettleAsync(OrchestratorLayout layout, string main, string id, int exitCode)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+
+        var state = exitCode switch
+        {
+            HarnessExit.Success => "applied",
+            HarnessExit.Incomplete => "stopped",
+            _ => FlowFoldEntry.Refused,
+        };
+
+        var entry = store.ReadFolds(layout)?.Of(id) ?? throw new HarnessException(HarnessExit.InternalError, $"the run's ledger of its folds holds no fold '{id}' to settle");
+        var paths = state == FlowFoldEntry.Refused ? entry.Paths : await LeftAsync(main, entry.Paths).ConfigureAwait(false);
+
+        Replace(layout, entry with { State = state, SettledAt = clock.GetUtcNow(), Paths = paths });
+    }
+
+    /// <summary>
+    /// Settles every intent of <paramref name="instance"/> a crash left - its verb called and nothing recorded after - as
+    /// interrupted, with what the main tree holds at each path now: what the step's next attempt reads before it folds
+    /// anything again.
+    /// </summary>
+    /// <param name="layout">The run's orchestrator.</param>
+    /// <param name="main">The main tree's root.</param>
+    /// <param name="instance">The step instance.</param>
+    /// <returns>How many intents it settled.</returns>
+    public async Task<int> SettleInterruptedAsync(OrchestratorLayout layout, string main, string instance)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+
+        var left = (store.ReadFolds(layout)?.Folds ?? [])
+            .Where(entry => entry.State == FlowFoldEntry.Intended && string.Equals(entry.Instance, instance, StringComparison.Ordinal))
+            .ToList();
+
+        foreach (var entry in left)
+        {
+            Replace(layout, entry with { State = FlowFoldEntry.Interrupted, SettledAt = clock.GetUtcNow(), Paths = await LeftAsync(main, entry.Paths).ConfigureAwait(false) });
+        }
+
+        return left.Count;
+    }
+
+    /// <summary>
+    /// The folds of <paramref name="ledger"/> that hold what no commit has taken yet (<see cref="FlowFoldEntry.Uncommitted"/>),
+    /// in the order intended: what makes a run that stopped unfinished, and what a <c>commit</c> step commits.
+    /// </summary>
+    /// <param name="ledger">The run's ledger; null where it holds none.</param>
+    public static IReadOnlyList<FlowFoldEntry> Uncommitted(FlowFoldLedgerFile? ledger)
+        => [.. (ledger?.Folds ?? []).Where(entry => entry.Uncommitted)];
+
+    /// <summary>
+    /// Every path a fold's plan writes in the main tree, with what it does to each: written, merged - the arm registry
+    /// among them - removed, and each registry file its rows change.
+    /// </summary>
+    private static IEnumerable<(string Path, string What)> PathsOf(AgentPlanned planned)
+        => planned.Written.Select(path => (path, "written"))
+            .Concat(planned.Merged.Concat(planned.ArmRegistry is { } arms ? [arms] : []).Select(path => (path, "merged")))
+            .Concat(planned.Deleted.Select(path => (path, "deleted")))
+            .Concat(planned.Registries.Select(path => (path, "registry")));
+
+    /// <summary>Each of <paramref name="paths"/> with what the main tree holds there now, and whether that is not what it held before.</summary>
+    private async Task<IReadOnlyList<FlowFoldPath>> LeftAsync(string main, IReadOnlyList<FlowFoldPath> paths)
+    {
+        var left = new List<FlowFoldPath>();
+
+        foreach (var path in paths)
+        {
+            var digest = await FileContentHash.OfFileAsync(fileSystem, Path.Combine(main, path.Path), CancellationToken.None).ConfigureAwait(false);
+            left.Add(path with { Left = digest, Changed = !string.Equals(digest, path.Before, StringComparison.Ordinal) });
+        }
+
+        return left;
+    }
+
+    /// <summary>Writes <paramref name="entry"/> over the one of its id, inside the run's own section.</summary>
+    private void Replace(OrchestratorLayout layout, FlowFoldEntry entry)
+        => store.UpdateFolds(layout, ledger => ledger with
+        {
+            Folds = [.. ledger.Folds.Select(fold => string.Equals(fold.Id, entry.Id, StringComparison.Ordinal) ? entry : fold)],
+        });
+}

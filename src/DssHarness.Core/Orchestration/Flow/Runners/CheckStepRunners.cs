@@ -38,37 +38,6 @@ internal static class CheckResults
     /// <summary>The longest each read of the forge a step makes may take: its <c>timeoutMinutes</c>, else <see cref="GhProcess.DefaultLimit"/>.</summary>
     /// <param name="step">The step.</param>
     public static TimeSpan? ReadLimitOf(WorkflowStep step) => step.TimeoutMinutes is { } minutes ? TimeSpan.FromMinutes(minutes) : null;
-
-    /// <summary>
-    /// The names a <c>rows</c> or <c>paths</c> key holds the step to: those written out, those its expression yielded where
-    /// the step started - none where it read nothing - or null where the step names none, and judges the whole tree.
-    /// </summary>
-    /// <param name="list">The key.</param>
-    /// <param name="run">The step's run, with what the engine read where it started.</param>
-    /// <param name="key">The key's name.</param>
-    /// <exception cref="HarnessException">
-    /// The engine handed on no list of names for an expression it reads where the step starts: its own fault (70), never
-    /// read as naming nothing, which would judge nothing and pass.
-    /// </exception>
-    public static IReadOnlyList<string>? NamesOf(FlowList? list, FlowStepRun run, string key)
-    {
-        if (list is null)
-        {
-            return null;
-        }
-
-        if (list.Expression is null)
-        {
-            return list.Written;
-        }
-
-        return run.Read is not null
-            && run.Read.TryGetValue(key, out var value)
-            && value.ToNode() is JsonArray names
-            && names.All(name => name is JsonValue text && text.GetValueKind() == System.Text.Json.JsonValueKind.String)
-                ? [.. names.Select(name => name!.GetValue<string>())]
-                : throw new HarnessException(HarnessExit.InternalError, $"'{run.Instance}' was handed no names its {key} read where it started");
-    }
 }
 
 /// <summary>
@@ -93,7 +62,7 @@ public sealed class AnchorBalanceStepRunner(IHarnessContextLoader contextLoader,
         var tree = place.Repository;
 
         var report = await balance.CheckAsync(tree, run.Step.Base, cancellationToken).ConfigureAwait(false);
-        var held = CheckResults.NamesOf(run.Step.Rows, run, "rows") is { } rows ? report.HeldTo(rows) : report;
+        var held = FlowStepKeys.NamesOf(run.Step.Rows, run, "rows") is { } rows ? report.HeldTo(rows) : report;
         var findings = AnchorReports.BalanceFindings(held);
 
         return CheckResults.Checked(
@@ -126,7 +95,7 @@ public sealed class AnchorCitationsStepRunner(IHarnessContextLoader contextLoade
         var tree = place.Repository;
 
         var report = await citations.CheckAsync(tree, AnchorCitationSubjects.Of(run.Step.Subject), cancellationToken).ConfigureAwait(false);
-        var held = CheckResults.NamesOf(run.Step.AnchorPaths, run, "paths") is { } paths ? report.HeldTo(paths) : report;
+        var held = FlowStepKeys.NamesOf(run.Step.AnchorPaths, run, "paths") is { } paths ? report.HeldTo(paths) : report;
 
         return CheckResults.Checked(
             held.Passed,

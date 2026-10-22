@@ -909,7 +909,9 @@ public sealed class AgentService(
                 says.Add($"{FoldAllowances.MergeOption} writes a clean three-way merge into its worktree as its change, and a clean textual merge proves nothing about the program");
             }
 
-            return RefusedInDry(CommandOutcome.Refused(
+            var weighed = Weighed(changed.Count, mergeable, plan.Conflicting, [], rowsOtherwiseRefused: false);
+
+            return Weighs(CommandOutcome.Refused(
                 $"{Agent(record)} changed {changed.Count} of the path(s) to refresh - {ReportText.Listed([.. changed.Select(change => change.Path)])} - and "
                 + "refreshing would undo those changes. Nothing was copied.",
                 [
@@ -936,6 +938,18 @@ public sealed class AgentService(
                     says.Count == 1 ? $"{says[0]}; it is not a --force." : $"{string.Join("; ", says)}. None is a --force.",
                     .. bound,
                 ]));
+
+            // Weighed by the one rule a fold is: a clean merge nobody asked for a consent it lacks, a conflict told apart.
+            CommandOutcome Weighs(CommandOutcome refused)
+            {
+                if (!apply)
+                {
+                    return Dry(json, context.Layout, RefreshCommand, refused, weighed.Standing, new Typed(weighed.Needs, weighed.Reasons, planned), main, path);
+                }
+
+                met.Reasons = Applying(weighed.Needs, weighed.Reasons);
+                return refused;
+            }
         }
 
         if (inTheWay.Count > 0)
@@ -1174,12 +1188,14 @@ public sealed class AgentService(
 
         if (stop is not null)
         {
+            var weighed = RebaseWeighed(stop, plan);
+
             if (!apply)
             {
-                return Dry(json, context.Layout, RebaseCommand, stop, DryRuns.StandingOf(stop), new Typed([], RebaseReasons(plan), planned), path);
+                return Dry(json, context.Layout, RebaseCommand, stop, weighed.Standing, new Typed(weighed.Needs, weighed.Reasons, planned), path);
             }
 
-            met.Reasons = RebaseReasons(plan);
+            met.Reasons = weighed.Standing == RequestStanding.Refused || weighed.Standing == RequestStanding.NeedsConsent ? Applying(weighed.Needs, weighed.Reasons) : [];
             return stop;
         }
 
@@ -1213,7 +1229,8 @@ public sealed class AgentService(
 
             if (stop is not null)
             {
-                met.Reasons = RebaseReasons(plan);
+                var weighed = RebaseWeighed(stop, plan);
+                met.Reasons = weighed.Standing == RequestStanding.Refused || weighed.Standing == RequestStanding.NeedsConsent ? Applying(weighed.Needs, weighed.Reasons) : [];
                 return stop;
             }
 
@@ -1495,7 +1512,7 @@ public sealed class AgentService(
                         + $": it was moved there by hand, so folding or moving it now would weigh its work against the wrong commit. {putBack}"));
     }
 
-    public async Task<CommandOutcome> FoldAsync(
+    public Task<CommandOutcome> FoldAsync(
         string startDirectory,
         string orchestrator,
         string agent,
@@ -1503,6 +1520,18 @@ public sealed class AgentService(
         bool apply,
         CancellationToken cancellationToken = default,
         bool json = false)
+        => FoldHeldAsync(startDirectory, orchestrator, agent, allowances, expected: null, apply, json, cancellationToken);
+
+    /// <summary>Folding an agent, its <c>--apply</c> held to what its dry run named where <paramref name="expected"/> is given.</summary>
+    private async Task<CommandOutcome> FoldHeldAsync(
+        string startDirectory,
+        string orchestrator,
+        string agent,
+        FoldAllowances allowances,
+        AgentPlanned? expected,
+        bool apply,
+        bool json,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(allowances);
 
@@ -1519,7 +1548,7 @@ public sealed class AgentService(
         }
 
         var met = new HoldersMet();
-        var outcome = await FoldLiveAsync(at, allowances, apply, json, met, cancellationToken).ConfigureAwait(false);
+        var outcome = await FoldLiveAsync(at, allowances, expected, apply, json, met, cancellationToken).ConfigureAwait(false);
         var answered = apply ? _log.Record(at.Layout!, agent, FoldCommand, outcome) : outcome;
 
         // Asked for one document, what the live agent answered brings one, and what was returned above brings the same
@@ -1528,9 +1557,10 @@ public sealed class AgentService(
     }
 
     /// <summary>Folding a live agent, once it is found.</summary>
-    private async Task<CommandOutcome> FoldLiveAsync(AgentAt at, FoldAllowances allowances, bool apply, bool json, HoldersMet met, CancellationToken cancellationToken)
+    private async Task<CommandOutcome> FoldLiveAsync(AgentAt at, FoldAllowances allowances, AgentPlanned? expected, bool apply, bool json, HoldersMet met, CancellationToken cancellationToken)
     {
         var (context, layout, record, path) = (at.Context!, at.Layout!, at.Record!, at.Path!);
+        var policy = TwoChangePolicy.Of(context, []);
         var (unfoldable, seed) = await UnfoldableAsync(context.Layout.MainCheckoutRoot, layout, record, path, cancellationToken).ConfigureAwait(false);
 
         // A fold takes the main tree and the agent's worktree: who holds either is named on every exit a dry run makes.
@@ -1545,7 +1575,7 @@ public sealed class AgentService(
         {
             var measured = await MeasureAsync(context, layout, record, path, seed!, allowances, deleting: false, AnchorBatchMode.Plan, cancellationToken).ConfigureAwait(false);
 
-            var (standing, typed) = Consents(measured);
+            var (standing, typed) = Consents(measured, policy);
 
             if (measured.Refusal is { } refused)
             {
@@ -1579,12 +1609,21 @@ public sealed class AgentService(
         {
             var measured = await MeasureAsync(context, layout, record, path, seed!, allowances, deleting: false, AnchorBatchMode.Check, cancellationToken).ConfigureAwait(false);
 
+            // What it set out to write rides its answer, as measured under the hold.
+            met.Planned = PlannedOf(measured, policy);
+
             if (measured.Refusal is { } refused)
             {
                 // Typed as its dry run's would be, a consent nobody gave besides: a conflict told from every other refusal
                 // without reading a line.
-                met.Reasons = ApplyReasons(measured);
+                met.Reasons = ApplyReasons(measured, policy);
                 return refused;
+            }
+
+            if (Unexpected(record, expected, met.Planned, deleting: false) is { } unexpected)
+            {
+                met.Reasons = [RefusalKind.Other];
+                return unexpected;
             }
 
             var written = await WriteAsync(context, layout, record, path, seed!, measured).ConfigureAwait(false);
@@ -1601,7 +1640,7 @@ public sealed class AgentService(
         }
     }
 
-    public async Task<CommandOutcome> DeleteAsync(
+    public Task<CommandOutcome> DeleteAsync(
         string startDirectory,
         string orchestrator,
         string agent,
@@ -1610,6 +1649,19 @@ public sealed class AgentService(
         bool discardUncommitted,
         CancellationToken cancellationToken = default,
         bool json = false)
+        => DeleteHeldAsync(startDirectory, orchestrator, agent, allowances, expected: null, apply, discardUncommitted, json, cancellationToken);
+
+    /// <summary>Deleting an agent, the <c>--apply</c> of its fold held to what its dry run named where <paramref name="expected"/> is given.</summary>
+    private async Task<CommandOutcome> DeleteHeldAsync(
+        string startDirectory,
+        string orchestrator,
+        string agent,
+        FoldAllowances allowances,
+        AgentPlanned? expected,
+        bool apply,
+        bool discardUncommitted,
+        bool json,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(allowances);
 
@@ -1633,7 +1685,7 @@ public sealed class AgentService(
         }
 
         var met = new HoldersMet();
-        var outcome = await DeleteFoundAsync(found.Context!, found.Layout!, found.Record!, allowances, apply, discardUncommitted, json, met, cancellationToken).ConfigureAwait(false);
+        var outcome = await DeleteFoundAsync(found.Context!, found.Layout!, found.Record!, allowances, expected, apply, discardUncommitted, json, met, cancellationToken).ConfigureAwait(false);
         var answered = apply ? _log.Record(found.Layout!, agent, DeleteCommand, outcome) : outcome;
 
         // Asked for one document, what the agent found answered brings one, and what was returned above brings the same
@@ -1647,6 +1699,7 @@ public sealed class AgentService(
         OrchestratorLayout layout,
         AgentRecord record,
         FoldAllowances allowances,
+        AgentPlanned? expected,
         bool apply,
         bool discardUncommitted,
         bool json,
@@ -1686,7 +1739,7 @@ public sealed class AgentService(
 
         return record.State == AgentStates.Closed
             ? await FinishAsync(target, allowances, apply, json, met, cancellationToken).ConfigureAwait(false)
-            : await CloseAsync(target, allowances, apply, discardUncommitted, json, met, cancellationToken).ConfigureAwait(false);
+            : await CloseAsync(target, allowances, expected, apply, discardUncommitted, json, met, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1751,9 +1804,10 @@ public sealed class AgentService(
     /// Deleting a live agent: its fold and rows - or nothing, abandoning it - then its transcripts and evidence kept, its
     /// closing recorded, and its worktree's removal asked for.
     /// </summary>
-    private async Task<CommandOutcome> CloseAsync(Target target, FoldAllowances allowances, bool apply, bool discard, bool json, HoldersMet met, CancellationToken cancellationToken)
+    private async Task<CommandOutcome> CloseAsync(Target target, FoldAllowances allowances, AgentPlanned? expected, bool apply, bool discard, bool json, HoldersMet met, CancellationToken cancellationToken)
     {
         var (context, layout, record, path) = (target.Context, target.Layout, target.Record, target.Path);
+        var policy = TwoChangePolicy.Of(context, []);
 
         switch (target.Standing.Kind)
         {
@@ -1795,7 +1849,7 @@ public sealed class AgentService(
                 // Weighed as the fold's own only where the refusal is the fold's: a closing whose fold measured clean and
                 // then could not read its evidence failed for that, and stands as its failure does.
                 var (refusedStanding, refusedTyped) = dry.Fold is { } measuredFold && ReferenceEquals(refusal, measuredFold.Refusal)
-                    ? Consents(measuredFold)
+                    ? Consents(measuredFold, policy)
                     : (DryRuns.StandingOf(refusal), Typed.None);
 
                 return Dry(json, context.Layout, DeleteCommand, refusal, refusedStanding, refusedTyped, context.Layout.MainCheckoutRoot, path);
@@ -1828,7 +1882,7 @@ public sealed class AgentService(
                     .. line,
                 ]);
 
-            var (closingStanding, closingTyped) = dry.Fold is { } fold ? Consents(fold) : (RequestStanding.Sound, Typed.None);
+            var (closingStanding, closingTyped) = dry.Fold is { } fold ? Consents(fold, policy) : (RequestStanding.Sound, Typed.None);
 
             return await DryRemovalAsync(
                 json,
@@ -1852,11 +1906,20 @@ public sealed class AgentService(
         {
             var measured = await MeasureClosingAsync(target, seed, allowances, discard, AnchorBatchMode.Check, cancellationToken).ConfigureAwait(false);
 
+            // What its fold set out to write rides its answer, as measured under the hold.
+            met.Planned = measured.Fold is { } measuredFold ? PlannedOf(measuredFold, policy) : null;
+
             if (measured.Refusal is { } refused)
             {
                 // Typed as its dry run's would be, a consent nobody gave besides, where the refusal is the fold's own.
-                met.Reasons = measured.Fold is { } refusedFold && ReferenceEquals(refused, refusedFold.Refusal) ? ApplyReasons(refusedFold) : [];
+                met.Reasons = measured.Fold is { } refusedFold && ReferenceEquals(refused, refusedFold.Refusal) ? ApplyReasons(refusedFold, policy) : [];
                 return refused;
+            }
+
+            if (!discard && Unexpected(record, expected, met.Planned, deleting: true) is { } unexpected)
+            {
+                met.Reasons = [RefusalKind.Other];
+                return unexpected;
             }
 
             // Which git worktree this is, read before anything is written: its closing records it, and a worktree whose
@@ -2652,29 +2715,29 @@ public sealed class AgentService(
     /// failure does, whatever it counted: nothing it would have counted was read.
     /// </summary>
     /// <param name="measured">What the fold measured, or a closing's fold.</param>
-    private static (RequestStanding? Standing, Typed Typed) Consents(Measured measured)
+    /// <param name="policy">How each path both trees changed is resolved, which names the arm registry.</param>
+    private static (RequestStanding? Standing, Typed Typed) Consents(Measured measured, TwoChangePolicy policy)
     {
-        List<ConsentKind> needs = [];
+        var batch = measured.Rows.Batch;
+        var planned = PlannedOf(measured, policy);
+        List<ConsentKind> rowNeeds = [];
 
-        if (measured.Rows.Batch.UnnamedNew.Count > 0)
+        if (batch.UnnamedNew.Count > 0)
         {
-            needs.Add(ConsentKind.FoldNewRows);
+            rowNeeds.Add(ConsentKind.FoldNewRows);
         }
 
-        if (measured.Rows.Batch.Unaccepted.Count > 0)
+        if (batch.Unaccepted.Count > 0)
         {
-            needs.Add(ConsentKind.FoldLostRows);
+            rowNeeds.Add(ConsentKind.FoldLostRows);
         }
 
-        if (measured.Rows.Batch.UnacceptedOver.Count > 0)
+        if (batch.UnacceptedOver.Count > 0)
         {
-            needs.Add(ConsentKind.FoldOverCells);
+            rowNeeds.Add(ConsentKind.FoldOverCells);
         }
 
-        if (measured.Plan?.Mergeable.Count > 0)
-        {
-            needs.Add(ConsentKind.FoldTwoChanges);
-        }
+        var needs = NeedsOf(rowNeeds, measured.Plan?.Mergeable ?? []);
 
         if (measured.Refusal is { } refused)
         {
@@ -2682,58 +2745,157 @@ public sealed class AgentService(
 
             if (standing != RequestStanding.Refused)
             {
-                return (standing, new Typed(needs, []));
+                return (standing, new Typed(needs, [], planned));
             }
 
-            var onlyConsents = measured.Plan is { } plan
-                && plan.Refusals.Count == plan.Mergeable.Count
-                && measured.Rows.Batch.Problems.Count == measured.Rows.Batch.UnnamedNew.Count;
+            if (measured.Plan is not { } plan)
+            {
+                return (standing, new Typed(needs, [RefusalKind.Other], planned));
+            }
 
-            return onlyConsents
-                ? (RequestStanding.NeedsConsent, new Typed(needs, []))
-                : (standing, new Typed(needs, FoldReasons(measured)));
+            var weighed = Weighed(plan.Refusals.Count, plan.Mergeable, plan.Conflicting, rowNeeds, batch.Problems.Count > batch.UnnamedNew.Count);
+
+            return (weighed.Standing, new Typed(weighed.Needs, weighed.Reasons, planned));
         }
 
-        return (Consenting(measured.Rows.Batch), new Typed(needs, []));
+        return (Consenting(batch), new Typed(needs, [], planned));
     }
 
     /// <summary>
-    /// The reasons a refused fold or closing is refused for, by kind: a conflict where a path both trees changed has a
-    /// merge that conflicts, and something else where any refusal is neither that nor a consent the request lacks - a
-    /// clean merge nobody asked for and a row nobody named new are consents, and type no reason.
+    /// How a refused plan of the fold family stands - a fold's, a deletion's fold's, a refresh's or a move of an agent's base -
+    /// the one rule all four are weighed by: needing consent where every refusal is a clean merge nobody asked for and its
+    /// rows lack only consents too, and refused otherwise - for a conflict where a path both changed has a merge that
+    /// conflicts, and for something else where any refusal is neither that nor a clean merge, or a row is refused for more
+    /// than a consent. A clean merge nobody asked for is a consent the request lacks, whatever else refuses it.
     /// </summary>
-    /// <param name="measured">What the fold measured, refused.</param>
-    private static IReadOnlyList<RefusalKind> FoldReasons(Measured measured)
+    /// <param name="refusals">How many paths its plan refuses, clean merges and conflicts among them.</param>
+    /// <param name="mergeable">The paths both changed whose merge is clean and that nobody named to be merged.</param>
+    /// <param name="conflicting">The paths both changed whose merge conflicts.</param>
+    /// <param name="rowNeeds">The consents its rows lack; none for a refresh and a move of an agent's base.</param>
+    /// <param name="rowsOtherwiseRefused">Whether a row is refused for more than a consent it lacks.</param>
+    private static (RequestStanding Standing, IReadOnlyList<ConsentKind> Needs, IReadOnlyList<RefusalKind> Reasons) Weighed(
+        int refusals,
+        IReadOnlyList<string> mergeable,
+        IReadOnlyList<string> conflicting,
+        IReadOnlyList<ConsentKind> rowNeeds,
+        bool rowsOtherwiseRefused)
+    {
+        var needs = NeedsOf(rowNeeds, mergeable);
+
+        // Refused with nothing it lacks would read as a consent nobody can give: what refused it is something else.
+        if (refusals == mergeable.Count && !rowsOtherwiseRefused && needs.Count > 0)
+        {
+            return (RequestStanding.NeedsConsent, needs, []);
+        }
+
+        var otherwise = refusals > conflicting.Count + mergeable.Count || rowsOtherwiseRefused;
+
+        return (
+            RequestStanding.Refused,
+            needs,
+            [
+                .. conflicting.Count > 0 ? [RefusalKind.Conflict] : Array.Empty<RefusalKind>(),
+                .. otherwise ? [RefusalKind.Other] : Array.Empty<RefusalKind>(),
+            ]);
+    }
+
+    /// <summary>The consents a plan lacks: those its rows lack, and <c>--merge</c> where a path both trees changed merges cleanly and nobody named it.</summary>
+    /// <param name="rowNeeds">The consents its rows lack.</param>
+    /// <param name="mergeable">The paths both changed whose merge is clean and that nobody named to be merged.</param>
+    private static IReadOnlyList<ConsentKind> NeedsOf(IReadOnlyList<ConsentKind> rowNeeds, IReadOnlyList<string> mergeable)
+        => mergeable.Count > 0 ? [.. rowNeeds, ConsentKind.FoldTwoChanges] : rowNeeds;
+
+    /// <summary>
+    /// The reasons an <c>--apply</c> its own measure refused is refused for, by kind: as its dry run types them, and a
+    /// consent nobody gave as something else besides - an <c>--apply</c> refuses what its dry run asks, so a request refused
+    /// for a conflicting path and a clean merge nobody asked for is never read as refused for conflicts alone.
+    /// </summary>
+    /// <param name="needs">The consents its measure lacks.</param>
+    /// <param name="reasons">The reasons its measure typed.</param>
+    private static IReadOnlyList<RefusalKind> Applying(IReadOnlyList<ConsentKind> needs, IReadOnlyList<RefusalKind> reasons)
+        => needs.Count > 0 && !reasons.Contains(RefusalKind.Other) ? [.. reasons, RefusalKind.Other] : reasons.Count > 0 ? reasons : [RefusalKind.Other];
+
+    /// <summary>
+    /// How a move of an agent's base stands where its measure stopped it: by the one rule where its plan was measured and
+    /// refuses it, as its stop stands otherwise - a refusal of something else where it could not be measured.
+    /// </summary>
+    /// <param name="stop">Why it stopped.</param>
+    /// <param name="plan">What it measured; null where it could not be measured.</param>
+    private static (RequestStanding? Standing, IReadOnlyList<ConsentKind> Needs, IReadOnlyList<RefusalKind> Reasons) RebaseWeighed(CommandOutcome stop, RebasePlan? plan)
+        => (DryRuns.StandingOf(stop), plan) switch
+        {
+            (RequestStanding.Refused, { } measured) when measured.Refusals.Count > 0 => Weighed(measured.Refusals.Count, measured.Mergeable, measured.Conflicting, [], rowsOtherwiseRefused: false),
+            (RequestStanding.Refused, _) => (RequestStanding.Refused, [], [RefusalKind.Other]),
+            var (standing, _) => (standing, [], []),
+        };
+
+    /// <summary>
+    /// Why an <c>--apply</c> held to what its dry run named does not go on, where what it measured under its hold writes
+    /// anything else - the trees moved between the two - or null where it writes exactly that, or was held to nothing.
+    /// </summary>
+    /// <param name="record">The agent.</param>
+    /// <param name="expected">What its dry run named; null where it is held to nothing.</param>
+    /// <param name="planned">What it measured under its hold; null where nothing was measured.</param>
+    /// <param name="deleting">Whether the fold is a deletion's, which is said as one.</param>
+    private static CommandOutcome? Unexpected(AgentRecord record, AgentPlanned? expected, AgentPlanned? planned, bool deleting)
+    {
+        if (expected is null)
+        {
+            return null;
+        }
+
+        var difference = planned is null ? "nothing was measured" : planned.DifferenceFrom(expected);
+
+        return difference is null
+            ? null
+            : CommandOutcome.Refused(
+                $"{Agent(record)} was not {(deleting ? "deleted" : "folded")}: what it would write is not what its dry run named - {difference}. "
+                + (deleting ? "Nothing was written or removed." : "Nothing was written."));
+    }
+
+    /// <summary>
+    /// The registry files <paramref name="rows"/> change, as git names them: the one a row moves out of and the one it goes
+    /// into, of each row applied - new or changed - distinct and in order.
+    /// </summary>
+    /// <param name="rows">The rows weighed.</param>
+    private static IReadOnlyList<string> RegistriesOf(IEnumerable<AnchorRowOutcome> rows)
+        => [.. rows
+            .Where(row => row.Action is AnchorRowAction.New or AnchorRowAction.Changed)
+            .SelectMany(row => new[] { row.Change?.From, row.Change?.To })
+            .OfType<AnchorRegistry>()
+            .Select(registry => AnchorRegistryLocator.Normalize(registry.RelativePath))
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)];
+
+    /// <summary>
+    /// What a measured fold, or a deletion's fold, names: what it writes, merges, hands, removes and applies, the registry
+    /// files its rows change, and what each consent it lacks and each conflict it meets is about; null where nothing was
+    /// planned.
+    /// </summary>
+    /// <param name="measured">What the fold measured.</param>
+    /// <param name="policy">How each path both trees changed is resolved, which names the arm registry.</param>
+    private static AgentPlanned? PlannedOf(Measured measured, TwoChangePolicy policy)
     {
         if (measured.Plan is not { } plan)
         {
-            return [RefusalKind.Other];
+            return null;
         }
 
-        var otherwise = plan.Refusals.Count > plan.Conflicting.Count + plan.Mergeable.Count
-            || measured.Rows.Batch.Problems.Count > measured.Rows.Batch.UnnamedNew.Count;
+        var batch = measured.Rows.Batch;
 
-        return
-        [
-            .. plan.Conflicting.Count > 0 ? [RefusalKind.Conflict] : Array.Empty<RefusalKind>(),
-            .. otherwise ? [RefusalKind.Other] : Array.Empty<RefusalKind>(),
-        ];
+        return Planned([], [], [.. plan.Handed.Files, .. plan.Handed.Deletions], [.. plan.Merged.Select(merge => merge.Path)], policy) with
+        {
+            Written = plan.Written,
+            Deleted = plan.Deleted,
+            Registries = RegistriesOf(batch.Rows),
+            Rows = [.. batch.Rows.Where(row => row.Action is AnchorRowAction.New or AnchorRowAction.Changed).Select(row => row.Id)],
+            Mergeable = plan.Mergeable,
+            Conflicting = plan.Conflicting,
+            NewRows = batch.UnnamedNew,
+            LostCells = [.. batch.Unaccepted.Select(cell => cell.ToString())],
+            OverCells = [.. batch.UnacceptedOver.Select(cell => cell.ToString())],
+        };
     }
-
-    /// <summary>
-    /// The reasons a move of an agent's base is refused for, by kind: a conflict where a path both changed has a merge that
-    /// conflicts, and something else where any other path refuses it - a clean merge nobody asked for among them, which a
-    /// move, asking no consent, refuses as it refuses the rest. Something else too where it could not be measured.
-    /// </summary>
-    /// <param name="plan">What the move measured; null where it could not be measured.</param>
-    private static IReadOnlyList<RefusalKind> RebaseReasons(RebasePlan? plan)
-        => plan is null
-            ? [RefusalKind.Other]
-            :
-            [
-                .. plan.Conflicting.Count > 0 ? [RefusalKind.Conflict] : Array.Empty<RefusalKind>(),
-                .. plan.Refusals.Count > plan.Conflicting.Count ? [RefusalKind.Other] : Array.Empty<RefusalKind>(),
-            ];
 
     /// <summary>
     /// The reasons a request's facts carry for its standing: those typed where it stands refused, something else where it
@@ -2762,7 +2924,7 @@ public sealed class AgentService(
             [.. written.Applied.Merged.Where(path => policy.RuleFor(path) != TwoChangeRule.Arms)],
             written.Applied.Merged.FirstOrDefault(path => policy.RuleFor(path) == TwoChangeRule.Arms),
             written.Applied.Handed,
-            [.. rows.Select(row => row.Change?.To.Name).OfType<string>().Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)],
+            RegistriesOf(rows),
             [.. rows.Where(row => row.Action is AnchorRowAction.New or AnchorRowAction.Changed).Select(row => row.Id)],
             [.. rows.SelectMany(row => row.Over).Where(cell => cell.Accepted).Select(cell => cell.Cell.ToString())]);
 
@@ -2778,7 +2940,11 @@ public sealed class AgentService(
     /// <param name="plan">What the refresh measured.</param>
     /// <param name="policy">How each path both trees changed is resolved, which names the arm registry.</param>
     private static AgentPlanned PlannedOf(RefreshPlan plan, TwoChangePolicy policy)
-        => Planned([], [], [.. plan.Handed.Files, .. plan.Handed.Deletions], [.. plan.Merged.Select(merge => merge.Merge.Path)], policy);
+        => Planned([], [], [.. plan.Handed.Files, .. plan.Handed.Deletions], [.. plan.Merged.Select(merge => merge.Merge.Path)], policy) with
+        {
+            Mergeable = plan.Mergeable,
+            Conflicting = plan.Conflicting,
+        };
 
     /// <summary>
     /// What a move of an agent's base names, as its answer's facts carry it: what it takes, what it keeps and what it
@@ -2787,7 +2953,11 @@ public sealed class AgentService(
     /// <param name="plan">What the move measured.</param>
     /// <param name="policy">How each path both changed is resolved, which names the arm registry.</param>
     private static AgentPlanned PlannedOf(RebasePlan plan, TwoChangePolicy policy)
-        => Planned(plan.Taken, plan.Kept, [], [.. plan.Merged.Select(merge => merge.Path)], policy);
+        => Planned(plan.Taken, plan.Kept, [], [.. plan.Merged.Select(merge => merge.Path)], policy) with
+        {
+            Mergeable = plan.Mergeable,
+            Conflicting = plan.Conflicting,
+        };
 
     private static AgentPlanned Planned(IReadOnlyList<string> taken, IReadOnlyList<string> kept, IReadOnlyList<string> handed, IReadOnlyList<string> merged, TwoChangePolicy policy)
         => new(
@@ -2797,17 +2967,14 @@ public sealed class AgentService(
             [.. merged.Where(path => policy.RuleFor(path) != TwoChangeRule.Arms)],
             merged.FirstOrDefault(path => policy.RuleFor(path) == TwoChangeRule.Arms));
 
-    /// <summary>
-    /// The reasons an <c>--apply</c>'s own measure refused it for, by kind: as its dry run types them, and a consent nobody
-    /// gave as something else besides - an <c>--apply</c> refuses what its dry run asks, so a request refused for a
-    /// conflicting path and a clean merge nobody asked for is never read as refused for conflicts alone.
-    /// </summary>
+    /// <summary>The reasons a fold's <c>--apply</c> its own measure refused is refused for, by kind, as <see cref="Applying"/> gives them.</summary>
     /// <param name="measured">What the --apply measured, refused.</param>
-    private static IReadOnlyList<RefusalKind> ApplyReasons(Measured measured)
+    /// <param name="policy">How each path both trees changed is resolved, which names the arm registry.</param>
+    private static IReadOnlyList<RefusalKind> ApplyReasons(Measured measured, TwoChangePolicy policy)
     {
-        var (_, typed) = Consents(measured);
+        var (_, typed) = Consents(measured, policy);
 
-        return typed.Needs.Count > 0 && !typed.Reasons.Contains(RefusalKind.Other) ? [.. typed.Reasons, RefusalKind.Other] : typed.Reasons;
+        return Applying(typed.Needs, typed.Reasons);
     }
 
     /// <summary>
@@ -3697,7 +3864,7 @@ public sealed class AgentService(
         ArgumentNullException.ThrowIfNull(request);
 
         return UseCaseResult<AgentVerbFacts>.From(
-            await FoldAsync(request.StartDirectory, request.Orchestrator, request.Agent, request.Allowances, request.Apply, cancellationToken, request.Json).ConfigureAwait(false));
+            await FoldHeldAsync(request.StartDirectory, request.Orchestrator, request.Agent, request.Allowances, request.Expected, request.Apply, request.Json, cancellationToken).ConfigureAwait(false));
     }
 
     /// <inheritdoc cref="IAgentService.DeleteAsync(DeleteAgentRequest, CancellationToken)"/>
@@ -3706,7 +3873,7 @@ public sealed class AgentService(
         ArgumentNullException.ThrowIfNull(request);
 
         return UseCaseResult<AgentVerbFacts>.From(
-            await DeleteAsync(request.StartDirectory, request.Orchestrator, request.Agent, request.Allowances, request.Apply, request.DiscardUncommitted, cancellationToken, request.Json).ConfigureAwait(false));
+            await DeleteHeldAsync(request.StartDirectory, request.Orchestrator, request.Agent, request.Allowances, request.Expected, request.Apply, request.DiscardUncommitted, request.Json, cancellationToken).ConfigureAwait(false));
     }
 
     /// <summary>What deleting a live agent measured before writing anything, and why it cannot go on where it cannot.</summary>
@@ -3727,7 +3894,7 @@ public sealed class AgentService(
         /// <summary>What a fold applied, where this --apply wrote one; <see langword="null"/> where it folded nothing.</summary>
         public AgentFolded? Folded { get; set; }
 
-        /// <summary>What the plan of a refresh or a move of an agent's base names, once it is measured; <see langword="null"/> before.</summary>
+        /// <summary>What the plan of the verb names, measured under its hold; <see langword="null"/> before, and where none was measured.</summary>
         public AgentPlanned? Planned { get; set; }
 
         /// <summary>The reasons the --apply's own measure was refused for, by kind, where it typed any; empty otherwise.</summary>
@@ -3736,11 +3903,11 @@ public sealed class AgentService(
 
     /// <summary>
     /// What a request's measure typed: each consent it lacks and each reason it is refused for, by kind, which its standing
-    /// is typed by, and what its plan names where it is a refresh's or a move of an agent's base.
+    /// is typed by, and what its plan names.
     /// </summary>
     /// <param name="Needs">Each consent the request lacks, by kind, and nothing else.</param>
     /// <param name="Reasons">Each reason its measure refused it for, by kind; empty where it typed none.</param>
-    /// <param name="Planned">What the plan of a refresh or a move of an agent's base names; <see langword="null"/> where none was measured.</param>
+    /// <param name="Planned">What the plan of the verb names; <see langword="null"/> where none was measured.</param>
     private sealed record Typed(IReadOnlyList<ConsentKind> Needs, IReadOnlyList<RefusalKind> Reasons, AgentPlanned? Planned = null)
     {
         /// <summary>Nothing lacked and nothing typed.</summary>

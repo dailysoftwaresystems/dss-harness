@@ -179,6 +179,11 @@ public static class ServiceRegistration
         services.AddSingleton<IFlowStepTypeRunner, AnchorCitationsStepRunner>();
         services.AddSingleton<IFlowStepTypeRunner, CiReadStepRunner>();
         services.AddSingleton<IFlowStepTypeRunner, CiWaitStepRunner>();
+        services.AddSingleton<FoldLedger>();
+        services.AddSingleton<IFlowStepTypeRunner, FoldStepRunner>();
+        services.AddSingleton<IFlowStepTypeRunner, DeleteAgentStepRunner>();
+        services.AddSingleton<IFlowStepTypeRunner, RefreshStepRunner>();
+        services.AddSingleton<IFlowStepTypeRunner, RebaseStepRunner>();
         services.AddSingleton<IFlowStepRunner, FlowStepRunners>();
 
         // The one way an agent's step is worked, whatever the client is: each client built in is registered here as its

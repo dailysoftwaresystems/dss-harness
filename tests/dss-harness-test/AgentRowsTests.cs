@@ -1,4 +1,5 @@
 using DssHarness.Core.Anchors;
+using DssHarness.Core.Configuration;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Orchestration;
@@ -396,7 +397,7 @@ public sealed class AgentRowsTests
         Assert.True(accepted.Succeeded, OrchestrationKit.Describe(accepted));
         Assert.Equal("another plan", (await RowAsync(kit)).ClosingWork);
         Assert.Equal("two\nagent edit\n", OrchestrationKit.Read(kit.Main, "b.txt"));
-        AgentVerbFactsTests.Same(new AgentFolded(["b.txt"], [], [], ArmRegistry: null, [], ["pending"], [Id], []), Facts(accepted).Folded);
+        AgentVerbFactsTests.Same(new AgentFolded(["b.txt"], [], [], ArmRegistry: null, [], [AnchorSettings.DefaultPendingAnchorsPath], [Id], []), Facts(accepted).Folded);
     }
 
     /// <summary>
@@ -515,7 +516,7 @@ public sealed class AgentRowsTests
         Assert.Contains($"  refused: {Id}: its closing was changed by the registries and by the agent since an earlier fold of this agent applied it, so the agent's text is written over the registries' only with --accept-over {Id}:closing; the dry run shows the three texts.", lostAlone.Details!);
         Assert.True(over.Succeeded, OrchestrationKit.Describe(over));
         Assert.Equal("the fix, made better", (await RowAsync(kit)).ClosingWork);
-        AgentVerbFactsTests.Same(new AgentFolded([], [], [], ArmRegistry: null, [], ["pending"], [Id], [$"{Id}:closing"]), Facts(over).Folded);
+        AgentVerbFactsTests.Same(new AgentFolded([], [], [], ArmRegistry: null, [], [AnchorSettings.DefaultPendingAnchorsPath], [Id], [$"{Id}:closing"]), Facts(over).Folded);
     }
 
     /// <summary>

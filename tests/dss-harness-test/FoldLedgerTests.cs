@@ -1,0 +1,329 @@
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Orchestration;
+using DssHarness.Core.Orchestration.Flow;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
+
+namespace DssHarness.Tests;
+
+/// <summary>
+/// The run's write-ahead ledger of its folds and what a fold family step keeps in its directory: each path a fold means to
+/// write with what the main tree held there before, written before the verb is called, and what it left there after - a
+/// crash between the two settled by the next attempt from what the tree holds - every record held strictly, and a run
+/// whose ledger holds a fold no commit took counted unfinished.
+/// </summary>
+public sealed class FoldLedgerTests
+{
+    private const string Digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    private static readonly DateTimeOffset At = new(2026, 10, 22, 12, 0, 0, TimeSpan.Zero);
+
+    /// <summary>
+    /// An intent names every path the plan writes, merges, removes and every registry file its rows change - each once,
+    /// with what the main tree holds there now, none where it holds no file - and the rows it applies, before anything is
+    /// written; and the ids are f&lt;n&gt; in the order intended.
+    /// </summary>
+    [Fact]
+    public async Task AnIntent_RecordsWhatEachPathHeldBefore_EveryPathOnce()
+    {
+        using var temp = new TempDirectory();
+        var (harness, layout, ledger) = Ledger(temp);
+        File.WriteAllText(Path.Combine(temp.Path, "a.txt"), "before\n");
+        Directory.CreateDirectory(Path.Combine(temp.Path, ".plans"));
+        File.WriteAllText(Path.Combine(temp.Path, ".plans", "r.md"), "rows\n");
+        var planned = new AgentPlanned([], [], ["h.txt"], ["m.txt"], "arms.txt")
+        {
+            Written = ["a.txt", "new.txt"],
+            Deleted = ["gone.txt"],
+            Registries = [".plans/r.md", "a.txt"],
+            Rows = ["R-1"],
+        };
+
+        var first = await ledger.IntendAsync(layout, temp.Path, "fold", 1, "fold", "a1", planned, Token);
+        var second = await ledger.IntendAsync(layout, temp.Path, "fold", 2, "fold", "a1", planned with { Written = [] }, Token);
+
+        var entry = harness.OrchestrationStore.ReadFolds(layout)!.Of(first)!;
+
+        Assert.Equal(("f1", "f2"), (first, second));
+        Assert.Equal(FlowFoldEntry.Intended, entry.State);
+        Assert.Null(entry.SettledAt);
+        Assert.Equal(
+            [("a.txt", "written"), ("new.txt", "written"), ("m.txt", "merged"), ("arms.txt", "merged"), ("gone.txt", "deleted"), (".plans/r.md", "registry")],
+            entry.Paths.Select(path => (path.Path, path.What)));
+        Assert.Equal(FileContentHash.Of("before\n"u8), entry.Paths[0].Before);
+        Assert.Null(entry.Paths[1].Before);
+        Assert.Equal(FileContentHash.Of("rows\n"u8), entry.Paths[^1].Before);
+        Assert.All(entry.Paths, path => Assert.Null(path.Changed));
+        Assert.Equal(["R-1"], entry.Rows);
+        Assert.True(entry.Uncommitted);
+
+        // Whether a fold holds what no commit took is read from its paths, never written beside them.
+        Assert.DoesNotContain("uncommitted", File.ReadAllText(layout.FoldsFile), StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// A settle records what the fold left at each path and whether that is what it held: applied for a fold that went
+    /// through, stopped for one that stopped part way; a refusal wrote nothing and reads nothing - it holds nothing a
+    /// commit would take.
+    /// </summary>
+    [Fact]
+    public async Task ASettle_RecordsWhatTheFoldLeft_AndARefusalHoldsNothing()
+    {
+        using var temp = new TempDirectory();
+        var (harness, layout, ledger) = Ledger(temp);
+        File.WriteAllText(Path.Combine(temp.Path, "a.txt"), "before\n");
+        File.WriteAllText(Path.Combine(temp.Path, "gone.txt"), "there\n");
+        var planned = new AgentPlanned([], [], [], [], null) { Written = ["a.txt", "same.txt"], Deleted = ["gone.txt"] };
+        File.WriteAllText(Path.Combine(temp.Path, "same.txt"), "same\n");
+
+        var applied = await ledger.IntendAsync(layout, temp.Path, "fold", 1, "fold", "a1", planned, Token);
+        File.WriteAllText(Path.Combine(temp.Path, "a.txt"), "after\n");
+        File.Delete(Path.Combine(temp.Path, "gone.txt"));
+        await ledger.SettleAsync(layout, temp.Path, applied, HarnessExit.Success);
+
+        var refused = await ledger.IntendAsync(layout, temp.Path, "fold", 2, "fold", "a1", planned, Token);
+        await ledger.SettleAsync(layout, temp.Path, refused, HarnessExit.Refused);
+
+        var stopped = await ledger.IntendAsync(layout, temp.Path, "fold", 3, "fold", "a1", planned with { Deleted = [] }, Token);
+        File.WriteAllText(Path.Combine(temp.Path, "a.txt"), "part way\n");
+        await ledger.SettleAsync(layout, temp.Path, stopped, HarnessExit.Incomplete);
+
+        var file = harness.OrchestrationStore.ReadFolds(layout)!;
+        var first = file.Of(applied)!;
+
+        Assert.Equal("applied", first.State);
+        Assert.NotNull(first.SettledAt);
+        Assert.Equal((FileContentHash.Of("after\n"u8), true), (first.Paths[0].Left, first.Paths[0].Changed));
+        Assert.Equal((FileContentHash.Of("same\n"u8), false), (first.Paths[1].Left, first.Paths[1].Changed));
+        Assert.Equal(((string?)null, true), (first.Paths[2].Left, first.Paths[2].Changed));
+        Assert.True(first.Uncommitted);
+        Assert.Equal(FlowFoldEntry.Refused, file.Of(refused)!.State);
+        Assert.All(file.Of(refused)!.Paths, path => Assert.Null(path.Changed));
+        Assert.False(file.Of(refused)!.Uncommitted);
+        Assert.Equal("stopped", file.Of(stopped)!.State);
+        Assert.True(file.Of(stopped)!.Paths[0].Changed);
+        Assert.Equal([applied, stopped], FoldLedger.Uncommitted(file).Select(entry => entry.Id));
+
+        // A path a commit took holds nothing a commit would take again.
+        var committed = file with { Folds = [.. file.Folds.Select(entry => entry with { Paths = [.. entry.Paths.Select(path => path.Changed == true ? path with { Committed = new string('a', 40) } : path)] })] };
+
+        Assert.Empty(FoldLedger.Uncommitted(committed));
+    }
+
+    /// <summary>
+    /// An intent a crash left - the verb called, nothing recorded after - is settled interrupted by the step's next attempt,
+    /// with what the tree holds now: another instance's intent is left as it is.
+    /// </summary>
+    [Fact]
+    public async Task AnIntentACrashLeft_IsSettledInterrupted_WithWhatTheTreeHolds()
+    {
+        using var temp = new TempDirectory();
+        var (harness, layout, ledger) = Ledger(temp);
+        var planned = new AgentPlanned([], [], [], [], null) { Written = ["a.txt"] };
+
+        var mine = await ledger.IntendAsync(layout, temp.Path, "fold", 1, "fold", "a1", planned, Token);
+        var other = await ledger.IntendAsync(layout, temp.Path, "items[1].fold", 1, "fold", "a2", planned, Token);
+        File.WriteAllText(Path.Combine(temp.Path, "a.txt"), "written before the crash\n");
+
+        var settled = await ledger.SettleInterruptedAsync(layout, temp.Path, "fold");
+        var file = harness.OrchestrationStore.ReadFolds(layout)!;
+
+        Assert.Equal(1, settled);
+        Assert.Equal(FlowFoldEntry.Interrupted, file.Of(mine)!.State);
+        Assert.Equal((FileContentHash.Of("written before the crash\n"u8), true), (file.Of(mine)!.Paths[0].Left, file.Of(mine)!.Paths[0].Changed));
+        Assert.Equal(FlowFoldEntry.Intended, file.Of(other)!.State);
+        Assert.Equal(0, await ledger.SettleInterruptedAsync(layout, temp.Path, "fold"));
+    }
+
+    /// <summary>
+    /// What a path holds is read as the file there: a link to a file as the file it leads to; a directory, a link that leads
+    /// nowhere and nothing at all hold no file.
+    /// </summary>
+    [Fact]
+    public async Task WhatAPathHolds_IsTheFileThere_ALinkFollowed()
+    {
+        using var temp = new TempDirectory();
+        var (harness, _, _) = Ledger(temp);
+        File.WriteAllText(Path.Combine(temp.Path, "a.txt"), "held\n");
+        Directory.CreateDirectory(Path.Combine(temp.Path, "dir"));
+        TestLinks.OrSkip(() =>
+        {
+            File.CreateSymbolicLink(Path.Combine(temp.Path, "to-a.txt"), Path.Combine(temp.Path, "a.txt"));
+            File.CreateSymbolicLink(Path.Combine(temp.Path, "nowhere.txt"), Path.Combine(temp.Path, "gone.txt"));
+        });
+
+        Task<string?> Of(string name) => FileContentHash.OfFileAsync(harness.FileSystem, Path.Combine(temp.Path, name), Token);
+
+        Assert.Equal(FileContentHash.Of("held\n"u8), await Of("a.txt"));
+        Assert.Equal(FileContentHash.Of("held\n"u8), await Of("to-a.txt"));
+        Assert.Null(await Of("dir"));
+        Assert.Null(await Of("nowhere.txt"));
+        Assert.Null(await Of("absent.txt"));
+    }
+
+    /// <summary>
+    /// The ledger is read strictly: ids f&lt;n&gt; in the order intended; settled exactly when it says what became of a
+    /// fold; what a path left said only once it was read, and whether it changed true to what it left; a commit only on a
+    /// path it changed; a path relative to the tree; a state, a type and a kind of path the engine has.
+    /// </summary>
+    [Theory]
+    [InlineData("misnumbered", "its fold 'f3' is out of order: ids are f<n>, in the order intended")]
+    [InlineData("unsettled", "its fold 'f1': it is settled exactly when it says what became of it")]
+    [InlineData("readWhileIntended", "its fold 'f1': 'a.txt' says what the fold left exactly where it wrote nothing yet")]
+    [InlineData("changedUntrue", "its fold 'f1': 'a.txt' says it changed where what it left is what it held")]
+    [InlineData("committedUnchanged", "its fold 'f1': 'a.txt' is committed and was not changed")]
+    [InlineData("rooted", "its fold 'f1': a folded path, '/a.txt', is not a path relative to the tree, spelt with forward slashes")]
+    [InlineData("state", "its fold 'f1': 'done' is not a state a fold stands in")]
+    [InlineData("type", "its fold 'f1': 'refresh' is not a step that folds")]
+    [InlineData("what", "its fold 'f1': 'copied' is not what a fold does to 'a.txt'")]
+    [InlineData("digest", "its fold 'f1': 'a.txt' has 'x', which is not a SHA-256 digest")]
+    [InlineData("twice", "its fold 'f1': 'a.txt' is named twice")]
+    [InlineData("readWhileRefused", "its fold 'f1': 'a.txt' says what the fold left exactly where it wrote nothing yet")]
+    [InlineData("unreadSettled", "its fold 'f1': 'a.txt' says what the fold left exactly where it was settled")]
+    public void TheFoldLedger_IsStrict(string wrong, string problem)
+    {
+        var path = new FlowFoldPath("a.txt", "written", Digest, Left: null, Changed: true);
+        var entry = new FlowFoldEntry("f1", "fold", 1, "fold", "a1", "applied", At, [path], [], SettledAt: At);
+        var ledger = new FlowFoldLedgerFile(1, "r1", [entry]);
+
+        Assert.Null(ledger.Problem());
+
+        var broken = wrong switch
+        {
+            "misnumbered" => ledger with { Folds = [entry, entry with { Id = "f3" }] },
+            "unsettled" => ledger with { Folds = [entry with { SettledAt = null }] },
+            "readWhileIntended" => ledger with { Folds = [entry with { State = FlowFoldEntry.Intended, SettledAt = null }] },
+            "changedUntrue" => ledger with { Folds = [entry with { Paths = [path with { Left = Digest }] }] },
+            "committedUnchanged" => ledger with { Folds = [entry with { Paths = [path with { Left = Digest, Changed = false, Committed = new string('a', 40) }] }] },
+            "rooted" => ledger with { Folds = [entry with { Paths = [path with { Path = "/a.txt" }] }] },
+            "state" => ledger with { Folds = [entry with { State = "done" }] },
+            "type" => ledger with { Folds = [entry with { Type = "refresh" }] },
+            "what" => ledger with { Folds = [entry with { Paths = [path with { What = "copied" }] }] },
+            "digest" => ledger with { Folds = [entry with { Paths = [path with { Before = "x" }] }] },
+            "twice" => ledger with { Folds = [entry with { Paths = [path, path with { What = "merged" }] }] },
+            "readWhileRefused" => ledger with { Folds = [entry with { State = FlowFoldEntry.Refused }] },
+            "unreadSettled" => ledger with { Folds = [entry with { Paths = [path with { Changed = null }] }] },
+            _ => throw new ArgumentOutOfRangeException(nameof(wrong), wrong, "no such case"),
+        };
+
+        Assert.Equal(problem, broken.Problem());
+    }
+
+    /// <summary>
+    /// What a fold family step keeps is read strictly: a standing, a consent and a reason the engine has; a consent given
+    /// by an answer that gives one, for something it names; a target that failed names its code, and one not ended none.
+    /// </summary>
+    [Fact]
+    public void TheFoldRecordAndTheTargets_AreStrict()
+    {
+        var record = new FlowFoldRecord(
+            "fold",
+            1,
+            "a1",
+            "fold",
+            [new FlowFoldGrant("foldNewRows", ["R-1"], "q1", "allow")],
+            [],
+            new FlowFoldShown(13, "lacks", ["FoldNewRows"], [], [], "NeedsConsent"),
+            new FlowFoldAsked("foldNewRows", ["R-1"], 0));
+
+        Assert.Null(record.Problem());
+        Assert.Equal("its dry run: 'Lacking' is not a standing", (record with { Shown = record.Shown! with { Standing = "Lacking" } }).Problem());
+        Assert.Equal("its dry run: 'NewRows' is not a consent", (record with { Shown = record.Shown! with { Needs = ["NewRows"] } }).Problem());
+        Assert.Equal("its dry run: 'conflict' is not a reason a request is refused for", (record with { Shown = record.Shown! with { Refusals = ["conflict"] } }).Problem());
+        Assert.Equal("a consent it was given: 'retry' gives no consent", (record with { Granted = [record.Granted[0] with { Answer = "retry" }] }).Problem());
+        Assert.Equal("a consent it was given: it names nothing it was given for", (record with { Granted = [record.Granted[0] with { Named = [] }] }).Problem());
+        Assert.Equal("'merge' is not a step of the fold family", (record with { Type = "merge" }).Problem());
+        Assert.Equal("its question: its answer stands at -1", (record with { Asked = record.Asked! with { AnswerAt = -1 } }).Problem());
+
+        Assert.Null(new FlowTargetRecord("a2", FlowTargetRecord.Failed, 1, Exit: 13).Problem());
+        Assert.Equal("a target that failed names its code", new FlowTargetRecord("a2", FlowTargetRecord.Failed, 1).Problem());
+        Assert.Equal("a target notStarted names no code", new FlowTargetRecord("a2", FlowTargetRecord.NotStarted, 1, Exit: 21).Problem());
+        Assert.Equal("'gone' is not where a target stands", new FlowTargetRecord("a2", "gone", 0).Problem());
+        Assert.Null(new FlowTargetRecord("a2", FlowTargetRecord.Failed, 6, Exit: 13, Cause: "LockHeld", EndedByQuestion: "foldConflicts").Problem());
+        Assert.Equal("'Held' is not a cause an ending is recorded with", new FlowTargetRecord("a2", FlowTargetRecord.Failed, 1, Exit: 13, Cause: "Held").Problem());
+        Assert.Equal("'None' is not a cause an ending is recorded with", new FlowTargetRecord("a2", FlowTargetRecord.Failed, 1, Exit: 13, Cause: "None").Problem());
+        Assert.Equal(
+            "only a target that failed names a cause or a question that ended it",
+            new FlowTargetRecord("a2", FlowTargetRecord.Done, 1, Exit: 0, Cause: "LockHeld").Problem());
+        Assert.Equal(
+            "only a target that failed names a cause or a question that ended it",
+            new FlowTargetRecord("a2", FlowTargetRecord.NotStarted, 0, EndedByQuestion: "foldConflicts").Problem());
+    }
+
+    /// <summary>What a fold family step keeps reads back whole: what its dry run named among it, its plan's every member.</summary>
+    [Fact]
+    public void TheFoldRecord_ReadsBackWhole()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var planned = new AgentPlanned([], [], [], ["m.txt"], ArmRegistry: null) { Written = ["a.txt"], NewRows = ["R-1"], Registries = [".plans/r.md"] };
+        var record = new FlowFoldRecord(
+            "items[0].fold",
+            2,
+            "a1",
+            "fold",
+            [],
+            ["c.txt"],
+            new FlowFoldShown(13, "lacks", ["FoldNewRows"], [], ["out.txt"], "NeedsConsent", planned),
+            Applied: new FlowFoldApplied(0, "folded", "Sound", new AgentFolded(["a.txt"], [], [], ArmRegistry: null, [new HandedPath("h.txt", null)], [], [], []), planned, "f1"));
+
+        harness.OrchestrationStore.WriteFoldRecord(temp.Path, record);
+
+        AgentVerbFactsTests.Same(record, harness.OrchestrationStore.ReadFoldRecord(temp.Path));
+        Assert.Null(harness.OrchestrationStore.ReadFoldRecord(Path.Combine(temp.Path, "none")));
+    }
+
+    /// <summary>
+    /// A stopped run whose ledger holds a fold no commit took is unfinished - it would fold into the main tree a second run
+    /// folds into - and a session is refused, saying so; its fold committed, the run holds nothing in the tree.
+    /// </summary>
+    [Fact]
+    public async Task ARunWithAFoldNotYetCommitted_IsUnfinished()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var layout = new HarnessLayout(temp.Path, temp.Path);
+        var sessions = new FlowSessions(harness.OrchestrationStore, harness.FileSystem, harness.Identity);
+        var definition = WorkflowFileParser.Parse("workflows/flow/flow.yml", "name: flow\nsteps:\n  - name: one\n    type: orient\n");
+        var (other, _) = sessions.Create(layout, definition);
+        new FlowRunOwner(harness.OrchestrationStore, harness.Identity).Release(other);
+        // The run's own state says Stopped - written by hand, for the test is of the scan, not of the stop.
+        harness.OrchestrationStore.WriteFlow(other, new FlowFile(1, other.Name, "flow", Digest, new Dictionary<string, string>(), "Stopped", new FlowBudgetRecord(0, 0, 0), 0, [], [], At));
+        var ledger = new FoldLedger(harness.OrchestrationStore, harness.FileSystem, TimeProvider.System);
+        var id = await ledger.IntendAsync(other, temp.Path, "one", 1, "fold", "a1", new AgentPlanned([], [], [], [], null) { Written = ["a.txt"] }, Token);
+        File.WriteAllText(Path.Combine(temp.Path, "a.txt"), "folded\n");
+        await ledger.SettleAsync(other, temp.Path, id, HarnessExit.Success);
+
+        var held = Assert.Throws<HarnessException>(() => sessions.Create(layout, definition, wantedName: "second"));
+
+        Assert.Contains("run 'r1' of this repository is unfinished (stopped; 1 fold in its ledger not yet committed)", held.Message, StringComparison.Ordinal);
+
+        // A ledger that does not read as one cannot say what it holds, and the run is unfinished all the same.
+        var written = File.ReadAllText(other.FoldsFile);
+        File.WriteAllText(other.FoldsFile, "{");
+        var unread = Assert.Throws<HarnessException>(() => sessions.Create(layout, definition, wantedName: "second"));
+        File.WriteAllText(other.FoldsFile, written);
+
+        Assert.Contains("run 'r1' of this repository is unfinished (stopped, and whether its ledger holds a fold not yet committed cannot be told: ", unread.Message, StringComparison.Ordinal);
+
+        _ = harness.OrchestrationStore.UpdateFolds(other, file => file with
+        {
+            Folds = [.. file.Folds.Select(entry => entry with { Paths = [.. entry.Paths.Select(path => path with { Committed = new string('b', 40) })] })],
+        });
+
+        Assert.Equal("second", sessions.Create(layout, definition, wantedName: "second").Run.Name);
+    }
+
+    private static CancellationToken Token => TestContext.Current.CancellationToken;
+
+    /// <summary>A ledger over a run of the repository at <paramref name="temp"/>, with the clock at <see cref="At"/>.</summary>
+    private static (HarnessFactory Harness, OrchestratorLayout Layout, FoldLedger Ledger) Ledger(TempDirectory temp)
+    {
+        var harness = new HarnessFactory();
+        var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "r1");
+        Directory.CreateDirectory(layout.Directory);
+        harness.OrchestrationStore.WriteOrchestrator(layout, new OrchestratorRecord { Kind = OrchestratorRecord.KindName, Name = "r1", Model = "flow-engine", CreatedAt = At, Parallel = 1 });
+
+        return (harness, layout, new FoldLedger(harness.OrchestrationStore, harness.FileSystem, new ManualClock(At)));
+    }
+}

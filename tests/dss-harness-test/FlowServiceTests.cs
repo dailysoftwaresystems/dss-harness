@@ -129,6 +129,7 @@ public sealed class FlowServiceTests
                 $"events: {run.EventsFile}",
                 $"report: {run.ReportFile}",
                 $"reportJson: {run.ReportJsonFile}",
+                $"folds: {run.FoldsFile}",
                 $"log {run.LogFile("r1")}",
             ],
             outcome.Details);
@@ -324,7 +325,7 @@ public sealed class FlowServiceTests
         Assert.Equal("Done", document["status"]!.GetValue<string>());
         Assert.Equal(0d, document["spent"]!["usd"]!.GetValue<double>());
         Assert.Equal(
-            ["run", "state", "status", "questions", "issues", "definition", "events", "report", "reportJson", "log"],
+            ["run", "state", "status", "questions", "issues", "definition", "events", "report", "reportJson", "folds", "log"],
             document["records"]!.AsObject().Select(member => member.Key));
         Assert.Equal(run.FlowFile, document["records"]!["state"]!.GetValue<string>());
         Assert.Equal(run.LogFile("r1"), document["records"]!["log"]!.GetValue<string>());
@@ -1286,6 +1287,7 @@ public sealed class FlowServiceTests
                 $"events: {run.EventsFile}",
                 $"report: {run.ReportFile}",
                 $"reportJson: {run.ReportJsonFile}",
+                $"folds: {run.FoldsFile}",
                 $"log {run.LogFile("r1")}",
             ],
             outcome.Details);
@@ -1297,7 +1299,7 @@ public sealed class FlowServiceTests
         Assert.Equal("r1", document["run"]!.GetValue<string>());
         Assert.Equal("Running", document["status"]!.GetValue<string>());
         Assert.Equal(
-            ["run", "state", "status", "questions", "issues", "definition", "events", "report", "reportJson", "log"],
+            ["run", "state", "status", "questions", "issues", "definition", "events", "report", "reportJson", "folds", "log"],
             document["records"]!.AsObject().Select(member => member.Key));
 
         var logged = repository.Harness.OrchestrationLog.Read(run.LogFile("r1"))[^1];

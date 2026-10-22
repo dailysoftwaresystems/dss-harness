@@ -16,8 +16,7 @@ Implemented today: `init`, `verify-git`, `create-worktree`, `delete-worktree`,
 `list-worktree`, the orchestrator commands (`create-orchestrator`, `delete-orchestrator`,
 `list-orchestrator`, `create-agent`, `seed-agent`, `refresh-agent`, `rebase-agent`,
 `fold-agent`, `delete-agent`), the run commands (`run-orchestrator`, `resume-orchestrator`,
-`answer-orchestrator`, `pause-orchestrator`, `stop-orchestrator`; `orient`, `validate-plan` and
-`create-agent` are served, and a step of any other type fails until its runner lands), `validate-workflow`, `export-workflow`, `list-agent-providers`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
+`answer-orchestrator`, `pause-orchestrator`, `stop-orchestrator`; the steps `FlowStepRunners.Served` lists are served - `orient`, `validate-plan`, `create-agent`, `build`, `test`, `run`, `check-mutations`, `anchor-balance`, `anchor-citations`, `ci-read`, `ci-wait`, `fold`, `delete-agent`, `refresh`, `rebase` - and a step of any other type fails until its runner lands), `validate-workflow`, `export-workflow`, `list-agent-providers`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
 `read-anchor`, `read-anchors`, `check-anchor-balance`, `check-anchor-citations`),
 `fix-line-endings`, `check-ci-legs`, `legs`, `host-exec`, `install-missing-tools`,
 `update-tool`, `sync`, `build`, `test`, `run`, `check-mutations`, `stop-run`, `clean`, `up`, `down` and
@@ -687,7 +686,8 @@ command weighs that cannot be read - for a live agent's deletion, which git work
 both make) - fails it (20); a path, a row or an option that is refused - or, for a deletion, a record of the copies
 hosts keep that cannot be read, which its `--apply` reads before it writes anything (`AgentService.HostCopiesOf`, the
 lines weighed kept) - 13, save a usage error, 10, which its `--apply` answers before it takes anything; cells of the
-rows that need a consent nobody gave (`--accept-lost`, `--accept-over`), 13 - the same summary and lines, the line 'to
+rows that need a consent nobody gave (`--new`, `--accept-lost`, `--accept-over`), or a path both trees changed whose
+merge is clean and that `--merge` does not name - a refresh's and a move of a base's too - 13 - the same summary and lines, the line 'to
 write them:' (delete-agent's 'to do it:') among them,
 since a plan of rows still shows every such cell (`AnchorBatchMode.Plan`) and the rule is the command's, not the
 anchors' service's; a run holding a tree the `--apply` takes, or a lock file that cannot be read, 13 - save where what
@@ -747,7 +747,7 @@ which a step of an orchestrator run will read typed, so beside those it says `ne
 by kind - `fold-new-rows` (`--new`), `fold-lost-rows` (`--accept-lost`), `fold-over-cells` (`--accept-over`),
 `fold-two-changes` (`--merge`); `refusals`, each reason it stands refused for, `conflict` where a path both trees
 changed has a three-way merge that conflicts and `other` for anything else, so a request refused for conflicting
-merges alone says `conflict` and nothing else; and `folded`, what the `--apply` of a fold and of a deletion, which folds back what is left of the agent, did - gone through or stopped part way after writing some of it (21): the paths written, deleted, merged and handed, each handed with its digest, the arm registry where it was merged by arm, the registries its rows changed, the ids of the rows applied and the cells `--accept-over` took; null for every other answer and where it did nothing at all; and `planned`, what the plan of a refresh or of a move of the base names, its dry run's and its `--apply`'s alike: the paths taken, kept, handed and merged, and the arm registry merged by arm; null for a fold and a deletion. An `--apply`
+merges alone says `conflict` and nothing else; and `folded`, what the `--apply` of a fold and of a deletion, which folds back what is left of the agent, did - gone through or stopped part way after writing some of it (21): the paths written, deleted, merged and handed, each handed with its digest, the arm registry where it was merged by arm, the registries its rows changed, the ids of the rows applied and the cells `--accept-over` took; null for every other answer and where it did nothing at all; and `planned`, what the plan of the verb names, its dry run's and its `--apply`'s alike: the paths taken, kept, handed and merged, the arm registry merged by arm, the paths a fold - a deletion's among them - writes and deletes, the registry files its rows change, as git names them, and the rows it applies, and what each consent it lacks and each conflict it meets is about (`mergeable`, `conflicting`, `newRows`, `lostCells`, `overCells`); null where no plan was measured. An `--apply`
 refused at its hold answers the same document,
 `applied` true, its `request` `sound` and the run it met in `heldNow`, said as a dry run at that moment says it
 (`TreeHolders.Refused`, the one sentence and holder both take, handed up by the hold to the verb's answer), so a
@@ -1480,8 +1480,9 @@ written to `step.json` before `IAgentService.CreateAsync` is called; run again i
 drops a making cut part way, and finishes the removal of one found closed (`FlowStepResult.NameSpent`), and `MakeAsync(noWorktree: true)` makes a read-only reason
 step's agent the same way. Each step is handed the run it belongs to (`FlowRunPlace`) and what the engine read for it
 where it starts (`FlowStepRun.Read`: a plan check's `items` and `scope`, the pull request's base `FlowTemplate` fills for
-orient, an anchor check's `rows` or `paths` expression, a `ci-wait`'s commit where it names none - the one the run last
-pushed), the agent it works in (`FlowStepRun.WorksIn`), and its keys' templates filled (`FlowStepTemplates`, the one
+orient, an anchor check's `rows` or `paths` expression, a fold family step's lists of names - read by `FlowStepKeys.NamesOf`
+- a `ci-wait`'s commit where it names none - the one the run last pushed), the agent it works in (`FlowStepRun.WorksIn`)
+or, of `others`, the target whose turn it is (`FlowStepRun.Target`), and its keys' templates filled (`FlowStepTemplates`, the one
 reader of which text each template key holds, the definition's check its other caller). The leg steps - `build`, `test`,
 `run`, `check-mutations` - share `LegStepRunner`: the use case of each command (`IBuildLegs`, `ITestLegs`,
 `IRunnerLegs` - a run that writes the tree in place, by `HarnessConfig.WritingRunners`, the answer the step's claim of
@@ -1500,7 +1501,19 @@ checks print (`AnchorReports.BalanceFindings`, `AnchorCitationReports.Line`); `C
 statuses through `ICiJobSource` until one is red - classified by `ICiLegsService.ClassifyRunAsync`, its job's log read
 whole - every one has ended, none appeared, or its time is spent, with `CiConclusions` the one place that says what a
 conclusion came to. Every call of `gh` goes through `GhProcess`: the repository it answers for, never asking, ended at its
-limit (21). The other step runners - the agents, the rest of the steps over the services the tool already has - are
+limit (21). The fold family - `FoldStepRunner`, `DeleteAgentStepRunner`, `RefreshStepRunner` and `RebaseStepRunner`, over
+`FoldFamilyStepRunner` - calls the verbs' typed use cases and reads their `AgentVerbFacts`, never an exit code:
+`FoldStandings.Read` says whether a dry run ends the step, asks or applies; `FlowQuestions.FoldQuestionOf` is the one rule
+of the question it raises - `foldConflicts` for conflicting merges alone, `foldOutside` for paths `FoldWithin` finds
+outside a fold's `within`, then each consent it lacks, a person's first - with what it is about (`FlowDryRun.Of`, over
+`AgentPlanned`), which the runner keeps in the step's `fold.json` (`FlowFoldRecord`) with where its answer will stand; a
+consent is given by name only where the dry run made again names exactly that, and one that no longer does is never
+passed. A fold's apply is held to what its dry run named (`FoldAgentRequest.Expected`, measured again under its hold and
+compared by `AgentPlanned.DifferenceFrom`), and `FoldLedger` writes its intent to `folds.json` before the verb is called
+and what it left after (`FlowFoldLedgerFile`), an intent a crash cut off settled from the tree by the next attempt. A
+refresh or a rebase of `others` is one turn for each target (`FlowInstance.Targets`, `FlowTargetRecord`), in
+`OrchestrationRules.AgentNameOrder`, each claimed on its own tree (`FlowClaims.Of`), retried by its own count and ended
+on its own. The other step runners - the agents, the rest of the steps over the services the tool already has - are
 the next thing the tool grows.
 
 A definition is held to the `config.json` it is checked under as well: a `run` step whose runner -
@@ -1575,7 +1588,8 @@ pass; and `delete-orchestrator` decides and removes inside that section too, tak
 orchestrator's own, so no claim comes between its look at the owner and its removal of the run.
 
 The run's records are written in one order at every change - a step's own files (its `handoff.md`
-where it handed off, its `output.json`, then the `step.json` that names them), then `flow.json` (the
+where it handed off, its `output.json`, then the `step.json` that names them - a refresh's or a rebase's of `others`
+with each target and where it stands), then `flow.json` (the
 truth a resume reads), `workflow.json`, `pre-existing-issues.json` where the change listed one, and last the event
 in `events.jsonl` - each read back strictly: a value the engine does not name, a nested record that
 does not hold, a time in any but the one form (`yyyy-MM-dd HH:mm:ss`, UTC; one not yet come is

@@ -166,13 +166,13 @@ public static class WorkflowStepTypes
             "CreateAgentRunner: IAgentService.CreateAsync, SeedAsync and DeleteAsync",
             ["write main"],
             "an open-agent slot"),
-        new("fold", FoldKeys, [], null, "IAgentService.FoldAsync", ["write main", "write the agent's tree"], null, FoldOutput),
+        new("fold", FoldKeys, [], null, "FoldStepRunner: IAgentService.FoldAsync held to its dry run, FoldLedger, FoldWithin", ["write main", "write the agent's tree"], null, FoldOutput),
         new(
             "delete-agent",
             [.. FoldKeys, new("discardUncommitted", "discard what is not committed rather than folding it; it then folds nothing, and takes no allow and no within")],
             [],
             null,
-            "IAgentService.DeleteAsync",
+            "DeleteAgentStepRunner: IAgentService.DeleteAsync held to its dry run, FoldLedger, FoldWithin",
             ["write main", "write the agent's tree"],
             "releases the open-agent slot",
             FoldOutput),
@@ -189,7 +189,7 @@ public static class WorkflowStepTypes
             ],
             [],
             null,
-            "IAgentService.RefreshAsync",
+            "RefreshStepRunner: IAgentService.RefreshAsync",
             ["write main", "write its target"],
             null),
         new(
@@ -202,7 +202,7 @@ public static class WorkflowStepTypes
             ],
             [],
             null,
-            "IAgentService.RebaseAsync",
+            "RebaseStepRunner: IAgentService.RebaseAsync",
             ["write its target"],
             null),
         new(
@@ -392,7 +392,7 @@ public static class WorkflowStepTypes
     [
         new("of", "the create-agent step whose agent the step works on, which it waits for through dependsOn") { Required = true },
         new("allow", "what it may carry, member for member the fold command's options") { Keys = AllowKeys },
-        new("within", "the paths it may write"),
+        new("within", "the paths, as patterns, its fold may write or delete in the main tree; a path outside them asks foldOutside, and the registries its rows change are never held to it"),
     ];
 
     /// <summary>What one <c>on</c> block takes.</summary>

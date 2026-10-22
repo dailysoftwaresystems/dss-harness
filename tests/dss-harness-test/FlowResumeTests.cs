@@ -38,6 +38,144 @@ public sealed class FlowResumeTests
     private static FlowResumeState TakeUp(HarnessFactory harness, OrchestratorLayout layout, WorkflowDefinition definition, string? digest = null)
         => new FlowResume(harness.OrchestrationStore, layout, harness.FileSystem).Load(digest ?? FlowRunContext.DigestOf(definition));
 
+    /// <summary>
+    /// A step of others a crash cut off goes on at the resume from its record alone: at the first target whose turn had
+    /// not ended, the ones that ended never asked again, and its every target's count of attempts carried on.
+    /// </summary>
+    [Fact]
+    public async Task AStepOfOthers_GoesOnAtTheResume_AtTheFirstTargetWhoseTurnHadNotEnded()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            maxOpenAgents: 4
+            steps:
+              - name: one
+                type: create-agent
+                agent: worker.md
+              - name: two
+                type: create-agent
+                agent: worker.md
+                dependsOn: [one]
+              - name: three
+                type: create-agent
+                agent: worker.md
+                dependsOn: [two]
+              - name: rebase
+                type: rebase
+                others: one
+                dependsOn: [three]
+            """);
+        var runner = new Runner().OnAsync("rebase", (run, cancellationToken) => run.Target == "a2"
+            ? Task.FromResult(FlowStepResult.Ended(passed: true, HarnessExit.Success))
+            : new TaskCompletionSource<FlowStepResult>().Task.WaitAsync(cancellationToken));
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), records: records);
+            _ = coordinator.RunAsync(Token);
+            await runner.StartedAsync("rebase", attempt: 2).WaitAsync(Bound, Token);
+
+            // The crash, while a3 has its turn.
+        }
+
+        var targets = new List<string?>();
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var resumed = new Runner().On("rebase", run =>
+            {
+                lock (targets)
+                {
+                    targets.Add(run.Target);
+                }
+
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            });
+            var coordinator = new FlowCoordinator(definition, resumed, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+            var rebase = coordinator.Instances["rebase"];
+
+            Assert.Equal(FlowRunStatus.Done, end.Status);
+            Assert.Equal(["a3"], targets);
+            Assert.Equal([("a2", FlowTargetRecord.Done, 1), ("a3", FlowTargetRecord.Done, 2)], rebase.Targets!.Select(target => (target.Agent, target.State, target.Attempts)));
+        }
+
+        Assert.Equal(
+            [FlowTargetRecord.Done, FlowTargetRecord.Done],
+            harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("rebase"))!.Targets!.Select(target => target.State));
+    }
+
+    /// <summary>
+    /// A step of others whose failure ended the run runs again at the resume, giving each target that failed on its own
+    /// its turn again - and leaving the one a fail answer ended standing, as a step one ended stands.
+    /// </summary>
+    [Fact]
+    public async Task AStepOfOthersThatEndedTheRun_GivesItsFailedTargetsTheirTurnAtTheResume_SaveOneAFailAnswerEnded()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            maxOpenAgents: 4
+            steps:
+              - name: one
+                type: create-agent
+                agent: worker.md
+              - name: two
+                type: create-agent
+                agent: worker.md
+                dependsOn: [one]
+              - name: three
+                type: create-agent
+                agent: worker.md
+                dependsOn: [two]
+              - name: rebase
+                type: rebase
+                others: one
+                dependsOn: [three]
+                answers:
+                  foldConflicts: fail
+            """);
+        var runner = new Runner().On("rebase", run => run.Target == "a2"
+            ? FlowStepResult.Ended(passed: false, HarnessExit.ConfigInvalid, "a key was filled wrong")
+            : FlowStepResult.Standing(new FlowDryRun(RequestStanding.Refused, [], [], [RefusalKind.Conflict], "1 path conflicts") { Conflicting = ["src/a.cs"], Agent = run.Target, Target = run.Target }));
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var end = await new FlowCoordinator(definition, runner, new RunnerFacts(), records: records).RunAsync(Token).WaitAsync(Bound, Token);
+
+            Assert.Equal(FlowRunStatus.Failed, end.Status);
+        }
+
+        var targets = new List<string?>();
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var resumed = new Runner().On("rebase", run =>
+            {
+                lock (targets)
+                {
+                    targets.Add(run.Target);
+                }
+
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            });
+            var coordinator = new FlowCoordinator(definition, resumed, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again);
+            _ = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+            var rebase = coordinator.Instances["rebase"];
+
+            Assert.Equal(["a2"], targets);
+            Assert.Equal(
+                [("a2", FlowTargetRecord.Done, null), ("a3", FlowTargetRecord.Failed, "foldConflicts")],
+                rebase.Targets!.Select(target => (target.Agent, target.State, target.EndedByQuestion)));
+            Assert.Equal(("foldConflicts", HarnessExit.Refused), (rebase.EndedByQuestion, rebase.Exit));
+        }
+    }
+
     /// <summary>A run that ends writes its state whole: every instance with its state and what it waits on, next empty, the pause it ended by, and the events in order.</summary>
     [Fact]
     public async Task ARunThatEnds_WritesItsStateWhole()
@@ -1524,7 +1662,7 @@ public sealed class FlowResumeTests
                 type: create-agent
                 agent: worker.md
             """);
-        var lacking = FlowStepResult.Standing(new FlowDryRun(RequestStanding.NeedsConsent, [ConsentKind.FoldNewRows], ["row 12"], [], "1 new row"));
+        var lacking = FlowStepResult.Standing(new FlowDryRun(RequestStanding.NeedsConsent, [ConsentKind.FoldNewRows], [new FlowNamed(ConsentKind.FoldNewRows, ["row 12"])], [], "1 new row"));
         var runner = new Runner().OnAsync("fold", (run, cancellationToken) => run.Attempt == 1
             ? Task.FromResult(lacking)
             : new TaskCompletionSource<FlowStepResult>().Task.WaitAsync(cancellationToken));
@@ -1747,7 +1885,7 @@ public sealed class FlowResumeTests
                 of: made
                 dependsOn: [made]
             """);
-        var lacking = FlowStepResult.Standing(new FlowDryRun(RequestStanding.NeedsConsent, [ConsentKind.FoldNewRows], ["row 12"], [], "1 new row"));
+        var lacking = FlowStepResult.Standing(new FlowDryRun(RequestStanding.NeedsConsent, [ConsentKind.FoldNewRows], [new FlowNamed(ConsentKind.FoldNewRows, ["row 12"])], [], "1 new row"));
         var (harness, layout, records) = Records("r1", temp.Path, definition);
 
         using (records)

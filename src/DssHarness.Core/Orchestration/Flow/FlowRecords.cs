@@ -170,6 +170,11 @@ public sealed record FlowEvent(
 /// A leg step's: true once every leg of its attempt that works in a copy has it, and every one in the tree itself has
 /// ended, so the tree is let go while the legs work on; null until then, and for every other step.
 /// </param>
+/// <param name="Targets">
+/// A refresh's or a rebase's of <c>others</c>: each target, in the order of their names, with where it stands, how many
+/// attempts its turn ran and how it ended - what a resume goes on from, at the first whose turn has not ended; null for
+/// every other step, and before it starts.
+/// </param>
 public sealed record FlowStepRecord(
     string Instance,
     string Step,
@@ -207,7 +212,8 @@ public sealed record FlowStepRecord(
     string? LeftBy = null,
     string? Cause = null,
     string? Model = null,
-    bool? Copied = null)
+    bool? Copied = null,
+    IReadOnlyList<FlowTargetRecord>? Targets = null)
 {
     /// <summary>Where a failure can leave the run, as the record names each of <see cref="FlowFailure"/>'s values.</summary>
     public static readonly IReadOnlyList<string> Failures = [.. Enum.GetValues<FlowFailure>().Select(NameOf)];
@@ -241,6 +247,8 @@ public sealed record FlowStepRecord(
             : RaisedBy is not null && !FlowInstanceId.IsWellFormed(RaisedBy) ? $"'{RaisedBy}' is not an instance id"
             : LeftBy is not null && !FlowInstanceId.IsWellFormed(LeftBy) ? $"'{LeftBy}' is not an instance id"
             : Handoff?.Problem() is { } handoff ? $"its handoff: {handoff}"
+            : Targets?.FirstOrDefault(target => target.Problem() is not null) is { } target ? $"its target '{target.Agent}': {target.Problem()}"
+            : Targets?.GroupBy(target => target.Agent, StringComparer.Ordinal).FirstOrDefault(group => group.Count() > 1) is { } twice ? $"it names target '{twice.Key}' twice"
             : null;
 }
 
@@ -742,6 +750,7 @@ public sealed record FlowSnapshot(
 /// <param name="Cause">What the code alone cannot say of its ending: a refusal over a held lock; none for every other.</param>
 /// <param name="Model">The model the agent a create-agent step makes is made for; null where <paramref name="Made"/> is.</param>
 /// <param name="Copied">Whether the leg step's attempt let its tree go while its legs work on, every copy made (<see cref="FlowStepRecord.Copied"/>).</param>
+/// <param name="Targets">A step of others' targets, each with where it stands (<see cref="FlowStepRecord.Targets"/>); null for every other step.</param>
 public sealed record FlowSnapshotStep(
     string Instance,
     string Step,
@@ -779,4 +788,5 @@ public sealed record FlowSnapshotStep(
     string? LeftBy = null,
     OutcomeCause Cause = OutcomeCause.None,
     string? Model = null,
-    bool Copied = false);
+    bool Copied = false,
+    IReadOnlyList<FlowTargetRecord>? Targets = null);

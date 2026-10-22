@@ -133,6 +133,18 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// </summary>
     public const string StepLogsDirectoryName = "logs";
 
+    /// <summary>The name of the run's write-ahead ledger of its folds.</summary>
+    public const string FoldsFileName = "folds.json";
+
+    /// <summary>
+    /// The name of the file a fold family step keeps in its directory - or in its target's, for a step of <c>others</c>:
+    /// what its dry run named and stood, the question it asked, each consent it was given and how its apply ended.
+    /// </summary>
+    public const string StepFoldFileName = "fold.json";
+
+    /// <summary>The name of the directory a refresh or a rebase of <c>others</c> keeps one directory for each target in, in its own.</summary>
+    public const string StepTargetsDirectoryName = "targets";
+
     /// <summary>Where the orchestrator named <paramref name="name"/> of the repository at <paramref name="layout"/> is kept.</summary>
     /// <param name="layout">The repository.</param>
     /// <param name="name">The orchestrator's name, already checked.</param>
@@ -293,6 +305,9 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <summary>Every question the run raised and every answer it was given, the open ones among them: the one owner of what a question said.</summary>
     public string QuestionsFile => Path.Combine(Directory, QuestionsFileName);
 
+    /// <summary>The run's write-ahead ledger of its folds: each path a fold means to write, the digest it held before and the one the fold left.</summary>
+    public string FoldsFile => Path.Combine(Directory, FoldsFileName);
+
     /// <summary>What another process asked of the running engine: a safe pause, or a stop. Read by the engine at its poll, and taken.</summary>
     public string StopFile => Path.Combine(Directory, StopFileName);
 
@@ -327,6 +342,11 @@ public sealed record OrchestratorLayout(string Name, string Directory)
         => agent is null
             ? StepDirectory(Flow.FlowInstanceId.DirectoryOf(instance))
             : AgentStepDirectory(agent, Flow.FlowInstanceId.DirectoryOf(instance));
+
+    /// <summary>Where a refresh or a rebase of <c>others</c> kept at <paramref name="stepDirectory"/> keeps what it did to <paramref name="agent"/>.</summary>
+    /// <param name="stepDirectory">The step's own directory.</param>
+    /// <param name="agent">The target's name.</param>
+    public static string TargetDirectory(string stepDirectory, string agent) => Path.Combine(stepDirectory, StepTargetsDirectoryName, agent);
 
     /// <summary>The handoff of one step instance, in its own directory (<see cref="InstanceDirectory"/>).</summary>
     /// <param name="instance">The step instance's id, as <see cref="Flow.FlowInstanceId"/> spells it.</param>

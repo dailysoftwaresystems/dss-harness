@@ -1100,6 +1100,7 @@ public sealed class FlowService(
             new("events", layout.EventsFile),
             new("report", layout.ReportFile),
             new("reportJson", layout.ReportJsonFile),
+            new("folds", layout.FoldsFile),
             .. inbox ? new[] { new FlowRecordPath("inbox", layout.InboxFile) } : [],
         ];
 

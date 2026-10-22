@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
 using DssHarness.Core.Output;
@@ -93,7 +94,7 @@ public sealed record SubmodulePath(string Path, string Submodule);
 /// <summary>A path handed to an agent, and the file it was handed.</summary>
 /// <param name="Path">The path, as git names it.</param>
 /// <param name="Digest">The SHA-256 of the file copied; null for a deletion.</param>
-public sealed record HandedPath(string Path, string? Digest);
+public sealed record HandedPath(string Path, [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Digest);
 
 /// <summary>What applying a fold did.</summary>
 /// <param name="Written">The paths it wrote into the main tree, in order.</param>
@@ -231,6 +232,9 @@ public sealed record RefreshPlan
 
     /// <summary>The changed paths whose three-way merge is clean and was not asked for: what naming each to be merged would write.</summary>
     public required IReadOnlyList<string> Mergeable { get; init; }
+
+    /// <summary>The changed paths whose three-way merge conflicts: no consent lifts them, and a person reconciles each.</summary>
+    public required IReadOnlyList<string> Conflicting { get; init; }
 
     /// <summary>The paths named with <see cref="FoldAllowances.MergeOption"/> outside the paths weighed: a misspelling, most likely.</summary>
     public required IReadOnlyList<string> MergeStray { get; init; }
@@ -1464,6 +1468,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         var gives = new Dictionary<string, string>(StringComparer.Ordinal);
         var shown = new List<string>();
         var mergeable = new List<string>();
+        var conflicting = new List<string>();
 
         foreach (var (offer, _, into) in twice)
         {
@@ -1484,6 +1489,10 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             {
                 mergeable.Add(offer.Path);
             }
+            else if (offer.Conflicts)
+            {
+                conflicting.Add(offer.Path);
+            }
         }
 
         var merging = merged.Select(merge => merge.Merge.Path).ToHashSet(StringComparer.Ordinal);
@@ -1499,6 +1508,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             Merged = merged,
             Shown = shown,
             Mergeable = mergeable,
+            Conflicting = conflicting,
 
             // A path named to be merged under the paths weighed that has nothing to merge is let stand, so a line that ran
             // once runs again; one outside them names nothing.
@@ -2825,17 +2835,9 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     private async Task<FileIdentity> IdentityAsync(string path, CancellationToken cancellationToken)
         => new((await FileContentHash.OfAsync(_fileSystem, path, cancellationToken).ConfigureAwait(false)).Content, IsExecutable(path));
 
-    /// <summary>
-    /// The digest of the file at <paramref name="path"/>, or null where it holds none; a path that cannot be looked at
-    /// raises. A link holds the file it leads to, where it leads to one; a link to a directory, or to nothing, holds none.
-    /// </summary>
-    private async Task<string?> DigestAsync(string path, CancellationToken cancellationToken)
-        => _fileSystem.KindOf(path) switch
-        {
-            PathKind.File => (await FileContentHash.OfAsync(_fileSystem, path, cancellationToken).ConfigureAwait(false)).Content,
-            PathKind.Link when _fileSystem.FileExists(path) => (await FileContentHash.OfAsync(_fileSystem, path, cancellationToken).ConfigureAwait(false)).Content,
-            _ => null,
-        };
+    /// <summary>The digest of the file at <paramref name="path"/>, or null where it holds none (<see cref="FileContentHash.OfFileAsync"/>).</summary>
+    private Task<string?> DigestAsync(string path, CancellationToken cancellationToken)
+        => FileContentHash.OfFileAsync(_fileSystem, path, cancellationToken);
 
     /// <summary>
     /// Stops a write or a removal where the file at <paramref name="file"/>, in the tree named <paramref name="tree"/>, no

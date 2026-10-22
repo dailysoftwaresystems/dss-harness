@@ -53,4 +53,24 @@ public static class FileContentHash
     /// <summary>The same hash, of bytes already in hand.</summary>
     /// <param name="contents">The bytes.</param>
     public static string Of(ReadOnlySpan<byte> contents) => Convert.ToHexStringLower(SHA256.HashData(contents));
+
+    /// <summary>
+    /// The content hash of the file at <paramref name="path"/>, or null where it holds none; a path that cannot be looked
+    /// at raises. A link holds the file it leads to, where it leads to one; a link to a directory, or to nothing, holds none.
+    /// </summary>
+    /// <param name="fileSystem">Looks at the path and opens the file.</param>
+    /// <param name="path">The path.</param>
+    /// <param name="cancellationToken">Stops the read.</param>
+    public static async Task<string?> OfFileAsync(IFileSystem fileSystem, string path, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(fileSystem);
+
+        return fileSystem.KindOf(path) switch
+        {
+            PathKind.File => (await OfAsync(fileSystem, path, cancellationToken).ConfigureAwait(false)).Content,
+            // Where the links lead, never whether one is there: a link that leads nowhere is no file on any platform.
+            PathKind.Link when fileSystem.KindOf(fileSystem.ResolveLinks(path)) == PathKind.File => (await OfAsync(fileSystem, path, cancellationToken).ConfigureAwait(false)).Content,
+            _ => null,
+        };
+    }
 }

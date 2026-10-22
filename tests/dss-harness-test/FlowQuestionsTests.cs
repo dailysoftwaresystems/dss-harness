@@ -77,9 +77,15 @@ public sealed class FlowQuestionsTests
         public bool WritesTree(string runner) => false;
     }
 
-    /// <summary>A fold family step's dry run, as its runner reports it over the verbs' own facts.</summary>
+    /// <summary>
+    /// A fold family step's dry run, as its runner reports it over the verbs' own facts: each consent about the name at its
+    /// place among <paramref name="named"/>, and a refusal's names the paths its merges conflict on.
+    /// </summary>
     private static FlowStepResult Dry(RequestStanding standing, ConsentKind[] consents, string[] named, RefusalKind[] refusals, string summary)
-        => FlowStepResult.Standing(new FlowDryRun(standing, consents, named, refusals, summary));
+        => FlowStepResult.Standing(new FlowDryRun(standing, consents, [.. consents.Select((consent, at) => new FlowNamed(consent, at < named.Length ? [named[at]] : []))], refusals, summary)
+        {
+            Conflicting = standing == RequestStanding.Refused ? named : [],
+        });
 
     /// <summary>
     /// A question's record read back as the question the engine holds and written again is the same record, every member

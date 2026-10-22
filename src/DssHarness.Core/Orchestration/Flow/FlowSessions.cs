@@ -237,10 +237,30 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
         }
 
         var open = agents.Count(entry => entry.Record is { State: AgentStates.Live } record && record.Worktree is not null);
+        int uncommitted;
 
-        return open > 0
-            ? $"{status}; {open.ToString(CultureInfo.InvariantCulture)} agent{(open == 1 ? string.Empty : "s")} with worktree{(open == 1 ? string.Empty : "s")} still open"
-            : null;
+        try
+        {
+            uncommitted = FoldLedger.Uncommitted(_store.ReadFolds(other)).Count;
+        }
+        catch (HarnessException ex)
+        {
+            return $"{status}, and whether its ledger holds a fold not yet committed cannot be told: {ex.Message.TrimEnd('.')}";
+        }
+
+        List<string> held = [];
+
+        if (open > 0)
+        {
+            held.Add($"{open.ToString(CultureInfo.InvariantCulture)} agent{(open == 1 ? string.Empty : "s")} with worktree{(open == 1 ? string.Empty : "s")} still open");
+        }
+
+        if (uncommitted > 0)
+        {
+            held.Add($"{uncommitted.ToString(CultureInfo.InvariantCulture)} fold{(uncommitted == 1 ? string.Empty : "s")} in its ledger not yet committed");
+        }
+
+        return held.Count > 0 ? $"{status}; {string.Join(", and ", held)}" : null;
     }
 
     /// <summary>

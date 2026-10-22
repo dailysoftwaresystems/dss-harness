@@ -62,6 +62,12 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
     /// <summary>What a person gave from another terminal is, as its refusals and <see cref="RecordWritten"/> name it.</summary>
     public const string InboxKind = "what a person gave from another terminal";
 
+    /// <summary>What the run's ledger of its folds is, as its refusals and <see cref="RecordWritten"/> name it.</summary>
+    public const string FoldsKind = "the run's ledger of its folds";
+
+    /// <summary>What a fold family step's record is, as its refusals and <see cref="RecordWritten"/> name it.</summary>
+    public const string FoldRecordKind = "a fold family step's record";
+
     /// <summary>How long one read-decide-write waits for another process's.</summary>
     private static readonly TimeSpan Window = TimeSpan.FromSeconds(30);
 
@@ -526,6 +532,54 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
 
             return true;
         });
+    }
+
+    /// <summary>The run's ledger of its folds, or null where the run holds none.</summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    /// <exception cref="HarnessException">The ledger cannot be read as one (<see cref="HarnessExit.Refused"/>).</exception>
+    public Flow.FlowFoldLedgerFile? ReadFolds(OrchestratorLayout orchestrator)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+        return Read<Flow.FlowFoldLedgerFile>(orchestrator.FoldsFile, FoldsKind, file => file.Problem());
+    }
+
+    /// <summary>
+    /// Changes the run's ledger of its folds inside the run's own section: read whole, changed, and written whole, so two
+    /// steps that fold at once each keep the other's entry.
+    /// </summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    /// <param name="change">What becomes of the ledger, from the one there - an empty one where none is.</param>
+    /// <returns>The ledger as written.</returns>
+    public Flow.FlowFoldLedgerFile UpdateFolds(OrchestratorLayout orchestrator, Func<Flow.FlowFoldLedgerFile, Flow.FlowFoldLedgerFile> change)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+        ArgumentNullException.ThrowIfNull(change);
+
+        return Exclusively(orchestrator, () =>
+        {
+            var changed = change(ReadFolds(orchestrator) ?? new Flow.FlowFoldLedgerFile(1, orchestrator.Name, []));
+            Write(orchestrator.FoldsFile, FoldsKind, changed, changed.Problem());
+            return changed;
+        });
+    }
+
+    /// <summary>A fold family step's record, kept in its directory, or null where the directory holds none.</summary>
+    /// <param name="directory">The step's directory, or its target's for a step of others.</param>
+    /// <exception cref="HarnessException">The record cannot be read as one (<see cref="HarnessExit.Refused"/>).</exception>
+    public Flow.FlowFoldRecord? ReadFoldRecord(string directory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+        return Read<Flow.FlowFoldRecord>(Path.Combine(directory, OrchestratorLayout.StepFoldFileName), FoldRecordKind, record => record.Problem());
+    }
+
+    /// <summary>Writes a fold family step's record whole, in its directory.</summary>
+    /// <param name="directory">The step's directory, or its target's for a step of others.</param>
+    /// <param name="record">The record, which must be one.</param>
+    public void WriteFoldRecord(string directory, Flow.FlowFoldRecord record)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+        ArgumentNullException.ThrowIfNull(record);
+        Write(Path.Combine(directory, OrchestratorLayout.StepFoldFileName), FoldRecordKind, record, record.Problem());
     }
 
     private T? Read<T>(string path, string what, Func<T, string?> problemOf)

@@ -2800,6 +2800,9 @@ public static class HelpTopics
                 ($"  {OrchestratorLayout.WorkflowStatusFileName}", "a run's status for a person: each step of its definition, its instances, progress and what it waits on"),
                 ($"  {OrchestratorLayout.DefinitionFileName}", "the workflow's definition as the run began with it"),
                 ($"  {OrchestratorLayout.QuestionsFileName}", "every question the run raised, its answers, and who gave each"),
+                ($"  {OrchestratorLayout.FoldsFileName}", "the ledger of the run's folds: each path a fold means to write, what the main tree held there before it and what it left"),
+                ($"  <step>/{OrchestratorLayout.StepFoldFileName}", "a fold, delete-agent, refresh or rebase step: what its dry run named and stood, the question it asked, each consent given by name, how its apply ended"),
+                ($"  <step>/{OrchestratorLayout.StepTargetsDirectoryName}/<agent>/", "a refresh or a rebase of others: what it did to each target, as above"),
                 ($"  {OrchestratorLayout.PreExistingIssuesFileName}", "each pre-existing issue the run listed, proven"),
                 ($"  {OrchestratorLayout.EventsFileName}", "the run's history, one event to a line, written after the state it tells of"),
                 ($"  {OrchestratorLayout.ReportFileName}, {OrchestratorLayout.ReportJsonFileName}", "the report of the run's last session"),
@@ -3056,8 +3059,14 @@ public static class HelpTopics
             + "folded says what the --apply of a fold and of a deletion did, gone through or stopped part way after writing some "
             + "of it - what it wrote, deleted, merged and handed, the arm registry merged by arm, the registries and rows it "
             + "applied, and the cells --accept-over took - and is null for every other answer and where it did nothing at all; "
-            + "planned says what the plan of a refresh or a rebase takes, keeps, hands and merges, and is null for a fold and a "
-            + "deletion. An --apply refused at its hold answers the same "
+            + "planned says what the plan of the verb names, its dry run's and its --apply's alike - what a rebase takes and keeps, "
+            + "what a refresh or a fold hands, what each merges, what a fold, a deletion's among them, writes and deletes, the "
+            + "registry files its rows change, as git names them, and the rows it applies - and what each consent it lacks and each "
+            + "conflict it meets is about: mergeable, the paths both trees changed whose clean merge nobody asked for; conflicting, "
+            + "those whose merge conflicts; newRows, lostCells and overCells; null where no plan was measured, a deletion that "
+            + "folds nothing among them. A refresh or a rebase over a path both trees changed whose merge is clean lacks "
+            + $"{FoldAllowances.MergeOption} as a fold does - needs-consent, its code {HarnessExit.Refused} still - and one over "
+            + "conflicting paths alone is refused for a conflict. An --apply refused at its hold answers the same "
             + "document, applied true: request 'sound', and the run it met in heldNow. Stopped before "
             + "anything is weighed - a command line the parser refuses, a --directory that is not there, a repository not "
             + "initialised, another usage error, or a refusal met before then, an agent that is not there among them - it "
@@ -3428,6 +3437,34 @@ public static class HelpTopics
             + $"it ends the step incomplete ({HarnessExit.Incomplete}), which runs it again; a ci-wait reads again at its next poll where "
             + $"a read failed or passed it, and ends with that read's code only where {CiChecksService.FailedReadsInARow} did running "
             + "or its wait is spent.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "fold, delete-agent, refresh and rebase make their verb's dry run first and read what it stood, typed, never its "
+            + "code: sound, they apply with exactly what it named; a run holding the tree the apply takes is waited out, as a held "
+            + $"lock is ({HarnessExit.Refused} after the retries), and one holding only a copy a deletion removes is run again, as an "
+            + $"incomplete step is ({HarnessExit.Incomplete} after them); a consent it lacks asks the question of its kind - "
+            + "foldNewRows, foldLostRows, foldOverCells, foldTwoChanges - one at a time, a person's first, with the rows, the cells "
+            + "or the paths it is about; refused for paths both trees changed whose merges conflict, and nothing else, it asks "
+            + $"foldConflicts with them; refused for anything else, it fails ({HarnessExit.Refused}). A fold's paths are held to its "
+            + "within, patterns of the paths it may write or delete in the main tree - never the registry files its rows change, "
+            + "nor a path it hands the agent - and one outside them asks foldOutside with the paths. Answered allow or merge, the "
+            + "dry run is made again and the consent given by name only where it names exactly what the question showed - "
+            + "otherwise the question is asked again with what it names now, and a consent given before the trees moved is never "
+            + "passed; answered retry, the step runs again, a new attempt. Its apply is held to what its dry run named: measured "
+            + "again under its hold and found to write anything else - the trees moved between the two - it writes nothing and "
+            + $"is weighed again, {FoldFamilyStepRunner.MostPasses} times at most. A fold, and a deletion that folds, write each "
+            + $"path they mean to write, with what the main tree holds there, to the run's ledger ({OrchestratorLayout.FoldsFileName}) "
+            + "before the verb is called, and what they left after - an intent a crash cut off is settled from the tree by the "
+            + "next attempt - and answer written, deleted, registries and rows; a run stopped with a fold in its ledger no commit "
+            + "took is unfinished, as one with an agent open is. A refresh refused for conflicting merges alone hands every "
+            + "other path first, then asks foldConflicts of those it left; its paths expression yielding none, it is done, having "
+            + "weighed nothing. A rebase moves the base whole or not at all. A refresh or a rebase of others works on every "
+            + "other open agent of the run, in the order of their names - a2 before a10 - one at a time, each admitted on its own "
+            + "against its own tree, retried on its own and recorded in the step's directory "
+            + $"({OrchestratorLayout.StepTargetsDirectoryName}/<agent>/), one closed before its turn passed over; a target that "
+            + "fails ends its own turn, and the step ends done, or failed with the code of the first that failed, once each has "
+            + $"had its turn. Each step keeps what its dry run named and how its apply ended in its directory ({OrchestratorLayout.StepFoldFileName}).");
         builder.AppendLine();
         AppendWrapped(
             builder,
