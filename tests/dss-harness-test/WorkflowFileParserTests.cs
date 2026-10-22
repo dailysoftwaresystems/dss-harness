@@ -724,7 +724,8 @@ public sealed class WorkflowFileParserTests
 
     /// <summary>
     /// A list given empty is never read as the key left out, which says something else: a pause's pre-answers given empty
-    /// are not "no answer given beforehand", and the checks a wait ignores given empty are not "every check counted".
+    /// are not "no answer given beforehand", the checks a wait ignores given empty are not "every check counted", and the
+    /// rows or files an anchor check is held to given empty are not "the whole tree judged".
     /// </summary>
     [Fact]
     public void AListGivenEmpty_IsRefusedRatherThanReadAsTheKeyLeftOut()
@@ -741,12 +742,20 @@ public sealed class WorkflowFileParserTests
               - name: checks
                 type: ci-wait
                 ignore: []
+              - name: balance
+                type: anchor-balance
+                rows: []
+              - name: cites
+                type: anchor-citations
+                paths: []
             """);
 
         Assert.Equal(
             [
                 "line 7, column 16: 'approval.preAnswer' is given empty, which is never read as no answer given beforehand: list the answers a person may give with the run, or leave the key out for no answer given beforehand.",
                 "line 10, column 13: 'checks.ignore' is given empty, which is never read as every check counted: name the checks it does not count, or leave the key out for every check counted.",
+                "line 13, column 11: 'balance.rows' is given empty, which is never read as the whole tree judged: name the rows it is held to, or leave the key out for the whole tree judged.",
+                "line 16, column 12: 'cites.paths' is given empty, which is never read as the whole tree judged: name the files it is held to, or leave the key out for the whole tree judged.",
             ],
             problems);
     }

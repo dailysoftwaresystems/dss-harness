@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using DssHarness.Core.Anchors;
+using DssHarness.Core.Ci;
 using DssHarness.Core.Agents.Policy;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
@@ -2441,6 +2442,14 @@ public sealed partial class HelpTests
         Assert.Contains("It knows no workflow of its own", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("with {leg} standing for the leg's", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("A green leg past 80% of its", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains(
+            "Every call of gh, whoever makes it, is started so that it cannot ask anything (GH_PROMPT_DISABLED, GCM_INTERACTIVE, "
+                + $"GIT_TERMINAL_PROMPT) and is ended where it has not answered within {GhProcess.DefaultLimit.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes, "
+                + $"a workflow step's timeoutMinutes where it says one: a read that did not answer in time is not done ({HarnessExit.Incomplete}), "
+                + "and asked again it may answer.",
+            Prose.Words(result.StandardOutput),
+            StringComparison.Ordinal);
+        Assert.Equal(GhProcess.NeverAsks.Keys.Order(StringComparer.Ordinal), ["GCM_INTERACTIVE", "GH_PROMPT_DISABLED", "GIT_TERMINAL_PROMPT"]);
 
         // The example reads what it says it reads: a leg and its budget from a whole job name, and the leg from one
         // the forge cut short, which it would otherwise not read at all.
@@ -2795,7 +2804,7 @@ public sealed partial class HelpTests
             orchestrators,
             StringComparison.Ordinal);
         Assert.Contains(
-            "The steps served so far are orient, validate-plan, create-agent, build, test, run, check-mutations ('dssharness help workflows'): a step of any other type fails, saying no runner serves its type.",
+            "The steps served so far are orient, validate-plan, create-agent, build, test, run, check-mutations, anchor-balance, anchor-citations, ci-read, ci-wait ('dssharness help workflows'): a step of any other type fails, saying no runner serves its type.",
             orchestrators,
             StringComparison.Ordinal);
     }
@@ -3163,7 +3172,8 @@ public sealed partial class HelpTests
         Assert.Contains(
             "This build checks a workflow's definition, with 'dssharness validate-workflow <name>', and starts and drives a run of one with "
                 + "'dssharness run-orchestrator <name>' (see 'help orchestrators'). The steps served so far are orient, validate-plan, "
-                + "create-agent, build, test, run, check-mutations, each below; a step of any other type fails, saying no runner serves its type.",
+                + "create-agent, build, test, run, check-mutations, anchor-balance, anchor-citations, ci-read, ci-wait, each below; a step of "
+                + "any other type fails, saying no runner serves its type.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -3229,6 +3239,39 @@ public sealed partial class HelpTests
                 + "run.name, the same for every pull request. A brace meant literally is written twice, {{ and }} alike, another "
                 + "expander's ${...} is left as written, and a placeholder that names nothing is refused. Every template key of a step "
                 + $"is filled where the step starts, and one that reads nothing fails it ({HarnessExit.ConfigInvalid}) before its runner is asked.",
+            prose,
+            StringComparison.Ordinal);
+
+        // What the checks that run no legs do and answer, and what red does to them: each default and code is its owner's.
+        Assert.Contains(
+            "anchor-balance and anchor-citations run the checks of those names in the main checkout - the balance from its base, the "
+                + $"citations of its subject ({string.Join(", ", AnchorCitationSubjects.Names)}; "
+                + $"{AnchorCitationSubjects.Default} where it names none) - each held to its rows or its paths where it names them: the anchors "
+                + "among those rows the change opened, closed and lost, a problem at a line of one of them and every problem of a registry as a "
+                + "whole, or the citations in those files; a rows or paths expression that reads nothing names nothing. Each answers passed and "
+                + "findings, each a line as the check prints it. ci-read reads the legs check-ci-legs reads, of its branch - the one checked out "
+                + "in the main checkout where it names none - and its newest limit runs, answering passed, branch, matrixRan, legs and red, each leg as "
+                + "check-ci-legs --json gives it. ci-wait waits for every check run and commit status the forge lists for its commit - the "
+                + $"commit the run last pushed where it names none, refused ({HarnessExit.Refused}) where it pushed none - less those its ignore "
+                + "names - a job by its own name, as its workflow names it, a status by its context - written out or with * for any run of "
+                + $"characters, reading them every pollSeconds ({CiChecksRequest.DefaultPollSeconds}): "
+                + "a red one - one that concluded failure, a status of failure or error - ends it at once, answered with its name, url and, of a "
+                + "job of a workflow run, the job, its workflow, the step that failed, its leg as check-ci-legs classifies it, whether it overran "
+                + "its budget, and its whole log kept in the step's directory "
+                + $"({OrchestratorLayout.StepLogsDirectoryName}/<job>.<id>{PhaseLogs.Extension}, the job's id telling two of one name apart) "
+                + "with its last lines in tail, both masked by the repository's runner secrets, and in unread why any of that could not be "
+                + "read; every check ended green - success, neutral or skipped - on two reads running that found the same checks, at its "
+                + "wait's end on the last alone, passes it; and no check within "
+                + $"appearSeconds ({CiChecksRequest.DefaultAppearSeconds}) - or waitMinutes where that is shorter - checks still running at waitMinutes ({CiChecksRequest.DefaultWaitMinutes}) "
+                + "or one ended neither green nor red asks (noChecks, checksPending, checksUnsettled), never failing it; answered accept, it "
+                + "reads once more, waiting for nothing, and is done with the checks as they are, its passed true only where they are green. "
+                + "A check that finds red is "
+                + "red: under failOn red - every check's default but ci-read's, never - it fails with its check's code "
+                + $"(an anchor finding {AnchorExit.Findings}, a red CI leg {CiExit.LegRed} and no matrix run {CiExit.MatrixDidNotRun}, a red check "
+                + $"{CiExit.LegRed}), and under never it is done, its passed false. Every read of the forge is given the step's timeoutMinutes, else "
+                + $"{GhProcess.DefaultLimit.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes, and one past it ends the step incomplete "
+                + $"({HarnessExit.Incomplete}), which runs it again; a ci-wait reads again at its next poll where a read failed or passed it, "
+                + $"and ends with that read's code only where {CiChecksService.FailedReadsInARow} did running or its wait is spent.",
             prose,
             StringComparison.Ordinal);
 

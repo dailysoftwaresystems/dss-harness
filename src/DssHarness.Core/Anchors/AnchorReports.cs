@@ -266,8 +266,7 @@ public static class AnchorReports
         lines.AddRange(report.Closed.Select(closing =>
             $"  - {closing.Id}{(closing.Bookkeeping ? "   [bookkeeping: not credited]" : string.Empty)}"));
         lines.AddRange(report.Lost.Select(loss => $"  ! {loss.Id}   [lost: {(loss.AlreadyClosed ? "already closed" : "not credited")}]"));
-        lines.AddRange(report.Opened.Select(opening =>
-            $"  + {opening.Id}   {opening.Excerpt}{(opening.Disclosed ? "   [disclosed: not counted]" : string.Empty)}"));
+        lines.AddRange(report.Opened.Select(opening => "  " + OpenedLine(opening)));
 
         if (report.Merging.Count > 0)
         {
@@ -347,6 +346,26 @@ public static class AnchorReports
             },
             ["message"] = finding.Message,
         })]);
+
+    /// <summary>
+    /// What failed a balance, each a line as the check prints it: where it counts more anchors opened than closed, each
+    /// it counted as created; and each problem that stops a registry being trusted. None where it passed.
+    /// </summary>
+    /// <param name="report">What was measured.</param>
+    public static IReadOnlyList<string> BalanceFindings(AnchorBalanceReport report)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+
+        return
+        [
+            .. report.NetNew > 0 ? report.Opened.Where(opening => !opening.Disclosed).Select(OpenedLine) : [],
+            .. report.Findings.Where(finding => finding.Severity == AnchorFindingSeverity.Fatal).Select(FindingLine),
+        ];
+    }
+
+    /// <summary>An anchor the change opened, as the balance prints it.</summary>
+    private static string OpenedLine(AnchorOpening opening)
+        => $"+ {opening.Id}   {opening.Excerpt}{(opening.Disclosed ? "   [disclosed: not counted]" : string.Empty)}";
 
     private static string FindingLine(AnchorFinding finding)
         => $"{finding.File}:{finding.LineNumber}   {finding.Severity switch

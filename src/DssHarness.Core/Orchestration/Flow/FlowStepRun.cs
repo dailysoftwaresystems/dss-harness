@@ -57,7 +57,9 @@ public sealed record FlowMadeAgent(string Name, string? Model);
 /// <param name="Read">
 /// What the engine read for the step where it starts, by key: a <c>validate-plan</c> step's <c>items</c> and
 /// <c>scope</c>, each where the step gives it; an <c>orient</c> step's <c>base</c>, the flow's <c>pull-request</c> step's
-/// base filled (<see cref="FlowTemplate.PullRequestBase"/>), where one names it. Empty for every other step.
+/// base filled (<see cref="FlowTemplate.PullRequestBase"/>), where one names it; an anchor check's <c>rows</c> or
+/// <c>paths</c>, the names its expression yielded, none where it read nothing; a <c>ci-wait</c> step's <c>commit</c>
+/// where it names none, the commit the run last pushed. Empty for every other step.
 /// </param>
 /// <param name="Made">The agent a <c>create-agent</c> step makes, as the engine named it; null for every other step.</param>
 /// <param name="WorksIn">
@@ -202,6 +204,14 @@ public sealed record FlowStepResult
 
     /// <summary>Every leg the step ran, with each one's own verdict; the steps that run no legs give none.</summary>
     public IReadOnlyList<FlowLeg> Legs { get; init; } = [];
+
+    /// <summary>
+    /// A check that runs no legs - an anchor check, a CI read, a wait for checks - reached its verdict, and it is red:
+    /// under <c>failOn: red</c> the step fails with <see cref="Exit"/>, the code its check gives what it found; under
+    /// <c>never</c> it is done, and the steps after it read <c>passed</c>. <see cref="Passed"/> says the check did its
+    /// work. A step that runs legs says red by their verdicts, and never sets it.
+    /// </summary>
+    public bool Red { get; init; }
 
     /// <summary>The typed cause, where the exit code alone cannot say which kind of refusal it was.</summary>
     public OutcomeCause Cause { get; init; }

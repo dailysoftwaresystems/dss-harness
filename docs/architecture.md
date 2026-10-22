@@ -1480,7 +1480,8 @@ written to `step.json` before `IAgentService.CreateAsync` is called; run again i
 drops a making cut part way, and finishes the removal of one found closed (`FlowStepResult.NameSpent`), and `MakeAsync(noWorktree: true)` makes a read-only reason
 step's agent the same way. Each step is handed the run it belongs to (`FlowRunPlace`) and what the engine read for it
 where it starts (`FlowStepRun.Read`: a plan check's `items` and `scope`, the pull request's base `FlowTemplate` fills for
-orient), the agent it works in (`FlowStepRun.WorksIn`), and its keys' templates filled (`FlowStepTemplates`, the one
+orient, an anchor check's `rows` or `paths` expression, a `ci-wait`'s commit where it names none - the one the run last
+pushed), the agent it works in (`FlowStepRun.WorksIn`), and its keys' templates filled (`FlowStepTemplates`, the one
 reader of which text each template key holds, the definition's check its other caller). The leg steps - `build`, `test`,
 `run`, `check-mutations` - share `LegStepRunner`: the use case of each command (`IBuildLegs`, `ITestLegs`,
 `IRunnerLegs` - a run that writes the tree in place, by `HarnessConfig.WritingRunners`, the answer the step's claim of
@@ -1490,8 +1491,17 @@ the tree; each copy made, said where the leg takes its tree after the sync; each
 line is kept), each leg's verdict read on its own and `red` holding the red legs only, with the phase that did not pass
 (`LegEntry.TailPhase`, beside `LogTail`); the ledger (`LegRunResult.ToDocument`) and, in an agent's worktree, each red
 leg's failing phase log are kept in the step's directory. A leg run something other than its legs ended - refused, or
-stopped - ends the step with its own code. The other step runners - the agents, the rest of the steps over the services
-the tool already has - are the next thing the tool grows.
+stopped - ends the step with its own code. The checks that run no legs answer `FlowStepResult.Red` where they found red,
+which the coordinator reads by `failOn` as it reads a red leg: `AnchorBalanceStepRunner` and `AnchorCitationsStepRunner`
+over the anchor services, held to a step's rows or paths by `AnchorBalanceReport.HeldTo` (each `AnchorFinding` carries
+the id of its row, none for a registry as a whole) and `AnchorCitationReport.HeldTo`, their findings the lines the
+checks print (`AnchorReports.BalanceFindings`, `AnchorCitationReports.Line`); `CiReadStepRunner` over
+`ICiLegsService.CheckAsync`; and `CiWaitStepRunner` over `ICiChecksService`, which reads a commit's check runs and
+statuses through `ICiJobSource` until one is red - classified by `ICiLegsService.ClassifyRunAsync`, its job's log read
+whole - every one has ended, none appeared, or its time is spent, with `CiConclusions` the one place that says what a
+conclusion came to. Every call of `gh` goes through `GhProcess`: the repository it answers for, never asking, ended at its
+limit (21). The other step runners - the agents, the rest of the steps over the services the tool already has - are
+the next thing the tool grows.
 
 A definition is held to the `config.json` it is checked under as well: a `run` step whose runner -
 or a runner its run checks name - says `writesTree` names with `in` the create-agent step whose

@@ -1,13 +1,16 @@
 using System.Globalization;
 using System.Text.Json;
-using DssHarness.Core.Git;
+using System.Text.RegularExpressions;
 using DssHarness.Core.Output;
-using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
 
 namespace DssHarness.Core.Ci;
 
-/// <summary>Reads CI run and job metadata for the repository a command is standing in.</summary>
+/// <summary>Reads CI run and job metadata, and the checks of a commit, for the repository a command is standing in.</summary>
+/// <remarks>
+/// Every read is given <c>limit</c>, the longest it may take: <see cref="GhProcess.DefaultLimit"/> where null, and a
+/// read past it is not done (21), which a caller may ask again.
+/// </remarks>
 public interface ICiJobSource
 {
     /// <summary>The newest run ids of <paramref name="workflow"/> on <paramref name="branch"/>.</summary>
@@ -15,6 +18,7 @@ public interface ICiJobSource
     /// <param name="workflow">The workflow's name or file name.</param>
     /// <param name="branch">The branch.</param>
     /// <param name="limit">How many runs, newest first.</param>
+    /// <param name="readLimit">The longest the read may take.</param>
     /// <param name="cancellationToken">Stops the child process.</param>
     /// <exception cref="HarnessException">The forge could not be asked, so CI was not read.</exception>
     Task<IReadOnlyList<long>> ListRunsAsync(
@@ -22,55 +26,68 @@ public interface ICiJobSource
         string workflow,
         string branch,
         int limit,
+        TimeSpan? readLimit,
         CancellationToken cancellationToken = default);
 
     /// <summary>One run, with every job and step it recorded.</summary>
     /// <param name="repositoryRoot">The repository to ask about.</param>
     /// <param name="runId">The run.</param>
+    /// <param name="readLimit">The longest each read may take.</param>
     /// <param name="cancellationToken">Stops the child processes.</param>
     /// <exception cref="HarnessException">The run could not be read, so CI was not read.</exception>
-    Task<CiRun> ReadRunAsync(string repositoryRoot, long runId, CancellationToken cancellationToken = default);
+    Task<CiRun> ReadRunAsync(string repositoryRoot, long runId, TimeSpan? readLimit, CancellationToken cancellationToken = default);
+
+    /// <summary>Every check run the forge lists for <paramref name="commit"/>, the latest of each.</summary>
+    /// <param name="repositoryRoot">The repository to ask about.</param>
+    /// <param name="commit">The commit.</param>
+    /// <param name="readLimit">The longest each read may take.</param>
+    /// <param name="cancellationToken">Stops the child processes.</param>
+    /// <exception cref="HarnessException">The checks could not be read, so CI was not read.</exception>
+    Task<IReadOnlyList<CiCheckRun>> ListCheckRunsAsync(string repositoryRoot, string commit, TimeSpan? readLimit, CancellationToken cancellationToken = default);
+
+    /// <summary>Every commit status the forge lists for <paramref name="commit"/>, the newest of each context.</summary>
+    /// <param name="repositoryRoot">The repository to ask about.</param>
+    /// <param name="commit">The commit.</param>
+    /// <param name="readLimit">The longest each read may take.</param>
+    /// <param name="cancellationToken">Stops the child processes.</param>
+    /// <exception cref="HarnessException">The statuses could not be read, so CI was not read.</exception>
+    Task<IReadOnlyList<CiCommitStatus>> ListStatusesAsync(string repositoryRoot, string commit, TimeSpan? readLimit, CancellationToken cancellationToken = default);
+
+    /// <summary>The whole log of one job, as the forge keeps it.</summary>
+    /// <param name="repositoryRoot">The repository to ask about.</param>
+    /// <param name="jobId">The job.</param>
+    /// <param name="readLimit">The longest the read may take.</param>
+    /// <param name="cancellationToken">Stops the child process.</param>
+    /// <exception cref="HarnessException">The log could not be read.</exception>
+    Task<string> ReadJobLogAsync(string repositoryRoot, long jobId, TimeSpan? readLimit, CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc cref="ICiJobSource"/>
 /// <remarks>
-/// <para>
-/// Read-only by construction: this issues GET requests through the forge's own command line and
-/// nothing else. It never labels, re-runs or pushes, because re-triggering CI is a person's call and
-/// a leg reported red is a stop to read rather than something to retry until it passes.
-/// </para>
-/// <para>
-/// The forge's tool finds which repository to answer for by running git, so every variable git reads a
-/// repository from is cleared before it starts, the same <see cref="GitLocalVariables"/> the git client
-/// clears. Measured: with another repository's <c>GIT_DIR</c> exported, the tool answered for THAT
-/// repository even when the branch was given explicitly -- a fix that cleaned only the harness's own
-/// git calls would have left this second channel open.
-/// </para>
+/// Read-only by construction: this issues GET requests through the forge's own command line, by
+/// <see cref="GhProcess"/>, and nothing else. It never labels, re-runs or pushes, because re-triggering CI is a
+/// person's call and a leg reported red is a stop to read rather than something to retry until it passes.
 /// </remarks>
-/// <param name="processRunner">Runs the forge's tool.</param>
-/// <param name="localVariables">
-/// The variables it starts without; asked of git through <paramref name="processRunner"/> where none is given.
-/// </param>
-public sealed class GhCiJobSource(IProcessRunner processRunner, GitLocalVariables? localVariables = null) : ICiJobSource
+/// <param name="gh">Runs the forge's tool.</param>
+public sealed class GhCiJobSource(GhProcess gh) : ICiJobSource
 {
-    /// <summary>The forge's command line. The one dependency, and there is no fallback to a second.</summary>
-    private const string GhExecutable = "gh";
+    /// <summary>What a read that did not answer leaves undone, as each of its refusals ends.</summary>
+    private const string NotRead = "so CI was NOT read (this is not a pass)";
 
-    /// <summary>
-    /// The variable that makes the forge's tool answer for a repository somebody else named. Refused
-    /// rather than cleared: it is an explicit override, and this command reads only the CI of the tree
-    /// it was pointed at, so silently ignoring it would answer a different question than the caller asked.
-    /// </summary>
-    private const string RepositoryOverrideVariable = "GH_REPO";
+    /// <summary>How many entries one request asks for, which is the most the API will return at once.</summary>
+    private const int PageSize = 100;
 
-    private readonly IProcessRunner _processRunner = processRunner;
-    private readonly GitLocalVariables _localVariables = localVariables ?? new GitLocalVariables(processRunner);
+    /// <summary>Where a check that is a job of a workflow run points: the run's id, then the job's.</summary>
+    private static readonly Regex JobAddress = new(@"/actions/runs/(?<run>\d+)/job/(?<job>\d+)", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+
+    private readonly GhProcess _gh = gh;
 
     public async Task<IReadOnlyList<long>> ListRunsAsync(
         string repositoryRoot,
         string workflow,
         string branch,
         int limit,
+        TimeSpan? readLimit,
         CancellationToken cancellationToken = default)
     {
         var output = await RunAsync(
@@ -82,6 +99,7 @@ public sealed class GhCiJobSource(IProcessRunner processRunner, GitLocalVariable
                 "--limit", limit.ToString(CultureInfo.InvariantCulture),
                 "--json", "databaseId",
             ],
+            readLimit,
             cancellationToken).ConfigureAwait(false);
 
         using var document = Parse(output, $"the run list for '{workflow}' on {branch}");
@@ -95,6 +113,7 @@ public sealed class GhCiJobSource(IProcessRunner processRunner, GitLocalVariable
     public async Task<CiRun> ReadRunAsync(
         string repositoryRoot,
         long runId,
+        TimeSpan? readLimit,
         CancellationToken cancellationToken = default)
     {
         var id = runId.ToString(CultureInfo.InvariantCulture);
@@ -102,9 +121,20 @@ public sealed class GhCiJobSource(IProcessRunner processRunner, GitLocalVariable
         var runOutput = await RunAsync(
             repositoryRoot,
             ["api", $"repos/:owner/:repo/actions/runs/{id}"],
+            readLimit,
             cancellationToken).ConfigureAwait(false);
 
         using var run = Parse(runOutput, $"run {id}");
+
+        var jobs = await ReadAllAsync(
+            repositoryRoot,
+            $"repos/:owner/:repo/actions/runs/{id}/jobs",
+            "jobs",
+            $"the jobs of run {id}",
+            "job",
+            ReadJob,
+            readLimit,
+            cancellationToken).ConfigureAwait(false);
 
         return new CiRun(
             runId,
@@ -112,26 +142,83 @@ public sealed class GhCiJobSource(IProcessRunner processRunner, GitLocalVariable
             Text(run.RootElement, "head_branch"),
             Text(run.RootElement, "created_at"),
             Text(run.RootElement, "conclusion"),
-            await ReadAllJobsAsync(repositoryRoot, id, cancellationToken).ConfigureAwait(false));
+            jobs)
+        {
+            Workflow = Text(run.RootElement, "name"),
+            WorkflowPath = Text(run.RootElement, "path"),
+        };
     }
 
+    public Task<IReadOnlyList<CiCheckRun>> ListCheckRunsAsync(
+        string repositoryRoot,
+        string commit,
+        TimeSpan? readLimit,
+        CancellationToken cancellationToken = default)
+        => ReadAllAsync(
+            repositoryRoot,
+            $"repos/:owner/:repo/commits/{Uri.EscapeDataString(commit)}/check-runs",
+            "check_runs",
+            $"the check runs of {commit}",
+            "check run",
+            ReadCheckRun,
+            readLimit,
+            cancellationToken);
+
+    public Task<IReadOnlyList<CiCommitStatus>> ListStatusesAsync(
+        string repositoryRoot,
+        string commit,
+        TimeSpan? readLimit,
+        CancellationToken cancellationToken = default)
+        => ReadAllAsync(
+            repositoryRoot,
+            $"repos/:owner/:repo/commits/{Uri.EscapeDataString(commit)}/status",
+            "statuses",
+            $"the statuses of {commit}",
+            "status",
+            ReadStatus,
+            readLimit,
+            cancellationToken);
+
+    public Task<string> ReadJobLogAsync(
+        string repositoryRoot,
+        long jobId,
+        TimeSpan? readLimit,
+        CancellationToken cancellationToken = default)
+        => _gh.RunAsync(
+            repositoryRoot,
+            ["api", $"repos/:owner/:repo/actions/jobs/{jobId.ToString(CultureInfo.InvariantCulture)}/logs"],
+            readLimit,
+            $"so the log of job {jobId.ToString(CultureInfo.InvariantCulture)} was NOT read",
+            cancellationToken);
+
     /// <summary>
-    /// Every job of a run, following the pages until the count the run itself reports is reached.
+    /// Every entry of a listing, following the pages until the count the listing itself reports is reached.
     /// </summary>
     /// <param name="repositoryRoot">The repository to ask from.</param>
-    /// <param name="id">The run's id.</param>
+    /// <param name="address">The listing, without its page.</param>
+    /// <param name="member">The member of each page that holds its entries.</param>
+    /// <param name="subject">What is read, as a refusal names it.</param>
+    /// <param name="entry">What one entry is, as a refusal counts them.</param>
+    /// <param name="read">Reads one entry.</param>
+    /// <param name="readLimit">The longest each read may take.</param>
     /// <param name="cancellationToken">Stops the requests.</param>
     /// <exception cref="HarnessException">
-    /// Fewer jobs came back than the run says it has. A page that was never fetched is a leg that
-    /// cannot be red: a matrix wider than one page would quietly lose the legs past its end, and the
-    /// gate would report every leg it did see as green.
+    /// Fewer entries came back than the listing says it has, or a page holds no list of them. A page that was never
+    /// fetched is a leg, or a check, that cannot be red: a listing wider than one page would quietly lose the entries past
+    /// its end, and the gate would report every one it did see as green; a page of another shape read as empty would
+    /// say there were none.
     /// </exception>
-    private async Task<IReadOnlyList<CiJob>> ReadAllJobsAsync(
+    private async Task<IReadOnlyList<T>> ReadAllAsync<T>(
         string repositoryRoot,
-        string id,
+        string address,
+        string member,
+        string subject,
+        string entry,
+        Func<JsonElement, T> read,
+        TimeSpan? readLimit,
         CancellationToken cancellationToken)
     {
-        var collected = new List<CiJob>();
+        var collected = new List<T>();
         var total = 0;
 
         for (var page = 1; ; page++)
@@ -140,54 +227,53 @@ public sealed class GhCiJobSource(IProcessRunner processRunner, GitLocalVariable
 
             var output = await RunAsync(
                 repositoryRoot,
-                ["api", $"repos/:owner/:repo/actions/runs/{id}/jobs?per_page={PageSize}&page={page}"],
+                ["api", $"{address}?per_page={PageSize}&page={page}"],
+                readLimit,
                 cancellationToken).ConfigureAwait(false);
 
-            using var jobs = Parse(output, $"the jobs of run {id}");
+            using var listed = Parse(output, subject);
 
-            total = Count(jobs.RootElement) ?? total;
+            total = Count(listed.RootElement) ?? total;
 
-            var read = ReadJobs(jobs.RootElement);
-            collected.AddRange(read);
+            if (!listed.RootElement.TryGetProperty(member, out var array) || array.ValueKind != JsonValueKind.Array)
+            {
+                throw new HarnessException(
+                    HarnessExit.CommandFailed,
+                    $"{GhProcess.Executable} answered no '{member}' list for {subject}, {NotRead}.");
+            }
 
-            if (read.Count < PageSize)
+            var entries = array.EnumerateArray().Select(read).ToList();
+
+            collected.AddRange(entries);
+
+            if (entries.Count < PageSize)
             {
                 break;
             }
         }
 
-        // Checked rather than assumed. The count the run reports is the only statement of how many
-        // legs there were, and a gate reading fewer than that is reading a subset it cannot name.
+        // Checked rather than assumed. The count the listing reports is the only statement of how many there were,
+        // and a gate reading fewer than that is reading a subset it cannot name.
         if (total > collected.Count)
         {
             throw new HarnessException(
                 HarnessExit.CommandFailed,
-                $"Run {id} reports {ReportText.Counted(total, "job")} and only {collected.Count} came back, so some legs were "
+                $"{char.ToUpperInvariant(subject[0])}{subject[1..]} report {ReportText.Counted(total, entry)} and only {collected.Count} came back, so some were "
                 + "never read. This is not a pass.");
         }
 
         return collected;
     }
 
-    /// <summary>How many jobs a page says the run has in total.</summary>
+    /// <summary>How many entries a page says the listing has in total.</summary>
     private static int? Count(JsonElement root)
         => root.TryGetProperty("total_count", out var count) && count.TryGetInt32(out var value) ? value : null;
 
-    /// <summary>How many jobs one request asks for, which is the most the API will return at once.</summary>
-    private const int PageSize = 100;
-
-    private static IReadOnlyList<CiJob> ReadJobs(JsonElement root)
-    {
-        if (!root.TryGetProperty("jobs", out var jobs) || jobs.ValueKind != JsonValueKind.Array)
+    private static CiJob ReadJob(JsonElement job)
+        => new(Text(job, "name") ?? string.Empty, Text(job, "conclusion"), ReadSteps(job))
         {
-            return [];
-        }
-
-        return [.. jobs.EnumerateArray().Select(job => new CiJob(
-            Text(job, "name") ?? string.Empty,
-            Text(job, "conclusion"),
-            ReadSteps(job)))];
-    }
+            Id = job.TryGetProperty("id", out var id) && id.TryGetInt64(out var value) ? value : null,
+        };
 
     private static IReadOnlyList<CiStep> ReadSteps(JsonElement job)
     {
@@ -202,6 +288,31 @@ public sealed class GhCiJobSource(IProcessRunner processRunner, GitLocalVariable
             Moment(step, "started_at"),
             Moment(step, "completed_at")))];
     }
+
+    /// <summary>
+    /// One check run: a job of a workflow run where the address it points at says which - the forge's own jobs point at
+    /// <c>/actions/runs/&lt;run&gt;/job/&lt;job&gt;</c> - and a check of its own otherwise.
+    /// </summary>
+    private static CiCheckRun ReadCheckRun(JsonElement check)
+    {
+        var url = Text(check, "html_url") ?? Text(check, "details_url") ?? string.Empty;
+        var job = JobAddress.Match(Text(check, "details_url") ?? url);
+
+        return new CiCheckRun(
+            Text(check, "name") ?? string.Empty,
+            Text(check, "status") ?? string.Empty,
+            Text(check, "conclusion"),
+            url,
+            job.Success ? long.Parse(job.Groups["run"].Value, CultureInfo.InvariantCulture) : null,
+            job.Success ? long.Parse(job.Groups["job"].Value, CultureInfo.InvariantCulture) : null);
+    }
+
+    private static CiCommitStatus ReadStatus(JsonElement status)
+        => new(
+            Text(status, "context") ?? string.Empty,
+            Text(status, "state") ?? string.Empty,
+            Text(status, "target_url") ?? string.Empty,
+            Text(status, "description"));
 
     private static string? Text(JsonElement element, string name)
         => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
@@ -224,56 +335,11 @@ public sealed class GhCiJobSource(IProcessRunner processRunner, GitLocalVariable
         {
             throw new HarnessException(
                 HarnessExit.CommandFailed,
-                $"{GhExecutable} answered something that is not JSON for {subject}, so CI was NOT read "
+                $"{GhProcess.Executable} answered something that is not JSON for {subject}, so CI was NOT read "
                 + $"(this is not a pass): {ex.Message}");
         }
     }
 
-    private async Task<string> RunAsync(
-        string repositoryRoot,
-        IReadOnlyList<string> arguments,
-        CancellationToken cancellationToken)
-    {
-        if (Environment.GetEnvironmentVariable(RepositoryOverrideVariable) is { Length: > 0 } named)
-        {
-            throw new HarnessException(
-                HarnessExit.Refused,
-                $"{RepositoryOverrideVariable} is set ({named}), so {GhExecutable} would answer for THAT repository; "
-                + "this command reads only the CI of the tree it was pointed at. Unset it for this call. "
-                + "CI was NOT read, and this is not a pass.");
-        }
-
-        if (_processRunner.FindExecutable(GhExecutable) is null)
-        {
-            throw new HarnessException(
-                HarnessExit.ToolMissing,
-                $"'{GhExecutable}' is not installed or not on PATH, so CI was NOT read. This is not a pass: an "
-                + "instrument that could not look must never read as one.");
-        }
-
-        var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
-        await _localVariables.ClearAsync(environment, cancellationToken).ConfigureAwait(false);
-
-        var result = await _processRunner.RunAsync(
-            new ProcessRequest
-            {
-                FileName = GhExecutable,
-                Arguments = arguments,
-                WorkingDirectory = repositoryRoot,
-                Environment = environment,
-            },
-            cancellationToken).ConfigureAwait(false);
-
-        if (!result.Succeeded)
-        {
-            var said = result.StandardError.Trim();
-
-            throw new HarnessException(
-                HarnessExit.CommandFailed,
-                $"{GhExecutable} {string.Join(' ', arguments)} failed, so CI was NOT read (this is not a pass): "
-                + (said.Length > 0 ? said : $"it exited with code {result.ExitCode}."));
-        }
-
-        return result.StandardOutput;
-    }
+    private Task<string> RunAsync(string repositoryRoot, IReadOnlyList<string> arguments, TimeSpan? readLimit, CancellationToken cancellationToken)
+        => _gh.RunAsync(repositoryRoot, arguments, readLimit, NotRead, cancellationToken);
 }

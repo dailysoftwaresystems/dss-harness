@@ -564,7 +564,7 @@ public sealed record WorkflowStep
     public int? WaitMinutes { get; init; } = null;
 
     /// <summary>How long a CI wait waits for every check to end where the file says not: an hour.</summary>
-    public const int DefaultWaitMinutes = 60;
+    public const int DefaultWaitMinutes = Ci.CiChecksRequest.DefaultWaitMinutes;
 
     /// <summary>How often a CI wait reads the checks while it waits.</summary>
     public int? PollSeconds { get; init; } = null;

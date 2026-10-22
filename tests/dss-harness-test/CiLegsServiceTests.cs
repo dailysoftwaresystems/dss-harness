@@ -376,7 +376,7 @@ public sealed class CiLegsServiceTests
         var cancellationToken = TestContext.Current.CancellationToken;
         var harness = await PrepareAsync(temp);
 
-        var service = new CiLegsService(harness.ContextLoader, new StubJobSource([]), harness.GitClient, harness.FileSystem);
+        var service = new CiLegsService(harness.ContextLoader, new StubCiJobSource([]), harness.GitClient, harness.FileSystem);
 
         var refusal = await Assert.ThrowsAsync<HarnessException>(
             () => service.CheckAsync(temp.Path, Request(), cancellationToken));
@@ -398,7 +398,7 @@ public sealed class CiLegsServiceTests
         temp.WriteFile("file.txt", "content\n");
         await harness.CommitAllAsync(temp.Path, "initial", cancellationToken);
         await harness.RunGitAsync(temp.Path, ["checkout", "--quiet", "-b", "work"], cancellationToken);
-        var source = new StubJobSource([Run(Leg("linux-clang-asan", budgetMinutes: 45, testSeconds: 10, testFailed: false))]);
+        var source = new StubCiJobSource([Run(Leg("linux-clang-asan", budgetMinutes: 45, testSeconds: 10, testFailed: false))]);
         var service = new CiLegsService(harness.ContextLoader, source, harness.GitClient, harness.FileSystem);
 
         _ = await service.CheckAsync(temp.Path, Request(), cancellationToken);
@@ -413,8 +413,50 @@ public sealed class CiLegsServiceTests
         Assert.StartsWith("There is no branch to ask about (a detached HEAD?), so CI was NOT read.", refusal.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// One run a check of a commit is a job of is classified as every run the command reads is: its legs, each budget from
+    /// the run's own workflow file where it is among the repository's - and from the other sources where it is not - and
+    /// every read given the caller's limit.
+    /// </summary>
+    [Theory]
+    [InlineData(".github/workflows/pipeline.yml", 180.0, "workflow")]
+    [InlineData(".github/workflows/elsewhere.yml", 3000.0, "ci.legBudgetMinutes")]
+    public async Task ARunACheckIsAJobOf_IsClassified_ItsBudgetFromItsOwnWorkflow(string workflowPath, double budget, string source)
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp, workflow: "    - { leg: mac-arm, minutes: 3 }\n", workflowBudget: "leg: {leg}, minutes: (?<budget>[0-9]+)");
+        var jobs = new StubCiJobSource([Run(new CiJob("unit (mac-arm)", CiConclusions.Failure, [new CiStep("Test", CiConclusions.Failure, Moment(0), Moment(200))]) { Id = 9 }) with { Workflow = "Pipeline", WorkflowPath = workflowPath }]);
+
+        var report = await new CiLegsService(harness.ContextLoader, jobs, harness.GitClient, harness.FileSystem)
+            .ClassifyRunAsync(temp.Path, 4242, TimeSpan.FromMinutes(4), cancellationToken);
+
+        var leg = Assert.Single(report.Legs);
+        Assert.Equal(("mac-arm", budget, source), (leg.Leg, leg.BudgetSeconds, leg.BudgetSource));
+        Assert.Equal([4242L], jobs.RunsRead);
+        Assert.Equal([TimeSpan.FromMinutes(4)], jobs.ReadLimits);
+    }
+
+    /// <summary>A repository whose ci settings do not say which jobs are legs has none to classify: the run's jobs are all there is, and nothing is refused.</summary>
+    [Fact]
+    public async Task ARunOfARepositoryWithNoLegConventions_HasNoLegs()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp, ci: new CiSettings());
+        var jobs = new StubCiJobSource([Run(new CiJob("unit (mac-arm)", CiConclusions.Failure, []))]);
+
+        var report = await new CiLegsService(harness.ContextLoader, jobs, harness.GitClient, harness.FileSystem)
+            .ClassifyRunAsync(temp.Path, 4242, null, cancellationToken);
+
+        Assert.Empty(report.Legs);
+        Assert.False(report.MatrixRan);
+        Assert.Equal(["unit (mac-arm)=failure"], report.JobsPresent);
+        Assert.Equal("run 4242", report.Workflow);
+    }
+
     private static CiLegsService Service(HarnessFactory harness, CiRun run)
-        => new(harness.ContextLoader, new StubJobSource([run]), harness.GitClient, harness.FileSystem);
+        => new(harness.ContextLoader, new StubCiJobSource([run]), harness.GitClient, harness.FileSystem);
 
     private static CiLegsRequest Request() => new(Branch: null, CiLegsRequest.DefaultLimit, []);
 
@@ -472,30 +514,5 @@ public sealed class CiLegsServiceTests
         File.WriteAllText(Path.Combine(workflows, "pipeline.yml"), Workflow + "\n" + workflow);
 
         return harness;
-    }
-
-    /// <summary>
-    /// Job metadata a test supplies. The forge is not reachable from a test, and reading CI needs the
-    /// network and an authenticated tool: a test that needed either would red for a property of the
-    /// machine rather than of the code.
-    /// </summary>
-    private sealed class StubJobSource(IReadOnlyList<CiRun> runs) : ICiJobSource
-    {
-        /// <summary>The branch each listing was asked about, in order.</summary>
-        public List<string> Branches { get; } = [];
-
-        public Task<IReadOnlyList<long>> ListRunsAsync(
-            string repositoryRoot,
-            string workflow,
-            string branch,
-            int limit,
-            CancellationToken cancellationToken = default)
-        {
-            Branches.Add(branch);
-            return Task.FromResult<IReadOnlyList<long>>([.. runs.Select(run => run.Id)]);
-        }
-
-        public Task<CiRun> ReadRunAsync(string repositoryRoot, long runId, CancellationToken cancellationToken = default)
-            => Task.FromResult(runs.First(run => run.Id == runId));
     }
 }

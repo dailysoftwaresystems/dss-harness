@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Channels;
 using DssHarness.Core.Execution;
@@ -2679,8 +2680,9 @@ public sealed class FlowCoordinator
 
                 // What the step reads where it starts, as when is read where it is admitted (ReadAtStart): a test
                 // step's filterWhen - false gives the runner no filter and fills no template, so every test of the
-                // step's legs runs - a validate-plan's items and scope, and the pull request's base orient says. One
-                // that cannot be read fails the step as an unreadable when does.
+                // step's legs runs - a validate-plan's items and scope, the pull request's base orient says, an anchor
+                // check's rows or paths, and the commit the run last pushed for a ci-wait that names none. One that
+                // cannot be read fails the step as an unreadable when does.
                 var step = instance.Step;
                 var read = new Dictionary<string, FlowValue>(StringComparer.Ordinal);
 
@@ -3229,22 +3231,26 @@ public sealed class FlowCoordinator
     /// <summary>
     /// What a step's own work ended with: a step that runs legs is read from each leg's own verdict, and every other
     /// step from what its runner said. Under <c>failOn: red</c> any red leg fails the step with its worst red leg's
-    /// code; under <c>never</c> red is no failure, and the legs that still decide - a failure that is not red, an
-    /// incomplete one - decide as they would without it.
+    /// code, and a check with no legs that found red fails with its own; under <c>never</c> red is no failure, and the
+    /// legs that still decide - a failure that is not red, an incomplete one - decide as they would without it.
     /// </summary>
     /// <returns>Whether it passed, its code, its error, and the typed cause its code is read with: the runner's for a step with no legs, the worst incomplete leg's own for one whose legs ended so.</returns>
     private static (bool Passed, int Exit, string? Error, OutcomeCause Cause) Ends(WorkflowStep step, FlowStepResult result)
     {
+        var failsOnRed = (step.FailOn ?? WorkflowStepTypes.Find(step.Type ?? string.Empty)?.FailOnDefault) == "red";
+
         if (result.Legs.Count == 0)
         {
-            return (result.Passed, result.Exit, result.Error, result.Cause);
+            return result.Red && result.Passed
+                ? (!failsOnRed, result.Exit, result.Error, OutcomeCause.None)
+                : (result.Passed, result.Exit, result.Error, result.Cause);
         }
 
         var red = FlowLegVerdicts.OfClass(result.Legs, FlowLegClass.Red);
         var notRed = FlowLegVerdicts.OfClass(result.Legs, FlowLegClass.FailureThatIsNotRed);
         var incomplete = FlowLegVerdicts.OfClass(result.Legs, FlowLegClass.Incomplete);
 
-        if (red.Count > 0 && (step.FailOn ?? WorkflowStepTypes.Find(step.Type ?? string.Empty)?.FailOnDefault) == "red")
+        if (red.Count > 0 && failsOnRed)
         {
             var code = FlowLegVerdicts.CodeOf(FlowLegVerdicts.Worst(red)!.Value);
             return (false, code, WorstLine(red, code), OutcomeCause.None);
@@ -5485,9 +5491,13 @@ public sealed class FlowCoordinator
     /// <summary>
     /// What <paramref name="instance"/>'s step reads where it starts, into <paramref name="read"/> by key: a test step's
     /// <c>filterWhen</c>; a <c>validate-plan</c> step's <c>items</c> and <c>scope</c>, each where it gives it - a scope
-    /// that reads nothing is no update, and is handed on as read; an <c>orient</c> step's <c>base</c>, the flow's pull
-    /// request's base filled as the run's start fills it, where a pull-request step names one. Why one could not be
-    /// read, as the step's record keeps it; null where each was.
+    /// that reads nothing is no update, and is handed on as read; an anchor balance's <c>rows</c> and an anchor
+    /// citations check's <c>paths</c>, where each gives an expression - one that reads nothing, or null, is an empty list,
+    /// naming nothing, and one that yields anything but a list of names cannot be read; an <c>orient</c> step's
+    /// <c>base</c>, the flow's pull request's base filled as the run's start fills it, where a pull-request step names one;
+    /// and a <c>ci-wait</c> step's <c>commit</c> where it names none, the commit the run last pushed - the output of the
+    /// push step that ended done last - where it pushed one. Why one could not be read, as the step's record keeps it;
+    /// null where each was.
     /// </summary>
     private string? ReadAtStart(FlowInstance instance, Dictionary<string, FlowValue> read)
     {
@@ -5496,6 +5506,8 @@ public sealed class FlowCoordinator
         {
             "test" => [("filterWhen", step.FilterWhen, false)],
             "validate-plan" => [("items", step.Items, false), ("scope", step.Scope, true)],
+            "anchor-balance" => [("rows", step.Rows?.Expression, true)],
+            "anchor-citations" => [("paths", step.AnchorPaths?.Expression, true)],
             _ => [],
         };
 
@@ -5513,7 +5525,22 @@ public sealed class FlowCoordinator
                 return Unreadable(key, instance.Id, problem);
             }
 
+            if (key is "rows" or "paths")
+            {
+                if (Names(value, expression, out var names) is { } unnamed)
+                {
+                    return Unreadable(key, instance.Id, unnamed);
+                }
+
+                value = FlowValue.Of(new JsonArray([.. names.Select(name => (JsonNode?)name)]));
+            }
+
             read[key] = value;
+        }
+
+        if (step.Type == "ci-wait" && step.Commit is null && LastPushed() is { } pushed)
+        {
+            read["commit"] = FlowValue.Of(pushed);
         }
 
         if (step.Type == "orient")
@@ -5530,6 +5557,40 @@ public sealed class FlowCoordinator
 
         return null;
     }
+
+    /// <summary>
+    /// The names <paramref name="value"/> - what a <c>rows</c> or a <c>paths</c> expression yielded - holds: none where
+    /// it read nothing or null, each text of the list otherwise. Why it holds no names, where it yields anything else.
+    /// </summary>
+    private static string? Names(FlowValue value, string expression, out IReadOnlyList<string> names)
+    {
+        names = [];
+
+        if (value.IsMissing || value.IsNull)
+        {
+            return null;
+        }
+
+        if (value.ToNode() is not JsonArray list || list.Any(item => item is not JsonValue text || text.GetValueKind() != JsonValueKind.String))
+        {
+            return $"'{expression}' yields no list of names";
+        }
+
+        names = [.. list.Select(item => item!.GetValue<string>())];
+        return null;
+    }
+
+    /// <summary>
+    /// The commit the run last pushed: the <c>sha</c> of the push step that ended done last, or null where none has -
+    /// a run that pushed nothing has no commit of its own to wait for.
+    /// </summary>
+    private string? LastPushed()
+        => _created
+            .Where(instance => instance.Step.Type == "push" && instance.State == FlowInstanceState.Done)
+            .Where(instance => instance.Output?["sha"] is JsonValue sha && sha.GetValueKind() == JsonValueKind.String)
+            .OrderBy(instance => instance.FinishedAt)
+            .Select(instance => instance.Output!["sha"]!.GetValue<string>())
+            .LastOrDefault();
 
     /// <summary>
     /// The name the run gives the next agent it makes: one past the highest any step of it holds, any name the session

@@ -25,6 +25,28 @@ public enum AnchorCitationSubject
     CurrentPullRequest,
 }
 
+/// <summary>How a workflow's <c>anchor-citations</c> step names what it judges: each subject by its name in camel case.</summary>
+public static class AnchorCitationSubjects
+{
+    /// <summary>The subject a step judges where it names none: the files as they are on disk.</summary>
+    public const string Default = "currentTree";
+
+    /// <summary>Every name a step may give, in the order help says them.</summary>
+    public static IReadOnlyList<string> Names { get; } = [Default, "currentCommit", "currentPullRequest"];
+
+    /// <summary>The subject <paramref name="name"/> names, or <see cref="Default"/>'s where it is null.</summary>
+    /// <param name="name">One of <see cref="Names"/>, as the definition's check holds it to.</param>
+    /// <exception cref="ArgumentOutOfRangeException">It is none of them.</exception>
+    public static AnchorCitationSubject Of(string? name)
+        => (name ?? Default) switch
+        {
+            Default => AnchorCitationSubject.CurrentTree,
+            "currentCommit" => AnchorCitationSubject.CurrentCommit,
+            "currentPullRequest" => AnchorCitationSubject.CurrentPullRequest,
+            _ => throw new ArgumentOutOfRangeException(nameof(name), name, "a subject no citation check judges"),
+        };
+}
+
 /// <summary>What check-anchor-citations measured.</summary>
 /// <param name="Subject">What was read.</param>
 /// <param name="SubjectDescription">The subject in words, including the commit it resolved to.</param>
@@ -44,6 +66,20 @@ public sealed record AnchorCitationReport(
 {
     /// <summary>Whether every citation resolved.</summary>
     public bool Passed => Unresolved.Count == 0;
+
+    /// <summary>
+    /// The check held to <paramref name="paths"/>: a citation that resolves to no row counts only where it is in one of
+    /// those files, each named relative to the repository as a citation names its file. What it says it read is the whole's.
+    /// </summary>
+    /// <param name="paths">The files it is held to.</param>
+    public AnchorCitationReport HeldTo(IReadOnlyCollection<string> paths)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+
+        var held = paths.Select(AnchorRegistryLocator.Normalize).ToHashSet(StringComparer.Ordinal);
+
+        return this with { Unresolved = [.. Unresolved.Where(citation => held.Contains(citation.Path))] };
+    }
 }
 
 /// <summary>Checks that every anchor id a scanned root cites resolves to a registry row.</summary>
@@ -334,6 +370,17 @@ public sealed class AnchorCitationService(
 /// </remarks>
 public static class AnchorCitationReports
 {
+    /// <summary>A citation that resolves to no row, as the check prints it: <c>path:line: id</c>, and what was written of a cut one.</summary>
+    /// <param name="citation">The citation.</param>
+    public static string Line(AnchorCitation citation)
+    {
+        ArgumentNullException.ThrowIfNull(citation);
+
+        return citation.Cut
+            ? $"{citation.Path}:{citation.LineNumber}: {citation.Written} (cut at the end of the line)"
+            : $"{citation.Path}:{citation.LineNumber}: {citation.Id}";
+    }
+
     /// <summary>What check-anchor-citations reports.</summary>
     /// <param name="report">What was measured.</param>
     /// <param name="json">Whether to write the findings as JSON instead of as lines.</param>
@@ -343,9 +390,7 @@ public static class AnchorCitationReports
 
         IReadOnlyList<string> data = json
             ? [Document(report).ToJsonString(ReportJson.Options)]
-            : [.. report.Unresolved.Select(citation => citation.Cut
-                ? $"{citation.Path}:{citation.LineNumber}: {citation.Written} (cut at the end of the line)"
-                : $"{citation.Path}:{citation.LineNumber}: {citation.Id}")];
+            : [.. report.Unresolved.Select(Line)];
 
         var looked =
             $"{ReportText.Counted(report.CitationsFound, "citation")} over {ReportText.Counted(report.FilesScanned, "file")} of {report.SubjectDescription}, "

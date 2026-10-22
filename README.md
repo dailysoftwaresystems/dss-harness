@@ -639,7 +639,7 @@ update (`cause`, `since`, `work`) and a piece (`kind`, `changed`, `keep`, `undo`
 rest), which a template reads and an expression does not. The engine starts and drives a run of a workflow
 (`run-orchestrator`, `dssharness help orchestrators`), from the main checkout's HEAD on a branch of its own: a start is
 refused where HEAD is detached, where the checkout is on the branch the run's pull request goes to, where a merge is under
-way and where changes are staged. Seven steps are served so far: `orient`, which reads what the repository is and has once
+way and where changes are staged. Eleven steps are served so far: `orient`, which reads what the repository is and has once
 (its branch and the pull request's base branch, the commit the run started on, a remote, legs and how each tests, anchors,
 CI, mutation arms, what is dirty, the open agents and who holds the tree); `validate-plan`, the machine's check of a plan's
 work items; `create-agent`, which makes the agent the engine named for it (`a<N>`, never twice) for the model its
@@ -648,8 +648,14 @@ steps `build`, `test`, `run` and `check-mutations`, which run their legs as the 
 they name with `in` or in the main checkout, each leg's verdict read on its own and its red legs answered alone - a leg
 that failed with the phase that did not pass and its last lines, a sweep's arm with its arm - a leg in a copy letting the
 tree go once its copy is made, and keep the ledger, and in an agent's worktree each red leg's failing log, in the step's
-directory. Every text a step hands on is filled where it starts, and one that reads nothing fails the step (12). A step of any other type fails, saying no
-runner serves its type; the rest are the next thing the tool grows. A step that works in
+directory; the checks `anchor-balance` and `anchor-citations`, each held to the rows or files a step names; `ci-read`,
+the legs `check-ci-legs` reads; and `ci-wait`, which waits for every check the forge runs on a commit - the one the run
+last pushed where it names none - ends at the first red one with its job's failing step and whole log, and asks where
+none appeared, some are still running, or one ended neither green nor red. A check that finds red fails its step under
+`failOn: red`, every check's default but `ci-read`'s. Every text a step hands on is filled where it starts, and one that
+reads nothing fails the step (12). Every call of `gh` is started so it cannot ask, and ended after five minutes or the
+step's `timeoutMinutes` (21). A step of any other type fails, saying no runner serves its type; the rest are the next
+thing the tool grows. A step that works in
 or on an agent waits for the create-agent step that makes it. Run `dssharness help workflows` for the whole of it.
 
 ## Anchors

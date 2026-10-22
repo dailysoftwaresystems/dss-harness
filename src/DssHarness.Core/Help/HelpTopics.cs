@@ -1697,6 +1697,7 @@ public static class HelpTopics
         builder.AppendLine("  check-ci-legs");
         builder.AppendLine($"    {CiExit.LegRed,3}  a leg is red");
         builder.AppendLine($"    {CiExit.MatrixDidNotRun,3}  the matrix did not run, which is never read as every leg passing");
+        builder.AppendLine($"    {HarnessExit.Incomplete,3}  a read of the forge did not answer in time: run it again");
         builder.AppendLine();
         builder.AppendLine("  build, test, run, check-mutations");
         builder.AppendLine($"    {LegExit.InputsMoved,3}  inputs-moved or unmeasured: let the tree settle, then run again; where the inputs");
@@ -1740,6 +1741,11 @@ public static class HelpTopics
         builder.AppendLine("budget. It knows no workflow of its own: which jobs are legs, what a leg is called,");
         builder.AppendLine("and which steps build and test it are what config.json's ci section declares, and");
         builder.AppendLine($"until they are, it refuses ({HarnessExit.Refused}) and names what to set.");
+        builder.AppendLine();
+        builder.AppendLine("Every call of gh, whoever makes it, is started so that it cannot ask anything");
+        builder.AppendLine("(GH_PROMPT_DISABLED, GCM_INTERACTIVE, GIT_TERMINAL_PROMPT) and is ended where it has");
+        builder.AppendLine($"not answered within {GhProcess.DefaultLimit.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes, a workflow step's timeoutMinutes where it says one: a");
+        builder.AppendLine($"read that did not answer in time is not done ({HarnessExit.Incomplete}), and asked again it may answer.");
         builder.AppendLine();
         builder.AppendLine("""  "ci": {""");
         builder.AppendLine("""    "workflows": [".github/workflows/ci.yml"],""");
@@ -3389,6 +3395,39 @@ public static class HelpTopics
             + $"ledger in its directory ({OrchestratorLayout.StepLedgerFileName}) and, in an agent's worktree, the log of each red "
             + $"leg's phase that did not pass, whole, where this machine ran the leg ({OrchestratorLayout.StepLogsDirectoryName}/<leg>.<phase>{PhaseLogs.Extension}, "
             + "the phase named as its log is), each attempt's own.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "anchor-balance and anchor-citations run the checks of those names in the main checkout - the balance from its "
+            + "base, the citations of its subject "
+            + $"({string.Join(", ", AnchorCitationSubjects.Names)}; {AnchorCitationSubjects.Default} where it names none) - each held "
+            + "to its rows or its paths where it names them: the anchors among those rows the change opened, closed and lost, a "
+            + "problem at a line of one of them and every problem of a registry as a whole, or the citations in those files; a rows "
+            + "or paths expression that reads nothing names nothing. Each answers passed and findings, each a line as the check "
+            + "prints it. ci-read reads the legs check-ci-legs reads, of its branch - the one checked out in the main checkout where "
+            + "it names none - and its newest limit runs, answering passed, branch, matrixRan, legs and red, each leg as check-ci-legs --json "
+            + "gives it. ci-wait waits for every check run and commit status the forge lists for its commit - the commit the run last "
+            + $"pushed where it names none, refused ({HarnessExit.Refused}) where it pushed none - less those its ignore names - a job "
+            + "by its own name, as its workflow names it, a status by its context - written out or with * for any run of characters, "
+            + "reading them every pollSeconds "
+            + $"({CiChecksRequest.DefaultPollSeconds}): a red one - one that concluded failure, a status of failure or error - ends it "
+            + "at once, answered with its name, url and, of a job of a workflow run, the job, its workflow, the step that failed, "
+            + "its leg as check-ci-legs classifies it, whether it overran its budget, and its whole log kept in the step's directory "
+            + $"({OrchestratorLayout.StepLogsDirectoryName}/<job>.<id>{PhaseLogs.Extension}, the job's id telling two of one name apart) "
+            + "with its last lines in tail, both masked by the repository's runner secrets, and in unread why any of that could not be "
+            + "read; every check ended green - success, neutral or skipped - on two reads running that found the same checks, at "
+            + "its wait's end on the last alone, passes it; and no check within "
+            + $"appearSeconds ({CiChecksRequest.DefaultAppearSeconds}) - or waitMinutes where that is shorter - checks still running at waitMinutes "
+            + $"({CiChecksRequest.DefaultWaitMinutes}) or one ended neither green nor red asks (noChecks, checksPending, "
+            + "checksUnsettled), never failing it; answered accept, it reads once more, waiting for nothing, and is done with the "
+            + "checks as they are, its passed true only where they are green. A check that finds red is red: under failOn red - every check's default but "
+            + "ci-read's, never - it fails with its check's code "
+            + $"(an anchor finding {AnchorExit.Findings}, a red CI leg {CiExit.LegRed} and no matrix run {CiExit.MatrixDidNotRun}, a red "
+            + $"check {CiExit.LegRed}), and under never it is done, its passed false. Every read of the forge is given the step's "
+            + $"timeoutMinutes, else {GhProcess.DefaultLimit.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes, and one past "
+            + $"it ends the step incomplete ({HarnessExit.Incomplete}), which runs it again; a ci-wait reads again at its next poll where "
+            + $"a read failed or passed it, and ends with that read's code only where {CiChecksService.FailedReadsInARow} did running "
+            + "or its wait is spent.");
         builder.AppendLine();
         AppendWrapped(
             builder,

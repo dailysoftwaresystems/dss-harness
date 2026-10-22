@@ -227,8 +227,9 @@ public sealed class AnchorBalanceService(
 
         // A row whose Anchor cell did not name one id there read as the cell's text, or as the first id it named, so
         // repairing that cell, as --lint asks, changes the id it reads as, which cannot be told from a loss by id: noted,
-        // since failing would fail the change repairing it.
-        findings.AddRange(lost.Select(pair => rules.NamesOneId(pair.Entry.Row.AnchorCell)
+        // since failing would fail the change repairing it. Either is the lost row's own, by the id it read as, though
+        // no line holds it now.
+        findings.AddRange(lost.Select(pair => (rules.NamesOneId(pair.Entry.Row.AnchorCell)
             ? pair.Entry.Registry.Fatal(
                 $"anchor '{pair.Loss.Id}' was {(pair.Loss.AlreadyClosed ? "closed" : "open")} where this change began and "
                 + "neither registry holds it now: a row moves between the registries and is never deleted, so its row was "
@@ -236,7 +237,7 @@ public sealed class AnchorBalanceService(
             : pair.Entry.Registry.Note(
                 $"the row read as '{pair.Loss.Id}' where this change began did not name one id in its Anchor cell, and no "
                 + $"row reads as '{pair.Loss.Id}' now: repairing that cell changes what its row reads as, so whether the row "
-                + "was repaired or lost cannot be told")));
+                + "was repaired or lost cannot be told")) with { RowId = pair.Loss.Id }));
 
         var opened = openNow
             .Where(pair => !openAtBase.ContainsKey(pair.Key))

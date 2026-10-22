@@ -255,6 +255,224 @@ public sealed class FlowStepStartTests
         Assert.Empty(runner.Runs.Single(run => run.Instance == "plan").Read!);
     }
 
+    /// <summary>
+    /// An anchor check's rows or paths, given as an expression, are read where it starts and handed on as names: one that
+    /// reads nothing, or null, names none; one written out is the step's own and is not read; and one that yields anything
+    /// but a list of names fails the step as an unreadable expression does, its runner never asked.
+    /// </summary>
+    [Fact]
+    public async Task AnAnchorChecksRowsAndPaths_AreReadWhereItStarts()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: fold
+                type: orient
+              - name: balance
+                type: anchor-balance
+                dependsOn: [fold]
+                rows: 'fold.rows'
+              - name: empty
+                type: anchor-balance
+                dependsOn: [fold]
+                rows: 'fold.none'
+              - name: unread
+                type: anchor-balance
+                dependsOn: [fold]
+                rows: 'fold.missing'
+              - name: written
+                type: anchor-balance
+                dependsOn: [fold]
+                rows: [A-ONE]
+              - name: cites
+                type: anchor-citations
+                dependsOn: [fold]
+                paths: 'fold.written'
+              - name: wrong
+                type: anchor-citations
+                dependsOn: [fold]
+                paths: 'fold.count'
+            """);
+        var runner = new Runner().On("fold", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: JsonNode.Parse("""{"rows": ["A-ONE", "A-TWO"], "none": null, "written": ["src/a.cs"], "count": [1, 2]}""")));
+        var coordinator = Coordinator(definition, runner);
+
+        _ = await coordinator.RunAsync(Token);
+
+        string Read(string instance, string key) => runner.Runs.Single(run => run.Instance == instance).Read![key].ToNode()!.ToJsonString();
+
+        Assert.Equal("""["A-ONE","A-TWO"]""", Read("balance", "rows"));
+        Assert.Equal("[]", Read("empty", "rows"));
+        Assert.Equal("[]", Read("unread", "rows"));
+        Assert.Equal("""["src/a.cs"]""", Read("cites", "paths"));
+        Assert.Empty(runner.Runs.Single(run => run.Instance == "written").Read!);
+        Assert.DoesNotContain(runner.Runs, run => run.Instance == "wrong");
+        Assert.Equal(
+            (FlowInstanceState.Failed, HarnessExit.ConfigInvalid, "expression 'paths' of 'wrong': 'fold.count' yields no list of names"),
+            (coordinator.Instances["wrong"].State, coordinator.Instances["wrong"].Exit, coordinator.Instances["wrong"].Error));
+    }
+
+    /// <summary>
+    /// A ci-wait that names no commit is handed the one the run last pushed - the sha of the push step that ended done
+    /// last - and one that names its own, or of a run that pushed nothing, is handed none.
+    /// </summary>
+    [Fact]
+    public async Task ACiWaitNamingNoCommit_IsHandedTheCommitTheRunLastPushed()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: early
+                type: ci-wait
+              - name: first
+                type: push
+                dependsOn: [early]
+              - name: second
+                type: push
+                dependsOn: [first]
+              - name: wait
+                type: ci-wait
+                dependsOn: [second]
+              - name: named
+                type: ci-wait
+                dependsOn: [second]
+                commit: abc
+            """);
+        var runner = new Runner()
+            .On("first", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: JsonNode.Parse("""{"pushed": true, "sha": "111"}""")))
+            .On("second", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: JsonNode.Parse("""{"pushed": true, "sha": "222"}""")));
+
+        _ = await Coordinator(definition, runner).RunAsync(Token);
+
+        Assert.Equal("222", runner.Runs.Single(run => run.Instance == "wait").Read!["commit"].AsTemplateText());
+        Assert.False(runner.Runs.Single(run => run.Instance == "named").Read!.ContainsKey("commit"));
+        Assert.False(runner.Runs.Single(run => run.Instance == "early").Read!.ContainsKey("commit"));
+    }
+
+    /// <summary>
+    /// The commit the run last pushed is that of the push that ended done last, by when it ended - never where it is
+    /// declared or when it started: of two pushes started together, the one that ended last; a push that failed, or
+    /// answered no sha, is passed over, whenever it ended.
+    /// </summary>
+    [Fact]
+    public async Task TheCommitTheRunLastPushed_IsThatOfThePushThatEndedDoneLast()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: second
+                type: push
+                dependsOn: [first]
+              - name: first
+                type: push
+              - name: broken
+                type: push
+                dependsOn: [second]
+                onFailure: continue
+              - name: unsure
+                type: push
+                dependsOn: [broken]
+              - name: wait
+                type: ci-wait
+                dependsOn: [unsure]
+            """);
+        var clock = new JumpingClock();
+        FlowStepResult Pushed(FlowStepResult result)
+        {
+            clock.Advance(TimeSpan.FromSeconds(1));
+            return result;
+        }
+
+        var runner = new Runner()
+            .On("first", _ => Pushed(FlowStepResult.Ended(passed: true, HarnessExit.Success, output: JsonNode.Parse("""{"pushed": true, "sha": "111"}"""))))
+            .On("second", _ => Pushed(FlowStepResult.Ended(passed: true, HarnessExit.Success, output: JsonNode.Parse("""{"pushed": true, "sha": "222"}"""))))
+            .On("broken", _ => Pushed(FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "rejected", output: JsonNode.Parse("""{"pushed": false, "sha": "999"}"""))))
+            .On("unsure", _ => Pushed(FlowStepResult.Ended(passed: true, HarnessExit.Success, output: JsonNode.Parse("""{"pushed": false, "sha": null}"""))));
+
+        _ = await new FlowCoordinator(definition, runner, new ConfiguredRunnerFacts(new HarnessConfig()), clock, null, null, runName: "r1").RunAsync(Token);
+
+        Assert.Equal("222", runner.Runs.Single(run => run.Instance == "wait").Read!["commit"].AsTemplateText());
+
+        // Two pushes never run together - each writes the remote - but one that failed and is run again ends after a push
+        // made since it began: the commit is the one pushed last, not the one whose step the run made first.
+        var again = Parse("""
+            name: flow
+            steps:
+              - name: early
+                type: push
+                onFailure: pause
+              - name: late
+                type: push
+              - name: wait
+                type: ci-wait
+                dependsOn: [early, late]
+            """);
+        var later = new JumpingClock();
+        var pushes = new Runner()
+            .On("early", run => PushedLater(run.Attempt == 1
+                ? FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "rejected", output: JsonNode.Parse("""{"pushed": false, "sha": "lost"}"""))
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success, output: JsonNode.Parse("""{"pushed": true, "sha": "early"}"""))))
+            .On("late", _ => PushedLater(FlowStepResult.Ended(passed: true, HarnessExit.Success, output: JsonNode.Parse("""{"pushed": true, "sha": "late"}"""))));
+        var coordinator = new FlowCoordinator(again, pushes, new ConfiguredRunnerFacts(new HarnessConfig()), later, null, null, runName: "r1");
+
+        _ = await coordinator.RunAsync(Token);
+        Assert.True(coordinator.TryAnswer(Assert.Single(coordinator.OpenQuestions).Id, "retry", out _));
+        _ = await coordinator.RunAsync(Token);
+
+        Assert.Equal([("early", 1), ("late", 1), ("early", 2), ("wait", 1)], pushes.Runs.Select(run => (run.Instance, run.Attempt)));
+        Assert.Equal("early", pushes.Runs.Single(run => run.Instance == "wait").Read!["commit"].AsTemplateText());
+
+        FlowStepResult PushedLater(FlowStepResult result)
+        {
+            later.Advance(TimeSpan.FromSeconds(1));
+            return result;
+        }
+    }
+
+    /// <summary>
+    /// A check that runs no legs and found red is read by its failOn: red - every check's default but ci-read's - fails it
+    /// with the code its check gave; never ends it done with that code, its output kept either way.
+    /// </summary>
+    [Fact]
+    public async Task ACheckWithNoLegsThatFoundRed_IsReadByItsFailOn()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: balance
+                type: anchor-balance
+                onFailure: continue
+              - name: cites
+                type: anchor-citations
+                failOn: never
+              - name: read
+                type: ci-read
+              - name: gate
+                type: ci-read
+                failOn: red
+                onFailure: continue
+            """);
+        static FlowStepResult Red(int code) => new() { Asked = null, Passed = true, Red = true, Exit = code, Error = "found red", Output = new JsonObject { ["passed"] = false } };
+        var runner = new Runner()
+            .On("balance", _ => Red(1))
+            .On("cites", _ => Red(1))
+            .On("read", _ => Red(2))
+            .On("gate", _ => Red(2));
+        var coordinator = Coordinator(definition, runner);
+
+        _ = await coordinator.RunAsync(Token);
+
+        (FlowInstanceState, int?, string?, bool) Ended(string instance)
+        {
+            var ended = coordinator.Instances[instance];
+            return (ended.State, ended.Exit, ended.Error, ended.Output!["passed"]!.GetValue<bool>());
+        }
+
+        Assert.Equal((FlowInstanceState.Failed, 1, "found red", false), Ended("balance"));
+        Assert.Equal((FlowInstanceState.Done, 1, "found red", false), Ended("cites"));
+        Assert.Equal((FlowInstanceState.Done, 2, "found red", false), Ended("read"));
+        Assert.Equal((FlowInstanceState.Failed, 2, "found red", false), Ended("gate"));
+    }
+
     /// <summary>A validate-plan step whose items read nothing fails as an unreadable expression does, and its runner is never asked.</summary>
     [Fact]
     public async Task AValidatePlanStepWhoseItemsReadNothing_FailsUnreadable()

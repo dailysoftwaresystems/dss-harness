@@ -74,18 +74,14 @@ public sealed class GitLocalVariablesTests
     [Fact]
     public async Task TheForgesCommandLine_StartsWithoutEveryVariableGitReadsARepositoryFrom()
     {
-        Assert.SkipWhen(
-            Environment.GetEnvironmentVariable("GH_REPO") is { Length: > 0 },
-            "GH_REPO is set in this environment, which the command refuses before it starts anything.");
-
         var requests = new List<ProcessRequest>();
         var runner = Substitute.For<IProcessRunner>();
         runner.FindExecutable("gh").Returns("gh");
         runner.RunAsync(Arg.Do<ProcessRequest>(requests.Add), Arg.Any<CancellationToken>()).Returns(Exited(0, "[{\"databaseId\": 7}]"));
         string[] names = ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY"];
 
-        var runs = await new GhCiJobSource(runner, GitLocalVariables.Fixed(names))
-            .ListRunsAsync("/repo", "test.yml", "main", 1, TestContext.Current.CancellationToken);
+        var runs = await new GhCiJobSource(new GhProcess(runner, GitLocalVariables.Fixed(names), _ => null))
+            .ListRunsAsync("/repo", "test.yml", "main", 1, readLimit: null, TestContext.Current.CancellationToken);
 
         Assert.Equal([7L], runs);
         var environment = Assert.Single(requests).Environment;

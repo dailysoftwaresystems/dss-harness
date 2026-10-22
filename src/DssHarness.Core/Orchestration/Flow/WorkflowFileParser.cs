@@ -1143,14 +1143,18 @@ public static class WorkflowFileParser
                     Base = ScalarIn(keys, $"{where}.base", problems),
                     Rows = FlowListIn(keys, $"{where}.rows", problems),
                 };
+
+                RefuseGivenEmpty(keys, $"{where}.rows", "name the rows it is held to", "the whole tree judged", problems);
                 break;
 
             case "anchor-citations":
                 step = step with
                 {
-                    Subject = EnumIn(keys, $"{where}.subject", problems, ["currentTree", "currentCommit", "currentPullRequest"]),
+                    Subject = EnumIn(keys, $"{where}.subject", problems, Anchors.AnchorCitationSubjects.Names),
                     AnchorPaths = FlowListIn(keys, $"{where}.paths", problems),
                 };
+
+                RefuseGivenEmpty(keys, $"{where}.paths", "name the files it is held to", "the whole tree judged", problems);
                 break;
 
             case "ci-read":

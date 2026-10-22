@@ -175,6 +175,10 @@ public static class ServiceRegistration
         services.AddSingleton<IFlowStepTypeRunner, TestStepRunner>();
         services.AddSingleton<IFlowStepTypeRunner, RunStepRunner>();
         services.AddSingleton<IFlowStepTypeRunner, SweepStepRunner>();
+        services.AddSingleton<IFlowStepTypeRunner, AnchorBalanceStepRunner>();
+        services.AddSingleton<IFlowStepTypeRunner, AnchorCitationsStepRunner>();
+        services.AddSingleton<IFlowStepTypeRunner, CiReadStepRunner>();
+        services.AddSingleton<IFlowStepTypeRunner, CiWaitStepRunner>();
         services.AddSingleton<IFlowStepRunner, FlowStepRunners>();
 
         // The one way an agent's step is worked, whatever the client is: each client built in is registered here as its
@@ -339,8 +343,10 @@ public static class ServiceRegistration
         services.AddSingleton<LegSetUps>();
         services.AddSingleton<IAnchorCitationService, AnchorCitationService>();
         services.AddSingleton<ILineEndingService, LineEndingService>();
+        services.AddSingleton<GhProcess>();
         services.AddSingleton<ICiJobSource, GhCiJobSource>();
         services.AddSingleton<ICiLegsService, CiLegsService>();
+        services.AddSingleton<ICiChecksService, CiChecksService>();
 
         services.AddSingleton<VerifyGitService>();
         services.AddSingleton<InitService>();
