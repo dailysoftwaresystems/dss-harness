@@ -1,0 +1,6210 @@
+# comment 0000
+# comment 0001
+# comment 0002
+# comment 0003
+# comment 0004
+# comment 0005
+# comment 0006
+# comment 0005
+# comment 0004
+# comment 0007
+# comment 0008
+# comment 0009
+# comment 0010
+# comment 0004
+# comment 0005
+# comment 0011
+# comment 0005
+# comment 0004
+# comment 0012
+# comment 0013
+# comment 0014
+# comment 0015
+# comment 0016
+# comment 0017
+# comment 0018
+# comment 0019
+# comment 0020
+# comment 0021
+# comment 0022
+# comment 0023
+# comment 0024
+# comment 0025
+# comment 0026
+# comment 0027
+# comment 0028
+# comment 0029
+# comment 0030
+# comment 0031
+# comment 0032
+# comment 0033
+# comment 0034
+# comment 0035
+# comment 0004
+# comment 0005
+# comment 0036
+# comment 0005
+# comment 0004
+# comment 0037
+# comment 0038
+# comment 0039
+# comment 0040
+# comment 0041
+# comment 0042
+# comment 0043
+# comment 0044
+# comment 0045
+# comment 0046
+# comment 0047
+# comment 0048
+# comment 0049
+# comment 0050
+# comment 0051
+# comment 0052
+# comment 0053
+# comment 0054
+# comment 0055
+# comment 0056
+# comment 0057
+# comment 0004
+# comment 0058
+# comment 0059
+# comment 0060
+
+# comment 0005
+# section 0061 -- its arms
+# comment 0005
+
+A | arm-00000 | tail 000000
+C | arm-00000 | tail 000001
+G | arm-00000 | tail 000002
+S | arm-00000 | tail 000003
+
+A | arm-00001 | tail 000004
+C | arm-00001 | tail 000005
+G | arm-00001 | tail 000006
+S | arm-00001 | tail 000003
+
+A | arm-00002 | tail 000007
+C | arm-00002 | tail 000008
+C | arm-00002 | tail 000009
+C | arm-00002 | tail 000010
+C | arm-00002 | tail 000011
+C | arm-00002 | tail 000012
+G | arm-00002 | tail 000013
+S | arm-00002 | tail 000014
+
+A | arm-00003 | tail 000015
+C | arm-00003 | tail 000016
+C | arm-00003 | tail 000017
+C | arm-00003 | tail 000018
+G | arm-00003 | tail 000019
+S | arm-00003 | tail 000003
+
+A | arm-00004 | tail 000020
+C | arm-00004 | tail 000021
+G | arm-00004 | tail 000022
+S | arm-00004 | tail 000003
+
+A | arm-00005 | tail 000023
+C | arm-00005 | tail 000024
+G | arm-00005 | tail 000025
+S | arm-00005 | tail 000003
+
+A | arm-00006 | tail 000026
+C | arm-00006 | tail 000027
+G | arm-00006 | tail 000028
+S | arm-00006 | tail 000014
+
+A | arm-00007 | tail 000029
+C | arm-00007 | tail 000030
+G | arm-00007 | tail 000031
+S | arm-00007 | tail 000014
+
+A | arm-00008 | tail 000032
+C | arm-00008 | tail 000008
+C | arm-00008 | tail 000009
+G | arm-00008 | tail 000033
+S | arm-00008 | tail 000014
+
+A | arm-00009 | tail 000034
+C | arm-00009 | tail 000035
+G | arm-00009 | tail 000036
+S | arm-00009 | tail 000003
+
+A | arm-00010 | tail 000037
+C | arm-00010 | tail 000038
+G | arm-00010 | tail 000039
+S | arm-00010 | tail 000003
+
+A | arm-00011 | tail 000040
+C | arm-00011 | tail 000041
+G | arm-00011 | tail 000042
+S | arm-00011 | tail 000003
+
+A | arm-00012 | tail 000043
+C | arm-00012 | tail 000044
+G | arm-00012 | tail 000045
+S | arm-00012 | tail 000003
+
+A | arm-00013 | tail 000046
+C | arm-00013 | tail 000047
+G | arm-00013 | tail 000048
+S | arm-00013 | tail 000014
+
+A | arm-00014 | tail 000049
+C | arm-00014 | tail 000050
+G | arm-00014 | tail 000051
+S | arm-00014 | tail 000003
+
+A | arm-00015 | tail 000052
+C | arm-00015 | tail 000050
+G | arm-00015 | tail 000051
+S | arm-00015 | tail 000003
+
+A | arm-00016 | tail 000053
+C | arm-00016 | tail 000054
+C | arm-00016 | tail 000055
+C | arm-00016 | tail 000056
+C | arm-00016 | tail 000057
+G | arm-00016 | tail 000058
+S | arm-00016 | tail 000003
+
+A | arm-00017 | tail 000059
+C | arm-00017 | tail 000060
+C | arm-00017 | tail 000061
+C | arm-00017 | tail 000062
+C | arm-00017 | tail 000063
+G | arm-00017 | tail 000064
+S | arm-00017 | tail 000003
+
+A | arm-00018 | tail 000065
+C | arm-00018 | tail 000066
+G | arm-00018 | tail 000067
+S | arm-00018 | tail 000003
+
+A | arm-00019 | tail 000068
+C | arm-00019 | tail 000069
+C | arm-00019 | tail 000070
+G | arm-00019 | tail 000071
+S | arm-00019 | tail 000003
+
+A | arm-00020 | tail 000072
+C | arm-00020 | tail 000073
+C | arm-00020 | tail 000074
+G | arm-00020 | tail 000075
+S | arm-00020 | tail 000003
+
+A | arm-00021 | tail 000076
+C | arm-00021 | tail 000077
+G | arm-00021 | tail 000078
+S | arm-00021 | tail 000003
+
+A | arm-00022 | tail 000079
+C | arm-00022 | tail 000080
+G | arm-00022 | tail 000081
+S | arm-00022 | tail 000003
+
+A | arm-00023 | tail 000082
+C | arm-00023 | tail 000008
+G | arm-00023 | tail 000033
+S | arm-00023 | tail 000014
+
+A | arm-00024 | tail 000083
+C | arm-00024 | tail 000084
+G | arm-00024 | tail 000028
+S | arm-00024 | tail 000014
+
+A | arm-00025 | tail 000085
+C | arm-00025 | tail 000086
+G | arm-00025 | tail 000031
+S | arm-00025 | tail 000014
+
+A | arm-00026 | tail 000087
+C | arm-00026 | tail 000086
+G | arm-00026 | tail 000031
+S | arm-00026 | tail 000014
+
+A | arm-00027 | tail 000088
+C | arm-00027 | tail 000089
+G | arm-00027 | tail 000028
+S | arm-00027 | tail 000014
+
+A | arm-00028 | tail 000090
+C | arm-00028 | tail 000091
+G | arm-00028 | tail 000092
+S | arm-00028 | tail 000003
+
+A | arm-00029 | tail 000093
+C | arm-00029 | tail 000094
+G | arm-00029 | tail 000095
+S | arm-00029 | tail 000003
+
+A | arm-00030 | tail 000096
+C | arm-00030 | tail 000097
+C | arm-00030 | tail 000098
+C | arm-00030 | tail 000099
+C | arm-00030 | tail 000100
+C | arm-00030 | tail 000101
+C | arm-00030 | tail 000102
+C | arm-00030 | tail 000103
+G | arm-00030 | tail 000104
+S | arm-00030 | tail 000003
+
+A | arm-00031 | tail 000105
+C | arm-00031 | tail 000106
+C | arm-00031 | tail 000107
+G | arm-00031 | tail 000108
+S | arm-00031 | tail 000003
+
+A | arm-00032 | tail 000109
+C | arm-00032 | tail 000110
+G | arm-00032 | tail 000048
+S | arm-00032 | tail 000014
+
+A | arm-00033 | tail 000111
+C | arm-00033 | tail 000112
+C | arm-00033 | tail 000113
+C | arm-00033 | tail 000114
+C | arm-00033 | tail 000115
+G | arm-00033 | tail 000116
+S | arm-00033 | tail 000003
+
+A | arm-00034 | tail 000117
+C | arm-00034 | tail 000118
+G | arm-00034 | tail 000119
+S | arm-00034 | tail 000003
+
+A | arm-00035 | tail 000120
+C | arm-00035 | tail 000121
+G | arm-00035 | tail 000028
+S | arm-00035 | tail 000014
+
+A | arm-00036 | tail 000122
+C | arm-00036 | tail 000084
+G | arm-00036 | tail 000123
+S | arm-00036 | tail 000014
+
+A | arm-00037 | tail 000124
+C | arm-00037 | tail 000008
+G | arm-00037 | tail 000123
+S | arm-00037 | tail 000014
+
+A | arm-00038 | tail 000125
+C | arm-00038 | tail 000121
+G | arm-00038 | tail 000028
+S | arm-00038 | tail 000014
+
+A | arm-00039 | tail 000126
+C | arm-00039 | tail 000084
+G | arm-00039 | tail 000028
+S | arm-00039 | tail 000014
+
+A | arm-00040 | tail 000127
+C | arm-00040 | tail 000110
+C | arm-00040 | tail 000128
+C | arm-00040 | tail 000129
+G | arm-00040 | tail 000130
+S | arm-00040 | tail 000014
+
+A | arm-00041 | tail 000131
+C | arm-00041 | tail 000132
+G | arm-00041 | tail 000130
+S | arm-00041 | tail 000014
+
+A | arm-00890 | tail 003043
+C | arm-00890 | tail 003044
+G | arm-00890 | tail 003045
+S | arm-00890 | tail 003046
+
+A | arm-00042 | tail 000133
+C | arm-00042 | tail 000134
+C | arm-00042 | tail 000135
+C | arm-00042 | tail 000136
+G | arm-00042 | tail 000137
+S | arm-00042 | tail 000003
+
+A | arm-00043 | tail 000138
+C | arm-00043 | tail 000084
+G | arm-00043 | tail 000033
+S | arm-00043 | tail 000014
+
+A | arm-00044 | tail 000139
+C | arm-00044 | tail 000140
+G | arm-00044 | tail 000141
+S | arm-00044 | tail 000003
+
+A | arm-00045 | tail 000142
+C | arm-00045 | tail 000143
+G | arm-00045 | tail 000144
+S | arm-00045 | tail 000014
+
+A | arm-00046 | tail 000145
+C | arm-00046 | tail 000146
+G | arm-00046 | tail 000147
+S | arm-00046 | tail 000148
+
+A | arm-00047 | tail 000149
+C | arm-00047 | tail 000150
+G | arm-00047 | tail 000151
+S | arm-00047 | tail 000148
+
+A | arm-00048 | tail 000152
+C | arm-00048 | tail 000153
+G | arm-00048 | tail 000154
+S | arm-00048 | tail 000003
+
+A | arm-00049 | tail 000155
+C | arm-00049 | tail 000156
+G | arm-00049 | tail 000157
+S | arm-00049 | tail 000003
+
+A | arm-00050 | tail 000158
+C | arm-00050 | tail 000159
+G | arm-00050 | tail 000160
+S | arm-00050 | tail 000003
+
+A | arm-00051 | tail 000161
+C | arm-00051 | tail 000162
+G | arm-00051 | tail 000163
+S | arm-00051 | tail 000148
+
+A | arm-00052 | tail 000164
+C | arm-00052 | tail 000162
+G | arm-00052 | tail 000163
+S | arm-00052 | tail 000148
+
+A | arm-00053 | tail 000165
+C | arm-00053 | tail 000162
+G | arm-00053 | tail 000163
+S | arm-00053 | tail 000148
+
+A | arm-00054 | tail 000166
+C | arm-00054 | tail 000167
+G | arm-00054 | tail 000168
+S | arm-00054 | tail 000003
+
+A | arm-00055 | tail 000169
+C | arm-00055 | tail 000170
+C | arm-00055 | tail 000171
+C | arm-00055 | tail 000172
+G | arm-00055 | tail 000173
+S | arm-00055 | tail 000003
+
+A | arm-00056 | tail 000174
+C | arm-00056 | tail 000175
+G | arm-00056 | tail 000176
+S | arm-00056 | tail 000148
+
+A | arm-00057 | tail 000177
+C | arm-00057 | tail 000178
+G | arm-00057 | tail 000179
+S | arm-00057 | tail 000148
+
+A | arm-00058 | tail 000180
+C | arm-00058 | tail 000089
+G | arm-00058 | tail 000181
+S | arm-00058 | tail 000014
+
+A | arm-00059 | tail 000182
+C | arm-00059 | tail 000008
+G | arm-00059 | tail 000033
+S | arm-00059 | tail 000014
+
+A | arm-00060 | tail 000183
+C | arm-00060 | tail 000184
+G | arm-00060 | tail 000185
+S | arm-00060 | tail 000003
+
+A | arm-00061 | tail 000186
+C | arm-00061 | tail 000187
+S | arm-00061 | tail 000003
+
+A | arm-00062 | tail 000188
+C | arm-00062 | tail 000189
+G | arm-00062 | tail 000190
+S | arm-00062 | tail 000148
+
+A | arm-00063 | tail 000191
+C | arm-00063 | tail 000192
+G | arm-00063 | tail 000193
+S | arm-00063 | tail 000148
+
+A | arm-00064 | tail 000194
+C | arm-00064 | tail 000195
+G | arm-00064 | tail 000196
+S | arm-00064 | tail 000003
+
+A | arm-00065 | tail 000197
+C | arm-00065 | tail 000198
+C | arm-00065 | tail 000199
+G | arm-00065 | tail 000168
+S | arm-00065 | tail 000003
+
+A | arm-00066 | tail 000200
+C | arm-00066 | tail 000201
+C | arm-00066 | tail 000202
+G | arm-00066 | tail 000203
+S | arm-00066 | tail 000003
+
+A | arm-00067 | tail 000204
+C | arm-00067 | tail 000205
+G | arm-00067 | tail 000163
+S | arm-00067 | tail 000148
+
+A | arm-00068 | tail 000206
+C | arm-00068 | tail 000207
+G | arm-00068 | tail 000168
+S | arm-00068 | tail 000003
+
+A | arm-00069 | tail 000208
+C | arm-00069 | tail 000209
+G | arm-00069 | tail 000168
+S | arm-00069 | tail 000003
+
+A | arm-00070 | tail 000210
+C | arm-00070 | tail 000211
+G | arm-00070 | tail 000212
+S | arm-00070 | tail 000003
+
+A | arm-00071 | tail 000213
+C | arm-00071 | tail 000214
+G | arm-00071 | tail 000154
+S | arm-00071 | tail 000003
+
+A | arm-00072 | tail 000215
+C | arm-00072 | tail 000216
+G | arm-00072 | tail 000217
+S | arm-00072 | tail 000003
+
+A | arm-00073 | tail 000218
+C | arm-00073 | tail 000219
+S | arm-00073 | tail 000003
+
+A | arm-00074 | tail 000220
+C | arm-00074 | tail 000221
+C | arm-00074 | tail 000222
+C | arm-00074 | tail 000223
+C | arm-00074 | tail 000224
+C | arm-00074 | tail 000225
+G | arm-00074 | tail 000226
+S | arm-00074 | tail 000003
+
+A | arm-00075 | tail 000227
+C | arm-00075 | tail 000228
+G | arm-00075 | tail 000229
+S | arm-00075 | tail 000003
+
+A | arm-00076 | tail 000230
+C | arm-00076 | tail 000231
+G | arm-00076 | tail 000232
+S | arm-00076 | tail 000003
+
+A | arm-00077 | tail 000233
+C | arm-00077 | tail 000234
+S | arm-00077 | tail 000003
+
+A | arm-00078 | tail 000235
+C | arm-00078 | tail 000236
+G | arm-00078 | tail 000237
+S | arm-00078 | tail 000003
+
+A | arm-00079 | tail 000238
+C | arm-00079 | tail 000201
+G | arm-00079 | tail 000239
+S | arm-00079 | tail 000003
+
+A | arm-00080 | tail 000240
+C | arm-00080 | tail 000241
+C | arm-00080 | tail 000242
+G | arm-00080 | tail 000243
+S | arm-00080 | tail 000003
+
+A | arm-00081 | tail 000244
+C | arm-00081 | tail 000245
+S | arm-00081 | tail 000003
+
+A | arm-00082 | tail 000246
+C | arm-00082 | tail 000247
+G | arm-00082 | tail 000248
+S | arm-00082 | tail 000003
+
+A | arm-00083 | tail 000249
+C | arm-00083 | tail 000250
+G | arm-00083 | tail 000168
+S | arm-00083 | tail 000003
+
+A | arm-00084 | tail 000251
+C | arm-00084 | tail 000252
+G | arm-00084 | tail 000168
+S | arm-00084 | tail 000003
+
+A | arm-00085 | tail 000253
+C | arm-00085 | tail 000254
+G | arm-00085 | tail 000255
+S | arm-00085 | tail 000003
+
+A | arm-00086 | tail 000256
+C | arm-00086 | tail 000257
+G | arm-00086 | tail 000258
+S | arm-00086 | tail 000003
+
+A | arm-00087 | tail 003047
+C | arm-00087 | tail 000260
+G | arm-00087 | tail 000261
+S | arm-00087 | tail 000003
+
+A | arm-00088 | tail 003048
+C | arm-00088 | tail 000260
+G | arm-00088 | tail 000261
+S | arm-00088 | tail 000003
+
+A | arm-00089 | tail 003049
+C | arm-00089 | tail 000260
+G | arm-00089 | tail 000261
+S | arm-00089 | tail 000003
+
+A | arm-00090 | tail 003050
+C | arm-00090 | tail 000265
+G | arm-00090 | tail 000261
+S | arm-00090 | tail 000003
+
+A | arm-00091 | tail 003051
+C | arm-00091 | tail 000265
+G | arm-00091 | tail 000261
+S | arm-00091 | tail 000003
+
+A | arm-00092 | tail 000267
+C | arm-00092 | tail 000268
+G | arm-00092 | tail 000269
+S | arm-00092 | tail 000003
+
+A | arm-00093 | tail 000270
+C | arm-00093 | tail 000271
+C | arm-00093 | tail 000272
+G | arm-00093 | tail 000273
+S | arm-00093 | tail 000003
+
+A | arm-00094 | tail 000274
+C | arm-00094 | tail 000089
+G | arm-00094 | tail 000028
+S | arm-00094 | tail 000014
+
+A | arm-00095 | tail 000275
+C | arm-00095 | tail 000276
+C | arm-00095 | tail 000277
+G | arm-00095 | tail 000278
+S | arm-00095 | tail 000003
+
+A | arm-00096 | tail 000279
+C | arm-00096 | tail 000280
+G | arm-00096 | tail 000281
+S | arm-00096 | tail 000003
+
+A | arm-00097 | tail 000282
+C | arm-00097 | tail 000209
+G | arm-00097 | tail 000168
+S | arm-00097 | tail 000003
+
+A | arm-00098 | tail 000283
+C | arm-00098 | tail 000284
+G | arm-00098 | tail 000168
+S | arm-00098 | tail 000003
+
+A | arm-00099 | tail 000285
+C | arm-00099 | tail 000286
+C | arm-00099 | tail 000287
+G | arm-00099 | tail 000288
+S | arm-00099 | tail 000003
+
+A | arm-00100 | tail 000289
+C | arm-00100 | tail 000021
+G | arm-00100 | tail 000022
+S | arm-00100 | tail 000003
+
+A | arm-00101 | tail 000290
+C | arm-00101 | tail 000291
+G | arm-00101 | tail 000292
+S | arm-00101 | tail 000003
+
+A | arm-00102 | tail 000293
+C | arm-00102 | tail 000294
+G | arm-00102 | tail 000295
+S | arm-00102 | tail 000148
+
+A | arm-00103 | tail 000296
+C | arm-00103 | tail 000297
+G | arm-00103 | tail 000298
+S | arm-00103 | tail 000003
+
+A | arm-00104 | tail 000299
+C | arm-00104 | tail 000300
+G | arm-00104 | tail 000301
+S | arm-00104 | tail 000003
+
+A | arm-00105 | tail 000302
+C | arm-00105 | tail 000047
+G | arm-00105 | tail 000303
+S | arm-00105 | tail 000014
+
+A | arm-00106 | tail 000304
+C | arm-00106 | tail 000305
+G | arm-00106 | tail 000306
+S | arm-00106 | tail 000003
+
+A | arm-00107 | tail 000307
+C | arm-00107 | tail 000308
+G | arm-00107 | tail 000309
+S | arm-00107 | tail 000003
+
+A | arm-00108 | tail 000310
+C | arm-00108 | tail 000311
+G | arm-00108 | tail 000312
+S | arm-00108 | tail 000003
+
+A | arm-00109 | tail 000313
+C | arm-00109 | tail 000314
+G | arm-00109 | tail 000315
+S | arm-00109 | tail 000003
+
+A | arm-00110 | tail 000316
+C | arm-00110 | tail 000112
+G | arm-00110 | tail 000116
+S | arm-00110 | tail 000003
+
+A | arm-00111 | tail 000317
+C | arm-00111 | tail 000112
+G | arm-00111 | tail 000116
+S | arm-00111 | tail 000003
+
+A | arm-00112 | tail 000318
+C | arm-00112 | tail 000319
+G | arm-00112 | tail 000320
+S | arm-00112 | tail 000003
+
+A | arm-00113 | tail 000321
+C | arm-00113 | tail 000322
+G | arm-00113 | tail 000323
+S | arm-00113 | tail 000003
+
+A | arm-00114 | tail 000324
+C | arm-00114 | tail 000325
+G | arm-00114 | tail 000326
+S | arm-00114 | tail 000148
+
+A | arm-00115 | tail 000327
+C | arm-00115 | tail 000325
+G | arm-00115 | tail 000328
+S | arm-00115 | tail 000148
+
+A | arm-00116 | tail 000329
+C | arm-00116 | tail 000175
+G | arm-00116 | tail 000330
+S | arm-00116 | tail 000148
+
+A | arm-00117 | tail 000331
+C | arm-00117 | tail 000110
+G | arm-00117 | tail 000130
+S | arm-00117 | tail 000014
+
+A | arm-00118 | tail 000332
+C | arm-00118 | tail 000110
+C | arm-00118 | tail 000333
+G | arm-00118 | tail 000334
+S | arm-00118 | tail 000014
+
+A | arm-00119 | tail 000335
+C | arm-00119 | tail 000336
+G | arm-00119 | tail 000337
+S | arm-00119 | tail 000003
+
+A | arm-00120 | tail 000338
+C | arm-00120 | tail 000339
+G | arm-00120 | tail 000340
+S | arm-00120 | tail 000148
+
+A | arm-00121 | tail 000341
+C | arm-00121 | tail 000342
+G | arm-00121 | tail 000343
+S | arm-00121 | tail 000003
+
+A | arm-00122 | tail 000344
+C | arm-00122 | tail 000345
+G | arm-00122 | tail 000346
+S | arm-00122 | tail 000148
+
+A | arm-00123 | tail 000347
+C | arm-00123 | tail 000162
+G | arm-00123 | tail 000163
+S | arm-00123 | tail 000148
+
+A | arm-00124 | tail 000348
+C | arm-00124 | tail 000349
+G | arm-00124 | tail 000163
+S | arm-00124 | tail 000148
+
+A | arm-00125 | tail 000350
+C | arm-00125 | tail 000162
+G | arm-00125 | tail 000163
+S | arm-00125 | tail 000148
+
+A | arm-00126 | tail 000351
+C | arm-00126 | tail 000349
+G | arm-00126 | tail 000163
+S | arm-00126 | tail 000148
+
+A | arm-00127 | tail 000352
+C | arm-00127 | tail 000024
+G | arm-00127 | tail 000025
+S | arm-00127 | tail 000003
+
+A | arm-00128 | tail 000353
+C | arm-00128 | tail 000354
+G | arm-00128 | tail 000355
+S | arm-00128 | tail 000003
+
+A | arm-00129 | tail 000356
+C | arm-00129 | tail 000357
+G | arm-00129 | tail 000358
+S | arm-00129 | tail 000003
+
+A | arm-00130 | tail 000359
+C | arm-00130 | tail 000089
+G | arm-00130 | tail 000028
+S | arm-00130 | tail 000014
+
+A | arm-00131 | tail 000360
+C | arm-00131 | tail 000257
+G | arm-00131 | tail 000258
+S | arm-00131 | tail 000003
+
+A | arm-00132 | tail 000361
+C | arm-00132 | tail 000362
+G | arm-00132 | tail 000363
+S | arm-00132 | tail 000014
+
+A | arm-00133 | tail 000364
+C | arm-00133 | tail 000365
+G | arm-00133 | tail 000366
+S | arm-00133 | tail 000003
+
+A | arm-00134 | tail 000367
+C | arm-00134 | tail 000368
+G | arm-00134 | tail 000075
+S | arm-00134 | tail 000003
+
+A | arm-00135 | tail 000369
+C | arm-00135 | tail 000370
+C | arm-00135 | tail 000371
+C | arm-00135 | tail 000372
+C | arm-00135 | tail 000373
+C | arm-00135 | tail 000374
+C | arm-00135 | tail 000375
+G | arm-00135 | tail 000376
+S | arm-00135 | tail 000003
+
+A | arm-00136 | tail 000377
+C | arm-00136 | tail 000378
+C | arm-00136 | tail 000379
+C | arm-00136 | tail 000380
+G | arm-00136 | tail 000381
+S | arm-00136 | tail 000003
+
+A | arm-00137 | tail 000382
+C | arm-00137 | tail 000383
+C | arm-00137 | tail 000384
+C | arm-00137 | tail 000385
+C | arm-00137 | tail 000100
+G | arm-00137 | tail 000386
+S | arm-00137 | tail 000003
+
+A | arm-00138 | tail 000387
+C | arm-00138 | tail 000388
+G | arm-00138 | tail 000389
+S | arm-00138 | tail 000003
+
+A | arm-00139 | tail 000390
+C | arm-00139 | tail 000391
+C | arm-00139 | tail 000392
+C | arm-00139 | tail 000393
+C | arm-00139 | tail 000394
+G | arm-00139 | tail 000395
+S | arm-00139 | tail 000003
+
+A | arm-00140 | tail 000396
+C | arm-00140 | tail 000397
+C | arm-00140 | tail 000398
+G | arm-00140 | tail 000399
+S | arm-00140 | tail 000003
+
+A | arm-00141 | tail 000400
+C | arm-00141 | tail 000401
+G | arm-00141 | tail 000081
+S | arm-00141 | tail 000003
+
+A | arm-00142 | tail 000402
+C | arm-00142 | tail 000403
+C | arm-00142 | tail 000404
+C | arm-00142 | tail 000405
+C | arm-00142 | tail 000406
+G | arm-00142 | tail 000407
+S | arm-00142 | tail 000003
+
+A | arm-00143 | tail 000408
+C | arm-00143 | tail 000409
+G | arm-00143 | tail 000410
+S | arm-00143 | tail 000003
+
+A | arm-00144 | tail 000411
+C | arm-00144 | tail 000086
+G | arm-00144 | tail 000031
+S | arm-00144 | tail 000014
+
+A | arm-00145 | tail 000412
+C | arm-00145 | tail 000397
+C | arm-00145 | tail 000398
+G | arm-00145 | tail 000399
+S | arm-00145 | tail 000003
+
+A | arm-00146 | tail 000413
+C | arm-00146 | tail 000257
+G | arm-00146 | tail 000258
+S | arm-00146 | tail 000003
+
+A | arm-00147 | tail 000414
+C | arm-00147 | tail 000415
+G | arm-00147 | tail 000416
+S | arm-00147 | tail 000003
+
+A | arm-00148 | tail 000417
+C | arm-00148 | tail 000418
+C | arm-00148 | tail 000419
+G | arm-00148 | tail 000420
+S | arm-00148 | tail 000003
+
+A | arm-00149 | tail 000421
+C | arm-00149 | tail 000422
+C | arm-00149 | tail 000423
+C | arm-00149 | tail 000424
+G | arm-00149 | tail 000425
+S | arm-00149 | tail 000003
+
+A | arm-00150 | tail 000426
+C | arm-00150 | tail 000427
+G | arm-00150 | tail 000428
+S | arm-00150 | tail 000148
+
+A | arm-00151 | tail 000429
+C | arm-00151 | tail 000427
+G | arm-00151 | tail 000428
+S | arm-00151 | tail 000148
+
+A | arm-00152 | tail 000430
+C | arm-00152 | tail 000431
+C | arm-00152 | tail 000432
+C | arm-00152 | tail 000433
+G | arm-00152 | tail 000434
+S | arm-00152 | tail 000003
+
+# comment 0005
+# section 0062 -- its arms
+# comment 0005
+
+A | arm-00980 | tail 003592
+C | arm-00980 | tail 003593
+G | arm-00980 | tail 003594
+S | arm-00980 | tail 003595
+
+A | arm-00981 | tail 003596
+C | arm-00981 | tail 003597
+G | arm-00981 | tail 003598
+S | arm-00981 | tail 003595
+
+A | arm-00153 | tail 000435
+C | arm-00153 | tail 000436
+G | arm-00153 | tail 000437
+S | arm-00153 | tail 000003
+
+A | arm-00154 | tail 000438
+C | arm-00154 | tail 000439
+G | arm-00154 | tail 000440
+S | arm-00154 | tail 000003
+
+A | arm-00982 | tail 003599
+C | arm-00982 | tail 003600
+G | arm-00982 | tail 003601
+G | arm-00982 | tail 003602
+S | arm-00982 | tail 001375
+
+A | arm-00155 | tail 000441
+C | arm-00155 | tail 000442
+C | arm-00155 | tail 000443
+C | arm-00155 | tail 000444
+G | arm-00155 | tail 000445
+S | arm-00155 | tail 000446
+
+A | arm-00156 | tail 000447
+C | arm-00156 | tail 000448
+C | arm-00156 | tail 000449
+C | arm-00156 | tail 000450
+G | arm-00156 | tail 000451
+S | arm-00156 | tail 000446
+
+A | arm-00157 | tail 000452
+C | arm-00157 | tail 000453
+G | arm-00157 | tail 000454
+S | arm-00157 | tail 000446
+
+A | arm-00158 | tail 000455
+C | arm-00158 | tail 000456
+G | arm-00158 | tail 000457
+S | arm-00158 | tail 000446
+
+A | arm-00159 | tail 000458
+C | arm-00159 | tail 000459
+G | arm-00159 | tail 000460
+S | arm-00159 | tail 000446
+
+A | arm-00160 | tail 000461
+C | arm-00160 | tail 000462
+G | arm-00160 | tail 000463
+S | arm-00160 | tail 000446
+
+A | arm-00161 | tail 000464
+C | arm-00161 | tail 000465
+G | arm-00161 | tail 000466
+S | arm-00161 | tail 000446
+
+A | arm-00162 | tail 000467
+C | arm-00162 | tail 000468
+G | arm-00162 | tail 000451
+S | arm-00162 | tail 000446
+
+A | arm-00163 | tail 000469
+C | arm-00163 | tail 000470
+G | arm-00163 | tail 000471
+S | arm-00163 | tail 000446
+
+# comment 0005
+# section 0063 -- its arms
+# comment 0005
+
+A | arm-00891 | tail 003052
+C | arm-00891 | tail 003053
+G | arm-00891 | tail 003054
+S | arm-00891 | tail 003055
+
+A | arm-00892 | tail 003056
+C | arm-00892 | tail 003057
+G | arm-00892 | tail 003058
+S | arm-00892 | tail 003055
+
+A | arm-00893 | tail 003059
+C | arm-00893 | tail 003060
+G | arm-00893 | tail 003061
+S | arm-00893 | tail 003055
+
+A | arm-00894 | tail 003062
+C | arm-00894 | tail 003063
+G | arm-00894 | tail 003064
+S | arm-00894 | tail 003065
+
+A | arm-00164 | tail 000472
+C | arm-00164 | tail 000473
+G | arm-00164 | tail 000474
+S | arm-00164 | tail 000003
+
+A | arm-00165 | tail 000475
+C | arm-00165 | tail 000476
+G | arm-00165 | tail 000477
+S | arm-00165 | tail 000003
+
+A | arm-00895 | tail 003066
+C | arm-00895 | tail 003067
+G | arm-00895 | tail 003068
+S | arm-00895 | tail 003069
+
+A | arm-00896 | tail 003070
+C | arm-00896 | tail 003071
+G | arm-00896 | tail 003068
+S | arm-00896 | tail 003072
+
+A | arm-00166 | tail 000478
+C | arm-00166 | tail 000479
+G | arm-00166 | tail 000480
+S | arm-00166 | tail 000003
+
+A | arm-00897 | tail 003073
+C | arm-00897 | tail 003074
+G | arm-00897 | tail 003075
+S | arm-00897 | tail 003076
+
+A | arm-00167 | tail 000481
+C | arm-00167 | tail 000482
+G | arm-00167 | tail 000483
+S | arm-00167 | tail 000003
+
+A | arm-00898 | tail 003077
+C | arm-00898 | tail 003078
+C | arm-00898 | tail 003079
+C | arm-00898 | tail 003080
+C | arm-00898 | tail 003081
+G | arm-00898 | tail 003082
+S | arm-00898 | tail 003083
+
+A | arm-00168 | tail 000484
+C | arm-00168 | tail 000485
+C | arm-00168 | tail 000486
+G | arm-00168 | tail 000025
+S | arm-00168 | tail 000003
+
+A | arm-00899 | tail 003084
+C | arm-00899 | tail 003085
+G | arm-00899 | tail 003086
+S | arm-00899 | tail 003087
+
+A | arm-00983 | tail 003603
+C | arm-00983 | tail 003604
+G | arm-00983 | tail 003605
+S | arm-00983 | tail 003595
+
+A | arm-00900 | tail 003088
+C | arm-00900 | tail 003089
+C | arm-00900 | tail 003090
+G | arm-00900 | tail 003091
+S | arm-00900 | tail 003069
+
+A | arm-00901 | tail 003092
+C | arm-00901 | tail 003089
+C | arm-00901 | tail 003090
+G | arm-00901 | tail 003091
+S | arm-00901 | tail 003093
+
+A | arm-00902 | tail 003094
+C | arm-00902 | tail 003095
+G | arm-00902 | tail 003096
+S | arm-00902 | tail 003097
+
+A | arm-00169 | tail 000487
+C | arm-00169 | tail 000488
+G | arm-00169 | tail 000489
+S | arm-00169 | tail 000003
+
+A | arm-00984 | tail 003606
+C | arm-00984 | tail 003607
+G | arm-00984 | tail 003608
+S | arm-00984 | tail 003595
+
+A | arm-00903 | tail 003098
+C | arm-00903 | tail 003099
+G | arm-00903 | tail 003100
+S | arm-00903 | tail 003076
+
+A | arm-00170 | tail 000490
+C | arm-00170 | tail 000491
+G | arm-00170 | tail 000477
+S | arm-00170 | tail 000003
+
+A | arm-00171 | tail 000492
+C | arm-00171 | tail 000473
+G | arm-00171 | tail 000474
+S | arm-00171 | tail 000003
+
+A | arm-00172 | tail 000493
+C | arm-00172 | tail 000494
+C | arm-00172 | tail 000495
+C | arm-00172 | tail 000496
+C | arm-00172 | tail 000497
+C | arm-00172 | tail 000498
+G | arm-00172 | tail 000499
+S | arm-00172 | tail 000003
+
+A | arm-00173 | tail 000500
+C | arm-00173 | tail 000501
+G | arm-00173 | tail 000502
+S | arm-00173 | tail 000003
+
+A | arm-00904 | tail 003101
+C | arm-00904 | tail 003102
+G | arm-00904 | tail 003103
+S | arm-00904 | tail 003104
+
+A | arm-00905 | tail 003105
+C | arm-00905 | tail 003106
+G | arm-00905 | tail 003107
+S | arm-00905 | tail 003104
+
+A | arm-00174 | tail 000503
+C | arm-00174 | tail 000504
+G | arm-00174 | tail 000505
+S | arm-00174 | tail 000003
+
+A | arm-00175 | tail 000506
+C | arm-00175 | tail 000501
+G | arm-00175 | tail 000502
+S | arm-00175 | tail 000003
+
+A | arm-00176 | tail 000507
+C | arm-00176 | tail 000080
+G | arm-00176 | tail 000081
+S | arm-00176 | tail 000003
+
+A | arm-00177 | tail 000508
+C | arm-00177 | tail 000509
+C | arm-00177 | tail 000510
+C | arm-00177 | tail 000511
+G | arm-00177 | tail 000512
+S | arm-00177 | tail 000003
+
+A | arm-00178 | tail 000513
+C | arm-00178 | tail 000514
+G | arm-00178 | tail 000477
+S | arm-00178 | tail 000003
+
+A | arm-00179 | tail 000515
+C | arm-00179 | tail 000514
+G | arm-00179 | tail 000477
+S | arm-00179 | tail 000003
+
+A | arm-00906 | tail 003108
+C | arm-00906 | tail 003109
+G | arm-00906 | tail 003110
+S | arm-00906 | tail 003076
+
+A | arm-00180 | tail 000516
+C | arm-00180 | tail 000517
+G | arm-00180 | tail 000518
+S | arm-00180 | tail 000003
+
+A | arm-00181 | tail 000519
+C | arm-00181 | tail 000517
+G | arm-00181 | tail 000518
+S | arm-00181 | tail 000003
+
+A | arm-00182 | tail 000520
+C | arm-00182 | tail 000521
+C | arm-00182 | tail 000522
+G | arm-00182 | tail 000523
+S | arm-00182 | tail 000003
+
+A | arm-00183 | tail 000524
+C | arm-00183 | tail 000509
+C | arm-00183 | tail 000525
+C | arm-00183 | tail 000526
+G | arm-00183 | tail 000512
+S | arm-00183 | tail 000003
+
+A | arm-00985 | tail 003609
+C | arm-00985 | tail 003610
+C | arm-00985 | tail 003611
+G | arm-00985 | tail 003612
+S | arm-00985 | tail 003595
+
+A | arm-00986 | tail 003613
+C | arm-00986 | tail 003610
+C | arm-00986 | tail 003614
+C | arm-00986 | tail 003615
+C | arm-00986 | tail 003616
+G | arm-00986 | tail 003617
+S | arm-00986 | tail 003595
+
+A | arm-00184 | tail 000527
+C | arm-00184 | tail 000514
+G | arm-00184 | tail 000477
+S | arm-00184 | tail 000003
+
+A | arm-00185 | tail 000528
+C | arm-00185 | tail 000047
+G | arm-00185 | tail 000303
+S | arm-00185 | tail 000014
+
+A | arm-00907 | tail 003111
+C | arm-00907 | tail 003112
+G | arm-00907 | tail 003113
+S | arm-00907 | tail 003114
+
+A | arm-00186 | tail 000529
+C | arm-00186 | tail 000488
+G | arm-00186 | tail 000489
+S | arm-00186 | tail 000003
+
+A | arm-00187 | tail 000530
+C | arm-00187 | tail 000531
+G | arm-00187 | tail 000532
+S | arm-00187 | tail 000003
+
+A | arm-00188 | tail 000533
+C | arm-00188 | tail 000531
+G | arm-00188 | tail 000532
+S | arm-00188 | tail 000003
+
+A | arm-00189 | tail 000534
+C | arm-00189 | tail 000514
+G | arm-00189 | tail 000477
+S | arm-00189 | tail 000003
+
+A | arm-00190 | tail 000535
+C | arm-00190 | tail 000536
+G | arm-00190 | tail 000163
+S | arm-00190 | tail 000148
+
+A | arm-00191 | tail 000537
+C | arm-00191 | tail 000538
+G | arm-00191 | tail 000163
+S | arm-00191 | tail 000148
+
+A | arm-00192 | tail 000539
+C | arm-00192 | tail 000540
+G | arm-00192 | tail 000163
+S | arm-00192 | tail 000148
+
+A | arm-00193 | tail 000541
+C | arm-00193 | tail 000542
+G | arm-00193 | tail 000163
+S | arm-00193 | tail 000148
+
+A | arm-00194 | tail 000543
+C | arm-00194 | tail 000544
+G | arm-00194 | tail 000163
+S | arm-00194 | tail 000148
+
+A | arm-00195 | tail 000545
+C | arm-00195 | tail 000546
+G | arm-00195 | tail 000547
+S | arm-00195 | tail 000148
+
+A | arm-00196 | tail 000548
+C | arm-00196 | tail 000549
+C | arm-00196 | tail 000550
+G | arm-00196 | tail 000547
+S | arm-00196 | tail 000148
+
+A | arm-00197 | tail 000551
+C | arm-00197 | tail 000552
+G | arm-00197 | tail 000553
+S | arm-00197 | tail 000003
+
+A | arm-00908 | tail 003115
+C | arm-00908 | tail 003116
+G | arm-00908 | tail 003117
+S | arm-00908 | tail 003118
+
+A | arm-00198 | tail 000554
+C | arm-00198 | tail 000555
+G | arm-00198 | tail 000477
+S | arm-00198 | tail 000003
+
+A | arm-00199 | tail 000556
+C | arm-00199 | tail 000557
+S | arm-00199 | tail 000003
+
+A | arm-00200 | tail 000558
+C | arm-00200 | tail 000559
+C | arm-00200 | tail 000560
+C | arm-00200 | tail 000561
+G | arm-00200 | tail 000562
+S | arm-00200 | tail 000003
+
+A | arm-00201 | tail 000563
+C | arm-00201 | tail 000564
+G | arm-00201 | tail 000025
+S | arm-00201 | tail 000003
+
+A | arm-00202 | tail 000565
+C | arm-00202 | tail 000566
+G | arm-00202 | tail 000567
+S | arm-00202 | tail 000003
+
+A | arm-00203 | tail 000568
+C | arm-00203 | tail 000569
+G | arm-00203 | tail 000570
+S | arm-00203 | tail 000003
+
+A | arm-00204 | tail 000571
+C | arm-00204 | tail 000572
+G | arm-00204 | tail 000573
+S | arm-00204 | tail 000003
+
+A | arm-00205 | tail 000574
+C | arm-00205 | tail 000575
+G | arm-00205 | tail 000576
+S | arm-00205 | tail 000003
+
+A | arm-00206 | tail 000577
+C | arm-00206 | tail 000578
+G | arm-00206 | tail 000579
+S | arm-00206 | tail 000003
+
+A | arm-00207 | tail 000580
+C | arm-00207 | tail 000581
+G | arm-00207 | tail 000582
+S | arm-00207 | tail 000003
+
+A | arm-00208 | tail 000583
+C | arm-00208 | tail 000584
+G | arm-00208 | tail 000585
+S | arm-00208 | tail 000003
+
+A | arm-00209 | tail 000586
+C | arm-00209 | tail 000587
+G | arm-00209 | tail 000588
+S | arm-00209 | tail 000003
+
+A | arm-00210 | tail 000589
+C | arm-00210 | tail 000590
+G | arm-00210 | tail 000591
+S | arm-00210 | tail 000003
+
+A | arm-00211 | tail 000592
+C | arm-00211 | tail 000368
+G | arm-00211 | tail 000075
+S | arm-00211 | tail 000003
+
+A | arm-00212 | tail 000593
+C | arm-00212 | tail 000594
+C | arm-00212 | tail 000595
+C | arm-00212 | tail 000596
+G | arm-00212 | tail 000483
+S | arm-00212 | tail 000003
+
+A | arm-00213 | tail 000597
+C | arm-00213 | tail 000598
+C | arm-00213 | tail 000599
+G | arm-00213 | tail 000600
+S | arm-00213 | tail 000003
+
+A | arm-00214 | tail 000601
+C | arm-00214 | tail 000602
+G | arm-00214 | tail 000603
+S | arm-00214 | tail 000003
+
+A | arm-00215 | tail 000604
+C | arm-00215 | tail 000605
+C | arm-00215 | tail 000606
+C | arm-00215 | tail 000607
+G | arm-00215 | tail 000608
+S | arm-00215 | tail 000003
+
+A | arm-00216 | tail 000609
+C | arm-00216 | tail 000501
+G | arm-00216 | tail 000502
+S | arm-00216 | tail 000003
+
+A | arm-00217 | tail 000610
+C | arm-00217 | tail 000611
+C | arm-00217 | tail 000612
+G | arm-00217 | tail 000613
+S | arm-00217 | tail 000003
+
+A | arm-00218 | tail 000614
+C | arm-00218 | tail 000594
+C | arm-00218 | tail 000615
+C | arm-00218 | tail 000616
+G | arm-00218 | tail 000483
+S | arm-00218 | tail 000003
+
+A | arm-00219 | tail 000617
+C | arm-00219 | tail 000618
+G | arm-00219 | tail 000619
+S | arm-00219 | tail 000003
+
+A | arm-00220 | tail 003119
+C | arm-00220 | tail 000621
+G | arm-00220 | tail 000622
+S | arm-00220 | tail 000003
+
+A | arm-00221 | tail 000623
+C | arm-00221 | tail 000624
+C | arm-00221 | tail 000625
+G | arm-00221 | tail 000626
+S | arm-00221 | tail 000003
+
+A | arm-00222 | tail 000627
+C | arm-00222 | tail 000628
+C | arm-00222 | tail 000629
+G | arm-00222 | tail 000630
+S | arm-00222 | tail 000003
+
+A | arm-00223 | tail 000631
+C | arm-00223 | tail 000021
+G | arm-00223 | tail 000022
+S | arm-00223 | tail 000003
+
+A | arm-00224 | tail 000632
+C | arm-00224 | tail 000594
+C | arm-00224 | tail 000633
+C | arm-00224 | tail 000634
+G | arm-00224 | tail 000483
+S | arm-00224 | tail 000003
+
+A | arm-00225 | tail 000635
+C | arm-00225 | tail 000636
+G | arm-00225 | tail 000637
+S | arm-00225 | tail 000003
+
+A | arm-00226 | tail 000638
+C | arm-00226 | tail 000639
+G | arm-00226 | tail 000640
+S | arm-00226 | tail 000003
+
+A | arm-00227 | tail 000641
+C | arm-00227 | tail 000642
+G | arm-00227 | tail 000643
+S | arm-00227 | tail 000148
+
+A | arm-00228 | tail 000644
+C | arm-00228 | tail 000645
+G | arm-00228 | tail 000646
+S | arm-00228 | tail 000148
+
+A | arm-00229 | tail 000647
+C | arm-00229 | tail 000648
+C | arm-00229 | tail 000649
+G | arm-00229 | tail 000650
+S | arm-00229 | tail 000003
+
+A | arm-00230 | tail 000651
+C | arm-00230 | tail 000652
+C | arm-00230 | tail 000653
+C | arm-00230 | tail 000654
+C | arm-00230 | tail 000655
+G | arm-00230 | tail 000656
+S | arm-00230 | tail 000003
+
+A | arm-00231 | tail 000657
+C | arm-00231 | tail 000658
+C | arm-00231 | tail 000659
+C | arm-00231 | tail 000660
+C | arm-00231 | tail 000661
+C | arm-00231 | tail 000662
+C | arm-00231 | tail 000663
+C | arm-00231 | tail 000664
+C | arm-00231 | tail 000665
+C | arm-00231 | tail 000666
+C | arm-00231 | tail 000667
+C | arm-00231 | tail 000668
+C | arm-00231 | tail 000669
+G | arm-00231 | tail 000670
+S | arm-00231 | tail 000003
+
+A | arm-00232 | tail 000671
+C | arm-00232 | tail 000672
+C | arm-00232 | tail 000673
+C | arm-00232 | tail 000674
+C | arm-00232 | tail 000675
+C | arm-00232 | tail 000676
+C | arm-00232 | tail 000677
+G | arm-00232 | tail 000499
+S | arm-00232 | tail 000003
+
+A | arm-00233 | tail 000678
+C | arm-00233 | tail 000679
+G | arm-00233 | tail 000680
+S | arm-00233 | tail 000003
+
+A | arm-00234 | tail 000681
+C | arm-00234 | tail 000682
+C | arm-00234 | tail 000683
+C | arm-00234 | tail 000684
+C | arm-00234 | tail 000685
+C | arm-00234 | tail 000686
+C | arm-00234 | tail 000687
+C | arm-00234 | tail 000688
+C | arm-00234 | tail 000689
+C | arm-00234 | tail 000690
+C | arm-00234 | tail 000691
+C | arm-00234 | tail 000692
+C | arm-00234 | tail 000693
+C | arm-00234 | tail 000694
+C | arm-00234 | tail 000695
+C | arm-00234 | tail 000696
+C | arm-00234 | tail 000697
+C | arm-00234 | tail 000698
+C | arm-00234 | tail 000699
+C | arm-00234 | tail 000700
+C | arm-00234 | tail 000701
+C | arm-00234 | tail 000702
+C | arm-00234 | tail 000703
+C | arm-00234 | tail 000704
+C | arm-00234 | tail 000705
+C | arm-00234 | tail 000706
+C | arm-00234 | tail 000707
+C | arm-00234 | tail 000708
+C | arm-00234 | tail 000709
+C | arm-00234 | tail 000710
+C | arm-00234 | tail 000711
+C | arm-00234 | tail 000712
+G | arm-00234 | tail 000512
+S | arm-00234 | tail 000003
+
+A | arm-00235 | tail 000713
+C | arm-00235 | tail 000714
+C | arm-00235 | tail 000715
+C | arm-00235 | tail 000716
+C | arm-00235 | tail 000717
+C | arm-00235 | tail 000718
+C | arm-00235 | tail 000719
+C | arm-00235 | tail 000720
+C | arm-00235 | tail 000721
+C | arm-00235 | tail 000722
+C | arm-00235 | tail 000723
+G | arm-00235 | tail 000724
+S | arm-00235 | tail 000003
+
+A | arm-00236 | tail 000725
+C | arm-00236 | tail 000679
+G | arm-00236 | tail 000680
+S | arm-00236 | tail 000003
+
+A | arm-00237 | tail 000726
+C | arm-00237 | tail 000727
+G | arm-00237 | tail 000728
+S | arm-00237 | tail 000003
+
+A | arm-00238 | tail 000729
+C | arm-00238 | tail 000730
+G | arm-00238 | tail 000731
+S | arm-00238 | tail 000003
+
+A | arm-00987 | tail 003618
+C | arm-00987 | tail 003619
+G | arm-00987 | tail 003620
+S | arm-00987 | tail 003595
+
+A | arm-00239 | tail 000732
+C | arm-00239 | tail 000488
+G | arm-00239 | tail 000489
+S | arm-00239 | tail 000003
+
+A | arm-00240 | tail 000733
+C | arm-00240 | tail 000488
+G | arm-00240 | tail 000489
+S | arm-00240 | tail 000003
+
+A | arm-00241 | tail 000734
+C | arm-00241 | tail 000735
+C | arm-00241 | tail 000736
+C | arm-00241 | tail 000737
+C | arm-00241 | tail 000738
+C | arm-00241 | tail 000739
+C | arm-00241 | tail 000740
+C | arm-00241 | tail 000741
+C | arm-00241 | tail 000742
+C | arm-00241 | tail 000743
+C | arm-00241 | tail 000744
+C | arm-00241 | tail 000745
+C | arm-00241 | tail 000746
+C | arm-00241 | tail 000747
+C | arm-00241 | tail 000748
+C | arm-00241 | tail 000749
+C | arm-00241 | tail 000750
+C | arm-00241 | tail 000751
+C | arm-00241 | tail 000752
+C | arm-00241 | tail 000753
+C | arm-00241 | tail 000754
+C | arm-00241 | tail 000755
+C | arm-00241 | tail 000756
+C | arm-00241 | tail 000757
+C | arm-00241 | tail 000758
+C | arm-00241 | tail 000759
+C | arm-00241 | tail 000760
+C | arm-00241 | tail 000761
+C | arm-00241 | tail 000762
+C | arm-00241 | tail 000763
+G | arm-00241 | tail 000518
+S | arm-00241 | tail 000003
+
+A | arm-00242 | tail 000764
+C | arm-00242 | tail 000765
+G | arm-00242 | tail 000766
+S | arm-00242 | tail 000003
+
+A | arm-00243 | tail 000767
+C | arm-00243 | tail 000768
+C | arm-00243 | tail 000769
+C | arm-00243 | tail 000770
+G | arm-00243 | tail 000771
+S | arm-00243 | tail 000003
+
+A | arm-00244 | tail 000772
+C | arm-00244 | tail 000514
+G | arm-00244 | tail 000477
+S | arm-00244 | tail 000003
+
+A | arm-00245 | tail 000773
+C | arm-00245 | tail 000774
+G | arm-00245 | tail 000002
+S | arm-00245 | tail 000003
+
+A | arm-00246 | tail 000775
+C | arm-00246 | tail 000594
+C | arm-00246 | tail 000776
+C | arm-00246 | tail 000777
+G | arm-00246 | tail 000483
+S | arm-00246 | tail 000003
+
+A | arm-00247 | tail 000778
+C | arm-00247 | tail 000779
+G | arm-00247 | tail 000168
+S | arm-00247 | tail 000003
+
+A | arm-00248 | tail 000780
+C | arm-00248 | tail 000781
+G | arm-00248 | tail 000782
+S | arm-00248 | tail 000003
+
+A | arm-00249 | tail 000783
+C | arm-00249 | tail 000784
+C | arm-00249 | tail 000785
+G | arm-00249 | tail 000786
+S | arm-00249 | tail 000003
+
+A | arm-00250 | tail 000787
+C | arm-00250 | tail 000788
+C | arm-00250 | tail 000789
+C | arm-00250 | tail 000790
+G | arm-00250 | tail 000168
+S | arm-00250 | tail 000003
+
+A | arm-00251 | tail 000791
+C | arm-00251 | tail 000792
+C | arm-00251 | tail 000793
+C | arm-00251 | tail 000794
+G | arm-00251 | tail 000168
+S | arm-00251 | tail 000003
+
+A | arm-00252 | tail 000795
+C | arm-00252 | tail 000796
+G | arm-00252 | tail 000797
+S | arm-00252 | tail 000798
+
+A | arm-00253 | tail 000799
+C | arm-00253 | tail 000800
+G | arm-00253 | tail 000801
+S | arm-00253 | tail 000003
+
+# comment 0005
+# section 0064 -- its arms
+# comment 0005
+
+A | arm-00254 | tail 000802
+C | arm-00254 | tail 000803
+C | arm-00254 | tail 000804
+G | arm-00254 | tail 000805
+S | arm-00254 | tail 000003
+
+A | arm-00255 | tail 000806
+C | arm-00255 | tail 000807
+G | arm-00255 | tail 000808
+S | arm-00255 | tail 000003
+
+A | arm-00256 | tail 000809
+C | arm-00256 | tail 000521
+C | arm-00256 | tail 000810
+G | arm-00256 | tail 000523
+S | arm-00256 | tail 000003
+
+A | arm-00257 | tail 000811
+C | arm-00257 | tail 000812
+G | arm-00257 | tail 000813
+S | arm-00257 | tail 000003
+
+A | arm-00988 | tail 003621
+C | arm-00988 | tail 003622
+G | arm-00988 | tail 003623
+S | arm-00988 | tail 003595
+
+A | arm-00989 | tail 003624
+C | arm-00989 | tail 003625
+G | arm-00989 | tail 003626
+S | arm-00989 | tail 003595
+
+A | arm-00990 | tail 003627
+C | arm-00990 | tail 003593
+G | arm-00990 | tail 003628
+S | arm-00990 | tail 003595
+
+A | arm-00258 | tail 003629
+C | arm-00258 | tail 000815
+C | arm-00258 | tail 000816
+C | arm-00258 | tail 000817
+C | arm-00258 | tail 000818
+C | arm-00258 | tail 000820
+G | arm-00258 | tail 003630
+G | arm-00258 | tail 000821
+S | arm-00258 | tail 000822
+
+A | arm-00991 | tail 003631
+C | arm-00991 | tail 003622
+C | arm-00991 | tail 003632
+C | arm-00991 | tail 003633
+G | arm-00991 | tail 003634
+S | arm-00991 | tail 003595
+
+A | arm-00992 | tail 003635
+C | arm-00992 | tail 003636
+G | arm-00992 | tail 003637
+S | arm-00992 | tail 003595
+
+A | arm-00993 | tail 003638
+C | arm-00993 | tail 003639
+S | arm-00993 | tail 001371
+
+A | arm-00994 | tail 003640
+C | arm-00994 | tail 003641
+C | arm-00994 | tail 003642
+C | arm-00994 | tail 003643
+C | arm-00994 | tail 003644
+C | arm-00994 | tail 003645
+G | arm-00994 | tail 003646
+S | arm-00994 | tail 001371
+
+A | arm-00995 | tail 003647
+C | arm-00995 | tail 003648
+G | arm-00995 | tail 003649
+S | arm-00995 | tail 003595
+
+A | arm-00259 | tail 000823
+C | arm-00259 | tail 000824
+G | arm-00259 | tail 000825
+S | arm-00259 | tail 000003
+
+A | arm-00260 | tail 000826
+C | arm-00260 | tail 000827
+G | arm-00260 | tail 000828
+S | arm-00260 | tail 000003
+
+A | arm-00261 | tail 000829
+C | arm-00261 | tail 000830
+G | arm-00261 | tail 000831
+S | arm-00261 | tail 000832
+
+A | arm-00262 | tail 000833
+C | arm-00262 | tail 000834
+C | arm-00262 | tail 000835
+G | arm-00262 | tail 000836
+S | arm-00262 | tail 000003
+
+A | arm-00263 | tail 000837
+C | arm-00263 | tail 000838
+G | arm-00263 | tail 000039
+S | arm-00263 | tail 000003
+
+A | arm-00264 | tail 000839
+C | arm-00264 | tail 000840
+G | arm-00264 | tail 000841
+S | arm-00264 | tail 000003
+
+A | arm-00265 | tail 000842
+C | arm-00265 | tail 000843
+C | arm-00265 | tail 000844
+C | arm-00265 | tail 000845
+G | arm-00265 | tail 000119
+S | arm-00265 | tail 000003
+
+A | arm-00266 | tail 000846
+C | arm-00266 | tail 000812
+G | arm-00266 | tail 000813
+S | arm-00266 | tail 000003
+
+A | arm-00267 | tail 000847
+C | arm-00267 | tail 000848
+G | arm-00267 | tail 000410
+S | arm-00267 | tail 000003
+
+A | arm-00268 | tail 000849
+C | arm-00268 | tail 000850
+C | arm-00268 | tail 000851
+G | arm-00268 | tail 000119
+S | arm-00268 | tail 000003
+
+A | arm-00269 | tail 000852
+C | arm-00269 | tail 000812
+G | arm-00269 | tail 000813
+S | arm-00269 | tail 000003
+
+A | arm-00270 | tail 000853
+C | arm-00270 | tail 000848
+G | arm-00270 | tail 000410
+S | arm-00270 | tail 000003
+
+A | arm-00271 | tail 000854
+C | arm-00271 | tail 000855
+G | arm-00271 | tail 000137
+S | arm-00271 | tail 000003
+
+A | arm-00272 | tail 000856
+C | arm-00272 | tail 000857
+C | arm-00272 | tail 000858
+C | arm-00272 | tail 000859
+G | arm-00272 | tail 000860
+S | arm-00272 | tail 000822
+
+A | arm-00996 | tail 003650
+M | arm-00996 | tail 003651
+C | arm-00996 | tail 003652
+C | arm-00996 | tail 003653
+G | arm-00996 | tail 003654
+S | arm-00996 | tail 001375
+
+A | arm-00997 | tail 003655
+C | arm-00997 | tail 003656
+G | arm-00997 | tail 003657
+S | arm-00997 | tail 003595
+
+A | arm-00273 | tail 000861
+C | arm-00273 | tail 000862
+G | arm-00273 | tail 000863
+S | arm-00273 | tail 000003
+
+A | arm-00274 | tail 000864
+C | arm-00274 | tail 000865
+C | arm-00274 | tail 000866
+G | arm-00274 | tail 000867
+S | arm-00274 | tail 000003
+
+A | arm-00275 | tail 000868
+C | arm-00275 | tail 000869
+C | arm-00275 | tail 000870
+C | arm-00275 | tail 000871
+C | arm-00275 | tail 000872
+C | arm-00275 | tail 000873
+C | arm-00275 | tail 000874
+C | arm-00275 | tail 000875
+G | arm-00275 | tail 000876
+S | arm-00275 | tail 000003
+
+A | arm-00276 | tail 000877
+C | arm-00276 | tail 000878
+G | arm-00276 | tail 000879
+S | arm-00276 | tail 000003
+
+A | arm-00277 | tail 000880
+C | arm-00277 | tail 000881
+G | arm-00277 | tail 000882
+S | arm-00277 | tail 000003
+
+A | arm-00278 | tail 000883
+C | arm-00278 | tail 000884
+C | arm-00278 | tail 000885
+C | arm-00278 | tail 000886
+G | arm-00278 | tail 000887
+S | arm-00278 | tail 000003
+
+A | arm-00279 | tail 000888
+C | arm-00279 | tail 000889
+G | arm-00279 | tail 000890
+S | arm-00279 | tail 000003
+
+A | arm-00280 | tail 000891
+C | arm-00280 | tail 000892
+G | arm-00280 | tail 000893
+S | arm-00280 | tail 000003
+
+A | arm-00281 | tail 000894
+C | arm-00281 | tail 000895
+G | arm-00281 | tail 000896
+S | arm-00281 | tail 000003
+
+A | arm-00282 | tail 000897
+C | arm-00282 | tail 000898
+C | arm-00282 | tail 000899
+C | arm-00282 | tail 000900
+S | arm-00282 | tail 000003
+
+A | arm-00283 | tail 000901
+C | arm-00283 | tail 000774
+G | arm-00283 | tail 000002
+S | arm-00283 | tail 000003
+
+A | arm-00284 | tail 000902
+C | arm-00284 | tail 000903
+G | arm-00284 | tail 000904
+S | arm-00284 | tail 000003
+
+A | arm-00285 | tail 000905
+C | arm-00285 | tail 000611
+C | arm-00285 | tail 000906
+G | arm-00285 | tail 000613
+S | arm-00285 | tail 000003
+
+A | arm-00286 | tail 000907
+C | arm-00286 | tail 000812
+G | arm-00286 | tail 000813
+S | arm-00286 | tail 000003
+
+A | arm-00287 | tail 000908
+C | arm-00287 | tail 000021
+G | arm-00287 | tail 000022
+S | arm-00287 | tail 000003
+
+A | arm-00288 | tail 000909
+C | arm-00288 | tail 000812
+G | arm-00288 | tail 000813
+S | arm-00288 | tail 000003
+
+A | arm-00289 | tail 000910
+C | arm-00289 | tail 000774
+G | arm-00289 | tail 000002
+S | arm-00289 | tail 000003
+
+A | arm-00290 | tail 000911
+C | arm-00290 | tail 000812
+G | arm-00290 | tail 000813
+S | arm-00290 | tail 000003
+
+A | arm-00291 | tail 000912
+C | arm-00291 | tail 000368
+G | arm-00291 | tail 000075
+S | arm-00291 | tail 000003
+
+A | arm-00292 | tail 000913
+C | arm-00292 | tail 000812
+G | arm-00292 | tail 000813
+S | arm-00292 | tail 000003
+
+A | arm-00293 | tail 000914
+C | arm-00293 | tail 000035
+G | arm-00293 | tail 000036
+S | arm-00293 | tail 000003
+
+A | arm-00294 | tail 000915
+C | arm-00294 | tail 000812
+G | arm-00294 | tail 000813
+S | arm-00294 | tail 000003
+
+A | arm-00295 | tail 000916
+C | arm-00295 | tail 000917
+G | arm-00295 | tail 000918
+S | arm-00295 | tail 000003
+
+A | arm-00296 | tail 000919
+C | arm-00296 | tail 000812
+G | arm-00296 | tail 000813
+S | arm-00296 | tail 000003
+
+A | arm-00297 | tail 000920
+C | arm-00297 | tail 000921
+G | arm-00297 | tail 000922
+S | arm-00297 | tail 000003
+
+A | arm-00298 | tail 000923
+C | arm-00298 | tail 000924
+G | arm-00298 | tail 000925
+S | arm-00298 | tail 000003
+
+A | arm-00299 | tail 000926
+C | arm-00299 | tail 000035
+G | arm-00299 | tail 000036
+S | arm-00299 | tail 000003
+
+A | arm-00300 | tail 000927
+C | arm-00300 | tail 000928
+G | arm-00300 | tail 000929
+S | arm-00300 | tail 000003
+
+A | arm-00301 | tail 000930
+C | arm-00301 | tail 000931
+G | arm-00301 | tail 000932
+S | arm-00301 | tail 000003
+
+A | arm-00302 | tail 003120
+C | arm-00302 | tail 000934
+G | arm-00302 | tail 000935
+S | arm-00302 | tail 000003
+
+A | arm-00303 | tail 000936
+C | arm-00303 | tail 000080
+G | arm-00303 | tail 000081
+S | arm-00303 | tail 000003
+
+A | arm-00304 | tail 000937
+C | arm-00304 | tail 000812
+G | arm-00304 | tail 000813
+S | arm-00304 | tail 000003
+
+A | arm-00305 | tail 000938
+C | arm-00305 | tail 000931
+G | arm-00305 | tail 000932
+S | arm-00305 | tail 000003
+
+A | arm-00306 | tail 003121
+C | arm-00306 | tail 000940
+G | arm-00306 | tail 000941
+S | arm-00306 | tail 000003
+
+A | arm-00307 | tail 000942
+C | arm-00307 | tail 000928
+G | arm-00307 | tail 000929
+S | arm-00307 | tail 000003
+
+A | arm-00308 | tail 000943
+C | arm-00308 | tail 000840
+G | arm-00308 | tail 000841
+S | arm-00308 | tail 000003
+
+A | arm-00309 | tail 000944
+C | arm-00309 | tail 000945
+G | arm-00309 | tail 000946
+S | arm-00309 | tail 000832
+
+# comment 0005
+# section 0065 -- its arms
+# comment 0005
+
+A | arm-00909 | tail 003122
+C | arm-00909 | tail 003123
+G | arm-00909 | tail 003124
+S | arm-00909 | tail 003118
+
+A | arm-00998 | tail 003658
+C | arm-00998 | tail 003659
+C | arm-00998 | tail 003660
+G | arm-00998 | tail 003661
+S | arm-00998 | tail 003595
+
+A | arm-00310 | tail 000947
+C | arm-00310 | tail 000948
+G | arm-00310 | tail 000949
+S | arm-00310 | tail 000003
+
+A | arm-00311 | tail 000950
+M | arm-00311 | tail 000951
+M | arm-00311 | tail 000952
+C | arm-00311 | tail 000953
+G | arm-00311 | tail 000954
+S | arm-00311 | tail 000003
+
+A | arm-00312 | tail 000955
+C | arm-00312 | tail 000956
+G | arm-00312 | tail 000957
+S | arm-00312 | tail 000003
+
+A | arm-00313 | tail 000958
+C | arm-00313 | tail 000959
+G | arm-00313 | tail 000960
+S | arm-00313 | tail 000003
+
+A | arm-00314 | tail 000961
+C | arm-00314 | tail 000962
+G | arm-00314 | tail 000963
+S | arm-00314 | tail 000003
+
+A | arm-00315 | tail 000964
+C | arm-00315 | tail 000965
+G | arm-00315 | tail 000966
+S | arm-00315 | tail 000003
+
+A | arm-00316 | tail 000967
+B | arm-00316 | tail 000968
+S | arm-00316 | tail 000003
+
+A | arm-00317 | tail 000969
+C | arm-00317 | tail 000970
+C | arm-00317 | tail 000971
+G | arm-00317 | tail 000972
+S | arm-00317 | tail 000003
+
+A | arm-00318 | tail 000973
+C | arm-00318 | tail 000974
+G | arm-00318 | tail 000975
+S | arm-00318 | tail 000003
+
+# comment 0005
+# section 0066 -- its arms
+# comment 0005
+
+A | arm-00319 | tail 000976
+C | arm-00319 | tail 000977
+G | arm-00319 | tail 000978
+S | arm-00319 | tail 000003
+
+A | arm-00320 | tail 000979
+C | arm-00320 | tail 000980
+C | arm-00320 | tail 000981
+C | arm-00320 | tail 000982
+C | arm-00320 | tail 000983
+C | arm-00320 | tail 000984
+C | arm-00320 | tail 000985
+C | arm-00320 | tail 000986
+C | arm-00320 | tail 000987
+C | arm-00320 | tail 000988
+C | arm-00320 | tail 000989
+C | arm-00320 | tail 000990
+C | arm-00320 | tail 000991
+C | arm-00320 | tail 000992
+C | arm-00320 | tail 000993
+C | arm-00320 | tail 000994
+C | arm-00320 | tail 000995
+C | arm-00320 | tail 000996
+C | arm-00320 | tail 000997
+S | arm-00320 | tail 000003
+
+A | arm-00321 | tail 000998
+C | arm-00321 | tail 000999
+G | arm-00321 | tail 001000
+S | arm-00321 | tail 000003
+
+A | arm-00322 | tail 001001
+C | arm-00322 | tail 001002
+C | arm-00322 | tail 001003
+G | arm-00322 | tail 001004
+S | arm-00322 | tail 000003
+
+A | arm-00323 | tail 001005
+C | arm-00323 | tail 001006
+G | arm-00323 | tail 001007
+S | arm-00323 | tail 000003
+
+A | arm-00324 | tail 001008
+C | arm-00324 | tail 001002
+C | arm-00324 | tail 001009
+G | arm-00324 | tail 001004
+S | arm-00324 | tail 000003
+
+A | arm-00325 | tail 001010
+C | arm-00325 | tail 001011
+C | arm-00325 | tail 001012
+G | arm-00325 | tail 001013
+S | arm-00325 | tail 000003
+
+A | arm-00326 | tail 001014
+C | arm-00326 | tail 001015
+C | arm-00326 | tail 001016
+G | arm-00326 | tail 001017
+S | arm-00326 | tail 000003
+
+A | arm-00327 | tail 001018
+C | arm-00327 | tail 001019
+G | arm-00327 | tail 001020
+S | arm-00327 | tail 000003
+
+A | arm-00328 | tail 001021
+C | arm-00328 | tail 001022
+C | arm-00328 | tail 001023
+G | arm-00328 | tail 001024
+S | arm-00328 | tail 000003
+
+A | arm-00329 | tail 001025
+C | arm-00329 | tail 001022
+C | arm-00329 | tail 001026
+G | arm-00329 | tail 001024
+S | arm-00329 | tail 000003
+
+A | arm-00330 | tail 001027
+C | arm-00330 | tail 001028
+C | arm-00330 | tail 001029
+G | arm-00330 | tail 001030
+S | arm-00330 | tail 000003
+
+A | arm-00331 | tail 001031
+C | arm-00331 | tail 000365
+G | arm-00331 | tail 000366
+S | arm-00331 | tail 000003
+
+A | arm-00332 | tail 001032
+C | arm-00332 | tail 001033
+C | arm-00332 | tail 001034
+G | arm-00332 | tail 001035
+S | arm-00332 | tail 000003
+
+A | arm-00333 | tail 001036
+C | arm-00333 | tail 001037
+G | arm-00333 | tail 000922
+S | arm-00333 | tail 000003
+
+A | arm-00334 | tail 001038
+C | arm-00334 | tail 001037
+G | arm-00334 | tail 000922
+S | arm-00334 | tail 000003
+
+A | arm-00335 | tail 001039
+C | arm-00335 | tail 001040
+G | arm-00335 | tail 001041
+S | arm-00335 | tail 000003
+
+A | arm-00336 | tail 001042
+C | arm-00336 | tail 001043
+C | arm-00336 | tail 001044
+G | arm-00336 | tail 000867
+S | arm-00336 | tail 000003
+
+A | arm-00337 | tail 001045
+C | arm-00337 | tail 001046
+C | arm-00337 | tail 001047
+C | arm-00337 | tail 001048
+C | arm-00337 | tail 001049
+C | arm-00337 | tail 001050
+C | arm-00337 | tail 001051
+C | arm-00337 | tail 001052
+C | arm-00337 | tail 001053
+C | arm-00337 | tail 001054
+C | arm-00337 | tail 001055
+C | arm-00337 | tail 001056
+C | arm-00337 | tail 001057
+S | arm-00337 | tail 000003
+
+A | arm-00338 | tail 001058
+C | arm-00338 | tail 001059
+C | arm-00338 | tail 001060
+G | arm-00338 | tail 001061
+S | arm-00338 | tail 000003
+
+A | arm-00339 | tail 001062
+C | arm-00339 | tail 001063
+G | arm-00339 | tail 001064
+S | arm-00339 | tail 000014
+
+A | arm-00340 | tail 001065
+C | arm-00340 | tail 001063
+G | arm-00340 | tail 001064
+S | arm-00340 | tail 000014
+
+A | arm-00341 | tail 001066
+C | arm-00341 | tail 001063
+G | arm-00341 | tail 001064
+S | arm-00341 | tail 000014
+
+A | arm-00342 | tail 001067
+C | arm-00342 | tail 001068
+G | arm-00342 | tail 001069
+S | arm-00342 | tail 000003
+
+A | arm-00343 | tail 001070
+C | arm-00343 | tail 001068
+G | arm-00343 | tail 001071
+S | arm-00343 | tail 000003
+
+A | arm-00344 | tail 001072
+C | arm-00344 | tail 001019
+G | arm-00344 | tail 001020
+S | arm-00344 | tail 000003
+
+A | arm-00345 | tail 001073
+C | arm-00345 | tail 001074
+C | arm-00345 | tail 001075
+C | arm-00345 | tail 001076
+G | arm-00345 | tail 001077
+S | arm-00345 | tail 000003
+
+A | arm-00346 | tail 001078
+C | arm-00346 | tail 001063
+G | arm-00346 | tail 001064
+S | arm-00346 | tail 000014
+
+A | arm-00347 | tail 001079
+C | arm-00347 | tail 001080
+C | arm-00347 | tail 001081
+C | arm-00347 | tail 001082
+C | arm-00347 | tail 001083
+G | arm-00347 | tail 001004
+S | arm-00347 | tail 000003
+
+A | arm-00348 | tail 001084
+C | arm-00348 | tail 000201
+C | arm-00348 | tail 000202
+G | arm-00348 | tail 001085
+S | arm-00348 | tail 000003
+
+A | arm-00349 | tail 001086
+C | arm-00349 | tail 000201
+C | arm-00349 | tail 000202
+G | arm-00349 | tail 001085
+S | arm-00349 | tail 000003
+
+A | arm-00350 | tail 001087
+C | arm-00350 | tail 001088
+C | arm-00350 | tail 001089
+G | arm-00350 | tail 000782
+S | arm-00350 | tail 000003
+
+A | arm-00351 | tail 001090
+C | arm-00351 | tail 001091
+G | arm-00351 | tail 001092
+S | arm-00351 | tail 000003
+
+A | arm-00352 | tail 001093
+C | arm-00352 | tail 001094
+G | arm-00352 | tail 001095
+S | arm-00352 | tail 000003
+
+A | arm-00353 | tail 001096
+C | arm-00353 | tail 001097
+G | arm-00353 | tail 001098
+S | arm-00353 | tail 000003
+
+A | arm-00354 | tail 001099
+C | arm-00354 | tail 001100
+G | arm-00354 | tail 001101
+S | arm-00354 | tail 000003
+
+A | arm-00355 | tail 001102
+C | arm-00355 | tail 001103
+C | arm-00355 | tail 001104
+C | arm-00355 | tail 001105
+C | arm-00355 | tail 001106
+G | arm-00355 | tail 001107
+S | arm-00355 | tail 000003
+
+A | arm-00356 | tail 001108
+C | arm-00356 | tail 001109
+C | arm-00356 | tail 001110
+C | arm-00356 | tail 001111
+G | arm-00356 | tail 001112
+S | arm-00356 | tail 000003
+
+A | arm-00357 | tail 001113
+C | arm-00357 | tail 001114
+G | arm-00357 | tail 000147
+S | arm-00357 | tail 000148
+
+A | arm-00358 | tail 001115
+C | arm-00358 | tail 000189
+C | arm-00358 | tail 001116
+C | arm-00358 | tail 001117
+G | arm-00358 | tail 001118
+S | arm-00358 | tail 000148
+
+A | arm-00359 | tail 001119
+C | arm-00359 | tail 001120
+C | arm-00359 | tail 001121
+C | arm-00359 | tail 001122
+G | arm-00359 | tail 001123
+S | arm-00359 | tail 000148
+
+A | arm-00360 | tail 001124
+C | arm-00360 | tail 000205
+G | arm-00360 | tail 001125
+S | arm-00360 | tail 000148
+
+A | arm-00361 | tail 001126
+C | arm-00361 | tail 001127
+G | arm-00361 | tail 001128
+S | arm-00361 | tail 000148
+
+A | arm-00362 | tail 001129
+C | arm-00362 | tail 001130
+G | arm-00362 | tail 001131
+S | arm-00362 | tail 000148
+
+A | arm-00363 | tail 001132
+C | arm-00363 | tail 001133
+G | arm-00363 | tail 001134
+S | arm-00363 | tail 000148
+
+A | arm-00364 | tail 001135
+C | arm-00364 | tail 001136
+G | arm-00364 | tail 000147
+S | arm-00364 | tail 000148
+
+A | arm-00365 | tail 001137
+C | arm-00365 | tail 001138
+G | arm-00365 | tail 001139
+S | arm-00365 | tail 000003
+
+A | arm-00366 | tail 001140
+C | arm-00366 | tail 001141
+G | arm-00366 | tail 001142
+S | arm-00366 | tail 000003
+
+A | arm-00367 | tail 001143
+C | arm-00367 | tail 001144
+G | arm-00367 | tail 001145
+S | arm-00367 | tail 000003
+
+A | arm-00368 | tail 001146
+C | arm-00368 | tail 001147
+G | arm-00368 | tail 001148
+S | arm-00368 | tail 000003
+
+A | arm-00369 | tail 001149
+C | arm-00369 | tail 001150
+G | arm-00369 | tail 001151
+S | arm-00369 | tail 000003
+
+A | arm-00370 | tail 001152
+C | arm-00370 | tail 001153
+G | arm-00370 | tail 001154
+S | arm-00370 | tail 000003
+
+A | arm-00371 | tail 001155
+C | arm-00371 | tail 001156
+C | arm-00371 | tail 001157
+G | arm-00371 | tail 001158
+S | arm-00371 | tail 000003
+
+A | arm-00372 | tail 001159
+C | arm-00372 | tail 001160
+G | arm-00372 | tail 001161
+S | arm-00372 | tail 000003
+
+A | arm-00373 | tail 001162
+C | arm-00373 | tail 001163
+C | arm-00373 | tail 001164
+G | arm-00373 | tail 001165
+S | arm-00373 | tail 000003
+
+A | arm-00374 | tail 001166
+C | arm-00374 | tail 001167
+G | arm-00374 | tail 001168
+S | arm-00374 | tail 000003
+
+A | arm-00375 | tail 001169
+C | arm-00375 | tail 001170
+G | arm-00375 | tail 001168
+S | arm-00375 | tail 000003
+
+A | arm-00376 | tail 001171
+C | arm-00376 | tail 001167
+G | arm-00376 | tail 001168
+S | arm-00376 | tail 000003
+
+A | arm-00377 | tail 001172
+C | arm-00377 | tail 001173
+G | arm-00377 | tail 001174
+S | arm-00377 | tail 000003
+
+A | arm-00378 | tail 001175
+C | arm-00378 | tail 001176
+G | arm-00378 | tail 000116
+S | arm-00378 | tail 000003
+
+A | arm-00379 | tail 001177
+C | arm-00379 | tail 001178
+G | arm-00379 | tail 001179
+S | arm-00379 | tail 000148
+
+A | arm-00380 | tail 001180
+C | arm-00380 | tail 000349
+G | arm-00380 | tail 000163
+S | arm-00380 | tail 000148
+
+A | arm-00381 | tail 001181
+C | arm-00381 | tail 001182
+G | arm-00381 | tail 000163
+S | arm-00381 | tail 000148
+
+A | arm-00382 | tail 001183
+C | arm-00382 | tail 001184
+G | arm-00382 | tail 001185
+S | arm-00382 | tail 000003
+
+A | arm-00383 | tail 001186
+C | arm-00383 | tail 001184
+G | arm-00383 | tail 001187
+S | arm-00383 | tail 000003
+
+A | arm-00384 | tail 001188
+C | arm-00384 | tail 001178
+G | arm-00384 | tail 001189
+S | arm-00384 | tail 000148
+
+A | arm-00385 | tail 001190
+C | arm-00385 | tail 000645
+G | arm-00385 | tail 000646
+S | arm-00385 | tail 000148
+
+A | arm-00386 | tail 001191
+C | arm-00386 | tail 000162
+G | arm-00386 | tail 000163
+S | arm-00386 | tail 000148
+
+A | arm-00387 | tail 001192
+C | arm-00387 | tail 001193
+G | arm-00387 | tail 001194
+S | arm-00387 | tail 000148
+
+A | arm-00388 | tail 001195
+C | arm-00388 | tail 001196
+G | arm-00388 | tail 001197
+S | arm-00388 | tail 000148
+
+A | arm-00389 | tail 001198
+C | arm-00389 | tail 001199
+G | arm-00389 | tail 001200
+S | arm-00389 | tail 000148
+
+A | arm-00390 | tail 001201
+C | arm-00390 | tail 001202
+G | arm-00390 | tail 000163
+S | arm-00390 | tail 000148
+
+A | arm-00391 | tail 001203
+C | arm-00391 | tail 001202
+G | arm-00391 | tail 000163
+S | arm-00391 | tail 000148
+
+A | arm-00392 | tail 001204
+C | arm-00392 | tail 001205
+G | arm-00392 | tail 001206
+S | arm-00392 | tail 000148
+
+A | arm-00393 | tail 001207
+C | arm-00393 | tail 000349
+G | arm-00393 | tail 000163
+S | arm-00393 | tail 000148
+
+A | arm-00394 | tail 001208
+C | arm-00394 | tail 001202
+G | arm-00394 | tail 000163
+S | arm-00394 | tail 000148
+
+A | arm-00395 | tail 001209
+C | arm-00395 | tail 001210
+G | arm-00395 | tail 001211
+S | arm-00395 | tail 000003
+
+A | arm-00396 | tail 001212
+C | arm-00396 | tail 001213
+G | arm-00396 | tail 001214
+S | arm-00396 | tail 000003
+
+A | arm-00397 | tail 001215
+C | arm-00397 | tail 000236
+C | arm-00397 | tail 000202
+G | arm-00397 | tail 001216
+S | arm-00397 | tail 000003
+
+A | arm-00398 | tail 001217
+C | arm-00398 | tail 000236
+C | arm-00398 | tail 001218
+G | arm-00398 | tail 001219
+S | arm-00398 | tail 000148
+
+A | arm-00399 | tail 001220
+C | arm-00399 | tail 001221
+G | arm-00399 | tail 001222
+S | arm-00399 | tail 000003
+
+A | arm-00400 | tail 001223
+C | arm-00400 | tail 001224
+G | arm-00400 | tail 001225
+S | arm-00400 | tail 000003
+
+A | arm-00401 | tail 001226
+C | arm-00401 | tail 000378
+C | arm-00401 | tail 001227
+C | arm-00401 | tail 001228
+G | arm-00401 | tail 001004
+S | arm-00401 | tail 000003
+
+A | arm-00402 | tail 001229
+C | arm-00402 | tail 001230
+G | arm-00402 | tail 001231
+S | arm-00402 | tail 000003
+
+A | arm-00403 | tail 001232
+C | arm-00403 | tail 001233
+C | arm-00403 | tail 001234
+C | arm-00403 | tail 001235
+G | arm-00403 | tail 000434
+S | arm-00403 | tail 000003
+
+A | arm-00404 | tail 001236
+C | arm-00404 | tail 001237
+G | arm-00404 | tail 001238
+S | arm-00404 | tail 000003
+
+A | arm-00405 | tail 001239
+C | arm-00405 | tail 001240
+G | arm-00405 | tail 001241
+S | arm-00405 | tail 000003
+
+A | arm-00406 | tail 001242
+C | arm-00406 | tail 001243
+G | arm-00406 | tail 001244
+S | arm-00406 | tail 000014
+
+A | arm-00407 | tail 001245
+C | arm-00407 | tail 001246
+C | arm-00407 | tail 001247
+C | arm-00407 | tail 001248
+C | arm-00407 | tail 001249
+G | arm-00407 | tail 001250
+S | arm-00407 | tail 000003
+
+A | arm-00408 | tail 001251
+C | arm-00408 | tail 001252
+G | arm-00408 | tail 001253
+S | arm-00408 | tail 000003
+
+A | arm-00409 | tail 001254
+C | arm-00409 | tail 001255
+G | arm-00409 | tail 001256
+S | arm-00409 | tail 000003
+
+A | arm-00410 | tail 001257
+C | arm-00410 | tail 001258
+G | arm-00410 | tail 001259
+S | arm-00410 | tail 000003
+
+A | arm-00411 | tail 001260
+C | arm-00411 | tail 001043
+C | arm-00411 | tail 001261
+G | arm-00411 | tail 000867
+S | arm-00411 | tail 000003
+
+A | arm-00412 | tail 001262
+C | arm-00412 | tail 001263
+C | arm-00412 | tail 001264
+C | arm-00412 | tail 001265
+C | arm-00412 | tail 001266
+C | arm-00412 | tail 001267
+C | arm-00412 | tail 001268
+C | arm-00412 | tail 001269
+C | arm-00412 | tail 001270
+G | arm-00412 | tail 001271
+S | arm-00412 | tail 000003
+
+A | arm-00413 | tail 001272
+C | arm-00413 | tail 001243
+G | arm-00413 | tail 001244
+S | arm-00413 | tail 000014
+
+A | arm-00414 | tail 001273
+C | arm-00414 | tail 001274
+C | arm-00414 | tail 001275
+C | arm-00414 | tail 001276
+C | arm-00414 | tail 001277
+C | arm-00414 | tail 001278
+G | arm-00414 | tail 001222
+S | arm-00414 | tail 000003
+
+A | arm-00415 | tail 001279
+C | arm-00415 | tail 001280
+G | arm-00415 | tail 001281
+S | arm-00415 | tail 000003
+
+A | arm-00416 | tail 001282
+C | arm-00416 | tail 001280
+G | arm-00416 | tail 001281
+S | arm-00416 | tail 000003
+
+A | arm-00417 | tail 001283
+C | arm-00417 | tail 001043
+C | arm-00417 | tail 001284
+G | arm-00417 | tail 000867
+S | arm-00417 | tail 000003
+
+A | arm-00418 | tail 001285
+C | arm-00418 | tail 001286
+C | arm-00418 | tail 001287
+C | arm-00418 | tail 001288
+C | arm-00418 | tail 001289
+C | arm-00418 | tail 001290
+C | arm-00418 | tail 001291
+C | arm-00418 | tail 001292
+C | arm-00418 | tail 001293
+C | arm-00418 | tail 001294
+C | arm-00418 | tail 001295
+C | arm-00418 | tail 001296
+C | arm-00418 | tail 001297
+G | arm-00418 | tail 001298
+S | arm-00418 | tail 000003
+
+A | arm-00419 | tail 001299
+C | arm-00419 | tail 001300
+C | arm-00419 | tail 001301
+C | arm-00419 | tail 001302
+C | arm-00419 | tail 001303
+G | arm-00419 | tail 001304
+S | arm-00419 | tail 000003
+
+A | arm-00420 | tail 001305
+C | arm-00420 | tail 001306
+C | arm-00420 | tail 001307
+C | arm-00420 | tail 001308
+G | arm-00420 | tail 001309
+S | arm-00420 | tail 000003
+
+A | arm-00421 | tail 001310
+C | arm-00421 | tail 001311
+G | arm-00421 | tail 001312
+S | arm-00421 | tail 000003
+
+A | arm-00422 | tail 001313
+C | arm-00422 | tail 001019
+G | arm-00422 | tail 001020
+S | arm-00422 | tail 000003
+
+A | arm-00423 | tail 001314
+C | arm-00423 | tail 001315
+G | arm-00423 | tail 001020
+S | arm-00423 | tail 000003
+
+A | arm-00424 | tail 001316
+C | arm-00424 | tail 001311
+G | arm-00424 | tail 001312
+S | arm-00424 | tail 000003
+
+A | arm-00425 | tail 001317
+C | arm-00425 | tail 001318
+G | arm-00425 | tail 001319
+S | arm-00425 | tail 000003
+
+A | arm-00426 | tail 001320
+C | arm-00426 | tail 001019
+G | arm-00426 | tail 001020
+S | arm-00426 | tail 000003
+
+A | arm-00427 | tail 001321
+C | arm-00427 | tail 001315
+G | arm-00427 | tail 001020
+S | arm-00427 | tail 000003
+
+A | arm-00428 | tail 001322
+C | arm-00428 | tail 001323
+G | arm-00428 | tail 001244
+S | arm-00428 | tail 000014
+
+A | arm-00429 | tail 001324
+C | arm-00429 | tail 001325
+G | arm-00429 | tail 001326
+S | arm-00429 | tail 000014
+
+A | arm-00430 | tail 001327
+C | arm-00430 | tail 001325
+G | arm-00430 | tail 001326
+S | arm-00430 | tail 000014
+
+A | arm-00431 | tail 001328
+C | arm-00431 | tail 001323
+C | arm-00431 | tail 001329
+G | arm-00431 | tail 001244
+S | arm-00431 | tail 000014
+
+A | arm-00432 | tail 001330
+C | arm-00432 | tail 001331
+G | arm-00432 | tail 001168
+S | arm-00432 | tail 000003
+
+A | arm-00433 | tail 001332
+C | arm-00433 | tail 001333
+C | arm-00433 | tail 001334
+C | arm-00433 | tail 001335
+G | arm-00433 | tail 001168
+S | arm-00433 | tail 000003
+
+A | arm-00434 | tail 001336
+C | arm-00434 | tail 001337
+G | arm-00434 | tail 001139
+S | arm-00434 | tail 000003
+
+A | arm-00435 | tail 001338
+C | arm-00435 | tail 001339
+G | arm-00435 | tail 001168
+S | arm-00435 | tail 000003
+
+A | arm-00436 | tail 001340
+C | arm-00436 | tail 001341
+C | arm-00436 | tail 001342
+C | arm-00436 | tail 001343
+G | arm-00436 | tail 001139
+S | arm-00436 | tail 000003
+
+A | arm-00437 | tail 001344
+C | arm-00437 | tail 001345
+C | arm-00437 | tail 001346
+G | arm-00437 | tail 001168
+S | arm-00437 | tail 000003
+
+A | arm-00438 | tail 001347
+C | arm-00438 | tail 001348
+C | arm-00438 | tail 001349
+G | arm-00438 | tail 000786
+S | arm-00438 | tail 000003
+
+A | arm-00439 | tail 001350
+C | arm-00439 | tail 001351
+G | arm-00439 | tail 001352
+S | arm-00439 | tail 000003
+
+A | arm-00440 | tail 001353
+C | arm-00440 | tail 001354
+G | arm-00440 | tail 001355
+S | arm-00440 | tail 000148
+
+A | arm-00441 | tail 001356
+C | arm-00441 | tail 001354
+G | arm-00441 | tail 001355
+S | arm-00441 | tail 000148
+
+A | arm-00442 | tail 001357
+C | arm-00442 | tail 001354
+G | arm-00442 | tail 001355
+S | arm-00442 | tail 000148
+
+A | arm-00443 | tail 001358
+C | arm-00443 | tail 001359
+G | arm-00443 | tail 001360
+S | arm-00443 | tail 000148
+
+A | arm-00444 | tail 001361
+C | arm-00444 | tail 001354
+G | arm-00444 | tail 001355
+S | arm-00444 | tail 000148
+
+A | arm-00445 | tail 001362
+C | arm-00445 | tail 001363
+C | arm-00445 | tail 001364
+G | arm-00445 | tail 001365
+S | arm-00445 | tail 000003
+
+A | arm-00446 | tail 001366
+C | arm-00446 | tail 001367
+G | arm-00446 | tail 001168
+S | arm-00446 | tail 000003
+
+# comment 0005
+# section 0067 -- its arms
+# comment 0005
+
+A | arm-00447 | tail 003662
+C | arm-00447 | tail 001369
+G | arm-00447 | tail 001370
+S | arm-00447 | tail 001371
+
+A | arm-00999 | tail 003663
+C | arm-00999 | tail 003664
+C | arm-00999 | tail 003665
+S | arm-00999 | tail 001371
+
+A | arm-00448 | tail 003666
+C | arm-00448 | tail 001373
+G | arm-00448 | tail 001374
+S | arm-00448 | tail 001375
+
+A | arm-00449 | tail 003667
+C | arm-00449 | tail 001377
+G | arm-00449 | tail 001378
+S | arm-00449 | tail 001379
+
+A | arm-01000 | tail 003668
+C | arm-01000 | tail 003669
+G | arm-01000 | tail 001382
+S | arm-01000 | tail 001375
+
+A | arm-00450 | tail 003670
+C | arm-00450 | tail 003671
+G | arm-00450 | tail 001382
+S | arm-00450 | tail 001375
+
+A | arm-00451 | tail 003672
+C | arm-00451 | tail 003673
+G | arm-00451 | tail 001385
+S | arm-00451 | tail 001375
+
+A | arm-01001 | tail 003674
+C | arm-01001 | tail 003675
+G | arm-01001 | tail 003676
+S | arm-01001 | tail 003595
+
+A | arm-00452 | tail 003677
+C | arm-00452 | tail 001373
+G | arm-00452 | tail 001387
+S | arm-00452 | tail 001375
+
+A | arm-00453 | tail 003678
+C | arm-00453 | tail 001389
+G | arm-00453 | tail 001390
+S | arm-00453 | tail 001391
+
+A | arm-00454 | tail 003679
+C | arm-00454 | tail 001393
+G | arm-00454 | tail 001394
+S | arm-00454 | tail 001391
+
+A | arm-01002 | tail 003680
+C | arm-01002 | tail 003681
+C | arm-01002 | tail 003682
+C | arm-01002 | tail 003683
+C | arm-01002 | tail 003684
+C | arm-01002 | tail 003685
+C | arm-01002 | tail 003686
+G | arm-01002 | tail 003687
+G | arm-01002 | tail 003688
+G | arm-01002 | tail 003689
+G | arm-01002 | tail 003690
+S | arm-01002 | tail 001371
+
+A | arm-00455 | tail 003691
+C | arm-00455 | tail 001396
+C | arm-00455 | tail 001397
+G | arm-00455 | tail 001398
+S | arm-00455 | tail 001379
+
+A | arm-01003 | tail 003692
+C | arm-01003 | tail 003693
+C | arm-01003 | tail 003694
+G | arm-01003 | tail 003695
+G | arm-01003 | tail 003696
+S | arm-01003 | tail 001371
+
+A | arm-00456 | tail 003697
+C | arm-00456 | tail 001393
+G | arm-00456 | tail 001390
+S | arm-00456 | tail 001391
+
+A | arm-00457 | tail 003698
+C | arm-00457 | tail 001393
+C | arm-00457 | tail 001401
+G | arm-00457 | tail 001394
+S | arm-00457 | tail 001391
+
+A | arm-01004 | tail 003699
+C | arm-01004 | tail 003700
+G | arm-01004 | tail 003701
+S | arm-01004 | tail 001391
+
+A | arm-01005 | tail 003702
+C | arm-01005 | tail 003703
+G | arm-01005 | tail 003704
+S | arm-01005 | tail 001371
+
+A | arm-01006 | tail 003705
+C | arm-01006 | tail 003706
+G | arm-01006 | tail 003707
+S | arm-01006 | tail 001391
+
+A | arm-01007 | tail 003708
+C | arm-01007 | tail 003709
+G | arm-01007 | tail 003710
+S | arm-01007 | tail 001391
+
+A | arm-01008 | tail 003711
+C | arm-01008 | tail 003709
+G | arm-01008 | tail 003712
+S | arm-01008 | tail 001391
+
+A | arm-01009 | tail 003713
+C | arm-01009 | tail 003714
+G | arm-01009 | tail 003715
+S | arm-01009 | tail 001375
+
+A | arm-01010 | tail 003716
+C | arm-01010 | tail 003717
+G | arm-01010 | tail 003718
+S | arm-01010 | tail 003595
+
+A | arm-01011 | tail 003719
+C | arm-01011 | tail 003720
+G | arm-01011 | tail 003721
+S | arm-01011 | tail 001371
+
+A | arm-01012 | tail 003722
+C | arm-01012 | tail 003723
+G | arm-01012 | tail 003724
+G | arm-01012 | tail 003725
+S | arm-01012 | tail 001371
+
+A | arm-00458 | tail 001402
+C | arm-00458 | tail 001403
+C | arm-00458 | tail 001404
+G | arm-00458 | tail 001405
+S | arm-00458 | tail 001371
+
+A | arm-00459 | tail 003726
+C | arm-00459 | tail 001407
+C | arm-00459 | tail 001408
+C | arm-00459 | tail 001409
+G | arm-00459 | tail 001410
+S | arm-00459 | tail 001411
+
+A | arm-01013 | tail 003727
+C | arm-01013 | tail 003728
+G | arm-01013 | tail 003729
+S | arm-01013 | tail 003595
+
+A | arm-01014 | tail 003730
+C | arm-01014 | tail 003731
+C | arm-01014 | tail 003732
+G | arm-01014 | tail 003733
+S | arm-01014 | tail 003595
+
+A | arm-01015 | tail 003734
+C | arm-01015 | tail 003735
+G | arm-01015 | tail 001394
+S | arm-01015 | tail 001391
+
+A | arm-00460 | tail 001412
+C | arm-00460 | tail 001413
+C | arm-00460 | tail 001414
+G | arm-00460 | tail 001415
+S | arm-00460 | tail 001371
+
+A | arm-00461 | tail 003736
+C | arm-00461 | tail 001417
+G | arm-00461 | tail 001418
+S | arm-00461 | tail 001419
+
+A | arm-00462 | tail 001420
+C | arm-00462 | tail 001421
+C | arm-00462 | tail 001422
+C | arm-00462 | tail 001423
+C | arm-00462 | tail 001424
+G | arm-00462 | tail 001415
+S | arm-00462 | tail 001371
+
+A | arm-00463 | tail 003737
+C | arm-00463 | tail 001417
+G | arm-00463 | tail 001426
+S | arm-00463 | tail 001419
+
+A | arm-00464 | tail 001427
+C | arm-00464 | tail 001428
+G | arm-00464 | tail 001429
+S | arm-00464 | tail 001371
+
+A | arm-01016 | tail 003738
+C | arm-01016 | tail 003739
+G | arm-01016 | tail 003740
+S | arm-01016 | tail 003595
+
+A | arm-00465 | tail 003741
+C | arm-00465 | tail 003742
+G | arm-00465 | tail 001432
+S | arm-00465 | tail 001375
+
+A | arm-00466 | tail 003743
+C | arm-00466 | tail 001434
+G | arm-00466 | tail 001435
+S | arm-00466 | tail 001371
+
+A | arm-01017 | tail 003744
+C | arm-01017 | tail 003745
+C | arm-01017 | tail 003746
+G | arm-01017 | tail 003747
+S | arm-01017 | tail 003595
+
+A | arm-00467 | tail 001436
+C | arm-00467 | tail 001437
+G | arm-00467 | tail 001438
+S | arm-00467 | tail 001371
+
+A | arm-01018 | tail 003748
+C | arm-01018 | tail 003749
+C | arm-01018 | tail 003750
+G | arm-01018 | tail 003751
+S | arm-01018 | tail 003595
+
+A | arm-01019 | tail 003752
+C | arm-01019 | tail 003753
+C | arm-01019 | tail 003754
+G | arm-01019 | tail 003747
+S | arm-01019 | tail 003595
+
+A | arm-01020 | tail 003755
+C | arm-01020 | tail 003756
+G | arm-01020 | tail 003757
+S | arm-01020 | tail 003595
+
+A | arm-00468 | tail 001439
+C | arm-00468 | tail 001440
+C | arm-00468 | tail 001441
+C | arm-00468 | tail 001442
+G | arm-00468 | tail 001443
+S | arm-00468 | tail 001371
+
+A | arm-01021 | tail 003758
+C | arm-01021 | tail 003759
+G | arm-01021 | tail 003760
+G | arm-01021 | tail 003761
+S | arm-01021 | tail 001371
+
+A | arm-01022 | tail 003762
+C | arm-01022 | tail 003763
+C | arm-01022 | tail 003764
+G | arm-01022 | tail 003765
+S | arm-01022 | tail 003595
+
+A | arm-01023 | tail 003766
+C | arm-01023 | tail 003767
+C | arm-01023 | tail 003768
+C | arm-01023 | tail 003769
+S | arm-01023 | tail 003595
+
+A | arm-00469 | tail 003770
+C | arm-00469 | tail 001445
+C | arm-00469 | tail 003771
+S | arm-00469 | tail 001379
+
+A | arm-01024 | tail 003772
+C | arm-01024 | tail 003773
+G | arm-01024 | tail 003774
+S | arm-01024 | tail 003595
+
+A | arm-00470 | tail 003775
+C | arm-00470 | tail 001448
+G | arm-00470 | tail 001449
+S | arm-00470 | tail 001371
+
+A | arm-01025 | tail 003776
+C | arm-01025 | tail 003777
+G | arm-01025 | tail 003778
+S | arm-01025 | tail 003595
+
+A | arm-01026 | tail 003779
+C | arm-01026 | tail 003780
+C | arm-01026 | tail 003781
+G | arm-01026 | tail 003782
+S | arm-01026 | tail 003595
+
+A | arm-00471 | tail 001450
+C | arm-00471 | tail 001451
+C | arm-00471 | tail 001452
+C | arm-00471 | tail 001453
+C | arm-00471 | tail 001454
+C | arm-00471 | tail 001455
+C | arm-00471 | tail 001456
+G | arm-00471 | tail 001457
+S | arm-00471 | tail 001371
+
+A | arm-00472 | tail 003783
+C | arm-00472 | tail 001459
+C | arm-00472 | tail 001460
+G | arm-00472 | tail 001461
+S | arm-00472 | tail 001371
+
+A | arm-01027 | tail 003784
+C | arm-01027 | tail 003785
+S | arm-01027 | tail 001371
+
+A | arm-01028 | tail 003786
+C | arm-01028 | tail 003787
+S | arm-01028 | tail 001371
+
+A | arm-00473 | tail 003788
+C | arm-00473 | tail 001463
+C | arm-00473 | tail 001464
+C | arm-00473 | tail 001465
+G | arm-00473 | tail 001466
+S | arm-00473 | tail 001371
+
+A | arm-00474 | tail 001467
+C | arm-00474 | tail 001468
+G | arm-00474 | tail 001469
+S | arm-00474 | tail 001371
+
+A | arm-01029 | tail 003789
+C | arm-01029 | tail 003790
+G | arm-01029 | tail 003791
+S | arm-01029 | tail 001371
+
+A | arm-01030 | tail 003792
+C | arm-01030 | tail 003793
+C | arm-01030 | tail 003794
+C | arm-01030 | tail 003795
+C | arm-01030 | tail 003686
+C | arm-01030 | tail 003796
+G | arm-01030 | tail 003797
+S | arm-01030 | tail 001371
+
+A | arm-01031 | tail 003798
+C | arm-01031 | tail 003799
+G | arm-01031 | tail 003800
+S | arm-01031 | tail 003801
+
+A | arm-00475 | tail 003802
+C | arm-00475 | tail 003803
+C | arm-00475 | tail 003804
+C | arm-00475 | tail 003805
+C | arm-00475 | tail 003806
+C | arm-00475 | tail 003807
+C | arm-00475 | tail 003808
+C | arm-00475 | tail 003809
+C | arm-00475 | tail 003810
+C | arm-00475 | tail 003685
+C | arm-00475 | tail 003686
+C | arm-00475 | tail 003811
+G | arm-00475 | tail 003812
+S | arm-00475 | tail 001371
+
+A | arm-00476 | tail 003813
+C | arm-00476 | tail 003814
+C | arm-00476 | tail 003815
+G | arm-00476 | tail 003816
+S | arm-00476 | tail 001371
+
+A | arm-01032 | tail 003817
+C | arm-01032 | tail 003818
+S | arm-01032 | tail 001371
+
+A | arm-01033 | tail 003819
+C | arm-01033 | tail 003820
+G | arm-01033 | tail 003821
+S | arm-01033 | tail 001371
+
+A | arm-01034 | tail 003822
+C | arm-01034 | tail 003823
+G | arm-01034 | tail 003824
+G | arm-01034 | tail 003825
+S | arm-01034 | tail 001371
+
+A | arm-01035 | tail 003826
+C | arm-01035 | tail 003827
+G | arm-01035 | tail 003828
+S | arm-01035 | tail 001371
+
+A | arm-01036 | tail 003829
+C | arm-01036 | tail 003830
+C | arm-01036 | tail 003831
+G | arm-01036 | tail 003832
+S | arm-01036 | tail 001371
+
+A | arm-01037 | tail 003833
+C | arm-01037 | tail 003834
+S | arm-01037 | tail 001371
+
+A | arm-01038 | tail 003835
+C | arm-01038 | tail 003836
+S | arm-01038 | tail 001371
+
+A | arm-01039 | tail 003837
+C | arm-01039 | tail 003838
+C | arm-01039 | tail 003839
+G | arm-01039 | tail 003840
+S | arm-01039 | tail 001371
+
+A | arm-01040 | tail 003841
+C | arm-01040 | tail 003842
+C | arm-01040 | tail 003843
+C | arm-01040 | tail 003844
+G | arm-01040 | tail 003845
+S | arm-01040 | tail 001371
+
+A | arm-01041 | tail 003846
+C | arm-01041 | tail 003847
+G | arm-01041 | tail 003848
+S | arm-01041 | tail 003595
+
+A | arm-01042 | tail 003849
+C | arm-01042 | tail 003850
+S | arm-01042 | tail 001371
+
+A | arm-01043 | tail 003851
+C | arm-01043 | tail 003852
+C | arm-01043 | tail 003853
+C | arm-01043 | tail 003854
+G | arm-01043 | tail 003855
+S | arm-01043 | tail 001371
+
+A | arm-01044 | tail 003856
+C | arm-01044 | tail 003857
+G | arm-01044 | tail 003858
+S | arm-01044 | tail 003801
+
+A | arm-00477 | tail 001479
+C | arm-00477 | tail 001480
+C | arm-00477 | tail 001481
+G | arm-00477 | tail 001482
+S | arm-00477 | tail 001371
+
+A | arm-00478 | tail 001483
+C | arm-00478 | tail 001484
+G | arm-00478 | tail 001485
+S | arm-00478 | tail 000014
+
+A | arm-01045 | tail 003859
+C | arm-01045 | tail 003860
+G | arm-01045 | tail 003861
+S | arm-01045 | tail 003595
+
+A | arm-01046 | tail 003862
+C | arm-01046 | tail 003863
+S | arm-01046 | tail 001375
+
+A | arm-00479 | tail 001486
+C | arm-00479 | tail 001487
+G | arm-00479 | tail 003864
+S | arm-00479 | tail 001375
+
+A | arm-00480 | tail 001489
+C | arm-00480 | tail 001487
+G | arm-00480 | tail 003865
+S | arm-00480 | tail 001375
+
+A | arm-01047 | tail 003866
+C | arm-01047 | tail 003867
+S | arm-01047 | tail 001375
+
+A | arm-01048 | tail 003868
+C | arm-01048 | tail 003869
+S | arm-01048 | tail 001375
+
+A | arm-01049 | tail 003870
+C | arm-01049 | tail 003871
+S | arm-01049 | tail 001375
+
+A | arm-00481 | tail 003872
+C | arm-00481 | tail 001492
+C | arm-00481 | tail 001493
+G | arm-00481 | tail 001494
+S | arm-00481 | tail 001371
+
+A | arm-00482 | tail 001495
+C | arm-00482 | tail 001496
+G | arm-00482 | tail 001497
+S | arm-00482 | tail 001371
+
+A | arm-00483 | tail 003873
+C | arm-00483 | tail 001499
+G | arm-00483 | tail 001500
+S | arm-00483 | tail 001371
+
+A | arm-00484 | tail 001501
+C | arm-00484 | tail 001502
+G | arm-00484 | tail 001503
+S | arm-00484 | tail 001371
+
+A | arm-00485 | tail 003874
+C | arm-00485 | tail 001505
+G | arm-00485 | tail 001446
+S | arm-00485 | tail 001379
+
+A | arm-01050 | tail 003875
+C | arm-01050 | tail 003876
+G | arm-01050 | tail 003877
+S | arm-01050 | tail 001371
+
+A | arm-01051 | tail 003878
+C | arm-01051 | tail 003847
+G | arm-01051 | tail 003879
+S | arm-01051 | tail 003595
+
+A | arm-00486 | tail 003880
+C | arm-00486 | tail 001507
+G | arm-00486 | tail 001494
+S | arm-00486 | tail 001371
+
+A | arm-00487 | tail 003881
+C | arm-00487 | tail 003882
+C | arm-00487 | tail 003883
+G | arm-00487 | tail 003858
+S | arm-00487 | tail 001371
+
+A | arm-00488 | tail 003884
+C | arm-00488 | tail 001513
+C | arm-00488 | tail 001514
+G | arm-00488 | tail 001494
+S | arm-00488 | tail 001371
+
+A | arm-00489 | tail 003885
+C | arm-00489 | tail 001516
+G | arm-00489 | tail 001494
+S | arm-00489 | tail 001371
+
+A | arm-00490 | tail 003886
+C | arm-00490 | tail 001518
+G | arm-00490 | tail 001494
+S | arm-00490 | tail 001371
+
+A | arm-00491 | tail 003887
+C | arm-00491 | tail 001520
+G | arm-00491 | tail 001494
+S | arm-00491 | tail 001371
+
+A | arm-01052 | tail 003888
+C | arm-01052 | tail 003889
+C | arm-01052 | tail 003890
+C | arm-01052 | tail 003891
+G | arm-01052 | tail 003845
+S | arm-01052 | tail 001371
+
+A | arm-01053 | tail 003892
+C | arm-01053 | tail 003893
+G | arm-01053 | tail 003894
+G | arm-01053 | tail 003895
+S | arm-01053 | tail 001391
+
+A | arm-00492 | tail 003896
+C | arm-00492 | tail 003897
+C | arm-00492 | tail 003898
+G | arm-00492 | tail 003858
+S | arm-00492 | tail 001371
+
+A | arm-01054 | tail 003899
+C | arm-01054 | tail 003860
+G | arm-01054 | tail 003900
+S | arm-01054 | tail 003595
+
+A | arm-01055 | tail 003901
+C | arm-01055 | tail 003860
+G | arm-01055 | tail 003902
+S | arm-01055 | tail 003595
+
+A | arm-00493 | tail 003903
+C | arm-00493 | tail 001525
+C | arm-00493 | tail 001526
+C | arm-00493 | tail 001527
+C | arm-00493 | tail 001528
+G | arm-00493 | tail 001494
+S | arm-00493 | tail 001371
+
+A | arm-00494 | tail 003904
+C | arm-00494 | tail 001530
+C | arm-00494 | tail 001531
+C | arm-00494 | tail 001532
+C | arm-00494 | tail 001533
+G | arm-00494 | tail 001494
+S | arm-00494 | tail 001371
+
+A | arm-00495 | tail 003905
+C | arm-00495 | tail 001535
+G | arm-00495 | tail 001494
+S | arm-00495 | tail 001371
+
+A | arm-00496 | tail 003906
+C | arm-00496 | tail 003907
+C | arm-00496 | tail 003908
+C | arm-00496 | tail 003909
+G | arm-00496 | tail 001539
+S | arm-00496 | tail 001371
+
+
+A | arm-00497 | tail 003910
+C | arm-00497 | tail 001541
+C | arm-00497 | tail 001542
+C | arm-00497 | tail 001543
+C | arm-00497 | tail 001544
+C | arm-00497 | tail 001545
+G | arm-00497 | tail 001494
+S | arm-00497 | tail 001371
+
+A | arm-01056 | tail 003911
+C | arm-01056 | tail 003912
+C | arm-01056 | tail 003913
+G | arm-01056 | tail 003855
+S | arm-01056 | tail 001371
+
+A | arm-01057 | tail 003914
+C | arm-01057 | tail 003838
+G | arm-01057 | tail 003915
+S | arm-01057 | tail 001371
+
+A | arm-00498 | tail 003916
+C | arm-00498 | tail 001547
+G | arm-00498 | tail 000821
+S | arm-00498 | tail 001371
+
+A | arm-00499 | tail 003917
+C | arm-00499 | tail 001549
+C | arm-00499 | tail 001550
+C | arm-00499 | tail 001551
+G | arm-00499 | tail 001552
+S | arm-00499 | tail 001553
+
+A | arm-00500 | tail 003918
+M | arm-00500 | tail 001555
+C | arm-00500 | tail 001556
+C | arm-00500 | tail 001557
+C | arm-00500 | tail 001558
+C | arm-00500 | tail 001559
+C | arm-00500 | tail 001560
+C | arm-00500 | tail 001561
+C | arm-00500 | tail 001562
+C | arm-00500 | tail 001563
+C | arm-00500 | tail 001564
+C | arm-00500 | tail 001565
+G | arm-00500 | tail 001566
+S | arm-00500 | tail 001567
+
+A | arm-00501 | tail 001568
+C | arm-00501 | tail 001569
+G | arm-00501 | tail 001570
+S | arm-00501 | tail 001571
+
+A | arm-01058 | tail 003919
+C | arm-01058 | tail 003920
+S | arm-01058 | tail 001375
+
+A | arm-00502 | tail 003921
+C | arm-00502 | tail 001573
+G | arm-00502 | tail 001494
+S | arm-00502 | tail 001371
+
+A | arm-00503 | tail 003922
+C | arm-00503 | tail 001575
+G | arm-00503 | tail 001494
+S | arm-00503 | tail 001371
+
+A | arm-00504 | tail 003923
+C | arm-00504 | tail 001577
+C | arm-00504 | tail 001578
+C | arm-00504 | tail 001579
+C | arm-00504 | tail 001580
+G | arm-00504 | tail 001581
+S | arm-00504 | tail 001371
+
+A | arm-00505 | tail 003924
+C | arm-00505 | tail 001583
+C | arm-00505 | tail 001584
+C | arm-00505 | tail 001585
+C | arm-00505 | tail 001586
+G | arm-00505 | tail 001587
+S | arm-00505 | tail 001371
+
+A | arm-00506 | tail 001588
+C | arm-00506 | tail 001589
+G | arm-00506 | tail 001590
+S | arm-00506 | tail 000014
+
+A | arm-00507 | tail 001591
+C | arm-00507 | tail 001592
+G | arm-00507 | tail 001593
+S | arm-00507 | tail 001594
+
+A | arm-00508 | tail 001595
+C | arm-00508 | tail 001592
+G | arm-00508 | tail 001596
+S | arm-00508 | tail 001597
+
+A | arm-00509 | tail 001598
+C | arm-00509 | tail 001592
+G | arm-00509 | tail 001596
+S | arm-00509 | tail 001597
+
+A | arm-00510 | tail 001599
+C | arm-00510 | tail 001592
+G | arm-00510 | tail 001596
+S | arm-00510 | tail 001597
+
+A | arm-00511 | tail 001600
+C | arm-00511 | tail 001592
+G | arm-00511 | tail 001593
+S | arm-00511 | tail 001594
+
+A | arm-00512 | tail 001601
+C | arm-00512 | tail 001592
+G | arm-00512 | tail 001596
+S | arm-00512 | tail 001597
+
+A | arm-00513 | tail 001602
+C | arm-00513 | tail 001592
+G | arm-00513 | tail 001596
+S | arm-00513 | tail 001597
+
+A | arm-01059 | tail 003925
+C | arm-01059 | tail 003926
+G | arm-01059 | tail 003927
+G | arm-01059 | tail 003928
+S | arm-01059 | tail 003595
+
+A | arm-00514 | tail 001603
+C | arm-00514 | tail 001592
+G | arm-00514 | tail 001596
+S | arm-00514 | tail 001597
+
+A | arm-00515 | tail 001604
+C | arm-00515 | tail 001592
+G | arm-00515 | tail 001596
+S | arm-00515 | tail 001597
+
+A | arm-00516 | tail 001605
+C | arm-00516 | tail 001592
+C | arm-00516 | tail 001606
+G | arm-00516 | tail 001607
+S | arm-00516 | tail 001597
+
+A | arm-00517 | tail 001608
+C | arm-00517 | tail 001609
+C | arm-00517 | tail 001610
+G | arm-00517 | tail 001611
+S | arm-00517 | tail 001571
+
+A | arm-00518 | tail 001612
+C | arm-00518 | tail 001592
+C | arm-00518 | tail 001613
+G | arm-00518 | tail 001607
+S | arm-00518 | tail 001597
+
+A | arm-01060 | tail 003929
+C | arm-01060 | tail 003753
+C | arm-01060 | tail 003930
+G | arm-01060 | tail 003931
+S | arm-01060 | tail 003595
+
+A | arm-01061 | tail 003932
+C | arm-01061 | tail 003753
+G | arm-01061 | tail 003931
+S | arm-01061 | tail 003595
+
+A | arm-01062 | tail 003933
+C | arm-01062 | tail 003847
+G | arm-01062 | tail 003934
+S | arm-01062 | tail 003595
+
+A | arm-01063 | tail 003935
+C | arm-01063 | tail 003860
+G | arm-01063 | tail 003936
+S | arm-01063 | tail 003595
+
+A | arm-01064 | tail 003937
+C | arm-01064 | tail 003938
+G | arm-01064 | tail 003877
+S | arm-01064 | tail 001371
+
+A | arm-00519 | tail 003939
+C | arm-00519 | tail 003940
+C | arm-00519 | tail 003941
+S | arm-00519 | tail 001375
+
+A | arm-01065 | tail 003942
+C | arm-01065 | tail 003943
+C | arm-01065 | tail 003944
+S | arm-01065 | tail 003945
+
+A | arm-01066 | tail 003946
+C | arm-01066 | tail 003947
+C | arm-01066 | tail 003948
+S | arm-01066 | tail 003595
+
+A | arm-00520 | tail 003949
+C | arm-00520 | tail 001617
+C | arm-00520 | tail 001618
+C | arm-00520 | tail 001619
+C | arm-00520 | tail 001620
+C | arm-00520 | tail 001621
+C | arm-00520 | tail 001622
+G | arm-00520 | tail 000821
+S | arm-00520 | tail 001371
+
+A | arm-00521 | tail 001623
+C | arm-00521 | tail 001624
+G | arm-00521 | tail 001625
+S | arm-00521 | tail 001371
+
+A | arm-01067 | tail 003950
+C | arm-01067 | tail 003700
+C | arm-01067 | tail 003951
+C | arm-01067 | tail 003952
+G | arm-01067 | tail 003953
+S | arm-01067 | tail 001391
+
+A | arm-00522 | tail 001626
+C | arm-00522 | tail 001484
+C | arm-00522 | tail 001627
+G | arm-00522 | tail 001628
+S | arm-00522 | tail 000014
+
+A | arm-00523 | tail 003954
+C | arm-00523 | tail 001393
+G | arm-00523 | tail 001390
+S | arm-00523 | tail 001391
+
+A | arm-00524 | tail 001630
+C | arm-00524 | tail 001631
+C | arm-00524 | tail 001632
+G | arm-00524 | tail 001633
+S | arm-00524 | tail 000014
+
+A | arm-00525 | tail 001634
+C | arm-00525 | tail 001635
+G | arm-00525 | tail 001633
+S | arm-00525 | tail 000014
+
+A | arm-00526 | tail 001636
+C | arm-00526 | tail 001637
+C | arm-00526 | tail 001638
+G | arm-00526 | tail 001639
+S | arm-00526 | tail 000014
+
+A | arm-00527 | tail 001640
+C | arm-00527 | tail 001641
+G | arm-00527 | tail 001642
+S | arm-00527 | tail 001371
+
+A | arm-00528 | tail 003955
+C | arm-00528 | tail 001644
+C | arm-00528 | tail 001645
+C | arm-00528 | tail 001646
+C | arm-00528 | tail 001647
+C | arm-00528 | tail 001648
+C | arm-00528 | tail 001649
+C | arm-00528 | tail 001650
+C | arm-00528 | tail 001651
+G | arm-00528 | tail 000821
+S | arm-00528 | tail 001371
+
+A | arm-01068 | tail 003956
+C | arm-01068 | tail 003957
+G | arm-01068 | tail 003927
+G | arm-01068 | tail 003928
+S | arm-01068 | tail 003595
+
+A | arm-01069 | tail 003958
+C | arm-01069 | tail 003959
+G | arm-01069 | tail 003960
+S | arm-01069 | tail 003595
+
+# comment 0005
+# section 0068 -- its arms
+# comment 0005
+
+A | arm-00529 | tail 001652
+C | arm-00529 | tail 001653
+C | arm-00529 | tail 001654
+G | arm-00529 | tail 001655
+S | arm-00529 | tail 000003
+
+A | arm-00530 | tail 001656
+C | arm-00530 | tail 001657
+G | arm-00530 | tail 001658
+S | arm-00530 | tail 000003
+
+A | arm-00531 | tail 001659
+C | arm-00531 | tail 001657
+G | arm-00531 | tail 001658
+S | arm-00531 | tail 000003
+
+A | arm-00532 | tail 001660
+C | arm-00532 | tail 001661
+C | arm-00532 | tail 001662
+C | arm-00532 | tail 001663
+C | arm-00532 | tail 001664
+C | arm-00532 | tail 001665
+C | arm-00532 | tail 001666
+C | arm-00532 | tail 001667
+G | arm-00532 | tail 001668
+S | arm-00532 | tail 000003
+
+A | arm-00533 | tail 001669
+C | arm-00533 | tail 001670
+G | arm-00533 | tail 001671
+S | arm-00533 | tail 000003
+
+A | arm-00534 | tail 001672
+C | arm-00534 | tail 001673
+C | arm-00534 | tail 001662
+C | arm-00534 | tail 001663
+C | arm-00534 | tail 001664
+G | arm-00534 | tail 001674
+S | arm-00534 | tail 000003
+
+A | arm-00535 | tail 001675
+C | arm-00535 | tail 001657
+G | arm-00535 | tail 001658
+S | arm-00535 | tail 000003
+
+A | arm-00536 | tail 001676
+C | arm-00536 | tail 001677
+G | arm-00536 | tail 001678
+S | arm-00536 | tail 000003
+
+A | arm-00537 | tail 001679
+C | arm-00537 | tail 001680
+C | arm-00537 | tail 001681
+G | arm-00537 | tail 001682
+S | arm-00537 | tail 000003
+
+A | arm-00538 | tail 001683
+C | arm-00538 | tail 001684
+G | arm-00538 | tail 001685
+S | arm-00538 | tail 000003
+
+A | arm-00539 | tail 001686
+C | arm-00539 | tail 001687
+C | arm-00539 | tail 001688
+G | arm-00539 | tail 001689
+S | arm-00539 | tail 001690
+
+A | arm-00540 | tail 001691
+C | arm-00540 | tail 001692
+C | arm-00540 | tail 001693
+G | arm-00540 | tail 001694
+S | arm-00540 | tail 000003
+
+A | arm-00541 | tail 001695
+C | arm-00541 | tail 001673
+C | arm-00541 | tail 001662
+C | arm-00541 | tail 001664
+G | arm-00541 | tail 001671
+S | arm-00541 | tail 000003
+
+A | arm-00542 | tail 001696
+C | arm-00542 | tail 001697
+G | arm-00542 | tail 001698
+S | arm-00542 | tail 000003
+
+A | arm-00543 | tail 001699
+C | arm-00543 | tail 001700
+C | arm-00543 | tail 001701
+G | arm-00543 | tail 001702
+S | arm-00543 | tail 000003
+
+A | arm-00544 | tail 001703
+C | arm-00544 | tail 001704
+G | arm-00544 | tail 001705
+S | arm-00544 | tail 001597
+
+A | arm-00545 | tail 001706
+C | arm-00545 | tail 001707
+G | arm-00545 | tail 001705
+S | arm-00545 | tail 001597
+
+A | arm-00546 | tail 001708
+C | arm-00546 | tail 001709
+G | arm-00546 | tail 001710
+S | arm-00546 | tail 000003
+
+A | arm-00547 | tail 001711
+C | arm-00547 | tail 001712
+C | arm-00547 | tail 001713
+G | arm-00547 | tail 001714
+S | arm-00547 | tail 000003
+
+A | arm-00548 | tail 001715
+C | arm-00548 | tail 001716
+C | arm-00548 | tail 001717
+G | arm-00548 | tail 001718
+S | arm-00548 | tail 000003
+
+A | arm-00549 | tail 001719
+C | arm-00549 | tail 001720
+G | arm-00549 | tail 001721
+S | arm-00549 | tail 001597
+
+A | arm-00550 | tail 001722
+C | arm-00550 | tail 001720
+G | arm-00550 | tail 001721
+S | arm-00550 | tail 001597
+
+A | arm-00551 | tail 001723
+C | arm-00551 | tail 001720
+G | arm-00551 | tail 001721
+S | arm-00551 | tail 001597
+
+A | arm-00552 | tail 001724
+C | arm-00552 | tail 001720
+G | arm-00552 | tail 001721
+S | arm-00552 | tail 001597
+
+A | arm-00553 | tail 001725
+C | arm-00553 | tail 001726
+G | arm-00553 | tail 001705
+S | arm-00553 | tail 001597
+
+A | arm-00554 | tail 001727
+C | arm-00554 | tail 001728
+C | arm-00554 | tail 001729
+C | arm-00554 | tail 001730
+G | arm-00554 | tail 001731
+S | arm-00554 | tail 000003
+
+A | arm-00555 | tail 001732
+C | arm-00555 | tail 001733
+G | arm-00555 | tail 001734
+S | arm-00555 | tail 000003
+
+A | arm-00556 | tail 001735
+C | arm-00556 | tail 001736
+C | arm-00556 | tail 001737
+G | arm-00556 | tail 001738
+S | arm-00556 | tail 000003
+
+A | arm-00557 | tail 001739
+C | arm-00557 | tail 001740
+C | arm-00557 | tail 001741
+G | arm-00557 | tail 001742
+S | arm-00557 | tail 000003
+
+A | arm-00558 | tail 001743
+C | arm-00558 | tail 001744
+G | arm-00558 | tail 001705
+S | arm-00558 | tail 001597
+
+A | arm-00559 | tail 001745
+C | arm-00559 | tail 001744
+C | arm-00559 | tail 001746
+C | arm-00559 | tail 001747
+C | arm-00559 | tail 001748
+G | arm-00559 | tail 001705
+S | arm-00559 | tail 001597
+
+A | arm-00560 | tail 001749
+C | arm-00560 | tail 001750
+G | arm-00560 | tail 001751
+S | arm-00560 | tail 000003
+
+A | arm-00561 | tail 001752
+C | arm-00561 | tail 001753
+C | arm-00561 | tail 001754
+G | arm-00561 | tail 001678
+S | arm-00561 | tail 000003
+
+A | arm-00562 | tail 001755
+C | arm-00562 | tail 001673
+C | arm-00562 | tail 001662
+C | arm-00562 | tail 001663
+C | arm-00562 | tail 001664
+C | arm-00562 | tail 001665
+C | arm-00562 | tail 001666
+C | arm-00562 | tail 001756
+G | arm-00562 | tail 001668
+S | arm-00562 | tail 000003
+
+A | arm-00563 | tail 001757
+C | arm-00563 | tail 001758
+C | arm-00563 | tail 001759
+C | arm-00563 | tail 001760
+C | arm-00563 | tail 001761
+C | arm-00563 | tail 001762
+C | arm-00563 | tail 001763
+G | arm-00563 | tail 001764
+S | arm-00563 | tail 000003
+
+A | arm-00564 | tail 001765
+C | arm-00564 | tail 001766
+C | arm-00564 | tail 001767
+C | arm-00564 | tail 001768
+C | arm-00564 | tail 001769
+C | arm-00564 | tail 001770
+G | arm-00564 | tail 001771
+S | arm-00564 | tail 000003
+
+A | arm-00565 | tail 001772
+C | arm-00565 | tail 001773
+C | arm-00565 | tail 001774
+C | arm-00565 | tail 001775
+C | arm-00565 | tail 001776
+C | arm-00565 | tail 001777
+G | arm-00565 | tail 001778
+S | arm-00565 | tail 000003
+
+A | arm-00566 | tail 001779
+C | arm-00566 | tail 001780
+G | arm-00566 | tail 001781
+S | arm-00566 | tail 000003
+
+A | arm-00567 | tail 001782
+C | arm-00567 | tail 001783
+G | arm-00567 | tail 001784
+S | arm-00567 | tail 000003
+
+A | arm-00568 | tail 001785
+C | arm-00568 | tail 001786
+G | arm-00568 | tail 001705
+S | arm-00568 | tail 001597
+
+A | arm-00569 | tail 001787
+C | arm-00569 | tail 001786
+G | arm-00569 | tail 001705
+S | arm-00569 | tail 001597
+
+A | arm-00570 | tail 001788
+C | arm-00570 | tail 001789
+G | arm-00570 | tail 001705
+S | arm-00570 | tail 001597
+
+A | arm-00571 | tail 001790
+C | arm-00571 | tail 001791
+G | arm-00571 | tail 001705
+S | arm-00571 | tail 001597
+
+A | arm-00572 | tail 001792
+C | arm-00572 | tail 001793
+G | arm-00572 | tail 001794
+S | arm-00572 | tail 000003
+
+A | arm-00573 | tail 001795
+C | arm-00573 | tail 001796
+G | arm-00573 | tail 001797
+S | arm-00573 | tail 001798
+
+A | arm-00574 | tail 001799
+C | arm-00574 | tail 001800
+G | arm-00574 | tail 001801
+S | arm-00574 | tail 000003
+
+A | arm-00575 | tail 001802
+C | arm-00575 | tail 001803
+G | arm-00575 | tail 001804
+S | arm-00575 | tail 000003
+
+A | arm-00576 | tail 001805
+C | arm-00576 | tail 001806
+G | arm-00576 | tail 001807
+S | arm-00576 | tail 001597
+
+A | arm-00577 | tail 001808
+C | arm-00577 | tail 001806
+G | arm-00577 | tail 001807
+S | arm-00577 | tail 001597
+
+A | arm-00578 | tail 001809
+C | arm-00578 | tail 001810
+G | arm-00578 | tail 001811
+S | arm-00578 | tail 000003
+
+A | arm-00579 | tail 001812
+C | arm-00579 | tail 001813
+G | arm-00579 | tail 001814
+S | arm-00579 | tail 001815
+
+A | arm-00580 | tail 001816
+C | arm-00580 | tail 001817
+C | arm-00580 | tail 001818
+G | arm-00580 | tail 001819
+S | arm-00580 | tail 000003
+
+A | arm-00581 | tail 001820
+C | arm-00581 | tail 001821
+G | arm-00581 | tail 001751
+S | arm-00581 | tail 000003
+
+A | arm-00582 | tail 001822
+C | arm-00582 | tail 001821
+G | arm-00582 | tail 001751
+S | arm-00582 | tail 000003
+
+A | arm-00583 | tail 001823
+C | arm-00583 | tail 001821
+G | arm-00583 | tail 001751
+S | arm-00583 | tail 000003
+
+A | arm-00584 | tail 001824
+C | arm-00584 | tail 001825
+G | arm-00584 | tail 001826
+S | arm-00584 | tail 000003
+
+A | arm-00585 | tail 001827
+C | arm-00585 | tail 001828
+G | arm-00585 | tail 001829
+S | arm-00585 | tail 000003
+
+A | arm-00586 | tail 001830
+C | arm-00586 | tail 001831
+C | arm-00586 | tail 001832
+S | arm-00586 | tail 000003
+
+A | arm-00587 | tail 001833
+C | arm-00587 | tail 001834
+G | arm-00587 | tail 001835
+S | arm-00587 | tail 000003
+
+A | arm-00588 | tail 001836
+C | arm-00588 | tail 001837
+C | arm-00588 | tail 001838
+G | arm-00588 | tail 001839
+S | arm-00588 | tail 000003
+
+A | arm-00589 | tail 001840
+C | arm-00589 | tail 001841
+G | arm-00589 | tail 001842
+S | arm-00589 | tail 000003
+
+A | arm-00590 | tail 001843
+C | arm-00590 | tail 001844
+C | arm-00590 | tail 001845
+C | arm-00590 | tail 001846
+C | arm-00590 | tail 001847
+G | arm-00590 | tail 001848
+S | arm-00590 | tail 000003
+
+A | arm-00591 | tail 001849
+C | arm-00591 | tail 001850
+C | arm-00591 | tail 001851
+C | arm-00591 | tail 001852
+C | arm-00591 | tail 001853
+C | arm-00591 | tail 001854
+C | arm-00591 | tail 001855
+C | arm-00591 | tail 001856
+C | arm-00591 | tail 001857
+G | arm-00591 | tail 001858
+S | arm-00591 | tail 000003
+
+A | arm-00592 | tail 001859
+C | arm-00592 | tail 001860
+C | arm-00592 | tail 001861
+C | arm-00592 | tail 001862
+C | arm-00592 | tail 001863
+C | arm-00592 | tail 001864
+C | arm-00592 | tail 001865
+C | arm-00592 | tail 001866
+C | arm-00592 | tail 001867
+G | arm-00592 | tail 001868
+S | arm-00592 | tail 000003
+
+A | arm-00593 | tail 001869
+C | arm-00593 | tail 001870
+G | arm-00593 | tail 001871
+S | arm-00593 | tail 000003
+
+A | arm-00594 | tail 001872
+C | arm-00594 | tail 001873
+G | arm-00594 | tail 001874
+S | arm-00594 | tail 000003
+
+A | arm-00595 | tail 001875
+C | arm-00595 | tail 001876
+G | arm-00595 | tail 001877
+S | arm-00595 | tail 000003
+
+# comment 0005
+# section 0069 -- its arms
+# comment 0005
+
+A | arm-00910 | tail 003125
+C | arm-00910 | tail 003126
+G | arm-00910 | tail 003127
+S | arm-00910 | tail 003118
+
+# comment 0005
+# section 0070 -- its arms
+# comment 0005
+
+A | arm-00596 | tail 001878
+C | arm-00596 | tail 001879
+G | arm-00596 | tail 001880
+S | arm-00596 | tail 000003
+
+A | arm-00597 | tail 001881
+C | arm-00597 | tail 001882
+G | arm-00597 | tail 001883
+S | arm-00597 | tail 000003
+
+A | arm-00598 | tail 001884
+C | arm-00598 | tail 001885
+C | arm-00598 | tail 001886
+G | arm-00598 | tail 001887
+S | arm-00598 | tail 000003
+
+A | arm-00599 | tail 001888
+C | arm-00599 | tail 001889
+G | arm-00599 | tail 001890
+S | arm-00599 | tail 000003
+
+A | arm-00600 | tail 001891
+C | arm-00600 | tail 001892
+C | arm-00600 | tail 001893
+G | arm-00600 | tail 001894
+S | arm-00600 | tail 000003
+
+A | arm-00601 | tail 001895
+C | arm-00601 | tail 001896
+G | arm-00601 | tail 001897
+S | arm-00601 | tail 000014
+
+A | arm-00602 | tail 001898
+C | arm-00602 | tail 001899
+G | arm-00602 | tail 001900
+S | arm-00602 | tail 000003
+
+A | arm-00603 | tail 001901
+C | arm-00603 | tail 001902
+C | arm-00603 | tail 001903
+G | arm-00603 | tail 001904
+S | arm-00603 | tail 000148
+
+A | arm-00604 | tail 001905
+C | arm-00604 | tail 001906
+C | arm-00604 | tail 001907
+C | arm-00604 | tail 001908
+G | arm-00604 | tail 001909
+S | arm-00604 | tail 000003
+
+A | arm-00605 | tail 001910
+C | arm-00605 | tail 001911
+C | arm-00605 | tail 001912
+C | arm-00605 | tail 001913
+G | arm-00605 | tail 001914
+S | arm-00605 | tail 000148
+
+A | arm-00606 | tail 001915
+C | arm-00606 | tail 001911
+C | arm-00606 | tail 001912
+G | arm-00606 | tail 001914
+S | arm-00606 | tail 000148
+
+A | arm-00607 | tail 001916
+C | arm-00607 | tail 001917
+C | arm-00607 | tail 001918
+C | arm-00607 | tail 001919
+G | arm-00607 | tail 001920
+S | arm-00607 | tail 001371
+
+A | arm-00608 | tail 001921
+C | arm-00608 | tail 001922
+G | arm-00608 | tail 001923
+S | arm-00608 | tail 000014
+
+A | arm-00609 | tail 001924
+C | arm-00609 | tail 001925
+G | arm-00609 | tail 001926
+S | arm-00609 | tail 000003
+
+A | arm-00610 | tail 001927
+C | arm-00610 | tail 001928
+C | arm-00610 | tail 001886
+G | arm-00610 | tail 001929
+S | arm-00610 | tail 000003
+
+A | arm-00611 | tail 001930
+C | arm-00611 | tail 001931
+G | arm-00611 | tail 001932
+S | arm-00611 | tail 000003
+
+A | arm-00612 | tail 001933
+C | arm-00612 | tail 001934
+G | arm-00612 | tail 001935
+S | arm-00612 | tail 001936
+
+A | arm-00613 | tail 001937
+C | arm-00613 | tail 001938
+G | arm-00613 | tail 001939
+S | arm-00613 | tail 000003
+
+A | arm-00614 | tail 001940
+C | arm-00614 | tail 001941
+G | arm-00614 | tail 001942
+S | arm-00614 | tail 000003
+
+A | arm-00615 | tail 001943
+C | arm-00615 | tail 001944
+C | arm-00615 | tail 001945
+C | arm-00615 | tail 001946
+C | arm-00615 | tail 001947
+C | arm-00615 | tail 001948
+G | arm-00615 | tail 001949
+S | arm-00615 | tail 000003
+
+A | arm-00616 | tail 001950
+C | arm-00616 | tail 001951
+G | arm-00616 | tail 001952
+S | arm-00616 | tail 001553
+
+A | arm-00617 | tail 001953
+C | arm-00617 | tail 001954
+C | arm-00617 | tail 001955
+C | arm-00617 | tail 001956
+G | arm-00617 | tail 001957
+S | arm-00617 | tail 001371
+
+A | arm-00618 | tail 001958
+C | arm-00618 | tail 001959
+C | arm-00618 | tail 001960
+C | arm-00618 | tail 001961
+G | arm-00618 | tail 001962
+S | arm-00618 | tail 001371
+
+A | arm-00619 | tail 001963
+C | arm-00619 | tail 001964
+C | arm-00619 | tail 001918
+C | arm-00619 | tail 001965
+G | arm-00619 | tail 001966
+S | arm-00619 | tail 001371
+
+A | arm-00620 | tail 001967
+C | arm-00620 | tail 001964
+C | arm-00620 | tail 001919
+C | arm-00620 | tail 001968
+G | arm-00620 | tail 001969
+S | arm-00620 | tail 001371
+
+A | arm-00621 | tail 001970
+C | arm-00621 | tail 001971
+C | arm-00621 | tail 001972
+C | arm-00621 | tail 001973
+G | arm-00621 | tail 001974
+S | arm-00621 | tail 001371
+
+A | arm-00622 | tail 001975
+C | arm-00622 | tail 001964
+C | arm-00622 | tail 001919
+C | arm-00622 | tail 001968
+G | arm-00622 | tail 001976
+S | arm-00622 | tail 001371
+
+A | arm-00623 | tail 001977
+C | arm-00623 | tail 001964
+C | arm-00623 | tail 001978
+C | arm-00623 | tail 001979
+G | arm-00623 | tail 001966
+S | arm-00623 | tail 001371
+
+A | arm-00624 | tail 003961
+C | arm-00624 | tail 001981
+G | arm-00624 | tail 001982
+S | arm-00624 | tail 001379
+
+A | arm-00625 | tail 001983
+C | arm-00625 | tail 001984
+C | arm-00625 | tail 001985
+C | arm-00625 | tail 001986
+G | arm-00625 | tail 001987
+S | arm-00625 | tail 000014
+
+A | arm-00626 | tail 001988
+C | arm-00626 | tail 001989
+G | arm-00626 | tail 001990
+S | arm-00626 | tail 001371
+
+A | arm-00627 | tail 001991
+C | arm-00627 | tail 001992
+C | arm-00627 | tail 001993
+C | arm-00627 | tail 001994
+G | arm-00627 | tail 001995
+S | arm-00627 | tail 000014
+
+A | arm-00628 | tail 001996
+C | arm-00628 | tail 001997
+C | arm-00628 | tail 001998
+C | arm-00628 | tail 001999
+C | arm-00628 | tail 002000
+G | arm-00628 | tail 002001
+S | arm-00628 | tail 001371
+
+A | arm-00629 | tail 002002
+C | arm-00629 | tail 002003
+C | arm-00629 | tail 002004
+C | arm-00629 | tail 002005
+G | arm-00629 | tail 001987
+S | arm-00629 | tail 000014
+
+A | arm-00630 | tail 002006
+C | arm-00630 | tail 002007
+C | arm-00630 | tail 002008
+G | arm-00630 | tail 002009
+S | arm-00630 | tail 000014
+
+A | arm-00631 | tail 002010
+C | arm-00631 | tail 002011
+C | arm-00631 | tail 002012
+C | arm-00631 | tail 002013
+C | arm-00631 | tail 002014
+C | arm-00631 | tail 002015
+C | arm-00631 | tail 002016
+C | arm-00631 | tail 002017
+G | arm-00631 | tail 001995
+S | arm-00631 | tail 000014
+
+A | arm-00632 | tail 002018
+C | arm-00632 | tail 002019
+G | arm-00632 | tail 002020
+S | arm-00632 | tail 001371
+
+A | arm-00633 | tail 002021
+C | arm-00633 | tail 002022
+G | arm-00633 | tail 002023
+S | arm-00633 | tail 000014
+
+A | arm-00634 | tail 002024
+C | arm-00634 | tail 002025
+C | arm-00634 | tail 002026
+C | arm-00634 | tail 002027
+G | arm-00634 | tail 002028
+S | arm-00634 | tail 000014
+
+A | arm-00635 | tail 002029
+C | arm-00635 | tail 002030
+C | arm-00635 | tail 002031
+G | arm-00635 | tail 001987
+S | arm-00635 | tail 000014
+
+A | arm-00636 | tail 002032
+C | arm-00636 | tail 002033
+G | arm-00636 | tail 002034
+S | arm-00636 | tail 000014
+
+A | arm-00637 | tail 002035
+C | arm-00637 | tail 002036
+C | arm-00637 | tail 002037
+G | arm-00637 | tail 002038
+S | arm-00637 | tail 001371
+
+A | arm-00638 | tail 002039
+C | arm-00638 | tail 002040
+C | arm-00638 | tail 002041
+G | arm-00638 | tail 002042
+S | arm-00638 | tail 001371
+
+A | arm-00639 | tail 002043
+C | arm-00639 | tail 002044
+G | arm-00639 | tail 002045
+S | arm-00639 | tail 000014
+
+A | arm-00640 | tail 002046
+C | arm-00640 | tail 002025
+G | arm-00640 | tail 002028
+S | arm-00640 | tail 000014
+
+A | arm-00641 | tail 002047
+C | arm-00641 | tail 002025
+G | arm-00641 | tail 002028
+S | arm-00641 | tail 000014
+
+A | arm-00642 | tail 002048
+C | arm-00642 | tail 002049
+G | arm-00642 | tail 002050
+S | arm-00642 | tail 000014
+
+A | arm-00643 | tail 002051
+M | arm-00643 | tail 002052
+C | arm-00643 | tail 002053
+G | arm-00643 | tail 002054
+S | arm-00643 | tail 000003
+
+A | arm-00644 | tail 002055
+C | arm-00644 | tail 002056
+G | arm-00644 | tail 002057
+S | arm-00644 | tail 000003
+
+A | arm-00645 | tail 002058
+C | arm-00645 | tail 002059
+G | arm-00645 | tail 002060
+S | arm-00645 | tail 000003
+
+A | arm-00646 | tail 002061
+C | arm-00646 | tail 002062
+G | arm-00646 | tail 002063
+S | arm-00646 | tail 001597
+
+A | arm-00647 | tail 002064
+C | arm-00647 | tail 002065
+G | arm-00647 | tail 002063
+S | arm-00647 | tail 001597
+
+A | arm-00648 | tail 002066
+C | arm-00648 | tail 002067
+C | arm-00648 | tail 002068
+G | arm-00648 | tail 002069
+S | arm-00648 | tail 002070
+
+A | arm-00649 | tail 002071
+C | arm-00649 | tail 002067
+C | arm-00649 | tail 002068
+G | arm-00649 | tail 002069
+S | arm-00649 | tail 002070
+
+A | arm-00650 | tail 002072
+C | arm-00650 | tail 002067
+C | arm-00650 | tail 002068
+G | arm-00650 | tail 002069
+S | arm-00650 | tail 002070
+
+A | arm-00651 | tail 002073
+C | arm-00651 | tail 002067
+C | arm-00651 | tail 002068
+G | arm-00651 | tail 002069
+S | arm-00651 | tail 002070
+
+A | arm-00652 | tail 002074
+C | arm-00652 | tail 002067
+C | arm-00652 | tail 002068
+G | arm-00652 | tail 002069
+S | arm-00652 | tail 002070
+
+A | arm-00653 | tail 002075
+C | arm-00653 | tail 002076
+C | arm-00653 | tail 002077
+G | arm-00653 | tail 002078
+S | arm-00653 | tail 002070
+
+A | arm-00654 | tail 002079
+C | arm-00654 | tail 002080
+G | arm-00654 | tail 002081
+S | arm-00654 | tail 000148
+
+A | arm-00655 | tail 002082
+C | arm-00655 | tail 002083
+G | arm-00655 | tail 002084
+S | arm-00655 | tail 002070
+
+A | arm-00656 | tail 002085
+C | arm-00656 | tail 002086
+C | arm-00656 | tail 002087
+C | arm-00656 | tail 002088
+C | arm-00656 | tail 002089
+G | arm-00656 | tail 002090
+S | arm-00656 | tail 002070
+
+A | arm-00657 | tail 002091
+M | arm-00657 | tail 002092
+C | arm-00657 | tail 002093
+G | arm-00657 | tail 002094
+S | arm-00657 | tail 000148
+
+A | arm-00658 | tail 002095
+C | arm-00658 | tail 002080
+G | arm-00658 | tail 002081
+S | arm-00658 | tail 000148
+
+A | arm-00659 | tail 002096
+C | arm-00659 | tail 002097
+C | arm-00659 | tail 002098
+C | arm-00659 | tail 002099
+C | arm-00659 | tail 002100
+G | arm-00659 | tail 002101
+S | arm-00659 | tail 002070
+
+A | arm-00660 | tail 002102
+C | arm-00660 | tail 002103
+C | arm-00660 | tail 002104
+C | arm-00660 | tail 002105
+G | arm-00660 | tail 002106
+S | arm-00660 | tail 002070
+
+A | arm-00661 | tail 002107
+C | arm-00661 | tail 002108
+G | arm-00661 | tail 002106
+S | arm-00661 | tail 002070
+
+A | arm-00662 | tail 002109
+C | arm-00662 | tail 002110
+C | arm-00662 | tail 002111
+C | arm-00662 | tail 002112
+G | arm-00662 | tail 002113
+S | arm-00662 | tail 002070
+
+A | arm-00663 | tail 002114
+C | arm-00663 | tail 002115
+G | arm-00663 | tail 002063
+S | arm-00663 | tail 001597
+
+A | arm-00664 | tail 002116
+C | arm-00664 | tail 002117
+G | arm-00664 | tail 002118
+S | arm-00664 | tail 001597
+
+A | arm-00665 | tail 002119
+C | arm-00665 | tail 002120
+G | arm-00665 | tail 002063
+S | arm-00665 | tail 001597
+
+A | arm-00666 | tail 002121
+C | arm-00666 | tail 002122
+G | arm-00666 | tail 002063
+S | arm-00666 | tail 001597
+
+A | arm-00667 | tail 002123
+C | arm-00667 | tail 002124
+C | arm-00667 | tail 002125
+G | arm-00667 | tail 002063
+S | arm-00667 | tail 001597
+
+A | arm-00668 | tail 002126
+C | arm-00668 | tail 002076
+C | arm-00668 | tail 002127
+C | arm-00668 | tail 002128
+C | arm-00668 | tail 002129
+G | arm-00668 | tail 002130
+S | arm-00668 | tail 002070
+
+A | arm-00669 | tail 002131
+C | arm-00669 | tail 002067
+G | arm-00669 | tail 002132
+S | arm-00669 | tail 002070
+
+A | arm-00670 | tail 002133
+C | arm-00670 | tail 002134
+G | arm-00670 | tail 002135
+S | arm-00670 | tail 000014
+
+A | arm-00671 | tail 002136
+C | arm-00671 | tail 002137
+G | arm-00671 | tail 002138
+S | arm-00671 | tail 001371
+
+A | arm-00672 | tail 002139
+C | arm-00672 | tail 002140
+G | arm-00672 | tail 002138
+S | arm-00672 | tail 001371
+
+A | arm-00673 | tail 002141
+C | arm-00673 | tail 002142
+G | arm-00673 | tail 002143
+S | arm-00673 | tail 000014
+
+A | arm-00674 | tail 002144
+C | arm-00674 | tail 002145
+G | arm-00674 | tail 002146
+S | arm-00674 | tail 001371
+
+A | arm-00675 | tail 002147
+C | arm-00675 | tail 002148
+G | arm-00675 | tail 002149
+S | arm-00675 | tail 000014
+
+A | arm-00676 | tail 002150
+C | arm-00676 | tail 002151
+G | arm-00676 | tail 002152
+S | arm-00676 | tail 000014
+
+A | arm-00677 | tail 002153
+C | arm-00677 | tail 002154
+C | arm-00677 | tail 002155
+G | arm-00677 | tail 002156
+S | arm-00677 | tail 001371
+
+A | arm-00678 | tail 002157
+C | arm-00678 | tail 002158
+G | arm-00678 | tail 002159
+S | arm-00678 | tail 001371
+
+A | arm-00679 | tail 002160
+C | arm-00679 | tail 002134
+G | arm-00679 | tail 002135
+S | arm-00679 | tail 000014
+
+A | arm-00680 | tail 002161
+C | arm-00680 | tail 002162
+C | arm-00680 | tail 002163
+G | arm-00680 | tail 002164
+S | arm-00680 | tail 000003
+
+A | arm-00681 | tail 002165
+C | arm-00681 | tail 002166
+G | arm-00681 | tail 002167
+S | arm-00681 | tail 001571
+
+A | arm-00682 | tail 002168
+C | arm-00682 | tail 002169
+G | arm-00682 | tail 002170
+S | arm-00682 | tail 000003
+
+A | arm-00683 | tail 002171
+C | arm-00683 | tail 002172
+C | arm-00683 | tail 002173
+G | arm-00683 | tail 002174
+S | arm-00683 | tail 000014
+
+A | arm-00684 | tail 002175
+C | arm-00684 | tail 002176
+C | arm-00684 | tail 002177
+C | arm-00684 | tail 002178
+G | arm-00684 | tail 002179
+S | arm-00684 | tail 001371
+
+A | arm-00685 | tail 002180
+C | arm-00685 | tail 002181
+G | arm-00685 | tail 002182
+S | arm-00685 | tail 000003
+
+A | arm-00686 | tail 002183
+C | arm-00686 | tail 002184
+C | arm-00686 | tail 002185
+G | arm-00686 | tail 002186
+S | arm-00686 | tail 001371
+
+A | arm-00687 | tail 002187
+C | arm-00687 | tail 002172
+G | arm-00687 | tail 002188
+S | arm-00687 | tail 000014
+
+A | arm-00688 | tail 002189
+C | arm-00688 | tail 002176
+G | arm-00688 | tail 002186
+S | arm-00688 | tail 001371
+
+A | arm-00689 | tail 002190
+C | arm-00689 | tail 002191
+G | arm-00689 | tail 002192
+S | arm-00689 | tail 000003
+
+A | arm-00690 | tail 002193
+C | arm-00690 | tail 002191
+G | arm-00690 | tail 002192
+S | arm-00690 | tail 000003
+
+A | arm-00691 | tail 002194
+C | arm-00691 | tail 002195
+C | arm-00691 | tail 002196
+G | arm-00691 | tail 002197
+S | arm-00691 | tail 000003
+
+A | arm-00692 | tail 002198
+C | arm-00692 | tail 002199
+G | arm-00692 | tail 001485
+S | arm-00692 | tail 000014
+
+A | arm-00693 | tail 002200
+C | arm-00693 | tail 002201
+G | arm-00693 | tail 002202
+S | arm-00693 | tail 000003
+
+A | arm-00694 | tail 002203
+C | arm-00694 | tail 002204
+C | arm-00694 | tail 002205
+C | arm-00694 | tail 002206
+C | arm-00694 | tail 002207
+C | arm-00694 | tail 002208
+G | arm-00694 | tail 002209
+S | arm-00694 | tail 000003
+
+A | arm-00695 | tail 002210
+C | arm-00695 | tail 002211
+C | arm-00695 | tail 002212
+G | arm-00695 | tail 002213
+S | arm-00695 | tail 000003
+
+A | arm-00696 | tail 002214
+C | arm-00696 | tail 002215
+C | arm-00696 | tail 002216
+G | arm-00696 | tail 002217
+S | arm-00696 | tail 000003
+
+A | arm-00697 | tail 002218
+C | arm-00697 | tail 002219
+G | arm-00697 | tail 002220
+S | arm-00697 | tail 000003
+
+A | arm-00698 | tail 002221
+C | arm-00698 | tail 002222
+C | arm-00698 | tail 002223
+C | arm-00698 | tail 002224
+C | arm-00698 | tail 002225
+G | arm-00698 | tail 002226
+S | arm-00698 | tail 000003
+
+A | arm-00699 | tail 002227
+C | arm-00699 | tail 002228
+G | arm-00699 | tail 001883
+S | arm-00699 | tail 000003
+
+A | arm-00700 | tail 002229
+C | arm-00700 | tail 002230
+C | arm-00700 | tail 002231
+G | arm-00700 | tail 001883
+S | arm-00700 | tail 000003
+
+A | arm-00701 | tail 002232
+C | arm-00701 | tail 002233
+G | arm-00701 | tail 002234
+S | arm-00701 | tail 000003
+
+A | arm-00702 | tail 002235
+C | arm-00702 | tail 002236
+G | arm-00702 | tail 002237
+S | arm-00702 | tail 000003
+
+A | arm-00703 | tail 002238
+C | arm-00703 | tail 002239
+C | arm-00703 | tail 002240
+C | arm-00703 | tail 002241
+G | arm-00703 | tail 002242
+S | arm-00703 | tail 000003
+
+A | arm-00704 | tail 002243
+C | arm-00704 | tail 002244
+G | arm-00704 | tail 002245
+S | arm-00704 | tail 000003
+
+A | arm-00705 | tail 002246
+C | arm-00705 | tail 002247
+C | arm-00705 | tail 001965
+C | arm-00705 | tail 001968
+G | arm-00705 | tail 001920
+S | arm-00705 | tail 001371
+
+A | arm-00706 | tail 002248
+C | arm-00706 | tail 002249
+C | arm-00706 | tail 002250
+C | arm-00706 | tail 002251
+C | arm-00706 | tail 002252
+G | arm-00706 | tail 001920
+S | arm-00706 | tail 001371
+
+A | arm-00707 | tail 002253
+C | arm-00707 | tail 002254
+G | arm-00707 | tail 001923
+S | arm-00707 | tail 000014
+
+A | arm-00708 | tail 002255
+C | arm-00708 | tail 002256
+G | arm-00708 | tail 002257
+S | arm-00708 | tail 001571
+
+# comment 0005
+# section 0071 -- its arms
+# comment 0005
+
+A | arm-00709 | tail 002258
+C | arm-00709 | tail 002259
+S | arm-00709 | tail 000014
+
+A | arm-00710 | tail 002260
+C | arm-00710 | tail 002261
+G | arm-00710 | tail 002262
+S | arm-00710 | tail 000003
+
+A | arm-00711 | tail 002263
+C | arm-00711 | tail 002264
+C | arm-00711 | tail 002265
+G | arm-00711 | tail 002266
+S | arm-00711 | tail 000003
+
+A | arm-00712 | tail 002267
+C | arm-00712 | tail 002268
+G | arm-00712 | tail 002269
+S | arm-00712 | tail 000003
+
+# comment 0005
+# section 0072 -- its arms
+# comment 0005
+
+A | arm-00713 | tail 003962
+C | arm-00713 | tail 002271
+G | arm-00713 | tail 002272
+S | arm-00713 | tail 001553
+
+A | arm-00714 | tail 003963
+C | arm-00714 | tail 002274
+C | arm-00714 | tail 002275
+C | arm-00714 | tail 002276
+C | arm-00714 | tail 002277
+C | arm-00714 | tail 001397
+C | arm-00714 | tail 002278
+G | arm-00714 | tail 002279
+S | arm-00714 | tail 001553
+
+A | arm-00911 | tail 003128
+C | arm-00911 | tail 003129
+G | arm-00911 | tail 003130
+S | arm-00911 | tail 003087
+
+A | arm-00912 | tail 003131
+C | arm-00912 | tail 003132
+G | arm-00912 | tail 003133
+S | arm-00912 | tail 003118
+
+A | arm-01070 | tail 003964
+C | arm-01070 | tail 003965
+G | arm-01070 | tail 003966
+S | arm-01070 | tail 003595
+
+A | arm-01071 | tail 003967
+C | arm-01071 | tail 003968
+C | arm-01071 | tail 003969
+C | arm-01071 | tail 003970
+C | arm-01071 | tail 003971
+G | arm-01071 | tail 003972
+G | arm-01071 | tail 003973
+S | arm-01071 | tail 001375
+
+A | arm-00715 | tail 003974
+C | arm-00715 | tail 002281
+C | arm-00715 | tail 002282
+C | arm-00715 | tail 002283
+C | arm-00715 | tail 002284
+C | arm-00715 | tail 002285
+C | arm-00715 | tail 002286
+C | arm-00715 | tail 002287
+C | arm-00715 | tail 002288
+C | arm-00715 | tail 002289
+C | arm-00715 | tail 002290
+C | arm-00715 | tail 003975
+G | arm-00715 | tail 002291
+S | arm-00715 | tail 001553
+
+A | arm-00913 | tail 003134
+C | arm-00913 | tail 003135
+G | arm-00913 | tail 003136
+S | arm-00913 | tail 003076
+
+A | arm-00716 | tail 003976
+C | arm-00716 | tail 002293
+C | arm-00716 | tail 002294
+C | arm-00716 | tail 002295
+C | arm-00716 | tail 002296
+G | arm-00716 | tail 002297
+S | arm-00716 | tail 002298
+
+A | arm-00717 | tail 003977
+C | arm-00717 | tail 002271
+C | arm-00717 | tail 002300
+C | arm-00717 | tail 002301
+C | arm-00717 | tail 003978
+G | arm-00717 | tail 002302
+S | arm-00717 | tail 001375
+
+A | arm-00718 | tail 003979
+C | arm-00718 | tail 002304
+C | arm-00718 | tail 002305
+C | arm-00718 | tail 002306
+C | arm-00718 | tail 002307
+C | arm-00718 | tail 002308
+C | arm-00718 | tail 002309
+C | arm-00718 | tail 002310
+C | arm-00718 | tail 002311
+G | arm-00718 | tail 002312
+S | arm-00718 | tail 002313
+
+A | arm-00719 | tail 002314
+C | arm-00719 | tail 002315
+G | arm-00719 | tail 002316
+S | arm-00719 | tail 002317
+
+A | arm-00720 | tail 002318
+C | arm-00720 | tail 002319
+G | arm-00720 | tail 002320
+S | arm-00720 | tail 002321
+
+A | arm-00721 | tail 002322
+C | arm-00721 | tail 002323
+G | arm-00721 | tail 002324
+S | arm-00721 | tail 002325
+
+A | arm-00722 | tail 002326
+C | arm-00722 | tail 002327
+G | arm-00722 | tail 002328
+S | arm-00722 | tail 001597
+
+A | arm-00723 | tail 002329
+C | arm-00723 | tail 002330
+G | arm-00723 | tail 002331
+S | arm-00723 | tail 000148
+
+A | arm-00724 | tail 003137
+C | arm-00724 | tail 002333
+G | arm-00724 | tail 002334
+S | arm-00724 | tail 000003
+
+A | arm-00725 | tail 003980
+C | arm-00725 | tail 002271
+C | arm-00725 | tail 002336
+C | arm-00725 | tail 002337
+C | arm-00725 | tail 002338
+C | arm-00725 | tail 002339
+C | arm-00725 | tail 002340
+C | arm-00725 | tail 002287
+C | arm-00725 | tail 002288
+C | arm-00725 | tail 002289
+C | arm-00725 | tail 002290
+C | arm-00725 | tail 003981
+G | arm-00725 | tail 002341
+S | arm-00725 | tail 002342
+
+A | arm-00726 | tail 002343
+C | arm-00726 | tail 002344
+G | arm-00726 | tail 002345
+S | arm-00726 | tail 000014
+
+A | arm-00727 | tail 002346
+C | arm-00727 | tail 002199
+G | arm-00727 | tail 001485
+S | arm-00727 | tail 000014
+
+# comment 0005
+# section 0073 -- its arms
+# comment 0005
+
+# comment 0005
+# section 0074 -- its arms
+# comment 0005
+
+A | arm-01072 | tail 003982
+C | arm-01072 | tail 003983
+C | arm-01072 | tail 003984
+G | arm-01072 | tail 003985
+S | arm-01072 | tail 001375
+
+A | arm-01073 | tail 003986
+C | arm-01073 | tail 003987
+C | arm-01073 | tail 003988
+G | arm-01073 | tail 003985
+S | arm-01073 | tail 001375
+
+A | arm-00728 | tail 003138
+C | arm-00728 | tail 003139
+C | arm-00728 | tail 003140
+C | arm-00728 | tail 003141
+G | arm-00728 | tail 002351
+S | arm-00728 | tail 000003
+
+A | arm-00914 | tail 003142
+C | arm-00914 | tail 003143
+G | arm-00914 | tail 003144
+S | arm-00914 | tail 003076
+
+A | arm-00915 | tail 003145
+C | arm-00915 | tail 003146
+G | arm-00915 | tail 003147
+S | arm-00915 | tail 000003
+
+A | arm-00729 | tail 003148
+C | arm-00729 | tail 003149
+C | arm-00729 | tail 003150
+C | arm-00729 | tail 003151
+G | arm-00729 | tail 003152
+S | arm-00729 | tail 000003
+
+A | arm-00730 | tail 003153
+C | arm-00730 | tail 003154
+C | arm-00730 | tail 003155
+C | arm-00730 | tail 003156
+G | arm-00730 | tail 003157
+S | arm-00730 | tail 000003
+
+A | arm-00916 | tail 003158
+C | arm-00916 | tail 003159
+C | arm-00916 | tail 003160
+G | arm-00916 | tail 003161
+S | arm-00916 | tail 000003
+
+A | arm-00731 | tail 003162
+C | arm-00731 | tail 002361
+C | arm-00731 | tail 002362
+C | arm-00731 | tail 002363
+C | arm-00731 | tail 002364
+C | arm-00731 | tail 002365
+C | arm-00731 | tail 002366
+G | arm-00731 | tail 002367
+S | arm-00731 | tail 000003
+
+A | arm-00917 | tail 003163
+C | arm-00917 | tail 003164
+G | arm-00917 | tail 003165
+S | arm-00917 | tail 000003
+
+A | arm-00918 | tail 003166
+C | arm-00918 | tail 003167
+G | arm-00918 | tail 003168
+S | arm-00918 | tail 000003
+
+A | arm-00919 | tail 003169
+C | arm-00919 | tail 003170
+G | arm-00919 | tail 003171
+S | arm-00919 | tail 000003
+
+A | arm-00732 | tail 003172
+C | arm-00732 | tail 002369
+C | arm-00732 | tail 002370
+C | arm-00732 | tail 002371
+G | arm-00732 | tail 002372
+S | arm-00732 | tail 000003
+
+A | arm-00920 | tail 003173
+C | arm-00920 | tail 003174
+G | arm-00920 | tail 003175
+S | arm-00920 | tail 000003
+
+A | arm-00733 | tail 003176
+C | arm-00733 | tail 002374
+C | arm-00733 | tail 002375
+C | arm-00733 | tail 002376
+C | arm-00733 | tail 002377
+G | arm-00733 | tail 002378
+S | arm-00733 | tail 000003
+
+A | arm-00734 | tail 003177
+C | arm-00734 | tail 002380
+G | arm-00734 | tail 002381
+S | arm-00734 | tail 000003
+
+A | arm-00735 | tail 003178
+C | arm-00735 | tail 002383
+C | arm-00735 | tail 002384
+C | arm-00735 | tail 002385
+C | arm-00735 | tail 002386
+C | arm-00735 | tail 002387
+C | arm-00735 | tail 002388
+G | arm-00735 | tail 002389
+S | arm-00735 | tail 000003
+
+A | arm-00736 | tail 003179
+C | arm-00736 | tail 002391
+G | arm-00736 | tail 002392
+S | arm-00736 | tail 000003
+
+A | arm-00737 | tail 003180
+C | arm-00737 | tail 002394
+G | arm-00737 | tail 002395
+S | arm-00737 | tail 000003
+
+A | arm-00738 | tail 003181
+C | arm-00738 | tail 002397
+C | arm-00738 | tail 002398
+C | arm-00738 | tail 002399
+C | arm-00738 | tail 002400
+C | arm-00738 | tail 002401
+C | arm-00738 | tail 002402
+C | arm-00738 | tail 002403
+C | arm-00738 | tail 002404
+C | arm-00738 | tail 002405
+C | arm-00738 | tail 002406
+C | arm-00738 | tail 002387
+C | arm-00738 | tail 002388
+G | arm-00738 | tail 002407
+S | arm-00738 | tail 000003
+
+A | arm-00739 | tail 003182
+C | arm-00739 | tail 002409
+C | arm-00739 | tail 002410
+C | arm-00739 | tail 002411
+C | arm-00739 | tail 002412
+C | arm-00739 | tail 002413
+C | arm-00739 | tail 002414
+C | arm-00739 | tail 002415
+G | arm-00739 | tail 002416
+S | arm-00739 | tail 000003
+
+A | arm-00740 | tail 003183
+C | arm-00740 | tail 002418
+G | arm-00740 | tail 002419
+S | arm-00740 | tail 000003
+
+A | arm-00741 | tail 003184
+C | arm-00741 | tail 002421
+G | arm-00741 | tail 002419
+S | arm-00741 | tail 000003
+
+A | arm-00742 | tail 003185
+C | arm-00742 | tail 002423
+G | arm-00742 | tail 002419
+S | arm-00742 | tail 000003
+
+A | arm-00743 | tail 003186
+C | arm-00743 | tail 002425
+G | arm-00743 | tail 002419
+S | arm-00743 | tail 000003
+
+A | arm-00744 | tail 003187
+C | arm-00744 | tail 002427
+G | arm-00744 | tail 002419
+S | arm-00744 | tail 000003
+
+A | arm-00745 | tail 003188
+C | arm-00745 | tail 002429
+C | arm-00745 | tail 003189
+G | arm-00745 | tail 002430
+S | arm-00745 | tail 000003
+
+A | arm-00746 | tail 003190
+C | arm-00746 | tail 002432
+G | arm-00746 | tail 002433
+S | arm-00746 | tail 000003
+
+A | arm-00747 | tail 003191
+C | arm-00747 | tail 002435
+C | arm-00747 | tail 002436
+G | arm-00747 | tail 002437
+S | arm-00747 | tail 000003
+
+A | arm-00748 | tail 003192
+C | arm-00748 | tail 002439
+G | arm-00748 | tail 002440
+S | arm-00748 | tail 000003
+
+A | arm-00749 | tail 003193
+C | arm-00749 | tail 002442
+G | arm-00749 | tail 002443
+S | arm-00749 | tail 000003
+
+A | arm-00750 | tail 003194
+C | arm-00750 | tail 002445
+G | arm-00750 | tail 002446
+S | arm-00750 | tail 000003
+
+A | arm-00751 | tail 003195
+C | arm-00751 | tail 002448
+C | arm-00751 | tail 002449
+C | arm-00751 | tail 002450
+C | arm-00751 | tail 002451
+C | arm-00751 | tail 002452
+C | arm-00751 | tail 002453
+C | arm-00751 | tail 002454
+C | arm-00751 | tail 002455
+C | arm-00751 | tail 002456
+C | arm-00751 | tail 002457
+C | arm-00751 | tail 002458
+C | arm-00751 | tail 002459
+C | arm-00751 | tail 002460
+C | arm-00751 | tail 002461
+C | arm-00751 | tail 002415
+G | arm-00751 | tail 002462
+S | arm-00751 | tail 000003
+
+A | arm-00752 | tail 003196
+C | arm-00752 | tail 002464
+C | arm-00752 | tail 002465
+C | arm-00752 | tail 002466
+G | arm-00752 | tail 002467
+S | arm-00752 | tail 000003
+
+A | arm-00753 | tail 003197
+C | arm-00753 | tail 002469
+G | arm-00753 | tail 002470
+S | arm-00753 | tail 000003
+
+A | arm-00754 | tail 003198
+C | arm-00754 | tail 002472
+C | arm-00754 | tail 002473
+C | arm-00754 | tail 002474
+C | arm-00754 | tail 002475
+C | arm-00754 | tail 002476
+C | arm-00754 | tail 002387
+G | arm-00754 | tail 002477
+S | arm-00754 | tail 000003
+
+A | arm-00755 | tail 003199
+C | arm-00755 | tail 002479
+G | arm-00755 | tail 002480
+S | arm-00755 | tail 000003
+
+A | arm-00756 | tail 003200
+C | arm-00756 | tail 003201
+C | arm-00756 | tail 003202
+G | arm-00756 | tail 002484
+S | arm-00756 | tail 000003
+
+A | arm-00757 | tail 003203
+C | arm-00757 | tail 003204
+C | arm-00757 | tail 003205
+C | arm-00757 | tail 003206
+C | arm-00757 | tail 003207
+C | arm-00757 | tail 003208
+G | arm-00757 | tail 002490
+S | arm-00757 | tail 000003
+
+A | arm-00758 | tail 003209
+C | arm-00758 | tail 002492
+C | arm-00758 | tail 002493
+C | arm-00758 | tail 002494
+C | arm-00758 | tail 002495
+C | arm-00758 | tail 002496
+C | arm-00758 | tail 002497
+C | arm-00758 | tail 002498
+C | arm-00758 | tail 003210
+G | arm-00758 | tail 002499
+S | arm-00758 | tail 000003
+
+A | arm-00759 | tail 003211
+C | arm-00759 | tail 002501
+G | arm-00759 | tail 002502
+S | arm-00759 | tail 000003
+
+A | arm-00760 | tail 003212
+C | arm-00760 | tail 002504
+C | arm-00760 | tail 002505
+C | arm-00760 | tail 002506
+C | arm-00760 | tail 003210
+G | arm-00760 | tail 002507
+S | arm-00760 | tail 000003
+
+A | arm-00761 | tail 003213
+C | arm-00761 | tail 002509
+C | arm-00761 | tail 002510
+G | arm-00761 | tail 002511
+S | arm-00761 | tail 000003
+
+A | arm-00762 | tail 003214
+C | arm-00762 | tail 002513
+G | arm-00762 | tail 002514
+S | arm-00762 | tail 000003
+
+A | arm-00763 | tail 003215
+C | arm-00763 | tail 002516
+G | arm-00763 | tail 002517
+S | arm-00763 | tail 000003
+
+A | arm-00764 | tail 003216
+C | arm-00764 | tail 002519
+G | arm-00764 | tail 002520
+S | arm-00764 | tail 000003
+
+A | arm-00765 | tail 003217
+C | arm-00765 | tail 002522
+G | arm-00765 | tail 002523
+S | arm-00765 | tail 000003
+
+A | arm-00766 | tail 003218
+C | arm-00766 | tail 002525
+C | arm-00766 | tail 002526
+C | arm-00766 | tail 002527
+C | arm-00766 | tail 002384
+C | arm-00766 | tail 002385
+C | arm-00766 | tail 002370
+C | arm-00766 | tail 002371
+C | arm-00766 | tail 002386
+C | arm-00766 | tail 002387
+C | arm-00766 | tail 002388
+C | arm-00766 | tail 002528
+C | arm-00766 | tail 002529
+C | arm-00766 | tail 003219
+G | arm-00766 | tail 002530
+S | arm-00766 | tail 000003
+
+A | arm-00767 | tail 003220
+C | arm-00767 | tail 002532
+C | arm-00767 | tail 002533
+C | arm-00767 | tail 002400
+C | arm-00767 | tail 002404
+C | arm-00767 | tail 002413
+C | arm-00767 | tail 002414
+C | arm-00767 | tail 002405
+G | arm-00767 | tail 002534
+S | arm-00767 | tail 000003
+
+A | arm-00768 | tail 003221
+C | arm-00768 | tail 002536
+G | arm-00768 | tail 002537
+S | arm-00768 | tail 000003
+
+A | arm-00769 | tail 003222
+C | arm-00769 | tail 002539
+G | arm-00769 | tail 002540
+S | arm-00769 | tail 000003
+
+A | arm-00770 | tail 003223
+C | arm-00770 | tail 002542
+G | arm-00770 | tail 002543
+S | arm-00770 | tail 000003
+
+A | arm-00771 | tail 003224
+C | arm-00771 | tail 002545
+G | arm-00771 | tail 002546
+S | arm-00771 | tail 000003
+
+A | arm-00772 | tail 003225
+C | arm-00772 | tail 002548
+G | arm-00772 | tail 002549
+S | arm-00772 | tail 000003
+
+A | arm-00773 | tail 003226
+C | arm-00773 | tail 002551
+C | arm-00773 | tail 002552
+G | arm-00773 | tail 002553
+S | arm-00773 | tail 000003
+
+A | arm-00774 | tail 003227
+C | arm-00774 | tail 002369
+G | arm-00774 | tail 002555
+S | arm-00774 | tail 000003
+
+A | arm-00775 | tail 003228
+C | arm-00775 | tail 002557
+C | arm-00775 | tail 002371
+G | arm-00775 | tail 002558
+S | arm-00775 | tail 000003
+
+A | arm-00776 | tail 003229
+C | arm-00776 | tail 002560
+G | arm-00776 | tail 002561
+S | arm-00776 | tail 000003
+
+A | arm-00777 | tail 003230
+C | arm-00777 | tail 002563
+G | arm-00777 | tail 002564
+S | arm-00777 | tail 000003
+
+A | arm-00778 | tail 003231
+C | arm-00778 | tail 002566
+C | arm-00778 | tail 002567
+G | arm-00778 | tail 002568
+S | arm-00778 | tail 000003
+
+A | arm-00779 | tail 003232
+C | arm-00779 | tail 002570
+G | arm-00779 | tail 002571
+S | arm-00779 | tail 000003
+
+A | arm-00780 | tail 003233
+C | arm-00780 | tail 002573
+G | arm-00780 | tail 002574
+S | arm-00780 | tail 002575
+
+A | arm-00781 | tail 003234
+C | arm-00781 | tail 002577
+C | arm-00781 | tail 002578
+C | arm-00781 | tail 002579
+G | arm-00781 | tail 002580
+S | arm-00781 | tail 000003
+
+A | arm-00921 | tail 003235
+C | arm-00921 | tail 003236
+G | arm-00921 | tail 003237
+S | arm-00921 | tail 000003
+
+A | arm-00782 | tail 003238
+C | arm-00782 | tail 002582
+G | arm-00782 | tail 002583
+S | arm-00782 | tail 000003
+
+A | arm-00783 | tail 003239
+C | arm-00783 | tail 002585
+C | arm-00783 | tail 002586
+G | arm-00783 | tail 002587
+S | arm-00783 | tail 000003
+
+A | arm-00784 | tail 003240
+C | arm-00784 | tail 002589
+G | arm-00784 | tail 002590
+S | arm-00784 | tail 000003
+
+A | arm-00785 | tail 003241
+C | arm-00785 | tail 002592
+G | arm-00785 | tail 002593
+S | arm-00785 | tail 000003
+
+A | arm-00786 | tail 003242
+C | arm-00786 | tail 002595
+G | arm-00786 | tail 002596
+S | arm-00786 | tail 000003
+
+A | arm-00787 | tail 003243
+C | arm-00787 | tail 002598
+G | arm-00787 | tail 002599
+S | arm-00787 | tail 000003
+
+A | arm-00788 | tail 003244
+C | arm-00788 | tail 002601
+G | arm-00788 | tail 002602
+S | arm-00788 | tail 000003
+
+A | arm-00789 | tail 003245
+C | arm-00789 | tail 002604
+G | arm-00789 | tail 002605
+S | arm-00789 | tail 000003
+
+A | arm-00790 | tail 003246
+C | arm-00790 | tail 002607
+C | arm-00790 | tail 002608
+G | arm-00790 | tail 002609
+S | arm-00790 | tail 000003
+
+A | arm-00791 | tail 003247
+C | arm-00791 | tail 002611
+C | arm-00791 | tail 002612
+G | arm-00791 | tail 002613
+S | arm-00791 | tail 000003
+
+A | arm-00792 | tail 003248
+C | arm-00792 | tail 002615
+C | arm-00792 | tail 003210
+G | arm-00792 | tail 002616
+S | arm-00792 | tail 000003
+
+A | arm-00793 | tail 003249
+C | arm-00793 | tail 002618
+C | arm-00793 | tail 002619
+C | arm-00793 | tail 002620
+C | arm-00793 | tail 002621
+C | arm-00793 | tail 002622
+C | arm-00793 | tail 002623
+C | arm-00793 | tail 002624
+C | arm-00793 | tail 002625
+C | arm-00793 | tail 002626
+C | arm-00793 | tail 002627
+G | arm-00793 | tail 002628
+S | arm-00793 | tail 002575
+
+A | arm-00794 | tail 003250
+C | arm-00794 | tail 002630
+G | arm-00794 | tail 002631
+S | arm-00794 | tail 000003
+
+A | arm-00795 | tail 003251
+C | arm-00795 | tail 002633
+C | arm-00795 | tail 002634
+C | arm-00795 | tail 002635
+C | arm-00795 | tail 002636
+C | arm-00795 | tail 002637
+C | arm-00795 | tail 002638
+C | arm-00795 | tail 002639
+G | arm-00795 | tail 002640
+S | arm-00795 | tail 000003
+
+A | arm-00796 | tail 003252
+C | arm-00796 | tail 002642
+C | arm-00796 | tail 002643
+C | arm-00796 | tail 002644
+C | arm-00796 | tail 002645
+C | arm-00796 | tail 002646
+C | arm-00796 | tail 002647
+C | arm-00796 | tail 002648
+C | arm-00796 | tail 002649
+C | arm-00796 | tail 002650
+G | arm-00796 | tail 002651
+S | arm-00796 | tail 000003
+
+A | arm-00797 | tail 003253
+C | arm-00797 | tail 002653
+C | arm-00797 | tail 002654
+C | arm-00797 | tail 002634
+C | arm-00797 | tail 002635
+C | arm-00797 | tail 002636
+C | arm-00797 | tail 002655
+C | arm-00797 | tail 002656
+C | arm-00797 | tail 002637
+C | arm-00797 | tail 002638
+C | arm-00797 | tail 002657
+C | arm-00797 | tail 002639
+G | arm-00797 | tail 002658
+S | arm-00797 | tail 000003
+
+A | arm-00798 | tail 003254
+C | arm-00798 | tail 002660
+C | arm-00798 | tail 002398
+C | arm-00798 | tail 002399
+C | arm-00798 | tail 002400
+C | arm-00798 | tail 002401
+C | arm-00798 | tail 002402
+C | arm-00798 | tail 002403
+C | arm-00798 | tail 002411
+C | arm-00798 | tail 002412
+C | arm-00798 | tail 002404
+C | arm-00798 | tail 002413
+C | arm-00798 | tail 002414
+C | arm-00798 | tail 002405
+C | arm-00798 | tail 002406
+C | arm-00798 | tail 002387
+C | arm-00798 | tail 002388
+G | arm-00798 | tail 002658
+S | arm-00798 | tail 000003
+
+A | arm-00799 | tail 003255
+C | arm-00799 | tail 002662
+G | arm-00799 | tail 002663
+S | arm-00799 | tail 000003
+
+A | arm-00800 | tail 003256
+C | arm-00800 | tail 002665
+G | arm-00800 | tail 002433
+S | arm-00800 | tail 000003
+
+A | arm-00801 | tail 003257
+C | arm-00801 | tail 002667
+G | arm-00801 | tail 002668
+S | arm-00801 | tail 000003
+
+A | arm-00802 | tail 003258
+C | arm-00802 | tail 002670
+G | arm-00802 | tail 002671
+S | arm-00802 | tail 000003
+
+A | arm-00803 | tail 003259
+C | arm-00803 | tail 002673
+C | arm-00803 | tail 002674
+G | arm-00803 | tail 002675
+S | arm-00803 | tail 000003
+
+A | arm-00804 | tail 003260
+C | arm-00804 | tail 002677
+G | arm-00804 | tail 002678
+S | arm-00804 | tail 000003
+
+A | arm-00805 | tail 003261
+C | arm-00805 | tail 002680
+C | arm-00805 | tail 002681
+G | arm-00805 | tail 002682
+S | arm-00805 | tail 000003
+
+A | arm-00806 | tail 003262
+C | arm-00806 | tail 002684
+C | arm-00806 | tail 002685
+G | arm-00806 | tail 002686
+S | arm-00806 | tail 000003
+
+A | arm-00807 | tail 003263
+C | arm-00807 | tail 002688
+C | arm-00807 | tail 002689
+G | arm-00807 | tail 002690
+S | arm-00807 | tail 000003
+
+A | arm-00808 | tail 003264
+C | arm-00808 | tail 002692
+C | arm-00808 | tail 002693
+G | arm-00808 | tail 002694
+S | arm-00808 | tail 000003
+
+A | arm-00809 | tail 003265
+C | arm-00809 | tail 002696
+G | arm-00809 | tail 002697
+S | arm-00809 | tail 000003
+
+A | arm-00810 | tail 003266
+C | arm-00810 | tail 002699
+G | arm-00810 | tail 002700
+S | arm-00810 | tail 000003
+
+A | arm-00811 | tail 003267
+C | arm-00811 | tail 002702
+G | arm-00811 | tail 002703
+S | arm-00811 | tail 000003
+
+A | arm-00812 | tail 003268
+C | arm-00812 | tail 002705
+C | arm-00812 | tail 002706
+C | arm-00812 | tail 002707
+G | arm-00812 | tail 002708
+S | arm-00812 | tail 000003
+
+A | arm-00813 | tail 003269
+C | arm-00813 | tail 002710
+C | arm-00813 | tail 002711
+C | arm-00813 | tail 002712
+C | arm-00813 | tail 002713
+C | arm-00813 | tail 002714
+C | arm-00813 | tail 002715
+C | arm-00813 | tail 002716
+C | arm-00813 | tail 002717
+C | arm-00813 | tail 002718
+C | arm-00813 | tail 002719
+C | arm-00813 | tail 002720
+C | arm-00813 | tail 002721
+C | arm-00813 | tail 002722
+C | arm-00813 | tail 003210
+G | arm-00813 | tail 002723
+S | arm-00813 | tail 000003
+
+A | arm-00814 | tail 003270
+C | arm-00814 | tail 002725
+G | arm-00814 | tail 002726
+S | arm-00814 | tail 000003
+
+A | arm-00815 | tail 003271
+C | arm-00815 | tail 002374
+C | arm-00815 | tail 002375
+C | arm-00815 | tail 002376
+C | arm-00815 | tail 002377
+C | arm-00815 | tail 002728
+G | arm-00815 | tail 002729
+S | arm-00815 | tail 000003
+
+A | arm-00816 | tail 003272
+C | arm-00816 | tail 002731
+G | arm-00816 | tail 002732
+S | arm-00816 | tail 000003
+
+A | arm-00817 | tail 003273
+C | arm-00817 | tail 002734
+C | arm-00817 | tail 002735
+G | arm-00817 | tail 002736
+S | arm-00817 | tail 000003
+
+A | arm-00818 | tail 003274
+C | arm-00818 | tail 002738
+G | arm-00818 | tail 002739
+S | arm-00818 | tail 000003
+
+A | arm-00819 | tail 003275
+C | arm-00819 | tail 002741
+G | arm-00819 | tail 002742
+S | arm-00819 | tail 000003
+
+A | arm-00820 | tail 003276
+C | arm-00820 | tail 002744
+C | arm-00820 | tail 002745
+C | arm-00820 | tail 002689
+G | arm-00820 | tail 002746
+S | arm-00820 | tail 000003
+
+A | arm-00821 | tail 003277
+C | arm-00821 | tail 002748
+G | arm-00821 | tail 002749
+S | arm-00821 | tail 000003
+
+A | arm-00822 | tail 002750
+C | arm-00822 | tail 002751
+G | arm-00822 | tail 002752
+S | arm-00822 | tail 000003
+
+A | arm-00823 | tail 002753
+C | arm-00823 | tail 002754
+G | arm-00823 | tail 002755
+S | arm-00823 | tail 000003
+
+A | arm-00824 | tail 002756
+C | arm-00824 | tail 002757
+G | arm-00824 | tail 002758
+S | arm-00824 | tail 000003
+
+A | arm-00825 | tail 002759
+C | arm-00825 | tail 002760
+C | arm-00825 | tail 002761
+C | arm-00825 | tail 002762
+G | arm-00825 | tail 002763
+S | arm-00825 | tail 000003
+
+A | arm-00826 | tail 002764
+C | arm-00826 | tail 002765
+G | arm-00826 | tail 002766
+S | arm-00826 | tail 000003
+
+A | arm-00827 | tail 002767
+C | arm-00827 | tail 002768
+G | arm-00827 | tail 002769
+S | arm-00827 | tail 000003
+
+A | arm-00828 | tail 002770
+C | arm-00828 | tail 002771
+C | arm-00828 | tail 002772
+G | arm-00828 | tail 002773
+S | arm-00828 | tail 000003
+
+A | arm-00829 | tail 002774
+C | arm-00829 | tail 002775
+S | arm-00829 | tail 000003
+
+A | arm-00830 | tail 002776
+C | arm-00830 | tail 002777
+G | arm-00830 | tail 002778
+S | arm-00830 | tail 000003
+
+A | arm-00831 | tail 002779
+C | arm-00831 | tail 002780
+C | arm-00831 | tail 002781
+C | arm-00831 | tail 002782
+C | arm-00831 | tail 002783
+C | arm-00831 | tail 002784
+C | arm-00831 | tail 002785
+C | arm-00831 | tail 002786
+C | arm-00831 | tail 002787
+C | arm-00831 | tail 002788
+C | arm-00831 | tail 002789
+C | arm-00831 | tail 002790
+C | arm-00831 | tail 002791
+C | arm-00831 | tail 002792
+C | arm-00831 | tail 002793
+C | arm-00831 | tail 002794
+C | arm-00831 | tail 002795
+C | arm-00831 | tail 002796
+C | arm-00831 | tail 002797
+C | arm-00831 | tail 002798
+C | arm-00831 | tail 002799
+C | arm-00831 | tail 002800
+C | arm-00831 | tail 002801
+C | arm-00831 | tail 002802
+C | arm-00831 | tail 002803
+C | arm-00831 | tail 002804
+C | arm-00831 | tail 002805
+C | arm-00831 | tail 002806
+C | arm-00831 | tail 002807
+C | arm-00831 | tail 002808
+C | arm-00831 | tail 002809
+C | arm-00831 | tail 002810
+C | arm-00831 | tail 002811
+C | arm-00831 | tail 002812
+C | arm-00831 | tail 002813
+C | arm-00831 | tail 002814
+C | arm-00831 | tail 002815
+C | arm-00831 | tail 002816
+C | arm-00831 | tail 002817
+C | arm-00831 | tail 002818
+C | arm-00831 | tail 002819
+C | arm-00831 | tail 002820
+C | arm-00831 | tail 002821
+C | arm-00831 | tail 002822
+C | arm-00831 | tail 002823
+C | arm-00831 | tail 002824
+C | arm-00831 | tail 002825
+C | arm-00831 | tail 002826
+C | arm-00831 | tail 002827
+C | arm-00831 | tail 002828
+C | arm-00831 | tail 002829
+C | arm-00831 | tail 002830
+C | arm-00831 | tail 002831
+C | arm-00831 | tail 002832
+C | arm-00831 | tail 002833
+C | arm-00831 | tail 002834
+C | arm-00831 | tail 002835
+C | arm-00831 | tail 002836
+C | arm-00831 | tail 002837
+C | arm-00831 | tail 002838
+C | arm-00831 | tail 002839
+C | arm-00831 | tail 002840
+C | arm-00831 | tail 002841
+C | arm-00831 | tail 002842
+C | arm-00831 | tail 002843
+G | arm-00831 | tail 002844
+S | arm-00831 | tail 000003
+
+A | arm-00832 | tail 002845
+C | arm-00832 | tail 002846
+G | arm-00832 | tail 002847
+S | arm-00832 | tail 000003
+
+A | arm-00833 | tail 002848
+C | arm-00833 | tail 002849
+C | arm-00833 | tail 002850
+G | arm-00833 | tail 002851
+S | arm-00833 | tail 000003
+
+A | arm-00834 | tail 002852
+C | arm-00834 | tail 002853
+G | arm-00834 | tail 002854
+S | arm-00834 | tail 000003
+
+A | arm-00835 | tail 002855
+C | arm-00835 | tail 002856
+G | arm-00835 | tail 002857
+S | arm-00835 | tail 000003
+
+A | arm-00836 | tail 002858
+C | arm-00836 | tail 002856
+G | arm-00836 | tail 002859
+S | arm-00836 | tail 000003
+
+A | arm-00837 | tail 002860
+C | arm-00837 | tail 002861
+G | arm-00837 | tail 002862
+S | arm-00837 | tail 000003
+
+A | arm-00838 | tail 002863
+C | arm-00838 | tail 002864
+G | arm-00838 | tail 002865
+S | arm-00838 | tail 000003
+
+A | arm-00839 | tail 002866
+C | arm-00839 | tail 002867
+C | arm-00839 | tail 002850
+G | arm-00839 | tail 002868
+S | arm-00839 | tail 000003
+
+A | arm-00840 | tail 002869
+C | arm-00840 | tail 002870
+C | arm-00840 | tail 002871
+G | arm-00840 | tail 002872
+S | arm-00840 | tail 000003
+
+A | arm-00841 | tail 002873
+C | arm-00841 | tail 002874
+G | arm-00841 | tail 002875
+S | arm-00841 | tail 000003
+
+A | arm-00842 | tail 002876
+C | arm-00842 | tail 002877
+G | arm-00842 | tail 002878
+S | arm-00842 | tail 000003
+
+A | arm-00843 | tail 002879
+C | arm-00843 | tail 002880
+G | arm-00843 | tail 002881
+S | arm-00843 | tail 000003
+
+A | arm-00844 | tail 002882
+C | arm-00844 | tail 002883
+S | arm-00844 | tail 000003
+
+A | arm-00845 | tail 002884
+C | arm-00845 | tail 002885
+C | arm-00845 | tail 002886
+G | arm-00845 | tail 002887
+S | arm-00845 | tail 000003
+
+A | arm-00922 | tail 003278
+C | arm-00922 | tail 003279
+G | arm-00922 | tail 003280
+S | arm-00922 | tail 003281
+
+A | arm-00923 | tail 003282
+C | arm-00923 | tail 003283
+G | arm-00923 | tail 003284
+S | arm-00923 | tail 003281
+
+A | arm-00846 | tail 003285
+C | arm-00846 | tail 002889
+G | arm-00846 | tail 002890
+S | arm-00846 | tail 000003
+
+A | arm-00847 | tail 003286
+C | arm-00847 | tail 002892
+G | arm-00847 | tail 002893
+S | arm-00847 | tail 000003
+
+A | arm-00848 | tail 003287
+C | arm-00848 | tail 002895
+C | arm-00848 | tail 002896
+G | arm-00848 | tail 002897
+S | arm-00848 | tail 000003
+
+A | arm-00849 | tail 003288
+C | arm-00849 | tail 002899
+C | arm-00849 | tail 002900
+C | arm-00849 | tail 002901
+C | arm-00849 | tail 002902
+G | arm-00849 | tail 002903
+S | arm-00849 | tail 000003
+
+A | arm-00924 | tail 003289
+C | arm-00924 | tail 003290
+G | arm-00924 | tail 003291
+S | arm-00924 | tail 000003
+
+A | arm-00850 | tail 003292
+C | arm-00850 | tail 002905
+C | arm-00850 | tail 002906
+C | arm-00850 | tail 002907
+C | arm-00850 | tail 002908
+C | arm-00850 | tail 003293
+G | arm-00850 | tail 002909
+S | arm-00850 | tail 000003
+
+A | arm-00851 | tail 003294
+C | arm-00851 | tail 002911
+C | arm-00851 | tail 002912
+C | arm-00851 | tail 002913
+G | arm-00851 | tail 002914
+S | arm-00851 | tail 000003
+
+A | arm-00852 | tail 003295
+C | arm-00852 | tail 002916
+G | arm-00852 | tail 002917
+S | arm-00852 | tail 000003
+
+A | arm-00853 | tail 003296
+C | arm-00853 | tail 002911
+C | arm-00853 | tail 002912
+C | arm-00853 | tail 002919
+C | arm-00853 | tail 002896
+G | arm-00853 | tail 002920
+S | arm-00853 | tail 000003
+
+A | arm-00854 | tail 003297
+C | arm-00854 | tail 002922
+G | arm-00854 | tail 002923
+S | arm-00854 | tail 000003
+
+A | arm-00855 | tail 003298
+C | arm-00855 | tail 002925
+G | arm-00855 | tail 002926
+S | arm-00855 | tail 000003
+
+A | arm-00925 | tail 003299
+C | arm-00925 | tail 003300
+G | arm-00925 | tail 003301
+S | arm-00925 | tail 000003
+
+A | arm-00856 | tail 003302
+C | arm-00856 | tail 002928
+G | arm-00856 | tail 002929
+S | arm-00856 | tail 000003
+
+A | arm-00857 | tail 003303
+C | arm-00857 | tail 003304
+G | arm-00857 | tail 003305
+S | arm-00857 | tail 000003
+
+A | arm-00858 | tail 003306
+C | arm-00858 | tail 003307
+G | arm-00858 | tail 003308
+S | arm-00858 | tail 000003
+
+A | arm-00860 | tail 003309
+C | arm-00860 | tail 003310
+C | arm-00860 | tail 003311
+G | arm-00860 | tail 003312
+S | arm-00860 | tail 000003
+
+A | arm-00926 | tail 003313
+C | arm-00926 | tail 003314
+C | arm-00926 | tail 003315
+C | arm-00926 | tail 003316
+C | arm-00926 | tail 003317
+G | arm-00926 | tail 003318
+S | arm-00926 | tail 000003
+
+A | arm-00927 | tail 003319
+C | arm-00927 | tail 003320
+C | arm-00927 | tail 003321
+G | arm-00927 | tail 003322
+S | arm-00927 | tail 000003
+
+A | arm-00861 | tail 003323
+C | arm-00861 | tail 003324
+G | arm-00861 | tail 003325
+S | arm-00861 | tail 000003
+
+A | arm-00928 | tail 003326
+C | arm-00928 | tail 003327
+G | arm-00928 | tail 003328
+S | arm-00928 | tail 000003
+
+A | arm-00862 | tail 002946
+C | arm-00862 | tail 002947
+G | arm-00862 | tail 002948
+S | arm-00862 | tail 000003
+
+A | arm-00863 | tail 002949
+C | arm-00863 | tail 002950
+G | arm-00863 | tail 002948
+S | arm-00863 | tail 000003
+
+A | arm-00864 | tail 002951
+C | arm-00864 | tail 002952
+G | arm-00864 | tail 002948
+S | arm-00864 | tail 000003
+
+A | arm-00865 | tail 002953
+C | arm-00865 | tail 002954
+G | arm-00865 | tail 002948
+S | arm-00865 | tail 000003
+
+A | arm-00866 | tail 002955
+C | arm-00866 | tail 002956
+G | arm-00866 | tail 002948
+S | arm-00866 | tail 000003
+
+A | arm-00867 | tail 002957
+C | arm-00867 | tail 002958
+C | arm-00867 | tail 002959
+C | arm-00867 | tail 002960
+C | arm-00867 | tail 002961
+C | arm-00867 | tail 002962
+C | arm-00867 | tail 002963
+C | arm-00867 | tail 002964
+G | arm-00867 | tail 002948
+S | arm-00867 | tail 000003
+
+A | arm-00868 | tail 002965
+C | arm-00868 | tail 002966
+G | arm-00868 | tail 002967
+S | arm-00868 | tail 000003
+
+A | arm-00869 | tail 002968
+C | arm-00869 | tail 002969
+G | arm-00869 | tail 002967
+S | arm-00869 | tail 000003
+
+A | arm-00870 | tail 002970
+C | arm-00870 | tail 002971
+C | arm-00870 | tail 002972
+C | arm-00870 | tail 002973
+C | arm-00870 | tail 002974
+C | arm-00870 | tail 002975
+G | arm-00870 | tail 002967
+S | arm-00870 | tail 000003
+
+A | arm-00871 | tail 002976
+C | arm-00871 | tail 002977
+G | arm-00871 | tail 002967
+S | arm-00871 | tail 000003
+
+A | arm-00872 | tail 002978
+C | arm-00872 | tail 002979
+G | arm-00872 | tail 002967
+S | arm-00872 | tail 000003
+
+A | arm-00873 | tail 003329
+C | arm-00873 | tail 003330
+G | arm-00873 | tail 002967
+S | arm-00873 | tail 000003
+
+A | arm-00874 | tail 002982
+C | arm-00874 | tail 002983
+G | arm-00874 | tail 002948
+S | arm-00874 | tail 000003
+
+A | arm-00875 | tail 002984
+C | arm-00875 | tail 002985
+G | arm-00875 | tail 002948
+S | arm-00875 | tail 000003
+
+A | arm-00876 | tail 003331
+C | arm-00876 | tail 003332
+C | arm-00876 | tail 003333
+C | arm-00876 | tail 003334
+C | arm-00876 | tail 003335
+G | arm-00876 | tail 003336
+S | arm-00876 | tail 000003
+
+A | arm-00877 | tail 003337
+C | arm-00877 | tail 003338
+C | arm-00877 | tail 003339
+G | arm-00877 | tail 003340
+S | arm-00877 | tail 000003
+
+A | arm-00878 | tail 003341
+C | arm-00878 | tail 003342
+C | arm-00878 | tail 003343
+C | arm-00878 | tail 003344
+C | arm-00878 | tail 003345
+C | arm-00878 | tail 003346
+C | arm-00878 | tail 003347
+C | arm-00878 | tail 003348
+C | arm-00878 | tail 003349
+C | arm-00878 | tail 003350
+C | arm-00878 | tail 003351
+G | arm-00878 | tail 003352
+S | arm-00878 | tail 000003
+
+A | arm-00879 | tail 003353
+C | arm-00879 | tail 003354
+C | arm-00879 | tail 003355
+C | arm-00879 | tail 003356
+G | arm-00879 | tail 003357
+S | arm-00879 | tail 000003
+
+A | arm-00880 | tail 003358
+C | arm-00880 | tail 003359
+C | arm-00880 | tail 003360
+G | arm-00880 | tail 003003
+S | arm-00880 | tail 000003
+
+A | arm-00881 | tail 003361
+C | arm-00881 | tail 003362
+C | arm-00881 | tail 003363
+C | arm-00881 | tail 003364
+C | arm-00881 | tail 003365
+C | arm-00881 | tail 003366
+C | arm-00881 | tail 003367
+C | arm-00881 | tail 003368
+C | arm-00881 | tail 003369
+C | arm-00881 | tail 003370
+G | arm-00881 | tail 003012
+S | arm-00881 | tail 000003
+
+A | arm-00882 | tail 003371
+C | arm-00882 | tail 003372
+G | arm-00882 | tail 003373
+S | arm-00882 | tail 000003
+
+A | arm-00883 | tail 003374
+C | arm-00883 | tail 003375
+C | arm-00883 | tail 003376
+C | arm-00883 | tail 003377
+C | arm-00883 | tail 003378
+C | arm-00883 | tail 003379
+G | arm-00883 | tail 003019
+S | arm-00883 | tail 000003
+
+A | arm-00884 | tail 003380
+C | arm-00884 | tail 003381
+G | arm-00884 | tail 003022
+S | arm-00884 | tail 000003
+
+A | arm-00885 | tail 003382
+C | arm-00885 | tail 003383
+G | arm-00885 | tail 003384
+S | arm-00885 | tail 000003
+
+A | arm-00886 | tail 003385
+C | arm-00886 | tail 003386
+C | arm-00886 | tail 003387
+C | arm-00886 | tail 003388
+C | arm-00886 | tail 003389
+C | arm-00886 | tail 003390
+G | arm-00886 | tail 003391
+S | arm-00886 | tail 000003
+
+A | arm-00929 | tail 003392
+C | arm-00929 | tail 003393
+G | arm-00929 | tail 003394
+S | arm-00929 | tail 000003
+
+A | arm-00887 | tail 003395
+C | arm-00887 | tail 003396
+C | arm-00887 | tail 003397
+C | arm-00887 | tail 003398
+G | arm-00887 | tail 003399
+S | arm-00887 | tail 000003
+
+A | arm-00930 | tail 003400
+C | arm-00930 | tail 003401
+G | arm-00930 | tail 003402
+S | arm-00930 | tail 000003
+
+A | arm-00888 | tail 003403
+C | arm-00888 | tail 003038
+C | arm-00888 | tail 003404
+G | arm-00888 | tail 003039
+S | arm-00888 | tail 000003
+
+A | arm-00889 | tail 003405
+C | arm-00889 | tail 003041
+C | arm-00889 | tail 003404
+G | arm-00889 | tail 003042
+S | arm-00889 | tail 000003
+
+# comment 0005
+# section 0075 -- its arms
+# comment 0005

@@ -340,9 +340,13 @@ public abstract record RegistryMerge
 /// A text is read as the lines above its first row down to their last blank line; its segments, each one row with the
 /// comment and blank lines directly above it; and the comment and blank lines below its last row. An arm is the
 /// segments naming it, in the order they stand, ids compared ignoring case. Two versions of an arm are the same where
-/// their segments are the same in number and order and each line's text is equal, the blank lines that open a segment
-/// left out: they only part it from what stands above it, so an arm removed or added beside another changes nothing of
-/// that one. How a line ends is no part of it either, so a checkout with other line endings changes nothing.
+/// their segments are the same in number and order and each line's text is equal, below the section's comment blocks:
+/// a comment block that a blank line parts from the row below it is the section's, not the arm's - a header does not
+/// travel with whichever arm stands under it, so arms added before a section's first arm neither take the header from
+/// it nor carry a copy of their own - while comments abutting their row are the arm's own, and go where it goes. The
+/// blank lines that open a segment also only part it from what stands above it, so an arm removed or added beside
+/// another changes nothing of that one. How a line ends is no part of it either, so a checkout with other line endings
+/// changes nothing.
 /// </para>
 /// <para>
 /// Each arm is taken from the side that alone added, removed or changed it, and is a conflict where both did so
@@ -350,13 +354,16 @@ public abstract record RegistryMerge
 /// </para>
 /// <para>
 /// The main tree's text is kept line for line and changed only where the agent contributed. An arm taken from the
-/// agent in place of the main tree's lies over the main tree's segments of it, one for one, each below the blank lines
-/// the main tree parts it from what stands above it with; an arm only the agent has stands after the nearest segment
-/// above it in the agent's text that the result holds, and after what the main tree alone holds there - so two sides
-/// adding at one place come out as the main tree's addition, then the agent's. The segment that comes to stand first
-/// is written without the blank lines that open it. Each of the main tree's lines is written as the main tree holds
-/// it, each of the agent's with the ending of the main tree's first line, behind a byte order mark where the main
-/// tree's text has one and ending with a line ending where it does.
+/// agent in place of the main tree's lies over the main tree's segments of it, one for one, below what parts each of
+/// the main tree's segments from what stands above it - the section's comment blocks among it, which stay where the
+/// main tree stands them; an arm only the agent has stands after the nearest segment above it in the agent's text
+/// that the result holds, and after what the main tree alone holds there - so two sides adding at one place come out
+/// as the main tree's addition, then the agent's - and where it stands under a section whose header the result
+/// holds, it joins the section under that one header, carrying none of the section's blocks; a section only the
+/// agent added travels whole, its header once. The segment that comes to stand first is written without the blank
+/// lines that open it. Each of the main tree's lines is written as the main tree holds it, each of the agent's with
+/// the ending of the main tree's first line, behind a byte order mark where the main tree's text has one and ending
+/// with a line ending where it does.
 /// </para>
 /// <para>
 /// So a text merged with itself is itself, and a merge in which the agent changed nothing is the main tree's text,
@@ -407,6 +414,24 @@ public static class MutationRegistryMerge
         var tally = new Tally();
         var conflicts = new List<ArmConflict>();
         var arms = new Dictionary<string, Taken>(StringComparer.OrdinalIgnoreCase);
+
+        // The comment lines the text both sides held already holds are the sections': a header does not travel with
+        // whichever arm stands under it, so arms added before a section's first arm neither take the header from it
+        // nor carry a copy of their own. A comment block only one side wrote is that side's own, and travels with its
+        // arm. Where neither text was held before, every comment is one side's own or the other's.
+        var sections = new HashSet<string>(
+            (held?.Segments.SelectMany(segment => segment.Above) ?? [])
+                .Concat(held?.Header ?? [])
+                .Concat(held?.Trailer ?? [])
+                .Where(line => line.Read.Kind == RegistryLineKind.Comment)
+                .Select(line => line.Text),
+            StringComparer.Ordinal);
+
+        foreach (var segment in (held?.Segments ?? []).Concat(mains.Segments).Concat(agents.Segments))
+        {
+            segment.Mark(sections);
+        }
+
         var header = Weigh(Held(held?.Header), Held(mains.Header), Held(agents.Header), Same, new Tally(), out var disagreed);
 
         if (header is null)
@@ -613,9 +638,11 @@ public static class MutationRegistryMerge
                     break;
 
                 case Taken.Agent:
-                    // One for one in order, each below the blank lines that part the main tree's from what stands above
-                    // it; where the agent has more, the rest follow the last of the main tree's, and where it has fewer,
-                    // the main tree's remaining places go.
+                    // One for one in order, each below what parts the main tree's segment from what stands above it -
+                    // the section's comment blocks among it, which stay where the main tree stands them, for an arm
+                    // taken from the agent carries its own lines and never the section's header; where the agent has
+                    // more, the rest follow the last of the main tree's, and where it has fewer, the main tree's
+                    // remaining places go.
                     var theirs = mains.Arm(segment.Arm)!;
                     var ours = agents.Arm(segment.Arm)!;
 
@@ -623,7 +650,20 @@ public static class MutationRegistryMerge
                     {
                         var own = ours[segment.Within];
 
-                        over[own] = new Segment(MergeSide.Agent, [.. segment.Lines.Take(segment.Leading), .. own.Content], own.At) { Within = own.Within };
+                        // One for one in order: the main tree's section stands where it stands - the blanks that part
+                        // the segment from what is above it and the section's comment blocks kept, for an arm taken
+                        // from the agent carries its own lines and never the section's header - and the agent's own
+                        // lines lie under them, a comment only it wrote among them, for a person's words are not this
+                        // merge's to drop; where the agent has more, the rest follow the last of the main tree's, and
+                        // where it has fewer, the main tree's remaining places go. Nothing else of the main tree's
+                        // stands over the agent's lines: a comment of the arm's own that travelled with the main
+                        // tree's rows would change what the arm is read as, and a result re-merged would not be
+                        // itself.
+                        over[own] = new Segment(
+                            MergeSide.Agent,
+                            [.. Parting(segment), .. own.Carried.SkipWhile(line => line.Blank)],
+                            own.At)
+                        { Within = own.Within };
                         placed.Add(over[own]);
                     }
 
@@ -637,7 +677,7 @@ public static class MutationRegistryMerge
         }
 
         // Whether the main tree's version of the arm of the agent's segment holds one like it.
-        bool Kept(Segment ours) => mains.Arm(ours.Arm)!.Any(theirs => Same(theirs.Content, ours.Content));
+        bool Kept(Segment ours) => mains.Arm(ours.Arm)!.Any(theirs => Same(theirs.Identity, ours.Identity));
 
         // Where the agent's segment of an arm kept from the main tree stands in the result. Where the main tree's version
         // holds none like it: nowhere, where that version holds fewer segments of the arm - it dropped this one - and
@@ -657,7 +697,7 @@ public static class MutationRegistryMerge
             }
 
             return all.Skip(ours.Within + 1).Any(Kept)
-                ? theirs.Where(kept => Same(kept.Content, ours.Content)).MinBy(kept => Math.Abs(kept.Within - ours.Within))
+                ? theirs.Where(kept => Same(kept.Identity, ours.Identity)).MinBy(kept => Math.Abs(kept.Within - ours.Within))
                 : theirs[^1];
         }
 
@@ -677,45 +717,87 @@ public static class MutationRegistryMerge
 
         foreach (var segment in agents.Segments.Where(segment => arms[segment.Arm] == Taken.Agent && mains.Arm(segment.Arm) is null))
         {
+            var carried = segment;
             var at = segment.At == 0 ? Past(0) : placed.Count;
 
-            // After the nearest segment above it in the agent's text that the result holds: the agent's own, as it stands
-            // there, or the main tree's like it.
-            for (var above = segment.At - 1; above >= 0; above--)
+            // The section's comment blocks the agent's arm stands under: where the result holds one - the main tree's
+            // own header of that section - the arm joins the section inside it, under the one header, carrying nothing
+            // of the section's; where the result holds none, the blocks it holds that are its own travel whole with
+            // it, once.
+            if (segment.Structure is { Count: > 0 } block && Carrier(placed, block) is { } under)
             {
-                var follows = agents.Segments[above];
-                var anchor = arms[follows.Arm] switch
+                carried = new Segment(MergeSide.Agent, [.. Parted(segment)], segment.At) { Within = segment.Within };
+                over[segment] = carried;
+                at = Past(placed.FindLastIndex(candidate => string.Equals(candidate.Arm, under.Arm, StringComparison.OrdinalIgnoreCase)) + 1);
+            }
+            else
+            {
+                // After the nearest segment above it in the agent's text that the result holds: the agent's own, as it
+                // stands there, or the main tree's like it.
+                for (var above = segment.At - 1; above >= 0; above--)
                 {
-                    Taken.Agent => over.GetValueOrDefault(follows, follows),
-                    Taken.Main => KeptAs(follows),
-                    _ => null,
-                };
+                    var follows = agents.Segments[above];
+                    var anchor = arms[follows.Arm] switch
+                    {
+                        Taken.Agent => over.GetValueOrDefault(follows, follows),
+                        Taken.Main => KeptAs(follows),
+                        _ => null,
+                    };
 
-                if (anchor is not null)
-                {
-                    at = Past(placed.IndexOf(anchor) + 1);
-                    break;
+                    if (anchor is not null)
+                    {
+                        at = Past(placed.IndexOf(anchor) + 1);
+                        break;
+                    }
                 }
             }
 
             // Never above an earlier segment of its own arm: the rows of one arm keep their order.
             if (segment.Within > 0)
             {
-                at = Math.Max(at, placed.IndexOf(agents.Arm(segment.Arm)![segment.Within - 1]) + 1);
+                at = Math.Max(at, placed.IndexOf(over.GetValueOrDefault(agents.Arm(segment.Arm)![segment.Within - 1], agents.Arm(segment.Arm)![segment.Within - 1])) + 1);
             }
 
-            placed.Insert(at, segment);
+            placed.Insert(at, carried);
         }
 
         // The blank lines that open a segment part it from what stands above it, and nothing stands above the first but
         // the lines above the first row, which end at their own last blank line.
         if (placed is [{ Leading: > 0 } first, ..])
         {
-            placed[0] = new Segment(first.Side, first.Content, first.At) { Within = first.Within };
+            placed[0] = new Segment(first.Side, [.. first.Lines.SkipWhile(line => line.Blank)], first.At) { Within = first.Within };
         }
 
         return placed;
     }
+
+    /// <summary>
+    /// The lines that part <paramref name="segment"/>'s own from what stands above it: its blank lines and the
+    /// section's comment blocks among them, and nothing of the arm's own.
+    /// </summary>
+    private static IReadOnlyList<Line> Parting(Segment segment)
+        => [.. segment.Lines.Take(segment.Leading).Where(line => line.Blank || segment.Structure.Contains(line))];
+
+    /// <summary>
+    /// The segment's carried lines parted by one blank from whatever stands above it in the result: the section's
+    /// blocks dropped, one blank kept of those that parted them.
+    /// </summary>
+    private static IReadOnlyList<Line> Parted(Segment segment)
+    {
+        var blanks = segment.Carried.TakeWhile(line => line.Blank).Count();
+
+        return [.. segment.Carried.Take(Math.Min(1, blanks)), .. segment.Carried.Skip(blanks)];
+    }
+
+    /// <summary>
+    /// The placed segment whose section's comment lines are <paramref name="block"/>'s, or <see langword="null"/>
+    /// where the result holds none: the one header of the section an arm stands under.
+    /// </summary>
+    private static Segment? Carrier(List<Segment> placed, IReadOnlyList<Line> block)
+        => placed.FirstOrDefault(candidate => candidate.Above
+            .Where(line => line.Read.Kind == RegistryLineKind.Comment)
+            .Select(line => line.Text)
+            .SequenceEqual(block.Select(line => line.Text), StringComparer.Ordinal));
 
     /// <summary>
     /// The conflict of a merge whose text would not read back as it was merged, or <see langword="null"/> where it
@@ -761,13 +843,13 @@ public static class MutationRegistryMerge
             : one.Select(line => line.Text).SequenceEqual(other.Select(line => line.Text), StringComparer.Ordinal);
 
     /// <summary>
-    /// Whether two versions of an arm are the same: their segments the same in number and order, each line's text equal
-    /// below the blank lines that open each segment.
+    /// Whether two versions of an arm are the same: their segments the same in number and order, and each the same in
+    /// what its arm holds of it - its own lines and the comments beside them that are no section's.
     /// </summary>
     private static bool Same(IReadOnlyList<Segment>? one, IReadOnlyList<Segment>? other)
         => one is null || other is null
             ? one is null && other is null
-            : one.Count == other.Count && one.Zip(other).All(pair => Same(pair.First.Content, pair.Second.Content));
+            : one.Count == other.Count && one.Zip(other).All(pair => Same(pair.First.Identity, pair.Second.Identity));
 
     /// <summary>
     /// Whether two versions of an arm differ only in how each spells the arm's id: line for line they are one text
@@ -778,7 +860,7 @@ public static class MutationRegistryMerge
     {
         var spelled = one[0].Arm;
 
-        IEnumerable<string> Respelled(IReadOnlyList<Segment> arm) => arm.SelectMany(segment => segment.Content).Select(line => line.Read.NamedAs(spelled));
+        IEnumerable<string> Respelled(IReadOnlyList<Segment> arm) => arm.SelectMany(segment => segment.Identity).Select(line => line.Read.NamedAs(spelled));
 
         return Respelled(one).SequenceEqual(Respelled(other), StringComparer.Ordinal);
     }
@@ -829,20 +911,94 @@ public static class MutationRegistryMerge
         /// <summary>The arm its row names, as the row spells it; nothing where the row names none, which makes its text unreadable.</summary>
         public string Arm { get; } = lines[^1].Read.Arm ?? string.Empty;
 
-        /// <summary>
-        /// Its lines below the blank lines that open it: what its arm holds of it. The blank lines only part it from what
-        /// stands above it.
-        /// </summary>
-        public IReadOnlyList<Line> Content { get; } = [.. lines.SkipWhile(line => line.Blank)];
+        /// <summary>Its lines below the last blank line above its row: the row and the comments abutting it.</summary>
+        public IReadOnlyList<Line> Own { get; } = [.. OwnLines(lines)];
 
-        /// <summary>How many blank lines open it.</summary>
-        public int Leading => Lines.Count - Content.Count;
+        /// <summary>Its lines above its own.</summary>
+        public IReadOnlyList<Line> Above => [.. Lines.Take(Leading)];
+
+        /// <summary>How many lines stand above its own.</summary>
+        public int Leading => Lines.Count - Own.Count;
 
         /// <summary>Its place among its arm's segments, from 0.</summary>
         public int Within { get; set; }
 
         /// <summary>Where the last blank line above its row is, or -1 where none is.</summary>
         public int LastBlankAbove => Lines.ToList().FindLastIndex(line => line.Blank);
+
+        /// <summary>
+        /// The comment lines above its own that the text both sides held already holds: the section's blocks, which no
+        /// arm carries anywhere. Set by <see cref="Mark"/>; empty until it runs.
+        /// </summary>
+        public IReadOnlyList<Line> Structure { get; private set; } = [];
+
+        /// <summary>
+        /// What its arm holds of it: its own lines and the comments beside them that are no section's, the blank lines
+        /// and the section's blocks left out, so an arm is the same however the sections' headers moved around it. Set
+        /// by <see cref="Mark"/>; every non-blank line until it runs.
+        /// </summary>
+        public IReadOnlyList<Line> Identity { get; private set; } = [.. lines.Where(line => !line.Blank)];
+
+        /// <summary>
+        /// Its lines as a merge carries them from a side that is not the main tree's: the section's blocks left out,
+        /// its own lines and the blanks kept. Set by <see cref="Mark"/>; all its lines until it runs.
+        /// </summary>
+        public IReadOnlyList<Line> Carried { get; private set; } = lines;
+
+        /// <summary>
+        /// Marks which of its comment blocks are the section's: each whose every line the text both sides held names
+        /// above a row of its own, above the first row or below the last. A block only one side wrote is that side's
+        /// statement about this arm, and travels with it.
+        /// </summary>
+        /// <param name="sections">Every comment line the text both sides held holds, wherever it stands.</param>
+        public void Mark(IReadOnlyCollection<string> sections)
+        {
+            var structural = new List<Line>();
+            var run = new List<Line>();
+
+            void Take()
+            {
+                if (run.Count > 0 && run.All(line => sections.Contains(line.Text)))
+                {
+                    structural.AddRange(run);
+                }
+
+                run.Clear();
+            }
+
+            foreach (var line in Above)
+            {
+                if (line.Read.Kind == RegistryLineKind.Comment)
+                {
+                    run.Add(line);
+                    continue;
+                }
+
+                Take();
+            }
+
+            Take();
+
+            Structure = structural;
+
+            var dropped = structural.ToHashSet();
+            Identity = [.. Lines.Where(line => !line.Blank && !dropped.Contains(line))];
+            Carried = [.. Lines.Where(line => !dropped.Contains(line))];
+        }
+
+        /// <summary>The lines of <paramref name="lines"/> below the last blank line above their row.</summary>
+        private static IReadOnlyList<Line> OwnLines(IReadOnlyList<Line> lines)
+        {
+            for (var at = lines.Count - 2; at >= 0; at--)
+            {
+                if (lines[at].Blank)
+                {
+                    return [.. lines.Skip(at + 1)];
+                }
+            }
+
+            return lines;
+        }
     }
 
     /// <summary>One of the three texts as the merge reads it.</summary>

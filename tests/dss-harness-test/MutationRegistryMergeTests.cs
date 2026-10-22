@@ -1245,6 +1245,216 @@ public sealed class MutationRegistryMergeTests
         _ => merge.ToString(),
     };
 
+    /// <summary>
+    /// A comment block that a blank line parts from the row below it is the section's, not the arm's: where both sides
+    /// add a new first arm under one header, the merged registry holds the header once, with both sides' arms inside
+    /// the one section (a consumer's measured defect: the header stood twice, for each side's new first arm carried
+    /// it).
+    /// </summary>
+    [Fact]
+    public void ASectionHeaderStandsOnce_ThoughBothSidesAddedFirstArmsUnderIt()
+    {
+        var held = Text(
+            "# the arms",
+            "",
+            "# zero",
+            "",
+            A("z"),
+            C("z"),
+            "",
+            "# one",
+            "",
+            A("a-first"),
+            C("a-first"));
+        var main = Text(
+            "# the arms",
+            "",
+            "# zero",
+            "",
+            A("z"),
+            C("z"),
+            "",
+            "# one",
+            "",
+            A("a-new-first-main"),
+            C("a-new-first-main"),
+            "",
+            A("a-first"),
+            C("a-first"));
+        var agent = Text(
+            "# the arms",
+            "",
+            "# zero",
+            "",
+            A("z"),
+            C("z"),
+            "",
+            "# one",
+            "",
+            A("a-new-first-agent"),
+            C("a-new-first-agent"),
+            "",
+            A("a-first"),
+            C("a-first"));
+
+        var merged = Assert.IsType<RegistryMerge.Merged>(Merge(held, main, agent));
+
+        Assert.Equal(
+            Text(
+                "# the arms",
+                "",
+                "# zero",
+                "",
+                A("z"),
+                C("z"),
+                "",
+                "# one",
+                "",
+                A("a-new-first-main"),
+                C("a-new-first-main"),
+                "",
+                A("a-new-first-agent"),
+                C("a-new-first-agent"),
+                "",
+                A("a-first"),
+                C("a-first")),
+            merged.Text);
+    }
+
+    /// <summary>
+    /// Where new arms take the header from an old first arm on one side, that arm is not changed by the taking: an arm
+    /// whose rows both sides reworded alike is no conflict, and the header the new arms took stands once (the same
+    /// defect's second face: a false conflict on an arm whose lines were byte-equal on both sides).
+    /// </summary>
+    [Fact]
+    public void AnArmBothSidesRewordedAlike_IsNoConflict_WhereNewArmsTookTheHeaderFromIt()
+    {
+        var held = Text(
+            "# the arms",
+            "",
+            "# zero",
+            "",
+            A("z"),
+            C("z"),
+            "",
+            "# one",
+            "",
+            A("a-first", "old"),
+            C("a-first"),
+            "",
+            "# two",
+            "",
+            A("b-first"),
+            C("b-first"));
+        var main = Text(
+            "# the arms",
+            "",
+            "# zero",
+            "",
+            A("z"),
+            C("z"),
+            "",
+            "# one",
+            "",
+            A("a-first", "alike"),
+            C("a-first"),
+            "",
+            "# two",
+            "",
+            A("b-first"),
+            C("b-first"));
+        var agent = Text(
+            "# the arms",
+            "",
+            "# zero",
+            "",
+            A("z"),
+            C("z"),
+            "",
+            "# one",
+            "",
+            A("a-new-first"),
+            "",
+            A("a-first", "alike"),
+            C("a-first"),
+            "",
+            "# two",
+            "",
+            A("b-first"),
+            C("b-first"));
+
+        var merged = Assert.IsType<RegistryMerge.Merged>(Merge(held, main, agent));
+
+        Assert.Equal(
+            Text(
+                "# the arms",
+                "",
+                "# zero",
+                "",
+                A("z"),
+                C("z"),
+                "",
+                "# one",
+                "",
+                A("a-first", "alike"),
+                C("a-first"),
+                "",
+                A("a-new-first"),
+                "",
+                "# two",
+                "",
+                A("b-first"),
+                C("b-first")),
+            merged.Text);
+        Assert.Equal(1, merged.Same);
+    }
+
+    /// <summary>
+    /// A merge of the measured registries of the duplicate header (<c>fixtures/registry-merge/section-headers</c>) holds
+    /// each section header as many times as the main tree holds it: once.
+    /// </summary>
+    [Fact]
+    public void TheMeasuredRegistriesOfTheDuplicateHeader_MergeWithEachHeaderOnce()
+    {
+        var merged = Assert.IsType<RegistryMerge.Merged>(
+            MutationRegistryMerge.Merge(Measured("base"), Measured("main"), Measured("agent-refreshed")));
+
+        Assert.Equal(979, merged.Arms);
+        AssertEachHeaderAsTheMainTreeHoldsIt(merged);
+    }
+
+    /// <summary>
+    /// A merge of the measured registries of the false conflict (<c>fixtures/registry-merge/section-headers</c>) refuses
+    /// no arm: the arm whose lines both sides changed identically is not a conflict, only because new arms had taken
+    /// its header on the agent's side.
+    /// </summary>
+    [Fact]
+    public void TheMeasuredRegistriesOfTheFalseConflict_MergeWithNoConflict()
+    {
+        var merged = Assert.IsType<RegistryMerge.Merged>(
+            MutationRegistryMerge.Merge(Measured("base"), Measured("main"), Measured("agent-folded")));
+
+        Assert.Equal(1024, merged.Arms);
+        AssertEachHeaderAsTheMainTreeHoldsIt(merged);
+    }
+
+    /// <summary>
+    /// A merge that moved arms under one header gives itself again: the header once, the arms inside, whatever side
+    /// its own result is given as.
+    /// </summary>
+    [Fact]
+    public void AMergeThatMovedArmsUnderAHeader_GivesItselfAgain()
+    {
+        var held = Text("# the arms", "", "# zero", "", A("z"), C("z"), "", "# one", "", A("a-first"), C("a-first"));
+        var main = Text("# the arms", "", "# zero", "", A("z"), C("z"), "", "# one", "", A("a-new-first-main"), C("a-new-first-main"), "", A("a-first"), C("a-first"));
+        var agent = Text("# the arms", "", "# zero", "", A("z"), C("z"), "", "# one", "", A("a-new-first-agent"), C("a-new-first-agent"), "", A("a-first"), C("a-first"));
+        var first = Assert.IsType<RegistryMerge.Merged>(Merge(held, main, agent));
+        var bytes = first.Bytes;
+
+        Assert.Equal(bytes, Assert.IsType<RegistryMerge.Merged>(MutationRegistryMerge.Merge(Bytes(held), bytes, Bytes(agent))).Bytes);
+        Assert.Equal(bytes, Assert.IsType<RegistryMerge.Merged>(MutationRegistryMerge.Merge(Bytes(held), Bytes(main), bytes)).Bytes);
+    }
+
     private static string A(string id, string why = "why")
         => $"A | {id} | src/{id}.cpp | texts/{id}.before | texts/{id}.after | TEST-RED | fixture | fixture_tests | 3 | texts/{id}.diag | {why}";
 
@@ -1253,6 +1463,29 @@ public sealed class MutationRegistryMergeTests
     private static string Text(params string[] lines) => string.Join("\n", lines) + "\n";
 
     private static byte[] Bytes(string text) => Encoding.UTF8.GetBytes(text);
+
+    /// <summary>
+    /// One of the measured registries of the section-header defect, as a consumer's run held them and made neutral
+    /// (the directory's README says how): <c>base</c>, <c>main</c>, <c>agent-refreshed</c> or <c>agent-folded</c>.
+    /// </summary>
+    private static byte[] Measured(string name) => File.ReadAllBytes(MeasuredPath(name));
+
+    private static string MeasuredPath(string name)
+        => Path.Combine(Prose.RepositoryRoot(), "tests", "dss-harness-test", "fixtures", "registry-merge", "section-headers", $"{name}.arms.registry");
+
+    /// <summary>Every section header of the main tree's registry stands in <paramref name="merged"/> as many times as there: once.</summary>
+    private static void AssertEachHeaderAsTheMainTreeHoldsIt(RegistryMerge.Merged merged)
+    {
+        var main = File.ReadAllText(MeasuredPath("main"));
+        var headers = main.Split('\n').Where(line => line.StartsWith("# section ", StringComparison.Ordinal)).ToList();
+
+        Assert.NotEmpty(headers);
+
+        foreach (var header in headers)
+        {
+            Assert.Equal(main.Split(header).Length - 1, merged.Text.Split(header).Length - 1);
+        }
+    }
 
     /// <summary>The merge of three texts, each as UTF-8 bytes - or of two, where no text is given as what both held.</summary>
     private static RegistryMerge Merge(string? held, string main, string agent)
