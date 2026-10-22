@@ -113,6 +113,252 @@ public sealed class ContainExecTests
     }
 
     /// <summary>
+    /// A bound child on Windows ends with the process that started it, killed where it stood - a hard kill, which runs
+    /// nothing of that process's own - while a child started as children always were outlives it: what a dispatcher killed
+    /// by a consumer left running for minutes, its legs' test runners each holding a heavy leg's room.
+    /// </summary>
+    [Fact]
+    public async Task ABoundChild_OnWindows_EndsWithTheProcessThatStartedIt_KilledWhereItStood()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "the job a bound child joins is Windows' own; on Linux and macOS a bound child starts as any other, which ABoundChild_OnLinuxAndMacOS_StartsAsAnyOther holds.");
+
+        var ids = new TaskCompletionSource<Dictionary<string, int>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var running = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create()).RunAsync(
+            Child("bind-and-wait", CliRunner.CliProgram, "300000") with
+            {
+                OnOutputLine = line =>
+                {
+                    if (line.StartsWith("parent=", StringComparison.Ordinal))
+                    {
+                        ids.TrySetResult(Ids(line));
+                    }
+                },
+            },
+            TestContext.Current.CancellationToken);
+
+        var said = await ids.Task.WaitAsync(LongBound, TestContext.Current.CancellationToken);
+
+        try
+        {
+            using (var parent = Process.GetProcessById(said["parent"]))
+            {
+                parent.Kill(entireProcessTree: false);
+            }
+
+            Assert.True(AwaitGone(said["bound"]), $"the bound sleeper {said["bound"]} outlived the process that started it");
+            Assert.True(StillAlive(said["ordinary"]), $"the ordinary sleeper {said["ordinary"]} was ended by nothing that was asked to");
+        }
+        finally
+        {
+            TryEnding(said["bound"]);
+            TryEnding(said["ordinary"]);
+        }
+
+        // Only now: the ordinary sleeper holds the output its parent inherited, which this run reads to its end.
+        await running.WaitAsync(LongBound, TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>
+    /// A bound child's end, unlike a contained one's, ends nothing: what it left running lives on until the process that
+    /// started it ends - a server its build started stays for the next phase - and so does what a stopped one left.
+    /// </summary>
+    [Fact]
+    public async Task ABoundChildsLeftovers_OnWindows_OutliveItsOwnEnd()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "the sleeper is started out of every tree by Windows' own call; on Linux and macOS a bound child starts as any other.");
+
+        var result = await ContainingRunner().RunAsync(
+            Child("spawn-orphan", "300000") with { Bound = true },
+            TestContext.Current.CancellationToken).WaitAsync(LongBound, TestContext.Current.CancellationToken);
+        var orphan = Id(result.StandardOutput.Trim(), "orphan=") ?? 0;
+
+        try
+        {
+            Assert.Equal(0, result.ExitCode);
+            Assert.True(StillAlive(orphan), $"the sleeper {orphan} was ended by its bound parent's own end");
+        }
+        finally
+        {
+            TryEnding(orphan);
+        }
+    }
+
+    /// <summary>
+    /// A bound child stopped is stopped as any other child is - by its tree - and what it left outside its tree lives on
+    /// until the process that started it ends: its job is ended by nothing but that.
+    /// </summary>
+    [Fact]
+    public async Task ABoundChildStopped_OnWindows_LeavesWhatItLeftOutsideItsTreeToItsJob()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "the sleeper is started out of every tree by Windows' own call; on Linux and macOS a bound child starts as any other.");
+
+        var orphan = 0;
+
+        try
+        {
+            var (raised, _) = await RunAndStopOn(
+                Child("spawn-orphan-and-sleep", "300000", "300000") with { Bound = true },
+                line => (orphan = Id(line, "orphan=") ?? orphan) != 0);
+
+            Assert.IsType<OperationCanceledException>(raised);
+            Assert.True(StillAlive(orphan), $"the sleeper {orphan} was ended by its bound parent's stop");
+        }
+        finally
+        {
+            TryEnding(orphan);
+        }
+    }
+
+    /// <summary>
+    /// On Linux and macOS a bound child starts as any other, in the group and session of the one that started it: nothing
+    /// there ends a child with the process that started it, and an interrupt typed at the terminal still reaches it.
+    /// </summary>
+    [Fact]
+    public async Task ABoundChild_OnLinuxAndMacOS_StartsAsAnyOther()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "on Windows a bound child joins the runner's job, which ABoundChild_OnWindows_EndsWithTheProcessThatStartedIt_KilledWhereItStood holds.");
+
+        var result = await ContainingRunner().RunAsync(
+            Child("print-ids") with { Bound = true },
+            TestContext.Current.CancellationToken).WaitAsync(LongBound, TestContext.Current.CancellationToken);
+        var ids = Ids(result.StandardOutput);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal((GetGroupOfThisProcess(), GetSidOfThisProcess()), (ids["pgid"], ids["sid"]));
+    }
+
+    /// <summary>
+    /// A bound child is read as any other: its own streams and exit code, and said to have started before its first line.
+    /// </summary>
+    [Fact]
+    public async Task ABoundChild_HandsOnItsOwnStreamsAndExitCode()
+    {
+        var heard = new List<string>();
+
+        var result = await ContainingRunner().RunAsync(
+            Child("say-and-exit", "said out", "said err", "17") with
+            {
+                Bound = true,
+                OnStarted = () => Heard(heard, "started"),
+                OnOutputLine = line => Heard(heard, line),
+            },
+            TestContext.Current.CancellationToken).WaitAsync(LongBound, TestContext.Current.CancellationToken);
+
+        Assert.Equal((17, false), (result.ExitCode, result.TimedOut));
+        Assert.Equal(("said out\n", "said err\n"), (result.StandardOutput, result.StandardError));
+        Assert.Equal(["started", "said out"], heard);
+    }
+
+    /// <summary>
+    /// A child held in a job is given build servers of its own where its environment names none - the compiler's
+    /// program-database server at an endpoint named for the job, and no node of the build engine kept for a later build -
+    /// and keeps those its environment names, in whatever case.
+    /// </summary>
+    [Fact]
+    public void AChildHeldInAJob_IsGivenBuildServersOfItsOwn_WhereItsEnvironmentNamesNone()
+    {
+        var bare = new Dictionary<string, string?>(StringComparer.Ordinal);
+        ProcessRunner.OwnServers(bare, "dssharness-contain-x");
+
+        Assert.Equal(
+            ["MSBUILDDISABLENODEREUSE=1", "_MSPDBSRV_ENDPOINT_=dssharness-contain-x"],
+            bare.Select(pair => $"{pair.Key}={pair.Value}").Order(StringComparer.Ordinal));
+
+        var named = new Dictionary<string, string?>(StringComparer.Ordinal) { ["_mspdbsrv_endpoint_"] = "mine", ["MSBuildDisableNodeReuse"] = "0" };
+        ProcessRunner.OwnServers(named, "dssharness-contain-x");
+
+        Assert.Equal(["MSBuildDisableNodeReuse=0", "_mspdbsrv_endpoint_=mine"], named.Select(pair => $"{pair.Key}={pair.Value}").Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// On Windows the bound children of one runner share the one job it makes at the first of them, whichever start
+    /// together - each given the compiler's server named for that job and no build node kept - while a contained child is
+    /// given a job of its own; and the job is held by the runner, not by any child's start, so a collection ends none of
+    /// them.
+    /// </summary>
+    [Fact]
+    public async Task BoundChildren_OnWindows_ShareTheOneJobTheirRunnerMakes_AndHoldsAcrossACollection()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "the job a bound child joins is Windows' own; on Linux and macOS a bound child starts as any other.");
+
+        var made = 0;
+        var runner = new ProcessRunner(
+            new HostPlatform(),
+            FilePermissionsFactory.Create(),
+            CliRunner.CliProgram,
+            processTable: null,
+            makeJob: name =>
+            {
+                _ = Interlocked.Increment(ref made);
+                return Containment.CreateJob(name);
+            });
+        var token = TestContext.Current.CancellationToken;
+
+        var endpoints = await Task.WhenAll(Enumerable.Range(0, 3).Select(_ => runner.RunAsync(Child("print-env", ProcessRunner.ProgramDatabaseEndpoint) with { Bound = true }, token)));
+        var nodes = await runner.RunAsync(Child("print-env", ProcessRunner.NodeReuseOff) with { Bound = true }, token).WaitAsync(LongBound, token);
+        var contained = await runner.RunAsync(Child("print-env", ProcessRunner.ProgramDatabaseEndpoint) with { Contained = true }, token).WaitAsync(LongBound, token);
+
+        // The runner's one job for every bound child, and the contained child's own.
+        Assert.Equal(2, made);
+        Assert.Single(endpoints.Select(result => result.StandardOutput).Distinct(StringComparer.Ordinal));
+        Assert.StartsWith("dssharness-contain-", endpoints[0].StandardOutput, StringComparison.Ordinal);
+        Assert.Equal("1\n", nodes.StandardOutput);
+        Assert.NotEqual(endpoints[0].StandardOutput, contained.StandardOutput);
+
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(token);
+        var said = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sleeping = runner.RunAsync(
+            Child("say-pid-and-sleep", "300000") with { Bound = true, OnOutputLine = line => _ = Id(line, "pid=") is { } id && said.TrySetResult(id) },
+            stop.Token);
+        var sleeper = await said.Task.WaitAsync(LongBound, token);
+
+        try
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+
+            Assert.True(StillAlive(sleeper), $"the bound sleeper {sleeper} was ended by a collection: its job was held by nothing");
+            Assert.Equal(2, made);
+        }
+        finally
+        {
+            await stop.CancelAsync();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => sleeping.WaitAsync(LongBound, token));
+            TryEnding(sleeper);
+        }
+    }
+
+    /// <summary>
+    /// On Windows a bound child whose runner's job cannot be made never runs, saying why as any start's failure does, and
+    /// the next bound child asks for the job again: a job that could not be made is never kept as one.
+    /// </summary>
+    [Fact]
+    public async Task ABoundChildWhoseJobCannotBeMade_OnWindows_NeverRuns_AndTheNextAsksForItAgain()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "the job a bound child joins is Windows' own; on Linux and macOS a bound child starts as any other.");
+
+        var asked = 0;
+        var runner = new ProcessRunner(
+            new HostPlatform(),
+            FilePermissionsFactory.Create(),
+            CliRunner.CliProgram,
+            processTable: null,
+            makeJob: name => Interlocked.Increment(ref asked) == 1 ? throw new Win32Exception(5) : Containment.CreateJob(name));
+        var token = TestContext.Current.CancellationToken;
+
+        var raised = await Assert.ThrowsAsync<ProgramStartException>(
+            () => runner.RunAsync(ByItsPath("say-and-exit", "said out", "said err", "0") with { Bound = true }, token).WaitAsync(LongBound, token));
+        var ran = await runner.RunAsync(ByItsPath("say-and-exit", "said out", "said err", "0") with { Bound = true }, token).WaitAsync(LongBound, token);
+
+        Assert.Equal(
+            $"'{TestHost.AssemblyProgram}' could not be started: the job object that would contain it could not be made: {new Win32Exception(5).Message}",
+            raised.Message);
+        Assert.Equal((0, "said out\n"), (ran.ExitCode, ran.StandardOutput));
+        Assert.Equal(2, asked);
+    }
+
+    /// <summary>
     /// A child started through the step is read as any other: its own output on each stream and its
     /// own exit code come through, never the step's, and it is said to have started before the first
     /// line it wrote is handed on - contained or apart from the terminal, on every system.
@@ -881,14 +1127,16 @@ public sealed class ContainExecTests
             Child(mode) with { Contained = contained, ApartFromTerminal = apart },
             TestContext.Current.CancellationToken).WaitAsync(LongBound, TestContext.Current.CancellationToken);
 
-        var ids = result.StandardOutput
+        return (Ids(result.StandardOutput), result);
+    }
+
+    /// <summary>The ids a child behaviour printed, each as <c>name=id</c>.</summary>
+    private static Dictionary<string, int> Ids(string printed)
+        => printed
             .Split((char[]?)[], StringSplitOptions.RemoveEmptyEntries)
             .Where(token => token.Contains('=', StringComparison.Ordinal))
             .Select(token => token.Split('='))
             .ToDictionary(parts => parts[0], parts => int.Parse(parts[1], CultureInfo.InvariantCulture));
-
-        return (ids, result);
-    }
 
     /// <summary>Runs one child behaviour that starts a sleeper out of every tree and exits, and reads the sleeper's id.</summary>
     private static async Task<(ProcessResult Result, int Orphan)> RunWithOrphan(bool contained = false)

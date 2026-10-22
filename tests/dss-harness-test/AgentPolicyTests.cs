@@ -525,6 +525,7 @@ public sealed class AgentPolicyTests
             (IReadOnlyList<string>)["dssharness", "stop-orchestrator", "r1", "--now"],
             ["dssharness", "fold-agent", "a1", "--allow", "settled:1"],
             ["dssharness", "run-orchestrator", "implementation"],
+            ["dssharness", "stop-run", "20261022-035935-e6571255", "--now"],
             ["run-side-task", "--prompt", "x"],
         })
         {

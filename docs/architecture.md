@@ -20,7 +20,7 @@ Implemented today: `init`, `verify-git`, `create-worktree`, `delete-worktree`,
 the step runners land), `validate-workflow`, `export-workflow`, `list-agent-providers`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
 `read-anchor`, `read-anchors`, `check-anchor-balance`, `check-anchor-citations`),
 `fix-line-endings`, `check-ci-legs`, `legs`, `host-exec`, `install-missing-tools`,
-`update-tool`, `sync`, `build`, `test`, `run`, `check-mutations`, `clean`, `up`, `down` and
+`update-tool`, `sync`, `build`, `test`, `run`, `check-mutations`, `stop-run`, `clean`, `up`, `down` and
 `help`.
 
 Every section of this document now describes code that exists. Where a rule is stated in
@@ -161,6 +161,25 @@ start, since a session's id given to a later process ends nothing, and that reco
 record that does not read as one is said and left, and a starter on another machine is never taken
 to have gone. Windows records nothing: its job already ends a killed starter's children.
 
+A request can ask instead for a child **bound** to the harness's life (`ProcessRequest.Bound`):
+on Windows it is placed through `contain-exec` too, in the one job object the runner holds for as
+long as it lives - the process's life, for the runner the container builds - which ends every
+member when its last handle closes; so the harness ending in any way, a hard kill among them, ends
+the child and all it started at once. Its own end and a stop are as any other child's: nothing is
+terminated as it ends, and what it leaves running lives on until the harness ends. Every phase of
+a leg a dispatcher runs on its own machine - a build, a test, a runner's step, a mutation arm's
+run, a set-up's down line - is bound, and so is its `keepAwake` command: a dispatcher killed where
+it stood once left its legs' test runners running for minutes, each holding a heavy leg's room. A
+set-up's `up` line is not: what it brings up is shared, held across runs, and ended by its `down`
+line. A child held in a job - contained or bound - is given build servers of its own, where its
+environment names none: the compiler's program-database server listens at an endpoint named for
+the job (`_MSPDBSRV_ENDPOINT_`), and the build engine leaves no node for a later build
+(`MSBUILDDISABLENODEREUSE=1`) - a server a member starts ends with the job, and one shared with
+another dispatcher's builds would be taken from them mid-build. On Linux and macOS a bound child
+starts as any other: an interrupt or a termination signal given to the harness ends it with the
+harness's stop, a hang-up of its terminal reaches it as it reaches the harness, and a kill of the
+harness alone does not reach it - `stop-run --now` ends the harness with its whole tree.
+
 Whether the program started is said on a channel of the runner's own (`--status`), never in the
 program's streams or an exit code a program could give too: a program that cannot start is
 reported as one that never ran (`ExecutableNotFoundException`, `ProgramStartException`, worded as
@@ -172,7 +191,8 @@ interruption typed at the harness's terminal is sent to a group, and that group 
 On Windows such a child starts as any other, since a child started with no window already has a
 console of its own that an interruption typed at the harness's never reaches. A child apart from
 the terminal is stopped by its process tree, as any other, and what it leaves at its own end is
-left. No leg is contained: a `build`, `test` or `run` typed by hand starts its legs as it always has.
+left. No leg is contained: a `build`, `test` or `run` typed by hand starts its legs' phases bound on
+Windows, as above, and as any other child elsewhere.
 
 ### Paths come from git
 
@@ -2835,7 +2855,7 @@ tool replaces, where a green result had quietly stopped meaning anything.
 - Every other command asked for `--json` that stops before it has anything of its own to say
   answers in its own document's shape, never the ledger's: the agent verbs with the agent
   document, empty; `list-orchestrator`, `list-worktree`, `legs`, `install-missing-tools`,
-  `check-ci-legs`, `check-anchor-citations`, `check-anchor-balance`, `fix-line-endings`, `validate-workflow`, `export-workflow`, `up` and `down` with their own document
+  `check-ci-legs`, `check-anchor-citations`, `check-anchor-balance`, `fix-line-endings`, `validate-workflow`, `export-workflow`, `up`, `down` and `stop-run` with their own document
   holding nothing, after `exitCode` and `summary` (`ReportJson.Stopped`); the run verbs
   (`run-orchestrator`, `resume-orchestrator`, `answer-orchestrator`, `pause-orchestrator`,
   `stop-orchestrator`) with the flow document - the session they would have run, empty
@@ -3362,6 +3382,31 @@ worktree reads what it judged without leaving it. Kept in the main checkout inst
 once were, a worktree's runs landed beside the main checkout's. Nothing in `runs/` is shared
 between runs: each writes only the directory named by its own id. What two runs from different
 trees contend over is the lock above, which stays in the main checkout.
+
+A run is stopped from another terminal by `stop-run <run id>`, typed in the tree that ran it: it
+writes `<run id>.stop.json` beside the run's directory, as its owner file is (`<run id>.owner.json`),
+which the run's dispatcher looks for every `StopCadence.PollEvery` while it owns the directory, takes -
+recorded taken among the run's own records (`stopped.json`, `RunStops.TakenFileOf`) and the request
+removed - and stops on as an interrupt stops it: every leg stopped where it stands, its ledger
+written with what was reached, exit 130, a line naming who asked. `stop-run` waits 60 s for the
+dispatcher to give its directory up, and reads the run's record: there, the run stopped (0), naming
+it; not there, the run ended on its own before its dispatcher took a stop, so nothing was stopped
+(13). The record is the run's, not an asker's, so two terminals asking at once, or one asking again
+while the run stops, all hear the same. The dispatcher's watch ends before its directory is given
+up, and gives it up however it ends (`RunStopWatch.EndThenAsync`), taking back a request it never
+took, so no stop is ever taken by a run that has ended. Not
+stopped in time, the request stays asked (13), and `--now` ends the dispatcher's process where it
+stands with its whole tree - only one of this machine, and only the process its owner file names by
+its start - and releases its claim; its ledger is never written. A run that has ended, or whose
+dispatcher went without giving its directory up, is nothing to stop (13), and an abandoned claim is
+released - one killed while the stop was waited for too, said stopped (0) where it had taken the
+stop first; a request nothing will read any more goes with the claim of the run that left it,
+whoever finds it so (`RunStops.ReleaseAbandoned`, `RunStops.ReleaseAbandonedBeside`). How often a
+dispatcher looks and its asker watches is every such command's one cadence (`StopCadence`), an
+orchestrator's included. What a stop's `--now` answers where ending the process left nothing more to do is
+worded once for it and `stop-orchestrator --now` (`ProcessHolders.NothingMoreToDo`), and an
+interrupt while it waits for the process to go is the caller's, exit 130. `stop-run` is never asked
+of a host - the dispatcher's stop is what stops its legs on every host - and never run by an agent.
 
 The directory ignores itself: the run about to write there first gives it a `.gitignore` of its own,
 holding `*`, so its records never show in git status, whatever the tree's `.gitignore` says. Kept on

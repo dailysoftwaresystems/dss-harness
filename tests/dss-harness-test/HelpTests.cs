@@ -17,6 +17,7 @@ using DssHarness.Core.Platform;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 using DssHarness.Core.Runners;
+using DssHarness.Core.Runs;
 using DssHarness.Core.Sync;
 
 namespace DssHarness.Tests;
@@ -366,6 +367,30 @@ public sealed partial class HelpTests
             + "check-mutations in its tree on that machine to own its run directory says it was abandoned - its run id, process "
             + "and start, and where its records are - and releases its claim on them.",
             Prose.Words(result.StandardOutput),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The verdicts topic says how a run is stopped from another terminal from the code's own names and bounds: how often
+    /// its dispatcher looks for the stop, how long stop-run waits, the codes it ends with, and what a run's legs are bound to
+    /// on Windows.
+    /// </summary>
+    [Fact]
+    public void VerdictsTopic_SaysHowStopRunStopsARun_FromItsOwnBounds()
+    {
+        var prose = Prose.Words(HelpText.Of("verdicts").StandardOutput);
+
+        Assert.Contains(
+            $"A run is stopped with Ctrl+C where it was typed, and from another terminal with '{RunStopService.CommandName} <run id>' typed in the "
+                + $"tree that ran it: its dispatcher looks for the stop every {StopCadence.PollEvery.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s "
+                + $"and stops as an interrupt stops it - each leg stopped where it stands, its ledger written with what was reached, exit {HarnessExit.Cancelled} "
+                + $"- and {RunStopService.CommandName} waits {RunStopService.StopWait.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s for it, saying "
+                + $"the run stopped only where its dispatcher took the stop: one that ended on its own first is nothing it stopped ({HarnessExit.Refused}). "
+                + "--now ends the dispatcher's process where it stands, with all it started, and its ledger is never written. On Windows every phase a "
+                + "leg runs on its own machine, and its keepAwake command, is bound to its dispatcher - a set-up's up line apart - and ends with it however "
+                + $"it ends, a kill among them. On Linux and macOS a kill of the dispatcher alone does not reach its legs, and {RunStopService.CommandName} "
+                + "--now does.",
+            prose,
             StringComparison.Ordinal);
     }
 

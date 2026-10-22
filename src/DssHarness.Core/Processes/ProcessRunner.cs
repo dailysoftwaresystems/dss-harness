@@ -84,6 +84,21 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// </summary>
     private readonly Func<string, SafeWaitHandle> _makeJob = Containment.CreateJob;
 
+    /// <summary>What makes <see cref="_lifetime"/> once, whichever bound children start together.</summary>
+    private readonly Lock _lifetimeGate = new();
+
+    /// <summary>
+    /// The job this runner's bound children are held in on Windows, by its name and its one handle, once the first of them
+    /// has started: kept for as long as the runner, and closed by nothing else.
+    /// </summary>
+    private (string Name, SafeWaitHandle Job)? _lifetime;
+
+    /// <summary>The variable that names where the compiler's program-database server listens.</summary>
+    internal const string ProgramDatabaseEndpoint = "_MSPDBSRV_ENDPOINT_";
+
+    /// <summary>The variable that keeps the build engine from leaving nodes for a later build to reuse.</summary>
+    internal const string NodeReuseOff = "MSBUILDDISABLENODEREUSE";
+
     /// <summary>
     /// A runner reading <paramref name="processTable"/> in place of the machine's own table, or making its jobs with
     /// <paramref name="makeJob"/>: a test's. Not the public constructor's, because the container builds this runner from
@@ -201,11 +216,13 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
         var windows = _platform.Current == PlatformId.Windows;
 
-        // Through this tool's own step where a container is asked for: every contained child, and on
-        // Linux and macOS a child apart from the terminal. On Windows a child apart from the terminal
-        // starts as any other: started with no window, it has a console of its own, which an
-        // interruption typed at this process's console never reaches.
-        var throughStep = request.Contained || (request.ApartFromTerminal && !windows);
+        // Through this tool's own step where a container is asked for: every contained child, on Windows
+        // a bound one, and on Linux and macOS a child apart from the terminal. On Windows a child apart
+        // from the terminal starts as any other: started with no window, it has a console of its own,
+        // which an interruption typed at this process's console never reaches. On Linux and macOS a
+        // bound child starts as any other: nothing there ends a child with the process that started it.
+        var bound = request.Bound && !request.Contained && windows;
+        var throughStep = request.Contained || (request.ApartFromTerminal && !windows) || bound;
 
         if (throughStep && !File.Exists(resolved) && !Directory.Exists(resolved))
         {
@@ -220,6 +237,15 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         // end it ends the child with it.
         var jobName = request.Contained && windows ? JobName() : null;
         using var job = jobName is null ? null : MadeJob(jobName, request.FileName, resolved);
+
+        // The job a bound child joins: the runner's own, made at its first bound child and held for as long as the
+        // runner lives, never terminated and never closed by a child's end.
+        var joined = jobName ?? (bound ? LifetimeJob(request.FileName, resolved) : null);
+
+        if (joined is not null)
+        {
+            OwnServers(startInfo.Environment, joined);
+        }
 
         // The channel the step says whether the program started on, listened on before the step can
         // reach it.
@@ -241,13 +267,13 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
             startInfo.ArgumentList.Add(ContainExec.CommandName);
 
-            if (jobName is not null)
+            if (joined is not null)
             {
                 startInfo.ArgumentList.Add(ContainExec.JobOption);
-                startInfo.ArgumentList.Add(jobName);
+                startInfo.ArgumentList.Add(joined);
             }
 
-            if (!request.Contained)
+            if (!request.Contained && !bound)
             {
                 startInfo.ArgumentList.Add(ContainExec.GroupOption);
             }
@@ -802,6 +828,48 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// <summary>A job object's name, unique to this contained child of this process.</summary>
     private static string JobName()
         => $"dssharness-contain-{Guid.NewGuid():N}";
+
+    /// <summary>
+    /// The name of the job this runner's bound children are held in on Windows, made at the first of them: held by this
+    /// runner, never terminated and never closed but by the runner's own end - the process's, for the one the container
+    /// builds - so its members end then, whatever ends it. A job that could not be made is the start's failure, and the
+    /// next bound child asks for it again.
+    /// </summary>
+    private string LifetimeJob(string requested, string resolved)
+    {
+        lock (_lifetimeGate)
+        {
+            if (_lifetime is { } held)
+            {
+                return held.Name;
+            }
+
+            var name = JobName();
+            _lifetime = (name, MadeJob(name, requested, resolved));
+
+            return name;
+        }
+    }
+
+    /// <summary>
+    /// Gives a child held in a job on Windows build servers of its own, where its environment names none: the compiler's
+    /// program-database server listens at an endpoint named for the job, and the build engine keeps no node for a later
+    /// build. A server a member starts is the job's, and ends with it; shared with another process's builds - the
+    /// compiler's server is one for all of a user's builds unless told otherwise, and the build engine's nodes wait to be
+    /// reused by whichever build comes next - it would be taken from them mid-build as this job ended.
+    /// </summary>
+    /// <param name="environment">The child's environment, as its request left it.</param>
+    /// <param name="job">The job the child is held in.</param>
+    internal static void OwnServers(IDictionary<string, string?> environment, string job)
+    {
+        foreach (var (name, value) in new[] { (ProgramDatabaseEndpoint, job), (NodeReuseOff, "1") })
+        {
+            if (!environment.Keys.Any(existing => string.Equals(existing, name, StringComparison.OrdinalIgnoreCase)))
+            {
+                environment[name] = value;
+            }
+        }
+    }
 
     /// <summary>
     /// Whether <paramref name="program"/> names a file by its path rather than a program to look up by

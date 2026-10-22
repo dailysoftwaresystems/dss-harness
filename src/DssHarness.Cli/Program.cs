@@ -55,6 +55,7 @@ root.Subcommands.Add(BuildCommand.Create());
 root.Subcommands.Add(TestCommand.Create());
 root.Subcommands.Add(RunCommand.Create());
 root.Subcommands.Add(CheckMutationsCommand.Create());
+root.Subcommands.Add(StopRunCommand.Create());
 root.Subcommands.Add(CleanCommand.Create());
 root.Subcommands.Add(UpCommand.Create());
 root.Subcommands.Add(DownCommand.Create());

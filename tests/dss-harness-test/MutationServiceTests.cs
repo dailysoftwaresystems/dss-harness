@@ -2102,7 +2102,8 @@ public sealed class MutationServiceTests
             harness.PathBudget,
             harness.FileSystem,
             harness.Platform,
-            harness.Output);
+            harness.Output,
+            new RunStops(harness.FileSystem, harness.Identity, harness.Output, new LogOwnership(harness.FileSystem, harness.Output, harness.Identity)));
 
         return new MutationService(
             loader,

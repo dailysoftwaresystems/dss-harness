@@ -126,6 +126,18 @@ public sealed record ProcessRequest
     public bool Contained { get; init; }
 
     /// <summary>
+    /// Whether the child is bound to this process's life: on Windows it is placed, before it runs a line of its own, in the
+    /// one job object its runner holds for as long as the runner lives - the life of the process, for the runner the
+    /// container builds - which ends every member when its last handle closes. So this process ending in any way, a hard
+    /// kill among them, ends the child and all it started at once, as a host ends a dispatched leg whose dispatcher has
+    /// gone. Its own end and a stop are as any other child's: what it leaves running at its normal end lives on until this
+    /// process ends. On Linux and macOS the child starts as any other: an interrupt or a termination signal this process
+    /// is given ends it with this process's stop, its terminal's hang-up reaches it as it reaches this process, and a kill
+    /// of this process alone does not reach it. A <see cref="Contained"/> child is bound already, by its own job.
+    /// </summary>
+    public bool Bound { get; init; }
+
+    /// <summary>
     /// Whether the child starts in a process group of its own on Linux and macOS, apart from the
     /// terminal: an interruption typed where this process runs is sent to a group, and that group is
     /// not this child's. On Windows the child starts as any other, whose console of its own already

@@ -189,7 +189,7 @@ public sealed class ChildSessionsTests
 
         try
         {
-            var owner = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create()).RunAsync(
+            var owner = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram).RunAsync(
                 TestHost.ChildRequest("contain-recorded-and-wait", CliRunner.CliProgram, step, "300000") with
                 {
                     Timeout = LongBound,

@@ -510,7 +510,7 @@ public sealed class ToolResolutionTests
         var fileSystem = new PhysicalFileSystem(FilePermissionsFactory.Create());
         var identity = Substitute.For<IToolIdentityProvider>();
         identity.Current.Returns(new ToolIdentity("1.2.3", "abc123"));
-        var processRunner = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create());
+        var processRunner = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram);
         var agent = new HostAgentService(
             platform,
             identity,
@@ -610,7 +610,7 @@ public sealed class ToolResolutionTests
         // A copy that cannot start: started in place of the raised one, the request would fail.
         File.WriteAllText(Path.Combine(onPath, OperatingSystem.IsWindows() ? name + ".exe" : name), string.Empty);
 
-        var result = await new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create()).RunAsync(
+        var result = await new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram).RunAsync(
             new ProcessRequest
             {
                 FileName = name,
@@ -667,7 +667,7 @@ public sealed class ToolResolutionTests
 
         var request = TestHost.ChildRequest("print-env", "PATH") with { ProgramDirectories = new ProgramDirectories([raised], [appended]) };
 
-        var result = await new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create())
+        var result = await new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram)
             .RunAsync(request, TestContext.Current.CancellationToken);
 
         var entries = result.StandardOutput.Trim().Split(Path.PathSeparator);
@@ -741,7 +741,7 @@ public sealed class ToolResolutionTests
 
         TestHost.StartableProgram(appended, name);
 
-        var result = await new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create()).RunAsync(
+        var result = await new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram).RunAsync(
             new ProcessRequest { FileName = name, ProgramDirectories = ProgramDirectories.After([appended]), Timeout = TimeSpan.FromSeconds(30) },
             TestContext.Current.CancellationToken);
 
@@ -764,7 +764,7 @@ public sealed class ToolResolutionTests
 
         TestHost.StartableProgram(found, name);
 
-        var result = await new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create()).RunAsync(
+        var result = await new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram).RunAsync(
             new ProcessRequest
             {
                 FileName = name,
@@ -790,7 +790,7 @@ public sealed class ToolResolutionTests
 
         var request = TestHost.ChildRequest("print-env", "PATH") with { ProgramDirectories = ProgramDirectories.After([first, second]) };
 
-        var result = await new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create())
+        var result = await new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram)
             .RunAsync(request, TestContext.Current.CancellationToken);
 
         var entries = result.StandardOutput.Trim().Split(Path.PathSeparator);
@@ -1607,7 +1607,7 @@ public sealed class ToolResolutionTests
         var identity = Substitute.For<IToolIdentityProvider>();
         identity.Current.Returns(new ToolIdentity("1.2.3", "abc123"));
 
-        var processRunner = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create());
+        var processRunner = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram);
         var agent = new HostAgentService(
             platform,
             identity,

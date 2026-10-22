@@ -122,6 +122,9 @@ public sealed class KeepAwake
                 // do: under the host's environment, and finding what the survey found.
                 Environment = PhaseEnvironment.Layered(host.Env),
                 ProgramDirectories = ProgramDirectories.After(programDirectories),
+
+                // And ends with this process as the leg's own programs do, whether or not it waits on it.
+                Bound = true,
             },
             stop.Token);
 

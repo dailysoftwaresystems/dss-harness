@@ -363,6 +363,10 @@ public sealed class LegSetUps(ISetUpService setUps, SetUpHolds holds, PhaseRunne
                         Environment = PhaseEnvironment.Layered(leg.Environment),
                         ProgramDirectories = leg.Host.ProgramDirectories,
                         StallSeconds = config.Defaults.StallSeconds,
+
+                        // What an up line brings up is shared by every leg that names the set-up, held across
+                        // runs, and ended by its down line: never by the end of the run that brought it up.
+                        LeftRunning = direction == SetUpDirection.Up,
                     },
                     cancellationToken)
                 .ConfigureAwait(false);

@@ -52,6 +52,7 @@ internal static class TestChild
             "say-pid-then" => SayPidThen(standardOutput, arguments),
             "contain-and-wait" => ContainAndWait(standardOutput, arguments),
             "contain-recorded-and-wait" => ContainRecordedAndWait(standardOutput, arguments),
+            "bind-and-wait" => BindAndWait(standardOutput, arguments),
             "interrupt-own-console" => InterruptOwnConsole(standardOutput),
             "print-code-page" => PrintCodePage(standardOutput),
             "print-parent" => PrintParent(standardOutput),
@@ -666,6 +667,42 @@ internal static class TestChild
 
         output.Write($"parent={Environment.ProcessId} contained={containedId.Task.Result} ordinary={ordinaryId.Task.Result}\n");
         Task.WaitAll(contained, ordinary);
+
+        return 0;
+
+        Core.Processes.ProcessRequest Saying(TaskCompletionSource<string> id) => TestHost.ChildRequest("say-pid-and-sleep", arguments[1]) with
+        {
+            OnOutputLine = line =>
+            {
+                if (line.StartsWith("pid=", StringComparison.Ordinal))
+                {
+                    id.TrySetResult(line["pid=".Length..]);
+                }
+            },
+        };
+    }
+
+    /// <summary>
+    /// Starts two sleepers for <c>arguments[1]</c> milliseconds through a process runner of its own, which places bound
+    /// children through the tool <c>arguments[0]</c> names - one bound to this process's life, one as children always
+    /// were - writes its own id and both of theirs on one line, and waits for them: the process a test kills where it
+    /// stands, so the one bound is seen to end with it and the other to outlive it.
+    /// </summary>
+    private static int BindAndWait(TextWriter output, string[] arguments)
+    {
+        var runner = new Core.Processes.ProcessRunner(new Core.Platform.HostPlatform(), Core.Platform.FilePermissionsFactory.Create(), arguments[0]);
+        var boundId = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var ordinaryId = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var bound = runner.RunAsync(Saying(boundId) with { Bound = true });
+        var ordinary = runner.RunAsync(Saying(ordinaryId));
+
+        if (Task.WhenAny(Task.WhenAll(boundId.Task, ordinaryId.Task), bound, ordinary).GetAwaiter().GetResult() is not Task<string[]>)
+        {
+            return 95;
+        }
+
+        output.Write($"parent={Environment.ProcessId} bound={boundId.Task.Result} ordinary={ordinaryId.Task.Result}\n");
+        Task.WaitAll(bound, ordinary);
 
         return 0;
 

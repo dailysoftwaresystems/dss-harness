@@ -51,11 +51,11 @@ public sealed class AgentPolicy
     public static IReadOnlyList<string> NeverCiCommands { get; } = ["gh pr merge", "gh workflow run", "gh run rerun"];
 
     /// <summary>
-    /// This tool's own orchestrator and agent verbs, refused whatever <c>worktreeRules</c> says: an
-    /// agent does not move its own run.
+    /// This tool's own orchestrator and agent verbs, and the stop of a run of legs, refused whatever
+    /// <c>worktreeRules</c> says: an agent does not move its own run, nor stop one.
     /// </summary>
     public static IReadOnlyList<string> ToolVerbs { get; } =
-        ["create-orchestrator", "delete-orchestrator", "run-orchestrator", "resume-orchestrator", "answer-orchestrator", "pause-orchestrator", "stop-orchestrator", "create-agent", "seed-agent", "refresh-agent", "rebase-agent", "fold-agent", "delete-agent"];
+        ["create-orchestrator", "delete-orchestrator", "run-orchestrator", "resume-orchestrator", "answer-orchestrator", "pause-orchestrator", "stop-orchestrator", "create-agent", "seed-agent", "refresh-agent", "rebase-agent", "fold-agent", "delete-agent", "stop-run"];
 
     /// <summary>
     /// The files that hold the tool's own policy and what the next launch loads, refused as writes

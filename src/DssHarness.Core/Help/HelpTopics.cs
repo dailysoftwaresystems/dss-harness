@@ -893,6 +893,18 @@ public static class HelpTopics
         builder.AppendLine("run directory says it was abandoned - its run id, process and start, and where its");
         builder.AppendLine("records are - and releases its claim on them.");
         builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"A run is stopped with Ctrl+C where it was typed, and from another terminal with '{RunStopService.CommandName} <run id>' typed in "
+            + $"the tree that ran it: its dispatcher looks for the stop every {StopCadence.PollEvery.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s "
+            + $"and stops as an interrupt stops it - each leg stopped where it stands, its ledger written with what was reached, exit {HarnessExit.Cancelled} "
+            + $"- and {RunStopService.CommandName} waits {RunStopService.StopWait.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s for it, saying "
+            + $"the run stopped only where its dispatcher took the stop: one that ended on its own first is nothing it stopped ({HarnessExit.Refused}). "
+            + "--now ends the dispatcher's process where it stands, with all it started, and its ledger is never written. On Windows every phase "
+            + "a leg runs on its own machine, and its keepAwake command, is bound to its dispatcher - a set-up's up line apart - and ends with it "
+            + $"however it ends, a kill among them. On Linux and macOS a kill of the dispatcher alone does not reach its legs, and "
+            + $"{RunStopService.CommandName} --now does.");
+        builder.AppendLine();
         builder.AppendLine("check-mutations judges each arm of a repository's mutation registry, and a leg's");
         builder.AppendLine("verdict there is the worst of its own and its arms': violated where an arm's");
         builder.AppendLine("declaration did not hold, survived where its mutation built and ran and no case");

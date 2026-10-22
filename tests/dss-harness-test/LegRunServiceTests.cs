@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
@@ -1354,6 +1355,125 @@ public sealed class LegRunServiceTests
             $"logs: WARN - An earlier run was abandoned: pid {int.MaxValue - 1}, run 20250101-120000-deadbeef, since 2025-01-01 12:00:00Z",
             harness.StandardError.ToString(),
             StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A stop another process asks of a run (stop-run) is taken at the run's next look and stops it as an interrupt does:
+    /// the leg at work stopped where it stands, the run ended interrupted, its line naming who asked - its claim given up,
+    /// the request gone, and the stop recorded taken among the run's records for every process that asked.
+    /// </summary>
+    [Fact]
+    public async Task AStopAskedOfARun_StopsItAsAnInterruptDoes_AndRecordsItTakenAmongItsRecords()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var stops = new RunStops(harness.FileSystem, harness.Identity, harness.Output, new LogOwnership(harness.FileSystem, harness.Output, harness.Identity));
+        string? asked = null;
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            OneLeg(harness),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = LegWorkload.Copy },
+            stops: stops,
+            workAsync: async (work, token) =>
+            {
+                stops.Ask(asked = work.RunDirectory);
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+
+                throw new InvalidOperationException("the leg's work outlived the stop asked of its run");
+            });
+
+        using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
+
+        Assert.Equal(HarnessExit.Cancelled, outcome.ExitCode);
+        Assert.True(document.RootElement.GetProperty("cancelled").GetBoolean());
+        Assert.Contains(
+            $"test: WARN - pid {Environment.ProcessId} asked this run to stop ({RunStopService.CommandName}): its legs are stopped where they stand, as an interrupt stops them.",
+            harness.StandardError.ToString(),
+            StringComparison.Ordinal);
+        Assert.False(File.Exists(RunStops.FileOf(asked!)), "the request the run took stayed asked");
+        Assert.True(stops.TakenBack(asked!, "test"), "the run's records did not say it took the stop");
+        Assert.False(File.Exists(LogOwnership.OwnerFile(asked!)), "the run's claim was left behind it");
+    }
+
+    /// <summary>
+    /// A run's watch for a stop ends before its directory is given up: a stop asked as the run gives its directory up is
+    /// never taken by the run that ended, and is left, untaken, for the process that asked to take back - never removed by
+    /// a watch that ended after the directory was given up.
+    /// </summary>
+    [Fact]
+    public async Task AStopAskedAsARunGivesItsDirectoryUp_IsNeverTakenByIt_AndIsLeftForItsAsker()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var stops = new RunStops(harness.FileSystem, harness.Identity, harness.Output, new LogOwnership(harness.FileSystem, harness.Output, harness.Identity));
+        string? runDirectory = null;
+        var givingUp = new AskingAsTheOwnerGoes(harness.FileSystem, path => runDirectory is { } run && path == LogOwnership.OwnerFile(run), () => stops.Ask(runDirectory!));
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            OneLeg(harness),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null) { Workload = LegWorkload.Copy },
+            logs: new LogOwnership(givingUp, harness.Output, harness.Identity),
+            stops: stops,
+            work: leg =>
+            {
+                runDirectory = leg.RunDirectory;
+                return new LegEntry { Leg = leg.Leg.Name, Verdict = LegVerdict.Passed };
+            });
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.True(File.Exists(RunStops.FileOf(runDirectory!)), "a stop asked as the run gave its directory up was removed after the giving up");
+        Assert.False(stops.TakenBack(runDirectory!, "test"), "a stop asked as the run gave its directory up was taken by the run that ended");
+        Assert.False(File.Exists(RunStops.FileOf(runDirectory!)), "the process that asked left its untaken stop behind the run");
+    }
+
+    /// <summary>The file system, but that it runs <paramref name="then"/> just before a file <paramref name="owner"/> picks out is removed.</summary>
+    private sealed class AskingAsTheOwnerGoes(IFileSystem inner, Func<string, bool> owner, Action then) : PassThroughFileSystem(inner)
+    {
+        public override void DeleteFile(string path)
+        {
+            if (owner(path))
+            {
+                then();
+            }
+
+            base.DeleteFile(path);
+        }
+    }
+
+    /// <summary>
+    /// A stop asked of a run that ended without taking it - killed before its next look - goes with the run's claim when
+    /// the next run in its tree finds it abandoned: nothing would ever take it.
+    /// </summary>
+    [Fact]
+    public async Task AStopAskedOfAnAbandonedRun_GoesWithItsClaim()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var dead = temp.Combine(".harness-config", "runs", "20250101-120000-deadbeef");
+
+        Directory.CreateDirectory(dead);
+        File.WriteAllText(
+            LogOwnership.OwnerFile(dead),
+            "{ \"machine\": \"" + Environment.MachineName + "\", \"processId\": " + (int.MaxValue - 1).ToString(CultureInfo.InvariantCulture)
+            + ", \"processStamp\": \"a-process-that-has-gone\", \"runId\": \"20250101-120000-deadbeef\", \"takenUtc\": \"2025-01-01T12:00:00+00:00\" }");
+        new RunStops(harness.FileSystem, harness.Identity, harness.Output, new LogOwnership(harness.FileSystem, harness.Output, harness.Identity)).Ask(dead);
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            OneLeg(harness),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null) { Workload = LegWorkload.Copy },
+            stops: new RunStops(harness.FileSystem, harness.Identity, harness.Output, new LogOwnership(harness.FileSystem, harness.Output, harness.Identity)));
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.False(File.Exists(RunStops.FileOf(dead)), "the stop asked of the abandoned run was left behind it");
     }
 
     /// <summary>
@@ -2978,6 +3098,35 @@ public sealed class LegRunServiceTests
         Assert.Single(Directory.EnumerateFiles(Path.Combine(temp.Path, ".harness-config"), "set-up b down.*", SearchOption.AllDirectories));
     }
 
+    /// <summary>
+    /// A set-up's up line is left running on purpose - what it brings up is shared, held across runs, and ended by its
+    /// down line - so it is not bound to the process running the leg; its down line is, as every other phase is.
+    /// </summary>
+    [Fact]
+    public async Task ASetUpsUpLine_IsLeftRunning_AndItsDownLineIsBound()
+    {
+        using var temp = new TempDirectory();
+        using var state = new TempDirectory();
+        var harness = new HarnessFactory();
+        var seen = new RequestsSeen(harness.ProcessRunner);
+
+        SetUpScripts.Write(temp.Path);
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            SetUpConfig(harness, ("a", SetUpScripts.SetUp("a"))),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, ["native"], Json: true) { Workload = SetUpWorkload("a") with { SetUp = true } },
+            setUps: SetUpsFor(harness, state, phases: seen).SetUps);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal<string>(["up-a", "down-a"], SetUpScripts.Logged(temp.Path));
+        Assert.Equal(
+            [("up-a", false), ("down-a", true)],
+            seen.Seen.Select(request => (request.Arguments.First(argument => argument.EndsWith("-a", StringComparison.Ordinal)), request.Bound)));
+    }
+
     /// <summary>Naming set-ups changes no run that is not asked to set up: nothing is brought up or down.</summary>
     [Fact]
     public async Task ARunNotAskedToSetUp_BringsNothingUp()
@@ -3696,7 +3845,8 @@ public sealed class LegRunServiceTests
         HarnessFactory harness,
         TempDirectory state,
         TimeSpan? grace = null,
-        Func<TimeSpan, CancellationToken, Task>? wait = null)
+        Func<TimeSpan, CancellationToken, Task>? wait = null,
+        IProcessRunner? phases = null)
     {
         var holds = new SetUpHolds(harness.FileSystem, harness.Output, harness.Identity, harness.Platform, () => state.Combine("setups.json"), wait: wait);
         var service = new SetUpService(
@@ -3709,11 +3859,28 @@ public sealed class LegRunServiceTests
             harness.Output);
 
         return (
-            new LegSetUps(service, holds, new PhaseRunner(harness.ProcessRunner, harness.FileSystem, harness.Output))
+            new LegSetUps(service, holds, new PhaseRunner(phases ?? harness.ProcessRunner, harness.FileSystem, harness.Output))
             {
                 InterruptionGrace = grace ?? WorktreeService.DefaultInterruptionGrace,
             },
             holds);
+    }
+
+    /// <summary>A process runner that runs each request through <paramref name="inner"/>, noting the request first.</summary>
+    private sealed class RequestsSeen(IProcessRunner inner) : IProcessRunner
+    {
+        private readonly ConcurrentQueue<ProcessRequest> _seen = new();
+
+        /// <summary>Each request run, in the order it was asked.</summary>
+        public IReadOnlyList<ProcessRequest> Seen => [.. _seen];
+
+        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default)
+        {
+            _seen.Enqueue(request);
+            return inner.RunAsync(request, cancellationToken);
+        }
+
+        public string? FindExecutable(string command) => inner.FindExecutable(command);
     }
 
     /// <summary>What the one leg of <paramref name="outcome"/> did with each set-up, as its document says.</summary>
@@ -4332,17 +4499,19 @@ public sealed class LegRunServiceTests
         IHarnessContextLoader? loader = null,
         LegSetUps? setUps = null,
         IProcessRunner? versionProbes = null,
-        IHarnessOutput? output = null)
+        IHarnessOutput? output = null,
+        RunStops? stops = null)
     {
         var loading = loader ?? HostDoubles.Loader(config, tree ?? temp.Path, temp.Path);
         var run = runId ?? RunId.New();
+        var claims = logs ?? new LogOwnership(harness.FileSystem, harness.Output, harness.Identity);
 
         var service = new LegRunService(
             loading,
             new LegsService(loading, inspector, new KnownTrees(), harness.Platform, harness.Output),
             new LegExecutor(harness.Platform, harness.Output),
             runLock ?? new RunLock(harness.FileSystem, harness.Output, harness.Identity),
-            logs ?? new LogOwnership(harness.FileSystem, harness.Output, harness.Identity),
+            claims,
             sync ?? SyncKit.ServiceDouble(),
 
             // Each host's copy as this run's sync leaves it, unless the test says what it holds: a sync double writes nothing.
@@ -4361,6 +4530,7 @@ public sealed class LegRunServiceTests
             fileSystem ?? harness.FileSystem,
             harness.Platform,
             output ?? harness.Output,
+            stops ?? new RunStops(harness.FileSystem, harness.Identity, harness.Output, claims),
             origin,
             setUps);
 

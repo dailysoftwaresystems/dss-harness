@@ -71,8 +71,8 @@ public interface IFlowService : IUseCase
 /// <param name="StopWait">How long <c>stop-orchestrator</c> waits for the engine to end before <c>--now</c> is the way, and how long <c>--now</c> waits for the process it ended.</param>
 public sealed record FlowTimings(TimeSpan PollEvery, TimeSpan WatchEvery, TimeSpan StopWait)
 {
-    /// <summary>The tool's own: a poll every 2 s, a look every 200 ms, a stop waited for 30 s.</summary>
-    public static FlowTimings Default { get; } = new(TimeSpan.FromSeconds(2), TimeSpan.FromMilliseconds(200), TimeSpan.FromSeconds(30));
+    /// <summary>The tool's own: a poll and a look at every command's cadence (<see cref="StopCadence"/>), a stop waited for 30 s.</summary>
+    public static FlowTimings Default { get; } = new(StopCadence.PollEvery, StopCadence.WatchEvery, TimeSpan.FromSeconds(30));
 }
 
 /// <summary>Wires the commands of a run over the engine's own services.</summary>
@@ -1209,49 +1209,17 @@ public sealed class FlowService(
 
         CommandOutcome Answer(CommandOutcome outcome) => Ended(layout, StopCommand, outcome, ResultOf(layout, outcome), json);
 
-        if (!_owner.IsHere(held))
+        var ending = await _identity.EndWhereItStandsAsync(held.Machine, held.ProcessId, held.Stamp, _timings.StopWait, cancellationToken).ConfigureAwait(false);
+
+        if (ending.NothingMoreToDo($"the engine of run '{layout.Name}'", name, "owner", $"{StopCommand} {layout.Name}", _timings.StopWait) is { } nothingMore)
         {
-            return Answer(CommandOutcome.Refused(
-                $"run '{layout.Name}' is owned by an engine on another machine ({name}); --now ends only a process of this machine. {StopCommand} {layout.Name} without --now asks it to stop, or end it on its own machine. Nothing was changed."));
+            return Answer(nothingMore);
         }
 
-        if (held.ProcessId == _identity.CurrentId)
+        if (ending.How == ProcessEnded.AlreadyGone)
         {
-            return Answer(CommandOutcome.Refused($"run '{layout.Name}' is owned by this very process; --now ends another engine's process. Nothing was changed."));
-        }
-
-        if (held.Stamp is not { } stamp || !_identity.IsSame(held.ProcessId, stamp))
-        {
-            if (!_identity.IsAlive(held.ProcessId, held.Stamp))
-            {
-                _owner.RemoveGone(layout);
-                return Answer(CommandOutcome.Ok($"the engine of run '{layout.Name}' ({name}) had already ended; its owner was removed", [$"{ResumeCommand} goes on from the records"]));
-            }
-
-            return Answer(CommandOutcome.Refused(
-                $"{name} cannot be told to be the engine of run '{layout.Name}' - its start cannot be read beside the one its owner recorded - so it was not ended. Nothing was changed."));
-        }
-
-        try
-        {
-            using var process = System.Diagnostics.Process.GetProcessById(held.ProcessId);
-            process.Kill(entireProcessTree: true);
-
-            using var bound = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            bound.CancelAfter(_timings.StopWait);
-            await process.WaitForExitAsync(bound.Token).ConfigureAwait(false);
-        }
-        catch (ArgumentException)
-        {
-            // It ended meanwhile.
-        }
-        catch (OperationCanceledException)
-        {
-            return Answer(CommandOutcome.Failed(HarnessExit.CommandFailed, $"{name}, the engine of run '{layout.Name}', was ended and had not gone within {_timings.StopWait.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s; its owner is kept"));
-        }
-        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or NotSupportedException or AggregateException)
-        {
-            return Answer(CommandOutcome.Failed(HarnessExit.CommandFailed, $"{name}, the engine of run '{layout.Name}', could not be ended: {ex.Message.TrimEnd('.')}; its owner is kept"));
+            _owner.RemoveGone(layout);
+            return Answer(CommandOutcome.Ok($"the engine of run '{layout.Name}' ({name}) had already ended; its owner was removed", [$"{ResumeCommand} goes on from the records"]));
         }
 
         _owner.RemoveGone(layout);

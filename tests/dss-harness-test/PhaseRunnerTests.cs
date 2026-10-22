@@ -271,6 +271,27 @@ public sealed class PhaseRunnerTests
     }
 
     /// <summary>
+    /// Every phase is bound to the process that runs it - on Windows that process ending in any way ends what the phase
+    /// started - but one whose processes are to outlive it, a set-up's up line, which is left running on purpose.
+    /// </summary>
+    [Fact]
+    public async Task APhase_IsBoundToTheProcessThatRunsIt_ButOneLeftRunning()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var lines = new ScriptedLines(("done", false));
+
+        await new PhaseRunner(lines, factory.FileSystem, factory.Output).RunAsync(Child("exit", temp.Combine("a.log")), TestContext.Current.CancellationToken);
+        var bound = lines.Asked!.Bound;
+
+        await new PhaseRunner(lines, factory.FileSystem, factory.Output).RunAsync(
+            Child("exit", temp.Combine("b.log")) with { LeftRunning = true },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal((true, false), (bound, lines.Asked!.Bound));
+    }
+
+    /// <summary>
     /// A success pattern that cannot be evaluated in time against a line is never read as one that did not match: what it
     /// could not decide is raised once the child has ended, with every line of it kept in the log and the exit line after.
     /// </summary>
@@ -704,10 +725,14 @@ public sealed class PhaseRunnerTests
         /// <summary>Whether every line was printed and the child ended.</summary>
         public bool Finished { get; private set; }
 
+        /// <summary>The request last run.</summary>
+        public ProcessRequest? Asked { get; private set; }
+
         public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(request);
 
+            Asked = request;
             request.OnStarted?.Invoke();
 
             foreach (var (line, error) in lines)

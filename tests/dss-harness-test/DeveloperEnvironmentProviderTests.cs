@@ -429,7 +429,7 @@ public sealed class DeveloperEnvironmentProviderTests
 
         using var temp = new TempDirectory();
         var platform = HostDoubles.Platform(PlatformId.Windows, "x86_64");
-        var processes = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create());
+        var processes = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram);
         var provider = new DeveloperEnvironmentProvider(platform, processes, new PhysicalFileSystem(FilePermissionsFactory.Create()), new HarnessFactory().Output);
 
         foreach (var name in new[] { "p%OS%q", "a^b", "x!y", "r&d (x86)" })
@@ -510,7 +510,7 @@ public sealed class DeveloperEnvironmentProviderTests
     public async Task TheVisualStudioOnThisMachine_SetsUpCl()
     {
         var platform = new HostPlatform();
-        var processes = new ProcessRunner(platform, FilePermissionsFactory.Create());
+        var processes = new ProcessRunner(platform, FilePermissionsFactory.Create(), CliRunner.CliProgram);
         var probe = new DeveloperEnvironmentProbe(platform, processes);
         var token = TestContext.Current.CancellationToken;
 

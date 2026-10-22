@@ -160,6 +160,7 @@ public sealed class LegRunService(
     IFileSystem fileSystem,
     IHostPlatform platform,
     IHarnessOutput output,
+    RunStops stops,
     CommandOrigin? origin = null,
     LegSetUps? setUps = null)
 {
@@ -188,6 +189,9 @@ public sealed class LegRunService(
 
     /// <summary>What brings a leg's set-ups up and down, where its run is asked to set up.</summary>
     private readonly LegSetUps? _setUps = setUps;
+
+    /// <summary>The stop another process asks of a run (<c>stop-run</c>), which the run looks for while it owns its directory.</summary>
+    private readonly RunStops _stops = stops;
 
     /// <summary>
     /// Runs <paramref name="work"/> on every selected leg and reports the ledger.
@@ -319,6 +323,11 @@ public sealed class LegRunService(
         // Made as it was claimed: a front end is told where the run's records are as they begin, not only once it ends.
         _output.Publish(new RecordWritten("run directory", runDirectory));
 
+        // A stop another process asks of the run (stop-run) is looked for from here, where the run owns its directory, to
+        // where it gives it up, and stops the run as an interrupt does: the run's own token is the one both cancel.
+        var stop = _stops.Watch(runDirectory, commandName, cancellationToken);
+        using var stopping = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, stop.Stopping);
+
         // Trees another run holds, by tree: a verdict for the legs that need one, as a variant
         // another run holds is, and no end to the legs that do not.
         var lockedTrees = new ConcurrentDictionary<string, string>(LegPlan.TreeKeyComparer);
@@ -333,8 +342,9 @@ public sealed class LegRunService(
         {
             // A run on this machine that ended holding its own directory - most likely killed, or stopped with its
             // machine - may have written no verdict, and nothing would ever claim that directory again: said here, once,
-            // and let go. Inside this try, so that whatever happens in it, this run's own directory is still given up.
-            _logOwnership.ReleaseAbandoned(runDirectory);
+            // and let go. Inside this try, so that whatever happens in it, this run's own directory is still given up. A
+            // stop asked of such a run that it never took goes with it: nothing will take it now.
+            _ = _stops.ReleaseAbandonedBeside(runDirectory, context.Layout.RunDirectory, commandName);
 
             // Left out entirely where nothing is remote, or where the run acts on what each host already holds
             // (--use-staged), rather than supplied and made to do nothing: the executor reports a sync transition per
@@ -344,7 +354,7 @@ public sealed class LegRunService(
 
             if (!request.UseStaged && placed.Any(leg => leg.Synced))
             {
-                var read = sources = await ReadSourcesAsync(placed, commandName, cancellationToken).ConfigureAwait(false);
+                var read = sources = await ReadSourcesAsync(placed, commandName, stopping.Token).ConfigureAwait(false);
 
                 syncTree = (treeKey, token) => SyncTreeAsync(context, placed, treeKey, runId, request.ForceLock, read, lockedTrees, holders, token);
             }
@@ -365,7 +375,7 @@ public sealed class LegRunService(
                                 context, placed, plan, runId, runDirectory, request, work, commandName, ledger, lockedTrees, token),
                         },
                         ledger,
-                        cancellationToken)
+                        stopping.Token)
                     .ConfigureAwait(false);
             }
             catch (HarnessException ex)
@@ -397,7 +407,11 @@ public sealed class LegRunService(
                 read.Result.Dispose();
             }
 
-            await _logOwnership.ReleaseAsync(runDirectory, runId, CancellationToken.None).ConfigureAwait(false);
+            // The watch ends, taking back a request it never took, before the directory is given up: a stop asked too late
+            // is never taken by a run that has ended, nor recorded taken among its records.
+            Task GiveUp() => _logOwnership.ReleaseAsync(runDirectory, runId, CancellationToken.None);
+
+            await stop.EndThenAsync(GiveUp).ConfigureAwait(false);
         }
     }
 

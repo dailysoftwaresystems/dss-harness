@@ -77,7 +77,7 @@ public sealed class MarkedTextTests
             }
             .Where(shell => File.Exists(shell.Item1))
             .ToList();
-        var processes = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create());
+        var processes = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram);
 
         foreach (var (shell, flags) in shells)
         {

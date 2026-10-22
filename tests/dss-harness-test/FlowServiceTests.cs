@@ -837,7 +837,7 @@ public sealed class FlowServiceTests
 
         Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
         Assert.Equal(
-            $"run 'r1' is owned by an engine on another machine (process {Environment.ProcessId.ToString(CultureInfo.InvariantCulture)} on another machine); --now ends only a process of this machine. "
+            $"the engine of run 'r1' runs on another machine (process {Environment.ProcessId.ToString(CultureInfo.InvariantCulture)} on another machine); --now ends only a process of this machine. "
             + "stop-orchestrator r1 without --now asks it to stop, or end it on its own machine. Nothing was changed.",
             outcome.Message);
         Assert.Equal(elsewhere with { StartedAt = repository.Harness.OrchestrationStore.ReadOwner(run)!.StartedAt }, repository.Harness.OrchestrationStore.ReadOwner(run));

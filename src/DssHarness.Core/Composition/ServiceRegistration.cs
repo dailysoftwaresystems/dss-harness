@@ -266,6 +266,8 @@ public static class ServiceRegistration
             provider.GetRequiredService<HeavyLegSlots>(),
             provider.GetRequiredService<IMemoryGauge>()));
         services.AddSingleton<IWslPageCache, WslPageCache>();
+        services.AddSingleton<RunStops>();
+        services.AddSingleton<RunStopService>();
         services.AddSingleton<LegRunService>();
         services.AddSingleton<CleanService>();
 

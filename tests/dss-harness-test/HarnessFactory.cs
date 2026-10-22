@@ -41,7 +41,7 @@ public sealed class HarnessFactory
         Output = new ConsoleHarnessOutput(StandardOutput, StandardError, verbose, home);
 
         FileSystem = new PhysicalFileSystem(FilePermissions);
-        ProcessRunner = new ProcessRunner(Platform, FilePermissions);
+        ProcessRunner = new ProcessRunner(Platform, FilePermissions, CliRunner.CliProgram);
         ProcessTable = ProcessTableFactory.Create(Platform, ProcessRunner);
         GitClient = new GitClient(ProcessRunner, Output, localVariables: LocalVariables);
         RepositoryLocator = new RepositoryLocator(GitClient);
@@ -190,7 +190,7 @@ public sealed class HarnessFactory
     public GitLocalVariables LocalVariables => SharedLocalVariables;
 
     private static readonly GitLocalVariables SharedLocalVariables = new(
-        new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create()));
+        new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram));
 
     public IRepositoryLocator RepositoryLocator { get; }
 

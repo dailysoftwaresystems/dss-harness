@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Globalization;
 using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
+using DssHarness.Core.Results;
 
 namespace DssHarness.Core.Execution;
 
@@ -303,7 +304,29 @@ public static class ProcessHolders
     /// <param name="runId">Its run.</param>
     /// <param name="since">When it took what it holds, or asked for it.</param>
     public static string Describe(int processId, string runId, DateTimeOffset since)
-        => string.Create(CultureInfo.InvariantCulture, $"pid {processId}, {RunLine.Message(runId)}, since {since:u}");
+        => string.Create(CultureInfo.InvariantCulture, $"{Pid(processId)}, {RunLine.Message(runId)}, since {since:u}");
+
+    /// <summary>
+    /// A process a record names, as a line names it: <c>pid 12</c> where the record names this machine, and
+    /// <c>pid 12 on another machine</c> where it names another - never naming that machine, which its record alone keeps.
+    /// </summary>
+    /// <param name="identity">This process.</param>
+    /// <param name="machine">The machine the record names.</param>
+    /// <param name="processId">Its process id.</param>
+    public static string Name(this IProcessIdentity identity, string machine, int processId)
+        => $"{Pid(processId)}{identity.Elsewhere(machine)}";
+
+    /// <summary>
+    /// What a process's name adds where its record names another machine - <c> on another machine</c> - and nothing where
+    /// it names this one: the one way every line says a process is another machine's, never naming that machine.
+    /// </summary>
+    /// <param name="identity">This process.</param>
+    /// <param name="machine">The machine the record names.</param>
+    public static string Elsewhere(this IProcessIdentity identity, string machine)
+        => identity.IsHere(machine) ? string.Empty : " on another machine";
+
+    /// <summary>A process of this machine by its id, as every line names one.</summary>
+    private static string Pid(int processId) => string.Create(CultureInfo.InvariantCulture, $"pid {processId}");
 
     /// <summary>
     /// A holder whose record names <paramref name="machine"/>, as a line names it: as
@@ -316,9 +339,7 @@ public static class ProcessHolders
     /// <param name="runId">Its run.</param>
     /// <param name="since">When it took what it holds, or asked for it.</param>
     public static string Describe(this IProcessIdentity identity, string machine, int processId, string runId, DateTimeOffset since)
-        => identity.IsHere(machine)
-            ? Describe(processId, runId, since)
-            : string.Create(CultureInfo.InvariantCulture, $"pid {processId} on another machine, {RunLine.Message(runId)}, since {since:u}");
+        => string.Create(CultureInfo.InvariantCulture, $"{identity.Name(machine, processId)}, {RunLine.Message(runId)}, since {since:u}");
 
     /// <summary>What is said when a dead holder's <paramref name="what"/> is taken back.</summary>
     /// <param name="what">What it held, as a line names it.</param>
@@ -352,4 +373,151 @@ public static class ProcessHolders
         => stamp is { Length: > 0 }
             ? string.Empty
             : " (recorded by an older build, so a reused id cannot be told from it; --force-lock takes it)";
+
+    /// <summary>
+    /// Ends the process a record names where it stands, with all it started, without asking it - a stop's <c>--now</c>,
+    /// for a process that no longer answers: only one of this machine's, never this one, and only the process the record
+    /// names by its start - then waits for it to go, at most <paramref name="wait"/>. One place for what every such stop
+    /// decides, so no two can come to end a process the other would leave.
+    /// </summary>
+    /// <param name="identity">This process, and how another is told.</param>
+    /// <param name="machine">The machine the record names.</param>
+    /// <param name="processId">The process id it names.</param>
+    /// <param name="stamp">The stamp it names, or <see langword="null"/> where it carries none.</param>
+    /// <param name="wait">How long the process is given to go once it is ended.</param>
+    /// <param name="cancellationToken">Stops the waiting: the caller's own interrupt, thrown as one, never read as the wait spent.</param>
+    public static Task<ProcessEnding> EndWhereItStandsAsync(
+        this IProcessIdentity identity,
+        string machine,
+        int processId,
+        string? stamp,
+        TimeSpan wait,
+        CancellationToken cancellationToken = default)
+        => identity.EndWhereItStandsWithAsync(machine, processId, stamp, wait, KillAndWaitAsync, cancellationToken);
+
+    /// <summary>
+    /// <see cref="EndWhereItStandsAsync(IProcessIdentity, string, int, string?, TimeSpan, CancellationToken)"/>, ending the
+    /// process by <paramref name="killAndWait"/> - which ends it with its tree and waits for it to go until the token it is
+    /// given is cancelled - a test's where it stands in for the machine's own.
+    /// </summary>
+    internal static async Task<ProcessEnding> EndWhereItStandsWithAsync(
+        this IProcessIdentity identity,
+        string machine,
+        int processId,
+        string? stamp,
+        TimeSpan wait,
+        Func<int, CancellationToken, Task> killAndWait,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(identity);
+        ArgumentNullException.ThrowIfNull(killAndWait);
+
+        if (!identity.IsHere(machine))
+        {
+            return new ProcessEnding(ProcessEnded.Elsewhere);
+        }
+
+        if (processId == identity.CurrentId)
+        {
+            return new ProcessEnding(ProcessEnded.Itself);
+        }
+
+        if (stamp is not { } recorded || !identity.IsSame(processId, recorded))
+        {
+            return new ProcessEnding(identity.IsAlive(processId, stamp) ? ProcessEnded.CannotTell : ProcessEnded.AlreadyGone);
+        }
+
+        // A caller that has given up already ends nothing.
+        cancellationToken.ThrowIfCancellationRequested();
+
+        try
+        {
+            using var bound = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            bound.CancelAfter(wait);
+            await killAndWait(processId, bound.Token).ConfigureAwait(false);
+        }
+        catch (ArgumentException)
+        {
+            // It ended meanwhile.
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return new ProcessEnding(ProcessEnded.NotGone);
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or NotSupportedException or AggregateException)
+        {
+            return new ProcessEnding(ProcessEnded.CouldNotEnd, ex.Message.TrimEnd('.'));
+        }
+
+        return new ProcessEnding(ProcessEnded.Ended);
+    }
+
+    /// <summary>The machine's own end of a process: it and its whole tree, then waited for until <paramref name="bound"/> is cancelled.</summary>
+    private static async Task KillAndWaitAsync(int processId, CancellationToken bound)
+    {
+        using var process = System.Diagnostics.Process.GetProcessById(processId);
+        process.Kill(entireProcessTree: true);
+        await process.WaitForExitAsync(bound).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// What a stop's <c>--now</c> answers where ending its process left it nothing more to do
+    /// (<see cref="EndWhereItStandsAsync"/>): nothing was done - the process is another machine's, this very one, or
+    /// cannot be told to be the one recorded - or it was not ended, or did not go, and its record is kept. Null where it
+    /// was ended or had already gone, which each stop goes on from in its own way. One wording for every such stop.
+    /// </summary>
+    /// <param name="ending">How ending it went.</param>
+    /// <param name="holder">The process by its part, as a line names it: <c>run 20261022-035935-e6571255's dispatcher</c>.</param>
+    /// <param name="name">The process as a line names it.</param>
+    /// <param name="record">What records it as the holder, and is kept where it was not ended: <c>owner file</c>.</param>
+    /// <param name="ask">The command that asks it to stop instead, without <c>--now</c>.</param>
+    /// <param name="wait">How long it was given to go.</param>
+    public static CommandOutcome? NothingMoreToDo(this ProcessEnding ending, string holder, string name, string record, string ask, TimeSpan wait)
+    {
+        ArgumentNullException.ThrowIfNull(ending);
+
+        return ending.How switch
+        {
+            ProcessEnded.Elsewhere => CommandOutcome.Refused(
+                $"{holder} runs on another machine ({name}); --now ends only a process of this machine. {ask} without --now asks it to stop, or end it on its own machine. Nothing was changed."),
+            ProcessEnded.Itself => CommandOutcome.Refused($"{holder} is this very process; --now ends another process. Nothing was changed."),
+            ProcessEnded.CannotTell => CommandOutcome.Refused(
+                $"{name} cannot be told to be {holder} - its start cannot be read beside the one its {record} recorded - so it was not ended. Nothing was changed."),
+            ProcessEnded.NotGone => CommandOutcome.Failed(
+                HarnessExit.CommandFailed,
+                $"{name}, {holder}, was ended and had not gone within {wait.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s; its {record} is kept"),
+            ProcessEnded.CouldNotEnd => CommandOutcome.Failed(HarnessExit.CommandFailed, $"{name}, {holder}, could not be ended: {ending.Why}; its {record} is kept"),
+            _ => null,
+        };
+    }
 }
+
+/// <summary>How ending a recorded process where it stood went (<see cref="ProcessHolders.EndWhereItStandsAsync"/>).</summary>
+public enum ProcessEnded
+{
+    /// <summary>It was ended, and has gone.</summary>
+    Ended,
+
+    /// <summary>The record names another machine: nothing was done.</summary>
+    Elsewhere,
+
+    /// <summary>The record names this very process: nothing was done.</summary>
+    Itself,
+
+    /// <summary>The process the record names had already ended: nothing was done.</summary>
+    AlreadyGone,
+
+    /// <summary>A process carries the id, and cannot be told to be the one recorded - its start unreadable beside the record's: nothing was done.</summary>
+    CannotTell,
+
+    /// <summary>It was ended, and had not gone within the wait.</summary>
+    NotGone,
+
+    /// <summary>It could not be ended (<see cref="ProcessEnding.Why"/> says why).</summary>
+    CouldNotEnd,
+}
+
+/// <summary>How ending a recorded process where it stood went, and why where it could not be ended.</summary>
+/// <param name="How">How it went.</param>
+/// <param name="Why">Why it could not be ended, where it could not; null otherwise.</param>
+public sealed record ProcessEnding(ProcessEnded How, string? Why = null);
