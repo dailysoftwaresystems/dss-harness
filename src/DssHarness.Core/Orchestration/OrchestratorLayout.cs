@@ -124,6 +124,15 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <summary>The name of the file a step's output is kept in, validated, in its directory.</summary>
     public const string StepOutputFileName = "output.json";
 
+    /// <summary>The name of the file a leg step keeps its legs' ledger in, as <c>--json</c> gives it, in its directory.</summary>
+    public const string StepLedgerFileName = "ledger.json";
+
+    /// <summary>
+    /// The name of the directory a leg step in an agent's worktree keeps, whole, the log of each red leg's phase that did
+    /// not pass, as <c>&lt;leg&gt;.&lt;phase&gt;.log</c>, in its directory.
+    /// </summary>
+    public const string StepLogsDirectoryName = "logs";
+
     /// <summary>Where the orchestrator named <paramref name="name"/> of the repository at <paramref name="layout"/> is kept.</summary>
     /// <param name="layout">The repository.</param>
     /// <param name="name">The orchestrator's name, already checked.</param>

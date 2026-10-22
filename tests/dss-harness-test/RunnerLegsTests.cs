@@ -1,6 +1,7 @@
 using DssHarness.Core.Application.Legs;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
+using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 using DssHarness.Core.Runners;
@@ -182,6 +183,27 @@ public sealed class RunnerLegsTests
                 },
             },
         };
+    }
+
+    /// <summary>
+    /// A run of a runner writes the tree where the runner says writesTree, or a runner its run checks name does - each
+    /// found whatever case it is named in - and not otherwise, nor for a runner nobody declared, which is refused where it
+    /// is run: the one rule a run step's claim and its place read.
+    /// </summary>
+    [Fact]
+    public void ARunWritesTheTree_WhereItsRunnerOrARunnerItsRunChecksNameSaysSo()
+    {
+        var harness = new HarnessFactory();
+        var checkedByFormat = Config(harness, checkedByFormat: true);
+        var plain = Config(harness);
+
+        Assert.Equal([("format", false)], plain.WritingRunners("format"));
+        Assert.Equal([("FORMAT", false)], plain.WritingRunners("FORMAT"));
+        Assert.Equal([("format", true)], checkedByFormat.WritingRunners("probe"));
+        Assert.Empty(plain.WritingRunners("probe"));
+        Assert.Empty(plain.WritingRunners("nobody"));
+        Assert.True(new ConfiguredRunnerFacts(checkedByFormat).WritesTree("Probe"));
+        Assert.False(new ConfiguredRunnerFacts(plain).WritesTree("probe"));
     }
 
     private static async Task<HarnessException> RefusedAsync(HarnessFactory harness, RunnerLegsRequest request)

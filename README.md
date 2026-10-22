@@ -639,12 +639,17 @@ update (`cause`, `since`, `work`) and a piece (`kind`, `changed`, `keep`, `undo`
 rest), which a template reads and an expression does not. The engine starts and drives a run of a workflow
 (`run-orchestrator`, `dssharness help orchestrators`), from the main checkout's HEAD on a branch of its own: a start is
 refused where HEAD is detached, where the checkout is on the branch the run's pull request goes to, where a merge is under
-way and where changes are staged. Three steps are served so far: `orient`, which reads what the repository is and has once
+way and where changes are staged. Seven steps are served so far: `orient`, which reads what the repository is and has once
 (its branch and the pull request's base branch, the commit the run started on, a remote, legs and how each tests, anchors,
 CI, mutation arms, what is dirty, the open agents and who holds the tree); `validate-plan`, the machine's check of a plan's
-work items; and `create-agent`, which makes the agent the engine named for it (`a<N>`, never twice) for the model its
-first reason step runs on, both recorded before the agent is made so a step run again asks for the same one. A step of
-any other type fails, saying no runner serves its type; the rest are the next thing the tool grows. A step that works in
+work items; `create-agent`, which makes the agent the engine named for it (`a<N>`, never twice) for the model its
+first reason step runs on, both recorded before the agent is made so a step run again asks for the same one; and the leg
+steps `build`, `test`, `run` and `check-mutations`, which run their legs as the commands do, in the worktree of the agent
+they name with `in` or in the main checkout, each leg's verdict read on its own and its red legs answered alone - a leg
+that failed with the phase that did not pass and its last lines, a sweep's arm with its arm - a leg in a copy letting the
+tree go once its copy is made, and keep the ledger, and in an agent's worktree each red leg's failing log, in the step's
+directory. Every text a step hands on is filled where it starts, and one that reads nothing fails the step (12). A step of any other type fails, saying no
+runner serves its type; the rest are the next thing the tool grows. A step that works in
 or on an agent waits for the create-agent step that makes it. Run `dssharness help workflows` for the whole of it.
 
 ## Anchors

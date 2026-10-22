@@ -184,8 +184,9 @@ public sealed class RunnerLegs(
         // the same way.
         var where = LegTrees.Asked(request.LocalCopy, request.InPlace);
         var here = request.Here is not null;
+        var writing = harness.Config.WritingRunners(runnerName);
 
-        if (runner.WritesTree)
+        if (writing.Any(writer => !writer.IsCheck))
         {
             if (where == LocalTrees.Copy)
             {
@@ -212,9 +213,9 @@ public sealed class RunnerLegs(
             where = LocalTrees.InPlace;
         }
 
-        foreach (var check in checks.Where(check => check.Runner.WritesTree))
+        foreach (var (check, _) in writing.Where(writer => writer.IsCheck))
         {
-            var who = $"Run check '{check.Name}' of runner '{runnerName}'";
+            var who = $"Run check '{check}' of runner '{runnerName}'";
 
             if (where == LocalTrees.Copy)
             {
@@ -269,6 +270,7 @@ public sealed class RunnerLegs(
             {
                 Workload = workload,
                 LocalTrees = where,
+                Watch = request.Watch,
             },
             (work, token) => RunLegAsync(_runners, _builds, _toolchains, runnerName, request.Inputs, request.ManualSteps, workload, work, token),
             cancellationToken).ConfigureAwait(false);
@@ -381,6 +383,7 @@ public sealed class RunnerLegs(
                     TimingNotes = built,
                     Compilers = compilers,
                     LogTail = build.Tail,
+                    TailPhase = build.TailPhase,
                 };
             }
         }

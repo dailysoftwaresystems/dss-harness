@@ -93,6 +93,13 @@ public sealed record LegRunRequest(
     /// command's own run keeps what the notes carry: a sweep's notes feed its record of verdicts.
     /// </summary>
     public Func<PlacedLeg, Action<string, string>?>? HostNotes { get; init; }
+
+    /// <summary>
+    /// Who is told of the run's legs as it goes - every leg placed and where it works, each copy once it is made, each
+    /// leg once it has ended - or <see langword="null"/> where nobody is: a step of an orchestrator run lets its tree go
+    /// by it. Never sent to a host: the machine that placed a leg says where it works and when its copy is made.
+    /// </summary>
+    public ILegRunWatch? Watch { get; init; }
 }
 
 /// <summary>One unit of a leg's work asking its machine to take it: an arm of a sweep.</summary>
@@ -288,7 +295,7 @@ public sealed class LegRunService(
         }
 
         var runDirectory = context.Layout.RunDirectory(runId.Value);
-        var ledger = new LegLedger(_output, commandName, dispatched: request.Here is not null);
+        var ledger = new LegLedger(_output, commandName, dispatched: request.Here is not null, request.Watch);
 
         IgnoreRunRecords(context.Layout);
 
@@ -322,6 +329,10 @@ public sealed class LegRunService(
 
         // Made as it was claimed: a front end is told where the run's records are as they begin, not only once it ends.
         _output.Publish(new RecordWritten("run directory", runDirectory));
+
+        // Before any leg reads its tree - the reading for the copies below among it: a leg in a copy reads the tree only
+        // until its copy is made, and one in the tree itself until it ends.
+        request.Watch?.Placed([.. placed.Select(leg => new LegPlace(leg.Name, leg.Synced))]);
 
         // A stop another process asks of the run (stop-run) is looked for from here, where the run owns its directory, to
         // where it gives it up, and stops the run as an interrupt does: the run's own token is the one both cancel.
@@ -737,6 +748,13 @@ public sealed class LegRunService(
         if (lockedTrees.TryGetValue(leg.TreeKey, out var treeHeld))
         {
             return Ended(leg, LegVerdict.RefusedLocked, treeHeld, started) with { Tree = tree };
+        }
+
+        // Its copy is made: the sync of the tree it works in has ended, or nothing was synced - a run on what is staged
+        // reads no tree at all. A sync that failed never reaches here, and its leg is told of only as it ends.
+        if (leg.Synced)
+        {
+            request.Watch?.CopyMade(leg.Name);
         }
 
         // The tree shared and this variant exclusive: variants build side by side, but never while

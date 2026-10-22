@@ -35,6 +35,12 @@ public abstract record LegCommandRequest
     /// machine placed it itself.
     /// </summary>
     public HostId? Here { get; init; }
+
+    /// <summary>
+    /// Who is told of the run's legs as it goes - placed, each copy made, each ended - or <see langword="null"/> where
+    /// nobody is: no command line gives one, and a step of an orchestrator run lets its tree go by it.
+    /// </summary>
+    public ILegRunWatch? Watch { get; init; }
 }
 
 /// <summary>
@@ -113,6 +119,7 @@ public sealed class BuildLegs(IBuildService builds, LegRunService runs) : IBuild
             {
                 Workload = LegWorkload.BuildOnly,
                 LocalTrees = LegTrees.Asked(request.LocalCopy, request.InPlace),
+                Watch = request.Watch,
             },
             (work, token) => BuildLegAsync(_builds, work, token),
             cancellationToken).ConfigureAwait(false);
@@ -156,6 +163,7 @@ public sealed class BuildLegs(IBuildService builds, LegRunService runs) : IBuild
                 phase.Timings.Select(timing => new TimingMark(phase.Phase, timing.Text, timing.Value)))],
             Compilers = result.Compilers,
             LogTail = result.Tail,
+            TailPhase = result.TailPhase,
         };
     }
 

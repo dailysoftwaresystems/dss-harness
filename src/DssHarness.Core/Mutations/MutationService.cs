@@ -55,7 +55,11 @@ public sealed record MutationRequest(
     bool SelfTest = false,
     bool List = false,
     bool Pending = false,
-    RecordedArms? Held = null);
+    RecordedArms? Held = null)
+{
+    /// <summary>Who is told of the sweep's legs as it goes - placed, each copy made, each ended; <see langword="null"/> where nobody is.</summary>
+    public ILegRunWatch? Watch { get; init; }
+}
 
 /// <summary>The arms a sweep drives, as the registry declares them and <c>--arms</c> and the S rows select them.</summary>
 /// <param name="Registry">The registry, every arm in it.</param>
@@ -278,6 +282,7 @@ public sealed class MutationService(
                     // Each leg swept on a host tells this machine, as each arm ends there, what it judged: the same
                     // record-writing sink a leg swept here feeds, so a sweep stopped part way keeps what it had judged.
                     HostNotes = records ? NotesOf(context) : null,
+                    Watch = request.Watch,
                 },
                 (work, token) => request.SelfTest
                     ? SelfTestAsync(runner, work, arms, request.ForceLock, token)

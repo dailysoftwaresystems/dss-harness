@@ -129,6 +129,12 @@ public sealed record LegEntry
     public IReadOnlyList<string> LogTail { get; init; } = [];
 
     /// <summary>
+    /// The phase <see cref="LogTail"/>'s lines are of - the leg's last phase that did not pass - or <see langword="null"/>
+    /// where it holds none: what a reader is told first of where the leg stopped.
+    /// </summary>
+    public string? TailPhase { get; init; }
+
+    /// <summary>
     /// The steps of the runner's action this leg's operating system does not run, by name, in the order
     /// they are declared: left out on purpose, and said so, rather than simply absent.
     /// </summary>
@@ -273,7 +279,8 @@ public sealed record WorkedTree(string Path)
 /// legs are starting, where each starts and the verdict each reaches, and relays every line this one says: said here
 /// as well, each was said twice. What only this machine can say - each step, and what it waited for - is said still.
 /// </param>
-public sealed class LegLedger(IHarnessOutput output, string commandName, bool dispatched = false)
+/// <param name="watch">Who is told of each leg as its line is recorded; <see langword="null"/> where nobody is.</param>
+public sealed class LegLedger(IHarnessOutput output, string commandName, bool dispatched = false, ILegRunWatch? watch = null)
 {
     private readonly Lock _gate = new();
     private readonly List<LegEntry> _entries = [];
@@ -406,6 +413,9 @@ public sealed class LegLedger(IHarnessOutput output, string commandName, bool di
 
             _entries.Add(entry);
         }
+
+        // Its line is kept: whatever of its tree the leg was to read, it has read.
+        watch?.Ended(entry.Leg);
 
         // The machine that dispatched the leg here says its verdict as it records it from this one's ledger.
         if (_dispatched)

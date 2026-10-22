@@ -596,6 +596,9 @@ public static class HelpTopics
         builder.AppendLine("emptied when the action finishes, whatever the verdict, so anything a later run");
         builder.AppendLine("needs has to say 'persist'.");
         builder.AppendLine();
+        builder.AppendLine("A leg that did not pass carries, in --json, the last lines its last failing phase printed as");
+        builder.AppendLine("logTail and that phase's name as tailPhase - a host's leg among them, whose log stays there.");
+        builder.AppendLine();
         builder.AppendLine("A leg's line in --json names each file its steps kept as keptOutputs, relative to the");
         builder.AppendLine($"tree - the path '{ToolPackage.Command} sync --pull' takes to bring it back from the host that");
         builder.AppendLine("kept it. A leg that works in a copy of its tree keeps them in the copy, on this");
@@ -3371,7 +3374,21 @@ public static class HelpTopics
             + "the agent is made. Run again, it reads the agent first: none, it is made; whole, it is done; made part way with its "
             + "worktree's commit recorded, its seeding is finished; made part way without it, it is deleted, and closed - its "
             + "removal begun - its removal is finished; that, or deleted, the name is spent and the step fails, its next attempt "
-            + "named anew.");
+            + "named anew. build, test, run and check-mutations run their legs as the commands of those names do, in the worktree "
+            + "of the agent their in names, else the main checkout: test with its filter, exclude and labels and run with its "
+            + "inputs - a filter, an exclusion or a label that fills to nothing is not given - and check-mutations with its arms, "
+            + "every arm the registry declares where it names none, and pending. Each answers passed, true where every leg passed; "
+            + "exitCode, the command's; verdicts, each leg's own; red, the red legs alone - a leg that failed, with the phase that "
+            + "did not pass, the ledger's line and the last lines it printed, and of a sweep each arm that violated, survived or "
+            + "was unattributed, with its arm and its line; and runDirectory, null where the run made none. A leg that works in a "
+            + "copy - its own under .legs, or a host's - lets the step's hold on its tree go once its copy is made, or once it ends "
+            + "without one, and a leg in the tree itself once it ends: the step's record then says copied. A run whose runner, or "
+            + "a runner its run checks name, writes the tree holds write on it, and its legs work in the tree itself. A leg run "
+            + "refused part way, cut off, or ended with a leg it placed left with no line ends the step with the run's own code; "
+            + "one its legs ended - none could run, another run owns its records - is read by their verdicts. The step keeps the "
+            + $"ledger in its directory ({OrchestratorLayout.StepLedgerFileName}) and, in an agent's worktree, the log of each red "
+            + $"leg's phase that did not pass, whole, where this machine ran the leg ({OrchestratorLayout.StepLogsDirectoryName}/<leg>.<phase>{PhaseLogs.Extension}, "
+            + "the phase named as its log is), each attempt's own.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -3386,6 +3403,8 @@ public static class HelpTopics
             + "is refused, and a pull request's base reads nothing but the run's inputs and run.name, the same for every pull request. "
             + "A brace meant literally is written twice, {{ and }} alike, another expander's ${...} is left as written, and a "
             + "placeholder that names nothing is refused. "
+            + "Every template key of a step is filled where the step starts, and one that reads nothing fails it (12) before its runner "
+            + "is asked. "
             + "What only a prompt reads stands where its agent is asked it: {recommendations} in a reason step's prompt and the "
             + "advisor's, {question.<name>} in the advisor's alone, {status.<name>} in the reporter's two - {status.question} in its "
             + "askPrompt alone - {update.<name>} in the prompts of the step that plans an update and of the steps of its scope, and "

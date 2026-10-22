@@ -264,10 +264,13 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
     internal readonly HashSet<string> LegsInCopies = [];
     internal readonly HashSet<string> LegsInTree = [];
     internal readonly HashSet<string> CopiesMade = [];
-    internal readonly HashSet<string> TreeLegsEnded = [];
+    internal readonly HashSet<string> LegsEnded = [];
 
     /// <summary>Whether this attempt's runner has said every leg it runs is placed.</summary>
     internal bool EveryLegPlaced;
+
+    /// <summary>Whether this attempt let its tree go while its legs work on: every copy made, every leg in the tree itself ended.</summary>
+    internal bool Copied;
 
     /// <summary>The instance whose ending raised this one - a handler's source, the step whose failure a recovery took.</summary>
     internal FlowInstance? RaisedBy;
@@ -1858,6 +1861,9 @@ public sealed class FlowCoordinator
         instance.EndedByQuestion = null;
         instance.Failure = null;
         instance.FinishedAt = null;
+
+        // What the attempt before it said of its tree is its own: the next has let nothing go yet.
+        instance.Copied = false;
     }
 
     /// <summary>
@@ -2611,8 +2617,9 @@ public sealed class FlowCoordinator
         instance.LegsInCopies.Clear();
         instance.LegsInTree.Clear();
         instance.CopiesMade.Clear();
-        instance.TreeLegsEnded.Clear();
+        instance.LegsEnded.Clear();
         instance.EveryLegPlaced = false;
+        instance.Copied = false;
         instance.Draining = false;
         instance.PastTimeLimit = false;
 
@@ -2688,6 +2695,16 @@ public sealed class FlowCoordinator
                     step = step with { Filter = null };
                 }
 
+                // Every text the step hands on, filled where it starts by the names the step reads: the runner is given
+                // the step as it is to run. One that reads a step with no output fails the step, as an expression does.
+                if (FlowStepTemplates.Fill(step, (string text, out string? problem) => Filled(instance, text, out problem), out var key, out var broken) is not { } filled)
+                {
+                    _ = _messages.Writer.TryWrite(new Message(instance, FlowStepResult.Ended(passed: false, HarnessExit.ConfigInvalid, Unreadable(key!, instance.Id, broken!)), null, Attempt: attempt));
+                    return;
+                }
+
+                step = filled;
+
                 var result = await _runner.RunAsync(
                     new FlowStepRun(
                         step,
@@ -2703,7 +2720,8 @@ public sealed class FlowCoordinator
                         instance.Visit,
                         _place,
                         read,
-                        instance.Made is { } made ? new FlowMadeAgent(made, instance.MadeModel) : null),
+                        instance.Made is { } made ? new FlowMadeAgent(made, instance.MadeModel) : null,
+                        WorksInOf(instance)),
                     token).ConfigureAwait(false);
 
                 _ = _messages.Writer.TryWrite(new Message(instance, result, null, Attempt: attempt));
@@ -4854,18 +4872,21 @@ public sealed class FlowCoordinator
                 _ = instance.CopiesMade.Add(leg.Leg!);
                 break;
             case FlowLegEventKind.Ended:
-                _ = instance.TreeLegsEnded.Add(leg.Leg!);
+                _ = instance.LegsEnded.Add(leg.Leg!);
                 break;
         }
 
         // The tree is let go once the runner has said every leg is placed, every leg that works in a copy has its
-        // copy made and every leg that works in the tree itself has ended - and not before: a leg placed later may
-        // work in the tree itself.
+        // copy made - or ended without one, its sync refused or failed, reading the tree no more - and every leg that
+        // works in the tree itself has ended; and not before: a leg placed later may work in the tree itself. A write
+        // the step holds on its tree is never let go here: its runner writes the tree its legs work in.
         if (instance.EveryLegPlaced
-            && instance.LegsInCopies.All(instance.CopiesMade.Contains)
-            && instance.LegsInTree.All(instance.TreeLegsEnded.Contains))
+            && instance.LegsInCopies.All(copied => instance.CopiesMade.Contains(copied) || instance.LegsEnded.Contains(copied))
+            && instance.LegsInTree.All(instance.LegsEnded.Contains)
+            && instance.HeldClaims.RemoveAll(claim => claim.Kind == FlowClaimKind.Run) > 0)
         {
-            instance.HeldClaims.RemoveAll(claim => claim.Kind == FlowClaimKind.Run);
+            instance.Copied = true;
+            Record(FlowChangeKind.Step, instance, from: instance.State, to: instance.State, attempt: instance.Attempt, detail: "every copy its legs work in is made and every leg in its tree has ended: the tree is let go");
         }
     }
 
@@ -5525,7 +5546,8 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// Fills a template of <paramref name="instance"/>'s step - a pause step's question - by the one grammar
+    /// Fills a template of <paramref name="instance"/>'s step - a pause step's question, and each text its keys hand on
+    /// (<see cref="FlowStepTemplates"/>) - by the one grammar
     /// (<see cref="FlowTemplate.Fill"/>), each name read by the same roots an expression reads. A name that reads nothing
     /// says why, in <paramref name="problem"/>, and fills nothing.
     /// </summary>
@@ -5740,7 +5762,8 @@ public sealed class FlowCoordinator
             instance.IssuesOwed.Count == 0 ? null : [.. instance.IssuesOwed],
             instance.LeftBy,
             instance.Cause,
-            instance.MadeModel);
+            instance.MadeModel,
+            instance.Copied);
 
     /// <summary>
     /// The agent this step works in: the one its <c>in</c> or <c>of</c> names, once its create-agent has made it - the

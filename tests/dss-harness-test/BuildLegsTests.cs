@@ -60,7 +60,7 @@ public sealed class BuildLegsTests
     public void ABuildsRequest_CarriesNothingItsUseCaseWouldIgnore()
     {
         Assert.Equal(
-            ["Directory", "ForceLock", "Here", "InPlace", "Json", "LegNames", "LocalCopy", "Time", "UseStaged"],
+            ["Directory", "ForceLock", "Here", "InPlace", "Json", "LegNames", "LocalCopy", "Time", "UseStaged", "Watch"],
             typeof(BuildLegsRequest).GetProperties().Select(property => property.Name).Order(StringComparer.Ordinal));
     }
 }

@@ -74,6 +74,7 @@ public sealed class TestLegs(IBuildService builds, ITestService tests, CMakeTool
                 // Built first unless told not to, and tested either way.
                 Workload = new LegWorkload(Build: !request.SkipBuild, Test: true, []) { SetUp = request.SetUp },
                 LocalTrees = LegTrees.Asked(request.LocalCopy, request.InPlace),
+                Watch = request.Watch,
             },
             (work, token) => RunLegAsync(_builds, _tests, _toolchains, work, filter, request.Excludes, request.Labels, request.SkipBuild, token),
             cancellationToken).ConfigureAwait(false);
@@ -164,6 +165,7 @@ public sealed class TestLegs(IBuildService builds, ITestService tests, CMakeTool
                     TimingNotes = built,
                     Compilers = compilers,
                     LogTail = build.Tail,
+                    TailPhase = build.TailPhase,
                 };
             }
         }

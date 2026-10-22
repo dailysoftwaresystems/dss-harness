@@ -363,7 +363,7 @@ public sealed class WorkflowValidationService(
     /// </summary>
     private static IEnumerable<string> WritesTheMainTree(WorkflowStep step, string where, HarnessConfig config)
     {
-        if (step.Runner is null || step.In is not null || !config.PredefinedRunners.TryGetValue(step.Runner, out var runner))
+        if (step.Runner is null || step.In is not null)
         {
             yield break;
         }
@@ -371,17 +371,11 @@ public sealed class WorkflowValidationService(
         const string OnTheMainTree = "on the main tree: the run reads its definition there and folds into it, so a runner "
             + "that writes works in an agent's worktree. Name the create-agent step with 'in'";
 
-        if (runner.WritesTree)
+        foreach (var (writer, isCheck) in config.WritingRunners(step.Runner))
         {
-            yield return $"{where} runs '{step.Runner}', which writes the tree (writesTree), {OnTheMainTree}";
-        }
-
-        foreach (var check in runner.RunCheckRunners())
-        {
-            if (config.PredefinedRunners.TryGetValue(check, out var checkRunner) && checkRunner.WritesTree)
-            {
-                yield return $"{where} runs '{step.Runner}', whose run check '{check}' writes the tree (writesTree), {OnTheMainTree}";
-            }
+            yield return isCheck
+                ? $"{where} runs '{step.Runner}', whose run check '{writer}' writes the tree (writesTree), {OnTheMainTree}"
+                : $"{where} runs '{step.Runner}', which writes the tree (writesTree), {OnTheMainTree}";
         }
     }
 

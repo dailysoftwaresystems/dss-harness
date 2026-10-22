@@ -134,7 +134,22 @@ public static class FlowClaims
 /// </summary>
 public interface IFlowRunnerFacts
 {
-    /// <summary>Whether the runner <paramref name="runner"/> writes the tree it works in (<c>writesTree</c>).</summary>
+    /// <summary>
+    /// Whether a run of the runner <paramref name="runner"/> writes the tree it works in (<c>writesTree</c>): the runner
+    /// says so, or a runner its run checks name does.
+    /// </summary>
     /// <param name="runner">A runner's name, as a <c>run</c> step names it.</param>
     bool WritesTree(string runner);
+}
+
+/// <summary>
+/// The runner facts of one run, read from the configuration it runs under: a run of a runner writes the tree where
+/// <see cref="Configuration.HarnessConfig.WritingRunners"/> names any - the one answer the <c>run</c> step's runner works
+/// in place by, and the definition's check refuses on the main tree.
+/// </summary>
+/// <param name="config">The configuration the run runs under.</param>
+public sealed class ConfiguredRunnerFacts(Configuration.HarnessConfig config) : IFlowRunnerFacts
+{
+    /// <inheritdoc/>
+    public bool WritesTree(string runner) => config.WritingRunners(runner).Count > 0;
 }

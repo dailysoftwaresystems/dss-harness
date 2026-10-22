@@ -2433,6 +2433,7 @@ public sealed partial class CliEndToEndTests
         Assert.True(legs.Count == 1, $"exit {result.ExitCode}: {result.StandardError}");
         Assert.Equal("failed", legs[0].GetProperty("verdict").GetString());
         Assert.Contains(legs[0].GetProperty("logTail").EnumerateArray(), line => line.GetString()!.Contains("MSB1003", StringComparison.Ordinal));
+        Assert.Equal("build", legs[0].GetProperty("tailPhase").GetString());
     }
 
     /// <summary>

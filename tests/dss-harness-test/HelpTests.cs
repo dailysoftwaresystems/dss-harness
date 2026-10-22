@@ -2180,6 +2180,11 @@ public sealed partial class HelpTests
         var text = Prose.Words(result.StandardOutput);
 
         Assert.Contains("names each file its steps kept as keptOutputs, relative to the tree", text, StringComparison.Ordinal);
+        Assert.Contains(
+            "A leg that did not pass carries, in --json, the last lines its last failing phase printed as logTail and that phase's "
+                + "name as tailPhase - a host's leg among them, whose log stays there.",
+            text,
+            StringComparison.Ordinal);
         Assert.Contains("sync --pull' takes to bring it back", text, StringComparison.Ordinal);
         Assert.Contains(
             "A path given to --pull that ends with '/' names a directory: every file below it is brought back, each checked as a file named is and "
@@ -2790,7 +2795,7 @@ public sealed partial class HelpTests
             orchestrators,
             StringComparison.Ordinal);
         Assert.Contains(
-            "The steps served so far are orient, validate-plan, create-agent ('dssharness help workflows'): a step of any other type fails, saying no runner serves its type.",
+            "The steps served so far are orient, validate-plan, create-agent, build, test, run, check-mutations ('dssharness help workflows'): a step of any other type fails, saying no runner serves its type.",
             orchestrators,
             StringComparison.Ordinal);
     }
@@ -3158,7 +3163,7 @@ public sealed partial class HelpTests
         Assert.Contains(
             "This build checks a workflow's definition, with 'dssharness validate-workflow <name>', and starts and drives a run of one with "
                 + "'dssharness run-orchestrator <name>' (see 'help orchestrators'). The steps served so far are orient, validate-plan, "
-                + "create-agent, each below; a step of any other type fails, saying no runner serves its type.",
+                + "create-agent, build, test, run, check-mutations, each below; a step of any other type fails, saying no runner serves its type.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -3222,7 +3227,29 @@ public sealed partial class HelpTests
                 + "alone. A placeholder in braces - '{step.member}' - in a template key reads the same names, typed the same way, as one in "
                 + "a prompt does; one in any other key is refused, and a pull request's base reads nothing but the run's inputs and "
                 + "run.name, the same for every pull request. A brace meant literally is written twice, {{ and }} alike, another "
-                + "expander's ${...} is left as written, and a placeholder that names nothing is refused.",
+                + "expander's ${...} is left as written, and a placeholder that names nothing is refused. Every template key of a step "
+                + $"is filled where the step starts, and one that reads nothing fails it ({HarnessExit.ConfigInvalid}) before its runner is asked.",
+            prose,
+            StringComparison.Ordinal);
+
+        // What a leg step runs, answers, lets go and keeps: the names of its records are the layout's own.
+        Assert.Contains(
+            "build, test, run and check-mutations run their legs as the commands of those names do, in the worktree of the agent "
+                + "their in names, else the main checkout: test with its filter, exclude and labels and run with its inputs - a filter, "
+                + "an exclusion or a label that fills to nothing is not given - and check-mutations with its arms, every arm the registry "
+                + "declares where it names none, and pending. Each answers passed, true where every leg passed; exitCode, the command's; "
+                + "verdicts, each leg's own; red, the red legs alone - a leg that failed, with the phase that did not pass, the ledger's "
+                + "line and the last lines it printed, and of a sweep each arm that violated, survived or was unattributed, with its arm "
+                + "and its line; and runDirectory, null where the run made none. A leg that works in a copy - its own under .legs, or a "
+                + "host's - lets the step's hold on its tree go once its copy is made, or once it ends without one, and a leg in the tree "
+                + "itself once it ends: the step's record then says copied. A run whose runner, or a runner its run checks name, writes "
+                + "the tree holds write on it, and its legs work in the tree itself. A leg run refused part way, cut off, or ended with a "
+                + "leg it placed left with no line ends the step with the run's own code; one its legs ended - none could run, another "
+                + "run owns its records - is read by their verdicts. The step keeps the ledger in its directory "
+                + $"({OrchestratorLayout.StepLedgerFileName}) and, in an agent's worktree, the log of each red leg's phase that did not "
+                + "pass, whole, where this machine ran the leg "
+                + $"({OrchestratorLayout.StepLogsDirectoryName}/<leg>.<phase>{PhaseLogs.Extension}, the phase named as its log is), "
+                + "each attempt's own.",
             prose,
             StringComparison.Ordinal);
 

@@ -501,6 +501,7 @@ public sealed class RunnerRunService(
             // The last step that did not pass, for a leg that did not: one whose failure was excused, or
             // that went on past its failure, is the last only where nothing after it failed.
             LogTail = decided.Verdict.Verdict == LegVerdict.Passed ? [] : PhaseResult.TailOf(state.Phases),
+            TailPhase = decided.Verdict.Verdict == LegVerdict.Passed ? null : PhaseResult.TailPhaseOf(state.Phases),
 
             // Named as sync --pull takes them, so a caller brings back what the leg kept without walking the
             // host's tree for it: every attempt of this run, since a resumed run keeps what an earlier one kept.
@@ -517,19 +518,6 @@ public sealed class RunnerRunService(
             decided.Gate,
             steps.PerformedActions);
     }
-
-    /// <summary>
-    /// A step's name as a file name: every character a path cannot carry replaced.
-    /// </summary>
-    /// <remarks>
-    /// A step whose <c>run</c> block holds several lines is named <c>step (1/2)</c>, and that slash
-    /// is a directory separator on every platform this tool runs on. Replaced rather than stripped,
-    /// so a name keeps its length and its shape. Two names that differ only in such characters are
-    /// then one file's, as are two that differ only in case where a file system folds it: steps
-    /// named so are refused before any of them runs.
-    /// </remarks>
-    /// <param name="phase">The step's name, as the ledger shows it.</param>
-    public static string LogNameFor(string phase) => FileNames.SafeFor(phase);
 
     /// <summary>
     /// What a host running one of a run's legs is given after the command's name, so it runs what
@@ -768,7 +756,7 @@ public sealed class RunnerRunService(
 
     /// <summary>
     /// Refuses <paramref name="names"/> where two of them are one step's name, or are kept as one log
-    /// (<see cref="LogNameFor"/>).
+    /// (<see cref="PhaseLogs.NameFor"/>).
     /// </summary>
     /// <param name="runnerName">The runner, as the refusal names it.</param>
     /// <param name="names">The names of the steps one leg runs.</param>
@@ -792,7 +780,7 @@ public sealed class RunnerRunService(
         }
 
         var sharing = given
-            .GroupBy(LogNameFor, StringComparer.OrdinalIgnoreCase)
+            .GroupBy(PhaseLogs.NameFor, StringComparer.OrdinalIgnoreCase)
             .Where(group => group.Count() > 1)
             .Select(group => $"{string.Join(" and ", group.Select(name => $"'{name}'"))} as '{group.Key}.log'")
             .ToList();
@@ -1027,7 +1015,7 @@ public sealed class RunnerRunService(
                     Phase = phase.Name,
                     FileName = program,
                     Arguments = arguments,
-                    LogFile = new LegRecords(request.RunDirectory, request.Leg).PhaseLog(LogNameFor(phase.Name)),
+                    LogFile = new LegRecords(request.RunDirectory, request.Leg).PhaseLog(PhaseLogs.NameFor(phase.Name)),
                     WorkingDirectory = working,
                     Environment = EnvironmentFor(request, phase, values),
                     ProgramDirectories = request.ProgramDirectories,
@@ -1444,7 +1432,7 @@ public sealed class RunnerRunService(
             return result;
         }
 
-        var directory = Path.Combine(scratch.Build, LogNameFor(phase.StepName));
+        var directory = Path.Combine(scratch.Build, PhaseLogs.NameFor(phase.StepName));
 
         var missing = phase.Outputs
             .Where(output => !_fileSystem.FileExists(Path.Combine(directory, output))
@@ -1529,8 +1517,8 @@ public sealed class RunnerRunService(
         }
 
         {
-            var from = Path.Combine(scratch.Build, LogNameFor(phase.StepName));
-            var into = Path.Combine(scratch.Artifacts, LogNameFor(phase.StepName));
+            var from = Path.Combine(scratch.Build, PhaseLogs.NameFor(phase.StepName));
+            var into = Path.Combine(scratch.Artifacts, PhaseLogs.NameFor(phase.StepName));
 
             foreach (var output in phase.Outputs)
             {
@@ -1739,7 +1727,7 @@ public sealed class RunnerRunService(
         ActionBuild = scratch?.Build,
         ActionArtifacts = scratch?.Artifacts,
         RunArtifacts = scratch is null ? null : Path.GetDirectoryName(scratch.Artifacts),
-        StepBuild = scratch is not null && stepName is { Length: > 0 } ? Path.Combine(scratch.Build, LogNameFor(stepName)) : null,
+        StepBuild = scratch is not null && stepName is { Length: > 0 } ? Path.Combine(scratch.Build, PhaseLogs.NameFor(stepName)) : null,
     };
 
     /// <summary>

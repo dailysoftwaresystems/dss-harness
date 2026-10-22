@@ -391,6 +391,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
 
             // What the phase that failed there printed last: its log stays on that host.
             LogTail = [.. (entry.LogTail ?? []).Select(line => HostProbes.AsConfigured(line, connection))],
+            TailPhase = entry.TailPhase,
             Compilers = [.. entry.Compilers ?? []],
             DeveloperEnvironment = entry.DeveloperEnvironment,
 
@@ -505,7 +506,8 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
         IReadOnlyList<PhaseLogFile>? Logs = null,
         PendingSweep? PendingSweep = null,
         IReadOnlyList<RemoteLedgerControl>? Controls = null,
-        IReadOnlyList<SetUps.SetUpFact>? SetUps = null);
+        IReadOnlyList<SetUps.SetUpFact>? SetUps = null,
+        string? TailPhase = null);
 
     /// <summary>One control of a host's sweep that did not pass, beneath its leg's line.</summary>
     private sealed record RemoteLedgerControl(

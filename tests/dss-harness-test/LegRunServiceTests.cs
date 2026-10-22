@@ -3953,6 +3953,143 @@ public sealed class LegRunServiceTests
     }
 
     /// <summary>
+    /// A run whose request carries a watch tells it each leg it placed and where - in a copy of its own, or the tree
+    /// itself - before any leg reads the tree; that a leg's copy is made, once its sync has ended and before the leg's
+    /// work; and that each leg ended, as its line is kept. A leg in the tree itself has no copy to tell of.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AWatchedRun_IsToldEachLegPlaced_ItsCopyMadeBeforeItsWork_AndItsEnd(bool localCopy)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var token = TestContext.Current.CancellationToken;
+        var config = WatchedConfig(harness, localCopy);
+
+        await harness.InitializeHarnessAsync(temp.Path, token, config);
+        temp.WriteFile("src/a.c", "int a;\n");
+        await harness.CommitAllAsync(temp.Path, "initial", token);
+
+        var transports = LocalOnlyTransports(harness);
+        var said = new SaidWatch();
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            config,
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null) { Workload = LegWorkload.BuildOnly, Watch = said },
+            sync: SyncKit.Service(harness, loader: harness.ContextLoader, transports: transports),
+            transports: transports,
+            loader: harness.ContextLoader,
+            work: work =>
+            {
+                said.Add($"{work.Leg.Name} works");
+                return new LegEntry { Leg = work.Leg.Name, Verdict = LegVerdict.Passed };
+            });
+
+        Assert.True(HarnessExit.Success == outcome.ExitCode, $"the run ended {outcome.ExitCode}: {outcome.Message}");
+        Assert.Equal(
+            localCopy
+                ? ["placed native in a copy", "copy of native made", "native works", "native ended"]
+                : ["placed native in the tree", "native works", "native ended"],
+            said.Said);
+    }
+
+    /// <summary>
+    /// A leg whose copy's sync fails is never told of as having its copy: its watch hears that it was placed in a copy,
+    /// and then that it ended, its line kept - so whoever waits for its copy stops waiting at its end.
+    /// </summary>
+    [Fact]
+    public async Task ALegWhoseCopyIsNeverMade_IsToldOfOnlyAsItEnds()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var token = TestContext.Current.CancellationToken;
+        var config = WatchedConfig(harness, localCopy: true);
+
+        await harness.InitializeHarnessAsync(temp.Path, token, config);
+        temp.WriteFile("src/a.c", "int a;\n");
+        await harness.CommitAllAsync(temp.Path, "initial", token);
+
+        var transports = LocalOnlyTransports(harness);
+        var real = SyncKit.Service(harness, loader: harness.ContextLoader, transports: transports);
+        var failing = Substitute.For<ISyncService>();
+        failing.ReadSourceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(call => real.ReadSourceAsync(call.ArgAt<string>(0), call.ArgAt<CancellationToken>(1)));
+        failing.SyncAsync(Arg.Any<SyncSource>(), Arg.Any<ISyncTransport>(), Arg.Any<string>(), Arg.Any<SyncOptions>(), Arg.Any<CancellationToken>())
+            .Returns<Task<SyncResult>>(_ => throw new IOException("the disk is full"));
+        var said = new SaidWatch();
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            config,
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null) { Workload = LegWorkload.BuildOnly, Watch = said },
+            sync: failing,
+            transports: transports,
+            loader: harness.ContextLoader,
+            work: work =>
+            {
+                said.Add($"{work.Leg.Name} works");
+                return new LegEntry { Leg = work.Leg.Name, Verdict = LegVerdict.Passed };
+            });
+
+        Assert.NotEqual(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal(["placed native in a copy", "native ended"], said.Said);
+    }
+
+    /// <summary>One leg this machine runs, in a copy of its own where <paramref name="localCopy"/>, under no limit on its paths.</summary>
+    private static HarnessConfig WatchedConfig(HarnessFactory harness, bool localCopy) => new()
+    {
+        BuildConfigs = { ["debug"] = new BuildConfiguration() },
+        Projects = { new ProjectConfig { Name = "app", Type = "dotnet", Path = "." } },
+        Toolchains = { ["gcc"] = new ToolchainConfig { Platforms = [harness.Platform.PlatformKey] } },
+        Legs = { ["native"] = new LegConfig { Os = harness.Platform.PlatformKey, Processor = harness.Platform.Processor, Config = "debug", Project = "app", Toolchain = "gcc", LocalCopy = localCopy } },
+        Worktrees = new WorktreeSettings { PathLimit = 1000 },
+    };
+
+    /// <summary>What a run told its watch, and what its legs did beside it, in order.</summary>
+    private sealed class SaidWatch : ILegRunWatch
+    {
+        private readonly List<string> _said = [];
+
+        /// <summary>Everything said, in order.</summary>
+        public IReadOnlyList<string> Said
+        {
+            get
+            {
+                lock (_said)
+                {
+                    return [.. _said];
+                }
+            }
+        }
+
+        public void Placed(IReadOnlyList<LegPlace> legs)
+        {
+            foreach (var leg in legs)
+            {
+                Add($"placed {leg.Leg} in {(leg.InACopy ? "a copy" : "the tree")}");
+            }
+        }
+
+        public void CopyMade(string leg) => Add($"copy of {leg} made");
+
+        public void Ended(string leg) => Add($"{leg} ended");
+
+        public void Add(string said)
+        {
+            lock (_said)
+            {
+                _said.Add(said);
+            }
+        }
+    }
+
+    /// <summary>
     /// A leg with localCopy that this machine runs works in a copy of its tree kept in the tree's own .legs, named by its
     /// variant's key: the run reads the tree once, syncs the copy from that reading, and the leg works there - by the
     /// configuration the reading carried, its records in the run's own directory - holding the copy, never the tree. Its

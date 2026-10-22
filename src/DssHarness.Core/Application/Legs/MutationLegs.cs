@@ -110,7 +110,10 @@ public sealed class MutationLegs(MutationService sweeps) : IMutationLegs
             request.SelfTest,
             request.List,
             request.Pending,
-            Held(request));
+            Held(request))
+        {
+            Watch = request.Watch,
+        };
 
     /// <summary>
     /// Why what <paramref name="request"/> holds cannot be given together, or <see langword="null"/> where it can: a

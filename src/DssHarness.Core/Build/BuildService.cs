@@ -101,6 +101,9 @@ public sealed record BuildResult(
 
     /// <summary>The last lines the phase the build stopped at printed, as <see cref="PhaseResult.TailOf"/> picks them.</summary>
     public IReadOnlyList<string> Tail => PhaseResult.TailOf(Phases);
+
+    /// <summary>The phase <see cref="Tail"/>'s lines are of, as <see cref="PhaseResult.TailPhaseOf"/> names it.</summary>
+    public string? TailPhase => PhaseResult.TailPhaseOf(Phases);
 }
 
 /// <summary>Building one leg.</summary>

@@ -344,7 +344,7 @@ public sealed class LegSetUps(ISetUpService setUps, SetUpHolds holds, PhaseRunne
         }
 
         var phase = $"set-up {taken.Name} {SetUpService.CommandName(direction)}";
-        var log = RunnerRunService.LogNameFor(phase);
+        var log = PhaseLogs.NameFor(phase);
 
         try
         {

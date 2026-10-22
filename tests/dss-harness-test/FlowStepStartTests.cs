@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using DssHarness.Core.Configuration;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Results;
@@ -90,10 +91,19 @@ public sealed class FlowStepStartTests
                 return _written.LastOrDefault(step => step.Instance == instance);
             }
         }
+
+        /// <summary>Every record written of <paramref name="instance"/>, in order.</summary>
+        public IReadOnlyList<FlowSnapshotStep> All(string instance)
+        {
+            lock (_written)
+            {
+                return [.. _written.Where(step => step.Instance == instance)];
+            }
+        }
     }
 
-    private static FlowCoordinator Coordinator(WorkflowDefinition definition, Runner runner, IFlowRecords? records = null, IReadOnlyDictionary<string, string>? models = null, IReadOnlyDictionary<string, string>? inputs = null, FlowRunPlace? place = null)
-        => new(definition, runner, new NoRunnerFacts(), new JumpingClock(), inputs, records, runName: "r1", place: place, agentModels: models);
+    private static FlowCoordinator Coordinator(WorkflowDefinition definition, Runner runner, IFlowRecords? records = null, IReadOnlyDictionary<string, string>? models = null, IReadOnlyDictionary<string, string>? inputs = null, FlowRunPlace? place = null, HarnessConfig? config = null)
+        => new(definition, runner, new ConfiguredRunnerFacts(config ?? new HarnessConfig()), new JumpingClock(), inputs, records, runName: "r1", place: place, agentModels: models);
 
     /// <summary>
     /// A create-agent step is named a1 and given the model resolved for it, both written to its record before its runner
@@ -369,4 +379,226 @@ public sealed class FlowStepStartTests
     [InlineData(new[] { "a01", "ab", "b7", "a", "a-1", "A5" }, "a1")]
     public void TheNextAgentName_IsOnePastTheHighest(string[] taken, string next)
         => Assert.Equal(next, OrchestrationRules.NextAgentName(taken));
+
+    /// <summary>
+    /// A leg step is handed the agent its in names, as that step's create-agent made it, and its record says the tree is
+    /// let go once every copy its legs work in is made - or the leg ended without one, its sync refused - and every leg
+    /// in the tree itself has ended, and not before every leg is placed: one placed after a copy was made may work in the
+    /// tree itself. A step whose legs never let it go says nothing of it.
+    /// </summary>
+    [Theory]
+    [InlineData("copy made", true)]
+    [InlineData("ended without its copy", true)]
+    [InlineData("in the tree, still working", false)]
+    [InlineData("a leg placed after a copy was made", false)]
+    public async Task ALegStep_IsHandedItsAgent_AndItsRecordSaysWhenItsTreeIsLetGo(string legs, bool letGo)
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: work
+                type: create-agent
+                agent: agents/worker.md
+              - name: checks
+                type: build
+                in: work
+                dependsOn: [work]
+            """);
+        var records = new Records();
+        var runner = new Runner().On("checks", run =>
+        {
+            if (legs == "a leg placed after a copy was made")
+            {
+                run.Events.LegPlaced("far", inACopy: true);
+                run.Events.LegCopyMade("far");
+                run.Events.LegPlaced("here", inACopy: false);
+                run.Events.EveryLegPlaced();
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            }
+
+            run.Events.LegPlaced("far", inACopy: legs != "in the tree, still working");
+            run.Events.EveryLegPlaced();
+
+            if (legs == "copy made")
+            {
+                run.Events.LegCopyMade("far");
+            }
+            else if (legs == "ended without its copy")
+            {
+                run.Events.LegEnded("far");
+            }
+
+            return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+        });
+
+        _ = await Coordinator(definition, runner, records, models: new Dictionary<string, string> { ["work"] = "model-one" }).RunAsync(Token);
+
+        Assert.Equal("a1", runner.Runs.Single(run => run.Instance == "checks").WorksIn);
+        Assert.Null(runner.Runs.Single(run => run.Instance == "work").WorksIn);
+        Assert.Equal(letGo, records.Last("checks")!.Copied);
+    }
+
+    /// <summary>
+    /// What an attempt said of its tree is its own: one run again after an attempt that let its tree go - once the step's
+    /// failure is answered retry, and the record of the attempt waiting to start is written - has let nothing go until
+    /// its own legs do, and no record of it says otherwise.
+    /// </summary>
+    [Fact]
+    public async Task AnAttemptRunAgain_HasLetNothingGo_UntilItsOwnLegsDo()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: checks
+                type: build
+                onFailure: pause
+            """);
+        var records = new Records();
+        var runner = new Runner().On("checks", run =>
+        {
+            if (run.Attempt == 1)
+            {
+                run.Events.LegPlaced("far", inACopy: true);
+                run.Events.EveryLegPlaced();
+                run.Events.LegCopyMade("far");
+                return FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, "a leg failed");
+            }
+
+            run.Events.LegPlaced("here", inACopy: false);
+            run.Events.EveryLegPlaced();
+            return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+        });
+        var coordinator = Coordinator(definition, runner, records);
+
+        _ = await coordinator.RunAsync(Token);
+
+        Assert.True(coordinator.TryAnswer(Assert.Single(coordinator.OpenQuestions).Id, "retry", out _));
+        Assert.Contains(records.All("checks"), step => step.Attempt == 2);
+
+        _ = await coordinator.RunAsync(Token);
+
+        Assert.Equal([1, 2], runner.Runs.Select(run => run.Attempt));
+        Assert.Contains(records.All("checks"), step => step.Attempt == 1 && step.Copied);
+        Assert.All(records.All("checks").Where(step => step.Attempt == 2), step => Assert.False(step.Copied));
+    }
+
+    /// <summary>
+    /// A run step whose runner - or a runner its run checks name - writes the tree holds write on it, as the configuration
+    /// says, and never lets it go while its legs work: its record never says the tree was let go.
+    /// </summary>
+    [Theory]
+    [InlineData("tidy")]
+    [InlineData("probe")]
+    public async Task ARunStepWhoseRunWritesTheTree_NeverLetsItGo(string runner)
+    {
+        var definition = Parse($"""
+            name: flow
+            steps:
+              - name: work
+                type: create-agent
+                agent: agents/worker.md
+              - name: shape
+                type: run
+                runner: {runner}
+                in: work
+                dependsOn: [work]
+            """);
+        var config = new HarnessConfig
+        {
+            PredefinedRunners =
+            {
+                ["tidy"] = new RunnerConfig { WritesTree = true },
+                ["probe"] = new RunnerConfig
+                {
+                    ExpectedExceptions =
+                    [
+                        new ExpectedException
+                        {
+                            ExceptionType = "Flake",
+                            Messages = ["it flaked"],
+                            Message = "excused: the device was busy",
+                            EarnedOn = "2026-10-13",
+                            EarnedAt = "local",
+                            Mechanism = "the device is shared",
+                            Anchor = "D-AREA-TOPIC-ONE",
+                            RunChecks = [new RunCheck { PredefinedRunner = "TIDY" }],
+                        },
+                    ],
+                },
+            },
+        };
+        var records = new Records();
+        var steps = new Runner().On("shape", run =>
+        {
+            run.Events.LegPlaced("here", inACopy: false);
+            run.Events.EveryLegPlaced();
+            run.Events.LegEnded("here");
+            return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+        });
+
+        _ = await Coordinator(definition, steps, records, models: new Dictionary<string, string> { ["work"] = "model-one" }, config: config).RunAsync(Token);
+
+        Assert.False(records.Last("shape")!.Copied);
+        Assert.Equal(FlowInstanceState.Done, records.Last("shape")!.State);
+    }
+
+    /// <summary>
+    /// Every text a step hands on is filled where it starts, and the runner is given the step as it is to run: a test's
+    /// filter, exclusions and labels and a run's inputs, a filter, exclusion or label that fills to nothing not given; one
+    /// that reads nothing fails the step as an unreadable expression does, and its runner is never asked.
+    /// </summary>
+    [Fact]
+    public async Task AStepsTemplates_AreFilledWhereItStarts_AndOneFilledToNothingIsNotGiven()
+    {
+        var definition = Parse("""
+            name: flow
+            inputs:
+              - name: slow
+                default: slow-suite
+              - name: none
+                default: ''
+            steps:
+              - name: verify
+                type: test
+                filter: '{input.none}'
+                exclude: ['{input.slow}', '{input.none}', 'fixed']
+                labels: ['{input.none}']
+              - name: verify-some
+                type: test
+                filter: 'only-{input.slow}'
+              - name: shape
+                type: run
+                runner: probe
+                inputs:
+                  target: '{input.slow}-{run.name}'
+            """);
+        var runner = new Runner();
+
+        _ = await Coordinator(definition, runner).RunAsync(Token);
+
+        var verify = runner.Runs.Single(run => run.Instance == "verify").Step;
+        Assert.Null(verify.Filter);
+        Assert.Equal(["slow-suite", "fixed"], verify.Exclude);
+        Assert.Empty(verify.Labels);
+        Assert.Equal("only-slow-suite", runner.Runs.Single(run => run.Instance == "verify-some").Step.Filter);
+        Assert.Equal("slow-suite-r1", runner.Runs.Single(run => run.Instance == "shape").Step.Inputs["target"]);
+
+        var unreadable = Parse("""
+            name: flow
+            steps:
+              - name: verify
+                type: test
+                labels: ['fast', '{input.missing}']
+            """);
+        var refused = new Runner();
+        var coordinator = Coordinator(unreadable, refused);
+
+        _ = await coordinator.RunAsync(Token);
+
+        var step = coordinator.Instances["verify"];
+        Assert.Equal(FlowInstanceState.Failed, step.State);
+        Assert.Equal(HarnessExit.ConfigInvalid, step.Exit);
+        Assert.Equal("expression 'labels' of 'verify': '{input.missing}' reads nothing", step.Error);
+        Assert.Empty(refused.Runs);
+    }
 }

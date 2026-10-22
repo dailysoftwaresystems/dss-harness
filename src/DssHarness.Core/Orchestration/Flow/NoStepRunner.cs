@@ -26,14 +26,3 @@ public sealed class NoStepRunner : IFlowStepRunner
         => Task.FromResult<string?>(null);
 }
 
-/// <summary>
-/// The runner facts this build serves the engine with: no runner writes the tree, for no <c>run</c> step is served
-/// yet. Where a workflow names a <c>run</c> step whose runner would write the tree, the engine would under-claim - so
-/// the configuration's own facts (each runner's <c>writesTree</c>) replace this in the slice that lands the <c>run</c>
-/// step's runner, before it serves a step.
-/// </summary>
-public sealed class NoRunnerFacts : IFlowRunnerFacts
-{
-    /// <summary>No runner writes the tree: no <c>run</c> step is served.</summary>
-    public bool WritesTree(string runner) => false;
-}

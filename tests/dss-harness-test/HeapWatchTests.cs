@@ -18,40 +18,45 @@ public sealed class HeapWatchTests
     [Fact]
     public void WhatWasDropped_IsNoGrowth_AndWhatIsHeld_IsAllOfIt()
     {
-        using var watch = new HeapWatch();
-
-        // The collector's own budget, made larger than what is dropped: a machine whose caches, or whose settings, let
-        // that much gather before a collection of its own.
-        Assert.True(GC.TryStartNoGCRegion(Much + (Much / 4)), "This machine could not set aside the memory the measure needs.");
-
-        try
+        using (var watch = new HeapWatch())
         {
-            for (var dropped = 0; dropped < Much; dropped += 64 * 1024)
-            {
-                GC.KeepAlive(new byte[64 * 1024]);
-            }
+            // The collector's own budget, made larger than what is dropped: a machine whose caches, or whose settings, let
+            // that much gather before a collection of its own.
+            Assert.True(GC.TryStartNoGCRegion(Much + (Much / 4)), "This machine could not set aside the memory the measure needs.");
 
-            AwaitAReading(watch);
-        }
-        finally
-        {
             try
             {
-                GC.EndNoGCRegion();
+                for (var dropped = 0; dropped < Much; dropped += 64 * 1024)
+                {
+                    GC.KeepAlive(new byte[64 * 1024]);
+                }
+
+                AwaitAReading(watch);
             }
-            catch (InvalidOperationException)
+            finally
             {
-                // Already ended, by the collection a reading is taken after.
+                try
+                {
+                    GC.EndNoGCRegion();
+                }
+                catch (InvalidOperationException)
+                {
+                    // Already ended, by the collection a reading is taken after.
+                }
             }
+
+            Assert.True(watch.Growth <= Much / 4, $"what was dropped grew the heap by {watch.Growth:N0} bytes: {watch.Where}");
         }
 
-        Assert.True(watch.Growth <= Much / 4, $"what was dropped grew the heap by {watch.Growth:N0} bytes: {watch.Where}");
-
+        // What is held is measured from the heap as the dropping left it: the room set aside for it, and the pressure it
+        // made, let the process let go of what it kept beside the test - its caches, its pooled buffers, some 8 MB of
+        // large objects on a CI machine - which a baseline taken before the dropping would count against what is held.
+        using var holding = new HeapWatch();
         var held = new byte[Much];
 
-        AwaitAReading(watch);
+        AwaitAReading(holding);
 
-        Assert.True(watch.Growth >= Much - (Much / 16), $"{Much:N0} bytes held grew the heap by {watch.Growth:N0}: {watch.Where}");
+        Assert.True(holding.Growth >= Much - (Much / 16), $"{Much:N0} bytes held grew the heap by {holding.Growth:N0}: {holding.Where}");
         GC.KeepAlive(held);
     }
 

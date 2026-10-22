@@ -16,6 +16,19 @@ public static class PhaseLogs
     /// <summary>What every phase log's name ends with, after the phase.</summary>
     public const string Extension = ".log";
 
+    /// <summary>
+    /// A phase's name as its log is named for it: every character a path cannot carry replaced - the one rule every
+    /// writer of a phase's log names it by, and every reader finds a phase's log by.
+    /// </summary>
+    /// <remarks>
+    /// A runner's step whose <c>run</c> block holds several lines is named <c>step (1/2)</c>, and that slash is a
+    /// directory separator on every platform this tool runs on. Replaced rather than stripped, so a name keeps its length
+    /// and its shape. Two names that differ only in such characters are then one file's, as are two that differ only in
+    /// case where a file system folds it: steps named so are refused before any of them runs.
+    /// </remarks>
+    /// <param name="phase">The phase's name, as the ledger shows it.</param>
+    public static string NameFor(string phase) => FileNames.SafeFor(phase);
+
     /// <summary>The log of <paramref name="phase"/> in <paramref name="directory"/>.</summary>
     /// <param name="directory">The directory of records the phase's log is kept in: a leg's, an arm's, a control's.</param>
     /// <param name="phase">The phase, as its log is named for it.</param>

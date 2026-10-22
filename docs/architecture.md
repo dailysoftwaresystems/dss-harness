@@ -1468,7 +1468,7 @@ that ran (`ClaudeLine.CallResult.Ran`) one the engine was asked about and allowe
 with an `AgentAccountLimit`. The API clients are the next thing the tool grows. This build checks workflow definitions and
 starts and drives a run of one (see "Running a workflow" below). Each step is given to the runner of its type
 (`FlowStepRunners`, over every `IFlowStepTypeRunner` the root registers - `FlowStepRunners.Served` lists them, and a test
-holds the two to each other); a step of a type none serves yet fails, saying no runner serves its type. The first three
+holds the two to each other); a step of a type none serves yet fails, saying no runner serves its type. Those served
 are machine steps, each a thin adapter over the owner of its rule: `OrientRunner` reads the main checkout by
 `FlowCheckout` - the one probe the run's start reads too, over `IGitClient` and `GitRemotes` - and each fact by its owner
 (`LegSelection`, `TestInvocationResolver`, `AnchorCitationService.RootsOf`, `CiSettings.Unset`, `MutationService.Declares`,
@@ -1480,8 +1480,18 @@ written to `step.json` before `IAgentService.CreateAsync` is called; run again i
 drops a making cut part way, and finishes the removal of one found closed (`FlowStepResult.NameSpent`), and `MakeAsync(noWorktree: true)` makes a read-only reason
 step's agent the same way. Each step is handed the run it belongs to (`FlowRunPlace`) and what the engine read for it
 where it starts (`FlowStepRun.Read`: a plan check's `items` and `scope`, the pull request's base `FlowTemplate` fills for
-orient). The other step runners - the agents, the rest of the steps over the services the tool already has - are the
-next thing the tool grows.
+orient), the agent it works in (`FlowStepRun.WorksIn`), and its keys' templates filled (`FlowStepTemplates`, the one
+reader of which text each template key holds, the definition's check its other caller). The leg steps - `build`, `test`,
+`run`, `check-mutations` - share `LegStepRunner`: the use case of each command (`IBuildLegs`, `ITestLegs`,
+`IRunnerLegs` - a run that writes the tree in place, by `HarnessConfig.WritingRunners`, the answer the step's claim of
+write reads through `ConfiguredRunnerFacts` - and `IMutationLegs`) run in the agent's worktree or the main checkout, its
+legs told to the engine as `LegRunService` says them through the request's `ILegRunWatch` (each leg placed, in a copy or
+the tree; each copy made, said where the leg takes its tree after the sync; each leg ended, said by `LegLedger` as its
+line is kept), each leg's verdict read on its own and `red` holding the red legs only, with the phase that did not pass
+(`LegEntry.TailPhase`, beside `LogTail`); the ledger (`LegRunResult.ToDocument`) and, in an agent's worktree, each red
+leg's failing phase log are kept in the step's directory. A leg run something other than its legs ended - refused, or
+stopped - ends the step with its own code. The other step runners - the agents, the rest of the steps over the services
+the tool already has - are the next thing the tool grows.
 
 A definition is held to the `config.json` it is checked under as well: a `run` step whose runner -
 or a runner its run checks name - says `writesTree` names with `in` the create-agent step whose
@@ -2341,7 +2351,7 @@ PowerShell there, which all read a leading `~` as the home.
   the separator after it stays as written: `~\src\app`. PowerShell reads that; cmd.exe,
   OpenSSH's default shell there, reads no `~` at all.
 - **A program's own lines keep the home as it printed it**: a phase's last lines, in `logTail`
-  and beneath a ledger's table, the output a command relays, and what an emulator's witness
+  (with that phase's name in `tailPhase`) and beneath a ledger's table, the output a command relays, and what an emulator's witness
   printed. A command typed on the host itself names its paths in full, as a command typed on any
   machine does. Under `host-exec`, a document other than a ledger - a listing, `legs --json` -
   is written as the host prints it. An address the host's name resolved to is the one thing

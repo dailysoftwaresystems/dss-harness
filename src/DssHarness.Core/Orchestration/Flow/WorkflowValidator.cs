@@ -1529,23 +1529,7 @@ public static class WorkflowValidator
 
             foreach (var key in type.TemplateKeys)
             {
-                var texts = key switch
-                {
-                    "filter" => step.Filter is null ? [] : [step.Filter],
-                    "exclude" => step.Exclude,
-                    "labels" => step.Labels,
-                    "inputs" => step.Inputs.Values.ToList(),
-                    "base" => step.Base is null ? [] : [step.Base],
-                    "branch" => step.Branch is null ? [] : [step.Branch],
-                    "commit" => step.Commit is null ? [] : [step.Commit],
-                    "message" => step.Message is null ? [] : [step.Message],
-                    "variables" => step.Variables.Values.ToList(),
-                    "title" => step.Title is null ? [] : [step.Title],
-                    "question" => step.Question is null ? [] : [step.Question],
-                    _ => throw new UnreachableException($"'{key}' is marked a template key of '{type.Type}', and nothing checks it."),
-                };
-
-                foreach (var text in texts)
+                foreach (var text in FlowStepTemplates.Texts(step, key))
                 {
                     if (string.IsNullOrWhiteSpace(text))
                     {

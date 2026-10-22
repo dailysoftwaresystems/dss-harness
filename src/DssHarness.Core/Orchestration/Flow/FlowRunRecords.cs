@@ -597,7 +597,8 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
             step.IssuesOwed,
             step.LeftBy,
             step.Cause is OutcomeCause.None ? null : step.Cause.ToString(),
-            step.Model);
+            step.Model,
+            step.Copied ? true : null);
     }
 
     /// <summary>

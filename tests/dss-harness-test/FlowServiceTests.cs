@@ -81,7 +81,6 @@ public sealed class FlowServiceTests
             new FlowSessions(store, files, engines),
             new WorkflowValidationService(harness.ContextLoader, harness.FileSystem, harness.Platform, new DssHarness.Core.Secrets.AgentKeyStore(harness.FileSystem, harness.FilePermissions, harness.Platform)),
             runner,
-            new WritesNothing(),
             harness.OrchestrationLog,
             harness.ChildSessions,
             harness.PathBudget,

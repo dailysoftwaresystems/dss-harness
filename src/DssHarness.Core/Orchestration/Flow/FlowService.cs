@@ -85,7 +85,6 @@ public sealed record FlowTimings(TimeSpan PollEvery, TimeSpan WatchEvery, TimeSp
 /// <param name="sessions">One unfinished run at a time: the test at the start of every session, the run's name, record and owner.</param>
 /// <param name="validation">Validates the workflow a run is started of, and reads the entry a resume is held to.</param>
 /// <param name="runner">The step runner every step of the run is given to.</param>
-/// <param name="runnerFacts">What the engine asks of the runners a workflow names.</param>
 /// <param name="log">One line for each command the tool ran for the run.</param>
 /// <param name="children">Ends what a killed engine's steps left running, first in every command over a run.</param>
 /// <param name="pathBudget">Reckons the run's deepest paths against this machine's limit at its start.</param>
@@ -102,7 +101,6 @@ public sealed class FlowService(
     FlowSessions sessions,
     IWorkflowValidationService validation,
     IFlowStepRunner runner,
-    IFlowRunnerFacts runnerFacts,
     OrchestrationLog log,
     ChildSessions children,
     IPathBudget pathBudget,
@@ -137,7 +135,6 @@ public sealed class FlowService(
     private readonly FlowSessions _sessions = sessions;
     private readonly IWorkflowValidationService _validation = validation;
     private readonly IFlowStepRunner _runner = runner;
-    private readonly IFlowRunnerFacts _runnerFacts = runnerFacts;
     private readonly OrchestrationLog _log = log;
     private readonly ChildSessions _children = children;
     private readonly IPathBudget _pathBudget = pathBudget;
@@ -695,11 +692,12 @@ public sealed class FlowService(
             using var records = new FlowRunRecords(_fileSystem, _store, layout, runContext, _clock);
 
             // Every step is handed the run it belongs to, and each create-agent step the model its agent is made for,
-            // resolved from the configuration as the definition's check resolves it.
+            // resolved from the configuration as the definition's check resolves it; a run step claims its tree as the
+            // configuration's runners say a run of it writes there.
             var coordinator = new FlowCoordinator(
                 definition,
                 _runner,
-                _runnerFacts,
+                new ConfiguredRunnerFacts(context.Config),
                 _clock,
                 runContext.Inputs,
                 records,

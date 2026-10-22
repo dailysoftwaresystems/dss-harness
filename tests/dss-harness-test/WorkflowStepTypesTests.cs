@@ -24,10 +24,10 @@ public sealed class WorkflowStepTypesTests
             [
                 ("orient", "OrientRunner: FlowCheckout over IGitClient and GitRemotes, LegSelection.Resolve, TestInvocationResolver, AnchorCitationService.RootsOf, CiSettings.Unset, MutationService.Declares, OrchestrationRules.OpenAgents, TreeHolders"),
                 ("reason", "IAgentClient; a read-only one that begins work first makes its agent (IAgentService.CreateAsync, no worktree)"),
-                ("build", "IBuildLegs over LegRunService"),
-                ("test", "ITestLegs over LegRunService"),
-                ("run", "IRunnerLegs over LegRunService"),
-                ("check-mutations", "IMutationLegs through MutationService, over LegRunService"),
+                ("build", "BuildStepRunner: IBuildLegs over LegRunService"),
+                ("test", "TestStepRunner: ITestLegs over LegRunService"),
+                ("run", "RunStepRunner: IRunnerLegs over LegRunService, HarnessConfig.WritingRunners"),
+                ("check-mutations", "SweepStepRunner: IMutationLegs through MutationService, over LegRunService"),
                 ("create-agent", "CreateAgentRunner: IAgentService.CreateAsync, SeedAsync and DeleteAsync"),
                 ("fold", "IAgentService.FoldAsync"),
                 ("delete-agent", "IAgentService.DeleteAsync"),
@@ -182,12 +182,17 @@ public sealed class WorkflowStepTypesTests
             Assert.Empty(JsonSchemaSubset.SubsetProblems(JsonNode.Parse(type.Output!)!));
         }
 
-        // A sweep's red legs each name the arm, beside what every leg step's say.
-        var arm = JsonSchemaSubset.Read(JsonNode.Parse(WorkflowStepTypes.Find("check-mutations")!.Output!)!).Member("red")!.Items!;
-        var leg = JsonSchemaSubset.Read(JsonNode.Parse(WorkflowStepTypes.Find("test")!.Output!)!).Member("red")!.Items!;
+        // A sweep's red legs each name the arm - none where the leg failed outside every arm - beside what every leg
+        // step's say; a red leg's phase is none where no phase of it failed, and a run that placed no leg has no directory.
+        var sweep = JsonSchemaSubset.Read(JsonNode.Parse(WorkflowStepTypes.Find("check-mutations")!.Output!)!);
+        var test = JsonSchemaSubset.Read(JsonNode.Parse(WorkflowStepTypes.Find("test")!.Output!)!);
+        var arm = sweep.Member("red")!.Items!;
+        var leg = test.Member("red")!.Items!;
 
-        Assert.Equal(["string"], arm.Member("arm")!.Kinds);
+        Assert.Equal(["string", "null"], arm.Member("arm")!.Kinds);
         Assert.Null(leg.Member("arm"));
+        Assert.Equal(["string", "null"], leg.Member("phase")!.Kinds);
+        Assert.Equal(["string", "null"], test.Member("runDirectory")!.Kinds);
     }
 
     /// <summary>

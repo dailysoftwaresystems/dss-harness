@@ -26,8 +26,8 @@ public interface IFlowStepTypeRunner
 /// </summary>
 public sealed class FlowStepRunners : IFlowStepRunner
 {
-    /// <summary>The step types this build serves, in the order <c>help workflows</c> lists them: the tool registers a runner for each, and none other.</summary>
-    public static IReadOnlyList<string> Served { get; } = ["orient", "validate-plan", "create-agent"];
+    /// <summary>The step types this build serves, in the order help says them: the tool registers a runner for each, and none other.</summary>
+    public static IReadOnlyList<string> Served { get; } = ["orient", "validate-plan", "create-agent", "build", "test", "run", "check-mutations"];
 
     private readonly IReadOnlyDictionary<string, IFlowStepTypeRunner> _byType;
     private readonly NoStepRunner _none = new();

@@ -166,6 +166,10 @@ public sealed record FlowEvent(
 /// counts as incomplete (21). Null for every other ending.
 /// </param>
 /// <param name="Model">The model the agent a create-agent step makes is made for, written with <paramref name="Made"/>; null where that is.</param>
+/// <param name="Copied">
+/// A leg step's: true once every leg of its attempt that works in a copy has it, and every one in the tree itself has
+/// ended, so the tree is let go while the legs work on; null until then, and for every other step.
+/// </param>
 public sealed record FlowStepRecord(
     string Instance,
     string Step,
@@ -202,7 +206,8 @@ public sealed record FlowStepRecord(
     IReadOnlyList<FlowPreExistingReport>? IssuesOwed = null,
     string? LeftBy = null,
     string? Cause = null,
-    string? Model = null)
+    string? Model = null,
+    bool? Copied = null)
 {
     /// <summary>Where a failure can leave the run, as the record names each of <see cref="FlowFailure"/>'s values.</summary>
     public static readonly IReadOnlyList<string> Failures = [.. Enum.GetValues<FlowFailure>().Select(NameOf)];
@@ -736,6 +741,7 @@ public sealed record FlowSnapshot(
 /// <param name="LeftBy">The handler whose redirect sent the run back past this visit; null where none did.</param>
 /// <param name="Cause">What the code alone cannot say of its ending: a refusal over a held lock; none for every other.</param>
 /// <param name="Model">The model the agent a create-agent step makes is made for; null where <paramref name="Made"/> is.</param>
+/// <param name="Copied">Whether the leg step's attempt let its tree go while its legs work on, every copy made (<see cref="FlowStepRecord.Copied"/>).</param>
 public sealed record FlowSnapshotStep(
     string Instance,
     string Step,
@@ -772,4 +778,5 @@ public sealed record FlowSnapshotStep(
     IReadOnlyList<FlowPreExistingReport>? IssuesOwed = null,
     string? LeftBy = null,
     OutcomeCause Cause = OutcomeCause.None,
-    string? Model = null);
+    string? Model = null,
+    bool Copied = false);

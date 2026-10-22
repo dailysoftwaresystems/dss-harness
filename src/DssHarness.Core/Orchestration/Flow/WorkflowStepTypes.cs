@@ -37,7 +37,7 @@ public static class WorkflowStepTypes
     /// The default of the type's <c>failOn</c> key - <c>red</c> or <c>never</c> - for the types that
     /// check something; <see langword="null"/> for the types that check nothing.
     /// </param>
-    /// <param name="Calls">The service the type calls, as the plan's table names it: the engine's switch reads this and nothing else.</param>
+    /// <param name="Calls">The runner of the type and the services it calls, as the plan's table names them: read by nothing at run time; a test pins each.</param>
     /// <param name="Claims">What a step of the type holds while it runs, as the plan's table names each.</param>
     /// <param name="CountsAgainst">The limit a step of the type counts against, or what its slot does; <see langword="null"/> where it counts against nothing.</param>
     /// <param name="Output">
@@ -146,15 +146,15 @@ public static class WorkflowStepTypes
             "IAgentClient; a read-only one that begins work first makes its agent (IAgentService.CreateAsync, no worktree)",
             ["read main", "write the agent's tree where its access is write"],
             "maxReasoningAgents"),
-        new("build", LegKeys, [], "red", "IBuildLegs over LegRunService", ["run(tree)"], "maxParallelProcesses", LegsOutput(arms: false)),
-        new("test", [.. LegKeys, .. TestKeys], ["filter", "exclude", "labels"], "red", "ITestLegs over LegRunService", ["run(tree)"], "maxParallelProcesses", LegsOutput(arms: false)),
-        new("run", [.. LegKeys, new("runner", "the predefined runner the step runs") { Required = true }, RunInputs], ["inputs"], "red", "IRunnerLegs over LegRunService", ["run(tree)", "write(tree) where its runner says writesTree"], "maxParallelProcesses", LegsOutput(arms: false)),
+        new("build", LegKeys, [], "red", "BuildStepRunner: IBuildLegs over LegRunService", ["run(tree)"], "maxParallelProcesses", LegsOutput(arms: false)),
+        new("test", [.. LegKeys, .. TestKeys], ["filter", "exclude", "labels"], "red", "TestStepRunner: ITestLegs over LegRunService", ["run(tree)"], "maxParallelProcesses", LegsOutput(arms: false)),
+        new("run", [.. LegKeys, new("runner", "the predefined runner the step runs") { Required = true }, RunInputs], ["inputs"], "red", "RunStepRunner: IRunnerLegs over LegRunService, HarnessConfig.WritingRunners", ["run(tree)", "write(tree) where its runner says writesTree"], "maxParallelProcesses", LegsOutput(arms: false)),
         new(
             "check-mutations",
             [.. LegKeys, new("arms", "the arms it runs, by id; absent, every arm"), new("pending", "drive only the arms with no recorded passed that still holds")],
             [],
             "red",
-            "IMutationLegs through MutationService, over LegRunService",
+            "SweepStepRunner: IMutationLegs through MutationService, over LegRunService",
             ["run(tree)"],
             "maxParallelProcesses",
             LegsOutput(arms: true)),
@@ -469,8 +469,8 @@ public static class WorkflowStepTypes
         ("passed", Flag),
         ("exitCode", WholeNumber),
         ("verdicts", ListOf(ObjectOf(("leg", Text), ("verdict", Text)))),
-        ("red", ListOf(ObjectOf([("leg", Text), ("verdict", Text), ("phase", Text), ("detail", Text), ("tail", ListOf(Text)), .. arms ? [("arm", Text)] : Array.Empty<(string, string)>()]))),
-        ("runDirectory", Text));
+        ("red", ListOf(ObjectOf([("leg", Text), ("verdict", Text), ("phase", TextOrNull), ("detail", Text), ("tail", ListOf(Text)), .. arms ? [("arm", TextOrNull)] : Array.Empty<(string, string)>()]))),
+        ("runDirectory", TextOrNull));
 
     /// <summary>What a fold and a deletion answer: the paths written and deleted, the registries changed, and the ids of the rows applied.</summary>
     private static string FoldOutput => ObjectOf(("written", ListOf(Text)), ("deleted", ListOf(Text)), ("registries", ListOf(Text)), ("rows", ListOf(Text)));

@@ -171,8 +171,11 @@ public static class ServiceRegistration
         services.AddSingleton<IFlowStepTypeRunner, OrientRunner>();
         services.AddSingleton<IFlowStepTypeRunner, PlanCheckRunner>();
         services.AddSingleton<IFlowStepTypeRunner>(provider => provider.GetRequiredService<CreateAgentRunner>());
+        services.AddSingleton<IFlowStepTypeRunner, BuildStepRunner>();
+        services.AddSingleton<IFlowStepTypeRunner, TestStepRunner>();
+        services.AddSingleton<IFlowStepTypeRunner, RunStepRunner>();
+        services.AddSingleton<IFlowStepTypeRunner, SweepStepRunner>();
         services.AddSingleton<IFlowStepRunner, FlowStepRunners>();
-        services.AddSingleton<IFlowRunnerFacts, NoRunnerFacts>();
 
         // The one way an agent's step is worked, whatever the client is: each client built in is registered here as its
         // slice lands - claude-code first - and a test registers its fake the same way.

@@ -60,6 +60,10 @@ public sealed record FlowMadeAgent(string Name, string? Model);
 /// base filled (<see cref="FlowTemplate.PullRequestBase"/>), where one names it. Empty for every other step.
 /// </param>
 /// <param name="Made">The agent a <c>create-agent</c> step makes, as the engine named it; null for every other step.</param>
+/// <param name="WorksIn">
+/// The agent the step works in or acts on - the one its <c>in</c> or <c>of</c> names, as that step's create-agent made
+/// it - whose worktree a leg step works in and whose directory keeps the step's records; null for a step that names none.
+/// </param>
 public sealed record FlowStepRun(
     WorkflowStep Step,
     string Instance,
@@ -74,7 +78,8 @@ public sealed record FlowStepRun(
     int Visit = 1,
     FlowRunPlace? Place = null,
     IReadOnlyDictionary<string, FlowValue>? Read = null,
-    FlowMadeAgent? Made = null);
+    FlowMadeAgent? Made = null,
+    string? WorksIn = null);
 
 /// <summary>
 /// The one who runs a step: the code a step type calls - a machine step's service, a reason step's client runner - asked
@@ -125,7 +130,11 @@ public interface IFlowRunEvents
     /// <param name="leg">The leg's name.</param>
     void LegCopyMade(string leg);
 
-    /// <summary>The leg <paramref name="leg"/>'s work in the tree itself has ended: for a leg that works in the tree, the tree is held to this.</summary>
+    /// <summary>
+    /// The leg <paramref name="leg"/> has ended: whatever of the tree it was to read, it has read. A leg that works in the
+    /// tree itself holds it to this, and one placed in a copy whose copy was never made - its sync refused or failed -
+    /// lets it go here too.
+    /// </summary>
     /// <param name="leg">The leg's name.</param>
     void LegEnded(string leg);
 
