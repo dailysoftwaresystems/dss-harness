@@ -169,8 +169,14 @@ public static class ServiceRegistration
         services.AddSingleton<IFlowStepRunner, NoStepRunner>();
         services.AddSingleton<IFlowRunnerFacts, NoRunnerFacts>();
 
-        // The one way an agent's step is worked, whatever the client is. No client is built in yet: the clients
-        // register themselves when their slices land, and a test registers its fake the same way.
+        // The one way an agent's step is worked, whatever the client is: each client built in is registered here as its
+        // slice lands - claude-code first - and a test registers its fake the same way.
+        services.AddSingleton<IAgentClient>(provider => new Agents.ClaudeCode.ClaudeCodeClient(
+            provider.GetRequiredService<IProcessRunner>(),
+            provider.GetRequiredService<IFileSystem>(),
+            provider.GetRequiredService<IHostPlatform>(),
+            provider.GetRequiredService<ChildSessions>(),
+            provider.GetRequiredService<TimeProvider>()));
         services.AddSingleton<IAgentRunner, AgentRunner>();
         services.AddSingleton<IWorkflowValidationService, WorkflowValidationService>();
         services.AddSingleton<IWorkflowExportService, WorkflowExportService>();

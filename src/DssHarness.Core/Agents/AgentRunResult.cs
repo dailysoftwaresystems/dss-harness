@@ -170,6 +170,18 @@ public sealed record AgentRunResult(
     public IReadOnlyList<string> Files { get; init; } = [];
 
     /// <summary>
+    /// The keys the provider refused while it ran, by their names and never their values, in the order they were met:
+    /// each passed over for the rest of the run, which the engine records. Empty where none was refused.
+    /// </summary>
+    public IReadOnlyList<string> KeysRefused { get; init; } = [];
+
+    /// <summary>
+    /// A session file a launch left all the same, told to keep none, which the client removed - its own launch's, named
+    /// by the session id the client chose, and nothing else; empty where none was left.
+    /// </summary>
+    public IReadOnlyList<string> SessionFilesRemoved { get; init; } = [];
+
+    /// <summary>
     /// The exit code the run command answers for a step whose agent asked the person and produced no output: its own
     /// per-command code, which the run command's slice wires.
     /// </summary>

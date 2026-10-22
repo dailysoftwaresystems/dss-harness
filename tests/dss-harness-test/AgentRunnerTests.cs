@@ -744,7 +744,9 @@ public sealed class AgentRunnerTests
               "assumptions": [],
               "questions": [],
               "served": [],
-              "files": []
+              "files": [],
+              "keysRefused": [],
+              "sessionFilesRemoved": []
             }
 
             """,

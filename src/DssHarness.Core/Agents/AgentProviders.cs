@@ -11,18 +11,53 @@ namespace DssHarness.Core.Agents;
 /// <param name="Name">The client's name, as a provider's <c>client</c> names it.</param>
 /// <param name="ProviderType">The provider type it reaches: the one kind of API it speaks.</param>
 /// <param name="Efforts">The effort levels its protocol can say; a model's <c>efforts</c> are one of these.</param>
-/// <param name="SignsInWithLogin">
-/// Whether it signs in with the machine's login and reads no key - <c>claude-code</c>, whose sign-in no configuration
-/// changes in this build (part 03's <c>auth</c> is a later key of <c>agentClients</c>) - rather than signing each
-/// request with its provider's key.
+/// <param name="SignsIn">
+/// Whether it signs in, by its entry's <c>auth</c> - <c>claude-code</c>, the machine's login unless its entry says
+/// otherwise - rather than signing each request with its provider's key, as an API client does.
 /// </param>
 /// <param name="Settings">The names of the slot it reads that hold no key - a setting, such as the program it starts - each with what its value is.</param>
 public sealed record AgentClientKind(
     string Name,
     string ProviderType,
     IReadOnlyList<string> Efforts,
-    bool SignsInWithLogin,
+    bool SignsIn,
     IReadOnlyList<(string Name, string What)> Settings);
+
+/// <summary>
+/// How a client that signs in does (<c>agentClients.&lt;client&gt;.auth</c>), and the one place each way is named: the
+/// machine's login, a key of the provider's, or a token the slot holds.
+/// </summary>
+public static class AgentAuth
+{
+    /// <summary>The machine's login: no key is read, and none is given.</summary>
+    public const string Login = "login";
+
+    /// <summary>A key of the provider's <c>apiKeyNames</c>, tried in their order.</summary>
+    public const string ApiKey = "apiKey";
+
+    /// <summary>An OAuth token the slot holds, under the entry's <c>token</c>.</summary>
+    public const string OAuthToken = "oauthToken";
+
+    /// <summary>An authentication token the slot holds, under the entry's <c>token</c>.</summary>
+    public const string AuthToken = "authToken";
+
+    /// <summary>Every way a client signs in, in the order help names them.</summary>
+    public static IReadOnlyList<string> All { get; } = [Login, ApiKey, OAuthToken, AuthToken];
+
+    /// <summary>
+    /// The variable a token is held under where the entry names none, and the one Claude Code reads it from:
+    /// <c>CLAUDE_CODE_OAUTH_TOKEN</c> for an OAuth token, <c>ANTHROPIC_AUTH_TOKEN</c> for an authentication token; null
+    /// for a way that reads no token.
+    /// </summary>
+    /// <param name="auth">The way it signs in.</param>
+    public static string? TokenVariable(string auth)
+        => auth switch
+        {
+            OAuthToken => "CLAUDE_CODE_OAUTH_TOKEN",
+            AuthToken => "ANTHROPIC_AUTH_TOKEN",
+            _ => null,
+        };
+}
 
 /// <summary>
 /// The configuration's providers and tiers, resolved: the way from a model's code to its provider, its address, its
@@ -37,13 +72,13 @@ public sealed partial class AgentProviders
     public static readonly IReadOnlyList<AgentClientKind> ClientKinds =
     [
         new(
-            "claude-code",
+            ClaudeCode.ClaudeCodeClient.ClientName,
             "anthropic",
             ["low", "medium", "high", "xhigh", "max"],
-            SignsInWithLogin: true,
+            SignsIn: true,
             [(ClaudeCode.ClaudeCodeUpdateService.ExecutableVariable, "the program the claude-code client starts in place of npm's Claude Code")]),
-        new("claude-api", "anthropic", ["low", "medium", "high", "xhigh", "max"], SignsInWithLogin: false, []),
-        new("glm", "zai", ["low", "high", "max"], SignsInWithLogin: false, []),
+        new("claude-api", "anthropic", ["low", "medium", "high", "xhigh", "max"], SignsIn: false, []),
+        new("glm", "zai", ["low", "high", "max"], SignsIn: false, []),
     ];
 
     private readonly Dictionary<string, (AgentProviderConfig Provider, AgentModelConfig Model)> _models = new(StringComparer.Ordinal);
@@ -168,10 +203,12 @@ public sealed partial class AgentProviders
             problems.Add($"agentClients '{client}' is not a client this tool builds in: {string.Join(", ", ClientKinds.Select(kind => $"'{kind.Name}'"))}");
         }
 
-        foreach (var (client, entry) in config.AgentClients.Where(entry => entry.Value.Update is not null && entry.Key != "claude-code"))
+        foreach (var (client, entry) in config.AgentClients.Where(entry => entry.Value.Update is not null && entry.Key != ClaudeCode.ClaudeCodeClient.ClientName))
         {
             problems.Add($"agentClients '{client}' names update, a key of the claude-code client alone: whether the tool installs Claude Code with npm and brings one up to date");
         }
+
+        AuthRules(config, providers, problems);
 
         foreach (var (provider, at) in providers.Select((entry, at) => (entry, at)))
         {
@@ -258,6 +295,49 @@ public sealed partial class AgentProviders
     }
 
     /// <summary>
+    /// How each client that signs in does: <c>auth</c> and <c>token</c> are keys of such a client alone - an API client
+    /// signs each request with its provider's key - <c>auth</c> one of its ways, <c>token</c> read only by a way that
+    /// reads one, a variable's name, and appointed once beside every provider's keys, for a name holds one value.
+    /// </summary>
+    private static void AuthRules(HarnessConfig config, List<AgentProviderConfig> providers, List<string> problems)
+    {
+        foreach (var (client, entry) in config.AgentClients)
+        {
+            var signsIn = KindOf(client) is { SignsIn: true };
+
+            if (entry.Auth is not null && !signsIn)
+            {
+                problems.Add($"agentClients '{client}' names auth, a key of a client that signs in (claude-code): '{client}' signs each request with its provider's key");
+                continue;
+            }
+
+            if (entry.Auth is { } auth && !AgentAuth.All.Contains(auth, StringComparer.Ordinal))
+            {
+                problems.Add($"agentClients '{client}' auth '{auth}' is none of: {string.Join(", ", AgentAuth.All)}");
+                continue;
+            }
+
+            if (entry.Token is not { } token)
+            {
+                continue;
+            }
+
+            if (AgentAuth.TokenVariable(entry.Auth ?? AgentAuth.Login) is null)
+            {
+                problems.Add($"agentClients '{client}' names token, which only auth: {AgentAuth.OAuthToken} or {AgentAuth.AuthToken} reads; it signs in with auth: {entry.Auth ?? AgentAuth.Login}");
+            }
+            else if (!Secrets.AgentKeyStore.IsVariableName(token))
+            {
+                problems.Add($"agentClients '{client}' token '{token}' is not a variable's name: {Secrets.AgentKeyStore.VariableNameShape}, a name and never a token");
+            }
+            else if (providers.FirstOrDefault(provider => provider.ApiKeyNames.Contains(token, StringComparer.Ordinal)) is { } provider)
+            {
+                problems.Add($"agentClients '{client}' appoints '{token}' for its token and provider '{provider.Name}' for a key: a name is appointed once");
+            }
+        }
+    }
+
+    /// <summary>
     /// balanceKeyUsage balances a provider's keys by what each spent, so a model with no price could not be counted:
     /// refused where the switch is on and a provider with two keys or more lists one. A provider with one key has
     /// nothing to balance and is not refused.
@@ -285,20 +365,33 @@ public sealed partial class AgentProviders
         => _models.TryGetValue(code, out var entry) ? entry : null;
 
     /// <summary>
-    /// Whether <paramref name="client"/> signs in with the machine's login and reads no key: its kind's sign-in, which
-    /// no configuration changes in this build. A client the tool does not build in reads nothing either; it is refused
-    /// where the configuration or the definition names it.
+    /// How <paramref name="client"/> signs in, where it is a client that signs in: its entry's <c>auth</c>, the machine's
+    /// login where it says none; null for a client that signs each request with its provider's key, and for one the
+    /// tool does not build in, which is refused where the configuration or the definition names it.
     /// </summary>
     /// <param name="client">The client's name.</param>
-    public bool SignsInWithLogin(string client)
-        => KindOf(client) is { SignsInWithLogin: true };
+    public string? AuthOf(string client)
+        => KindOf(client) is { SignsIn: true }
+            ? Config.AgentClients.TryGetValue(client, out var entry) && entry.Auth is { } auth ? auth : AgentAuth.Login
+            : null;
+
+    /// <summary>
+    /// The variable the slot holds <paramref name="client"/>'s token under, where it signs in with one: its entry's
+    /// <c>token</c>, else the one Claude Code reads; null where it reads no token.
+    /// </summary>
+    /// <param name="client">The client's name.</param>
+    public string? TokenOf(string client)
+        => AuthOf(client) is { } auth && AgentAuth.TokenVariable(auth) is { } read
+            ? Config.AgentClients.TryGetValue(client, out var entry) && entry.Token is { } named ? named : read
+            : null;
 
     /// <summary>
     /// The names a model's key is read under on the client that reaches it - <paramref name="client"/> where the step
     /// names one, else the provider's own - in the order they are tried: the provider's <c>apiKeyNames</c> on a client
-    /// that signs each request with its provider's key (<c>claude-api</c>, <c>glm</c>), and none on one that signs in
-    /// with the machine's login (<c>claude-code</c>). The one place that says what a step's model needs of the slot:
-    /// <c>validate-workflow</c> asks it of every step, and so will the run that refuses a missing key.
+    /// that signs each request with its provider's key (<c>claude-api</c>, <c>glm</c>) and on one that signs in with a
+    /// key (<c>auth: apiKey</c>); the token's one name on one that signs in with a token; none on one that signs in
+    /// with the machine's login. The one place that says what a step's model needs of the slot: <c>validate-workflow</c>
+    /// asks it of every step, and so does a launch that is given its key.
     /// </summary>
     /// <param name="provider">The provider that lists the model.</param>
     /// <param name="client">The client the step names, or null where it names none.</param>
@@ -306,7 +399,14 @@ public sealed partial class AgentProviders
     {
         ArgumentNullException.ThrowIfNull(provider);
 
-        return SignsInWithLogin(client ?? provider.Client) ? [] : provider.ApiKeyNames;
+        var reaching = client ?? provider.Client;
+
+        return AuthOf(reaching) switch
+        {
+            null or AgentAuth.ApiKey => provider.ApiKeyNames,
+            AgentAuth.Login => [],
+            _ => TokenOf(reaching) is { } token ? [token] : [],
+        };
     }
 
     /// <summary>
@@ -328,6 +428,11 @@ public sealed partial class AgentProviders
         foreach (var kind in ClientKinds.Where(kind => Config.Providers.Any(provider => string.Equals(provider.Type, kind.ProviderType, StringComparison.Ordinal))))
         {
             appointed.AddRange(kind.Settings.Select(setting => new Secrets.AppointedKey(setting.Name, $"client '{kind.Name}'", setting.What, Secret: false)));
+
+            if (TokenOf(kind.Name) is { } token)
+            {
+                appointed.Add(new Secrets.AppointedKey(token, $"client '{kind.Name}'", $"the token client '{kind.Name}' signs in with ({AuthOf(kind.Name)})"));
+            }
         }
 
         return appointed;

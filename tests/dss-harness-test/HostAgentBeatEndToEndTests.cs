@@ -121,7 +121,7 @@ public sealed class HostAgentBeatEndToEndTests
                 Token);
             var written = agent.StandardOutput.ReadToEndAsync(Token);
 
-            HostAgentProtocol.Input(asked).WriteTo(agent.StandardInput.BaseStream);
+            HostAgentProtocol.Input(asked).WriteTo(agent.StandardInput.BaseStream, TestContext.Current.CancellationToken);
             await agent.StandardInput.BaseStream.FlushAsync(Token);
             await serving.Task.WaitAsync(TimeSpan.FromMinutes(2), Token);
 

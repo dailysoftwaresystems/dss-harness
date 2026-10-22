@@ -71,6 +71,39 @@ public sealed class AgentProviderTests
             TierConfig = tiers ?? new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase) { ["balanced"] = ["glm-5.3"] },
         });
 
+    /// <summary>The anthropic provider claude-code reaches, as a test spells it.</summary>
+    private static AgentProviderConfig Anthropic(List<string>? keys = null)
+        => Provider(
+            name: "anthropic",
+            type: "anthropic",
+            api: "https://api.anthropic.com",
+            client: "claude-code",
+            keys: keys ?? ["ANTHROPIC_API_KEY"],
+            models: [Model(code: "claude-sonnet-5-5", name: "Claude Sonnet 5.5", efforts: ["low", "medium", "high", "xhigh", "max"])]);
+
+    /// <summary>A config over <paramref name="providers"/> whose client entries are <paramref name="clients"/>.</summary>
+    private static HarnessConfig Config(Dictionary<string, AgentClientConfig> clients, List<AgentProviderConfig> providers)
+        => new()
+        {
+            Defaults = new HarnessDefaults { AgentTier = "balanced" },
+            Providers = providers,
+            TierConfig = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["balanced"] = [.. providers.SelectMany(provider => provider.Models).Select(model => model.Code)],
+            },
+            AgentClients = new(clients, StringComparer.OrdinalIgnoreCase),
+        };
+
+    /// <summary>The providers resolved under <paramref name="clients"/>, which must hold.</summary>
+    private static AgentProviders Clients(Dictionary<string, AgentClientConfig> clients, List<AgentProviderConfig> providers)
+    {
+        var (resolved, problems) = AgentProviders.Resolve(Config(clients, providers));
+
+        Assert.Empty(problems);
+
+        return resolved!;
+    }
+
     /// <summary>Selecting a model is enough: its provider, its address, its key's name and its client all follow from its code.</summary>
     [Fact]
     public void SelectingAModelIsEnough_TheProviderAddressKeyAndClientFollow()
@@ -152,6 +185,74 @@ public sealed class AgentProviderTests
         var (_, ofClientAlone) = AgentProviders.Resolve(glm);
 
         Exactly(ofClientAlone, "agentClients 'glm' names update, a key of the claude-code client alone: whether the tool installs Claude Code with npm and brings one up to date");
+    }
+
+    /// <summary>
+    /// claude-code signs in by its entry's auth - the machine's login where it says none, reading no key; a key of the
+    /// provider's, in their order; a token under the entry's token or the name Claude Code reads it from, appointed by
+    /// the client - and an API client signs each request with its provider's keys whatever claude-code's entry says.
+    /// </summary>
+    [Fact]
+    public void ClaudeCodesSignIn_IsItsEntrysAuth_TheLoginWhereItSaysNone()
+    {
+        var keys = new List<string> { "ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY_TWO" };
+        var anthropic = Anthropic(keys);
+
+        var login = Clients([], [anthropic]);
+        Assert.Equal((AgentAuth.Login, (string?)null), (login.AuthOf("claude-code"), login.TokenOf("claude-code")));
+        Assert.Empty(login.KeysRead(anthropic));
+        Assert.Null(login.AuthOf("claude-api"));
+        Assert.Null(login.AuthOf("glm"));
+        Assert.Equal(keys, login.KeysRead(anthropic, "claude-api"));
+
+        var apiKey = Clients(new() { ["claude-code"] = new AgentClientConfig { Auth = AgentAuth.ApiKey } }, [anthropic]);
+        Assert.Equal((AgentAuth.ApiKey, (string?)null), (apiKey.AuthOf("claude-code"), apiKey.TokenOf("claude-code")));
+        Assert.Equal(keys, apiKey.KeysRead(anthropic));
+
+        var oauth = Clients(new() { ["claude-code"] = new AgentClientConfig { Auth = AgentAuth.OAuthToken } }, [anthropic]);
+        Assert.Equal("CLAUDE_CODE_OAUTH_TOKEN", oauth.TokenOf("claude-code"));
+        Assert.Equal(["CLAUDE_CODE_OAUTH_TOKEN"], oauth.KeysRead(anthropic));
+        Assert.Equal(keys, oauth.KeysRead(anthropic, "claude-api"));
+        Assert.Contains(
+            new Core.Secrets.AppointedKey("CLAUDE_CODE_OAUTH_TOKEN", "client 'claude-code'", "the token client 'claude-code' signs in with (oauthToken)"),
+            oauth.Appointed());
+
+        var named = Clients(new() { ["claude-code"] = new AgentClientConfig { Auth = AgentAuth.AuthToken, Token = "GATEWAY_TOKEN" } }, [anthropic]);
+        Assert.Equal("GATEWAY_TOKEN", named.TokenOf("claude-code"));
+        Assert.Equal(["GATEWAY_TOKEN"], named.KeysRead(anthropic));
+        Assert.Equal("ANTHROPIC_AUTH_TOKEN", AgentAuth.TokenVariable(AgentAuth.AuthToken));
+        Assert.DoesNotContain(login.Appointed(), key => key.Name is "CLAUDE_CODE_OAUTH_TOKEN" or "ANTHROPIC_AUTH_TOKEN");
+    }
+
+    /// <summary>
+    /// auth and token are refused where they do not read: on a client that signs each request with its provider's key,
+    /// a way that is none of the four, a token where the way reads none, a token that is not a variable's name, and a
+    /// name appointed for a token and for a provider's key both.
+    /// </summary>
+    [Fact]
+    public void AuthAndToken_AreRefusedWhereTheyDoNotRead()
+    {
+        Exactly(
+            Refused(new() { ["glm"] = new AgentClientConfig { Auth = AgentAuth.ApiKey } }),
+            "agentClients 'glm' names auth, a key of a client that signs in (claude-code): 'glm' signs each request with its provider's key");
+        Exactly(
+            Refused(new() { ["claude-code"] = new AgentClientConfig { Auth = "password" } }),
+            "agentClients 'claude-code' auth 'password' is none of: login, apiKey, oauthToken, authToken");
+        Exactly(
+            Refused(new() { ["claude-code"] = new AgentClientConfig { Token = "MY_TOKEN" } }),
+            "agentClients 'claude-code' names token, which only auth: oauthToken or authToken reads; it signs in with auth: login");
+        Exactly(
+            Refused(new() { ["claude-code"] = new AgentClientConfig { Auth = AgentAuth.ApiKey, Token = "MY_TOKEN" } }),
+            "agentClients 'claude-code' names token, which only auth: oauthToken or authToken reads; it signs in with auth: apiKey");
+        Exactly(
+            Refused(new() { ["claude-code"] = new AgentClientConfig { Auth = AgentAuth.OAuthToken, Token = "my-token" } }),
+            "agentClients 'claude-code' token 'my-token' is not a variable's name: [A-Z][A-Z0-9_]*, a name and never a token");
+        Exactly(
+            Refused(new() { ["claude-code"] = new AgentClientConfig { Auth = AgentAuth.AuthToken, Token = "ANTHROPIC_API_KEY" } }),
+            "agentClients 'claude-code' appoints 'ANTHROPIC_API_KEY' for its token and provider 'anthropic' for a key: a name is appointed once");
+
+        static IReadOnlyList<string> Refused(Dictionary<string, AgentClientConfig> clients)
+            => AgentProviders.Resolve(Config(clients, [Anthropic()])).Problems;
     }
 
     /// <summary>balanceKeyUsage is refused where it is on and a provider with two keys or more lists a model with no price; one key is nothing to balance, and off is never refused.</summary>

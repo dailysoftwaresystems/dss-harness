@@ -118,12 +118,18 @@ public sealed class AgentProvidersService(
         {
             // Only a client that signs in is said: a pure API client - glm - signs each request with its provider's
             // key, which the provider's own row says, and appoints no name of its own. How a client signs in is its
-            // kind's, which no configuration changes in this build (part 03's auth is a later key of agentClients).
-            if (resolved.SignsInWithLogin(client))
+            // entry's auth: the machine's login where it says none.
+            var auth = resolved.AuthOf(client);
+
+            if (auth == AgentAuth.Login)
             {
                 clients.Add(new AgentClientListing(client, "the machine's login", []));
             }
-            else if (client == "claude-api")
+            else if (auth is not null && resolved.TokenOf(client) is { } token)
+            {
+                clients.Add(new AgentClientListing(client, $"the token of auth: {auth}", [new AgentKeyListing(token, Holds(token))]));
+            }
+            else if (auth == AgentAuth.ApiKey || client == "claude-api")
             {
                 foreach (var provider in config.Providers.Where(provider => provider.Client == client))
                 {

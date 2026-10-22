@@ -235,7 +235,7 @@ public sealed class ArmTestRunnerTests
             _ => Child("exit", records, "0"),
         };
 
-        var result = await RunAsync(request with { ClockStepToleranceMilliseconds = 2000 }, steppedAsItStarts: TimeSpan.FromSeconds(steppedSeconds));
+        var result = await RunAsync(request with { ClockStepToleranceMilliseconds = 2000 }, steppedAsItRuns: TimeSpan.FromSeconds(steppedSeconds));
 
         Assert.Equal(ended == "bound", result.Run.PastBound is not null);
         Assert.Equal(ended == "stall" ? 1 : (int?)null, result.Run.StalledAfterSeconds);
@@ -257,33 +257,28 @@ public sealed class ArmTestRunnerTests
 
         var result = await RunAsync(
             Child("exit", temp.Combine("arms", "charge-bound"), "0") with { ClockStepToleranceMilliseconds = tolerance },
-            steppedAsItStarts: TimeSpan.FromSeconds(steppedSeconds));
+            steppedAsItRuns: TimeSpan.FromSeconds(steppedSeconds));
 
         Assert.Equal(0, result.Run.ExitCode);
         Assert.Null(result.SteppedBy);
     }
 
     /// <summary>
-    /// The real runner, save that <paramref name="clock"/> is stepped by <paramref name="step"/> once the child has
-    /// started: a clock that stepped while a run went, and at no other moment - whichever readings are taken of it, and
-    /// whatever this machine's own wall clock does meanwhile.
+    /// The real runner, save that <paramref name="clock"/> is stepped by <paramref name="step"/> as the run asks for its
+    /// program: after the run read both clocks and before it reads them again, however it ends - a clock that stepped
+    /// while a run went, and at no other moment, whichever readings are taken of it and whatever this machine's own wall
+    /// clock does meanwhile. Not once the child has started: a run stopped at its bound on a loaded machine can be
+    /// stopped before its child starts, and would then never see the step at all.
     /// </summary>
-    private sealed class SteppingAsItStarts(IProcessRunner inner, SteppingClock clock, TimeSpan step) : IProcessRunner
+    private sealed class SteppingAsItRuns(IProcessRunner inner, SteppingClock clock, TimeSpan step) : IProcessRunner
     {
         public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(request);
 
-            return inner.RunAsync(
-                request with
-                {
-                    OnStarted = () =>
-                    {
-                        clock.Step(step);
-                        request.OnStarted?.Invoke();
-                    },
-                },
-                cancellationToken);
+            clock.Step(step);
+
+            return inner.RunAsync(request, cancellationToken);
         }
 
         public string? FindExecutable(string command) => inner.FindExecutable(command);
@@ -304,24 +299,24 @@ public sealed class ArmTestRunnerTests
 
     /// <summary>
     /// Runs <paramref name="request"/> as a sweep runs an arm's binary, timed by <paramref name="clock"/> - or, where
-    /// the test says <paramref name="steppedAsItStarts"/>, by a wall clock of the test's own, stepped by that much once
-    /// the binary has started.
+    /// the test says <paramref name="steppedAsItRuns"/>, by a wall clock of the test's own, stepped by that much as
+    /// the binary is asked for.
     /// </summary>
     private static Task<ArmRunResult> RunAsync(
         ArmRunRequest request,
         CancellationToken? cancellationToken = null,
         IFileSystem? fileSystem = null,
         TimeProvider? clock = null,
-        TimeSpan? steppedAsItStarts = null)
+        TimeSpan? steppedAsItRuns = null)
     {
         var harness = new HarnessFactory();
         var stepping = new SteppingClock();
-        IProcessRunner processes = steppedAsItStarts is { } step ? new SteppingAsItStarts(harness.ProcessRunner, stepping, step) : harness.ProcessRunner;
+        IProcessRunner processes = steppedAsItRuns is { } step ? new SteppingAsItRuns(harness.ProcessRunner, stepping, step) : harness.ProcessRunner;
 
         return new ArmTestRunner(
                 new PhaseRunner(processes, harness.FileSystem, harness.Output),
                 fileSystem ?? harness.FileSystem,
-                steppedAsItStarts is null ? clock ?? TimeProvider.System : stepping)
+                steppedAsItRuns is null ? clock ?? TimeProvider.System : stepping)
             .RunAsync(request, cancellationToken ?? TestContext.Current.CancellationToken);
     }
 

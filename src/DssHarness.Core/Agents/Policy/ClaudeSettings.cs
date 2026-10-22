@@ -28,6 +28,21 @@ namespace DssHarness.Core.Agents.Policy;
 public static class ClaudeSettings
 {
     /// <summary>
+    /// The names the engine controls in every launch, with their values, in the order they are written: compaction off,
+    /// for the engine compacts; the auto-updater off, for only this tool moves the installation; the key a launch signs
+    /// in with kept from the commands it runs; and the retry watchdog off, which would retry a limit without end. Set
+    /// in the settings' <c>env</c>, which outranks the user's own, and in the child's environment, which a host session's
+    /// would otherwise outrank.
+    /// </summary>
+    public static IReadOnlyList<KeyValuePair<string, string>> Controlled { get; } =
+    [
+        new("DISABLE_COMPACT", "1"),
+        .. ClaudeCode.ClaudeCodeInstall.EveryStart.Select(start => new KeyValuePair<string, string>(start.Key, start.Value!)),
+        new("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB", "1"),
+        new("CLAUDE_CODE_RETRY_WATCHDOG", "0"),
+    ];
+
+    /// <summary>
     /// Renders the settings file of one launch.
     /// </summary>
     /// <param name="tools">Every tool the launch has, by Claude Code's own names, as <c>--tools</c> names them.</param>
@@ -51,10 +66,12 @@ public static class ClaudeSettings
             writer.WriteString("outputStyle", "default");
 
             writer.WriteStartObject("env");
-            writer.WriteString("DISABLE_COMPACT", "1");
-            writer.WriteString("DISABLE_AUTOUPDATER", "1");
-            writer.WriteString("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB", "1");
-            writer.WriteString("CLAUDE_CODE_RETRY_WATCHDOG", "0");
+
+            foreach (var (name, value) in Controlled)
+            {
+                writer.WriteString(name, value);
+            }
+
             writer.WriteEndObject();
 
             writer.WriteStartObject("permissions");

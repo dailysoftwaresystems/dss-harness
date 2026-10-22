@@ -282,6 +282,8 @@ public sealed record TurnRestarted(string Why) : AgentEvent;
 /// <param name="Turn">The turn it happened on.</param>
 /// <param name="ThrewAway">Whether a part of an answer was thrown away.</param>
 /// <param name="CreditAsked">Whether a credit was asked for.</param>
+/// <param name="FromKey">The name of the key the serving entry signed in with, where it signed in with one; never its value.</param>
+/// <param name="ToKey">The name of the key the entry that takes over signs in with, where it signs in with one.</param>
 public sealed record FallbackStarted(
     string FromModel,
     string FromProvider,
@@ -293,7 +295,9 @@ public sealed record FallbackStarted(
     string How,
     int Turn,
     bool ThrewAway,
-    bool CreditAsked) : AgentEvent;
+    bool CreditAsked,
+    string? FromKey = null,
+    string? ToKey = null) : AgentEvent;
 
 /// <summary>An entry of the fallback that was not taken.</summary>
 /// <param name="Model">The model not taken.</param>

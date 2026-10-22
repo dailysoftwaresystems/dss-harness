@@ -17,9 +17,10 @@ namespace DssHarness.Core.Agents;
 /// <remarks>
 /// <para>
 /// The skeleton of it: the client is found by its name among those registered, the prompt is filled from its template
-/// by name, and the models are as the step named them. The resolution of tiers and fallbacks, the continuation of
-/// earlier work and the policy a run is held to come with their own slices and join the request then; nothing here
-/// names a provider, and nothing here runs anything live.
+/// by name, and the models are as the step named them. The policy's ground, the credential, the program and the names
+/// withheld are the request's and handed to the client as they are; the resolution of tiers and fallbacks and the
+/// continuation of earlier work come with their own slices and join the request then. Nothing here names a provider,
+/// and nothing here runs anything live.
 /// </para>
 /// <para>
 /// Whatever the end, the record says it: every run's stream begins with the runner's <see cref="RunStarted"/> and ends
@@ -250,7 +251,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                 null);
         }
 
-        var messages = new AgentMessages();
+        var messages = step.Messages ?? new AgentMessages();
 
         try
         {
@@ -307,8 +308,15 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             [],
             mask,
             directory,
-            new AgentHandoffSignal(Bound(step)),
-            messages);
+            step.Handoff ?? new AgentHandoffSignal(Bound(step)),
+            messages)
+        {
+            Ground = step.Ground,
+            Capabilities = step.Capabilities,
+            Credential = step.Credential,
+            Program = step.Program,
+            Withheld = step.Withheld,
+        };
 
     /// <summary>The step's own directory, as the one owner of the paths spells it.</summary>
     /// <param name="step">The step.</param>

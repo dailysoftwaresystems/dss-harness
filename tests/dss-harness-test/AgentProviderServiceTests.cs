@@ -83,6 +83,38 @@ public sealed class AgentProviderServiceTests
             outcome.Details!.Where(line => line.StartsWith("zai ", StringComparison.Ordinal) || line.StartsWith("balanceKeyUsage", StringComparison.Ordinal)));
     }
 
+    /// <summary>
+    /// claude-code's sign-in is listed as its entry's auth says: a token by the name the slot holds it under, present or
+    /// missing and appointed by the client, so the slot's name is never listed as appointed by nothing; a key by its
+    /// provider's names, in order.
+    /// </summary>
+    [Fact]
+    public async Task ClaudeCodesSignIn_IsListedAsItsEntrysAuthSaysIt()
+    {
+        using var repository = await RepositoryAsync();
+        var file = Path.Combine(repository.Tree.Path, ".harness-config", "config.json");
+        var config = JsonNode.Parse(File.ReadAllText(file))!.AsObject();
+        config["agentClients"] = new JsonObject { ["claude-code"] = new JsonObject { ["auth"] = "oauthToken" } };
+        File.WriteAllText(file, config.ToJsonString(DssHarness.Core.Output.ReportJson.Options));
+        repository.Tree.WriteFile(".harness-config/workflows/.env/keys.env", "CLAUDE_CODE_OAUTH_TOKEN=one\n");
+        var service = Service(repository.Harness);
+
+        var token = await service.ListAsync(repository.Tree.Path, template: false, json: false, TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, token.ExitCode);
+        Assert.Contains("client 'claude-code' signs in with the token of auth: oauthToken (CLAUDE_CODE_OAUTH_TOKEN, present)", token.Details!);
+        Assert.DoesNotContain(token.Details!, line => line.StartsWith("declared in the slot", StringComparison.Ordinal));
+
+        config["agentClients"] = new JsonObject { ["claude-code"] = new JsonObject { ["auth"] = "apiKey" } };
+        File.WriteAllText(file, config.ToJsonString(DssHarness.Core.Output.ReportJson.Options));
+
+        var key = await service.ListAsync(repository.Tree.Path, template: false, json: false, TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, key.ExitCode);
+        Assert.Contains("client 'claude-code' signs in with the key of provider 'anthropic' (ANTHROPIC_API_KEY, missing)", key.Details!);
+        Assert.Contains("declared in the slot and appointed by nothing: CLAUDE_CODE_OAUTH_TOKEN", key.Details!);
+    }
+
     [Fact]
     public async Task AnswersOneJsonDocument_WithNoMemberForAValue()
     {

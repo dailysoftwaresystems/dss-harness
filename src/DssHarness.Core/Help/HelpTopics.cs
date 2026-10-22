@@ -2354,8 +2354,8 @@ public static class HelpTopics
 
     /// <summary>
     /// The agent sections of config.json: the companies whose models the tool reaches, their keys in the git-ignored
-    /// slot, the tiers a step runs on and the effort forms - said where a person reads them, before the clients that
-    /// reach the companies are built (nothing here runs a step).
+    /// slot, the tiers a step runs on and the effort forms, the agents' policy and the claude-code client - said where a
+    /// person reads them, before the API clients and the step runners are built (nothing here runs a step).
     /// </summary>
     private static string RenderAgentClients()
     {
@@ -2370,18 +2370,24 @@ public static class HelpTopics
         builder.AppendLine("provider, so naming a model is enough - its code says its provider, its API's address,");
         builder.AppendLine("its keys' names and its client.");
         builder.AppendLine();
-        builder.AppendLine("A provider's keys are a list, apiKeyNames: the names of the variables that hold its");
-        builder.AppendLine($"keys in the git-ignored slot {HarnessLayout.WorkflowsDirectoryRelative}/.env/, at least one, in the");
-        builder.AppendLine("order they are tried - a name and never a key, and a second key of one company is a second");
-        builder.AppendLine("name in the list. A client that signs in with the machine's login - claude-code - reads no");
-        builder.AppendLine("key at all. Choosing a key is the engine's, when it runs a run's steps, and no command of");
-        builder.AppendLine("this build runs a step: a step is to start on the first key the slot holds, unless");
-        builder.AppendLine("balanceKeyUsage is on (off unless turned on), where it is to start on the one that has spent");
-        builder.AppendLine("least in the last seven days, counted back from the moment it starts, its conversation");
-        builder.AppendLine("staying with one account. What a key spent is to be what the engine counts for each request");
-        builder.AppendLine("served with it, at the configuration's prices, recorded by the key's name in the");
-        builder.AppendLine("repository's records; what the same key spends elsewhere - another repository, another");
-        builder.AppendLine("machine, another tool - is not seen.");
+        AppendWrapped(
+            builder,
+            "A provider's keys are a list, apiKeyNames: the names of the variables that hold its keys in the git-ignored "
+            + $"slot {HarnessLayout.WorkflowsDirectoryRelative}/.env/, at least one, in the order they are tried - a name and never a key, "
+            + "and a second key of one company is a second name in the list. claude-code signs in by its entry's auth "
+            + $"(agentClients.claude-code.auth, one of {string.Join(", ", Agents.AgentAuth.All)}): {Agents.AgentAuth.Login}, the machine's "
+            + $"login, where nothing is said, reading no key at all; {Agents.AgentAuth.ApiKey}, its provider's keys in their order; "
+            + $"{Agents.AgentAuth.OAuthToken} or {Agents.AgentAuth.AuthToken}, the token the slot holds under the entry's token "
+            + $"({Agents.AgentAuth.TokenVariable(Agents.AgentAuth.OAuthToken)} or {Agents.AgentAuth.TokenVariable(Agents.AgentAuth.AuthToken)} "
+            + "where it names none) - a name and never a token, appointed once beside every provider's keys. A launch is "
+            + "given that credential and no other, whatever the tool's own environment holds; claude-api and glm sign each "
+            + "request with their provider's keys. Choosing a key is the engine's, when "
+            + "it runs a run's steps, and no command of this build runs a step: a step is to start on the first key the slot "
+            + "holds, unless balanceKeyUsage is on (off unless turned on), where it is to start on the one that has spent "
+            + "least in the last seven days, counted back from the moment it starts, its conversation staying with one "
+            + "account. What a key spent is to be what the engine counts for each request served with it, at the "
+            + "configuration's prices, recorded by the key's name in the repository's records; what the same key spends "
+            + "elsewhere - another repository, another machine, another tool - is not seen.");
         builder.AppendLine();
         builder.AppendLine("The slot itself is a directory of dotenv files, " + HarnessLayout.WorkflowsEnvSlotRelative + "/:");
         builder.AppendLine("every file in it is read and merged, a name declared in two of them is refused, a line whose");
@@ -2439,9 +2445,8 @@ public static class HelpTopics
         builder.AppendLine("key (agentClients.<client>.update, true where nothing is said) and DISABLE_UPDATES in the");
         builder.AppendLine("tool's own environment (a setting of the person's, never a key) turn installing and");
         builder.AppendLine("updating off, and a run that then needs one that is missing or too old will be refused with");
-        builder.AppendLine("the command to run by hand. The clients that reach the companies, and the step runner that");
-        builder.AppendLine("readies Claude Code before a run's first step, are what it builds next, and nothing here");
-        builder.AppendLine("runs a step.");
+        builder.AppendLine("the command to run by hand. The step runner that readies Claude Code before a run's first");
+        builder.AppendLine("step is what it builds next, and nothing here runs a step.");
         builder.AppendLine();
         builder.AppendLine("What an agent may do is one policy, the same on every client: everything is allowed except");
         builder.AppendLine("the root actions, the places no agent reaches, and the restrictions - which only ever");
@@ -2507,10 +2512,48 @@ public static class HelpTopics
         builder.AppendLine("among them; what it is never given is a key in its environment, and what no file tool");
         builder.AppendLine("of an agent touches is the slot itself, in any root. Where this tool cannot decide a");
         builder.AppendLine("call it denies it, never allows: nothing runs while the host that would answer is");
-        builder.AppendLine("silent or gone. The policy is built and holds every action behind it; the clients that");
-        builder.AppendLine("ask it are what it builds next, and no command of this build runs an agent yet.");
+        builder.AppendLine("silent or gone. The policy is built and holds every action behind it; the claude-code");
+        builder.AppendLine("client below asks it of every call, the API clients are what it builds next, and no");
+        builder.AppendLine("command of this build runs an agent yet.");
+        builder.AppendLine();
+        AppendWrapped(builder, ClaudeCodeClientProse());
 
         return builder.ToString();
+    }
+
+    /// <summary>
+    /// What the claude-code client does with a launch, its tools from the one table that gives them, the names it sets
+    /// from the one list of them, and its bounds from the types that hold them.
+    /// </summary>
+    private static string ClaudeCodeClientProse()
+    {
+        var tools = string.Join(
+            "; ",
+            Agents.ClaudeCode.ClaudeCodeTools.Table.Select(row =>
+                $"{row.Capability.ToString().ToLowerInvariant()}: {(row.Tools.Count == 0 ? "none of Claude Code's" : string.Join(", ", row.Tools.Select(tool => tool.Name)))}"));
+        var controlled = string.Join(", ", Agents.Policy.ClaudeSettings.Controlled.Select(name => $"{name.Key}={name.Value}"));
+        var output = new Agents.AgentOutput("o", "{}");
+
+        return "The claude-code client starts Claude Code once for each launch, a new session every time: never resumed "
+            + "and never continued, keeping no session file (one a launch leaves all the same is removed, and said), streamed "
+            + "both ways - the step's prompt is the first message on its input, never an argument - in the agent's working "
+            + "directory, with every other root it reaches added. It is given its model and no fallback, the step's effort, "
+            + "turns and budget, and the tools of the agent's capabilities and no other - "
+            + tools
+            + $" - and never {string.Join(", ", Agents.ClaudeCode.ClaudeCodeTools.NeverOffered)}. The run's reporter is given "
+            + $"{string.Join(", ", Agents.ClaudeCode.ClaudeCodeTools.Reporter)} alone. Every call is asked of the engine "
+            + "before it runs and answered from the policy above: a denial carries its rule's sentence, which the model "
+            + $"reads, and is a line of the step's {Agents.ClaudeCode.ClaudeLaunch.DenialsFileName}; a tool the launch was not given, or whose calls the engine "
+            + "cannot read, is denied by name. An answer held to a step's schema that does not read is sent back, each "
+            + $"problem by its path, up to {output.MaxRepairs} times; a message the engine gives an agent at work is written "
+            + "to the same launch, and a result written before the launch took it is not the answer; a handoff asked "
+            + "interrupts the turn and asks the agent for its handoff in the same launch, no tool running in that turn, a "
+            + "launch that does not take the interrupt ended whole. Every message is held to the model asked for, a date "
+            + "after its id the same model: one another model wrote ends the step. Its environment holds nothing of a "
+            + $"Claude Code session this tool was started in ({Agents.ClaudeCode.ClaudeLaunch.SessionVariable} and every {Agents.ClaudeCode.ClaudeLaunch.SessionPrefix} name), no credential but the "
+            + $"one its auth gives, and the names the engine sets: {controlled}. A key Claude Code reports invalid is passed "
+            + "over, and while the step has done no work the next key is given a new launch with the step's prompt; the "
+            + $"control messages both ways are kept in the step's {Agents.ClaudeCode.ClaudeLaunch.ControlFileName} beside its stored stream.";
     }
 
     /// <summary>
@@ -3488,9 +3531,11 @@ public static class HelpTopics
         builder.AppendLine("                 least");
         builder.AppendLine("  agentClients   the clients the tool builds in (claude-code, claude-api, glm), each");
         builder.AppendLine("                 by its name: update, claude-code's alone, says whether the tool");
-        builder.AppendLine("                 installs and updates Claude Code with npm; a client holds no model,");
-        builder.AppendLine("                 size or price - contextTokens and maxOutputTokens are a model's");
-        builder.AppendLine("                 ('help agent-clients')");
+        builder.AppendLine("                 installs and updates Claude Code with npm; auth, claude-code's");
+        builder.AppendLine($"                 alone, how it signs in ({string.Join(", ", Agents.AgentAuth.All)}, {Agents.AgentAuth.Login}");
+        builder.AppendLine("                 where nothing is said), and token the variable a token is held under;");
+        builder.AppendLine("                 a client holds no model, size or price - contextTokens and");
+        builder.AppendLine("                 maxOutputTokens are a model's ('help agent-clients')");
         builder.AppendLine("  agentPolicy    what an agent may do beyond the rules built into the tool:");
         builder.AppendLine("                 restrictions, each one rule string, that only ever refuse -");
         builder.AppendLine("                 Run(git push *), Write(.github/**), Read(secrets/**),");

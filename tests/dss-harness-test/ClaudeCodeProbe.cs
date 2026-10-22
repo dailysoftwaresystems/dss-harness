@@ -50,6 +50,12 @@ internal static class ClaudeCodeProbe
     /// <param name="Input">The call's input, whole.</param>
     internal sealed record Reason(string Tool, string ReasonType, JsonNode? Input);
 
+    /// <summary>A channel's curated recordings in the test tree, or a path below them.</summary>
+    /// <param name="channel">The channel: <c>oldest</c>, <c>stable</c> or <c>latest</c>.</param>
+    /// <param name="below">The segments below the channel's folder, if any.</param>
+    internal static string Fixtures(string channel, params string[] below)
+        => Path.Combine([Prose.RepositoryRoot(), "tests", "dss-harness-test", "fixtures", "claude-code", channel, .. below]);
+
     /// <summary>Reads a recording, one line each, in the order they came.</summary>
     /// <param name="path">The recording's own file.</param>
     /// <returns>The lines, their kinds and their wholes.</returns>

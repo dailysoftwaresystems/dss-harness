@@ -484,7 +484,11 @@ that fixes it; a setting, such as `CLAUDE_EXECUTABLE`, is no key. `validate-work
 names every key a step's model would read that no file of the slot declares, with the steps that
 would read it, and still passes - a machine that only checks a configuration needs no key. A model
 reached through `claude-api` or `glm` reads its provider's keys; one reached through `claude-code`
-signs in with the machine's login and reads none. The credential slots - the runner's two
+signs in by the client's `auth` (`agentClients.claude-code.auth`): `login`, the machine's login,
+where nothing is said, reading no key; `apiKey`, the provider's keys in their order; `oauthToken`
+or `authToken`, the token the slot holds under the entry's `token` (`CLAUDE_CODE_OAUTH_TOKEN` or
+`ANTHROPIC_AUTH_TOKEN` where it names none) - a name and never a token, appointed once beside
+every provider's keys. The credential slots - the runner's two
 value directories and this one among them - are never handed to an agent, seeded from the main tree
 or folded back into it, whatever git or the ignore block says.
 
@@ -556,8 +560,25 @@ runs opens files as the user it runs as, a file of the credential slot among the
 never given is a key in its environment, and what no file tool of an agent touches is the slot
 itself, in any root. Where this tool cannot decide a call it denies it, never allows: nothing
 runs while the host that would answer is silent or gone. The policy is built and holds every
-action behind it; the clients that ask it are what comes next, and no command of this build runs
-an agent yet.
+action behind it; the `claude-code` client asks it of every call, the API clients are what comes
+next, and no command of this build runs an agent yet.
+
+The `claude-code` client starts Claude Code once for each launch, a new session every time -
+never resumed or continued, keeping no session file (one a launch leaves all the same is removed,
+and said) - streamed both ways: the step's prompt is the first message on its input, never an
+argument, and the launch runs in the agent's working directory with every other root it reaches
+added. It is given its model and no fallback, the step's effort, turns and budget, and the tools of
+the agent's capabilities and no other (`read`: `Read`, `Grep`, `Glob`; `write`: `Write`, `Edit`,
+`NotebookEdit`; `run`: `Bash`; `web`: none of Claude Code's), never one that starts agents, loads
+skills, asks a person or plans. Every call is asked of the engine before it runs and answered from
+the policy, a denial with its rule's sentence the model reads and a line of the step's
+`denials.jsonl`; an answer that does not read against the step's schema is sent back, each problem
+by its path; a message the engine gives an agent at work is written to the same launch; a handoff
+asked interrupts the turn and asks the agent for its handoff, no tool running in that turn; every
+message is held to the model asked for; the launch's environment holds nothing of a Claude Code
+session the tool was started in and no credential but the one its `auth` gives; and a key Claude
+Code reports invalid is passed over, the next key given a new launch while the step has done no
+work. `help agent-clients` says it whole.
 
 ```bash
 dssharness validate-workflow                 # check every declared workflow

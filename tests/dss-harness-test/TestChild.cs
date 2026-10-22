@@ -1087,6 +1087,11 @@ internal static class TestChild
     /// </remarks>
     private static int ClaudeCode(TextWriter output, string[] arguments)
     {
+        if (Environment.GetEnvironmentVariable(FakeClaude.ScriptVariable) is { Length: > 0 } script)
+        {
+            return FakeClaude.Run(output, arguments, script);
+        }
+
         using var input = new StreamReader(Console.OpenStandardInput(), Utf8NoBom);
 
         string? Line() => input.ReadLine();

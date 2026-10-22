@@ -353,6 +353,7 @@ public sealed class AgentStreamTests
                 "sessionStarted.tools", "sessionStarted.skills", "assistantMessage.calls", "outputRepair.problems",
                 "personAsked.questions", "personAsked.questions[0].choices", "result.json.usage.perModel", "result.json.assumptions",
                 "result.json.questions", "result.json.questions[0].choices", "result.json.served", "result.json.files",
+                "result.json.keysRefused", "result.json.sessionFilesRemoved",
             ],
             refused);
     }

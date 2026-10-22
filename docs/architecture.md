@@ -1362,8 +1362,11 @@ no file of the agent clients' slot declares, one beside a key the slot holds amo
 steps that would read it - as a step's first model, or as a later model of its tier. What a model
 reads is decided in one place (`AgentProviders.KeysRead`) by the client that reaches it, the step's
 own or else its provider's: `claude-api` and `glm` sign each request with the provider's key, and
-`claude-code` signs in with the machine's login and reads none, so a step on it is never said to
-need one. Each line is the one sentence a missing key is said in (`AgentKeyStore.Missing`), ending
+`claude-code` signs in by its entry's `auth` (`AgentAuth`, `AgentProviders.AuthOf`): the machine's
+login where nothing is said, reading none, so a step on it is never said to need one; the
+provider's keys under `apiKey`; under `oauthToken` or `authToken` the one token the slot holds by the
+entry's `token` (`AgentProviders.TokenOf`), appointed by the client beside every provider's keys
+and refused where a provider's key is appointed under the same name. Each line is the one sentence a missing key is said in (`AgentKeyStore.Missing`), ending
 with the names the slot holds that nothing appoints. It is a report and not a problem: a machine
 that only checks a configuration needs no key, and no command of this build refuses one - the run
 that will is the engine's, which this build does not yet run. The slot itself
@@ -1442,8 +1445,19 @@ web). For Claude Code the policy is rendered, never re-decided, into the launch'
 rules as deny rules, absolute once for each root that covers no root the launch writes - a second
 layer, for the engine is asked about every call and answers from the same policy in its own
 process. Where the policy cannot decide a call it denies it, never
-allows - nothing runs while the host that would answer is silent or gone; the clients that ask it
-are the next thing the tool grows. This build checks workflow definitions and
+allows - nothing runs while the host that would answer is silent or gone. The first client that
+asks it is `Agents\ClaudeCode\ClaudeCodeClient`, the `IAgentClient` of `claude-code`: each
+launch a new session (`ClaudeLaunch` builds its one argument list and its environment - nothing of
+a Claude Code session the tool was started in, the names `ClaudeSettings.Controlled` sets, and the
+one credential an `AgentCredential` gives), streamed both ways and read line by line as
+`ClaudeLine`s (every kind the probe's recordings hold), each `can_use_tool` it asks decided by
+`ClaudeToolDecider` through the policy, the tools it is given - and what a call of each is of - from
+the one table `ClaudeCodeTools` holds; an answer held to a schema checked by `StructuredOutputGate`
+and sent back while it does not read; a message to an agent at work, a handoff's interrupt and its
+turn (its prompt and its refusal `AgentHandoffSignal`'s, every client's), the
+model each message names, a key reported invalid moved past with a new launch, and a session file
+a launch leaves removed, all in one launch's loop that the stored stream (`AgentRunner`) records as
+it runs. The API clients are the next thing the tool grows. This build checks workflow definitions and
 starts and drives a run of one (see "Running a workflow" below); the step runners - the agents, the
 steps over the services the tool already has - are the next thing the tool grows, and until they land
 each step of a run fails, saying no runner serves its type.

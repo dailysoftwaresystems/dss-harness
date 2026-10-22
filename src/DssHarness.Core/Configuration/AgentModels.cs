@@ -15,6 +15,22 @@ public sealed class AgentClientConfig
     /// run that needs the client will be refused with once the engine's step runner asks it before the run's first step.
     /// </summary>
     public bool? Update { get; init; }
+
+    /// <summary>
+    /// How a claude-code client signs in (claude-code's key): <c>login</c>, the machine's login, where nothing is said;
+    /// <c>apiKey</c>, a key of the provider's <c>apiKeyNames</c>, tried in their order; <c>oauthToken</c> or
+    /// <c>authToken</c>, the token the slot holds under <see cref="Token"/>. A launch is given that credential and no
+    /// other, whatever the tool's own environment holds.
+    /// </summary>
+    public string? Auth { get; init; }
+
+    /// <summary>
+    /// The name of the slot's variable that holds the token a claude-code client signs in with under
+    /// <c>auth: oauthToken</c> (<c>CLAUDE_CODE_OAUTH_TOKEN</c> where nothing is said) or <c>auth: authToken</c>
+    /// (<c>ANTHROPIC_AUTH_TOKEN</c>): a name and never a token, appointed once beside every provider's
+    /// <c>apiKeyNames</c>.
+    /// </summary>
+    public string? Token { get; init; }
 }
 
 /// <summary>

@@ -1284,7 +1284,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         {
             if (input is not null)
             {
-                await Task.Run(() => input.WriteTo(writer.BaseStream)).ConfigureAwait(false);
+                await Task.Run(() => input.WriteTo(writer.BaseStream, exited)).ConfigureAwait(false);
             }
 
             await writer.BaseStream.FlushAsync().ConfigureAwait(false);

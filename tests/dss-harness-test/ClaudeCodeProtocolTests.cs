@@ -734,18 +734,8 @@ public sealed class ClaudeCodeProtocolTests
     /// <summary>The host's allow of the fake's one ask, in the recorded envelope.</summary>
     private const string Allow = """{"type":"control_response","response":{"subtype":"success","request_id":"00000000-0000-4000-8000-000000000002","response":{"behavior":"allow","updatedInput":{"file_path":"a.txt"}}}}""";
 
-    /// <summary>Where the curated recordings live, in the test tree.</summary>
-    private static string Fixtures(string channel, string file)
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-
-        while (directory is not null && !directory.EnumerateFiles("DssHarness.slnx").Any())
-        {
-            directory = directory.Parent;
-        }
-
-        return Path.Combine(directory!.FullName, "tests", "dss-harness-test", "fixtures", "claude-code", channel, file);
-    }
+    /// <summary>One curated recording's file.</summary>
+    private static string Fixtures(string channel, string file) => ClaudeCodeProbe.Fixtures(channel, file);
 
     /// <summary>One curated recording's lines.</summary>
     private static List<ClaudeCodeProbe.Line> Lines(string channel, string file) => ClaudeCodeProbe.Read(Fixtures(channel, file));

@@ -163,8 +163,9 @@ public sealed partial class HelpTests
 
         Assert.Contains(
             "agentClients the clients the tool builds in (claude-code, claude-api, glm), each by its name: update, claude-code's alone, says "
-                + "whether the tool installs and updates Claude Code with npm; a client holds no model, size or price - contextTokens and "
-                + "maxOutputTokens are a model's ('help agent-clients')",
+                + "whether the tool installs and updates Claude Code with npm; auth, claude-code's alone, how it signs in (login, apiKey, "
+                + "oauthToken, authToken, login where nothing is said), and token the variable a token is held under; a client holds no "
+                + "model, size or price - contextTokens and maxOutputTokens are a model's ('help agent-clients')",
             config,
             StringComparison.Ordinal);
 
@@ -196,8 +197,13 @@ public sealed partial class HelpTests
         var prose = Prose.Words(HelpText.Of("agent-clients").StandardOutput);
 
         Assert.Contains(
-            "A client that signs in with the machine's login - claude-code - reads no key at all. Choosing a key is the engine's, "
-                + "when it runs a run's steps, and no command of this build runs a step: a step is to start on the first key the slot holds,",
+            "claude-code signs in by its entry's auth (agentClients.claude-code.auth, one of login, apiKey, oauthToken, authToken): login, "
+                + "the machine's login, where nothing is said, reading no key at all; apiKey, its provider's keys in their order; oauthToken or "
+                + "authToken, the token the slot holds under the entry's token (CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN where it names "
+                + "none) - a name and never a token, appointed once beside every provider's keys. A launch is given that credential and no "
+                + "other, whatever the tool's own environment holds; claude-api and glm sign each request with their provider's keys. "
+                + "Choosing a key is the engine's, when it runs a run's steps, and no command of this build runs a step: a step is to start on "
+                + "the first key the slot holds,",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -297,6 +303,41 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The agent-clients topic says what the claude-code client does with a launch - a new session each time, streamed
+    /// both ways, the tools of the one table and the ones never given, every call asked of the engine, the repair, the
+    /// message at work, the handoff, the model held, the environment, a key passed over - its tools and names read from
+    /// the types that hold them.
+    /// </summary>
+    [Fact]
+    public async Task AgentClientsTopic_SaysWhatTheClaudeCodeClientDoesWithALaunch()
+    {
+        var prose = Prose.Words(HelpText.Of("agent-clients").StandardOutput);
+
+        Assert.Contains(
+            "The claude-code client starts Claude Code once for each launch, a new session every time: never resumed and never continued, "
+                + "keeping no session file (one a launch leaves all the same is removed, and said), streamed both ways - the step's prompt is "
+                + "the first message on its input, never an argument -",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "the tools of the agent's capabilities and no other - read: Read, Grep, Glob; write: Write, Edit, NotebookEdit; run: Bash; web: "
+                + "none of Claude Code's - and never Agent, Task, Skill, AskUserQuestion, EnterPlanMode, ExitPlanMode.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("The run's reporter is given Read, Grep, Glob alone.", prose, StringComparison.Ordinal);
+        Assert.Contains("Every call is asked of the engine before it runs and answered from the policy above", prose, StringComparison.Ordinal);
+        Assert.Contains("is sent back, each problem by its path, up to 2 times", prose, StringComparison.Ordinal);
+        Assert.Contains("a handoff asked interrupts the turn and asks the agent for its handoff in the same launch", prose, StringComparison.Ordinal);
+        Assert.Contains("Every message is held to the model asked for, a date after its id the same model", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            "the names the engine sets: DISABLE_COMPACT=1, DISABLE_AUTOUPDATER=1, CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1, CLAUDE_CODE_RETRY_WATCHDOG=0.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("A key Claude Code reports invalid is passed over, and while the step has done no work the next key is given a new launch", prose, StringComparison.Ordinal);
+        Assert.Contains("the claude-code client below asks it of every call, the API clients are what it builds next", prose, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The agent-clients topic's protected-path list is the one the policy holds, word for word: a change in it is a
     /// change someone made, in both places at once or in neither.
     /// </summary>
@@ -330,6 +371,39 @@ public sealed partial class HelpTests
         Assert.Contains("read whole before it is matched, `Agents\\Policy\\CommandAnalysis`", architecture, StringComparison.Ordinal);
         Assert.Contains("no agent starts while the tool itself runs elevated (`IHostPlatform.IsPrivilegedProcess`", architecture, StringComparison.Ordinal);
         Assert.Contains("Where the policy cannot decide a call it denies it, never allows", architecture, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The README and the architecture say the claude-code client and how it signs in as the help does, and the
+    /// architecture names its owners by the types that are them.
+    /// </summary>
+    [Fact]
+    public async Task TheDocumentsSayTheClaudeCodeClient()
+    {
+        var readme = Prose.Document("README.md");
+
+        Assert.Contains("signs in by the client's `auth` (`agentClients.claude-code.auth`): `login`, the machine's login,", readme, StringComparison.Ordinal);
+        Assert.Contains("The `claude-code` client starts Claude Code once for each launch, a new session every time", readme, StringComparison.Ordinal);
+        Assert.Contains("Every call is asked of the engine before it runs and answered from the policy", readme, StringComparison.Ordinal);
+
+        var architecture = Prose.Document("docs", "architecture.md");
+
+        Assert.Contains($"The first client that asks it is `Agents\\ClaudeCode\\{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeCodeClient)}`", architecture, StringComparison.Ordinal);
+
+        foreach (var owner in new[]
+        {
+            nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeLaunch),
+            nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeLine),
+            nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeToolDecider),
+            nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeCodeTools),
+            nameof(DssHarness.Core.Agents.StructuredOutputGate),
+            nameof(DssHarness.Core.Agents.AgentHandoffSignal),
+            nameof(DssHarness.Core.Agents.AgentCredential),
+            nameof(DssHarness.Core.Agents.AgentAuth),
+        })
+        {
+            Assert.Contains($"`{owner}`", architecture, StringComparison.Ordinal);
+        }
     }
 
     /// <summary>

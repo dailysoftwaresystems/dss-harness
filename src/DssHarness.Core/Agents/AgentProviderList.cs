@@ -71,7 +71,8 @@ public sealed record AgentTierListing(string Name, IReadOnlyList<(string Code, s
 
 /// <summary>
 /// One client as the listing holds it: how it signs in, and the names it appoints with whether the slot holds each -
-/// none for a client that signs in with the machine's login, its provider's keys for one that signs each request.
+/// none for a client that signs in with the machine's login, its one token's name for one that signs in with a token,
+/// its provider's keys for one that signs in with a key or signs each request.
 /// </summary>
 /// <param name="Name">The client's name, as its providers name it.</param>
 /// <param name="SignIn">How it signs in, said as the listing says it.</param>

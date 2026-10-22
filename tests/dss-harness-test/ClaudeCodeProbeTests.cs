@@ -467,17 +467,7 @@ public sealed class ClaudeCodeProbeTests
     private sealed record Probe(string Channel, string Claude)
     {
         /// <summary>Where this channel's raw recordings go, in the test tree (git-ignored).</summary>
-        public string Raw(string launch)
-        {
-            var directory = new DirectoryInfo(AppContext.BaseDirectory);
-
-            while (directory is not null && !directory.EnumerateFiles("DssHarness.slnx").Any())
-            {
-                directory = directory.Parent;
-            }
-
-            return Path.Combine(directory!.FullName, "tests", "dss-harness-test", "fixtures", "claude-code", Channel, "raw", launch);
-        }
+        public string Raw(string launch) => ClaudeCodeProbe.Fixtures(Channel, "raw", launch);
     }
 
     /// <summary>What one launch varies of the launch's argument list, settings and environment.</summary>
