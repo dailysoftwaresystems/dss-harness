@@ -1381,7 +1381,8 @@ build calls yet), who may reach the file each name came from is asked by the one
 the host items' files are held to (`ItemEnvironment.Unprotected`): never a file others can change,
 and never one others can read while it holds a secret - a name the configuration appoints as a key,
 not a setting such as the program a client starts. `list-agent-providers` says the same configuration without saying one key: each
-provider, client and tier, every appointed name present or missing, exit 0 whatever is missing;
+provider, client and tier, every appointed key and token present or missing and each setting a
+client reads present or absent (`AgentProviders.SettingsRead`), exit 0 whatever is missing;
 `--template` the sections as `init` writes them, answered before any repository is read - outside
 one, and where the configuration it is printed to repair does not load. The Claude Code the clients will drive is npm's own:
 `NpmClient` finds npm (a program, or on Windows what `npm.cmd` would have started - the tool never
@@ -1454,10 +1455,17 @@ one credential an `AgentCredential` gives), streamed both ways and read line by 
 `ClaudeToolDecider` through the policy, the tools it is given - and what a call of each is of - from
 the one table `ClaudeCodeTools` holds; an answer held to a schema checked by `StructuredOutputGate`
 and sent back while it does not read; a message to an agent at work, a handoff's interrupt and its
-turn (its prompt and its refusal `AgentHandoffSignal`'s, every client's), the
-model each message names, a key reported invalid moved past with a new launch, and a session file
+turn (its prompt and its refusal `AgentHandoffSignal`'s, every client's; the agent asked once every
+message the engine wrote was taken or dropped - each with an id of its own, by which the
+interrupt's receipt names those it dropped), the model each message names, a key reported invalid moved past with a new launch, and a session file
 a launch leaves removed, all in one launch's loop that the stored stream (`AgentRunner`) records as
-it runs. The API clients are the next thing the tool grows. This build checks workflow definitions and
+it runs. The client holds each launch to the protocol in the same loop: the user's settings read
+first by `ClaudeUserSettings` (a credential they would give refuses the run; the file and its
+digest named in the launch's start, the hooks off), the `initialize` answer bounded, the init's
+tools and credential source (`ClaudeLaunch.ApiKeySources`) held to the launch's, and every call
+that ran (`ClaudeLine.CallResult.Ran`) one the engine was asked about and allowed; a decline is
+`Refused` and an account at its limit (`ClaudeLine.RateLimit`, or the turn's error) `RateLimited`
+with an `AgentAccountLimit`. The API clients are the next thing the tool grows. This build checks workflow definitions and
 starts and drives a run of one (see "Running a workflow" below); the step runners - the agents, the
 steps over the services the tool already has - are the next thing the tool grows, and until they land
 each step of a run fails, saying no runner serves its type.

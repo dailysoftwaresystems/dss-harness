@@ -259,8 +259,9 @@ public enum AgentCapability
 /// <param name="Keys">The values it may sign in with, in order; empty for the machine's login.</param>
 /// <param name="Api">The provider's address, which a launch that signs in with a key or a token is sent to; null for the machine's login.</param>
 /// <param name="ConfigDirectory">
-/// The Claude Code directory a launch reads - the slot's <c>CLAUDE_CONFIG_DIR</c>, else the tool's own, else none,
-/// which is Claude Code's default - and where a session file it may leave is looked for.
+/// The Claude Code directory a launch reads - what the slot holds under the name the client's <c>configDir</c> gives
+/// (<c>CLAUDE_CONFIG_DIR</c> where it gives none), else the tool's own, else none, which is Claude Code's default - and
+/// where a session file it may leave is looked for.
 /// </param>
 public sealed record AgentCredential(string Auth, IReadOnlyList<AgentKey> Keys, string? Api = null, string? ConfigDirectory = null);
 
@@ -367,6 +368,9 @@ public sealed record AgentStepRequest(
     /// <summary>The program a client that starts one starts, as the engine found it ready; null for a client that starts none.</summary>
     public string? Program { get; init; }
 
+    /// <summary>The version that program answered when the engine found it ready, as a refusal names it; null where it was not asked.</summary>
+    public string? ProgramVersion { get; init; }
+
     /// <summary>
     /// The names a child the run starts never inherits, whatever the tool's own environment holds: every name the
     /// configuration appoints a value of the slot for, so no other company's key and no token reaches it.
@@ -439,6 +443,9 @@ public sealed record AgentRun(
 
     /// <summary>The program a client that starts one starts, as the engine found it ready; null for a client that starts none.</summary>
     public string? Program { get; init; }
+
+    /// <summary>The version that program answered when the engine found it ready, as a refusal names it; null where it was not asked.</summary>
+    public string? ProgramVersion { get; init; }
 
     /// <summary>The names a child the run starts never inherits: every name the configuration appoints a value of the slot for.</summary>
     public IReadOnlyList<string> Withheld { get; init; } = [];

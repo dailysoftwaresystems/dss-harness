@@ -11,6 +11,7 @@ namespace DssHarness.Core.Agents;
 /// <param name="BalanceKeyUsage">Whether <c>balanceKeyUsage</c> is on: whether the engine, when it runs a run's steps, is to balance each provider's keys by what each spent.</param>
 /// <param name="Tiers">Each tier the configuration defines, with its models in the order they are tried.</param>
 /// <param name="Clients">Each client a provider names, with how it signs in and the names it appoints.</param>
+/// <param name="Settings">Each setting a client reads from the slot, by the name it is read under, with whether the slot holds it.</param>
 /// <param name="Unappointed">The names the slot holds that nothing appoints, in the order their files are read.</param>
 public sealed record AgentProviderList(
     string Slot,
@@ -19,7 +20,15 @@ public sealed record AgentProviderList(
     bool BalanceKeyUsage,
     IReadOnlyList<AgentTierListing> Tiers,
     IReadOnlyList<AgentClientListing> Clients,
+    IReadOnlyList<AgentSettingListing> Settings,
     IReadOnlyList<string> Unappointed);
+
+/// <summary>One setting a client reads from the slot, as the listing holds it: no key, and one the slot need not hold.</summary>
+/// <param name="Client">The client that reads it.</param>
+/// <param name="Key">The entry's key that renames it: <c>executable</c>, <c>configDir</c>.</param>
+/// <param name="Name">The variable it is read under.</param>
+/// <param name="Held">Whether the slot declares it, holding something.</param>
+public sealed record AgentSettingListing(string Client, string Key, string Name, bool Held);
 
 /// <summary>One provider as the listing holds it.</summary>
 /// <param name="Name">The provider's name.</param>

@@ -255,6 +255,64 @@ public sealed class AgentProviderTests
             => AgentProviders.Resolve(Config(clients, [Anthropic()])).Problems;
     }
 
+    /// <summary>
+    /// claude-code's settings are read under the names its entry gives - configDir, executable - or its own where it gives
+    /// none, and appointed by the client as settings, never keys.
+    /// </summary>
+    [Fact]
+    public void ClaudeCodesSettings_AreReadUnderTheNamesItsEntryGives_OrItsOwn()
+    {
+        var anthropic = Anthropic();
+
+        var own = Clients([], [anthropic]);
+        Assert.Equal(("CLAUDE_CONFIG_DIR", "CLAUDE_EXECUTABLE"), (own.SettingOf("claude-code", AgentClientSetting.ConfigDirKey), own.SettingOf("claude-code", AgentClientSetting.ExecutableKey)));
+        Assert.Null(own.SettingOf("glm", AgentClientSetting.ConfigDirKey));
+
+        var named = Clients(new() { ["claude-code"] = new AgentClientConfig { ConfigDir = "WORK_CLAUDE_DIR", Executable = "MY_CLAUDE" } }, [anthropic]);
+        Assert.Equal(("WORK_CLAUDE_DIR", "MY_CLAUDE"), (named.SettingOf("claude-code", AgentClientSetting.ConfigDirKey), named.SettingOf("claude-code", AgentClientSetting.ExecutableKey)));
+        Assert.Contains(
+            new Core.Secrets.AppointedKey("WORK_CLAUDE_DIR", "client 'claude-code'", "the Claude Code directory the claude-code client signs in from and reads the user's settings in", Secret: false),
+            named.Appointed());
+        Assert.Contains(
+            new Core.Secrets.AppointedKey("MY_CLAUDE", "client 'claude-code'", "the program the claude-code client starts in place of npm's Claude Code", Secret: false),
+            named.Appointed());
+        Assert.DoesNotContain(named.Appointed(), key => key.Name is "CLAUDE_CONFIG_DIR" or "CLAUDE_EXECUTABLE");
+    }
+
+    /// <summary>
+    /// configDir and executable are refused where they do not read: on a client that reads no such setting, a name that is
+    /// no variable's, and a name - given or a client's own - appointed twice: beside a provider's key, the client's token
+    /// (the one its entry names or the one Claude Code reads) or its other setting.
+    /// </summary>
+    [Fact]
+    public void ClaudeCodesSettings_AreRefusedWhereTheyDoNotRead()
+    {
+        Exactly(
+            Refused(new() { ["glm"] = new AgentClientConfig { ConfigDir = "WORK_CLAUDE_DIR" } }),
+            "agentClients 'glm' names configDir, a key of the claude-code client alone: the variable that holds the Claude Code directory the claude-code client signs in from and reads the user's settings in");
+        Exactly(
+            Refused(new() { ["claude-code"] = new AgentClientConfig { Executable = "my-claude" } }),
+            "agentClients 'claude-code' executable 'my-claude' is not a variable's name: [A-Z][A-Z0-9_]*, a name and never a value");
+        Exactly(
+            Refused(new() { ["claude-code"] = new AgentClientConfig { ConfigDir = "ANTHROPIC_API_KEY" } }),
+            "agentClients 'claude-code' appoints 'ANTHROPIC_API_KEY' for its configDir and provider 'anthropic' for a key: a name is appointed once");
+        Exactly(
+            Refused(new() { ["claude-code"] = new AgentClientConfig { Auth = AgentAuth.OAuthToken, Token = "GATEWAY", ConfigDir = "GATEWAY" } }),
+            "agentClients 'claude-code' appoints 'GATEWAY' for its token and its configDir: a name is appointed once");
+        Exactly(
+            Refused(new() { ["claude-code"] = new AgentClientConfig { Auth = AgentAuth.OAuthToken, Executable = "CLAUDE_CODE_OAUTH_TOKEN" } }),
+            "agentClients 'claude-code' appoints 'CLAUDE_CODE_OAUTH_TOKEN' for its token and its executable: a name is appointed once");
+        Exactly(
+            Refused(new() { ["claude-code"] = new AgentClientConfig { Executable = "CLAUDE_CONFIG_DIR" } }),
+            "agentClients 'claude-code' appoints 'CLAUDE_CONFIG_DIR' for its executable and its configDir: a name is appointed once");
+        Exactly(
+            AgentProviders.Resolve(Config([], [Anthropic(["CLAUDE_EXECUTABLE"])])).Problems,
+            "agentClients 'claude-code' appoints 'CLAUDE_EXECUTABLE' for its executable and provider 'anthropic' for a key: a name is appointed once");
+
+        static IReadOnlyList<string> Refused(Dictionary<string, AgentClientConfig> clients)
+            => AgentProviders.Resolve(Config(clients, [Anthropic()])).Problems;
+    }
+
     /// <summary>balanceKeyUsage is refused where it is on and a provider with two keys or more lists a model with no price; one key is nothing to balance, and off is never refused.</summary>
     [Fact]
     public void BalanceKeyUsage_IsRefusedWhereASpendCouldNotBeCounted()

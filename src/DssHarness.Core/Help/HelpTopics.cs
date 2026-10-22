@@ -2379,7 +2379,11 @@ public static class HelpTopics
             + $"login, where nothing is said, reading no key at all; {Agents.AgentAuth.ApiKey}, its provider's keys in their order; "
             + $"{Agents.AgentAuth.OAuthToken} or {Agents.AgentAuth.AuthToken}, the token the slot holds under the entry's token "
             + $"({Agents.AgentAuth.TokenVariable(Agents.AgentAuth.OAuthToken)} or {Agents.AgentAuth.TokenVariable(Agents.AgentAuth.AuthToken)} "
-            + "where it names none) - a name and never a token, appointed once beside every provider's keys. A launch is "
+            + "where it names none) - a name and never a token, appointed once beside every provider's keys. Its "
+            + $"{Agents.AgentClientSetting.ConfigDirKey} and {Agents.AgentClientSetting.ExecutableKey} name the variables of the slot that hold a specific login's Claude Code directory and "
+            + $"a program to start in place of npm's ({Orchestration.ClaudeTranscripts.ConfigDirectoryVariable} and {Agents.ClaudeCode.ClaudeCodeUpdateService.ExecutableVariable} where they name none), appointed once "
+            + "the same way and never a key; a launch is to sign in from that directory where the slot holds it, else from the "
+            + $"tool's own {Orchestration.ClaudeTranscripts.ConfigDirectoryVariable}, else from Claude Code's own. A launch is "
             + "given that credential and no other, whatever the tool's own environment holds; claude-api and glm sign each "
             + "request with their provider's keys. Choosing a key is the engine's, when "
             + "it runs a run's steps, and no command of this build runs a step: a step is to start on the first key the slot "
@@ -2403,7 +2407,8 @@ public static class HelpTopics
 
         builder.AppendLine();
         builder.AppendLine($"'{ToolPackage.Command} list-agent-providers' says what your configuration appoints and");
-        builder.AppendLine("whether the slot holds it, present or missing, never a value; 'list-agent-providers");
+        builder.AppendLine("whether the slot holds it - each key and token present or missing, each setting a client");
+        builder.AppendLine("reads present or absent, for none is needed - never a value; 'list-agent-providers");
         builder.AppendLine("--template' prints the agent sections as init writes them into a new config, to paste into");
         builder.AppendLine("an existing one.");
         builder.AppendLine();
@@ -2439,8 +2444,9 @@ public static class HelpTopics
         builder.AppendLine("claude node runs, or a claude whose program the machine will not say, such as another");
         builder.AppendLine("user's on Linux; a claude installed any other way whose program it names does not count,");
         builder.AppendLine("and a process table read by names alone refuses the change), and never a program the slot");
-        builder.AppendLine("names (CLAUDE_EXECUTABLE: a person's own choice, started as named; a slot that cannot give");
-        builder.AppendLine("it is refused, never passed over for npm's).");
+        builder.AppendLine($"names ({Agents.ClaudeCode.ClaudeCodeUpdateService.ExecutableVariable}, or the name agentClients.claude-code.{Agents.AgentClientSetting.ExecutableKey} gives: a");
+        builder.AppendLine("person's own choice, started as named; a slot that cannot give it is refused, never passed");
+        builder.AppendLine("over for npm's).");
         builder.AppendLine("After a change, whether it ran or failed, what npm holds since is said. A client's update");
         builder.AppendLine("key (agentClients.<client>.update, true where nothing is said) and DISABLE_UPDATES in the");
         builder.AppendLine("tool's own environment (a setting of the person's, never a key) turn installing and");
@@ -2547,13 +2553,33 @@ public static class HelpTopics
             + "cannot read, is denied by name. An answer held to a step's schema that does not read is sent back, each "
             + $"problem by its path, up to {output.MaxRepairs} times; a message the engine gives an agent at work is written "
             + "to the same launch, and a result written before the launch took it is not the answer; a handoff asked "
-            + "interrupts the turn and asks the agent for its handoff in the same launch, no tool running in that turn, a "
+            + "interrupts the turn and asks the agent for its handoff in the same launch once every message it was given was "
+            + "taken or dropped, no tool running in that turn, a "
             + "launch that does not take the interrupt ended whole. Every message is held to the model asked for, a date "
             + "after its id the same model: one another model wrote ends the step. Its environment holds nothing of a "
-            + $"Claude Code session this tool was started in ({Agents.ClaudeCode.ClaudeLaunch.SessionVariable} and every {Agents.ClaudeCode.ClaudeLaunch.SessionPrefix} name), no credential but the "
+            + $"Claude Code session this tool was started in ({Agents.ClaudeCode.ClaudeLaunch.SessionVariable} and every {Agents.ClaudeCode.ClaudeLaunch.SessionPrefix} name but "
+            + $"{string.Join(", ", Agents.ClaudeCode.ClaudeLaunch.KeptNames)}, which says only where a program is), no credential but the "
             + $"one its auth gives, and the names the engine sets: {controlled}. A key Claude Code reports invalid is passed "
             + "over, and while the step has done no work the next key is given a new launch with the step's prompt; the "
-            + $"control messages both ways are kept in the step's {Agents.ClaudeCode.ClaudeLaunch.ControlFileName} beside its stored stream.";
+            + $"control messages both ways are kept in the step's {Agents.ClaudeCode.ClaudeLaunch.ControlFileName} beside its stored stream. "
+            + $"Its own settings outrank the user's, which it still reads: the user's {Agents.ClaudeCode.ClaudeUserSettings.FileName} in its Claude Code directory and the "
+            + "user's CLAUDE.md reach every agent on this client, but no hook of theirs runs - every launch's settings say "
+            + "disableAllHooks - and each launch's start names that settings file and its SHA-256 and says the hooks are off. A "
+            + $"settings file that would give a launch a credential ({string.Join(", ", Agents.ClaudeCode.ClaudeLaunch.IdentityNames)} in its env, in any "
+            + $"case, or {Agents.ClaudeCode.ClaudeUserSettings.KeyHelper}) refuses the run before any launch, naming the file: a credential is read from the "
+            + $"slot alone - take it out of that file, or give the client a directory of its own (agentClients.claude-code.{Agents.AgentClientSetting.ConfigDirKey}). "
+            + "The client holds every launch to the protocol itself, so a version on which it does not hold names itself: a "
+            + $"launch that does not answer the host's initialize request within {Agents.ClaudeCode.ClaudeCodeClient.InitializeBound.TotalSeconds:0} s, whose init offers a tool it was not "
+            + "given or names a credential its auth did not give, or that refuses by itself a call the engine allows - as one "
+            + "started without --permission-prompt-tool stdio does - never started; a call it ran that the engine was never asked "
+            + "about, or refused, fails the step by the tool's name (before Claude Code 2.1.303 a call that ran unasked and failed "
+            + "as Claude Code fails a call whose input did not read cannot be told from one, and is not caught); and each is "
+            + "ended at once. A message the engine writes that no turn takes within the step's stall bound - counted from "
+            + "when the launch answered its initialize request, and from the turn's end for one written while a turn ran - ends "
+            + $"it {nameof(Agents.AgentRunStatus.Stalled)}. A request the model declines ends the step "
+            + $"{nameof(Agents.AgentRunStatus.Refused)}, with what it was of where the provider names it, and an account at its limit - a rate limit event "
+            + "that says rejected, or a turn Claude Code ends on rate_limit or billing_error after its own tries - ends it "
+            + $"{nameof(Agents.AgentRunStatus.RateLimited)}, with when the limit lifts where it says; an overloaded service is no limit of the account's.";
     }
 
     /// <summary>
@@ -3534,6 +3560,9 @@ public static class HelpTopics
         builder.AppendLine("                 installs and updates Claude Code with npm; auth, claude-code's");
         builder.AppendLine($"                 alone, how it signs in ({string.Join(", ", Agents.AgentAuth.All)}, {Agents.AgentAuth.Login}");
         builder.AppendLine("                 where nothing is said), and token the variable a token is held under;");
+        builder.AppendLine($"                 {Agents.AgentClientSetting.ConfigDirKey} and {Agents.AgentClientSetting.ExecutableKey}, claude-code's alone, the variables");
+        builder.AppendLine("                 that hold a specific login's Claude Code directory and the program");
+        builder.AppendLine($"                 it starts ({Orchestration.ClaudeTranscripts.ConfigDirectoryVariable}, {Agents.ClaudeCode.ClaudeCodeUpdateService.ExecutableVariable} where none is named);");
         builder.AppendLine("                 a client holds no model, size or price - contextTokens and");
         builder.AppendLine("                 maxOutputTokens are a model's ('help agent-clients')");
         builder.AppendLine("  agentPolicy    what an agent may do beyond the rules built into the tool:");

@@ -31,6 +31,19 @@ public sealed class AgentClientConfig
     /// <c>apiKeyNames</c>.
     /// </summary>
     public string? Token { get; init; }
+
+    /// <summary>
+    /// The name of the slot's variable that holds the Claude Code directory a claude-code client signs in from and reads
+    /// the user's settings in - a specific login's - where it is not the tool's own (claude-code's key;
+    /// <c>CLAUDE_CONFIG_DIR</c> where nothing is said): a name, appointed once beside every key.
+    /// </summary>
+    public string? ConfigDir { get; init; }
+
+    /// <summary>
+    /// The name of the slot's variable that holds the program a claude-code client starts in place of npm's Claude Code
+    /// (claude-code's key; <c>CLAUDE_EXECUTABLE</c> where nothing is said): a name, appointed once beside every key.
+    /// </summary>
+    public string? Executable { get; init; }
 }
 
 /// <summary>

@@ -70,6 +70,12 @@ public sealed class ClaudeCodeUpdateService(
     /// <summary>The name the slot holds a program a person named under.</summary>
     public const string ExecutableVariable = "CLAUDE_EXECUTABLE";
 
+    /// <summary>The name the slot holds the program a person named under, for <paramref name="client"/>: its <c>executable</c>, else <see cref="ExecutableVariable"/>.</summary>
+    /// <param name="client">The configuration's entry for the client; null where it declares none.</param>
+    public static string ExecutableName(AgentClientConfig? client)
+        => AgentProviders.ClientKinds.First(kind => kind.Name == ClaudeCodeClient.ClientName).Settings
+            .First(setting => setting.Key == AgentClientSetting.ExecutableKey).NameIn(client);
+
     /// <summary>The command that installs Claude Code and brings one up to date, as a refusal says it and a person runs it.</summary>
     public static string InstallCommand(string version = Needed)
         => $"npm install -g {ClaudeCodeInstall.PackageId}@{version}";
@@ -138,13 +144,15 @@ public sealed class ClaudeCodeUpdateService(
                 return Refused(HarnessExit.ConfigInvalid, broken);
             }
 
-            if (present.Holds(ExecutableVariable))
+            var executable = ExecutableName(client);
+
+            if (present.Holds(executable))
             {
-                var named = _keys.Value(layout, appointed, ExecutableVariable);
+                var named = _keys.Value(layout, appointed, executable);
 
                 return named is { Problem: null, Value: { Length: > 0 } namedProgram }
-                    ? await NamedAsync(namedProgram, cancellationToken).ConfigureAwait(false)
-                    : Refused(HarnessExit.ConfigInvalid, named.Problem ?? $"the slot declares {ExecutableVariable} and gave no value for it");
+                    ? await NamedAsync(namedProgram, executable, cancellationToken).ConfigureAwait(false)
+                    : Refused(HarnessExit.ConfigInvalid, named.Problem ?? $"the slot declares {executable} and gave no value for it");
             }
         }
 
@@ -350,7 +358,7 @@ public sealed class ClaudeCodeUpdateService(
     }
 
     /// <summary>A program a person named: read for what it is, and refused where it is not one this tool can start.</summary>
-    private async Task<ClaudeCodeAnswer> NamedAsync(string program, CancellationToken cancellationToken)
+    private async Task<ClaudeCodeAnswer> NamedAsync(string program, string executable, CancellationToken cancellationToken)
     {
         if (IsBatch(program))
         {
@@ -366,7 +374,7 @@ public sealed class ClaudeCodeUpdateService(
             return Refused(
                 HarnessExit.ToolMissing,
                 $"'{program}', the program the slot names, would not answer its --version: {answered.Problem}. "
-                + $"Update it by hand, or take {ExecutableVariable} out of the slot");
+                + $"Update it by hand, or take {executable} out of the slot");
         }
 
         return AtLeast(version, NeededVersion)
@@ -374,7 +382,7 @@ public sealed class ClaudeCodeUpdateService(
             : Refused(
                 HarnessExit.ToolMissing,
                 $"'{program}' is claude {version}, older than this tool needs ({Needed}), and a program a person named is never updated. "
-                + $"Update it by hand, or take {ExecutableVariable} out of the slot");
+                + $"Update it by hand, or take {executable} out of the slot");
     }
 
     /// <summary>

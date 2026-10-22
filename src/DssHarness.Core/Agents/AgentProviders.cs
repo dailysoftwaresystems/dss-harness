@@ -15,13 +15,43 @@ namespace DssHarness.Core.Agents;
 /// Whether it signs in, by its entry's <c>auth</c> - <c>claude-code</c>, the machine's login unless its entry says
 /// otherwise - rather than signing each request with its provider's key, as an API client does.
 /// </param>
-/// <param name="Settings">The names of the slot it reads that hold no key - a setting, such as the program it starts - each with what its value is.</param>
+/// <param name="Settings">The names of the slot it reads that hold no key - a setting, such as the program it starts - each by the entry's key that renames it.</param>
 public sealed record AgentClientKind(
     string Name,
     string ProviderType,
     IReadOnlyList<string> Efforts,
     bool SignsIn,
-    IReadOnlyList<(string Name, string What)> Settings);
+    IReadOnlyList<AgentClientSetting> Settings);
+
+/// <summary>
+/// A setting a client reads from the slot - a value that is no key, such as the program it starts - under the name its
+/// entry's key gives, or its own where the entry says none.
+/// </summary>
+/// <param name="Key">The entry's key that names the slot's variable: <c>executable</c>, <c>configDir</c>.</param>
+/// <param name="DefaultName">The variable read where the entry names none.</param>
+/// <param name="What">What its value is, as a refusal and the slot's checks say it.</param>
+public sealed record AgentClientSetting(string Key, string DefaultName, string What)
+{
+    /// <summary>The program a claude-code client starts in place of npm's Claude Code.</summary>
+    public const string ExecutableKey = "executable";
+
+    /// <summary>The Claude Code directory a claude-code client signs in from and reads the user's settings in.</summary>
+    public const string ConfigDirKey = "configDir";
+
+    /// <summary>The variable this setting is read under for <paramref name="entry"/>: the name its key gives, else the default.</summary>
+    /// <param name="entry">The client's entry; null where the configuration declares none.</param>
+    public string NameIn(AgentClientConfig? entry) => Named(entry) ?? DefaultName;
+
+    /// <summary>The name <paramref name="entry"/>'s key gives this setting; null where it gives none.</summary>
+    /// <param name="entry">The client's entry; null where the configuration declares none.</param>
+    public string? Named(AgentClientConfig? entry)
+        => Key switch
+        {
+            ExecutableKey => entry?.Executable,
+            ConfigDirKey => entry?.ConfigDir,
+            _ => throw new InvalidOperationException($"'{Key}' is no setting key of a client."),
+        };
+}
 
 /// <summary>
 /// How a client that signs in does (<c>agentClients.&lt;client&gt;.auth</c>), and the one place each way is named: the
@@ -57,6 +87,16 @@ public static class AgentAuth
             AuthToken => "ANTHROPIC_AUTH_TOKEN",
             _ => null,
         };
+
+    /// <summary>How a client that signs in this way signs in, as the listing and a refusal say it.</summary>
+    /// <param name="auth">The way it signs in.</param>
+    public static string Described(string auth)
+        => auth switch
+        {
+            Login => "the machine's login",
+            ApiKey => "a key of its provider's apiKeyNames",
+            _ => $"the token of auth: {auth}",
+        };
 }
 
 /// <summary>
@@ -76,7 +116,10 @@ public sealed partial class AgentProviders
             "anthropic",
             ["low", "medium", "high", "xhigh", "max"],
             SignsIn: true,
-            [(ClaudeCode.ClaudeCodeUpdateService.ExecutableVariable, "the program the claude-code client starts in place of npm's Claude Code")]),
+            [
+                new(AgentClientSetting.ExecutableKey, ClaudeCode.ClaudeCodeUpdateService.ExecutableVariable, "the program the claude-code client starts in place of npm's Claude Code"),
+                new(AgentClientSetting.ConfigDirKey, Orchestration.ClaudeTranscripts.ConfigDirectoryVariable, "the Claude Code directory the claude-code client signs in from and reads the user's settings in"),
+            ]),
         new("claude-api", "anthropic", ["low", "medium", "high", "xhigh", "max"], SignsIn: false, []),
         new("glm", "zai", ["low", "high", "max"], SignsIn: false, []),
     ];
@@ -208,7 +251,8 @@ public sealed partial class AgentProviders
             problems.Add($"agentClients '{client}' names update, a key of the claude-code client alone: whether the tool installs Claude Code with npm and brings one up to date");
         }
 
-        AuthRules(config, providers, problems);
+        AuthRules(config, problems);
+        AppointedNameRules(config, providers, problems);
 
         foreach (var (provider, at) in providers.Select((entry, at) => (entry, at)))
         {
@@ -296,10 +340,10 @@ public sealed partial class AgentProviders
 
     /// <summary>
     /// How each client that signs in does: <c>auth</c> and <c>token</c> are keys of such a client alone - an API client
-    /// signs each request with its provider's key - <c>auth</c> one of its ways, <c>token</c> read only by a way that
-    /// reads one, a variable's name, and appointed once beside every provider's keys, for a name holds one value.
+    /// signs each request with its provider's key - <c>auth</c> one of its ways, and <c>token</c> read only by a way that
+    /// reads one, and a variable's name. That it is appointed once is <see cref="AppointedNameRules"/>'.
     /// </summary>
-    private static void AuthRules(HarnessConfig config, List<AgentProviderConfig> providers, List<string> problems)
+    private static void AuthRules(HarnessConfig config, List<string> problems)
     {
         foreach (var (client, entry) in config.AgentClients)
         {
@@ -330,12 +374,92 @@ public sealed partial class AgentProviders
             {
                 problems.Add($"agentClients '{client}' token '{token}' is not a variable's name: {Secrets.AgentKeyStore.VariableNameShape}, a name and never a token");
             }
-            else if (providers.FirstOrDefault(provider => provider.ApiKeyNames.Contains(token, StringComparer.Ordinal)) is { } provider)
+        }
+    }
+
+    /// <summary>
+    /// The names a client appoints in the slot - its token, where it signs in with one, and each setting it reads - each by
+    /// the name its entry gives or its own where it gives none, and each appointed once, beside every provider's keys and
+    /// the client's other names, for a name holds one value. A setting's key is one of the client that reads it alone,
+    /// and the name it gives is a variable's name.
+    /// </summary>
+    private static void AppointedNameRules(HarnessConfig config, List<AgentProviderConfig> providers, List<string> problems)
+    {
+        var keys = ClientKinds.SelectMany(kind => kind.Settings).Select(setting => setting.Key).Distinct(StringComparer.Ordinal).ToList();
+        var clients = config.AgentClients.Keys.Concat(Served(providers).Select(kind => kind.Name)).Distinct(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var client in clients)
+        {
+            var entry = config.AgentClients.GetValueOrDefault(client);
+            var kind = KindOf(client);
+
+            foreach (var key in keys.Where(key => kind?.Settings.Any(own => own.Key == key) is not true))
             {
-                problems.Add($"agentClients '{client}' appoints '{token}' for its token and provider '{provider.Name}' for a key: a name is appointed once");
+                var owner = ClientKinds.First(other => other.Settings.Any(own => own.Key == key));
+                var setting = owner.Settings.First(own => own.Key == key);
+
+                if (setting.Named(entry) is not null)
+                {
+                    problems.Add($"agentClients '{client}' names {key}, a key of the {owner.Name} client alone: the variable that holds {setting.What}");
+                }
+            }
+
+            if (kind is null)
+            {
+                continue;
+            }
+
+            var names = new List<(string For, string Name)>();
+
+            // The token a way of signing in reads, by the entry's name or Claude Code's; one the auth rules refuse is theirs to say.
+            if (kind.SignsIn && AgentAuth.TokenVariable(entry?.Auth ?? AgentAuth.Login) is { } read && (entry?.Token ?? read) is var token && Secrets.AgentKeyStore.IsVariableName(token))
+            {
+                names.Add(("token", token));
+            }
+
+            foreach (var setting in kind.Settings)
+            {
+                if (setting.Named(entry) is { } named && !Secrets.AgentKeyStore.IsVariableName(named))
+                {
+                    problems.Add($"agentClients '{client}' {setting.Key} '{named}' is not a variable's name: {Secrets.AgentKeyStore.VariableNameShape}, a name and never a value");
+                    continue;
+                }
+
+                names.Add((setting.Key, setting.NameIn(entry)));
+            }
+
+            for (var at = 0; at < names.Count; at++)
+            {
+                var (@for, name) = names[at];
+
+                if (providers.FirstOrDefault(provider => provider.ApiKeyNames.Contains(name, StringComparer.Ordinal)) is { } provider)
+                {
+                    problems.Add($"agentClients '{client}' appoints '{name}' for its {@for} and provider '{provider.Name}' for a key: a name is appointed once");
+                }
+                else if (names.Take(at).FirstOrDefault(other => other.Name == name) is { For: { } first })
+                {
+                    problems.Add($"agentClients '{client}' appoints '{name}' for its {first} and its {@for}: a name is appointed once");
+                }
             }
         }
     }
+
+    /// <summary>
+    /// Every setting the clients that serve the configuration's providers read from the slot, each by the name it is read
+    /// under: the one rule of which settings are appointed, which the listing says and the slot is checked against.
+    /// </summary>
+    public IReadOnlyList<(string Client, AgentClientSetting Setting, string Name)> SettingsRead()
+        => [.. Served(Config.Providers).SelectMany(kind => kind.Settings.Select(setting => (kind.Name, setting, setting.NameIn(Config.AgentClients.GetValueOrDefault(kind.Name)))))];
+
+    /// <summary>The client kinds that serve a provider of <paramref name="providers"/>: those reaching its type.</summary>
+    private static IEnumerable<AgentClientKind> Served(IEnumerable<AgentProviderConfig> providers)
+        => ClientKinds.Where(kind => providers.Any(provider => string.Equals(provider.Type, kind.ProviderType, StringComparison.Ordinal)));
+
+    /// <summary>The name the slot holds <paramref name="client"/>'s setting <paramref name="key"/> under: its entry's, else the setting's own.</summary>
+    /// <param name="client">The client's name.</param>
+    /// <param name="key">The setting's key: <see cref="AgentClientSetting.ExecutableKey"/>, <see cref="AgentClientSetting.ConfigDirKey"/>.</param>
+    public string? SettingOf(string client, string key)
+        => KindOf(client)?.Settings.FirstOrDefault(setting => setting.Key == key)?.NameIn(Config.AgentClients.GetValueOrDefault(client));
 
     /// <summary>
     /// balanceKeyUsage balances a provider's keys by what each spent, so a model with no price could not be counted:
@@ -425,9 +549,10 @@ public sealed partial class AgentProviders
             appointed.AddRange(provider.ApiKeyNames.Select(name => new Secrets.AppointedKey(name, $"provider '{provider.Name}'", Secrets.AgentKeyStore.WhatHolds(provider))));
         }
 
-        foreach (var kind in ClientKinds.Where(kind => Config.Providers.Any(provider => string.Equals(provider.Type, kind.ProviderType, StringComparison.Ordinal))))
+        foreach (var kind in Served(Config.Providers))
         {
-            appointed.AddRange(kind.Settings.Select(setting => new Secrets.AppointedKey(setting.Name, $"client '{kind.Name}'", setting.What, Secret: false)));
+            appointed.AddRange(SettingsRead().Where(read => read.Client == kind.Name).Select(read => new Secrets.AppointedKey(
+                read.Name, $"client '{kind.Name}'", read.Setting.What, Secret: false)));
 
             if (TokenOf(kind.Name) is { } token)
             {

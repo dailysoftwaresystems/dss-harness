@@ -17,7 +17,6 @@ public sealed class ClaudeLineTests
         ("system", "thinking_tokens"),
         ("system", "task_summary"),
         ("system", "model_fallback"),
-        ("rate_limit_event", null),
     ];
 
     public static TheoryData<string> Channels => ["oldest", "stable", "latest"];
@@ -84,6 +83,12 @@ public sealed class ClaudeLineTests
                         Assert.Equal(("system", "permission_denied"), (type, subtype));
                         Assert.False(string.IsNullOrEmpty(refusal.Tool));
                         break;
+                    case ClaudeLine.RateLimit limit:
+                        Assert.Equal("rate_limit_event", type);
+                        Assert.Equal("allowed", limit.Status);
+                        Assert.NotNull(limit.ResetsAt);
+                        Assert.False(string.IsNullOrEmpty(limit.Window));
+                        break;
                     case ClaudeLine.Other other:
                         Assert.Contains((other.Type, other.Subtype), PassedBy);
                         break;
@@ -127,6 +132,15 @@ public sealed class ClaudeLineTests
         }
 
         Assert.True(answered > 0 && asked > 0, $"{channel}: {answered} results, {asked} asks");
+
+        // Whether a call ran is read from what Claude Code stamps beside its result: every call the host allowed ran,
+        // every one it refused or could not decide did not, on every version.
+        var stamped = lines.OfType<ClaudeLine.User>()
+            .SelectMany(user => user.Results.Select(result => (Result: result, Meta: (user.Node["tool_result_meta"] as JsonArray)?.SingleOrDefault(meta => meta?["id"]?.GetValue<string>() == result.CallId))))
+            .ToList();
+        Assert.All(stamped, pair => Assert.Equal(pair.Meta?["non_execution_kind"] is null && (pair.Result.Ok || pair.Meta?["permission_decision"] is not null || !pair.Result.Content.StartsWith(ClaudeLine.InputErrorMark, StringComparison.Ordinal)), pair.Result.Ran));
+        Assert.Contains(stamped, pair => pair.Result.Ran);
+        Assert.Contains(stamped, pair => !pair.Result.Ran);
         Assert.Contains(lines, line => line is ClaudeLine.User { Replay: true });
         Assert.Contains(lines, line => line is ClaudeLine.User { Results: [{ Ok: false }, ..] });
     }
@@ -151,21 +165,39 @@ public sealed class ClaudeLineTests
 
         Assert.Equal((ClaudeLine.Synthetic, "authentication_failed", (string?)null), (refused.Model, refused.Error, refused.Thinking));
         Assert.Null(refused.Usage);
+        Assert.Equal(((string?)null, (string?)null), (refused.StopReason, refused.Category));
+
+        var declined = Assert.IsType<ClaudeLine.Assistant>(ClaudeLine.Read(
+            """{"type":"assistant","message":{"model":"claude-sonnet-5-5","content":[],"stop_reason":"refusal","stop_details":{"type":"refusal","category":"cyber"}}}"""));
+
+        Assert.Equal(("refusal", "cyber"), (declined.StopReason, declined.Category));
     }
 
-    /// <summary>A user message reads as an echo or not, its text, and each call's result with whether it ran.</summary>
+    /// <summary>
+    /// A user message reads as an echo or not, its text, and each call's result with whether it succeeded and whether its
+    /// tool ran: one stamped with why it did not run did not, one that failed with Claude Code's input error failed on its
+    /// input before anything was asked, and any other ran - a failure after its permission was decided, under that mark or
+    /// not, and a failure a version that stamps nothing wrote, included.
+    /// </summary>
     [Fact]
     public void AUserMessage_ReadsItsEchoAndItsResults()
     {
-        var echo = Assert.IsType<ClaudeLine.User>(ClaudeLine.Read("""{"type":"user","message":{"content":"go"},"isReplay":true}"""));
+        var echo = Assert.IsType<ClaudeLine.User>(ClaudeLine.Read("""{"type":"user","message":{"content":"go"},"uuid":"u1","isReplay":true}"""));
         Assert.Equal((true, "go"), (echo.Replay, echo.Text));
 
         var results = Assert.IsType<ClaudeLine.User>(ClaudeLine.Read(
-            """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"},{"type":"tool_result","tool_use_id":"toolu_2","is_error":true,"content":[{"type":"text","text":"no"},{"type":"text","text":"pe"}]}]}}"""));
+            """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"},{"type":"tool_result","tool_use_id":"toolu_2","is_error":true,"content":[{"type":"text","text":"no"},{"type":"text","text":"pe"}]},{"type":"tool_result","tool_use_id":"toolu_3","is_error":true,"content":"exit 1"},{"type":"tool_result","tool_use_id":"toolu_4","is_error":true,"content":"denied"},{"type":"tool_result","tool_use_id":"toolu_5","is_error":true,"content":"<tool_use_error>InputValidationError: no path</tool_use_error>"},{"type":"tool_result","tool_use_id":"toolu_6","is_error":true,"content":"<tool_use_error>File does not exist.</tool_use_error>"}]},"tool_result_meta":[{"id":"toolu_3","permission_decision":{"decision":"accept","source":"user_temporary"}},{"id":"toolu_4","non_execution_kind":"permission-rule","permission_decision":{"decision":"reject","source":"user_reject"}},{"id":"toolu_6","permission_decision":{"decision":"accept","source":"config"}}]}"""));
 
         Assert.False(results.Replay);
         Assert.Equal(
-            [new ClaudeLine.CallResult("toolu_1", true, "ok"), new ClaudeLine.CallResult("toolu_2", false, "nope")],
+            [
+                new ClaudeLine.CallResult("toolu_1", true, "ok", Ran: true),
+                new ClaudeLine.CallResult("toolu_2", false, "nope", Ran: true),
+                new ClaudeLine.CallResult("toolu_3", false, "exit 1", Ran: true),
+                new ClaudeLine.CallResult("toolu_4", false, "denied", Ran: false),
+                new ClaudeLine.CallResult("toolu_5", false, "<tool_use_error>InputValidationError: no path</tool_use_error>", Ran: false),
+                new ClaudeLine.CallResult("toolu_6", false, "<tool_use_error>File does not exist.</tool_use_error>", Ran: true),
+            ],
             results.Results);
     }
 
@@ -193,6 +225,9 @@ public sealed class ClaudeLineTests
         Assert.Equal(("call", 2, "Read"), Piece("""{"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"toolu_9","name":"Read"}}"""));
         Assert.Equal(("start", (int?)null, "claude-sonnet-5-5"), Piece("""{"type":"message_start","message":{"model":"claude-sonnet-5-5"}}"""));
         Assert.Equal(("message_stop", (int?)null, (string?)null), Piece("""{"type":"message_stop"}"""));
+        Assert.Equal(("stop", (int?)null, "end_turn"), Piece("""{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_details":null}}"""));
+        Assert.Equal(("stop", (int?)null, "refusal:cyber"), Piece("""{"type":"message_delta","delta":{"stop_reason":"refusal","stop_details":{"type":"refusal","category":"cyber"}}}"""));
+        Assert.Equal(("message_delta", (int?)null, (string?)null), Piece("""{"type":"message_delta","delta":{}}"""));
 
         static (string, int?, string?) Piece(string @event)
         {
@@ -213,6 +248,10 @@ public sealed class ClaudeLineTests
         var failed = Assert.IsType<ClaudeLine.ControlResponse>(ClaudeLine.Read("""{"type":"control_response","response":{"subtype":"error","request_id":"r2","error":"no"}}"""));
         Assert.Equal(("r2", false, "no"), (failed.RequestId, failed.Succeeded, failed.Error));
 
+        var receipt = Assert.IsType<ClaudeLine.ControlResponse>(ClaudeLine.Read(
+            """{"type":"control_response","response":{"subtype":"success","request_id":"interrupt","response":{"still_queued":[],"cancelled":["u2","u3"]}}}"""));
+        Assert.Equal(["u2", "u3"], receipt.Cancelled);
+
         Assert.Equal("r3", Assert.IsType<ClaudeLine.ControlCancel>(ClaudeLine.Read("""{"type":"control_cancel_request","request_id":"r3"}""")).RequestId);
     }
 
@@ -225,6 +264,21 @@ public sealed class ClaudeLineTests
 
         var refusal = Assert.IsType<ClaudeLine.Refusal>(ClaudeLine.Read("""{"type":"system","subtype":"permission_denied","tool_name":"Write","tool_use_id":"toolu_4","message":"denied"}"""));
         Assert.Equal(("Write", "toolu_4", "denied"), (refusal.Tool, refusal.CallId, refusal.Message));
+    }
+
+    /// <summary>
+    /// A rate limit event reads where the account stands, when the allowance resets, which allowance it is and why it was
+    /// rejected; members it does not hold read as nothing.
+    /// </summary>
+    [Fact]
+    public void ARateLimitEvent_ReadsWhereTheAccountStands()
+    {
+        var rejected = Assert.IsType<ClaudeLine.RateLimit>(ClaudeLine.Read(
+            """{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1792422600,"rateLimitType":"seven_day","errorCode":"credits_required"}}"""));
+        Assert.Equal(("rejected", (DateTimeOffset?)DateTimeOffset.FromUnixTimeSeconds(1792422600), "seven_day", "credits_required"), (rejected.Status, rejected.ResetsAt, rejected.Window, rejected.ErrorCode));
+
+        var bare = Assert.IsType<ClaudeLine.RateLimit>(ClaudeLine.Read("""{"type":"rate_limit_event"}"""));
+        Assert.Equal((string.Empty, (DateTimeOffset?)null, (string?)null, (string?)null), (bare.Status, bare.ResetsAt, bare.Window, bare.ErrorCode));
     }
 
     /// <summary>A line that is no JSON object reads as nothing, and the client passes it by.</summary>

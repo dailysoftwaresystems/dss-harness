@@ -315,6 +315,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             Capabilities = step.Capabilities,
             Credential = step.Credential,
             Program = step.Program,
+            ProgramVersion = step.ProgramVersion,
             Withheld = step.Withheld,
         };
 

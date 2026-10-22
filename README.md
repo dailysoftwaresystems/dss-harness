@@ -471,8 +471,9 @@ entry says what it takes, holds and costs, with the date its numbers were read. 
 are `apiKeyNames`, the names of the variables that hold them in the git-ignored slot
 `.harness-config/workflows/.env/`, in the order they are tried; a second key of one company is a
 second name in the list, and no key is read from the process environment - a CI machine writes the
-file. `list-agent-providers` says it all without saying one key: each provider, client and tier, and
-for every appointed name `present` or `missing`, exit 0 whatever is missing; `--template` prints
+file. `list-agent-providers` says it all without saying one key: each provider, client and tier,
+for every appointed key and token `present` or `missing`, and for each setting a client reads from
+the slot `present` or `absent` (none is needed), exit 0 whatever is missing; `--template` prints
 the agent sections as `init` writes them into a new config, to paste into an existing one - outside
 a repository too, and where the configuration it is to repair does not load. A name
 declared in two of the slot's files is refused as the runner's value directories refuse one, a line
@@ -488,7 +489,10 @@ signs in by the client's `auth` (`agentClients.claude-code.auth`): `login`, the 
 where nothing is said, reading no key; `apiKey`, the provider's keys in their order; `oauthToken`
 or `authToken`, the token the slot holds under the entry's `token` (`CLAUDE_CODE_OAUTH_TOKEN` or
 `ANTHROPIC_AUTH_TOKEN` where it names none) - a name and never a token, appointed once beside
-every provider's keys. The credential slots - the runner's two
+every provider's keys. Its `configDir` and `executable` name the variables of the slot that hold a
+specific login's Claude Code directory and a program to start in place of npm's
+(`CLAUDE_CONFIG_DIR` and `CLAUDE_EXECUTABLE` where they name none), appointed once the same way and
+never a key. The credential slots - the runner's two
 value directories and this one among them - are never handed to an agent, seeded from the main tree
 or folded back into it, whatever git or the ignore block says.
 
@@ -508,7 +512,8 @@ same never-stopped, read-back sequence `update-tool` has: after a change that fa
 one that ran, it says what npm holds since.
 This build has that step and its refusals; the engine's step runner, which takes it before a run's
 first step that needs Claude Code, is still to come, so no command of this build installs or
-updates Claude Code yet. A program the slot names (`CLAUDE_EXECUTABLE`) is a person's own choice:
+updates Claude Code yet. A program the slot names (`CLAUDE_EXECUTABLE`, or the name the client's
+`executable` gives) is a person's own choice:
 started as named and never installed or updated, and a slot that cannot give it is refused, never
 passed over for npm's. A client's `update` key (`agentClients.<client>.update`, true by default)
 and `DISABLE_UPDATES` in the tool's own environment turn installing and updating off, and a run
@@ -578,7 +583,20 @@ asked interrupts the turn and asks the agent for its handoff, no tool running in
 message is held to the model asked for; the launch's environment holds nothing of a Claude Code
 session the tool was started in and no credential but the one its `auth` gives; and a key Claude
 Code reports invalid is passed over, the next key given a new launch while the step has done no
-work. `help agent-clients` says it whole.
+work. The user's own `settings.json` in the launch's Claude Code directory and the user's
+`CLAUDE.md` reach every agent on this client, but no hook of theirs runs: every launch's settings
+say `disableAllHooks`, and each launch's start names that settings file and its SHA-256 and says
+the hooks are off. A settings file that would give a launch a credential - `ANTHROPIC_API_KEY`,
+`ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_BASE_URL` in its `env`, or
+`apiKeyHelper` - refuses the run before any launch, naming the file; take it out, or give the
+client a directory of its own (`agentClients.claude-code.configDir`). The client holds every
+launch to the protocol itself: one that does not answer the host's `initialize` request within
+30 s, whose init offers a tool it was not given or names a credential its `auth` did not give, or
+that refuses by itself a call the engine allows never started; a call it ran that the engine was
+never asked about, or refused, fails the step by the tool's name; each is ended at once. A message
+no turn takes within the stall bound stalls the step; a declined request ends it `Refused`, and
+an account at its limit `RateLimited`, with when the limit lifts where Claude Code says.
+`help agent-clients` says it whole.
 
 ```bash
 dssharness validate-workflow                 # check every declared workflow

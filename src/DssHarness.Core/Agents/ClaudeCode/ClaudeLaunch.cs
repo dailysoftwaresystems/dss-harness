@@ -47,6 +47,13 @@ public static class ClaudeLaunch
     /// <summary>What every name of Claude Code's own begins with, a session's among them.</summary>
     public const string SessionPrefix = "CLAUDE_CODE_";
 
+    /// <summary>
+    /// The names of Claude Code's own a child keeps from the tool's environment: each says where a program Claude Code
+    /// starts is - Git's bash on Windows, which a machine without Git on its PATH names - and nothing of who the launch
+    /// is, what it may do or what it runs as. Every other is a session's, and is not inherited.
+    /// </summary>
+    public static IReadOnlyList<string> KeptNames { get; } = ["CLAUDE_CODE_GIT_BASH_PATH"];
+
     /// <summary>The variable a key a launch signs in with is given under.</summary>
     public const string KeyVariable = "ANTHROPIC_API_KEY";
 
@@ -65,6 +72,21 @@ public static class ClaudeLaunch
         AgentAuth.TokenVariable(AgentAuth.OAuthToken)!,
         AddressVariable,
     ];
+
+    /// <summary>
+    /// What <c>system/init</c>'s <c>apiKeySource</c> says of a launch that signed in this way: under the machine's login
+    /// <c>none</c> (a subscription's sign-in) or <c>/login managed key</c> (a Console login's key); with a key
+    /// <c>ANTHROPIC_API_KEY</c>; with a token <c>none</c>, since Claude Code names no key for a bearer token. Any other is
+    /// a credential the launch was not given, which the client's check refuses.
+    /// </summary>
+    /// <param name="auth">The way the launch signs in.</param>
+    public static IReadOnlyList<string> ApiKeySources(string auth)
+        => auth switch
+        {
+            AgentAuth.ApiKey => [KeyVariable],
+            AgentAuth.OAuthToken or AgentAuth.AuthToken => ["none"],
+            _ => ["none", "/login managed key"],
+        };
 
     /// <summary>The argument list of one launch, whole.</summary>
     /// <param name="run">The run.</param>
@@ -154,7 +176,7 @@ public static class ClaudeLaunch
         var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
 
         // A host session's own names would outrank the launch's settings, the probe found: none of them is inherited.
-        foreach (var name in own.Where(name => name == SessionVariable || name.StartsWith(SessionPrefix, StringComparison.Ordinal)))
+        foreach (var name in own.Where(name => name == SessionVariable || (name.StartsWith(SessionPrefix, StringComparison.Ordinal) && !KeptNames.Contains(name, StringComparer.Ordinal))))
         {
             environment[name] = null;
         }

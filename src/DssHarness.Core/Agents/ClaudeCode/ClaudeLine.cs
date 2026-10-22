@@ -29,6 +29,8 @@ public abstract record ClaudeLine(JsonObject Node)
     /// <param name="Calls">Each call it made, with its input.</param>
     /// <param name="Error">The failure Claude Code wrote it for (<c>authentication_failed</c>, <c>rate_limit</c>, ...); null for the model's own message.</param>
     /// <param name="Usage">What it used, where it says.</param>
+    /// <param name="StopReason">Why the model stopped writing it, where it says: <c>refusal</c> for a message it declined.</param>
+    /// <param name="Category">What a decline was of, where the provider names it.</param>
     public sealed record Assistant(
         JsonObject Node,
         string? Model,
@@ -36,7 +38,9 @@ public abstract record ClaudeLine(JsonObject Node)
         string? Thinking,
         IReadOnlyList<Call> Calls,
         string? Error,
-        AgentUsage? Usage) : ClaudeLine(Node);
+        AgentUsage? Usage,
+        string? StopReason = null,
+        string? Category = null) : ClaudeLine(Node);
 
     /// <summary>A user message in the stream: one the launch took from its input, echoed, or the results of the calls it ran.</summary>
     /// <param name="Node">The line.</param>
@@ -47,9 +51,9 @@ public abstract record ClaudeLine(JsonObject Node)
 
     /// <summary>A piece of a message being written (<c>stream_event</c>), as the deltas a front end shows.</summary>
     /// <param name="Node">The line.</param>
-    /// <param name="Kind">What it is: <c>text</c>, <c>thinking</c>, <c>call</c> (a call's start), <c>input</c> (a piece of a call's input), <c>start</c> (a message's start), or the event's own type for any other.</param>
+    /// <param name="Kind">What it is: <c>text</c>, <c>thinking</c>, <c>call</c> (a call's start), <c>input</c> (a piece of a call's input), <c>start</c> (a message's start), <c>stop</c> (why a message stopped), or the event's own type for any other.</param>
     /// <param name="Index">The content block it is of, where it names one.</param>
-    /// <param name="Text">What it adds: the text, the thinking, the input's piece; the tool's name for a call's start; the model for a message's start.</param>
+    /// <param name="Text">What it adds: the text, the thinking, the input's piece; the tool's name for a call's start; the model for a message's start; the stop reason for a message's stop, its category after it where the provider names one (<c>refusal:cyber</c>).</param>
     /// <param name="CallId">The call's id, for a call's start.</param>
     public sealed record Piece(JsonObject Node, string Kind, int? Index, string? Text, string? CallId) : ClaudeLine(Node);
 
@@ -92,7 +96,11 @@ public abstract record ClaudeLine(JsonObject Node)
     /// <param name="RequestId">The request it answers.</param>
     /// <param name="Succeeded">Whether it says success.</param>
     /// <param name="Error">What it says went wrong, where it did.</param>
-    public sealed record ControlResponse(JsonObject Node, string RequestId, bool Succeeded, string? Error) : ClaudeLine(Node);
+    /// <param name="Cancelled">
+    /// The ids of the waiting messages an interrupt's receipt says it dropped: none of them is taken. A message is named
+    /// by the id the host gave it, and one given none is never named.
+    /// </param>
+    public sealed record ControlResponse(JsonObject Node, string RequestId, bool Succeeded, string? Error, IReadOnlyList<string>? Cancelled = null) : ClaudeLine(Node);
 
     /// <summary>The launch withdraws a control request it made: no answer is wanted any more.</summary>
     /// <param name="Node">The line.</param>
@@ -114,7 +122,18 @@ public abstract record ClaudeLine(JsonObject Node)
     /// <param name="Message">What it said.</param>
     public sealed record Refusal(JsonObject Node, string? Tool, string? CallId, string Message) : ClaudeLine(Node);
 
-    /// <summary>Anything else the stream holds - a status, a rate limit's state, the thinking's count - which the client passes by.</summary>
+    /// <summary>
+    /// <c>rate_limit_event</c>: where the account stands with its allowances. <c>rejected</c> is an account at its limit -
+    /// an allowance used up, or with <c>errorCode: credits_required</c> its included usage spent.
+    /// </summary>
+    /// <param name="Node">The line.</param>
+    /// <param name="Status">Where it stands: <c>allowed</c>, <c>allowed_warning</c>, <c>rejected</c>.</param>
+    /// <param name="ResetsAt">When the allowance resets, where the event says.</param>
+    /// <param name="Window">Which allowance it is of (<c>five_hour</c>, <c>seven_day</c>, ...), where it says.</param>
+    /// <param name="ErrorCode">Why it was rejected, where it says: <c>credits_required</c> for included usage spent.</param>
+    public sealed record RateLimit(JsonObject Node, string Status, DateTimeOffset? ResetsAt, string? Window, string? ErrorCode) : ClaudeLine(Node);
+
+    /// <summary>Anything else the stream holds - a status, the thinking's count - which the client passes by.</summary>
     /// <param name="Node">The line.</param>
     /// <param name="Type">Its type.</param>
     /// <param name="Subtype">Its subtype, where it has one.</param>
@@ -131,9 +150,20 @@ public abstract record ClaudeLine(JsonObject Node)
 
     /// <summary>The result of one call, as the launch gave it back to the model.</summary>
     /// <param name="CallId">The call's id.</param>
-    /// <param name="Ok">Whether it ran: false for a refusal and for a failure alike.</param>
+    /// <param name="Ok">Whether it succeeded: false for a refusal and for a failure alike.</param>
     /// <param name="Content">What it returned, as text.</param>
-    public sealed record CallResult(string CallId, bool Ok, string Content);
+    /// <param name="Ran">
+    /// Whether the tool ran, failed or not. Every version taken stamps a result whose tool did not run with its
+    /// <c>non_execution_kind</c> (a refusal; a call the interrupt cut while it was asked, <c>user-rejected</c>, as 2.1.296
+    /// was seen to on 2026-10-22); 2.1.303 also stamps a permission decision on every call whose
+    /// permission was asked, run or not. A call that failed before that - its input did not read - carries Claude Code's
+    /// <see cref="InputErrorMark"/>, and did not run; any other ran. Before 2.1.303 a call that ran and failed with that
+    /// mark reads as one refused on its input: nothing beside the result tells them apart.
+    /// </param>
+    public sealed record CallResult(string CallId, bool Ok, string Content, bool Ran = true);
+
+    /// <summary>What a result Claude Code wrote for a call refused before it ran - an input that did not read - begins with.</summary>
+    public const string InputErrorMark = "<tool_use_error>";
 
     /// <summary>Reads one line; null where it is no JSON object, which the stream never writes and a client passes by.</summary>
     /// <param name="line">The line as the launch wrote it.</param>
@@ -180,8 +210,10 @@ public abstract record ClaudeLine(JsonObject Node)
                 node,
                 TextOf(node["response"]?["request_id"]) ?? string.Empty,
                 TextOf(node["response"]?["subtype"]) == "success",
-                TextOf(node["response"]?["error"])),
+                TextOf(node["response"]?["error"]),
+                [.. (node["response"]?["response"]?["cancelled"] as JsonArray ?? []).Select(TextOf).OfType<string>()]),
             ("control_cancel_request", _) => new ControlCancel(node, TextOf(node["request_id"]) ?? string.Empty),
+            ("rate_limit_event", _) => RateLimitOf(node),
             _ => new Other(node, type, subtype),
         };
     }
@@ -237,7 +269,21 @@ public abstract record ClaudeLine(JsonObject Node)
             thinking.Count == 0 ? null : string.Concat(thinking),
             calls,
             TextOf(node["error"]),
-            message?["usage"] is JsonObject usage ? UsageOf(usage) : null);
+            message?["usage"] is JsonObject usage ? UsageOf(usage) : null,
+            TextOf(message?["stop_reason"]),
+            TextOf(message?["stop_details"]?["category"]));
+    }
+
+    private static RateLimit RateLimitOf(JsonObject node)
+    {
+        var info = node["rate_limit_info"];
+
+        return new RateLimit(
+            node,
+            TextOf(info?["status"]) ?? string.Empty,
+            info?["resetsAt"] is JsonValue resets && resets.TryGetValue<long>(out var seconds) ? DateTimeOffset.FromUnixTimeSeconds(seconds) : null,
+            TextOf(info?["rateLimitType"]),
+            TextOf(info?["errorCode"]));
     }
 
     private static User UserOf(JsonObject node)
@@ -258,10 +304,16 @@ public abstract record ClaudeLine(JsonObject Node)
                         parts.Add(TextOf(block["text"]) ?? string.Empty);
                         break;
                     case "tool_result":
+                        var id = TextOf(block["tool_use_id"]) ?? string.Empty;
+                        var ok = block["is_error"] is not JsonValue error || !error.TryGetValue<bool>(out var failed) || !failed;
+                        var meta = (node["tool_result_meta"] as JsonArray ?? []).OfType<JsonObject>().FirstOrDefault(entry => TextOf(entry["id"]) == id);
+                        var said = ResultText(block["content"]);
+
                         results.Add(new CallResult(
-                            TextOf(block["tool_use_id"]) ?? string.Empty,
-                            block["is_error"] is not JsonValue error || !error.TryGetValue<bool>(out var failed) || !failed,
-                            ResultText(block["content"])));
+                            id,
+                            ok,
+                            said,
+                            meta?["non_execution_kind"] is null && (ok || meta?["permission_decision"] is not null || !said.StartsWith(InputErrorMark, StringComparison.Ordinal))));
                         break;
                 }
             }
@@ -290,6 +342,8 @@ public abstract record ClaudeLine(JsonObject Node)
             "content_block_start" when TextOf(@event?["content_block"]?["type"]) == "tool_use"
                 => new Piece(node, "call", index, TextOf(@event?["content_block"]?["name"]), TextOf(@event?["content_block"]?["id"])),
             "message_start" => new Piece(node, "start", index, TextOf(@event?["message"]?["model"]), null),
+            "message_delta" when TextOf(@event?["delta"]?["stop_reason"]) is { } stop
+                => new Piece(node, "stop", index, TextOf(@event?["delta"]?["stop_details"]?["category"]) is { } category ? $"{stop}:{category}" : stop, null),
             _ => new Piece(node, kind, index, null, null),
         };
     }

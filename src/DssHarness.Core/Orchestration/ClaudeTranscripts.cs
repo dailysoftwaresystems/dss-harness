@@ -39,9 +39,15 @@ public sealed class ClaudeTranscripts(IFileSystem fileSystem, IHostPlatform plat
     private readonly IHostPlatform _platform = platform;
     private readonly Func<string, string?> _environment = environment ?? Environment.GetEnvironmentVariable;
 
+    /// <summary>
+    /// Claude Code's directory on this machine, for this user: <c>CLAUDE_CONFIG_DIR</c> where it is set, else
+    /// <c>.claude</c> in the home directory - where its login, the user's settings and its projects are.
+    /// </summary>
+    public string ConfigDirectory
+        => _environment(ConfigDirectoryVariable) is { Length: > 0 } configured ? configured : Path.Combine(_platform.HomeDirectory, ".claude");
+
     /// <summary>Where Claude Code keeps its projects' transcripts on this machine, for this user.</summary>
-    public string ProjectsDirectory
-        => Path.Combine(_environment(ConfigDirectoryVariable) is { Length: > 0 } configured ? configured : Path.Combine(_platform.HomeDirectory, ".claude"), "projects");
+    public string ProjectsDirectory => Path.Combine(ConfigDirectory, "projects");
 
     /// <summary>Every transcript of <paramref name="session"/>: a session's, in any project, and a subagent's, under any session.</summary>
     /// <param name="session">A session's id, or a subagent's.</param>

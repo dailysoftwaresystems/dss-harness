@@ -31,6 +31,7 @@ public sealed class AgentProviderServiceTests
                 "tier balanced: Claude Sonnet 5.5 (claude-sonnet-5-5), GLM 5.3 (glm-5.3)",
                 "tier fast:     Claude Haiku 5.5 (claude-haiku-5-5), GLM 5.3 (glm-5.3)",
                 "client 'claude-code' signs in with the machine's login and reads no key",
+                "client 'claude-code' reads its settings where the slot holds them, none needed: CLAUDE_EXECUTABLE (executable), absent, CLAUDE_CONFIG_DIR (configDir), absent",
                 "keys are read from .harness-config/workflows/.env/ (1 file) and from nowhere else",
             ],
             outcome.Details);
@@ -54,6 +55,32 @@ public sealed class AgentProviderServiceTests
         Assert.Equal(
             ["declared in the slot and appointed by nothing: ZAI_APIKEY"],
             outcome.Details!.Where(line => line.StartsWith("declared in the slot", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// A setting the claude-code client reads under the name its entry gives is appointed by that name, and the client's
+    /// own name for it, which it then does not read, is one the slot holds that nothing appoints.
+    /// </summary>
+    [Fact]
+    public async Task ASettingRenamedByItsEntry_IsAppointedByThatName_AndItsOwnNameNoMore()
+    {
+        using var repository = await RepositoryAsync();
+        var file = Path.Combine(repository.Tree.Path, ".harness-config", "config.json");
+        var config = JsonNode.Parse(File.ReadAllText(file))!.AsObject();
+        config["agentClients"] = new JsonObject { ["claude-code"] = new JsonObject { ["configDir"] = "WORK_CLAUDE_DIR" } };
+        File.WriteAllText(file, config.ToJsonString(DssHarness.Core.Output.ReportJson.Options));
+        repository.Tree.WriteFile(".harness-config/workflows/.env/keys.env", "WORK_CLAUDE_DIR=/home/dev/.claude-work\nCLAUDE_CONFIG_DIR=/home/dev/.claude\nCLAUDE_EXECUTABLE=/opt/claude/bin/claude\n");
+        var service = Service(repository.Harness);
+
+        var outcome = await service.ListAsync(repository.Tree.Path, template: false, json: false, TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, outcome.ExitCode);
+        Assert.Equal(
+            ["declared in the slot and appointed by nothing: CLAUDE_CONFIG_DIR"],
+            outcome.Details!.Where(line => line.StartsWith("declared in the slot", StringComparison.Ordinal)));
+        Assert.Contains(
+            "client 'claude-code' reads its settings where the slot holds them, none needed: CLAUDE_EXECUTABLE (executable), present, WORK_CLAUDE_DIR (configDir), present",
+            outcome.Details!);
     }
 
     /// <summary>
@@ -138,6 +165,9 @@ public sealed class AgentProviderServiceTests
         Assert.Equal(["best", "high", "balanced", "fast"], document["tiers"]!.AsArray().Select(tier => (string?)tier!["name"]));
         Assert.Equal("claude-code", (string?)document["clients"]![0]!["name"]);
         Assert.Equal("the machine's login", (string?)document["clients"]![0]!["signIn"]);
+        Assert.Equal(
+            ["claude-code executable CLAUDE_EXECUTABLE false", "claude-code configDir CLAUDE_CONFIG_DIR false"],
+            document["settings"]!.AsArray().Select(setting => $"{setting!["client"]} {setting["key"]} {setting["name"]} {setting["held"]}"));
 
         // The record the document answers for holds names and whether the slot holds them - never a value, so no
         // member anywhere in it could carry one.

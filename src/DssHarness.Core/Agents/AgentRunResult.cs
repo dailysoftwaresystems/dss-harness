@@ -106,6 +106,14 @@ public sealed record AgentModelUsage(string Model, AgentUsage Usage);
 /// <param name="Cost">What it cost, and where each number is from; null where nothing has said or counted it.</param>
 public sealed record AgentUsageReport(AgentUsage Total, IReadOnlyList<AgentModelUsage> PerModel, AgentCost? Cost = null);
 
+/// <summary>
+/// An account at its limit: what a request is billed to - a provider's key, or a client's login - has no more to give
+/// for now, as the provider said it.
+/// </summary>
+/// <param name="BalanceSpent">Whether what is spent is its balance or its included usage, which time alone does not give back.</param>
+/// <param name="Lifts">When the limit lifts, where the provider says; null where it does not.</param>
+public sealed record AgentAccountLimit(bool BalanceSpent, DateTimeOffset? Lifts = null);
+
 /// <summary>The agent's answer to the handoff turn, or why there is none.</summary>
 /// <param name="Answer">The answer, masked; null where the agent gave none.</param>
 /// <param name="WhyNone">Why there is none; null where it answered.</param>
@@ -180,6 +188,15 @@ public sealed record AgentRunResult(
     /// by the session id the client chose, and nothing else; empty where none was left.
     /// </summary>
     public IReadOnlyList<string> SessionFilesRemoved { get; init; } = [];
+
+    /// <summary>
+    /// The account's limit, where the run ended on one (<see cref="AgentRunStatus.RateLimited"/>): whether its balance or
+    /// included usage is spent, and when it lifts where the provider says. Null for every other ending.
+    /// </summary>
+    public AgentAccountLimit? Limit { get; init; }
+
+    /// <summary>What a declined request was of, where the run ended <see cref="AgentRunStatus.Refused"/> and the provider names it.</summary>
+    public string? DeclinedFor { get; init; }
 
     /// <summary>
     /// The exit code the run command answers for a step whose agent asked the person and produced no output: its own

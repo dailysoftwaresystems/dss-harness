@@ -164,7 +164,9 @@ public sealed partial class HelpTests
         Assert.Contains(
             "agentClients the clients the tool builds in (claude-code, claude-api, glm), each by its name: update, claude-code's alone, says "
                 + "whether the tool installs and updates Claude Code with npm; auth, claude-code's alone, how it signs in (login, apiKey, "
-                + "oauthToken, authToken, login where nothing is said), and token the variable a token is held under; a client holds no "
+                + "oauthToken, authToken, login where nothing is said), and token the variable a token is held under; configDir and "
+                + "executable, claude-code's alone, the variables that hold a specific login's Claude Code directory and the program it "
+                + "starts (CLAUDE_CONFIG_DIR, CLAUDE_EXECUTABLE where none is named); a client holds no "
                 + "model, size or price - contextTokens and maxOutputTokens are a model's ('help agent-clients')",
             config,
             StringComparison.Ordinal);
@@ -200,7 +202,11 @@ public sealed partial class HelpTests
             "claude-code signs in by its entry's auth (agentClients.claude-code.auth, one of login, apiKey, oauthToken, authToken): login, "
                 + "the machine's login, where nothing is said, reading no key at all; apiKey, its provider's keys in their order; oauthToken or "
                 + "authToken, the token the slot holds under the entry's token (CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_AUTH_TOKEN where it names "
-                + "none) - a name and never a token, appointed once beside every provider's keys. A launch is given that credential and no "
+                + "none) - a name and never a token, appointed once beside every provider's keys. Its configDir and executable name the "
+                + "variables of the slot that hold a specific login's Claude Code directory and a program to start in place of npm's "
+                + "(CLAUDE_CONFIG_DIR and CLAUDE_EXECUTABLE where they name none), appointed once the same way and never a key; a launch is "
+                + "to sign in from that directory where the slot holds it, else from the tool's own CLAUDE_CONFIG_DIR, else from Claude "
+                + "Code's own. A launch is given that credential and no "
                 + "other, whatever the tool's own environment holds; claude-api and glm sign each request with their provider's keys. "
                 + "Choosing a key is the engine's, when it runs a run's steps, and no command of this build runs a step: a step is to start on "
                 + "the first key the slot holds,",
@@ -329,12 +335,42 @@ public sealed partial class HelpTests
         Assert.Contains("is sent back, each problem by its path, up to 2 times", prose, StringComparison.Ordinal);
         Assert.Contains("a handoff asked interrupts the turn and asks the agent for its handoff in the same launch", prose, StringComparison.Ordinal);
         Assert.Contains("Every message is held to the model asked for, a date after its id the same model", prose, StringComparison.Ordinal);
+        Assert.Contains("(CLAUDECODE and every CLAUDE_CODE_ name but CLAUDE_CODE_GIT_BASH_PATH, which says only where a program is)", prose, StringComparison.Ordinal);
         Assert.Contains(
             "the names the engine sets: DISABLE_COMPACT=1, DISABLE_AUTOUPDATER=1, CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1, CLAUDE_CODE_RETRY_WATCHDOG=0.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains("A key Claude Code reports invalid is passed over, and while the step has done no work the next key is given a new launch", prose, StringComparison.Ordinal);
         Assert.Contains("the claude-code client below asks it of every call, the API clients are what it builds next", prose, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The agent-clients topic says what the claude-code client holds a launch to: the user's settings and CLAUDE.md read
+    /// and their hooks off, a credential those settings would give refused by the file and the directory key, the checks
+    /// of the protocol that name a version where it does not hold, the stall, a decline and an account at its limit - its
+    /// names and its bound read from the types that hold them.
+    /// </summary>
+    [Fact]
+    public async Task AgentClientsTopic_SaysWhatTheClaudeCodeClientHoldsALaunchTo()
+    {
+        var prose = Prose.Words(HelpText.Of("agent-clients").StandardOutput);
+
+        Assert.Contains(
+            "the user's settings.json in its Claude Code directory and the user's CLAUDE.md reach every agent on this client, but no hook of theirs runs - every launch's settings say disableAllHooks -",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("each launch's start names that settings file and its SHA-256 and says the hooks are off", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            "(ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_BASE_URL in its env, in any case, or apiKeyHelper) refuses the run before any launch",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("give the client a directory of its own (agentClients.claude-code.configDir)", prose, StringComparison.Ordinal);
+        Assert.Contains("a launch that does not answer the host's initialize request within 30 s", prose, StringComparison.Ordinal);
+        Assert.Contains("a call it ran that the engine was never asked about, or refused, fails the step by the tool's name", prose, StringComparison.Ordinal);
+        Assert.Contains("within the step's stall bound - counted from when the launch answered its initialize request, and from the turn's end for one written while a turn ran - ends it Stalled", prose, StringComparison.Ordinal);
+        Assert.Contains("A request the model declines ends the step Refused", prose, StringComparison.Ordinal);
+        Assert.Contains("ends it RateLimited, with when the limit lifts where it says", prose, StringComparison.Ordinal);
+        Assert.Contains("CLAUDE_EXECUTABLE, or the name agentClients.claude-code.executable gives", prose, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -385,6 +421,11 @@ public sealed partial class HelpTests
         Assert.Contains("signs in by the client's `auth` (`agentClients.claude-code.auth`): `login`, the machine's login,", readme, StringComparison.Ordinal);
         Assert.Contains("The `claude-code` client starts Claude Code once for each launch, a new session every time", readme, StringComparison.Ordinal);
         Assert.Contains("Every call is asked of the engine before it runs and answered from the policy", readme, StringComparison.Ordinal);
+        Assert.Contains("but no hook of theirs runs: every launch's settings say `disableAllHooks`", readme, StringComparison.Ordinal);
+        Assert.Contains("The client holds every launch to the protocol itself", readme, StringComparison.Ordinal);
+        Assert.Contains("Its `configDir` and `executable` name the variables of the slot that hold a specific login's Claude Code directory", readme, StringComparison.Ordinal);
+        Assert.Contains("A program the slot names (`CLAUDE_EXECUTABLE`, or the name the client's `executable` gives)", readme, StringComparison.Ordinal);
+        Assert.Contains("and for each setting a client reads from the slot `present` or `absent` (none is needed)", readme, StringComparison.Ordinal);
 
         var architecture = Prose.Document("docs", "architecture.md");
 
@@ -400,6 +441,8 @@ public sealed partial class HelpTests
             nameof(DssHarness.Core.Agents.AgentHandoffSignal),
             nameof(DssHarness.Core.Agents.AgentCredential),
             nameof(DssHarness.Core.Agents.AgentAuth),
+            nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeUserSettings),
+            nameof(DssHarness.Core.Agents.AgentAccountLimit),
         })
         {
             Assert.Contains($"`{owner}`", architecture, StringComparison.Ordinal);

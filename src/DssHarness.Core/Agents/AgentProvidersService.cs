@@ -123,11 +123,11 @@ public sealed class AgentProvidersService(
 
             if (auth == AgentAuth.Login)
             {
-                clients.Add(new AgentClientListing(client, "the machine's login", []));
+                clients.Add(new AgentClientListing(client, AgentAuth.Described(auth), []));
             }
             else if (auth is not null && resolved.TokenOf(client) is { } token)
             {
-                clients.Add(new AgentClientListing(client, $"the token of auth: {auth}", [new AgentKeyListing(token, Holds(token))]));
+                clients.Add(new AgentClientListing(client, AgentAuth.Described(auth), [new AgentKeyListing(token, Holds(token))]));
             }
             else if (auth == AgentAuth.ApiKey || client == "claude-api")
             {
@@ -148,6 +148,7 @@ public sealed class AgentProvidersService(
             config.BalanceKeyUsage is true,
             tiers,
             clients,
+            [.. resolved.SettingsRead().Select(read => new AgentSettingListing(read.Client, read.Setting.Key, read.Name, Holds(read.Name)))],
             [.. present.Names.Where(name => !appointed.Any(key => string.Equals(key.Name, name, StringComparison.OrdinalIgnoreCase)))]);
     }
 }

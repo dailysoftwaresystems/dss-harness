@@ -171,6 +171,7 @@ public sealed record AgentQuestion(string Text, IReadOnlyList<string> Choices, s
 /// <param name="ApiKeySource">Claude Code: the credential source its <c>system/init</c> named.</param>
 /// <param name="SettingsFile">Claude Code: the user's settings file the launch read.</param>
 /// <param name="SettingsDigest">Claude Code: the digest of that file.</param>
+/// <param name="Hooks">Claude Code: whether the user's hooks run in the launch - <c>off</c> in every launch this tool makes.</param>
 public sealed record SessionStarted(
     string Client,
     string Model,
@@ -185,7 +186,8 @@ public sealed record SessionStarted(
     AgentCredentialSource? Credential = null,
     string? ApiKeySource = null,
     string? SettingsFile = null,
-    string? SettingsDigest = null) : AgentEvent;
+    string? SettingsDigest = null,
+    string? Hooks = null) : AgentEvent;
 
 /// <summary>A message the engine gave the agent, whole: which of them it is beside it.</summary>
 /// <param name="Text">The message.</param>

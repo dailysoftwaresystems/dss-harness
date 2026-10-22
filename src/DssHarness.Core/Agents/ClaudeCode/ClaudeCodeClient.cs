@@ -54,11 +54,20 @@ public sealed class ClaudeCodeClient(
     /// <summary>How long a launch whose input was closed has to end before it is ended whole.</summary>
     public static readonly TimeSpan EndBound = TimeSpan.FromSeconds(5);
 
+    /// <summary>How long a launch has to answer the host's <c>initialize</c> request before it is ended, never started.</summary>
+    public static readonly TimeSpan InitializeBound = TimeSpan.FromSeconds(30);
+
+    /// <summary>The id of the host's <c>initialize</c> request, which its answer names.</summary>
+    public const string InitializeId = "initialize";
+
     /// <summary>
     /// The largest result a call's event carries whole; a larger one is kept whole in a file beside the stream, and its
     /// event carries its first quarter and its last three quarters of this, with what was left out between them.
     /// </summary>
     public const int ResultCap = 32 * 1024;
+
+    /// <summary>The stop reason of a message the model declined to write.</summary>
+    private const string Declined = "refusal";
 
     private static readonly UTF8Encoding Utf8 = new(encoderShouldEmitUTF8Identifier: false);
 
@@ -122,13 +131,22 @@ public sealed class ClaudeCodeClient(
             return NotStarted(AgentNotStartedBecause.KeyMissing, $"the launch signs in with auth: {run.Credential!.Auth}, and the slot holds no value for it", run);
         }
 
+        // The user's settings are read by every launch: one that would give it a credential refuses the run before any
+        // launch, and the file and its digest are what each launch's record names.
+        var settings = ClaudeUserSettings.Read(_fileSystem, Transcripts(run).ConfigDirectory, run.Credential?.Auth ?? AgentAuth.Login);
+
+        if (settings.Refusal is { } refusal)
+        {
+            return NotStarted(AgentNotStartedBecause.ProgramMissing, refusal, run);
+        }
+
         var totals = new Totals();
         var tools = ClaudeCodeTools.Of(run.Capabilities, ground.ReporterRoot is not null);
         var policy = new AgentPolicy(_fileSystem, _platform, ground);
 
         for (var entry = 0; ; entry++)
         {
-            var launch = new Launch(this, run, model, program, events, policy, tools, keys[entry], totals);
+            var launch = new Launch(this, run, model, program, events, policy, tools, keys[entry], settings, totals);
             var outcome = await launch.RunAsync(cancellationToken).ConfigureAwait(false);
 
             if (outcome.KeyRefused && keys[entry] is { } refused)
@@ -172,6 +190,15 @@ public sealed class ClaudeCodeClient(
             SessionFilesRemoved = [.. totals.Removed],
         };
 
+    /// <summary>Claude Code's directory and transcripts as a launch of <paramref name="run"/> reads them: its credential's directory, else the tool's own.</summary>
+    private ClaudeTranscripts Transcripts(AgentRun run)
+        => new(
+            _fileSystem,
+            _platform,
+            name => name == ClaudeTranscripts.ConfigDirectoryVariable && run.Credential?.ConfigDirectory is { Length: > 0 } directory
+                ? directory
+                : _environment().GetValueOrDefault(name));
+
     /// <summary>The tool's own environment, as the process holds it.</summary>
     private static IReadOnlyDictionary<string, string> OwnEnvironment()
         => System.Environment.GetEnvironmentVariables()
@@ -194,6 +221,9 @@ public sealed class ClaudeCodeClient(
 
         public bool Worked { get; set; }
 
+        /// <summary>Whether the run did anything that stands: a call ran, or a turn ended.</summary>
+        public bool Acted { get; set; }
+
         public string? Session { get; set; }
 
         public decimal? Cost { get; set; }
@@ -209,8 +239,12 @@ public sealed class ClaudeCodeClient(
         public List<string> Removed { get; } = [];
     }
 
-    /// <summary>How one launch ended: its result, and whether the key it signed in with was refused.</summary>
-    private sealed record LaunchOutcome(AgentRunResult Result, bool KeyRefused = false);
+    /// <summary>
+    /// How one launch ended: its result, whether the key it signed in with was refused, and whether the child is ended at
+    /// once - a launch that did what it was never let do, that the engine is not the host of, or that stalled is given no
+    /// bound to end in by itself.
+    /// </summary>
+    private sealed record LaunchOutcome(AgentRunResult Result, bool KeyRefused = false, bool KillNow = false);
 
     /// <summary>What reaches a launch's one loop, in the order it reached it.</summary>
     private abstract record Arrival
@@ -224,6 +258,12 @@ public sealed class ClaudeCodeClient(
         public sealed record Posted(string Text) : Arrival;
 
         public sealed record Bound(string Why, Handing While) : Arrival;
+
+        /// <summary>The initialize request's bound passed.</summary>
+        public sealed record Uninitialized : Arrival;
+
+        /// <summary>The stall bound of a message the launch had not taken, counted from when <paramref name="Taken"/> messages were taken.</summary>
+        public sealed record Untaken(int Taken) : Arrival;
     }
 
     /// <summary>Where a launch stands with the handoff.</summary>
@@ -244,19 +284,35 @@ public sealed class ClaudeCodeClient(
         AgentPolicy policy,
         IReadOnlyList<string> tools,
         AgentKey? key,
+        ClaudeUserSettings.Reading settings,
         Totals totals)
     {
         private readonly Channel<Arrival> _arrivals = Channel.CreateUnbounded<Arrival>(new UnboundedChannelOptions { SingleReader = true });
         private readonly Channel<string> _input = Channel.CreateUnbounded<string>(new UnboundedChannelOptions { SingleReader = true });
-        private readonly Dictionary<string, (string Tool, string Input, long Started)> _calls = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, (string Tool, string Input, JsonNode? Asked, long Started)> _calls = new(StringComparer.Ordinal);
         private readonly Dictionary<int, string> _callAt = [];
+
+        // Every call the engine was asked about, by its id, with whether it allowed it.
+        private readonly Dictionary<string, bool> _decided = new(StringComparer.Ordinal);
+
+        // Every request of the launch's the engine answered, by its id.
+        private readonly HashSet<string> _answered = new(StringComparer.Ordinal);
         private readonly string _session = Guid.NewGuid().ToString("D");
+        private readonly string _auth = run.Credential?.Auth ?? AgentAuth.Login;
 
         private AppendLog? _control;
         private AppendLog? _denials;
         private bool _started;
+        private bool _initialized;
+        private string? _version = run.ProgramVersion;
         private bool _inTurn;
-        private int _unechoed;
+
+        // The ids of the messages written that no turn has taken yet, in the order they were written.
+        private readonly List<string> _pending = [];
+        private int _taken;
+        private string? _declined;
+        private AgentAccountLimit? _limit;
+        private DateTimeOffset? _resets;
         private int _repairs;
         private int _handoffAnswers;
         private Handing _handing;
@@ -314,7 +370,7 @@ public sealed class ClaudeCodeClient(
             Control(new JsonObject
             {
                 ["type"] = "control_request",
-                ["request_id"] = "initialize",
+                ["request_id"] = InitializeId,
                 ["request"] = new JsonObject { ["subtype"] = "initialize" },
             });
             await SayAsync(UserPrompt(), AgentMessageKind.FirstPrompt).ConfigureAwait(false);
@@ -331,6 +387,7 @@ public sealed class ClaudeCodeClient(
                 TaskContinuationOptions.OnlyOnRanToCompletion | TaskContinuationOptions.ExecuteSynchronously,
                 TaskScheduler.Default);
             var posting = PostAsync(ending.Token);
+            After(InitializeBound, new Arrival.Uninitialized());
 
             try
             {
@@ -339,6 +396,16 @@ public sealed class ClaudeCodeClient(
                 if (outcome.Result.Handoff is { } handoff)
                 {
                     await Emit(new HandoffAnswered(handoff.Answer is not null, handoff.WhyNone)).ConfigureAwait(false);
+                }
+                else if (_handing != Handing.No)
+                {
+                    // A launch that ended another way while it was asked for its handoff answered none, and says so.
+                    await Emit(new HandoffAnswered(false, outcome.Result.Error ?? $"the launch ended {outcome.Result.Status}")).ConfigureAwait(false);
+                }
+
+                if (outcome.KillNow)
+                {
+                    await ending.CancelAsync().ConfigureAwait(false);
                 }
 
                 await EndAsync(process, ending).ConfigureAwait(false);
@@ -371,6 +438,12 @@ public sealed class ClaudeCodeClient(
                     Arrival.HandoffAsked asked => await OnHandoffAskedAsync(asked.Asked).ConfigureAwait(false),
                     Arrival.Posted posted => await OnPostedAsync(posted.Text).ConfigureAwait(false),
                     Arrival.Bound bound => Bounded(bound),
+                    Arrival.Uninitialized => _initialized
+                        ? null
+                        : NotHost($"{Claude} did not answer the host's initialize request: this tool runs Claude Code only as its host"),
+                    Arrival.Untaken untaken => untaken.Taken == _taken && _pending.Count > 0 && !_inTurn
+                        ? Ends(Failed(AgentRunStatus.Stalled, $"Claude Code did not take the engine's message within {run.Limits.StallSeconds} s ({Claude})"), killNow: true)
+                        : null,
                     _ => null,
                 };
 
@@ -389,8 +462,7 @@ public sealed class ClaudeCodeClient(
                     return await OnInitAsync(init).ConfigureAwait(false);
 
                 case ClaudeLine.User user:
-                    await OnUserAsync(user).ConfigureAwait(false);
-                    return null;
+                    return await OnUserAsync(user).ConfigureAwait(false);
 
                 case ClaudeLine.Piece piece:
                     await OnPieceAsync(piece).ConfigureAwait(false);
@@ -404,18 +476,23 @@ public sealed class ClaudeCodeClient(
                     await OnControlRequestAsync(asked).ConfigureAwait(false);
                     return null;
 
+                case ClaudeLine.ControlResponse answered when _answered.Contains(answered.RequestId):
+                    // The launch writes back each answer the engine gave it: kept once, as the engine wrote it.
+                    return null;
+
                 case ClaudeLine.ControlResponse answered:
                     Record(answered.Node);
-                    return OnControlResponse(answered);
+                    return await OnControlResponseAsync(answered).ConfigureAwait(false);
 
                 case ClaudeLine.ControlCancel cancelled:
                     Record(cancelled.Node);
                     return null;
 
                 case ClaudeLine.Refusal refusal:
-                    totals.Denials++;
-                    await Emit(new PermissionDenied(refusal.Tool ?? string.Empty, string.Empty, string.Empty, AgentPermissionSource.ClaudeCode, Masked(refusal.Message))).ConfigureAwait(false);
-                    return null;
+                    return await OnRefusalAsync(refusal).ConfigureAwait(false);
+
+                case ClaudeLine.RateLimit limit:
+                    return OnRateLimit(limit);
 
                 case ClaudeLine.Retry retry:
                     await Emit(new WaitingToRetry(Masked(retry.Cause), retry.Attempt, retry.Of, retry.Delay, client._clock.GetUtcNow() + retry.Delay)).ConfigureAwait(false);
@@ -432,6 +509,25 @@ public sealed class ClaudeCodeClient(
         private async Task<LaunchOutcome?> OnInitAsync(ClaudeLine.Init init)
         {
             var named = init.Model ?? model;
+            _version = init.Version ?? _version;
+
+            // What the launch runs as is held at every turn's init: no tool it was not given, and no credential but the
+            // one its way of signing in gave.
+            var given = run.Output is null ? tools : [.. tools, ClaudeCodeTools.StructuredOutput];
+
+            if (init.Tools.FirstOrDefault(tool => !given.Contains(tool, StringComparer.Ordinal)) is { } offered)
+            {
+                return NotHost(ClaudeCodeTools.NeverOffered.Contains(offered, StringComparer.Ordinal)
+                    ? $"{Claude} offered the tool '{offered}', which this tool never gives an agent"
+                    : $"{Claude} offered the tool '{offered}', which this launch was not given");
+            }
+
+            var sources = ClaudeLaunch.ApiKeySources(_auth);
+
+            if (init.ApiKeySource is { } source && !sources.Contains(source, StringComparer.Ordinal))
+            {
+                return NotHost($"{Claude} signed in by '{source}', and this launch signs in with {AgentAuth.Described(_auth)}, which Claude Code names '{string.Join("' or '", sources)}'");
+            }
 
             if (!_started)
             {
@@ -452,26 +548,37 @@ public sealed class ClaudeCodeClient(
                     Effort: run.Effort,
                     SessionId: _session,
                     Credential: key is null ? new AgentCredentialSource(AgentCredentialSource.Login) : new AgentCredentialSource(AgentCredentialSource.EnvironmentFile, key.Name),
-                    ApiKeySource: init.ApiKeySource)).ConfigureAwait(false);
+                    ApiKeySource: init.ApiKeySource,
+                    SettingsFile: settings.File,
+                    SettingsDigest: settings.Digest,
+                    Hooks: ClaudeUserSettings.HooksOff)).ConfigureAwait(false);
             }
 
             return Served(named, "its launch");
         }
 
-        private async Task OnUserAsync(ClaudeLine.User user)
+        private async Task<LaunchOutcome?> OnUserAsync(ClaudeLine.User user)
         {
             if (user.Replay)
             {
-                _unechoed = Math.Max(0, _unechoed - 1);
+                // Messages are taken in the order they were written: the echo is of the oldest still waiting.
+                if (_pending.Count > 0)
+                {
+                    _pending.RemoveAt(0);
+                }
+
+                _taken++;
 
                 if (!_inTurn)
                 {
                     _inTurn = true;
+                    _declined = null;
+                    _limit = null;
                     totals.Turns++;
                     await Emit(new TurnStarted(totals.Turns)).ConfigureAwait(false);
                 }
 
-                return;
+                return null;
             }
 
             foreach (var result in user.Results)
@@ -495,7 +602,28 @@ public sealed class ClaudeCodeClient(
                 }
 
                 await Emit(new ToolCallFinished(result.CallId, result.Ok, client._clock.GetElapsedTime(call.Started), call.Input, content, file)).ConfigureAwait(false);
+
+                // Every call that ran is one the engine was asked about and allowed: one that was not ends the launch at
+                // once, its result told above, since the launch has done what nothing decided.
+                if (!result.Ran)
+                {
+                    continue;
+                }
+
+                totals.Acted = true;
+
+                if (!_decided.TryGetValue(result.CallId, out var allowed))
+                {
+                    return new LaunchOutcome(Failed(AgentRunStatus.Failed, $"Claude Code ran '{call.Tool}' without asking the engine ({Claude})"), KillNow: true);
+                }
+
+                if (!allowed)
+                {
+                    return new LaunchOutcome(Failed(AgentRunStatus.Failed, $"Claude Code ran '{call.Tool}' though the engine refused it ({Claude})"), KillNow: true);
+                }
             }
+
+            return null;
         }
 
         private async Task OnPieceAsync(ClaudeLine.Piece piece)
@@ -511,6 +639,9 @@ public sealed class ClaudeCodeClient(
                 case "start":
                     // A message's blocks are counted from naught again: no piece of it is an earlier message's call.
                     _callAt.Clear();
+                    break;
+                case "stop" when piece.Text?.Split(':', 2) is [Declined, .. var category]:
+                    _declined = category is [{ } named] ? named : string.Empty;
                     break;
                 case "call" when piece.CallId is { } id:
                     if (piece.Text == ClaudeCodeTools.StructuredOutput)
@@ -535,9 +666,24 @@ public sealed class ClaudeCodeClient(
 
         private async Task<LaunchOutcome?> OnAssistantAsync(ClaudeLine.Assistant assistant)
         {
-            if (assistant.Error == "authentication_failed")
+            switch (assistant.Error)
             {
-                _keyRefused = true;
+                case "authentication_failed":
+                    _keyRefused = true;
+                    break;
+
+                // Written only after Claude Code's own tries: the account is at its limit, which the turn's end ends the step on.
+                case "rate_limit":
+                    _limit = new AgentAccountLimit(BalanceSpent: false, _resets);
+                    break;
+                case "billing_error":
+                    _limit = new AgentAccountLimit(BalanceSpent: true);
+                    break;
+            }
+
+            if (assistant.StopReason == Declined)
+            {
+                _declined = assistant.Category ?? _declined ?? string.Empty;
             }
 
             if (assistant.Model is { } named && named != ClaudeLine.Synthetic && Served(named, $"its turn {totals.Turns}") is { } wrong)
@@ -548,7 +694,7 @@ public sealed class ClaudeCodeClient(
             foreach (var call in assistant.Calls.Where(call => call.Tool != ClaudeCodeTools.StructuredOutput))
             {
                 await StartedAsync(call.Id, call.Tool).ConfigureAwait(false);
-                _calls[call.Id] = (call.Tool, Masked(call.Input?.ToJsonString() ?? "{}"), _calls.TryGetValue(call.Id, out var known) ? known.Started : client._clock.GetTimestamp());
+                _calls[call.Id] = (call.Tool, Masked(call.Input?.ToJsonString() ?? "{}"), call.Input, _calls.TryGetValue(call.Id, out var known) ? known.Started : client._clock.GetTimestamp());
             }
 
             var calls = assistant.Calls.Where(call => call.Tool != ClaudeCodeTools.StructuredOutput).ToList();
@@ -574,7 +720,7 @@ public sealed class ClaudeCodeClient(
                 return;
             }
 
-            _calls[id] = (tool, "{}", client._clock.GetTimestamp());
+            _calls[id] = (tool, "{}", null, client._clock.GetTimestamp());
             totals.Calls++;
             await Emit(new ToolCallStarted(id, tool, AgentToolRunner.ClaudeCode)).ConfigureAwait(false);
         }
@@ -592,16 +738,17 @@ public sealed class ClaudeCodeClient(
 
             try
             {
-                answer = _handing == Handing.No
-                    ? ClaudeToolDecider.Decide(policy, tools, tool, asked.Input, run.Workspace.WorkingDirectory)
-                    : new AgentPolicyAnswer.Denied(AgentHandoffSignal.TurnRule, AgentPolicySource.Builtin, AgentHandoffSignal.ToolRefusal);
+                answer = Decide(tool, asked.Input);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 // A fault of the engine's own while deciding: the call fails, and nothing runs that was not decided.
+                Asked(asked.CallId, allowed: false);
                 Control(Error(asked.RequestId, $"the engine could not decide this call: {Masked(ex.Message)}"));
                 return;
             }
+
+            Asked(asked.CallId, answer is AgentPolicyAnswer.Allowed);
 
             if (answer is AgentPolicyAnswer.Denied denied)
             {
@@ -624,24 +771,122 @@ public sealed class ClaudeCodeClient(
             Control(Answer(asked.RequestId, new JsonObject { ["behavior"] = "allow", ["updatedInput"] = asked.Input?.DeepClone() ?? new JsonObject() }));
         }
 
-        private LaunchOutcome? OnControlResponse(ClaudeLine.ControlResponse answered)
+        /// <summary>The engine's answer to a call of <paramref name="tool"/>: its policy's, or, in the handoff turn, that turn's refusal.</summary>
+        private AgentPolicyAnswer Decide(string tool, JsonNode? input)
+            => _handing == Handing.No
+                ? ClaudeToolDecider.Decide(policy, tools, tool, input, run.Workspace.WorkingDirectory)
+                : new AgentPolicyAnswer.Denied(AgentHandoffSignal.TurnRule, AgentPolicySource.Builtin, AgentHandoffSignal.ToolRefusal);
+
+        /// <summary>Notes that the engine was asked about the call <paramref name="callId"/>, and whether it allowed it; the last answer stands.</summary>
+        private void Asked(string? callId, bool allowed)
         {
+            if (callId is not null)
+            {
+                _decided[callId] = allowed;
+            }
+        }
+
+        /// <summary>
+        /// A call Claude Code refused by itself. Its own deny rules are the engine's restriction rules written a second
+        /// time, so a call they refuse is one the engine refuses too; one the engine would have allowed was refused by a
+        /// launch that did not ask its host - no call of it would ever be decided by the engine - and ends it.
+        /// </summary>
+        private async Task<LaunchOutcome?> OnRefusalAsync(ClaudeLine.Refusal refusal)
+        {
+            totals.Denials++;
+            await Emit(new PermissionDenied(refusal.Tool ?? string.Empty, string.Empty, string.Empty, AgentPermissionSource.ClaudeCode, Masked(refusal.Message))).ConfigureAwait(false);
+
+            if (refusal.CallId is not { } id || _decided.ContainsKey(id) || !_calls.TryGetValue(id, out var call))
+            {
+                return null;
+            }
+
+            AgentPolicyAnswer answer;
+
+            try
+            {
+                answer = Decide(call.Tool, call.Asked);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // What the engine cannot decide it would not have allowed.
+                return null;
+            }
+
+            return answer is AgentPolicyAnswer.Allowed
+                ? NotHost($"Claude Code refused '{call.Tool}' without asking the engine, which allows it ({Claude}): {refusal.Message}; this tool runs Claude Code only as its host")
+                : null;
+        }
+
+        /// <summary>
+        /// The account's standing, as the stream says it: <c>rejected</c> is an account at its limit - an allowance used
+        /// up, or its included usage spent - which ends the step at once, with when it lifts where it says.
+        /// </summary>
+        private LaunchOutcome? OnRateLimit(ClaudeLine.RateLimit limit)
+        {
+            _resets = limit.ResetsAt ?? _resets;
+
+            if (limit.Status != "rejected")
+            {
+                return null;
+            }
+
+            return Ends(AtLimit(
+                new AgentAccountLimit(BalanceSpent: limit.ErrorCode == "credits_required", limit.ResetsAt),
+                $"its {limit.Window ?? "allowance"} rejected{(limit.ErrorCode is { } code ? $" ({code})" : string.Empty)}"));
+        }
+
+        /// <summary>The step's end at an account's limit.</summary>
+        private AgentRunResult AtLimit(AgentAccountLimit limit, string said)
+            => Failed(
+                AgentRunStatus.RateLimited,
+                $"Claude Code reported the account at its limit, {(limit.BalanceSpent ? "its balance or included usage spent" : "an allowance used up")}{(limit.Lifts is { } lifts ? $" until {lifts:u}" : string.Empty)}: {said}") with
+            {
+                Limit = limit,
+            };
+
+        private async Task<LaunchOutcome?> OnControlResponseAsync(ClaudeLine.ControlResponse answered)
+        {
+            if (answered.RequestId == InitializeId)
+            {
+                _initialized = answered.Succeeded;
+
+                if (!answered.Succeeded)
+                {
+                    return NotHost($"{Claude} refused the host's initialize request ({Masked(answered.Error ?? "no reason given")}): this tool runs Claude Code only as its host");
+                }
+
+                // A message written before the launch answered waited on its start, not on the launch: its bound starts
+                // now, as does the bound of an interrupt written meanwhile.
+                Watch();
+                WatchInterrupt();
+
+                return null;
+            }
+
             if (answered.RequestId == _interruptId && !answered.Succeeded)
             {
                 return HandedOff(null, $"Claude Code refused the interrupt: {Masked(answered.Error ?? "no reason given")}");
             }
 
-            if (answered.RequestId == _interruptId)
+            if (answered.RequestId != _interruptId)
             {
-                _interruptId = null;
+                return null;
             }
 
-            return null;
+            _interruptId = null;
+
+            // The receipt names each waiting message the interrupt dropped, by the id the engine gave it: no turn takes
+            // them. One Claude Code had taken for its next turn already is not named, and that turn runs - cut - first.
+            _pending.RemoveAll(id => answered.Cancelled?.Contains(id, StringComparer.Ordinal) == true);
+
+            return await AskWhenCutAsync().ConfigureAwait(false);
         }
 
         private async Task<LaunchOutcome?> OnResultAsync(ClaudeLine.Result result)
         {
             _inTurn = false;
+            totals.Acted = true;
             totals.Usage = totals.Usage.Plus(result.Usage);
             var served = _held ?? model;
             totals.PerModel[served] = totals.PerModel.TryGetValue(served, out var used) ? used.Plus(result.Usage) : result.Usage;
@@ -664,14 +909,15 @@ public sealed class ClaudeCodeClient(
             switch (_handing)
             {
                 case Handing.Interrupting:
-                    return await AskHandoffAsync().ConfigureAwait(false);
+                    return await AskWhenCutAsync().ConfigureAwait(false);
                 case Handing.Asking:
                     return await HandoffAnsweredAsync(result).ConfigureAwait(false);
             }
 
             // A message the launch has not taken yet begins a turn of its own: this result is not the step's answer.
-            if (_unechoed > 0)
+            if (_pending.Count > 0)
             {
+                Watch();
                 return null;
             }
 
@@ -712,10 +958,23 @@ public sealed class ClaudeCodeClient(
             return null;
         }
 
-        /// <summary>How a turn that ended on an error ends the step, where it did; null for a success.</summary>
+        /// <summary>How a turn that ended on an error, a decline or the account's limit ends the step, where it did; null for a success.</summary>
         private AgentRunResult? Ending(ClaudeLine.Result result)
         {
             var said = Masked(string.Join("; ", result.Errors.Count > 0 ? result.Errors : [result.Text ?? result.Subtype]));
+
+            if (_limit is { } limit)
+            {
+                return AtLimit(limit, said);
+            }
+
+            if (_declined is not null || result.StopReason == Declined)
+            {
+                return Failed(AgentRunStatus.Refused, $"the model declined the request{(_declined is { Length: > 0 } category ? $" ({category})" : string.Empty)}: {said}") with
+                {
+                    DeclinedFor = _declined is { Length: > 0 } named ? named : null,
+                };
+            }
 
             return (result.Subtype, result.TerminalReason) switch
             {
@@ -737,9 +996,9 @@ public sealed class ClaudeCodeClient(
 
             await Emit(new HandoffAsked(asked.Why, run.Handoff.Bound)).ConfigureAwait(false);
             _lead = asked.Lead;
-            After(run.Handoff.Bound, "the bound passed before the agent answered", Handing.Asking);
+            After(run.Handoff.Bound, new Arrival.Bound("the bound passed before the agent answered", Handing.Asking));
 
-            if (!_inTurn && _unechoed == 0)
+            if (!_inTurn && _pending.Count == 0)
             {
                 // Between turns there is nothing to cut: the agent is asked at once.
                 return await AskHandoffAsync().ConfigureAwait(false);
@@ -753,10 +1012,32 @@ public sealed class ClaudeCodeClient(
                 ["request_id"] = _interruptId,
                 ["request"] = new JsonObject { ["subtype"] = "interrupt", ["cancel_queued"] = true },
             });
-            After(InterruptBound, $"the agent did not take the interrupt within {InterruptBound.TotalSeconds:0} s", Handing.Interrupting);
+            WatchInterrupt();
 
             return null;
         }
+
+        /// <summary>
+        /// Starts the interrupt's bound once the launch reads its input: an interrupt written before the launch answered
+        /// the initialize waits on its start, so its bound starts then.
+        /// </summary>
+        private void WatchInterrupt()
+        {
+            if (_initialized && _handing == Handing.Interrupting && _interruptId is not null)
+            {
+                After(InterruptBound, new Arrival.Bound($"the agent did not take the interrupt within {InterruptBound.TotalSeconds:0} s", Handing.Interrupting));
+            }
+        }
+
+        /// <summary>
+        /// Asks the agent for its handoff once the interrupt has left nothing to come: no turn runs, and every message
+        /// written was taken or dropped - a turn still to come would answer the question in its place. A question written
+        /// before the receipt is read after the interrupt, which then has nothing left to drop.
+        /// </summary>
+        private async Task<LaunchOutcome?> AskWhenCutAsync()
+            => _handing == Handing.Interrupting && !_inTurn && _pending.Count == 0
+                ? await AskHandoffAsync().ConfigureAwait(false)
+                : null;
 
         private async Task<LaunchOutcome?> AskHandoffAsync()
         {
@@ -867,21 +1148,59 @@ public sealed class ClaudeCodeClient(
         private AgentRunResult Failed(AgentRunStatus status, string error)
             => new(status, Error: Masked(error));
 
+        /// <summary>
+        /// A launch the engine is not the host of: never started where nothing it did stands - no call ran and no turn
+        /// ended, for the program does not start as this tool starts it - and failed where something does; ended at once
+        /// either way.
+        /// </summary>
+        private LaunchOutcome NotHost(string why)
+            => new(totals.Acted ? Failed(AgentRunStatus.Failed, why) : ClaudeCodeClient.NotStarted(AgentNotStartedBecause.ProgramMissing, why, run), KillNow: true);
+
+        /// <summary>The step's end <paramref name="ended"/>; in the handoff turn, the handoff that turn did not give.</summary>
+        private LaunchOutcome Ends(AgentRunResult ended, bool killNow = false)
+            => (_handing == Handing.No ? new LaunchOutcome(ended) : HandedOff(null, $"the handoff turn ended {ended.Status}: {ended.Error}")) with { KillNow = killNow };
+
+        /// <summary>The program, by its version where it is known, as a refusal names it.</summary>
+        private string Claude => _version is { Length: > 0 } version ? $"claude {version}" : "claude";
+
+        /// <summary>
+        /// Starts the stall bound where the launch is between turns with a message it has not taken: a message the engine
+        /// writes begins a turn within the bound, or the step is <see cref="AgentRunStatus.Stalled"/>. A message written
+        /// while a turn runs is taken when the turn ends, and one written before the launch answered the initialize is
+        /// taken once it has, so their bounds start then.
+        /// </summary>
+        private void Watch()
+        {
+            if (run.Limits.StallSeconds is > 0 and var seconds && _initialized && _pending.Count > 0 && !_inTurn)
+            {
+                After(TimeSpan.FromSeconds(seconds), new Arrival.Untaken(_taken));
+            }
+        }
+
         /// <summary>Writes a user message, as the event that says so first.</summary>
         private async Task SayAsync(string text, AgentMessageKind kind)
         {
             await Emit(new MessageSent(Masked(text), kind)).ConfigureAwait(false);
-            _unechoed++;
+            // Each message carries an id of the engine's, by which the interrupt's receipt names the messages it dropped.
+            var id = Guid.NewGuid().ToString("D");
+            _pending.Add(id);
             Write(new JsonObject
             {
                 ["type"] = "user",
                 ["message"] = new JsonObject { ["role"] = "user", ["content"] = text },
+                ["uuid"] = id,
             });
+            Watch();
         }
 
         /// <summary>Writes a control message, and records it.</summary>
         private void Control(JsonObject message)
         {
+            if (message["response"]?["request_id"] is JsonValue id && id.TryGetValue<string>(out var answered))
+            {
+                _answered.Add(answered);
+            }
+
             Record(message);
             Write(message);
         }
@@ -894,10 +1213,10 @@ public sealed class ClaudeCodeClient(
 
         private string Masked(string text) => run.Mask.Redact(text);
 
-        /// <summary>Starts the bound <paramref name="span"/>, which says <paramref name="why"/> once it passes, counted <paramref name="while"/>.</summary>
-        private void After(TimeSpan span, string why, Handing @while)
+        /// <summary>Starts the bound <paramref name="span"/>, which hands the loop <paramref name="passed"/> once it passes.</summary>
+        private void After(TimeSpan span, Arrival passed)
             => _ = Task.Delay(span, client._clock).ContinueWith(
-                _ => _arrivals.Writer.TryWrite(new Arrival.Bound(why, @while)),
+                _ => _arrivals.Writer.TryWrite(passed),
                 CancellationToken.None,
                 TaskContinuationOptions.ExecuteSynchronously,
                 TaskScheduler.Default);
@@ -927,14 +1246,7 @@ public sealed class ClaudeCodeClient(
         /// <summary>Removes the session file the launch left all the same, told to keep none - its own, by its id, and nothing else.</summary>
         private async Task RemoveSessionFileAsync()
         {
-            var transcripts = new ClaudeTranscripts(
-                client._fileSystem,
-                client._platform,
-                name => name == ClaudeTranscripts.ConfigDirectoryVariable && run.Credential?.ConfigDirectory is { Length: > 0 } directory
-                    ? directory
-                    : client._environment().GetValueOrDefault(name));
-
-            foreach (var file in transcripts.Find(_session).Files.Where(file => Path.GetFileName(file) == _session + ".jsonl"))
+            foreach (var file in client.Transcripts(run).Find(_session).Files.Where(file => Path.GetFileName(file) == _session + ".jsonl"))
             {
                 try
                 {
