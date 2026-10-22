@@ -1369,7 +1369,8 @@ and never remove one another's. A restriction is one string (`Run(git push *)`, 
 whose trailing `*` is any arguments and the bare command too; `Write(.github/**)` and
 `Read(secrets/**)`, path patterns as `GlobPattern` reads them, gitignore's grammar, matched against
 the path as it stands under each of the agent's roots, as asked and as resolved so no path reaches
-through a link past a rule written for where it lands). Built in, not configurable: the root
+through a link past a rule written for where it lands; and `Web(pastebin.com)`, one domain, the
+domain and every name under it, or `Web(*)` the web whole). Built in, not configurable: the root
 actions (`sudo`, `su`, `doas`, `pkexec`, `run0`, `gsudo`, `sudoedit`, `runas`, `psexec`,
 PowerShell's `-Verb RunAs`, `wsl -u root`, `systemd-run`, `schtasks` with `/ru`, wherever a command
 names one), writes outside an agent's writable roots, every read and write of a credential slot,
@@ -1381,8 +1382,26 @@ bodies read as commands of their own, wrappers (`env`, `nohup`, `time`, `timeout
 `xargs`, `command`, `builtin`, `exec`, `eval`) stripped with their own options, and it goes into
 `sh -c`, `cmd /c`, `powershell -Command` and a decoded `-EncodedCommand`, to four levels;
 git's own options are dropped before its subcommand, and a `git -c` that names an alias or a key
-naming a program git runs is the `git config` it is. What it cannot read is said in help: the
-inside of a script file a command runs. Where the policy cannot decide a call it denies it, never
+naming a program git runs is the `git config` it is; and a command that runs a program which
+fetches from the network (`curl`, `wget`, `Invoke-WebRequest` and `Invoke-RestMethod` with `iwr`
+and `irm`, `http`, `https`, `gh api`) is decided as a web request too, by each address it names,
+under the `Web(...)` rules and `agentPolicy.webDomains`, refused where the step has no web. What it
+cannot read is said in help: the
+inside of a script file a command runs. The worktree rules (`agentPolicy.worktreeRules`, on unless
+turned off) refuse git's state-writing verbs and the merges and CI starts of `gh`, keep git's own
+files unwritten whatever `protectedPaths` says, and hold the tool's own policy, what the next
+launch loads, and its own state (`HarnessLayout.StatePaths`, the one owner of where that state is)
+unwritten by any agent - its own work directory the one exception; the tool's own verbs and
+`run-side-task` are refused whatever the switch says. The protected paths
+(`agentPolicy.protectedPaths`) are Claude Code's own list written out once as rules
+(`AgentPolicy.ProtectedPathRules`), pinned by a test and printed by `help agent-clients`, refused
+on every client; a step's `writes` is the one source that narrows, and the reporter's reads are
+narrowed to the run's directory alone (`AgentPolicyGround.ReporterRoot`: no command, no write, no
+web). For Claude Code the policy is rendered, never re-decided, into the launch's settings
+(`Agents\Policy\ClaudeSettings`): an ask rule for every tool the launch has, and the restriction
+rules as deny rules, absolute once for each root that covers no root the launch writes - a second
+layer, for the engine is asked about every call and answers from the same policy in its own
+process. Where the policy cannot decide a call it denies it, never
 allows - nothing runs while the host that would answer is silent or gone; the clients that ask it
 are the next thing the tool grows. This build checks workflow definitions and
 starts and drives a run of one (see "Running a workflow" below); the step runners - the agents, the

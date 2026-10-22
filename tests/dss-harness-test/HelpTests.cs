@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using DssHarness.Core.Anchors;
+using DssHarness.Core.Agents.Policy;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
@@ -168,8 +169,10 @@ public sealed partial class HelpTests
 
         Assert.Contains(
             "agentPolicy what an agent may do beyond the rules built into the tool: restrictions, each one rule string, that only ever refuse - "
-                + "Run(git push *), Write(.github/**), Read(secrets/**) - applied to every agent of every run under this configuration, beside a "
-                + "workflow's definitions and steps ('help agent-clients')",
+                + "Run(git push *), Write(.github/**), Read(secrets/**), Web(pastebin.com) - applied to every agent of every run under this "
+                + "configuration, beside a workflow's definitions and steps; webDomains, the allow list of every web request (left out, any "
+                + "public address); worktreeRules (true where nothing is said) and protectedPaths (true too), the switches of the rule sets "
+                + "'help agent-clients' names ('help agent-clients')",
             config,
             StringComparison.Ordinal);
 
@@ -253,14 +256,18 @@ public sealed partial class HelpTests
 
         Assert.Contains("What an agent may do is one policy, the same on every client: everything is allowed except", prose, StringComparison.Ordinal);
         Assert.Contains(
-            "A restriction is one string, Run(git push *), Write(.github/**) or Read(secrets/**): Run a command prefix, its "
-                + "trailing * any arguments and the bare command too; Write and Read path patterns as gitignore reads them",
+            "A restriction is one string, Run(git push *), Write(.github/**), Read(secrets/**) or Web(pastebin.com): Run a "
+                + "command prefix, its trailing * any arguments and the bare command too; Write and Read path patterns as "
+                + "gitignore reads them",
             prose,
             StringComparison.Ordinal);
         Assert.Contains("Declared under agentPolicy.restrictions in config.json", prose, StringComparison.Ordinal);
+        Assert.Contains("agentPolicy.webDomains is the allow list beside them", prose, StringComparison.Ordinal);
+        Assert.Contains("curl, wget, Invoke-WebRequest, Invoke-RestMethod, iwr, irm, http, https, gh api - is", prose, StringComparison.Ordinal);
         Assert.Contains("the root actions (sudo, su, doas, pkexec, run0, gsudo, sudoedit, runas,", prose, StringComparison.Ordinal);
         Assert.Contains("psexec, PowerShell's -Verb RunAs, wsl -u root, systemd-run, schtasks with /ru, wherever", prose, StringComparison.Ordinal);
         Assert.Contains("writes outside an agent's writable roots, every read and write of a", prose, StringComparison.Ordinal);
+        Assert.Contains("this tool's own verbs and run-side-task, whatever any switch says: an agent", prose, StringComparison.Ordinal);
         Assert.Contains("No agent starts while this tool itself runs elevated.", prose, StringComparison.Ordinal);
         Assert.Contains(
             "wrappers (env, nohup, time, timeout, nice, xargs, command, builtin, exec, eval) stripped, and it goes into "
@@ -268,8 +275,39 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains("the inside of a script file a command runs", prose, StringComparison.Ordinal);
+        Assert.Contains("The worktree rules (agentPolicy.worktreeRules, true where nothing is said)", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            "git's state-writing verbs (commit, stash, reset, clean, checkout, switch, restore, rebase, merge, "
+                + "cherry-pick, revert, pull, push, am, worktree, branch, tag, update-ref, config, gc) are refused",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("gh pr merge, gh workflow run and gh run rerun, for never merges,", prose, StringComparison.Ordinal);
+        Assert.Contains("whatever protectedPaths says", prose, StringComparison.Ordinal);
+        Assert.Contains("an agent does not edit its own policy or what the next launch loads", prose, StringComparison.Ordinal);
+        Assert.Contains("The protected paths (agentPolicy.protectedPaths, true where nothing is said)", prose, StringComparison.Ordinal);
+        Assert.Contains("written out once as rules, each said whole: Write(.git/**), Write(.config/git/**),", prose, StringComparison.Ordinal);
+        Assert.Contains("Write(Gemfile.lock), Write(composer.json), Write(composer.lock).", prose, StringComparison.Ordinal);
+        Assert.Contains("Claude Code's own guard stays Claude Code's", prose, StringComparison.Ordinal);
+        Assert.Contains("A step's writes is the one source that narrows", prose, StringComparison.Ordinal);
+        Assert.Contains("the reporter's reads are narrowed to the run's directory alone", prose, StringComparison.Ordinal);
+        Assert.Contains("an ask rule for every tool the launch has, and the restriction rules as deny rules", prose, StringComparison.Ordinal);
         Assert.Contains("This is policy, not a sandbox", prose, StringComparison.Ordinal);
         Assert.Contains("Where this tool cannot decide a call it denies it, never allows", prose, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The agent-clients topic's protected-path list is the one the policy holds, word for word: a change in it is a
+    /// change someone made, in both places at once or in neither.
+    /// </summary>
+    [Fact]
+    public async Task AgentClientsTopic_PinsTheProtectedPaths()
+    {
+        var prose = Prose.Words(HelpText.Of("agent-clients").StandardOutput);
+
+        foreach (var rule in AgentPolicy.ProtectedPathRules)
+        {
+            Assert.Contains($"Write({rule})", prose, StringComparison.Ordinal);
+        }
     }
 
     /// <summary>

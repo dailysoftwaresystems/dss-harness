@@ -14,6 +14,10 @@ public enum AgentRuleVerb
 
     /// <summary>A read, refused by the path it reads: <c>Read(secrets/**)</c>.</summary>
     Read,
+
+    /// <summary>A web request, refused by the host it names: <c>Web(pastebin.com)</c>, or <c>Web(*)</c> for the
+    /// web whole.</summary>
+    Web,
 }
 
 /// <summary>
@@ -34,8 +38,10 @@ public enum AgentRuleVerb
 /// gitignore's - matched against the path as it stands relative to each of the agent's roots.
 /// </para>
 /// <para>
-/// Deliberately no <c>Web</c> verb yet: the web rules arrive with what decides them, and a rule that
-/// loads is a rule that is read.
+/// A <c>Web</c> pattern is one domain - <c>Web(pastebin.com)</c> - which refuses the domain and
+/// every name under it, or <c>*</c> alone, which refuses the web whole. No scheme, no path and no
+/// port are read: a rule refuses a host, wherever an agent met it - a page, a redirect, a search's
+/// source, or a command that runs a program which fetches.
 /// </para>
 /// </remarks>
 public sealed class AgentRule
@@ -87,7 +93,7 @@ public sealed class AgentRule
 
         if (!Enum.TryParse<AgentRuleVerb>(verb, ignoreCase: false, out _))
         {
-            return $"'{text}' is no rule this tool reads: the verbs are Run, Write and Read";
+            return $"'{text}' is no rule this tool reads: the verbs are Run, Write, Read and Web";
         }
 
         var parsed = Enum.Parse<AgentRuleVerb>(verb);
@@ -114,6 +120,15 @@ public sealed class AgentRule
             return null;
         }
 
+        if (parsed is AgentRuleVerb.Web)
+        {
+            return pattern == "*"
+                ? null
+                : DomainProblem(pattern) is { } domain
+                    ? $"'{text}' does not read: {domain}"
+                    : null;
+        }
+
         if (GlobPattern.Problem(pattern) is { } shape)
         {
             return $"'{text}' does not read: the pattern '{pattern}' {shape}";
@@ -136,7 +151,42 @@ public sealed class AgentRule
         var verb = Enum.Parse<AgentRuleVerb>(text[..open].Trim());
         var pattern = text[(open + 1)..^1].Trim();
 
-        return new AgentRule(verb, pattern, verb is AgentRuleVerb.Run ? null : GlobPattern.Parse(pattern));
+        return new AgentRule(verb, pattern, verb is AgentRuleVerb.Run or AgentRuleVerb.Web ? null : GlobPattern.Parse(pattern));
+    }
+
+    /// <summary>
+    /// Why <paramref name="domain"/> is no domain a <c>Web</c> rule or <c>webDomains</c> holds, or
+    /// <see langword="null"/> where it is: labels joined by dots, each beginning and ending in a
+    /// letter or a digit, with nothing else beside a hyphen inside one. A host is refused by the
+    /// domain it is under, never by a piece of its name, so a pattern that would match a piece
+    /// matches nothing and is refused as one that does not read.
+    /// </summary>
+    public static string? DomainProblem(string? domain)
+    {
+        if (string.IsNullOrWhiteSpace(domain))
+        {
+            return "a domain is named: Web(pastebin.com)";
+        }
+
+        var text = domain.Trim();
+
+        if (text.Equals("localhost", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        foreach (var label in text.Split('.'))
+        {
+            if (label.Length == 0
+                || !char.IsAsciiLetterOrDigit(label[0])
+                || !char.IsAsciiLetterOrDigit(label[^1])
+                || !label.All(character => char.IsAsciiLetterOrDigit(character) || character == '-'))
+            {
+                return $"'{text}' is no domain: labels joined by dots, each beginning and ending in a letter or a digit, as pastebin.com is";
+            }
+        }
+
+        return text.Contains('.') ? null : $"'{text}' is no domain: one label alone is not a host an agent reaches, as pastebin.com is";
     }
 
     /// <summary>
@@ -180,6 +230,30 @@ public sealed class AgentRule
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Whether the host <paramref name="host"/> is refused by this <see cref="AgentRuleVerb.Web"/>
+    /// rule: the domain itself, or any name under it - <c>Web(pastebin.com)</c> refuses
+    /// <c>www.pastebin.com</c> too. Hosts fold case, so the comparison always does.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The rule is not a <see cref="AgentRuleVerb.Web"/> rule.</exception>
+    public bool MatchesHost(string host)
+    {
+        if (Verb is not AgentRuleVerb.Web)
+        {
+            throw new InvalidOperationException($"'{Text}' refuses a path or a command, not a host");
+        }
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(host);
+
+        if (Pattern == "*")
+        {
+            return true;
+        }
+
+        return host.Equals(Pattern, StringComparison.OrdinalIgnoreCase)
+            || host.EndsWith("." + Pattern, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

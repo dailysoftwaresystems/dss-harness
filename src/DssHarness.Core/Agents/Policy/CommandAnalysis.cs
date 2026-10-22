@@ -56,6 +56,175 @@ public static partial class CommandAnalysis
     }
 
     /// <summary>
+    /// The programs a command of which is decided as a web request too, by each address it names
+    /// (the user, 2026-10-19): <c>curl</c>, <c>wget</c>, PowerShell's <c>Invoke-WebRequest</c> and
+    /// <c>Invoke-RestMethod</c> with their aliases <c>iwr</c> and <c>irm</c>, the <c>http</c> and
+    /// <c>https</c> of its own name, and <c>gh api</c>, whose endpoint is <c>api.github.com</c>'s.
+    /// A program this list does not name, and what a script does inside, are not seen.
+    /// </summary>
+    public static IReadOnlyList<string> WebPrograms { get; } =
+        ["curl", "wget", "Invoke-WebRequest", "Invoke-RestMethod", "iwr", "irm", "http", "https"];
+
+    /// <summary>
+    /// The web addresses one command names, where it runs a program which fetches from the network:
+    /// the URLs of <c>curl</c> and <c>wget</c> - any word that is not an option, and a
+    /// <c>--url</c>'s - the first address PowerShell's fetchers take by position or by
+    /// <c>-Uri</c>, the first address of an <c>http</c> or <c>https</c>, and the endpoint of
+    /// <c>gh api</c>, which is <c>api.github.com</c>'s unless a <c>--hostname</c> names another.
+    /// Empty where the command's program is none of them, and an address that is only a flag's
+    /// value or an option's shape names nothing.
+    /// </summary>
+    /// <param name="words">One command's words, as <see cref="Commands(string)"/> or <see cref="Commands(IReadOnlyList{string})"/> flattened it.</param>
+    public static IReadOnlyList<string> WebAddresses(IReadOnlyList<string> words)
+    {
+        ArgumentNullException.ThrowIfNull(words);
+
+        if (words.Count == 0)
+        {
+            return [];
+        }
+
+        var program = Name(words[0]);
+        var arguments = words.Skip(1).ToList();
+
+        if (program.Equals("gh", StringComparison.OrdinalIgnoreCase))
+        {
+            var api = arguments.FindIndex(word => word.Equals("api", StringComparison.OrdinalIgnoreCase));
+
+            if (api < 0)
+            {
+                return [];
+            }
+
+            var rest = arguments.Skip(api + 1).ToList();
+            var host = "api.github.com";
+
+            var hostname = rest.FindIndex(word => word.Equals("--hostname", StringComparison.OrdinalIgnoreCase));
+
+            // A glued --hostname=value names its host as the separate form does.
+            var glued = rest.FindIndex(word => word.StartsWith("--hostname=", StringComparison.OrdinalIgnoreCase));
+
+            // The endpoint is the api's own first word that is not an option and not the value a
+            // --hostname takes: 'gh api --hostname h.example.com /user' names h.example.com's /user.
+            var endpoint = rest
+                .Where((word, at) => at != hostname && at != hostname + 1 && at != glued && !word.StartsWith("-", StringComparison.Ordinal))
+                .FirstOrDefault();
+
+            if (glued >= 0 && rest[glued]["--hostname=".Length..] is { Length: > 0 } namedByGlue)
+            {
+                host = namedByGlue;
+            }
+            else if (hostname >= 0 && rest.ElementAtOrDefault(hostname + 1) is { } named)
+            {
+                host = named;
+            }
+
+            return endpoint is { } path && LooksLikeAddress(path) ? [path] : [host];
+        }
+
+        if (program.Equals("curl", StringComparison.OrdinalIgnoreCase) || program.Equals("wget", StringComparison.OrdinalIgnoreCase))
+        {
+            // The options of curl and wget that take a value, whose value is no address: an
+            // output file (-o out.json) or a header (-H 'Host: x') would otherwise be read as a
+            // host by its shape. What this table does not name is said in help, as the inside of
+            // a script file is.
+            var valueTaking = new[]
+            {
+                "-o", "--output", "--data", "--data-raw", "--data-binary", "--data-urlencode", "-d", "-H", "--header",
+                "-A", "--user-agent", "-u", "--user", "-m", "--max-time", "-x", "--proxy", "-e", "--referer",
+                "-b", "--cookie", "-c", "--cookie-jar", "-F", "--form", "-K", "--config", "-T", "--upload-file",
+                "--cert", "--key", "--cacert", "--capath", "--ciphers", "--connect-timeout", "--content-type",
+                "--dns-servers", "--interface", "--ip-address", "--limit-rate", "--mail-from", "--mail-rcpt",
+                "--netrc-file", "--oauth2-bearer", "--pass", "--proxy-user", "--pubkey", "-Q", "--quote",
+                "--random-file", "-r", "--range", "-t", "--telnet-option", "-U", "--write-out", "-w",
+            };
+
+            var addresses = new List<string>();
+
+            for (var at = 0; at < arguments.Count; at++)
+            {
+                if (arguments[at].Equals("--url", StringComparison.Ordinal) && at + 1 < arguments.Count)
+                {
+                    addresses.Add(arguments[at + 1]);
+                    at++;
+                }
+                else if (arguments[at].StartsWith("--url=", StringComparison.Ordinal))
+                {
+                    addresses.Add(arguments[at]["--url=".Length..]);
+                }
+                else if (valueTaking.Contains(arguments[at], StringComparer.Ordinal) && at + 1 < arguments.Count)
+                {
+                    at++;
+                }
+                else if (!arguments[at].StartsWith("-", StringComparison.Ordinal) && LooksLikeAddress(arguments[at]))
+                {
+                    addresses.Add(arguments[at]);
+                }
+            }
+
+            return [.. addresses];
+        }
+
+        if (WebPrograms.Contains(program, StringComparer.OrdinalIgnoreCase))
+        {
+            // PowerShell's fetchers take the address by position or by -Uri; http and https take
+            // it by position alone. One address each: the first they name.
+            for (var at = 0; at < arguments.Count; at++)
+            {
+                if (arguments[at].StartsWith("-Uri:", StringComparison.OrdinalIgnoreCase) && LooksLikeAddress(arguments[at]["-Uri:".Length..]))
+                {
+                    return [arguments[at]["-Uri:".Length..]];
+                }
+
+                if (arguments[at].Equals("-Uri", StringComparison.OrdinalIgnoreCase) && at + 1 < arguments.Count && LooksLikeAddress(arguments[at + 1]))
+                {
+                    return [arguments[at + 1]];
+                }
+            }
+
+            return arguments.FirstOrDefault(word => !word.StartsWith("-", StringComparison.Ordinal) && LooksLikeAddress(word)) is { } positional
+                ? [positional]
+                : [];
+        }
+
+        return [];
+    }
+
+    /// <summary>
+    /// Whether a word names an address a fetcher would ask: a URL, or a bare
+    /// <c>host.tld[:port][/path]</c>, which curl and wget read as <c>http://</c> - localhost among
+    /// the bare hosts, for a loopback port is the one an agent's own machine serves. A word with
+    /// no dot in its host is a flag's value, a file, or an endpoint path - not an address.
+    /// </summary>
+    private static bool LooksLikeAddress(string word)
+    {
+        if (word.StartsWith('-') || word.Length == 0)
+        {
+            return false;
+        }
+
+        if (Uri.TryCreate(word, UriKind.Absolute, out var absolute) && absolute.Scheme is "http" or "https")
+        {
+            return true;
+        }
+
+        var authority = word.Split('/')[0].Split(':');
+
+        if (authority.Length is not (1 or 2))
+        {
+            return false;
+        }
+
+        if (authority[0].Equals("localhost", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return authority[0].Split('.', StringSplitOptions.RemoveEmptyEntries).Length >= 2
+            && authority[0].All(character => char.IsAsciiLetterOrDigit(character) || character is '.' or '-' or '_');
+    }
+
+    /// <summary>
     /// The words of a command the rules are matched against: git's own options dropped before its
     /// subcommand, so <c>git -C x push</c> meets a rule on <c>git push</c> - and a <c>git -c</c>
     /// that defines an alias, or sets a key naming a program git runs, is the <c>git config</c> it
@@ -304,8 +473,13 @@ public static partial class CommandAnalysis
                 }
 
                 // The option that carries c takes the next word as its script, alone (-c) or glued
-                // into it (-lc); a shell's other options take none.
-                if (option == "-c" || (option.StartsWith('-') && option.Length > 1 && option.Contains('c')))
+                // into a short cluster (-lc); a long option (--norc among them) is never a short
+                // cluster, however many letters it holds.
+                if (option == "-c"
+                    || (option.StartsWith("-", StringComparison.Ordinal)
+                        && !option.StartsWith("--", StringComparison.Ordinal)
+                        && option.Length > 1
+                        && option.Contains('c')))
                 {
                     return at + 1 < words.Count ? words[at + 1] : null;
                 }
@@ -318,7 +492,10 @@ public static partial class CommandAnalysis
         {
             for (var at = 1; at < words.Count; at++)
             {
-                if (words[at].Equals("/c", StringComparison.OrdinalIgnoreCase) && at + 1 < words.Count)
+                // /k runs what it is given as /c does, and stays open after: what it runs is what
+                // the rules must meet.
+                if ((words[at].Equals("/c", StringComparison.OrdinalIgnoreCase) || words[at].Equals("/k", StringComparison.OrdinalIgnoreCase))
+                    && at + 1 < words.Count)
                 {
                     return string.Join(' ', words.Skip(at + 1));
                 }

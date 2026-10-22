@@ -74,10 +74,48 @@ public sealed record AgentRestriction(string Text, AgentPolicySource Source);
 /// Every restriction that applies to this agent, all applied together: the configuration's, the
 /// definition's and the step's. A restriction only ever refuses.
 /// </param>
+/// <param name="Web">
+/// Whether this agent has the web at all: the capability <c>web</c> of its definition and the
+/// client's own key together. Without it every web request is refused - a page and a command that
+/// runs a program which fetches alike.
+/// </param>
+/// <param name="WebDomains">
+/// <c>agentPolicy.webDomains</c>: the allow list every request's host must stand under. Null where
+/// every public address is allowed; never empty, for the configuration is refused one.
+/// </param>
+/// <param name="Writes">
+/// The step's <c>writes</c>, its patterns relative to its worktree: the one source that narrows,
+/// for where a step has it, a write under its worktree to the paths its patterns name. Null where
+/// the step narrows nothing.
+/// </param>
+/// <param name="ReporterRoot">
+/// The one root the run's reporter may read, where this agent is one: reads outside it are denied,
+/// and with it no command, no write and no web runs at all. Null for every other agent.
+/// </param>
+/// <param name="WorktreeRules">
+/// Whether the worktree rules are on (<c>agentPolicy.worktreeRules</c>, true where nothing is
+/// said). The tool's own verbs and <c>run-side-task</c> are refused whatever this says.
+/// </param>
+/// <param name="ProtectedPaths">
+/// Whether Claude Code's protected paths are refused on every client
+/// (<c>agentPolicy.protectedPaths</c>, true where nothing is said).
+/// </param>
+/// <param name="StateDirectories">
+/// The tool's own state, as absolute paths under each tree this agent touches, from
+/// <c>HarnessLayout.StatePaths</c>: written by the tool's verbs alone, never by an agent's - the
+/// agent's own work directory excepted, for it is a writable root.
+/// </param>
 public sealed record AgentPolicyGround(
     string WorkingDirectory,
     IReadOnlyList<string> ReadRoots,
     IReadOnlyList<string> WritableRoots,
     IReadOnlyList<string> SlotDirectories,
     IReadOnlyList<string> ClaudeCodeDirectories,
-    IReadOnlyList<AgentRestriction> Restrictions);
+    IReadOnlyList<AgentRestriction> Restrictions,
+    bool Web = true,
+    IReadOnlyList<string>? WebDomains = null,
+    IReadOnlyList<string>? Writes = null,
+    string? ReporterRoot = null,
+    bool WorktreeRules = true,
+    bool ProtectedPaths = true,
+    IReadOnlyList<string>? StateDirectories = null);

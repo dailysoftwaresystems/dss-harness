@@ -512,22 +512,45 @@ that then needs one that is missing or too old will be refused with the command 
 What an agent may do is one policy, the same on every client: everything is allowed except the
 root actions, the places no agent reaches, and the restrictions - which only ever refuse, from
 every source at once, and never remove one another's. A restriction is one string,
-`Run(git push *)`, `Write(.github/**)` or `Read(secrets/**)`: `Run` a command prefix (its trailing
-`*` any arguments, the bare command too), `Write` and `Read` path patterns as gitignore reads
-them, matched against the path as it stands under each of the agent's roots. A repository
+`Run(git push *)`, `Write(.github/**)`, `Read(secrets/**)` or `Web(pastebin.com)`: `Run` a command
+prefix (its trailing `*` any arguments, the bare command too), `Write` and `Read` path patterns as
+gitignore reads them, matched against the path as it stands under each of the agent's roots, and
+`Web` one domain, the domain and every name under it, or `Web(*)` the web whole. A repository
 declares them under `agentPolicy.restrictions`, and a workflow's definitions and steps add their
-own to them, all applied together. Refused always, not configurable: the root actions (`sudo`,
+own to them, all applied together; `agentPolicy.webDomains` is the allow list beside them (left
+out, any public address), and a command that runs a program which fetches from the network -
+`curl`, `wget`, `Invoke-WebRequest`, `Invoke-RestMethod`, `iwr`, `irm`, `http`, `https`,
+`gh api` - is decided as a web request too, by each address it names. Refused always, not
+configurable: the root actions (`sudo`,
 `su`, `doas`, `pkexec`, `run0`, `gsudo`, `sudoedit`, `runas`, `psexec`, PowerShell's
 `-Verb RunAs`, `wsl -u root`, `systemd-run`, `schtasks` with `/ru`, wherever a command names one),
-writes outside an agent's writable roots, every read and write of a credential slot, and any
-command naming one or a Claude Code directory of the run's. No agent starts while this tool
+writes outside an agent's writable roots, every read and write of a credential slot, any
+command naming one or a Claude Code directory of the run's, and this tool's own verbs and
+`run-side-task`, whatever any switch says. No agent starts while this tool
 itself runs elevated. A shell command is read whole before it is matched - split on `;`, `&&`,
 `||`, `|`, `&` and line ends, its `$(...)`, backticks, subshells and loop and branch bodies read
 as commands of their own, wrappers (`env`, `nohup`, `time`, `timeout`, `nice`, `xargs`,
 `command`, `builtin`, `exec`, `eval`) stripped, and it goes into `sh -c`, `cmd /c`,
 `powershell -Command` and a decoded `-EncodedCommand`, to four levels - so `git -C x push` is
 `git push`, and `env A=1 git push` is too. What it cannot read is said in help, not guessed at:
-the inside of a script file a command runs. This is policy, not a sandbox - a program an agent
+the inside of a script file a command runs. The worktree rules (`agentPolicy.worktreeRules`, on
+unless turned off) keep an agent's worktree a thing the engine can measure: git's state-writing
+verbs and `gh pr merge`, `gh workflow run` and `gh run rerun` are refused (reading git stays
+allowed), git's own files are not written by a tool whatever `protectedPaths` says, an agent
+does not edit its own policy or what the next launch loads (`.harness-config/config.json`,
+`.harness-config/orchestrators/**`, `.harness-config/skills/**` - but for a step whose `writes`
+names that directory itself - `.harness-config/runner/**`, `.claude/settings*.json`, `.mcp.json`),
+and the tool's own state is written by its verbs alone, the agent's own work directory the one
+exception. The protected paths (`agentPolicy.protectedPaths`, on unless turned off) are the
+writes Claude Code guards - `.git/**`, `.vscode/**`, `.husky/**` and the rest of its list, which
+`help agent-clients` prints and a test pins - refused on every client, so a role is not stopped
+on one where it passes on another; turning them off takes this tool's refusal away, and Claude
+Code's own guard stays Claude Code's. A step's `writes` is the one source that narrows: where a
+step has them, a write under its worktree that matches none of their patterns is denied; the
+reporter's reads are narrowed to the run's directory alone, with no command, no write and no web
+at all. For Claude Code the same policy is rendered, never re-decided, into the launch's
+settings: an ask rule for every tool, and the restrictions as deny rules, absolute once for each
+root. This is policy, not a sandbox - a program an agent
 runs opens files as the user it runs as, a file of the credential slot among them; what it is
 never given is a key in its environment, and what no file tool of an agent touches is the slot
 itself, in any root. Where this tool cannot decide a call it denies it, never allows: nothing

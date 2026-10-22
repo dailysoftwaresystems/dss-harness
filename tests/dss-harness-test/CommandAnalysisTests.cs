@@ -187,4 +187,40 @@ public sealed class CommandAnalysisTests
         Assert.Equal("git", CommandAnalysis.Name("git"));
         Assert.Equal("bash", CommandAnalysis.Name("/usr/bin/bash.exe"));
     }
+
+    [Fact]
+    public void WebAddresses_ReadCurlAndWget_BehindTheirOptions()
+    {
+        Assert.Equal(["https://example.com/x"], CommandAnalysis.WebAddresses(["curl", "-s", "-o", "out", "https://example.com/x"]));
+        Assert.Equal(["https://a.example/x", "https://b.example/y"], CommandAnalysis.WebAddresses(["curl", "--url", "https://a.example/x", "--url=https://b.example/y"]));
+        Assert.Equal(["example.com/raw/1"], CommandAnalysis.WebAddresses(["wget", "-q", "example.com/raw/1"]));
+        Assert.Equal([], CommandAnalysis.WebAddresses(["curl", "--config", "cfg"]));
+    }
+
+    [Fact]
+    public void WebAddresses_ReadTheFetchersOfPowerShellAndHttp()
+    {
+        Assert.Equal(["https://example.com/api"], CommandAnalysis.WebAddresses(["Invoke-WebRequest", "-Uri", "https://example.com/api"]));
+        Assert.Equal(["https://example.com/api"], CommandAnalysis.WebAddresses(["iwr", "-Uri:https://example.com/api"]));
+        Assert.Equal(["https://example.com/api"], CommandAnalysis.WebAddresses(["irm", "https://example.com/api"]));
+        Assert.Equal(["example.org/x"], CommandAnalysis.WebAddresses(["http", "example.org/x", "a==b"]));
+        Assert.Equal([], CommandAnalysis.WebAddresses(["Invoke-WebRequest", "-Method", "GET"]));
+    }
+
+    [Fact]
+    public void WebAddresses_ReadGhApiAsApiGithubcoms_UnlessAHostnameNamesAnother()
+    {
+        Assert.Equal(["api.github.com"], CommandAnalysis.WebAddresses(["gh", "api", "repos/owner/repo"]));
+        Assert.Equal(["api.github.com"], CommandAnalysis.WebAddresses(["gh", "api", "/user"]));
+        Assert.Equal(["ghe.example.com"], CommandAnalysis.WebAddresses(["gh", "api", "--hostname", "ghe.example.com", "/user"]));
+        Assert.Equal([], CommandAnalysis.WebAddresses(["gh", "pr", "view", "41"]));
+    }
+
+    [Fact]
+    public void WebAddresses_ReadAProgramTheListDoesNotNameAsNoRequest()
+    {
+        Assert.Equal([], CommandAnalysis.WebAddresses(["git", "clone", "https://example.com/x.git"]));
+        Assert.Equal([], CommandAnalysis.WebAddresses(["dotnet", "restore"]));
+        Assert.Equal([], CommandAnalysis.WebAddresses(["curl.tar.gz"]));
+    }
 }

@@ -25,11 +25,34 @@ public sealed class AgentPolicyConfig
 {
     /// <summary>
     /// Restriction rules, each one string - <c>Run(git push *)</c>, <c>Write(.github/**)</c>,
-    /// <c>Read(secrets/**)</c> - applied beside the tool's built-in refusals to every agent of every run under this
-    /// configuration, and added to by a workflow's definitions and steps. Left out where the repository restricts
-    /// nothing, which is the default.
+    /// <c>Read(secrets/**)</c>, <c>Web(pastebin.com)</c> - applied beside the tool's built-in refusals to every
+    /// agent of every run under this configuration, and added to by a workflow's definitions and steps. Left out
+    /// where the repository restricts nothing, which is the default.
     /// </summary>
     public List<string> Restrictions { get; init; } = [];
+
+    /// <summary>
+    /// The allow list of every web request an agent makes: each entry one domain, and a request is allowed only to
+    /// a domain on the list or a name under it. Left out where every public address is allowed, which is the
+    /// default; given empty it is refused - leave the key out instead. A <c>Web(...)</c> restriction refuses
+    /// beside it whatever this allows.
+    /// </summary>
+    public List<string>? WebDomains { get; init; }
+
+    /// <summary>
+    /// Whether the worktree rules are on: what keeps an agent's worktree a thing the engine can measure, and its run
+    /// a thing only the engine moves - git's state-writing verbs, the merges and CI starts of <c>gh</c>, the tool's
+    /// own configuration and state. True where nothing is said. The tool's own verbs and <c>run-side-task</c> are
+    /// refused whatever this says.
+    /// </summary>
+    public bool? WorktreeRules { get; init; }
+
+    /// <summary>
+    /// Whether Claude Code's protected paths are refused on every client - the writes Claude Code guards, held to
+    /// alike where this tool's own clients would pass them. True where nothing is said; false takes this tool's
+    /// refusal away, and each client's own guard, where it has one, stays its own.
+    /// </summary>
+    public bool? ProtectedPaths { get; init; }
 }
 
 /// <summary>
