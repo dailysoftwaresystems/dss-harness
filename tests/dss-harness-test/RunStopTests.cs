@@ -813,18 +813,7 @@ public sealed class RunStopTests
                 Core.FileSystem.JsonStateFile.Options));
 
     /// <summary>A process of this test's own that sleeps five minutes: a dispatcher to end, or one to leave alone.</summary>
-    private static Process Sleeper()
-    {
-        var start = TestHost.ChildRequest("sleep", "300000");
-        var info = new ProcessStartInfo(start.FileName) { UseShellExecute = false };
-
-        foreach (var argument in start.Arguments)
-        {
-            info.ArgumentList.Add(argument);
-        }
-
-        return Process.Start(info)!;
-    }
+    private static Process Sleeper() => Process.Start(TestHost.StartOf(TestHost.ChildRequest("sleep", "300000")))!;
 
     /// <summary>Ends a sleeper of this test's own, wherever its test left it.</summary>
     private static void Ended(Process sleeper)

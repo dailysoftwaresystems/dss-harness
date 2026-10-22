@@ -82,11 +82,11 @@ public sealed class ContainExecTests
         try
         {
             Assert.Equal(0, result.ExitCode);
-            Assert.True(AwaitGone(orphan), $"the sleeper {orphan} outlived the job that held it");
+            Assert.True(orphan.AwaitGone(), $"the sleeper {orphan} outlived the job that held it");
         }
         finally
         {
-            TryEnding(orphan);
+            orphan.TryEnding();
         }
     }
 
@@ -104,11 +104,11 @@ public sealed class ContainExecTests
         try
         {
             Assert.Equal(0, result.ExitCode);
-            Assert.True(StillAlive(orphan), $"the sleeper {orphan} was ended by nothing that was asked to");
+            Assert.True(orphan.Running, $"the sleeper {orphan} was ended by nothing that was asked to");
         }
         finally
         {
-            TryEnding(orphan);
+            orphan.TryEnding();
         }
     }
 
@@ -137,6 +137,8 @@ public sealed class ContainExecTests
             TestContext.Current.CancellationToken);
 
         var said = await ids.Task.WaitAsync(LongBound, TestContext.Current.CancellationToken);
+        var bound = LearnedProcess.Of(said["bound"]);
+        var ordinary = LearnedProcess.Of(said["ordinary"]);
 
         try
         {
@@ -145,13 +147,13 @@ public sealed class ContainExecTests
                 parent.Kill(entireProcessTree: false);
             }
 
-            Assert.True(AwaitGone(said["bound"]), $"the bound sleeper {said["bound"]} outlived the process that started it");
-            Assert.True(StillAlive(said["ordinary"]), $"the ordinary sleeper {said["ordinary"]} was ended by nothing that was asked to");
+            Assert.True(bound.AwaitGone(), $"the bound sleeper {bound} outlived the process that started it");
+            Assert.True(ordinary.Running, $"the ordinary sleeper {ordinary} was ended by nothing that was asked to");
         }
         finally
         {
-            TryEnding(said["bound"]);
-            TryEnding(said["ordinary"]);
+            bound.TryEnding();
+            ordinary.TryEnding();
         }
 
         // Only now: the ordinary sleeper holds the output its parent inherited, which this run reads to its end.
@@ -170,16 +172,16 @@ public sealed class ContainExecTests
         var result = await ContainingRunner().RunAsync(
             Child("spawn-orphan", "300000") with { Bound = true },
             TestContext.Current.CancellationToken).WaitAsync(LongBound, TestContext.Current.CancellationToken);
-        var orphan = Id(result.StandardOutput.Trim(), "orphan=") ?? 0;
+        var orphan = LearnedProcess.In(result.StandardOutput.Trim(), "orphan=") ?? LearnedProcess.None;
 
         try
         {
             Assert.Equal(0, result.ExitCode);
-            Assert.True(StillAlive(orphan), $"the sleeper {orphan} was ended by its bound parent's own end");
+            Assert.True(orphan.Running, $"the sleeper {orphan} was ended by its bound parent's own end");
         }
         finally
         {
-            TryEnding(orphan);
+            orphan.TryEnding();
         }
     }
 
@@ -192,20 +194,20 @@ public sealed class ContainExecTests
     {
         Assert.SkipUnless(OperatingSystem.IsWindows(), "the sleeper is started out of every tree by Windows' own call; on Linux and macOS a bound child starts as any other.");
 
-        var orphan = 0;
+        var orphan = LearnedProcess.None;
 
         try
         {
             var (raised, _) = await RunAndStopOn(
                 Child("spawn-orphan-and-sleep", "300000", "300000") with { Bound = true },
-                line => (orphan = Id(line, "orphan=") ?? orphan) != 0);
+                line => (orphan = LearnedProcess.In(line, "orphan=") ?? orphan).Id != 0);
 
             Assert.IsType<OperationCanceledException>(raised);
-            Assert.True(StillAlive(orphan), $"the sleeper {orphan} was ended by its bound parent's stop");
+            Assert.True(orphan.Running, $"the sleeper {orphan} was ended by its bound parent's stop");
         }
         finally
         {
-            TryEnding(orphan);
+            orphan.TryEnding();
         }
     }
 
@@ -306,9 +308,9 @@ public sealed class ContainExecTests
         Assert.NotEqual(endpoints[0].StandardOutput, contained.StandardOutput);
 
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(token);
-        var said = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var said = new TaskCompletionSource<LearnedProcess>(TaskCreationOptions.RunContinuationsAsynchronously);
         var sleeping = runner.RunAsync(
-            Child("say-pid-and-sleep", "300000") with { Bound = true, OnOutputLine = line => _ = Id(line, "pid=") is { } id && said.TrySetResult(id) },
+            Child("say-pid-and-sleep", "300000") with { Bound = true, OnOutputLine = line => _ = LearnedProcess.In(line, "pid=") is { } id && said.TrySetResult(id) },
             stop.Token);
         var sleeper = await said.Task.WaitAsync(LongBound, token);
 
@@ -318,14 +320,14 @@ public sealed class ContainExecTests
             GC.WaitForPendingFinalizers();
             GC.Collect();
 
-            Assert.True(StillAlive(sleeper), $"the bound sleeper {sleeper} was ended by a collection: its job was held by nothing");
+            Assert.True(sleeper.Running, $"the bound sleeper {sleeper} was ended by a collection: its job was held by nothing");
             Assert.Equal(2, made);
         }
         finally
         {
             await stop.CancelAsync();
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => sleeping.WaitAsync(LongBound, token));
-            TryEnding(sleeper);
+            sleeper.TryEnding();
         }
     }
 
@@ -497,7 +499,7 @@ public sealed class ContainExecTests
     [Fact]
     public async Task AContainedChildsLeftover_EndsWithIt_AndTheOutputItHeldEnds()
     {
-        var holder = 0;
+        var holder = LearnedProcess.None;
         var since = new Stopwatch();
 
         try
@@ -508,7 +510,7 @@ public sealed class ContainExecTests
                     Contained = true,
                     OnOutputLine = line =>
                     {
-                        if (Id(line, "holder=") is { } id)
+                        if (LearnedProcess.In(line, "holder=") is { } id)
                         {
                             holder = id;
                             since.Start();
@@ -520,13 +522,13 @@ public sealed class ContainExecTests
             since.Stop();
 
             Assert.Equal(0, result.ExitCode);
-            Assert.NotEqual(0, holder);
-            Assert.True(AwaitGone(holder), $"the holder {holder} outlived the contained child that left it");
+            Assert.NotEqual(0, holder.Id);
+            Assert.True(holder.AwaitGone(), $"the holder {holder} outlived the contained child that left it");
             Assert.True(since.Elapsed < ProcessRunner.DrainBound, $"the run waited {since.Elapsed} for the leftover's end");
         }
         finally
         {
-            TryEnding(holder);
+            holder.TryEnding();
         }
     }
 
@@ -539,7 +541,7 @@ public sealed class ContainExecTests
     [Fact]
     public async Task AContainedChild_Stopped_EndsWhatItLeftOutsideItsTree_AndTheOutputItHeldEnds()
     {
-        var holder = 0;
+        var holder = LearnedProcess.None;
 
         try
         {
@@ -547,18 +549,18 @@ public sealed class ContainExecTests
                 Child("spawn-orphan-holder", "300000") with
                 {
                     Contained = true,
-                    OnOutputLine = line => holder = Id(line, "holder=") ?? holder,
+                    OnOutputLine = line => holder = LearnedProcess.In(line, "holder=") ?? holder,
                 },
                 line => string.Equals(line, "orphaned", StringComparison.Ordinal));
 
             Assert.IsType<OperationCanceledException>(raised);
-            Assert.NotEqual(0, holder);
-            Assert.True(AwaitGone(holder), $"the holder {holder} outlived the stopped child's container");
+            Assert.NotEqual(0, holder.Id);
+            Assert.True(holder.AwaitGone(), $"the holder {holder} outlived the stopped child's container");
             Assert.True(since < ProcessRunner.DrainBound, $"the stopped run waited {since} for the holder's end");
         }
         finally
         {
-            TryEnding(holder);
+            holder.TryEnding();
         }
     }
 
@@ -572,20 +574,20 @@ public sealed class ContainExecTests
     {
         Assert.SkipWhen(OperatingSystem.IsWindows(), "the session's end by signal is the C library's; on Windows the job ends, which AContainedChild_Stopped_EndsWhatItLeftOutsideItsTree_AndTheOutputItHeldEnds holds.");
 
-        var orphan = 0;
+        var orphan = LearnedProcess.None;
 
         try
         {
             var (raised, _) = await RunAndStopOn(
                 Child("spawn-orphan-and-sleep", "300000", "300000") with { Contained = true },
-                line => (orphan = Id(line, "orphan=") ?? orphan) != 0);
+                line => (orphan = LearnedProcess.In(line, "orphan=") ?? orphan).Id != 0);
 
             Assert.IsType<OperationCanceledException>(raised);
-            Assert.True(AwaitGone(orphan), $"the sleeper {orphan} outlived the session that held it");
+            Assert.True(orphan.AwaitGone(), $"the sleeper {orphan} outlived the session that held it");
         }
         finally
         {
-            TryEnding(orphan);
+            orphan.TryEnding();
         }
     }
 
@@ -601,21 +603,21 @@ public sealed class ContainExecTests
     {
         Assert.SkipWhen(OperatingSystem.IsWindows(), "groups are the C library's; on Windows every descendant is born in the job, which AContainedChild_Stopped_EndsWhatItLeftOutsideItsTree_AndTheOutputItHeldEnds holds.");
 
-        var holder = 0;
+        var holder = LearnedProcess.None;
 
         try
         {
             var (raised, since) = await RunAndStopOn(
                 Child("spawn-holder", "sleep", "300000", "own-group-and-sleep", "300000") with { Contained = true },
-                line => (holder = Id(line, "holder=") ?? holder) != 0);
+                line => (holder = LearnedProcess.In(line, "holder=") ?? holder).Id != 0);
 
             Assert.IsType<OperationCanceledException>(raised);
-            Assert.True(AwaitGone(holder), $"the descendant {holder} in a group of its own outlived the stop");
+            Assert.True(holder.AwaitGone(), $"the descendant {holder} in a group of its own outlived the stop");
             Assert.True(since < ProcessRunner.DrainBound, $"the stopped run waited {since} for the descendant's end");
         }
         finally
         {
-            TryEnding(holder);
+            holder.TryEnding();
         }
     }
 
@@ -650,7 +652,7 @@ public sealed class ContainExecTests
 
         using var temp = new TempDirectory();
         var ready = temp.Combine("ready.txt");
-        var orphan = 0;
+        var orphan = LearnedProcess.None;
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
 
         try
@@ -660,20 +662,20 @@ public sealed class ContainExecTests
                 {
                     Contained = true,
                     Timeout = LongBound,
-                    OnOutputLine = line => orphan = Id(line, "orphan=") ?? orphan,
+                    OnOutputLine = line => orphan = LearnedProcess.In(line, "orphan=") ?? orphan,
                 },
                 stop.Token);
 
             // Stopped once the leftover refuses the asking, which it says by the file.
-            Assert.True(Until(() => orphan != 0 && File.Exists(ready)), "the leftover never said it refuses to be asked");
+            Assert.True(Until(() => orphan.Id != 0 && File.Exists(ready)), "the leftover never said it refuses to be asked");
             await stop.CancelAsync();
 
             Assert.IsType<OperationCanceledException>(await Record.ExceptionAsync(() => run.WaitAsync(LongBound, TestContext.Current.CancellationToken)));
-            Assert.True(AwaitGone(orphan), $"the leftover {orphan}, refusing to be asked, outlived the grace");
+            Assert.True(orphan.AwaitGone(), $"the leftover {orphan}, refusing to be asked, outlived the grace");
         }
         finally
         {
-            TryEnding(orphan);
+            orphan.TryEnding();
         }
     }
 
@@ -687,7 +689,7 @@ public sealed class ContainExecTests
     {
         using var temp = new TempDirectory();
         var ready = temp.Combine("ready.txt");
-        var child = 0;
+        var child = LearnedProcess.None;
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
 
         try
@@ -697,22 +699,22 @@ public sealed class ContainExecTests
                 {
                     ApartFromTerminal = true,
                     Timeout = LongBound,
-                    OnOutputLine = line => child = Id(line, "pid=") ?? child,
+                    OnOutputLine = line => child = LearnedProcess.In(line, "pid=") ?? child,
                 },
                 stop.Token);
 
-            Assert.True(Until(() => child != 0 && File.Exists(ready)), "the child never said it refuses to be asked");
+            Assert.True(Until(() => child.Id != 0 && File.Exists(ready)), "the child never said it refuses to be asked");
 
             var since = Stopwatch.StartNew();
             await stop.CancelAsync();
 
             Assert.IsType<OperationCanceledException>(await Record.ExceptionAsync(() => run.WaitAsync(LongBound, TestContext.Current.CancellationToken)));
             Assert.True(since.Elapsed < ProcessRunner.SessionGrace, $"stopping a child apart from the terminal took {since.Elapsed}");
-            Assert.True(AwaitGone(child), $"the child {child} outlived its stop");
+            Assert.True(child.AwaitGone(), $"the child {child} outlived its stop");
         }
         finally
         {
-            TryEnding(child);
+            child.TryEnding();
         }
     }
 
@@ -727,7 +729,7 @@ public sealed class ContainExecTests
     {
         Assert.SkipWhen(OperatingSystem.IsWindows(), "the session is read from the process table on Linux and macOS; Windows ends the job, which needs none.");
 
-        var holder = 0;
+        var holder = LearnedProcess.None;
 
         try
         {
@@ -735,17 +737,17 @@ public sealed class ContainExecTests
                 Child("spawn-holder", "exit", "0", "sleep", "300000") with
                 {
                     Contained = true,
-                    OnOutputLine = line => holder = Id(line, "holder=") ?? holder,
+                    OnOutputLine = line => holder = LearnedProcess.In(line, "holder=") ?? holder,
                 },
                 TestContext.Current.CancellationToken).WaitAsync(LongBound, TestContext.Current.CancellationToken);
 
             Assert.Equal((0, false), (result.ExitCode, result.TimedOut));
             Assert.Equal(UnreadableTable.Unreached("its group was ended"), result.Uncontained);
-            Assert.True(AwaitGone(holder), $"the holder {holder} in the child's group outlived the child's end");
+            Assert.True(holder.AwaitGone(), $"the holder {holder} in the child's group outlived the child's end");
         }
         finally
         {
-            TryEnding(holder);
+            holder.TryEnding();
         }
     }
 
@@ -759,21 +761,21 @@ public sealed class ContainExecTests
     {
         Assert.SkipWhen(OperatingSystem.IsWindows(), "the session is read from the process table on Linux and macOS; Windows ends the job, which needs none.");
 
-        var orphan = 0;
+        var orphan = LearnedProcess.None;
 
         try
         {
             var (raised, _) = await RunAndStopOn(
                 Child("spawn-orphan-and-sleep", "300000", "300000") with { Contained = true },
-                line => (orphan = Id(line, "orphan=") ?? orphan) != 0,
+                line => (orphan = LearnedProcess.In(line, "orphan=") ?? orphan).Id != 0,
                 ContainingRunner(UnreadableTable.Raising));
 
             Assert.Equal($"The run was stopped, and {UnreadableTable.Unreached("its group was ended")}.", Assert.IsType<OperationCanceledException>(raised).Message);
-            Assert.True(AwaitGone(orphan), $"the orphan {orphan} in the stopped child's group outlived the stop");
+            Assert.True(orphan.AwaitGone(), $"the orphan {orphan} in the stopped child's group outlived the stop");
         }
         finally
         {
-            TryEnding(orphan);
+            orphan.TryEnding();
         }
     }
 
@@ -786,21 +788,21 @@ public sealed class ContainExecTests
     {
         Assert.SkipWhen(OperatingSystem.IsWindows(), "the session is read from the process table on Linux and macOS; Windows ends the job, which needs none.");
 
-        var child = 0;
+        var child = LearnedProcess.None;
 
         try
         {
             var (raised, _) = await RunAndStopOn(
                 Child("say-pid-and-sleep", "300000") with { Contained = true },
-                line => (child = Id(line, "pid=") ?? child) != 0,
+                line => (child = LearnedProcess.In(line, "pid=") ?? child).Id != 0,
                 ContainingRunner(new UnreadableTable(new InvalidOperationException("nothing foresaw this"))));
 
             Assert.Equal("nothing foresaw this", Assert.IsType<InvalidOperationException>(raised).Message);
-            Assert.True(AwaitGone(child), $"the child {child} outlived a stop whose container's end failed");
+            Assert.True(child.AwaitGone(), $"the child {child} outlived a stop whose container's end failed");
         }
         finally
         {
-            TryEnding(child);
+            child.TryEnding();
         }
     }
 
@@ -814,7 +816,7 @@ public sealed class ContainExecTests
     {
         Assert.SkipWhen(OperatingSystem.IsWindows(), "sessions are the C library's; on Windows nothing born in the job leaves it.");
 
-        var holder = 0;
+        var holder = LearnedProcess.None;
 
         try
         {
@@ -822,17 +824,17 @@ public sealed class ContainExecTests
                 Child("spawn-holder", "exit", "0", "own-session-and-sleep", "300000") with
                 {
                     Contained = true,
-                    OnOutputLine = line => holder = Id(line, "holder=") ?? holder,
+                    OnOutputLine = line => holder = LearnedProcess.In(line, "holder=") ?? holder,
                 },
                 TestContext.Current.CancellationToken).WaitAsync(ProcessRunner.DrainBound + TimeSpan.FromMinutes(1), TestContext.Current.CancellationToken);
 
             Assert.Equal(0, result.ExitCode);
             Assert.Equal($"holder={holder}\n", result.StandardOutput);
-            Assert.True(StillAlive(holder), $"the daemon {holder} was reached by what reaches nothing outside the session and the tree");
+            Assert.True(holder.Running, $"the daemon {holder} was reached by what reaches nothing outside the session and the tree");
         }
         finally
         {
-            TryEnding(holder);
+            holder.TryEnding();
         }
     }
 
@@ -847,8 +849,8 @@ public sealed class ContainExecTests
     {
         Assert.SkipWhen(OperatingSystem.IsWindows(), "groups and their signals are the C library's; AContainedChild_OnWindows_IsInAGroupOfItsOwn_ThatTheConsolesInterruptDoesNotReach holds Windows.");
 
-        var ids = new TaskCompletionSource<(int Parent, int Contained, int Ordinary)>(TaskCreationOptions.RunContinuationsAsynchronously);
-        (int Parent, int Contained, int Ordinary) said = default;
+        var ids = new TaskCompletionSource<(int Parent, LearnedProcess Contained, LearnedProcess Ordinary)>(TaskCreationOptions.RunContinuationsAsynchronously);
+        (int Parent, LearnedProcess Contained, LearnedProcess Ordinary) said = default;
 
         try
         {
@@ -860,7 +862,7 @@ public sealed class ContainExecTests
                     OnOutputLine = line =>
                     {
                         var words = line.Split(' ').Select(word => word.Split('=')).ToDictionary(pair => pair[0], pair => int.Parse(pair[1], CultureInfo.InvariantCulture));
-                        ids.TrySetResult((words["parent"], words["contained"], words["ordinary"]));
+                        ids.TrySetResult((words["parent"], LearnedProcess.Of(words["contained"]), LearnedProcess.Of(words["ordinary"])));
                     },
                 },
                 TestContext.Current.CancellationToken);
@@ -871,13 +873,13 @@ public sealed class ContainExecTests
 
             await run.WaitAsync(LongBound, TestContext.Current.CancellationToken);
 
-            Assert.True(AwaitGone(said.Ordinary), $"the child {said.Ordinary} in its parent's group outlived the signal to the group");
-            Assert.True(StillAlive(said.Contained), $"the contained child {said.Contained} was reached by the signal to its parent's group");
+            Assert.True(said.Ordinary.AwaitGone(), $"the child {said.Ordinary} in its parent's group outlived the signal to the group");
+            Assert.True(said.Contained.Running, $"the contained child {said.Contained} was reached by the signal to its parent's group");
         }
         finally
         {
-            TryEnding(said.Contained);
-            TryEnding(said.Ordinary);
+            said.Contained.TryEnding();
+            said.Ordinary.TryEnding();
         }
     }
 
@@ -1139,13 +1141,13 @@ public sealed class ContainExecTests
             .ToDictionary(parts => parts[0], parts => int.Parse(parts[1], CultureInfo.InvariantCulture));
 
     /// <summary>Runs one child behaviour that starts a sleeper out of every tree and exits, and reads the sleeper's id.</summary>
-    private static async Task<(ProcessResult Result, int Orphan)> RunWithOrphan(bool contained = false)
+    private static async Task<(ProcessResult Result, LearnedProcess Orphan)> RunWithOrphan(bool contained = false)
     {
         var result = await ContainingRunner().RunAsync(
             Child("spawn-orphan", "300000") with { Contained = contained },
             TestContext.Current.CancellationToken).WaitAsync(LongBound, TestContext.Current.CancellationToken);
 
-        return (result, Id(result.StandardOutput.Trim(), "orphan=") ?? 0);
+        return (result, LearnedProcess.In(result.StandardOutput.Trim(), "orphan=") ?? LearnedProcess.None);
     }
 
     /// <summary>
@@ -1244,10 +1246,6 @@ public sealed class ContainExecTests
         return script;
     }
 
-    /// <summary>The number after <paramref name="name"/> where <paramref name="line"/> is that and a number, else <see langword="null"/>.</summary>
-    private static int? Id(string line, string name)
-        => line.StartsWith(name, StringComparison.Ordinal) && int.TryParse(line[name.Length..], CultureInfo.InvariantCulture, out var id) ? id : null;
-
     /// <summary>Notes <paramref name="what"/> in <paramref name="heard"/>, which two threads note into.</summary>
     private static void Heard(List<string> heard, string what)
     {
@@ -1271,55 +1269,6 @@ public sealed class ContainExecTests
         }
 
         return false;
-    }
-
-    /// <summary>Whether <paramref name="process"/> is gone, looking for as long as a container takes to end it.</summary>
-    private static bool AwaitGone(int process)
-    {
-        for (var waited = TimeSpan.Zero; waited < TimeSpan.FromSeconds(10); waited += TimeSpan.FromMilliseconds(100))
-        {
-            if (!StillAlive(process))
-            {
-                return true;
-            }
-
-            Thread.Sleep(TimeSpan.FromMilliseconds(100));
-        }
-
-        return false;
-    }
-
-    /// <summary>Whether <paramref name="process"/> is running now.</summary>
-    private static bool StillAlive(int process)
-    {
-        try
-        {
-            using var found = Process.GetProcessById(process);
-            return !found.HasExited;
-        }
-        catch (ArgumentException)
-        {
-            return false;
-        }
-    }
-
-    /// <summary>Ends <paramref name="process"/> where the test started it and it still runs, taking its tree with it.</summary>
-    private static void TryEnding(int process)
-    {
-        if (process == 0)
-        {
-            return;
-        }
-
-        try
-        {
-            using var found = Process.GetProcessById(process);
-            found.Kill(entireProcessTree: true);
-        }
-        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or Win32Exception)
-        {
-            // Already gone, or going.
-        }
     }
 
     /// <summary>The terminal's interruption, SIGINT, as Linux and macOS number it.</summary>

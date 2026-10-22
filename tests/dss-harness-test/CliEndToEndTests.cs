@@ -1788,12 +1788,8 @@ public sealed partial class CliEndToEndTests
 
         // A shared tool at work in that tree's build of the leg - a test binary there - for as long as the commands run.
         var theirs = Path.Combine(VariantKey.For(config, config.Legs["native"], platform.PlatformKey).DirectoryUnder(worktree), "tests", "suite");
-        var start = new System.Diagnostics.ProcessStartInfo(TestHost.DotnetExecutable) { UseShellExecute = false, CreateNoWindow = true };
-        start.ArgumentList.Add("exec");
-        start.ArgumentList.Add(TestHost.AssemblyPath);
-        start.ArgumentList.Add("120000");
-        start.ArgumentList.Add(theirs);
-        start.Environment[TestHost.ChildModeVariable] = "sleep";
+        var start = TestHost.StartOf(TestHost.ChildRequest("sleep", "120000", theirs));
+        start.CreateNoWindow = true;
         using var tool = System.Diagnostics.Process.Start(start)!;
 
         try

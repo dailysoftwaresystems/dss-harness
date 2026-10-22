@@ -782,24 +782,12 @@ public sealed class ClaudeCodeProtocolTests
     /// <summary>Starts the fake <c>claude</c> with <paramref name="arguments"/> and, beside its mode, <paramref name="environment"/>.</summary>
     private static FakeClaude Fake(string[] arguments, IReadOnlyDictionary<string, string>? environment = null)
     {
-        var start = new ProcessStartInfo(TestHost.DotnetExecutable)
-        {
-            UseShellExecute = false,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            StandardOutputEncoding = Encoding.UTF8,
-            CreateNoWindow = true,
-        };
+        var start = TestHost.StartOf(TestHost.ChildRequest("claude-code", arguments));
 
-        start.ArgumentList.Add("exec");
-        start.ArgumentList.Add(TestHost.AssemblyPath);
-
-        foreach (var argument in arguments)
-        {
-            start.ArgumentList.Add(argument);
-        }
-
-        start.Environment[TestHost.ChildModeVariable] = "claude-code";
+        start.RedirectStandardInput = true;
+        start.RedirectStandardOutput = true;
+        start.StandardOutputEncoding = Encoding.UTF8;
+        start.CreateNoWindow = true;
 
         foreach (var (variable, value) in environment ?? new Dictionary<string, string>(StringComparer.Ordinal))
         {

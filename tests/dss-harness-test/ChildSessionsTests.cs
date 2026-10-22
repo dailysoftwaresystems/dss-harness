@@ -63,10 +63,10 @@ public sealed class ChildSessionsTests
                 },
                 OnOutputLine = line =>
                 {
-                    if (Id(line, "pid=") is { } id)
+                    if (LearnedProcess.In(line, "pid=") is { } id)
                     {
-                        leader = id;
-                        started = harness.Identity.StampOf(id);
+                        leader = id.Id;
+                        started = harness.Identity.StampOf(id.Id);
 
                         if (stopped)
                         {
@@ -131,7 +131,7 @@ public sealed class ChildSessionsTests
                 ApartFromTerminal = !contained,
                 SessionRecord = new Heard(heard),
                 OnStarted = () => heard.Add("started"),
-                OnOutputLine = line => leader = Id(line, "pid=") ?? leader,
+                OnOutputLine = line => leader = LearnedProcess.In(line, "pid=")?.Id ?? leader,
             },
             Token).WaitAsync(LongBound, Token);
 
@@ -162,12 +162,12 @@ public sealed class ChildSessionsTests
             Assert.Equal(TestHost.AssemblyProgram, raised.FileName);
             Assert.Equal($"'{TestHost.AssemblyProgram}' could not be started: its session could not be recorded: the disk is full", raised.Message);
             Assert.False(started, "a child whose session was not recorded was said to have started");
-            Assert.True(refusing.Leader > 0, "the record was never asked for");
-            Assert.True(AwaitGone(refusing.Leader), $"the child {refusing.Leader}, whose session was never recorded, was left running");
+            Assert.True(refusing.Leader.Id > 0, "the record was never asked for");
+            Assert.True(refusing.Leader.AwaitGone(), $"the child {refusing.Leader}, whose session was never recorded, was left running");
         }
         finally
         {
-            TryEnding(refusing.Leader);
+            refusing.Leader.TryEnding();
         }
     }
 
@@ -184,8 +184,8 @@ public sealed class ChildSessionsTests
         using var temp = new TempDirectory();
         var kit = await OrchestrationKit.PrepareAsync(temp);
         var step = kit.Layout.StepDirectory("s1");
-        var ids = new TaskCompletionSource<(int Owner, int Contained)>(TaskCreationOptions.RunContinuationsAsynchronously);
-        (int Owner, int Contained) said = default;
+        var ids = new TaskCompletionSource<(LearnedProcess Owner, LearnedProcess Contained)>(TaskCreationOptions.RunContinuationsAsynchronously);
+        (LearnedProcess Owner, LearnedProcess Contained) said = default;
 
         try
         {
@@ -196,41 +196,41 @@ public sealed class ChildSessionsTests
                     OnOutputLine = line =>
                     {
                         var words = line.Split(' ').Select(word => word.Split('=')).ToDictionary(pair => pair[0], pair => int.Parse(pair[1], CultureInfo.InvariantCulture));
-                        ids.TrySetResult((words["owner"], words["contained"]));
+                        ids.TrySetResult((LearnedProcess.Of(words["owner"]), LearnedProcess.Of(words["contained"])));
                     },
                 },
                 Token);
 
             said = await ids.Task.WaitAsync(LongBound, Token);
-            var record = OrchestratorLayout.ChildFile(step, said.Contained);
+            var record = OrchestratorLayout.ChildFile(step, said.Contained.Id);
 
             Assert.True(File.Exists(record), $"no record of session {said.Contained} at '{record}'");
 
             // Killed alone, as a crash or a kill -9 ends it: nothing of it ends the session it started.
-            using (var killed = Process.GetProcessById(said.Owner))
+            using (var killed = Process.GetProcessById(said.Owner.Id))
             {
                 killed.Kill(entireProcessTree: false);
             }
 
             await owner.WaitAsync(LongBound, Token);
-            Assert.True(StillAlive(said.Contained), $"the contained child {said.Contained} ended with the process that started it");
+            Assert.True(said.Contained.Running, $"the contained child {said.Contained} ended with the process that started it");
 
             var listed = await ListAsync(kit);
 
             Assert.Equal(HarnessExit.Success, listed.Completion.ExitCode);
-            Assert.True(AwaitGone(said.Contained), $"the contained child {said.Contained} outlived the command that found it left");
+            Assert.True(said.Contained.AwaitGone(), $"the contained child {said.Contained} outlived the command that found it left");
             Assert.False(File.Exists(record), $"the record of the ended session is still at '{record}'");
             Assert.Contains(
                 $"list-orchestrator: step 's1' of 'o1' left session {said.Contained} ('{TestHost.AssemblyProgram}') running, and the process that started it (pid {said.Owner}) has gone; it was ended",
                 Lines(listed.Error));
             Assert.True(
-                JsonNode.DeepEquals(new JsonArray(Ended(null, "s1", said.Contained, said.Owner)), listed.Document[EndedChildSessions.Member]),
+                JsonNode.DeepEquals(new JsonArray(Ended(null, "s1", said.Contained.Id, said.Owner.Id)), listed.Document[EndedChildSessions.Member]),
                 listed.Output);
         }
         finally
         {
-            TryEnding(said.Contained);
-            TryEnding(said.Owner);
+            said.Contained.TryEnding();
+            said.Owner.TryEnding();
         }
     }
 
@@ -258,8 +258,8 @@ public sealed class ChildSessionsTests
         var (refreshed, refreshLeader) = await LeftAsync(kit, kit.Layout.StepDirectory("s3"));
         var stopped = (await RefreshAsync(kit, "nobody")).Document;
 
-        Assert.True(JsonNode.DeepEquals(new JsonArray(Ended("a1", "s2", foldLeader, Environment.ProcessId)), fold["ended"]), fold.ToJsonString());
-        Assert.True(JsonNode.DeepEquals(new JsonArray(Ended(null, "s3", refreshLeader, Environment.ProcessId)), stopped["ended"]), stopped.ToJsonString());
+        Assert.True(JsonNode.DeepEquals(new JsonArray(Ended("a1", "s2", foldLeader.Id, Environment.ProcessId)), fold["ended"]), fold.ToJsonString());
+        Assert.True(JsonNode.DeepEquals(new JsonArray(Ended(null, "s3", refreshLeader.Id, Environment.ProcessId)), stopped["ended"]), stopped.ToJsonString());
 
         fold.Remove("ended");
         stopped.Remove("ended");
@@ -299,14 +299,14 @@ public sealed class ChildSessionsTests
         var listed = await ListAsync(kit, services => services.AddSingleton(refusing));
 
         var expected = JsonNode.Parse(OrchestrationReports.ListStopped(HarnessExit.CommandFailed, "git would not list the worktrees."))!.AsObject();
-        expected[EndedChildSessions.Member] = new JsonArray(Ended("a9", "s1", leader, Environment.ProcessId));
+        expected[EndedChildSessions.Member] = new JsonArray(Ended("a9", "s1", leader.Id, Environment.ProcessId));
 
         Assert.Equal(HarnessExit.CommandFailed, listed.Completion.ExitCode);
         Assert.True(JsonNode.DeepEquals(expected, listed.Document), listed.Output);
         Assert.Equal(
             [.. expected.Select(member => member.Key)],
             listed.Document.Select(member => member.Key));
-        Assert.True(AwaitGone(leader), $"the session {leader} the sweep found left outlived it");
+        Assert.True(leader.AwaitGone(), $"the session {leader} the sweep found left outlived it");
 
         await left.WaitAsync(LongBound, Token);
     }
@@ -323,15 +323,15 @@ public sealed class ChildSessionsTests
 
         try
         {
-            kit.Harness.ChildSessions.For(step).Placed(leader, TestHost.AssemblyProgram);
-            var record = OrchestratorLayout.ChildFile(step, leader);
+            kit.Harness.ChildSessions.For(step).Placed(leader.Id, TestHost.AssemblyProgram);
+            var record = OrchestratorLayout.ChildFile(step, leader.Id);
             var written = File.ReadAllText(record);
 
             var listed = await ListAsync(kit);
 
             Assert.Equal(HarnessExit.Success, listed.Completion.ExitCode);
             Assert.Equal(written, File.ReadAllText(record));
-            Assert.True(StillAlive(leader), $"the session {leader}, whose owner runs, was ended");
+            Assert.True(leader.Running, $"the session {leader}, whose owner runs, was ended");
             Assert.False(listed.Document.ContainsKey(EndedChildSessions.Member), listed.Output);
             Assert.DoesNotContain("left session", listed.Error, StringComparison.Ordinal);
             Assert.DoesNotContain(ChildSessions.RecordKind, listed.Error, StringComparison.Ordinal);
@@ -358,14 +358,14 @@ public sealed class ChildSessionsTests
 
         try
         {
-            Writer(kit, laterStart: true).For(step).Placed(leader, TestHost.AssemblyProgram);
-            var record = OrchestratorLayout.ChildFile(step, leader);
+            Writer(kit, laterStart: true).For(step).Placed(leader.Id, TestHost.AssemblyProgram);
+            var record = OrchestratorLayout.ChildFile(step, leader.Id);
 
             var listed = await ListAsync(kit);
 
             Assert.Equal(HarnessExit.Success, listed.Completion.ExitCode);
             Assert.False(File.Exists(record), $"the record naming a session nothing leads any more is still at '{record}'");
-            Assert.True(StillAlive(leader), $"the process {leader}, given the recorded leader's id, was ended");
+            Assert.True(leader.Running, $"the process {leader}, given the recorded leader's id, was ended");
             Assert.False(listed.Document.ContainsKey(EndedChildSessions.Member), listed.Output);
             Assert.DoesNotContain("left session", listed.Error, StringComparison.Ordinal);
             Assert.DoesNotContain(ChildSessions.RecordKind, listed.Error, StringComparison.Ordinal);
@@ -439,14 +439,14 @@ public sealed class ChildSessionsTests
 
         try
         {
-            Writer(kit, laterStart: false).For(step).Placed(leader, TestHost.AssemblyProgram);
-            var record = OrchestratorLayout.ChildFile(step, leader);
+            Writer(kit, laterStart: false).For(step).Placed(leader.Id, TestHost.AssemblyProgram);
+            var record = OrchestratorLayout.ChildFile(step, leader.Id);
 
             var listed = await kit.Harness.OrchestratorService.ListAsync(kit.Main, OrchestrationKit.Orchestrator, false, false, json: false, Token);
 
             Assert.True(listed.Succeeded, OrchestrationKit.Describe(listed));
             Assert.True(File.Exists(record));
-            Assert.True(StillAlive(leader));
+            Assert.True(leader.Running);
             Assert.Contains(
                 $"list-orchestrator: WARN - '{record}' is the record of a contained child's session, which this system never writes: session {leader} cannot be ended on Windows, "
                 + "whose contained children are held in a job that ends them with the process that held it, so none is ever left running for a sweep to end. It was left as it is.",
@@ -468,11 +468,11 @@ public sealed class ChildSessionsTests
         => TestHost.ChildRequest("say-pid-and-sleep", milliseconds) with { FileName = TestHost.AssemblyProgram, Arguments = [milliseconds] };
 
     /// <summary>A sleeper started contained, as a step's would be, its run and its id once it said it; stopped by <paramref name="stop"/>.</summary>
-    private static async Task<(Task<ProcessResult> Run, int Leader)> SleeperAsync(CancellationToken stop)
+    private static async Task<(Task<ProcessResult> Run, LearnedProcess Leader)> SleeperAsync(CancellationToken stop)
     {
-        var said = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var said = new TaskCompletionSource<LearnedProcess>(TaskCreationOptions.RunContinuationsAsynchronously);
         var run = ContainingRunner().RunAsync(
-            Sleeper("300000") with { Contained = true, OnOutputLine = line => _ = Id(line, "pid=") is { } id && said.TrySetResult(id) },
+            Sleeper("300000") with { Contained = true, OnOutputLine = line => _ = LearnedProcess.In(line, "pid=") is { } id && said.TrySetResult(id) },
             stop);
 
         return (run, await said.Task.WaitAsync(LongBound, Token));
@@ -482,11 +482,11 @@ public sealed class ChildSessionsTests
     /// A contained child started here whose record names an owner that has gone, as a killed process leaves one, in
     /// <paramref name="step"/>: its run, which ends once the sweep ends it, and its id.
     /// </summary>
-    private static async Task<(Task Run, int Leader)> LeftAsync(OrchestrationKit kit, string step)
+    private static async Task<(Task Run, LearnedProcess Leader)> LeftAsync(OrchestrationKit kit, string step)
     {
         var (run, leader) = await SleeperAsync(Token);
 
-        Writer(kit, laterStart: false).For(step).Placed(leader, TestHost.AssemblyProgram);
+        Writer(kit, laterStart: false).For(step).Placed(leader.Id, TestHost.AssemblyProgram);
 
         return (Record.ExceptionAsync(() => run).AsTask(), leader);
     }
@@ -581,59 +581,6 @@ public sealed class ChildSessionsTests
     private static string[] Lines(string written)
         => written.Split('\n').Select(line => line.TrimEnd('\r')).ToArray();
 
-    /// <summary>The number after <paramref name="name"/> where <paramref name="line"/> is that and a number.</summary>
-    private static int? Id(string line, string name)
-        => line.StartsWith(name, StringComparison.Ordinal) && int.TryParse(line[name.Length..], NumberStyles.None, CultureInfo.InvariantCulture, out var id) ? id : null;
-
-    /// <summary>Whether <paramref name="process"/> is gone, looking for as long as a session takes to end.</summary>
-    private static bool AwaitGone(int process)
-    {
-        for (var waited = TimeSpan.Zero; waited < TimeSpan.FromSeconds(10); waited += TimeSpan.FromMilliseconds(100))
-        {
-            if (!StillAlive(process))
-            {
-                return true;
-            }
-
-            Thread.Sleep(TimeSpan.FromMilliseconds(100));
-        }
-
-        return false;
-    }
-
-    /// <summary>Whether <paramref name="process"/> is running now.</summary>
-    private static bool StillAlive(int process)
-    {
-        try
-        {
-            using var found = Process.GetProcessById(process);
-            return !found.HasExited;
-        }
-        catch (ArgumentException)
-        {
-            return false;
-        }
-    }
-
-    /// <summary>Ends <paramref name="process"/> where the test started it and it still runs.</summary>
-    private static void TryEnding(int process)
-    {
-        if (process <= 0)
-        {
-            return;
-        }
-
-        try
-        {
-            using var found = Process.GetProcessById(process);
-            found.Kill(entireProcessTree: true);
-        }
-        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or Win32Exception)
-        {
-            // Already gone, or going.
-        }
-    }
-
     /// <summary>What one operation answered: how it ended, its standard output - the document alone - and its standard error.</summary>
     private sealed record Answer(CommandCompletion Completion, string Output, string Error)
     {
@@ -652,11 +599,11 @@ public sealed class ChildSessionsTests
     /// <summary>A record that cannot be written, keeping the leader it was asked to name.</summary>
     private sealed class Refusing : IContainedSessionRecord
     {
-        public int Leader { get; private set; }
+        public LearnedProcess Leader { get; private set; }
 
         public void Placed(int leader, string program)
         {
-            Leader = leader;
+            Leader = LearnedProcess.Of(leader);
             throw new IOException("the disk is full");
         }
 

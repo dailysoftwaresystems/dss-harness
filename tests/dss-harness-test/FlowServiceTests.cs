@@ -2507,17 +2507,7 @@ public sealed class FlowServiceTests
     }
 
     /// <summary>A process of this test's own that sleeps for five minutes, standing for an engine.</summary>
-    private static Process Sleeper()
-    {
-        var start = new ProcessStartInfo(TestHost.DotnetExecutable) { UseShellExecute = false };
-
-        start.ArgumentList.Add("exec");
-        start.ArgumentList.Add(TestHost.AssemblyPath);
-        start.ArgumentList.Add("300000");
-        start.Environment[TestHost.ChildModeVariable] = "sleep";
-
-        return Process.Start(start)!;
-    }
+    private static Process Sleeper() => Process.Start(TestHost.StartOf(TestHost.ChildRequest("sleep", "300000")))!;
 
     /// <summary>Ends a process of this test's own, where it still runs.</summary>
     private static void Ending(Process process)

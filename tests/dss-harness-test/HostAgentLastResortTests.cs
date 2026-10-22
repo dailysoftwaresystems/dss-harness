@@ -236,18 +236,10 @@ public sealed class HostAgentLastResortTests
     /// <summary>A process of this test's own that sleeps for a minute, unless ended first.</summary>
     private static Process Sleeping()
     {
-        var request = TestHost.ChildRequest("sleep", "60000");
-        var start = new ProcessStartInfo(request.FileName) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true };
+        var start = TestHost.StartOf(TestHost.ChildRequest("sleep", "60000"));
 
-        foreach (var argument in request.Arguments)
-        {
-            start.ArgumentList.Add(argument);
-        }
-
-        foreach (var (name, value) in request.Environment)
-        {
-            start.Environment[name] = value;
-        }
+        start.CreateNoWindow = true;
+        start.RedirectStandardInput = true;
 
         return Process.Start(start)!;
     }
