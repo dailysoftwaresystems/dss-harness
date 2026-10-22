@@ -1123,8 +1123,7 @@ public sealed class WorktreeService(
     private int BuildDirectoryLength(Configuration.HarnessConfig config)
     {
         var longest = config.Legs.Values
-            .Where(leg => leg.Wsl is null && leg.Ssh is null)
-            .Where(leg => string.Equals(leg.Os, _platform.PlatformKey, StringComparison.OrdinalIgnoreCase))
+            .Where(leg => Legs.LegTrees.BuildsHere(leg, _platform.PlatformKey))
             .Select(leg => Build.VariantKey.For(config, leg, _platform.PlatformKey).DirectoryName.Length)
             .DefaultIfEmpty(-1)
             .Max();

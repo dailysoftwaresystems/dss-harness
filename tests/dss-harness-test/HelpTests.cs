@@ -2779,6 +2779,22 @@ public sealed partial class HelpTests
         }
     }
 
+    /// <summary>The orchestrators topic says where a run starts from, and which steps are served so far.</summary>
+    [Fact]
+    public void OrchestratorsTopic_SaysWhereARunStartsFrom_AndWhichStepsAreServed()
+    {
+        var orchestrators = Prose.Words(HelpText.Of("orchestrators").StandardOutput);
+
+        Assert.Contains(
+            "A run starts from the main checkout's HEAD on a branch of its own, and records that commit and branch: it is refused (13), having made nothing, where HEAD is detached, where the checkout is on the branch the run's pull request is opened against - the pull-request step's base, filled from the run's inputs and its name, else the remote's default branch - where a merge is under way, and where changes are staged.",
+            orchestrators,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "The steps served so far are orient, validate-plan, create-agent ('dssharness help workflows'): a step of any other type fails, saying no runner serves its type.",
+            orchestrators,
+            StringComparison.Ordinal);
+    }
+
     /// <summary>
     /// The orchestrators and layout topics say where a step's contained child's session is recorded, and that every command
     /// over an orchestrator first ends what a killed process left of them - and on which systems - from the layout's own names.
@@ -3141,12 +3157,24 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains(
             "This build checks a workflow's definition, with 'dssharness validate-workflow <name>', and starts and drives a run of one with "
-                + "'dssharness run-orchestrator <name>' (see 'help orchestrators'). No step runner is built yet, so each step of a run fails, "
-                + "saying no runner serves its type.",
+                + "'dssharness run-orchestrator <name>' (see 'help orchestrators'). The steps served so far are orient, validate-plan, "
+                + "create-agent, each below; a step of any other type fails, saying no runner serves its type.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
             "every path the yml names is relative to that directory and stays inside it, as an action's files are relative to its own directory",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "What the steps served so far do. orient reads the main checkout and the repository once, and answers: the branch (failed, refused, where HEAD is detached), baseBranch - the pull-request step's base, filled from the run's inputs and its name, else the default branch of the remote the run's branch goes to (the push step's remote, else the one the branch tracks, else origin, else the only one), null where there is none - startCommit, the commit the run started from;",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "validate-plan checks the work items its items yields and answers ok, problems and the items, never a failure: at least one item and at most 8;",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "create-agent makes the agent the engine named for it - a<N>, one past the highest the run's agent directories and step records hold, never given twice - for the model of the first reason step that works in it, or the default tier's first model where none does, both written to the step's record before the agent is made.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains("params - its own knobs, defaulted in the file and read as param.<name>", prose, StringComparison.Ordinal);
@@ -3193,7 +3221,8 @@ public sealed partial class HelpTests
                 + $"({string.Join(", ", WorkflowExpressions.RunStatuses.Select(status => $"run.{status}"))}) is read by an always step "
                 + "alone. A placeholder in braces - '{step.member}' - in a template key reads the same names, typed the same way, as one in "
                 + "a prompt does; one in any other key is refused, and a pull request's base reads nothing but the run's inputs and "
-                + "run.name, the same for every pull request.",
+                + "run.name, the same for every pull request. A brace meant literally is written twice, {{ and }} alike, another "
+                + "expander's ${...} is left as written, and a placeholder that names nothing is refused.",
             prose,
             StringComparison.Ordinal);
 

@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
+using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
 using DssHarness.Core.Execution;
@@ -337,14 +338,24 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
     /// <param name="template">The template.</param>
     /// <param name="values">Its values.</param>
     /// <remarks>
-    /// The grammar of a prompt's own placeholders comes with the definition read; this fills a name where it stands,
-    /// reading the template once so a value that names another value is never filled in its turn.
+    /// Read by the one template grammar (<see cref="Orchestration.Flow.FlowTemplate.Pieces"/>): a brace doubled stands for
+    /// one, another expander's <c>${...}</c> is left as written, and a placeholder this step has no value for stands as
+    /// written, as does the rest of a template from a placeholder never closed. The template is read once, so a value
+    /// that names another value is never filled in its turn.
     /// </remarks>
     private static string Filled(string template, IReadOnlyDictionary<string, string> values)
-        => System.Text.RegularExpressions.Regex.Replace(
-            template,
-            @"\{(\w+)\}",
-            matched => values.TryGetValue(matched.Groups[1].Value, out var value) ? value : matched.Value);
+    {
+        var filled = new StringBuilder(template.Length);
+
+        foreach (var piece in Orchestration.Flow.FlowTemplate.Pieces(template))
+        {
+            filled.Append(piece.Kind != Orchestration.Flow.FlowTemplate.PieceKind.Placeholder
+                ? piece.Text
+                : values.TryGetValue(piece.Name, out var value) ? value : $"{{{piece.Text}}}");
+        }
+
+        return filled.ToString();
+    }
 
     /// <summary>One sink that takes each event into a channel, as the front end reads it; nothing once no one reads.</summary>
     /// <param name="yielded">The channel the events are yielded through.</param>

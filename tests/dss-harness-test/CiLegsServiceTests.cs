@@ -385,6 +385,34 @@ public sealed class CiLegsServiceTests
         Assert.Contains("not a pass", refusal.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// CI is read on the branch checked out where none is named and on the one named where one is; a detached HEAD, on no
+    /// branch, is refused - not a pass.
+    /// </summary>
+    [Fact]
+    public async Task CiIsReadOnTheBranchCheckedOut_OrTheOneNamed()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        temp.WriteFile("file.txt", "content\n");
+        await harness.CommitAllAsync(temp.Path, "initial", cancellationToken);
+        await harness.RunGitAsync(temp.Path, ["checkout", "--quiet", "-b", "work"], cancellationToken);
+        var source = new StubJobSource([Run(Leg("linux-clang-asan", budgetMinutes: 45, testSeconds: 10, testFailed: false))]);
+        var service = new CiLegsService(harness.ContextLoader, source, harness.GitClient, harness.FileSystem);
+
+        _ = await service.CheckAsync(temp.Path, Request(), cancellationToken);
+        _ = await service.CheckAsync(temp.Path, Request() with { Branch = "release" }, cancellationToken);
+
+        Assert.Equal(["work", "release"], source.Branches);
+
+        await harness.RunGitAsync(temp.Path, ["checkout", "--quiet", "--detach"], cancellationToken);
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => service.CheckAsync(temp.Path, Request(), cancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+        Assert.StartsWith("There is no branch to ask about (a detached HEAD?), so CI was NOT read.", refusal.Message, StringComparison.Ordinal);
+    }
+
     private static CiLegsService Service(HarnessFactory harness, CiRun run)
         => new(harness.ContextLoader, new StubJobSource([run]), harness.GitClient, harness.FileSystem);
 
@@ -453,13 +481,19 @@ public sealed class CiLegsServiceTests
     /// </summary>
     private sealed class StubJobSource(IReadOnlyList<CiRun> runs) : ICiJobSource
     {
+        /// <summary>The branch each listing was asked about, in order.</summary>
+        public List<string> Branches { get; } = [];
+
         public Task<IReadOnlyList<long>> ListRunsAsync(
             string repositoryRoot,
             string workflow,
             string branch,
             int limit,
             CancellationToken cancellationToken = default)
-            => Task.FromResult<IReadOnlyList<long>>([.. runs.Select(run => run.Id)]);
+        {
+            Branches.Add(branch);
+            return Task.FromResult<IReadOnlyList<long>>([.. runs.Select(run => run.Id)]);
+        }
 
         public Task<CiRun> ReadRunAsync(string repositoryRoot, long runId, CancellationToken cancellationToken = default)
             => Task.FromResult(runs.First(run => run.Id == runId));

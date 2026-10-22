@@ -190,6 +190,22 @@ public static class WorkflowValidator
     }
 
     /// <summary>
+    /// The model each create-agent step makes its agent for, by the step's path: the first model of the first reason
+    /// step that works in it (<c>in</c>), as that step resolves it, or - where no reason step works in it - the first
+    /// model of the configuration's default tier (part 04, "What a create-agent step hands the service"). A step whose
+    /// model resolves to none is not among them; the definition's check refuses it.
+    /// </summary>
+    /// <param name="definition">A workflow's parsed definition.</param>
+    /// <param name="providers">The configuration's providers and tiers, resolved.</param>
+    public static IReadOnlyDictionary<string, string> AgentModels(WorkflowDefinition definition, DssHarness.Core.Agents.AgentProviders providers)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(providers);
+
+        return new Check(definition, hasCommitTemplate: false, files: null, providers).AgentModels();
+    }
+
+    /// <summary>
     /// The keys of one provider a definition's steps would read and the slot does not hold, with the steps that would
     /// read them: first as a step's first model, then as a later model of its tier.
     /// </summary>
@@ -1057,6 +1073,28 @@ public static class WorkflowValidator
             {
                 _problems.Add($"{where} works in '{name}', which is declared after it; a worktree cannot be worked in before it is made");
             }
+            else
+            {
+                WaitsForTheAgent(entry, worksIn, "works in");
+            }
+        }
+
+        /// <summary>
+        /// A step that works in or on the agent <paramref name="create"/> makes waits for it to end: through its own
+        /// dependencies, or those of a group around it, as far as they go. One that does not could start before the agent
+        /// is made - its tree not there, and its records placed before the agent they belong to.
+        /// </summary>
+        private void WaitsForTheAgent(Entry entry, Entry create, string does)
+        {
+            // An alternative to the step that builds a work item runs in its place, with its dependencies (V44).
+            var waiter = _definition.Amend is { } amend && (entry.Path == amend.WhenChangeScope || entry.Path == amend.WhenRemoveScope)
+                ? amend.WhenAddScope
+                : entry.Path;
+
+            if (!FlowGraph.Waits(_definition, waiter, create.Path))
+            {
+                _problems.Add($"step '{entry.Path}' {does} the agent '{create.Path}' makes, and does not wait for it: name '{create.Step.Name}', or a step that depends on it, under dependsOn - a step that works in or on an agent starts once the agent is made");
+            }
         }
 
         /// <summary>A tier and a model at one level: the model would be used, and the tier never read.</summary>
@@ -1097,6 +1135,10 @@ public static class WorkflowValidator
                 else if (agent.Step.Type != "create-agent")
                 {
                     _problems.Add($"{where} names '{named}' as its {key}, which is a {agent.Step.Type ?? "group"} step; an agent is made by a create-agent step");
+                }
+                else if (key == "of")
+                {
+                    WaitsForTheAgent(entry, agent, "works on");
                 }
             }
 
@@ -2270,6 +2312,14 @@ public static class WorkflowValidator
                 {
                     AgentRules(providers, entry, $"workflow '{_definition.Name}' step '{entry.Path}'");
                 }
+                else if (entry.Step.Type == "create-agent" && WorkedInBy(entry) is null && DefaultTierProblem(providers) is { } problem)
+                {
+                    // A reason step that works in the agent says its model, and is checked as one; an agent no reason
+                    // step works in is made for the default tier's first model, which must then be there.
+                    _problems.Add(
+                        $"workflow '{_definition.Name}' step '{entry.Path}' makes an agent no reason step works in, which is made for the first model of the default tier, and "
+                        + problem + (providers.DefaultTier is null ? "; name the tier there" : string.Empty));
+                }
             }
 
             if (_definition.Advisor is { } advisor)
@@ -2283,14 +2333,59 @@ public static class WorkflowValidator
             }
         }
 
+        /// <summary>The model each create-agent step makes its agent for, by its path, where one resolves (<see cref="WorkflowValidator.AgentModels"/>).</summary>
+        internal IReadOnlyDictionary<string, string> AgentModels()
+        {
+            var models = new Dictionary<string, string>(StringComparer.Ordinal);
+
+            if (_providers is not { } providers)
+            {
+                return models;
+            }
+
+            foreach (var entry in _entries.Where(entry => entry.Step.Type == "create-agent"))
+            {
+                var (tier, model) = WorkedInBy(entry) is { } reason ? NamedBy(reason) : (null, null);
+
+                if (providers.ModelsFor(tier, model) is [var first, ..])
+                {
+                    models[entry.Path] = first.Model.Code;
+                }
+            }
+
+            return models;
+        }
+
+        /// <summary>The first reason step, in the order declared, that works in the agent the create-agent step <paramref name="create"/> makes; null where none does.</summary>
+        private Entry? WorkedInBy(Entry create)
+            => _entries.FirstOrDefault(entry => entry.Step.Type == "reason" && entry.Step.In is { } name && ReferenceEquals(Scope(entry, name), create));
+
         /// <summary>One step's config half: its model, its client and each model's effort, resolved and checked.</summary>
         private void AgentRules(DssHarness.Core.Agents.AgentProviders providers, Entry entry, string where)
         {
             var step = entry.Step;
-            var inherited = Inherited(entry);
+            var (tier, model) = NamedBy(entry);
 
-            AgentRules(providers, inherited?.Tier ?? step.Tier, inherited?.Model ?? step.Model, step.Effort, step.EffortByModel, step.Client, where);
+            AgentRules(providers, tier, model, step.Effort, step.EffortByModel, step.Client, where);
         }
+
+        /// <summary>
+        /// The tier and the model a reason step runs on, as it names them: its own, or - where it names neither and goes
+        /// on with another's work - those it inherits (<see cref="Inherited"/>). Both null where it runs on the default tier.
+        /// </summary>
+        private (string? Tier, string? Model) NamedBy(Entry reason)
+            => Inherited(reason) ?? (reason.Step.Tier, reason.Step.Model);
+
+        /// <summary>
+        /// Why the configuration's default tier gives no model, as a refusal ends: it names none, or one tierConfig does
+        /// not define; null where it gives one.
+        /// </summary>
+        private static string? DefaultTierProblem(DssHarness.Core.Agents.AgentProviders providers)
+            => providers.DefaultTier is not { } tier
+                ? "the configuration names no defaults.agentTier"
+                : providers.ModelsOf(tier).Count == 0
+                    ? $"defaults.agentTier names '{tier}', which tierConfig does not define. Defined: {string.Join(", ", providers.Tiers.OrderBy(name => name, StringComparer.Ordinal))}"
+                    : null;
 
         /// <summary>
         /// The tier or model a step that goes on with another's work inherits, following the chain of resumes to the
@@ -2335,8 +2430,8 @@ public static class WorkflowValidator
             foreach (var entry in _entries.Where(entry => entry.Step.Type == "reason"))
             {
                 var step = entry.Step;
-                var inherited = Inherited(entry);
-                AddLevels($"step '{entry.Path}'", inherited?.Tier ?? step.Tier, inherited?.Model ?? step.Model, step.Effort, step.EffortByModel, providers, lines);
+                var (tier, model) = NamedBy(entry);
+                AddLevels($"step '{entry.Path}'", tier, model, step.Effort, step.EffortByModel, providers, lines);
             }
 
             if (_definition.Advisor is { } advisor)
@@ -2368,7 +2463,7 @@ public static class WorkflowValidator
 
             void Need(string where, string? tier, string? model, string? client)
             {
-                foreach (var (provider, at) in ModelsRunOn(providers, tier, model).Select((entry, at) => (entry.Provider, at)))
+                foreach (var (provider, at) in providers.ModelsFor(tier, model).Select((entry, at) => (entry.Provider, at)))
                 {
                     var missing = providers.KeysRead(provider, client).Where(name => !held.Contains(name, StringComparer.OrdinalIgnoreCase)).ToList();
 
@@ -2401,9 +2496,8 @@ public static class WorkflowValidator
 
             foreach (var entry in _entries.Where(entry => entry.Step.Type == "reason"))
             {
-                var step = entry.Step;
-                var inherited = Inherited(entry);
-                Need($"step '{entry.Path}'", inherited?.Tier ?? step.Tier, inherited?.Model ?? step.Model, step.Client);
+                var (tier, model) = NamedBy(entry);
+                Need($"step '{entry.Path}'", tier, model, entry.Step.Client);
             }
 
             if (_definition.Advisor is { } advisor)
@@ -2432,27 +2526,14 @@ public static class WorkflowValidator
 
             IEnumerable<(string? Tier, string? Model)> agents = _entries
                 .Where(entry => entry.Step.Type == "reason")
-                .Select(entry => Inherited(entry) ?? (entry.Step.Tier, entry.Step.Model))
+                .Select(NamedBy)
                 .Concat(_definition.Advisor is { } advisor ? [(advisor.Tier, advisor.Model)] : [])
                 .Concat(_definition.Reporter is { } reporter ? [(reporter.Tier, reporter.Model)] : []);
 
             return [.. agents
-                .SelectMany(agent => ModelsRunOn(providers, agent.Tier, agent.Model))
+                .SelectMany(agent => providers.ModelsFor(agent.Tier, agent.Model))
                 .DistinctBy(entry => entry.Model.Code, StringComparer.Ordinal)];
         }
-
-        /// <summary>
-        /// The models an agent may run on, in the order they are tried: the model it names, else its tier's, else the
-        /// configuration's default tier's - the one resolution every line said of an agent reads. Empty where what it
-        /// names resolves to nothing, which the checks refuse on their own.
-        /// </summary>
-        private static IReadOnlyList<(Configuration.AgentProviderConfig Provider, Configuration.AgentModelConfig Model)> ModelsRunOn(
-            DssHarness.Core.Agents.AgentProviders providers,
-            string? tier,
-            string? model)
-            => model is { } named
-                ? (providers.Of(named) is { } of ? [(of.Provider, of.Model)] : [])
-                : providers.ModelsOf(tier ?? providers.DefaultTier ?? string.Empty);
 
         private void AddLevels(
             string where,
@@ -2463,7 +2544,7 @@ public static class WorkflowValidator
             DssHarness.Core.Agents.AgentProviders providers,
             List<string> lines)
         {
-            var models = ModelsRunOn(providers, tier, model);
+            var models = providers.ModelsFor(tier, model);
 
             if (models.Count == 0)
             {
@@ -2524,19 +2605,13 @@ public static class WorkflowValidator
                 // A step that names neither a tier nor a model runs on the configuration's default tier, which nothing
                 // builds in: where the config names none, the step is refused naming the two places this build reads
                 // one from (an agent definition's own tier is read when definitions are, a later slice's).
-                if (providers.DefaultTier is null)
+                if (DefaultTierProblem(providers) is { } problem)
                 {
-                    _problems.Add($"{where} names neither a tier nor a model, and the configuration names no defaults.agentTier; say one on the step, or under defaults.agentTier");
+                    _problems.Add($"{where} names neither a tier nor a model, and {problem}{(providers.DefaultTier is null ? "; say one on the step, or under defaults.agentTier" : string.Empty)}");
                     return;
                 }
 
-                var defaults = providers.ModelsOf(providers.DefaultTier);
-
-                if (defaults.Count == 0)
-                {
-                    _problems.Add($"{where} names neither a tier nor a model, and defaults.agentTier names '{providers.DefaultTier}', which tierConfig does not define. Defined: {string.Join(", ", providers.Tiers.OrderBy(name => name, StringComparer.Ordinal))}");
-                    return;
-                }
+                var defaults = providers.ModelsOf(providers.DefaultTier!);
 
                 // The default tier is a tier like a named one: its models are checked each on its own.
                 if (client is not null)

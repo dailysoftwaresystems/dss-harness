@@ -1194,7 +1194,7 @@ public sealed class AgentDeletionTests
         Assert.Equal(AgentStates.Deleted, kit.Record("ag").State);
     }
 
-    private sealed class LateEvidenceFileSystem(IFileSystem inner, string lateFile) : PassThroughFileSystem(inner)
+    internal sealed class LateEvidenceFileSystem(IFileSystem inner, string lateFile) : PassThroughFileSystem(inner)
     {
         private bool _written;
 

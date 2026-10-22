@@ -2852,6 +2852,10 @@ public static class HelpTopics
             + "r<N>, one more than the highest there, or the name --run gives, held to worktrees.maxNameLength and refused where it is "
             + "taken - with its record, its state (flow.json), its status (workflow.json), its questions (questions.json), its "
             + "pre-existing issues and its events, and claims it for its process (<run>.owner.json beside the run's directory). "
+            + "A run starts from the main checkout's HEAD on a branch of its own, and records that commit and branch: it is refused "
+            + $"({HarnessExit.Refused}), having made nothing, where HEAD is detached, where the checkout is on the branch the run's pull "
+            + "request is opened against - the pull-request step's base, filled from the run's inputs and its name, else the "
+            + "remote's default branch - where a merge is under way, and where changes are staged. "
             + "Only one run of a repository is unfinished with work in the tree at once: a start, or a session of another run, is "
             + $"refused ({HarnessExit.Refused}) while one is, and so it is where an agent's record of another run cannot be read. Each "
             + $"session drives the run until nothing more can run: done ({HarnessExit.Success}), failed ({HarnessExit.CommandFailed}, or "
@@ -2879,8 +2883,9 @@ public static class HelpTopics
             + "clock: an agent's handoff and a build may take as long as they take. The second stops the run where it stands - a "
             + $"step whose runner does not end within {PointOfNoReturn.SafePauseDrain.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s is recorded stopped all the same - and "
             + $"the command ends within {PointOfNoReturn.HardStopBound.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s whatever is left; "
-            + $"what is left then is what a crash leaves, and {FlowService.ResumeCommand} goes on from the records. No step runner is "
-            + "built yet: each step of a run fails, saying no runner serves its type.");
+            + $"what is left then is what a crash leaves, and {FlowService.ResumeCommand} goes on from the records. The steps served so "
+            + $"far are {string.Join(", ", FlowStepRunners.Served)} ('{ToolPackage.Command} help workflows'): a step of any other type "
+            + "fails, saying no runner serves its type.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -3202,8 +3207,9 @@ public static class HelpTopics
         builder.AppendLine($"name under workflows in config.json and defined by a yml file of its own:");
         builder.AppendLine($"{HarnessLayout.WorkflowsDirectoryRelative}/<name>/<name>{HarnessLayout.WorkflowFileExtension}. This build checks a");
         builder.AppendLine($"workflow's definition, with '{ToolPackage.Command} validate-workflow <name>', and starts and drives a run");
-        builder.AppendLine($"of one with '{ToolPackage.Command} {FlowService.RunCommand} <name>' (see 'help orchestrators'). No step runner");
-        builder.AppendLine("is built yet, so each step of a run fails, saying no runner serves its type.");
+        builder.AppendLine($"of one with '{ToolPackage.Command} {FlowService.RunCommand} <name>' (see 'help orchestrators'). The steps");
+        builder.AppendLine($"served so far are {string.Join(", ", FlowStepRunners.Served)}, each below; a step of any other type");
+        builder.AppendLine("fails, saying no runner serves its type.");
         builder.AppendLine();
         builder.AppendLine("The workflow's directory is the workflow's own - its agent files (agents/<name>.md),");
         builder.AppendLine("its prompts, its schemas, the bar it recommends by (recommendations.md) - and every path");
@@ -3339,6 +3345,36 @@ public static class HelpTopics
 
         AppendWrapped(
             builder,
+            "What the steps served so far do. orient reads the main checkout and the repository once, and answers: the branch "
+            + "(failed, refused, where HEAD is detached), baseBranch - the pull-request step's base, filled from the run's inputs "
+            + "and its name, else the default branch of the remote the run's branch goes to (the push step's remote, else the one "
+            + "the branch tracks, else origin, else the only one), null where there is none - startCommit, the commit the run "
+            + "started from; hasRemote; hasLegs and legCount, every declared leg; anchors, a citation root that names something once read, as "
+            + "check-anchor-citations reads them; "
+            + "ciConfigured, ci.legJobPattern, ci.buildStep and ci.testStep each set and a base branch to read CI on; hasMutations, "
+            + "mutations.registry naming a file in the tree; tests, for each leg that tests, its name, the program, the filter's "
+            + "option and the exclusions its test invocation applies on the leg's operating system (exclude, remoteExcludes; where "
+            + "ctest is given -LE more than once, a test is left out only where it matches every one); "
+            + "dirtyPaths, every path git status names; openAgents, each agent that counts against its run's open-agent limit, of every orchestrator of the "
+            + "repository, as {run, agent}; and inFlight, who holds the main tree now, each as a held-now line says it. "
+            + $"validate-plan checks the work items its items yields and answers ok, problems and the items, never a failure: at "
+            + $"least one item and at most {PlanValidator.MostItems}; each with a name in lowercase letters, digits and single "
+            + "hyphens, used once, ownedPaths, forbiddenPaths and the lists reuses, creates and replaces - an item without them is of "
+            + "the wrong shape; no path owned by two items, and none an item owns that it must not touch; the path budget of the "
+            + "worktree each would get, with the copies and workers its legs keep inside it and the deepest file it owns; every "
+            + "path it reuses or replaces there in the main tree, something under one of the three, and a why and a search for "
+            + "each thing it creates. A step given the pieces of a plan update (a scope that yields a list not empty) fails, saying "
+            + "this build does not check them yet; one whose items yield no list, or whose scope yields neither a list nor nothing, "
+            + "fails, as a definition that does not hold does. create-agent makes the agent the engine named for it - a<N>, one past the "
+            + "highest the run's agent directories and step records hold, never given twice - for the model of the first reason "
+            + "step that works in it, or the default tier's first model where none does, both written to the step's record before "
+            + "the agent is made. Run again, it reads the agent first: none, it is made; whole, it is done; made part way with its "
+            + "worktree's commit recorded, its seeding is finished; made part way without it, it is deleted, and closed - its "
+            + "removal begun - its removal is finished; that, or deleted, the name is spent and the step fails, its next attempt "
+            + "named anew.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
             $"An expression reads names joined by &&, ||, !, ==, != and ?? with ( ) to group, 'empty(x)' for whether a read holds nothing "
             + "and 'any(list, test)' for whether any member meets a test written with 'it' for the member: every step, input and param it "
             + "names must be declared before it, every path it reads is typed by what holds it - a reason step's schema, the output a "
@@ -3348,6 +3384,8 @@ public static class HelpTopics
             + $"({string.Join(", ", WorkflowExpressions.RunStatuses.Select(status => $"run.{status}"))}) is read by an always step alone. A placeholder in braces - "
             + "'{step.member}' - in a template key reads the same names, typed the same way, as one in a prompt does; one in any other key "
             + "is refused, and a pull request's base reads nothing but the run's inputs and run.name, the same for every pull request. "
+            + "A brace meant literally is written twice, {{ and }} alike, another expander's ${...} is left as written, and a "
+            + "placeholder that names nothing is refused. "
             + "What only a prompt reads stands where its agent is asked it: {recommendations} in a reason step's prompt and the "
             + "advisor's, {question.<name>} in the advisor's alone, {status.<name>} in the reporter's two - {status.question} in its "
             + "askPrompt alone - {update.<name>} in the prompts of the step that plans an update and of the steps of its scope, and "

@@ -532,6 +532,15 @@ public sealed class AgentService(
                 + "an agent's name is never used twice. Choose another name.");
         }
 
+        // A closed agent's removal began: it is never made or seeded again, and only deleting it again is open.
+        if (existing.State == AgentStates.Closed)
+        {
+            return CommandOutcome.Refused(
+                $"{Agent(existing)} is closed and its worktree's removal began, so it is never made again: "
+                + $"{OrchestrationReports.DeleteAgentLine(existing.Orchestrator, existing.Name)} finishes the removal, and an agent's name is "
+                + "never used twice. Nothing was changed.");
+        }
+
         // The two kinds of agent are two agents: the option that makes one is never the one that answers for the other.
         if (noWorktree && !existing.Reads)
         {
@@ -2977,7 +2986,7 @@ public sealed class AgentService(
     /// </summary>
     /// <param name="record">The agent's record.</param>
     /// <param name="seed">Its seed, or null where it was never seeded.</param>
-    private static string? MakingUnfinished(AgentRecord record, SeedRecord? seed)
+    internal static string? MakingUnfinished(AgentRecord record, SeedRecord? seed)
         => record.Reads ? null
         : record.Base is null
             ? $"it records no commit its worktree was made from, so nothing of it can be measured; "
@@ -3160,26 +3169,6 @@ public sealed class AgentService(
     };
 
     /// <summary>
-    /// The lock requests <paramref name="command"/> takes: each of <paramref name="trees"/> whole, on this machine. The
-    /// one spelling of them, asked by the hold an <c>--apply</c> takes and by its dry run, so the two can never ask
-    /// differently: where each leads (<see cref="RunLock.Key"/>), as git names a tree and as the builds before this one
-    /// recorded an agent's trees, so a run of one of them asking for the tree as it spells it meets the hold.
-    /// </summary>
-    /// <param name="command">The command taking them.</param>
-    /// <param name="runId">The run taking them.</param>
-    /// <param name="trees">The trees, on this machine.</param>
-    /// <exception cref="HarnessException">Where one of them leads cannot be told: refused (<see cref="RunLock.Key"/>).</exception>
-    private IReadOnlyList<LockRequest> Holds(string command, RunId runId, params string[] trees)
-        => [.. trees.Select(tree => new LockRequest
-        {
-            Host = HostId.Local.ToString(),
-            Tree = _runLock.Key(HostId.Local.ToString(), tree),
-            Scope = LockScope.TreeExclusive,
-            RunId = runId,
-            Command = command,
-        })];
-
-    /// <summary>
     /// The answer a dry run gives: what the verb composed - its lines named with who holds what its <c>--apply</c> takes,
     /// every holder, whether the dry run is otherwise refused or not - and the code the one rule gives it. As one document
     /// where <paramref name="json"/> asks.
@@ -3205,7 +3194,7 @@ public sealed class AgentService(
     {
         ArgumentNullException.ThrowIfNull(planned);
 
-        var holders = _treeHolders.Read(layout, Holds(command, RunId.New(), trees), [], []);
+        var holders = _treeHolders.Read(layout, _runLock.LocalTreesWhole(command, RunId.New(), trees), [], []);
 
         return Dry(json, planned, standing, typed, holders);
     }
@@ -3268,7 +3257,7 @@ public sealed class AgentService(
 
         if (unread is not null)
         {
-            return Dry(json, unread with { Details = planned.Details }, RequestStanding.Refused, typed with { Reasons = [] }, _treeHolders.Read(layout, Holds(DeleteCommand, RunId.New(), trees), [], []));
+            return Dry(json, unread with { Details = planned.Details }, RequestStanding.Refused, typed with { Reasons = [] }, _treeHolders.Read(layout, _runLock.LocalTreesWhole(DeleteCommand, RunId.New(), trees), [], []));
         }
 
         var leftInIt = await _worktrees.CopiesHeldAsync(target.Address.Name, layout, target.Path, cancellationToken).ConfigureAwait(false);
@@ -3277,7 +3266,7 @@ public sealed class AgentService(
         // rule's row for it; and what is kept in the worktree that the removal cannot take as it stands is weighed by that
         // rule, in its order, with every holder: below a lock that cannot be read and a tree a run holds, either of which
         // refuses the --apply before it goes anywhere near the removal.
-        return Dry(json, planned, standing, typed, _treeHolders.Read(layout, Holds(DeleteCommand, RunId.New(), trees), copies, leftInIt));
+        return Dry(json, planned, standing, typed, _treeHolders.Read(layout, _runLock.LocalTreesWhole(DeleteCommand, RunId.New(), trees), copies, leftInIt));
     }
 
     /// <summary>
@@ -3390,7 +3379,7 @@ public sealed class AgentService(
         var runId = RunId.New();
         var handles = new List<RunLockHandle>();
 
-        foreach (var request in Holds(command, runId, trees))
+        foreach (var request in _runLock.LocalTreesWhole(command, runId, trees))
         {
             var attempt = await _runLock.TryAcquireAsync(layout, request, cancellationToken).ConfigureAwait(false);
 

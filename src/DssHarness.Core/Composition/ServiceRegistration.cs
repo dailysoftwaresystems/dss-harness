@@ -161,12 +161,17 @@ public static class ServiceRegistration
         services.AddSingleton<IOrchestratorService, OrchestratorService>();
         services.AddSingleton<IAgentService, AgentService>();
 
-        // The commands of a run: one unfinished run at a time (15b) and the session driver over it (15c). The step
-        // runner a run's steps are given is the refusing one until the machine step runners and the agent clients
-        // land (slices 19 and 20): a run that says what it cannot do, never one that passes everything over.
+        // The commands of a run: one unfinished run at a time (15b) and the session driver over it (15c). Each step is
+        // given to the runner of its type, registered here as its slice lands; a step of a type none serves yet is
+        // refused, saying so: a run that says what it cannot do, never one that passes a step over.
         services.AddSingleton<FlowSessions>();
         services.AddSingleton<IFlowService, FlowService>();
-        services.AddSingleton<IFlowStepRunner, NoStepRunner>();
+        services.AddSingleton<PlanValidator>();
+        services.AddSingleton<CreateAgentRunner>();
+        services.AddSingleton<IFlowStepTypeRunner, OrientRunner>();
+        services.AddSingleton<IFlowStepTypeRunner, PlanCheckRunner>();
+        services.AddSingleton<IFlowStepTypeRunner>(provider => provider.GetRequiredService<CreateAgentRunner>());
+        services.AddSingleton<IFlowStepRunner, FlowStepRunners>();
         services.AddSingleton<IFlowRunnerFacts, NoRunnerFacts>();
 
         // The one way an agent's step is worked, whatever the client is: each client built in is registered here as its

@@ -577,6 +577,17 @@ public sealed partial class AgentProviders
     private static AgentClientKind? KindOf(string client)
         => ClientKinds.FirstOrDefault(kind => string.Equals(kind.Name, client, StringComparison.Ordinal));
 
+    /// <summary>
+    /// The models an agent runs on, in the order they are tried: the model it names, else its tier's, else the default
+    /// tier's - the one resolution every agent of a workflow is read by. Empty where what it names resolves to nothing.
+    /// </summary>
+    /// <param name="tier">The tier it names; null where it names none.</param>
+    /// <param name="model">The model it names; null where it names none.</param>
+    public IReadOnlyList<(AgentProviderConfig Provider, AgentModelConfig Model)> ModelsFor(string? tier, string? model)
+        => model is { } named
+            ? (Of(named) is { } of ? [(of.Provider, of.Model)] : [])
+            : ModelsOf(tier ?? DefaultTier ?? string.Empty);
+
     /// <summary>Every model of <paramref name="tier"/>, in the order <c>tierConfig</c> says they are tried; empty where the tier is not defined.</summary>
     public IReadOnlyList<(AgentProviderConfig Provider, AgentModelConfig Model)> ModelsOf(string tier)
     {

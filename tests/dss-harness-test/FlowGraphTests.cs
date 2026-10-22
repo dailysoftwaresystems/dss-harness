@@ -13,6 +13,65 @@ public sealed class FlowGraphTests
     private static WorkflowDefinition Parse(string text)
         => WorkflowFileParser.Parse("workflows/flow/flow.yml", text);
 
+    /// <summary>
+    /// A step waits for another where an edge leads there: its own dependencies, followed as far as they go; those of a
+    /// group around it, not counting that group's own members; a handler's source; and the members of a group it waits
+    /// for. A step declared beside it, before it, with nothing between, it does not wait for.
+    /// </summary>
+    [Fact]
+    public void AStepWaits_WhereAnEdgeLeadsToTheOther()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: make
+                type: orient
+              - name: beside
+                type: orient
+              - name: next
+                type: orient
+                dependsOn: [make]
+              - name: after
+                type: orient
+                dependsOn: [next]
+              - name: around
+                dependsOn: [make]
+                steps:
+                  - name: first
+                    type: orient
+                  - name: inner
+                    type: orient
+              - name: group
+                steps:
+                  - name: child
+                    type: orient
+              - name: past
+                type: orient
+                dependsOn: [group]
+              - name: mend
+                on:
+                  step: beside
+                  outcome: failure
+                steps:
+                  - name: fix
+                    type: orient
+                  - name: inner
+                    steps:
+                      - name: deep
+                        type: orient
+            """);
+
+        Assert.True(FlowGraph.Waits(definition, "next", "make"));
+        Assert.True(FlowGraph.Waits(definition, "after", "make"), "through the step it depends on");
+        Assert.True(FlowGraph.Waits(definition, "around.inner", "make"), "through the group around it");
+        Assert.False(FlowGraph.Waits(definition, "around.inner", "around.first"), "a group's own member is no wait of its siblings");
+        Assert.True(FlowGraph.Waits(definition, "past", "group.child"), "through the group it waits for");
+        Assert.True(FlowGraph.Waits(definition, "mend.fix", "beside"), "through the handler's source");
+        Assert.True(FlowGraph.Waits(definition, "mend.inner.deep", "beside"), "through every group around it");
+        Assert.False(FlowGraph.Waits(definition, "beside", "make"));
+        Assert.False(FlowGraph.Waits(definition, "make", "next"));
+    }
+
     /// <summary>A flow whose edges run one way has no cycle, however deep its groups.</summary>
     [Fact]
     public void AFlowThatRunsOneWay_HasNoCycle()

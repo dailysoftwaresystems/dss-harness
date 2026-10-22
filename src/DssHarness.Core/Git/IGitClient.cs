@@ -431,6 +431,12 @@ public interface IGitClient
     /// </exception>
     Task<string?> MergeBaseAsync(string directory, string first, IReadOnlyList<string> others, CancellationToken cancellationToken = default);
 
+    /// <summary>The branch the HEAD at <paramref name="directory"/> is on, as git names it short, or <see langword="null"/> where it is on none - a detached HEAD.</summary>
+    /// <param name="directory">A directory inside the repository.</param>
+    /// <param name="cancellationToken">Cancels the git process.</param>
+    /// <exception cref="HarnessException">git could not answer.</exception>
+    Task<string?> GetBranchAsync(string directory, CancellationToken cancellationToken = default);
+
     /// <summary>
     /// The commits an unfinished merge in the work tree at <paramref name="directory"/> is bringing into HEAD, as its
     /// MERGE_HEAD records them, or none where no merge is in progress. The work tree then holds what they bring, as far

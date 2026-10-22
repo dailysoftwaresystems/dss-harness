@@ -95,7 +95,7 @@ public sealed partial class GitClient
         var here = new GitHistoryHeld(format)
         {
             Head = head,
-            Branch = head is null ? null : await BranchAsync(directory, cancellationToken).ConfigureAwait(false),
+            Branch = head is null ? null : await GetBranchAsync(directory, cancellationToken).ConfigureAwait(false),
         };
 
         // Nothing asked; or objects named another way, which are no objects of this repository's: it holds none of what is
@@ -240,7 +240,7 @@ public sealed partial class GitClient
         var boundary = wanted.Boundary.Select(id => GitObjectId.Require(id, "a place history stops")).ToList();
 
         var head = await ResolveCommitAsync(directory, "HEAD", cancellationToken).ConfigureAwait(false);
-        var branch = head is null ? null : await BranchAsync(directory, cancellationToken).ConfigureAwait(false);
+        var branch = head is null ? null : await GetBranchAsync(directory, cancellationToken).ConfigureAwait(false);
 
         if (pack is not null)
         {
@@ -432,8 +432,8 @@ public sealed partial class GitClient
         return said.Length > 0 && said.All(char.IsAsciiLetterOrDigit) ? said : GitHistoryWanted.DefaultObjectFormat;
     }
 
-    /// <summary>The branch the HEAD at <paramref name="directory"/> is on, or <see langword="null"/> where it is on none.</summary>
-    private async Task<string?> BranchAsync(string directory, CancellationToken cancellationToken)
+    /// <inheritdoc/>
+    public async Task<string?> GetBranchAsync(string directory, CancellationToken cancellationToken = default)
     {
         var result = await RunAsync(directory, ["symbolic-ref", "--quiet", "--short", "HEAD"], cancellationToken: cancellationToken).ConfigureAwait(false);
 

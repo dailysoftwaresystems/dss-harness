@@ -721,7 +721,7 @@ public sealed class FlowCoordinatorTests
             """);
         var runner = new FakeRunner()
             .On("plan", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"list": ["x", "y"]}""")))
-            .On("maker", run => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject { ["agent"] = $"a{run.Index}" }));
+            .On("maker", run => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject { ["agent"] = run.Made!.Name }));
         var first = runner.Hold("work");
         var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
         var cancel = TestContext.Current.CancellationToken;

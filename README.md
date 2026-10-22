@@ -637,8 +637,15 @@ template key reads and no skill. A question gives only the texts the engine name
 update (`cause`, `since`, `work`) and a piece (`kind`, `changed`, `keep`, `undo`, `instead`,
 `cause`, `before`); the bar is one text, and so is each run fact (`{worktree}`, `{os}` and the
 rest), which a template reads and an expression does not. The engine starts and drives a run of a workflow
-(`run-orchestrator`, `dssharness help orchestrators`); its step runners are the next thing the tool grows, and until they land
-each step of a run fails, saying no runner serves its type. Run `dssharness help workflows` for the whole of it.
+(`run-orchestrator`, `dssharness help orchestrators`), from the main checkout's HEAD on a branch of its own: a start is
+refused where HEAD is detached, where the checkout is on the branch the run's pull request goes to, where a merge is under
+way and where changes are staged. Three steps are served so far: `orient`, which reads what the repository is and has once
+(its branch and the pull request's base branch, the commit the run started on, a remote, legs and how each tests, anchors,
+CI, mutation arms, what is dirty, the open agents and who holds the tree); `validate-plan`, the machine's check of a plan's
+work items; and `create-agent`, which makes the agent the engine named for it (`a<N>`, never twice) for the model its
+first reason step runs on, both recorded before the agent is made so a step run again asks for the same one. A step of
+any other type fails, saying no runner serves its type; the rest are the next thing the tool grows. A step that works in
+or on an agent waits for the create-agent step that makes it. Run `dssharness help workflows` for the whole of it.
 
 ## Anchors
 

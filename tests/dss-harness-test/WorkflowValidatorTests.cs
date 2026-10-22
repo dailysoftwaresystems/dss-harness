@@ -487,12 +487,14 @@ public sealed class WorkflowValidatorTests
                 outputs: schemas/implement.json
                 access: write
                 in: make
+                dependsOn: [make]
               - name: reads-but-names-in
                 type: reason
                 agent: reader
                 prompt: prompts/read.md
                 outputs: schemas/read.json
                 in: make
+                dependsOn: [make]
               - name: resumes
                 type: reason
                 prompt: prompts/mend.md
@@ -628,6 +630,7 @@ public sealed class WorkflowValidatorTests
                 agent: implementer
                 access: write
                 in: make
+                dependsOn: [make]
                 prompt: prompts/implement.md
                 outputs: schemas/implement.json
               - name: borrows
@@ -638,6 +641,7 @@ public sealed class WorkflowValidatorTests
                 tier: best
                 access: write
                 in: make
+                dependsOn: [make]
                 writes: [src/**]
                 prompt: prompts/mend.md
                 resumePrompt: prompts/again.md
@@ -1201,6 +1205,7 @@ public sealed class WorkflowValidatorTests
     {
         Assert.Equal(
             [
+                "step 'items.redo' works in the agent 'items.item-agent' makes, and does not wait for it: name 'item-agent', or a step that depends on it, under dependsOn - a step that works in or on an agent starts once the agent is made",
                 "amend.whenChangeScope names 'planning.plan', which is not declared beside 'items.implement': the three are alternatives at one place of one forEach group",
                 "amend.whenRemoveScope names 'items.undo', a orient step, and 'items.implement' is a reason step: an alternative runs in that step's place, and is of its type",
                 "amend.whenRemoveScope names 'items.undo', which says dependsOn, when: it runs in the place of 'implement', with that step's dependencies, and begins the work of its instance",
@@ -1885,6 +1890,147 @@ public sealed class WorkflowValidatorTests
                 """), hasCommitTemplate: false, files: null, providers: null));
     }
 
+    /// <summary>
+    /// A step that works in or on an agent waits for the create-agent step that makes it - through its own dependencies,
+    /// a group's around it, a handler's source, or the step it is an alternative to - and one that does not is refused.
+    /// </summary>
+    [Fact]
+    public void AStepThatWorksInOrOnAnAgent_WaitsForItsMaking()
+    {
+        Assert.Equal(
+            [
+                "step 'think' works in the agent 'make' makes, and does not wait for it: name 'make', or a step that depends on it, under dependsOn - a step that works in or on an agent starts once the agent is made",
+                "step 'close' works on the agent 'make' makes, and does not wait for it: name 'make', or a step that depends on it, under dependsOn - a step that works in or on an agent starts once the agent is made",
+            ],
+            Problems("""
+                name: flow
+                steps:
+                  - name: make
+                    type: create-agent
+                    agent: agents/worker.md
+                  - name: think
+                    type: reason
+                    agent: agents/worker.md
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                    access: write
+                    in: make
+                  - name: close
+                    type: fold
+                    of: make
+                """));
+
+        // Through another step, a group around it, and a handler's source, it waits.
+        Assert.Empty(Problems("""
+            name: flow
+            steps:
+              - name: make
+                type: create-agent
+                agent: agents/worker.md
+              - name: think
+                type: reason
+                agent: agents/worker.md
+                prompt: prompts/think.md
+                outputs: schemas/think.json
+                access: write
+                in: make
+                dependsOn: [make]
+              - name: wrap
+                dependsOn: [think]
+                steps:
+                  - name: close
+                    type: fold
+                    of: make
+              - name: mend
+                on:
+                  step: wrap
+                  outcome: failure
+                steps:
+                  - name: catch-up
+                    type: refresh
+                    of: make
+                    all: true
+            """));
+    }
+
+    /// <summary>
+    /// The model each create-agent step makes its agent for: the first reason step that works in it, as that step - or the
+    /// step whose work it goes on with - resolves it; else the default tier's first. One no model resolves for is refused.
+    /// </summary>
+    [Fact]
+    public void ACreateAgentStepsModel_IsItsFirstReasonSteps_ElseTheDefaultTiers()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: make
+                type: create-agent
+                agent: agents/worker.md
+              - name: build
+                type: reason
+                agent: agents/worker.md
+                tier: best
+                prompt: prompts/think.md
+                outputs: schemas/think.json
+                access: write
+                in: make
+                dependsOn: [make]
+              - name: again
+                type: reason
+                agent: agents/worker.md
+                model: glm-5.3
+                prompt: prompts/think.md
+                outputs: schemas/think.json
+                access: write
+                in: make
+                dependsOn: [build]
+              - name: idle
+                type: create-agent
+                agent: agents/worker.md
+            """);
+
+        Assert.Equal(
+            new Dictionary<string, string> { ["make"] = "claude-fable-5-1", ["idle"] = "glm-5.3" },
+            WorkflowValidator.AgentModels(definition, TwoModels()!));
+
+        Assert.Equal(
+            ["workflow 'flow' step 'idle' makes an agent no reason step works in, which is made for the first model of the default tier, and the configuration names no defaults.agentTier; name the tier there"],
+            WorkflowValidator.Validate(Parse("""
+                name: flow
+                steps:
+                  - name: idle
+                    type: create-agent
+                    agent: agents/worker.md
+                """), hasCommitTemplate: false, files: null, providers: Providers(agentTier: null)));
+
+        Assert.Empty(WorkflowValidator.AgentModels(Parse("""
+            name: flow
+            steps:
+              - name: idle
+                type: create-agent
+                agent: agents/worker.md
+            """), Providers(agentTier: null)!));
+
+        // A default tier tierConfig does not define gives no model either, said the same at both places that need one.
+        Assert.Equal(
+            [
+                "workflow 'flow' step 'think' names neither a tier nor a model, and defaults.agentTier names 'deep', which tierConfig does not define. Defined: balanced",
+                "workflow 'flow' step 'idle' makes an agent no reason step works in, which is made for the first model of the default tier, and defaults.agentTier names 'deep', which tierConfig does not define. Defined: balanced",
+            ],
+            WorkflowValidator.Validate(Parse("""
+                name: flow
+                steps:
+                  - name: think
+                    type: reason
+                    agent: agents/worker.md
+                    prompt: prompts/think.md
+                    outputs: schemas/think.json
+                  - name: idle
+                    type: create-agent
+                    agent: agents/worker.md
+                """), hasCommitTemplate: false, files: null, providers: Providers(agentTier: "deep")));
+    }
+
     /// <summary>One provider, one model, one tier, as the config-half tests spell the configuration.</summary>
     private static AgentProviders? Providers(string? agentTier = "balanced")
     {
@@ -2216,6 +2362,7 @@ public sealed class WorkflowValidatorTests
                     - name: verify
                       type: test
                       in: make
+                      dependsOn: [make]
                       when: "orient.hasLegs && item.ok"
                       onFailure: recover
             """);
@@ -2513,6 +2660,7 @@ public sealed class WorkflowValidatorTests
                   loopBound: accept
                   contextLimit: compact
               - name: stage
+                dependsOn: [make]
                 onFailure: recover
                 answers:
                   checksUnsettled: accept
@@ -3021,6 +3169,7 @@ public sealed class WorkflowValidatorTests
               - name: both
                 type: refresh
                 of: make
+                dependsOn: [make]
                 others: make
               - name: neither
                 type: rebase
@@ -3030,6 +3179,7 @@ public sealed class WorkflowValidatorTests
               - name: dropped
                 type: delete-agent
                 of: make
+                dependsOn: [make]
                 discardUncommitted: true
                 within: [src/**]
               - name: reads
@@ -3044,6 +3194,7 @@ public sealed class WorkflowValidatorTests
               - name: weighs-both
                 type: refresh
                 of: make
+                dependsOn: [make]
                 paths: [src/a.c]
                 all: true
             """);
@@ -3625,7 +3776,7 @@ public sealed class WorkflowValidatorTests
         static IReadOnlyList<string> OneAllow(string body)
             => Problems(
                 "name: flow\nsteps:\n  - name: make\n    type: create-agent\n    agent: agents/worker.md\n"
-                + "  - name: close\n    type: fold\n    of: make\n    allow:\n" + body);
+                + "  - name: close\n    type: fold\n    of: make\n    dependsOn: [make]\n    allow:\n" + body);
 
         Assert.Equal(
             ["step 'close' takes allow: 'src/a.cs' is named with both merge and settled: a path is merged for you, or reconciled by hand, never both."],
@@ -3653,6 +3804,7 @@ public sealed class WorkflowValidatorTests
               - name: close
                 type: delete-agent
                 of: make
+                dependsOn: [make]
                 allow:
                   new: ['an id']
             """);
@@ -3675,6 +3827,7 @@ public sealed class WorkflowValidatorTests
               - name: weigh
                 type: refresh
                 of: make
+                dependsOn: [make]
                 paths: [.]
                 except: [src/a.cs]
                 stale: [src/b.cs]
@@ -3696,6 +3849,7 @@ public sealed class WorkflowValidatorTests
               - name: weigh
                 type: refresh
                 of: make
+                dependsOn: [make]
                 except: [src/a.cs]
                 stale: [src/a.cs]
             """);
@@ -3715,6 +3869,7 @@ public sealed class WorkflowValidatorTests
               - name: move
                 type: rebase
                 of: make
+                dependsOn: [make]
                 settled: [src/a.cs]
                 merge: [src/a.cs]
             """);
@@ -3742,6 +3897,7 @@ public sealed class WorkflowValidatorTests
               - name: close
                 type: delete-agent
                 of: make
+                dependsOn: [make]
                 within: ['**x']
             """);
 
@@ -3767,6 +3923,7 @@ public sealed class WorkflowValidatorTests
                 outputs: schemas/think.json
                 access: write
                 in: make
+                dependsOn: [make]
                 writes: ['**oops']
             """);
 
@@ -3794,6 +3951,7 @@ public sealed class WorkflowValidatorTests
               - name: weigh
                 type: refresh
                 of: make
+                dependsOn: [make]
                 all: true
                 paths: input.paths
             """);
@@ -4141,6 +4299,7 @@ public sealed class WorkflowValidatorTests
                   - name: fold
                     type: fold
                     of: make
+                    dependsOn: [make]
                     within: 'orient.branch'
                 """));
     }

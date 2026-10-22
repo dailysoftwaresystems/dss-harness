@@ -276,8 +276,8 @@ public static class WorkflowExpressions
     }
 
     /// <summary>
-    /// Every name <paramref name="text"/> reads through a <c>{...}</c> template, in the order the
-    /// templates sit in the text, once each.
+    /// Every name <paramref name="text"/> reads through a <c>{...}</c> placeholder, as the one template grammar reads
+    /// them (<see cref="FlowTemplate.Pieces"/>), in the order they sit in the text, once each.
     /// </summary>
     /// <param name="text">A template's text: any run of it may hold one or more <c>{...}</c> placeholders.</param>
     /// <remarks>An empty text reads nothing; that it is empty is the validator's to refuse.</remarks>
@@ -287,34 +287,11 @@ public static class WorkflowExpressions
 
         var reads = new List<Read>();
 
-        for (var index = text.IndexOf('{'); index >= 0; index = text.IndexOf('{', index + 1))
+        foreach (var piece in FlowTemplate.Pieces(text).TakeWhile(piece => piece.Kind != FlowTemplate.PieceKind.Unclosed))
         {
-            var end = text.IndexOf('}', index + 1);
-
-            if (end < 0)
+            if (piece.Kind == FlowTemplate.PieceKind.Placeholder && piece.Name is { Length: > 0 } name)
             {
-                break;
-            }
-
-            var content = text[(index + 1)..end].Trim();
-            index = end;
-
-            if (content.Length == 0)
-            {
-                continue;
-            }
-
-            // A placeholder may say how its value is written, after '|': what it reads is before it.
-            var separator = content.IndexOf('|');
-
-            if (separator >= 0)
-            {
-                content = content[..separator].Trim();
-            }
-
-            if (content.Length > 0)
-            {
-                Add(reads, content, Template: true, insideAny: false);
+                Add(reads, name, Template: true, insideAny: false);
             }
         }
 
@@ -378,8 +355,9 @@ public static class WorkflowExpressions
     }
 
     /// <summary>
-    /// What is wrong with how a template's <paramref name="text"/> is written, where something is: a placeholder left
-    /// open, after which nothing the text reads would be seen.
+    /// What is wrong with how a template's <paramref name="text"/> is written (<see cref="FlowTemplate.Pieces"/>), where
+    /// something is: a placeholder left open, after which nothing the text reads would be seen, or one that names
+    /// nothing, which no run could fill.
     /// </summary>
     /// <param name="text">A template's text.</param>
     /// <returns>The problem, in words, or <see langword="null"/> where every placeholder is closed.</returns>
@@ -387,17 +365,17 @@ public static class WorkflowExpressions
     {
         ArgumentNullException.ThrowIfNull(text);
 
-        for (var index = text.IndexOf('{'); index >= 0; index = text.IndexOf('{', index + 1))
+        foreach (var piece in FlowTemplate.Pieces(text))
         {
-            // A placeholder is closed on its own line, before the next one opens: a '}' further on closes another.
-            var end = text.IndexOfAny(['}', '{', '\n'], index + 1);
-
-            if (end < 0 || text[end] != '}')
+            if (piece.Kind == FlowTemplate.PieceKind.Unclosed)
             {
-                return $"the placeholder at column {ColumnOf(text, index)} of line {LineOf(text, index)} is never closed";
+                return $"the placeholder at column {ColumnOf(text, piece.At)} of line {LineOf(text, piece.At)} is never closed";
             }
 
-            index = end;
+            if (piece.Kind == FlowTemplate.PieceKind.Placeholder && piece.Name.Length == 0)
+            {
+                return $"the placeholder at column {ColumnOf(text, piece.At)} of line {LineOf(text, piece.At)} names nothing (a brace meant literally is written twice)";
+            }
         }
 
         return null;

@@ -86,6 +86,7 @@ public sealed class FlowServiceTests
             harness.ChildSessions,
             harness.PathBudget,
             output ?? harness.Output,
+            harness.GitClient,
             clock,
             timings ?? Quick);
     }
@@ -132,6 +133,175 @@ public sealed class FlowServiceTests
                 $"log {run.LogFile("r1")}",
             ],
             outcome.Details);
+    }
+
+    /// <summary>A run records the commit and the branch it started from, as the probe its orient step reads them.</summary>
+    [Fact]
+    public async Task ARun_RecordsTheCommitAndTheBranchItStartedFrom()
+    {
+        var (repository, service, runner) = await ServiceAsync();
+        using var disposed = repository;
+        var git = repository.Harness;
+        await git.RunGitAsync(repository.Path, ["checkout", "--quiet", "-b", "feature"], Token);
+        var head = (await git.RunGitAsync(repository.Path, ["rev-parse", "HEAD"], Token)).StandardOutput.Trim();
+
+        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+
+        var outcome = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        var flow = repository.Harness.OrchestrationStore.ReadFlow(RunOf(repository))!;
+        Assert.Equal(head, flow.StartCommit);
+        Assert.Equal("feature", flow.Branch);
+    }
+
+    /// <summary>
+    /// The branch a run's start holds the checkout to is its pull request's base, filled from the run's inputs, where its
+    /// pull-request step names one: refused on it, started off it.
+    /// </summary>
+    [Fact]
+    public async Task ARunsStart_HoldsTheCheckoutToItsPullRequestsBase()
+    {
+        var (repository, service, runner) = await ServiceAsync("""
+            name: flow
+            inputs:
+              - name: target
+                default: work
+            steps:
+              - name: one
+                type: orient
+              - name: pr
+                type: pull-request
+                dependsOn: [one]
+                title: the work
+                body: body.md
+                base: '{input.target}'
+            """);
+        using var disposed = repository;
+        repository.Tree.WriteFile($".harness-config/workflows/{Workflow}/body.md", "the work\n");
+        await repository.Harness.RunGitAsync(repository.Path, ["checkout", "--quiet", "-b", "work"], Token);
+        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+
+        var refused = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal("run 'r1' of 'flow' cannot start: the main checkout is on 'work', the branch the run's pull request is opened against, and a run commits its work on a branch of its own: create one for it and check it out. Nothing was made.", refused.Message);
+        Assert.False(Directory.Exists(RunOf(repository).Directory));
+
+        var started = await service.RunAsync(repository.Path, Workflow, run: null, inputs: ["target=release"], json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        Assert.Equal(HarnessExit.Success, started.ExitCode);
+    }
+
+    /// <summary>
+    /// With no pull-request base, the branch a run's start holds the checkout to is the default of the remote its push step
+    /// names, not origin's; and a merge under way refuses a start too.
+    /// </summary>
+    [Fact]
+    public async Task ARunsStart_ReadsThePushRemotesDefault_AndIsRefusedWhileAMergeIsUnderWay()
+    {
+        var (repository, service, _) = await ServiceAsync("""
+            name: flow
+            steps:
+              - name: one
+                type: orient
+              - name: send
+                type: push
+                remote: upstream
+                dependsOn: [one]
+            """);
+        using var disposed = repository;
+        using var origin = new TempDirectory();
+        using var upstream = new TempDirectory();
+        var git = repository.Harness;
+        var branch = (await git.RunGitAsync(repository.Path, ["symbolic-ref", "--short", "HEAD"], Token)).StandardOutput.Trim();
+
+        foreach (var (name, remote, head) in new[] { ("origin", origin, branch), ("upstream", upstream, "trunk") })
+        {
+            await git.RunGitAsync(remote.Path, ["init", "--quiet", "--bare", "."], Token);
+            await git.RunGitAsync(repository.Path, ["remote", "add", name, remote.Path], Token);
+            await git.RunGitAsync(repository.Path, ["push", "--quiet", name, $"{branch}:{head}"], Token);
+            await git.RunGitAsync(repository.Path, ["remote", "set-head", name, head], Token);
+        }
+
+        async Task<string> RefusedAsync()
+        {
+            var outcome = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+            Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
+            Assert.False(Directory.Exists(RunOf(repository).Directory));
+            return outcome.Message;
+        }
+
+        await git.RunGitAsync(repository.Path, ["checkout", "--quiet", "-b", "trunk"], Token);
+        Assert.Equal("run 'r1' of 'flow' cannot start: the main checkout is on 'trunk', the branch the run's pull request is opened against, and a run commits its work on a branch of its own: create one for it and check it out. Nothing was made.", await RefusedAsync());
+
+        await git.RunGitAsync(repository.Path, ["checkout", "--quiet", "-b", "side"], Token);
+        repository.Tree.WriteFile("file.txt", "side\n");
+        await git.CommitAllAsync(repository.Path, "side", Token);
+        await git.RunGitAsync(repository.Path, ["checkout", "--quiet", "-b", "feature", "trunk"], Token);
+        repository.Tree.WriteFile("file.txt", "feature\n");
+        await git.CommitAllAsync(repository.Path, "feature", Token);
+        Assert.False((await git.GitClient.RunAsync(repository.Path, ["merge", "--quiet", "side"], cancellationToken: Token)).Succeeded);
+        Assert.Equal("run 'r1' of 'flow' cannot start: a merge is under way in the main checkout, and a run folds its work into the tree the merge is writing: finish the merge, or abort it. Nothing was made.", await RefusedAsync());
+    }
+
+    /// <summary>A start whose pull request's base cannot be filled is refused, saying why, before the checkout is weighed - here a detached HEAD.</summary>
+    [Fact]
+    public void AStartWhosePullRequestsBaseCannotBeFilled_IsRefused()
+    {
+        var definition = WorkflowFileParser.Parse("workflows/flow/flow.yml", """
+            name: flow
+            steps:
+              - name: pr
+                type: pull-request
+                title: t
+                body: body.md
+                base: '{input.target}'
+            """);
+        var detached = new FlowCheckout(null, "abc", false, [], [], [], null, null);
+
+        Assert.Equal(
+            "run 'r1' of 'flow' cannot start: its pull request's base cannot be filled: '{input.target}' reads nothing. Nothing was made.",
+            FlowService.StartRefusal(detached, definition, new Dictionary<string, string>(), "r1"));
+        Assert.Null(FlowService.StartRefusal(detached with { Branch = "work" }, definition, new Dictionary<string, string> { ["target"] = "main" }, "r1"));
+    }
+
+    /// <summary>
+    /// A run is refused, having made nothing, where the checkout is no place a run starts from: HEAD detached, the branch
+    /// its pull request goes to checked out - here the remote's default - and changes staged.
+    /// </summary>
+    [Fact]
+    public async Task ARunIsRefused_WhereTheCheckoutIsNoPlaceARunStartsFrom()
+    {
+        var (repository, service, _) = await ServiceAsync();
+        using var disposed = repository;
+        using var remote = new TempDirectory();
+        var git = repository.Harness;
+        var branch = (await git.RunGitAsync(repository.Path, ["symbolic-ref", "--short", "HEAD"], Token)).StandardOutput.Trim();
+
+        async Task<CommandOutcome> StartAsync()
+            => await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        void Refused(CommandOutcome outcome, string why)
+        {
+            Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
+            Assert.Equal($"run 'r1' of 'flow' cannot start: {why}. Nothing was made.", outcome.Message);
+            Assert.False(Directory.Exists(RunOf(repository).Directory));
+        }
+
+        await git.RunGitAsync(remote.Path, ["init", "--quiet", "--bare", "."], Token);
+        await git.RunGitAsync(repository.Path, ["remote", "add", "origin", remote.Path], Token);
+        await git.RunGitAsync(repository.Path, ["push", "--quiet", "origin", branch], Token);
+        await git.RunGitAsync(repository.Path, ["remote", "set-head", "origin", branch], Token);
+        Refused(await StartAsync(), $"the main checkout is on '{branch}', the branch the run's pull request is opened against, and a run commits its work on a branch of its own: create one for it and check it out");
+
+        await git.RunGitAsync(repository.Path, ["checkout", "--quiet", "--detach"], Token);
+        Refused(await StartAsync(), "the main checkout's HEAD is detached, and a run commits its work on a branch: check out a branch of its own for it");
+
+        await git.RunGitAsync(repository.Path, ["checkout", "--quiet", "-b", "feature"], Token);
+        repository.Tree.WriteFile("staged.txt", "staged\n");
+        await git.RunGitAsync(repository.Path, ["add", "staged.txt"], Token);
+        Refused(await StartAsync(), "the main checkout has staged changes (1 path(s): staged.txt), and a run's commit stages what it folded alone: commit them, or unstage them");
     }
 
     /// <summary>A session's --json is the run's document: its code and line, the run, its status, what it spent and every record it wrote by its path - never the empty stopped document.</summary>

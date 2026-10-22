@@ -45,6 +45,26 @@ public sealed class TestInvocationResolverTests
     }
 
     /// <summary>
+    /// The exclusions an invocation's own args apply: ctest's -E in any spelling and form, the last alone since ctest keeps
+    /// the last; ctest's -LE, every one, since ctest reads each; another runner's option, every value it is given; each
+    /// split on a declared join, an empty one leaving nothing out; none where no excludeArg is declared.
+    /// </summary>
+    [Fact]
+    public void TheExclusionsOfAnInvocation_AreReadAsItsRunnerReadsThem()
+    {
+        static IReadOnlyList<string> Of(string runner, string? excludeArg, string? join, params string[] args)
+            => TestInvocationResolver.ExclusionsOf(TestInvocationResolver.InvocationFor(
+                new TestConfig { All = new TestInvocation { Runner = runner, Args = [.. args], ExcludeArg = excludeArg, ExcludeJoin = join, SuccessPattern = "ok" } },
+                "linux"));
+
+        Assert.Equal(["c", "d"], Of("ctest", "-E", "|", "-E", "a|b", "--exclude-regex=c|d"));
+        Assert.Equal(["a", "b"], Of("ctest", "-LE", null, "-LE", "a", "--label-exclude", "b"));
+        Assert.Equal(["a", "b", "c"], Of("pytest", "--deselect", ",", "--deselect", "a,b", "--deselect", "c"));
+        Assert.Empty(Of("ctest", null, null, "-E", "a"));
+        Assert.Equal(["a"], Of("ctest", "-E", "|", "-E", "a|"));
+    }
+
+    /// <summary>
     /// A system's own section is found however a leg spells its system, as a leg's os is compared everywhere else and as
     /// the configuration is checked: ignoring case.
     /// </summary>

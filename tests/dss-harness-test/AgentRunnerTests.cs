@@ -776,7 +776,9 @@ public sealed class AgentRunnerTests
     }
 
     /// <summary>
-    /// The prompt is filled in one pass: a value that names another value is put in as it is, never filled in its turn.
+    /// The prompt is filled in one pass, by the one template grammar: a value that names another value is put in as it
+    /// is, never filled in its turn; a doubled brace stands for one, another expander's group and a name with no value
+    /// stand as written, and a name may be dotted.
     /// </summary>
     [Fact]
     public async Task ThePromptIsFilledInOnePass_AValueNamingAnotherIsPutInAsItIs()
@@ -785,11 +787,11 @@ public sealed class AgentRunnerTests
         var client = new FakeClient();
 
         await Runner(client).RunAsync(
-            Step(temp, template: "do {a} then {b}, leaving {c}", promptValues: new Dictionary<string, string> { ["a"] = "{b}", ["b"] = "x" }),
+            Step(temp, template: "do {a} then {b}, leaving {c} and {{d}} ${e} for {item.title}", promptValues: new Dictionary<string, string> { ["a"] = "{b}", ["b"] = "x", ["item.title"] = "t" }),
             events: null,
             TestContext.Current.CancellationToken);
 
-        Assert.Equal("do {b} then x, leaving {c}", client.Run!.UserPrompt);
+        Assert.Equal("do {b} then x, leaving {c} and {d} ${e} for t", client.Run!.UserPrompt);
     }
 
     /// <summary>

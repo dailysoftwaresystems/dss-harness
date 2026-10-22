@@ -375,7 +375,8 @@ public sealed class FlowSessionsTests
 
     /// <summary>
     /// A run's start is held to the path budget of the legs this machine runs that its leg steps may name, under its
-    /// deepest agent's worktree: refused by a sentence naming that worktree where it passes the limit.
+    /// deepest agent's worktree: refused by a sentence naming that worktree where it passes the limit. A leg that works
+    /// in its tree rather than a copy keeps no copy to count, and a file a work item writes is counted where it lies.
     /// </summary>
     [Fact]
     public void ARunsStartIsHeldToThePathBudgetOfItsLegSteps()
@@ -388,18 +389,30 @@ public sealed class FlowSessionsTests
               - name: build
                 type: build
             """);
-        var leg = new LegConfig { Os = platform.PlatformKey, Processor = "x64", Toolchain = "gcc", Config = "Debug" };
+        // Its os written in another case is this machine's all the same, as the configuration's check reads it.
+        var leg = new LegConfig { Os = platform.PlatformKey.ToUpperInvariant(), Processor = "x64", Toolchain = "gcc", Config = "Debug", LocalCopy = true };
         HarnessConfig Limited(int limit) => new() { Legs = new Dictionary<string, LegConfig>(StringComparer.Ordinal) { ["local"] = leg }, Worktrees = new WorktreeSettings { PathLimit = limit } };
         var config = Limited(40);
 
-        var refusal = FlowRunPaths.RefusalAtStart(new PathBudget(platform), config, layout, "r1", definition, platform.PlatformKey);
-        var (_, tree) = FlowRunPaths.AtStart(new PathBudget(platform), config, layout, "r1", definition, platform.PlatformKey);
+        var refusal = FlowRunPaths.RefusalAtStart(new PathBudget(platform), new HarnessContext(layout, config), "r1", definition, platform.PlatformKey);
+        var (inCopy, tree) = FlowRunPaths.AtStart(new PathBudget(platform), new HarnessContext(layout, config), "r1", definition, platform.PlatformKey);
 
         Assert.NotNull(refusal);
         Assert.StartsWith("run 'r1' of 'flow' would work in paths too long for this machine - the deepest of its agents' worktrees with the copies and workers its leg steps keep inside it: ", refusal, StringComparison.Ordinal);
         Assert.EndsWith(" Nothing was made.", refusal, StringComparison.Ordinal);
         Assert.Contains($"'{tree}'", refusal, StringComparison.Ordinal);
-        Assert.Null(FlowRunPaths.RefusalAtStart(new PathBudget(platform), Limited(2000), layout, "r1", definition, platform.PlatformKey));
+        Assert.Null(FlowRunPaths.RefusalAtStart(new PathBudget(platform), new HarnessContext(layout, Limited(2000)), "r1", definition, platform.PlatformKey));
+
+        var inTree = Limited(40);
+        inTree.Legs["local"] = new LegConfig { Os = platform.PlatformKey, Processor = "x64", Toolchain = "gcc", Config = "Debug" };
+        var (alone, _) = FlowRunPaths.AtStart(new PathBudget(platform), new HarnessContext(layout, inTree), "r1", definition, platform.PlatformKey);
+
+        Assert.True(alone.RequiredLength < inCopy.RequiredLength, "a leg working in its tree keeps no copy to count");
+        Assert.Equal(Path.TrimEndingDirectorySeparator(tree).Length + inTree.Worktrees.PathBudgetMargin, alone.RequiredLength);
+
+        // A file a work item writes is counted as it lies below the tree: its path after one separator.
+        var (written, _) = FlowRunPaths.AtStart(new PathBudget(platform), new HarnessContext(layout, inTree), "r1", definition, platform.PlatformKey, written: 10);
+        Assert.Equal(Path.TrimEndingDirectorySeparator(tree).Length + 1 + 10 + inTree.Worktrees.PathBudgetMargin, written.RequiredLength);
     }
 
     /// <summary>A runner that answers every step as asked.</summary>

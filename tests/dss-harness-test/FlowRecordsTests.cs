@@ -309,6 +309,75 @@ public sealed class FlowRecordsTests
         Assert.Equal("a1", work.Agent);
     }
 
+    /// <summary>
+    /// The records name the next agent one past the highest a&lt;N&gt; the run's agent directories hold and every name its
+    /// steps hold - a directory of another shape counting for none.
+    /// </summary>
+    [Fact]
+    public void TheRecords_NameTheNextAgent_OverTheRunsAgentDirectories()
+    {
+        using var temp = new TempDirectory();
+        var (harness, layout, _, records) = Records("r1", temp.Path, Parse("""
+            name: flow
+            steps:
+              - name: one
+                type: orient
+            """), new ManualClock());
+
+        using (records)
+        {
+            harness.FileSystem.CreateDirectory(layout.AgentDirectory("a8"));
+            harness.FileSystem.CreateDirectory(layout.AgentDirectory("notes"));
+            harness.FileSystem.CreateDirectory(layout.AgentDirectory("a099"));
+            IFlowRecords named = records;
+
+            Assert.Equal("a9", named.NameAgent(["a3"]));
+            Assert.Equal("a13", named.NameAgent(["a12"]));
+        }
+    }
+
+    /// <summary>
+    /// A step that works in an agent names no agent while its create-agent step runs - the agent is named, not yet made -
+    /// and names it once it is made. Here the step does not wait for the making, as the definition's check would refuse,
+    /// so the two run at once.
+    /// </summary>
+    [Fact]
+    public async Task AStepWorkingInAnAgent_NamesItOnlyOnceItIsMade()
+    {
+        using var temp = new TempDirectory();
+        var clock = new ManualClock();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: make
+                type: create-agent
+                agent: worker.md
+              - name: work
+                type: build
+                in: make
+            """);
+        var runner = new Runner().Hold("make").Hold("work");
+        var (harness, layout, _, records) = Records("r1", temp.Path, definition, clock);
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+            var session = coordinator.RunAsync(TestContext.Current.CancellationToken);
+            await runner.StartedAsync("make").WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+            await runner.StartedAsync("work").WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+            var running = harness.OrchestrationStore.ReadFlow(layout)!.Steps;
+            Assert.Equal("a1", running.Single(step => step.Instance == "make").Made);
+            Assert.Null(running.Single(step => step.Instance == "work").Agent);
+
+            runner.Complete("make");
+            runner.Complete("work");
+            await session.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        }
+
+        Assert.Equal("a1", harness.OrchestrationStore.ReadFlow(layout)!.Steps.Single(step => step.Instance == "work").Agent);
+    }
+
     /// <summary>The handoff a safe pause writes is a file in the stopped step's own directory, and it is removed once the next attempt is given it.</summary>
     [Fact]
     public async Task TheHandoffIsAFileInTheStoppedStepsDirectory_RemovedOnceGiven()

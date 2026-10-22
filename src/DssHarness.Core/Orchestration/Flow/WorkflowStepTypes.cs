@@ -116,7 +116,7 @@ public static class WorkflowStepTypes
     /// <summary>Every type, in the order <c>help workflows</c> lists them.</summary>
     public static IReadOnlyList<StepType> All { get; } =
     [
-        new("orient", [], [], null, "IGitClient (ResolveCommitAsync, GetStatusAsync), OrchestrationStore.Agents, LegSelection.Resolve", ["read main"], null, Output: OrientOutput),
+        new("orient", [], [], null, "OrientRunner: FlowCheckout over IGitClient and GitRemotes, LegSelection.Resolve, TestInvocationResolver, AnchorCitationService.RootsOf, CiSettings.Unset, MutationService.Declares, OrchestrationRules.OpenAgents, TreeHolders", ["read main"], null, Output: OrientOutput),
         new(
             "reason",
             [
@@ -129,7 +129,7 @@ public static class WorkflowStepTypes
                 new("resumePrompt", "the prompt file a step that goes on with its own work (resume names itself) is asked with when it runs again, in place of prompt"),
                 new("outputs", "the JSON schema file the step's answer is held to") { Required = true },
                 new("access", "read (the default), or write: in an agent's worktree, with 'in' naming it"),
-                new("in", "the create-agent step whose agent's worktree the step works in; required where access is write"),
+                new("in", "the create-agent step whose agent's worktree the step works in, which it waits for through dependsOn; required where access is write"),
                 new("resume", "the reason step whose work this one goes on with"),
                 new("independent", "never given the author's work to go on with"),
                 new("restrictions", "restrictions the agent works under, beyond the workflow's own"),
@@ -163,7 +163,7 @@ public static class WorkflowStepTypes
             [new("agent", "the agent definition, as agents/<name>.md in the workflow's directory") { Required = true }, new("empty", "make the agent with nothing handed to it")],
             [],
             null,
-            "IAgentService.CreateAsync",
+            "CreateAgentRunner: IAgentService.CreateAsync, SeedAsync and DeleteAsync",
             ["write main"],
             "an open-agent slot"),
         new("fold", FoldKeys, [], null, "IAgentService.FoldAsync", ["write main", "write the agent's tree"], null, FoldOutput),
@@ -179,7 +179,7 @@ public static class WorkflowStepTypes
         new(
             "refresh",
             [
-                new("of", "the create-agent step whose agent the step works on"),
+                new("of", "the create-agent step whose agent the step works on, which it waits for through dependsOn"),
                 new("others", "a create-agent step: the step works on every other live agent of the run that has a worktree, each on its own"),
                 new("paths", "the paths it weighs; absent, what its of and its keys say"),
                 new("all", "weigh every path the main tree moved, in place of paths"),
@@ -195,7 +195,7 @@ public static class WorkflowStepTypes
         new(
             "rebase",
             [
-                new("of", "the create-agent step whose agent the step works on"),
+                new("of", "the create-agent step whose agent the step works on, which it waits for through dependsOn"),
                 new("others", "a create-agent step: the step works on every other live agent of the run that has a worktree, each on its own"),
                 new("settled", "paths reconciled by hand: written out only, a person's answer"),
                 new("merge", "paths both trees changed whose clean three-way merge it takes"),
@@ -210,7 +210,7 @@ public static class WorkflowStepTypes
             [new("items", "an expression yielding the work items to check") { Required = true }, new("scope", "an expression yielding the pieces of a plan update, checked with them")],
             [],
             null,
-            "PlanValidator with IPathBudget.Check and CopyPathBudget.Check",
+            "PlanCheckRunner: PlanValidator with FlowRunPaths over IPathBudget.Check and CopyPathBudget",
             ["read main"],
             null,
             ObjectOf(("ok", Flag), ("problems", ListOf(Text)), ("items", UntypedList))),
@@ -370,7 +370,7 @@ public static class WorkflowStepTypes
     private static IReadOnlyList<KeyDescription> LegKeys =>
     [
         new("legs", "the legs or leg sets it runs, by name; absent, every declared leg"),
-        new("in", "the create-agent step whose agent's worktree it works in"),
+        new("in", "the create-agent step whose agent's worktree it works in, which it waits for through dependsOn"),
         new("failOn", "what a red leg does: red (the default) or never"),
     ];
 
@@ -390,7 +390,7 @@ public static class WorkflowStepTypes
     /// <summary>The keys the fold family takes, shared by <c>fold</c> and <c>delete-agent</c>.</summary>
     private static IReadOnlyList<KeyDescription> FoldKeys =>
     [
-        new("of", "the create-agent step whose agent the step works on") { Required = true },
+        new("of", "the create-agent step whose agent the step works on, which it waits for through dependsOn") { Required = true },
         new("allow", "what it may carry, member for member the fold command's options") { Keys = AllowKeys },
         new("within", "the paths it may write"),
     ];

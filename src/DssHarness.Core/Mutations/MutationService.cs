@@ -687,6 +687,21 @@ public sealed class MutationService(
     }
 
     /// <summary>
+    /// Whether the repository declares a registry of mutation arms, as a sweep reads it: <c>mutations.registry</c> set,
+    /// naming a file in the tree.
+    /// </summary>
+    /// <param name="context">The repository and its configuration.</param>
+    /// <param name="fileSystem">Where the registry is looked for.</param>
+    public static bool Declares(HarnessContext context, IFileSystem fileSystem)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(fileSystem);
+
+        return context.Config.Mutations.Registry is { } registry
+            && fileSystem.FileExists(TreeRegistryFiles.In(context.Layout.RepositoryRoot, registry));
+    }
+
+    /// <summary>
     /// Reads and verifies the registry <paramref name="context"/>'s configuration names, with every text it cites, and
     /// selects the arms <paramref name="armNames"/> names.
     /// </summary>
@@ -703,21 +718,19 @@ public sealed class MutationService(
         ArgumentNullException.ThrowIfNull(context);
 
         var settings = context.Config.Mutations;
+        var root = context.Layout.RepositoryRoot;
 
-        if (settings.Registry is not { } registry)
+        if (!Declares(context, _fileSystem))
         {
             throw new HarnessException(
                 HarnessExit.ConfigInvalid,
-                $"{CommandName} has no arms registry to sweep: set mutations.registry to the registry's path, relative to the repository root.");
+                settings.Registry is { } configured
+                    ? $"mutations.registry names '{configured}', which is not a file in '{root}'."
+                    : $"{CommandName} has no arms registry to sweep: set mutations.registry to the registry's path, relative to the repository root.");
         }
 
-        var root = context.Layout.RepositoryRoot;
+        var registry = settings.Registry!;
         var file = TreeRegistryFiles.In(root, registry);
-
-        if (!_fileSystem.FileExists(file))
-        {
-            throw new HarnessException(HarnessExit.ConfigInvalid, $"mutations.registry names '{registry}', which is not a file in '{root}'.");
-        }
 
         string rows;
 

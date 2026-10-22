@@ -22,6 +22,22 @@ public sealed record FlowAnswerGiven(string Question, string Answer);
 /// <param name="Blocks">Whether the issue stops the reporting step's own work.</param>
 public sealed record FlowPreExistingReport(string Title, string Description, string Where, string Evidence, bool Blocks);
 
+/// <summary>The run a step belongs to: where it works, its name, the commit it started from and the workflow it runs.</summary>
+/// <param name="Repository">The main checkout's root: where every service a step calls is asked from.</param>
+/// <param name="Run">The run's name, which names its orchestrator.</param>
+/// <param name="StartCommit">The commit the run started from; null where its records name none.</param>
+/// <param name="Definition">The workflow the run runs, as it was frozen when the run began.</param>
+public sealed record FlowRunPlace(string Repository, string Run, string? StartCommit, WorkflowDefinition Definition);
+
+/// <summary>
+/// The agent a step makes, as the engine named it before the step began: written to the step's record with the model
+/// it is made for before anything makes it, so a step run again asks for the same agent whatever the configuration
+/// says by then.
+/// </summary>
+/// <param name="Name">The agent's name, <c>a&lt;N&gt;</c>.</param>
+/// <param name="Model">The model it is made for; null where none resolved for the step, which its runner refuses.</param>
+public sealed record FlowMadeAgent(string Name, string? Model);
+
 /// <summary>
 /// What one step is asked to run: its definition, the instance of it that runs, the scope the instance sits in, and
 /// the answers this visit's questions were given.
@@ -37,6 +53,13 @@ public sealed record FlowPreExistingReport(string Title, string Description, str
 /// <param name="Handoff">The handoff this attempt is given, where a stop cut the attempt before it off; null where it is given none.</param>
 /// <param name="Issue">The pre-existing issue this instance is raised to triage, where it is one; null for every step the schedule starts.</param>
 /// <param name="Visit">Which visit of the step this is: 1 for the first, one more for each time a redirect, a handler or the recovery sent the run back to it.</param>
+/// <param name="Place">Where the run works; null for a run held in memory alone, which no step that calls a service can run in.</param>
+/// <param name="Read">
+/// What the engine read for the step where it starts, by key: a <c>validate-plan</c> step's <c>items</c> and
+/// <c>scope</c>, each where the step gives it; an <c>orient</c> step's <c>base</c>, the flow's <c>pull-request</c> step's
+/// base filled (<see cref="FlowTemplate.PullRequestBase"/>), where one names it. Empty for every other step.
+/// </param>
+/// <param name="Made">The agent a <c>create-agent</c> step makes, as the engine named it; null for every other step.</param>
 public sealed record FlowStepRun(
     WorkflowStep Step,
     string Instance,
@@ -48,7 +71,10 @@ public sealed record FlowStepRun(
     IFlowRunEvents Events,
     string? Handoff = null,
     FlowPreExistingReport? Issue = null,
-    int Visit = 1);
+    int Visit = 1,
+    FlowRunPlace? Place = null,
+    IReadOnlyDictionary<string, FlowValue>? Read = null,
+    FlowMadeAgent? Made = null);
 
 /// <summary>
 /// The one who runs a step: the code a step type calls - a machine step's service, a reason step's client runner - asked
@@ -195,6 +221,12 @@ public sealed record FlowStepResult
 
     /// <summary>What the wait's question says of what it found, where the runner reports it.</summary>
     public string? ChecksDetail { get; init; }
+
+    /// <summary>
+    /// A <c>create-agent</c> step's name is spent: the agent the engine named for it was deleted, and can never be made
+    /// again under that name, so the step's next attempt is named anew. False for every other result.
+    /// </summary>
+    public bool NameSpent { get; init; }
 
     /// <summary>A result for a step that ended: passed or not, with its code.</summary>
     public static FlowStepResult Ended(bool passed, int exit, string? error = null, JsonNode? output = null, IReadOnlyList<FlowPreExistingReport>? preExisting = null)

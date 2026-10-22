@@ -1400,6 +1400,9 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
     public Task<IReadOnlyList<string>> ListMergeHeadsAsync(string directory, CancellationToken cancellationToken = default)
         => Call(() => inner.ListMergeHeadsAsync(directory, Token(cancellationToken)));
 
+    public Task<string?> GetBranchAsync(string directory, CancellationToken cancellationToken = default)
+        => Call(() => inner.GetBranchAsync(directory, Token(cancellationToken)));
+
     public Task<bool?> IsShallowAsync(string directory, CancellationToken cancellationToken = default)
         => Call(() => inner.IsShallowAsync(directory, Token(cancellationToken)));
 

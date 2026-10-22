@@ -318,13 +318,7 @@ public sealed class CiLegsService(
             return given;
         }
 
-        var result = await _gitClient
-            .RunAsync(root, ["rev-parse", "--abbrev-ref", "HEAD"], cancellationToken: cancellationToken)
-            .ConfigureAwait(false);
-
-        var branch = result.Succeeded ? result.StandardOutput.Trim() : string.Empty;
-
-        if (branch.Length == 0 || string.Equals(branch, "HEAD", StringComparison.Ordinal))
+        if (await _gitClient.GetBranchAsync(root, cancellationToken).ConfigureAwait(false) is not { Length: > 0 } branch)
         {
             throw new HarnessException(
                 HarnessExit.Refused,
@@ -394,15 +388,7 @@ public sealed class CiLegsService(
         /// <exception cref="HarnessException">One the command cannot do without is not set.</exception>
         public static Conventions From(CiSettings settings)
         {
-            var missing = new[]
-                {
-                    ("ci.legJobPattern", settings.LegJobPattern),
-                    ("ci.buildStep", settings.BuildStep),
-                    ("ci.testStep", settings.TestStep),
-                }
-                .Where(setting => string.IsNullOrWhiteSpace(setting.Item2))
-                .Select(setting => setting.Item1)
-                .ToList();
+            var missing = settings.Unset();
 
             if (missing.Count > 0)
             {

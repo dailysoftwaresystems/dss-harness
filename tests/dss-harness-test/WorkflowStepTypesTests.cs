@@ -22,18 +22,18 @@ public sealed class WorkflowStepTypesTests
 
         Assert.Equal(
             [
-                ("orient", "IGitClient (ResolveCommitAsync, GetStatusAsync), OrchestrationStore.Agents, LegSelection.Resolve"),
+                ("orient", "OrientRunner: FlowCheckout over IGitClient and GitRemotes, LegSelection.Resolve, TestInvocationResolver, AnchorCitationService.RootsOf, CiSettings.Unset, MutationService.Declares, OrchestrationRules.OpenAgents, TreeHolders"),
                 ("reason", "IAgentClient; a read-only one that begins work first makes its agent (IAgentService.CreateAsync, no worktree)"),
                 ("build", "IBuildLegs over LegRunService"),
                 ("test", "ITestLegs over LegRunService"),
                 ("run", "IRunnerLegs over LegRunService"),
                 ("check-mutations", "IMutationLegs through MutationService, over LegRunService"),
-                ("create-agent", "IAgentService.CreateAsync"),
+                ("create-agent", "CreateAgentRunner: IAgentService.CreateAsync, SeedAsync and DeleteAsync"),
                 ("fold", "IAgentService.FoldAsync"),
                 ("delete-agent", "IAgentService.DeleteAsync"),
                 ("refresh", "IAgentService.RefreshAsync"),
                 ("rebase", "IAgentService.RebaseAsync"),
-                ("validate-plan", "PlanValidator with IPathBudget.Check and CopyPathBudget.Check"),
+                ("validate-plan", "PlanCheckRunner: PlanValidator with FlowRunPaths over IPathBudget.Check and CopyPathBudget"),
                 ("anchor-balance", "IAnchorBalanceService.CheckAsync"),
                 ("anchor-citations", "IAnchorCitationService.CheckAsync"),
                 ("ci-read", "ICiLegsService.CheckAsync"),

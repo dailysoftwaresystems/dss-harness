@@ -240,6 +240,121 @@ public sealed class GlobPattern
             && Covers(patternIndex + 1, candidateIndex + 1, candidate, depth, comparison);
     }
 
+    /// <summary>
+    /// Whether some path is matched by this pattern and by <paramref name="other"/> both - one that exists or one that
+    /// does not yet - so two patterns that would each let a different owner write a file are told apart from two that
+    /// never meet.
+    /// </summary>
+    /// <param name="other">The other pattern.</param>
+    /// <param name="comparison">How names are compared: the case rule of the tree the paths would be in.</param>
+    /// <exception cref="ArgumentException"><paramref name="comparison"/> is not ordinal.</exception>
+    public bool Overlaps(GlobPattern other, StringComparison comparison = StringComparison.Ordinal)
+    {
+        ArgumentNullException.ThrowIfNull(other);
+
+        if (comparison is not (StringComparison.Ordinal or StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException($"a path's names are compared ordinally, with or without case, never by {comparison}", nameof(comparison));
+        }
+
+        var mine = Spelled();
+        var theirs = other.Spelled();
+        var seen = new bool?[mine.Count + 1, theirs.Count + 1];
+
+        return Meet(0, 0);
+
+        // Whether what is left of the two can still be one path: a run of any segments on either side takes nothing or
+        // takes one of the other's, and two names meet where one name both would take.
+        bool Meet(int at, int against)
+        {
+            if (seen[at, against] is { } known)
+            {
+                return known;
+            }
+
+            var meets = (at == mine.Count && against == theirs.Count)
+                || (at < mine.Count && mine[at] is null && (Meet(at + 1, against) || (against < theirs.Count && Meet(at, against + 1))))
+                || (against < theirs.Count && theirs[against] is null && (Meet(at, against + 1) || (at < mine.Count && Meet(at + 1, against))))
+                || (at < mine.Count && against < theirs.Count
+                    && mine[at] is { } name && theirs[against] is { } theirName
+                    && NamesMeet(name, theirName, comparison)
+                    && Meet(at + 1, against + 1));
+
+            seen[at, against] = meets;
+
+            return meets;
+        }
+    }
+
+    /// <summary>
+    /// The paths this pattern matches, spelled whole from the root: each name a segment's pattern, and null for a run of
+    /// any number of segments. A pattern that is not anchored is preceded by such a run; what a matched directory holds
+    /// follows, one segment or more where the pattern names a directory or ends in <c>**</c>, any number otherwise.
+    /// </summary>
+    private List<string?> Spelled()
+    {
+        var spelled = new List<string?>();
+
+        if (!_anchored)
+        {
+            spelled.Add(null);
+        }
+
+        for (var at = 0; at < _segments.Length; at++)
+        {
+            // A trailing '**' stands for one segment or more, as Covers reads it; anywhere else, for any number.
+            if (_segments[at] == "**" && at < _segments.Length - 1)
+            {
+                spelled.Add(null);
+            }
+            else if (_segments[at] == "**")
+            {
+                spelled.Add("*");
+            }
+            else
+            {
+                spelled.Add(_segments[at]);
+            }
+        }
+
+        if (_directoriesOnly)
+        {
+            spelled.Add("*");
+        }
+
+        spelled.Add(null);
+
+        return spelled;
+    }
+
+    /// <summary>Whether one name is matched by two segments' patterns both, under <c>*</c> and <c>?</c>.</summary>
+    private static bool NamesMeet(string left, string right, StringComparison comparison)
+    {
+        var seen = new bool?[left.Length + 1, right.Length + 1];
+
+        return Meet(0, 0);
+
+        bool Meet(int at, int against)
+        {
+            if (seen[at, against] is { } known)
+            {
+                return known;
+            }
+
+            var meets = (at == left.Length && against == right.Length)
+                || (at < left.Length && left[at] == '*' && (Meet(at + 1, against) || (against < right.Length && Meet(at, against + 1))))
+                || (against < right.Length && right[against] == '*' && (Meet(at, against + 1) || (at < left.Length && Meet(at + 1, against))))
+                || (at < left.Length && against < right.Length
+                    && left[at] != '*' && right[against] != '*'
+                    && (left[at] == '?' || right[against] == '?' || Same(left[at], right[against], comparison))
+                    && Meet(at + 1, against + 1));
+
+            seen[at, against] = meets;
+
+            return meets;
+        }
+    }
+
     /// <summary>Whether one segment matches another under <c>*</c> and <c>?</c>, and nothing else.</summary>
     private static bool SegmentMatches(string pattern, string candidate, StringComparison comparison)
     {

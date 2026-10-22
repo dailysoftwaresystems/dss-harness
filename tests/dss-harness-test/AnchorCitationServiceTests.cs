@@ -533,6 +533,25 @@ public sealed class AnchorCitationServiceTests
         Assert.Contains("git remote set-head origin --auto", refusal.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The roots the check scans are the ones declared, each once as git spells it; a root that names nothing once
+    /// spelled so - the tree's own '.' among them - is none, and roots that are all such are refused, nothing scanned.
+    /// </summary>
+    [Fact]
+    public async Task TheRootsScanned_AreTheDeclaredOnes_EachOnce_AndNoneIsRefused()
+    {
+        Assert.Equal(["src", "docs"], AnchorCitationService.RootsOf(new AnchorSettings { CitationRoots = ["src", "./src", "docs\\", "", "."] }));
+
+        using var temp = new TempDirectory();
+        var harness = await PrepareAsync(temp, ["."]);
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(
+            () => Service(harness).CheckAsync(temp.Path, AnchorCitationSubject.CurrentTree, TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+        Assert.StartsWith("anchors.citationRoots declares no root, so nothing was scanned and nothing was checked.", refusal.Message, StringComparison.Ordinal);
+    }
+
     private static AnchorCitationService Service(HarnessFactory harness)
         => new(harness.ContextLoader, harness.AnchorRegistryService, harness.GitClient, harness.FileSystem);
 

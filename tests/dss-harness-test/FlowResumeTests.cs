@@ -843,6 +843,58 @@ public sealed class FlowResumeTests
         }
     }
 
+    /// <summary>
+    /// A create-agent step cut off before any model resolved for it is run again for the model that resolves then, under
+    /// the name it was given - its record's, not one named anew: nothing was made without a model.
+    /// </summary>
+    [Fact]
+    public async Task ACreateAgentStepCutOffWithNoModel_IsRunAgainForTheModelThatResolvesThen()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: work
+                type: create-agent
+                agent: worker.md
+            """);
+        var runner = new Runner().Hold("work");
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+
+        using (records)
+        {
+            var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), records: records);
+            var session = coordinator.RunAsync(Token);
+            await runner.StartedAsync("work").WaitAsync(Bound, Token);
+
+            // The crash, with the agent named and no model resolved for it.
+        }
+
+        var cut = harness.OrchestrationStore.ReadFlow(layout)!.Steps.Single(step => step.Instance == "work");
+        Assert.Equal("a1", cut.Made);
+        Assert.Null(cut.Model);
+
+        // An agent directory the making left: a name given anew would be one past it.
+        harness.FileSystem.CreateDirectory(layout.AgentDirectory("a1"));
+
+        FlowMadeAgent? asked = null;
+        var next = new Runner().On("work", run =>
+        {
+            asked = run.Made;
+            return FlowStepResult.Ended(passed: true, 0, output: new JsonObject { ["agent"] = run.Made!.Name });
+        });
+        var (_, _, again) = Records("r1", temp.Path, definition);
+
+        using (again)
+        {
+            var coordinator = new FlowCoordinator(definition, next, new RunnerFacts(), resume: TakeUp(harness, layout, definition), records: again, agentModels: new Dictionary<string, string>(StringComparer.Ordinal) { ["work"] = "model-one" });
+
+            Assert.Equal(FlowRunStatus.Done, (await coordinator.RunAsync(Token).WaitAsync(Bound, Token)).Status);
+        }
+
+        Assert.Equal(new FlowMadeAgent("a1", "model-one"), asked);
+    }
+
     /// <summary>A resume beside an open question is not refused where something can run; it is refused only where nothing can until the question is answered, naming answer-orchestrator.</summary>
     [Fact]
     public async Task AResumeBesideAnOpenQuestionIsRefusedOnlyWhereNothingCanRun()
@@ -1687,12 +1739,13 @@ public sealed class FlowResumeTests
         var definition = Parse("""
             name: flow
             steps:
-              - name: fold
-                type: fold
-                of: made
               - name: made
                 type: create-agent
                 agent: worker.md
+              - name: fold
+                type: fold
+                of: made
+                dependsOn: [made]
             """);
         var lacking = FlowStepResult.Standing(new FlowDryRun(RequestStanding.NeedsConsent, [ConsentKind.FoldNewRows], ["row 12"], [], "1 new row"));
         var (harness, layout, records) = Records("r1", temp.Path, definition);
@@ -1729,7 +1782,7 @@ public sealed class FlowResumeTests
         }
 
         Assert.Equal([new FlowAnswerGiven("q1", "allow")], next.Answers["fold@2"]);
-        Assert.Equal([new FlowAnswerGiven("q1", "allow")], harness.OrchestrationStore.ReadStepRecord(layout.StepRecordFile("fold"))!.Answers);
+        Assert.Equal([new FlowAnswerGiven("q1", "allow")], harness.OrchestrationStore.ReadStepRecord(Path.Combine(layout.InstanceDirectory("fold", "a1"), OrchestratorLayout.StepRecordFileName))!.Answers);
     }
 
     /// <summary>A work item that is JSON null is read back null, never Missing: the item a resume runs again is the one the run expanded.</summary>

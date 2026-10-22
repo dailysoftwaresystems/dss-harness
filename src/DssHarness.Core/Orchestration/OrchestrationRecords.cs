@@ -466,6 +466,28 @@ public static partial class OrchestrationRules
     public static int LongestGeneratedAgentName(int mostInstances)
         => GeneratedAgentPrefix.Length + Math.Max(mostInstances, 1).ToString(System.Globalization.CultureInfo.InvariantCulture).Length;
 
+    /// <summary>
+    /// The name a run gives the next agent it makes: <see cref="GeneratedAgentPrefix"/> and one past the highest number any
+    /// of <paramref name="taken"/> carries - the run's agent directories and the names its steps' records hold - so a
+    /// name is never given twice, a deleted agent's included. Names of another shape are no number, and count for none.
+    /// </summary>
+    /// <param name="taken">Every name the run has given or holds.</param>
+    public static string NextAgentName(IEnumerable<string> taken)
+    {
+        ArgumentNullException.ThrowIfNull(taken);
+
+        var highest = taken
+            .Where(name => name.Length > GeneratedAgentPrefix.Length
+                && name.StartsWith(GeneratedAgentPrefix, StringComparison.Ordinal)
+                && name[GeneratedAgentPrefix.Length] != '0'
+                && name.Skip(GeneratedAgentPrefix.Length).All(char.IsAsciiDigit))
+            .Select(name => long.TryParse(name.AsSpan(GeneratedAgentPrefix.Length), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var number) ? number : long.MaxValue - 1)
+            .DefaultIfEmpty(0)
+            .Max();
+
+        return GeneratedAgentPrefix + (highest + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+    }
+
     /// <summary>What is wrong with an agent's name beside its orchestrator's: never the same, since the two would share a log and a plans directory.</summary>
     /// <param name="orchestrator">The orchestrator's name.</param>
     /// <param name="agent">The agent's name.</param>

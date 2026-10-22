@@ -22,8 +22,9 @@ public interface IFlowService : IUseCase
 {
     /// <summary>
     /// Starts a run of a declared workflow: validates it (12), holds its inputs and its name to what they take (10),
-    /// makes the run's name, record and owner inside the repository's one section - refused (13) where its worktrees
-    /// would pass this machine's path limit - and runs the session.
+    /// makes the run's name, record and owner inside the repository's one section - refused (13), with nothing made,
+    /// where the main checkout is no place a run starts from (<see cref="FlowCheckout.StartRefusal"/>), where its pull
+    /// request's base cannot be filled, or where its worktrees would pass this machine's path limit - and runs the session.
     /// </summary>
     /// <param name="startDirectory">The directory the command acts on: the repository, and where an input's <c>@file</c> is read from.</param>
     /// <param name="definition">The workflow to run, as the repository's config declares it.</param>
@@ -89,6 +90,7 @@ public sealed record FlowTimings(TimeSpan PollEvery, TimeSpan WatchEvery, TimeSp
 /// <param name="children">Ends what a killed engine's steps left running, first in every command over a run.</param>
 /// <param name="pathBudget">Reckons the run's deepest paths against this machine's limit at its start.</param>
 /// <param name="output">Says what the engine's poller met and what it did about it.</param>
+/// <param name="gitClient">Reads the checkout a run starts from, by the probe its orient step reads.</param>
 /// <param name="clock">When the run's records are written, and how every wait of these commands is timed.</param>
 /// <param name="timings">How often the commands look; <see cref="FlowTimings.Default"/> where not given.</param>
 public sealed class FlowService(
@@ -105,6 +107,7 @@ public sealed class FlowService(
     ChildSessions children,
     IPathBudget pathBudget,
     IHarnessOutput output,
+    Git.IGitClient gitClient,
     TimeProvider? clock = null,
     FlowTimings? timings = null) : IFlowService
 {
@@ -139,6 +142,7 @@ public sealed class FlowService(
     private readonly ChildSessions _children = children;
     private readonly IPathBudget _pathBudget = pathBudget;
     private readonly IHarnessOutput _output = output;
+    private readonly Git.IGitClient _gitClient = gitClient;
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
     private readonly FlowTimings _timings = timings ?? FlowTimings.Default;
     private readonly FlowRunOwner _owner = new(store, identity, clock);
@@ -203,10 +207,16 @@ public sealed class FlowService(
         }
 
         // The inputs are held to the definition before anything of a run is made, by the one owner of what an input
-        // takes - the engine holds its run to the same - so nothing is written for a start that is refused.
+        // takes - the engine holds its run to the same - so nothing is written for a start that is refused. The checkout
+        // the run starts from is read by the probe its orient step reads, and held to what a run starts from once the
+        // run's name, which its pull request's base may read, is chosen.
+        IReadOnlyDictionary<string, string> resolved;
+        FlowCheckout checkout;
+
         try
         {
-            _ = FlowInputs.Resolve(workflow, given);
+            resolved = FlowInputs.Resolve(workflow, given);
+            checkout = await FlowCheckout.ReadAsync(_gitClient, context.Layout.MainCheckoutRoot, workflow, cancellationToken).ConfigureAwait(false);
         }
         catch (HarnessException ex)
         {
@@ -226,7 +236,10 @@ public sealed class FlowService(
                 workflow,
                 run,
                 given,
-                refusal: name => FlowRunPaths.RefusalAtStart(_pathBudget, context.Config, context.Layout, name, workflow, _platform.PlatformKey));
+                checkout.Head,
+                checkout.Branch,
+                refusal: name => StartRefusal(checkout, workflow, resolved, name)
+                    ?? FlowRunPaths.RefusalAtStart(_pathBudget, context, name, workflow, _platform.PlatformKey));
         }
         catch (HarnessException ex)
         {
@@ -234,6 +247,7 @@ public sealed class FlowService(
         }
 
         return await SessionAsync(
+            context,
             layout,
             RunCommand,
             reclaimed: null,
@@ -273,7 +287,7 @@ public sealed class FlowService(
             return Ended(layout, ResumeCommand, outcome, ResultOf(layout, outcome), json);
         }
 
-        return await SessionAsync(layout, ResumeCommand, reclaimed, () => Resumed(layout, digest!), answered: null, interrupts, json, cancellationToken).ConfigureAwait(false);
+        return await SessionAsync(context, layout, ResumeCommand, reclaimed, () => Resumed(layout, digest!), answered: null, interrupts, json, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -430,7 +444,7 @@ public sealed class FlowService(
 
         // The session begins with the answer: the question it names, answered by a person through this command, and
         // everything that can run after it.
-        return await SessionAsync(layout, AnswerCommand, reclaimed, () => Resumed(layout, digest!), (asked.Id, answer, takes ? text : null), interrupts, json, cancellationToken).ConfigureAwait(false);
+        return await SessionAsync(context, layout, AnswerCommand, reclaimed, () => Resumed(layout, digest!), (asked.Id, answer, takes ? text : null), interrupts, json, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -560,6 +574,21 @@ public sealed class FlowService(
     }
 
     /// <summary>
+    /// Why run <paramref name="run"/> of <paramref name="workflow"/> cannot start from <paramref name="checkout"/>: its
+    /// pull request's base cannot be filled, or the checkout is not one a run starts from (<see cref="FlowCheckout.StartRefusal"/>,
+    /// read against that base, else the remote's default branch); null where it can.
+    /// </summary>
+    internal static string? StartRefusal(FlowCheckout checkout, WorkflowDefinition workflow, IReadOnlyDictionary<string, string> inputs, string run)
+    {
+        var filled = FlowTemplate.PullRequestBase(workflow, inputs, run, out var problem);
+        var refusal = problem is not null
+            ? $"its pull request's base cannot be filled: {problem}"
+            : checkout.StartRefusal(filled);
+
+        return refusal is null ? null : $"run '{run}' of '{workflow.Name}' cannot start: {refusal}. Nothing was made.";
+    }
+
+    /// <summary>
     /// Loads the run's context and layout, and sweeps what a killed engine's steps left running before anything else of
     /// the run is read - or the refusal that answers for the command: a bad name (10), or no such run (13, with nothing
     /// written, for a run that is not there has no directory to log in).
@@ -636,6 +665,7 @@ public sealed class FlowService(
     /// refusal, a defect - the owner is released and the outcome is in the run's log.
     /// </summary>
     private async Task<CommandOutcome> SessionAsync(
+        HarnessContext context,
         OrchestratorLayout layout,
         string command,
         string? reclaimed,
@@ -663,7 +693,20 @@ public sealed class FlowService(
             var (definition, runContext, resume) = begin();
 
             using var records = new FlowRunRecords(_fileSystem, _store, layout, runContext, _clock);
-            var coordinator = new FlowCoordinator(definition, _runner, _runnerFacts, _clock, runContext.Inputs, records, resume, layout.Name);
+
+            // Every step is handed the run it belongs to, and each create-agent step the model its agent is made for,
+            // resolved from the configuration as the definition's check resolves it.
+            var coordinator = new FlowCoordinator(
+                definition,
+                _runner,
+                _runnerFacts,
+                _clock,
+                runContext.Inputs,
+                records,
+                resume,
+                layout.Name,
+                new FlowRunPlace(context.Layout.MainCheckoutRoot, layout.Name, runContext.StartCommit, definition),
+                Agents.AgentProviders.Resolve(context.Config).Providers is { } providers ? WorkflowValidator.AgentModels(definition, providers) : null);
             var before = _store.ReadFlowQuestions(layout);
 
             if (answered is { } given && !coordinator.TryAnswer(given.Question, given.Answer, given.Text, out var problem, AnswerCommand))

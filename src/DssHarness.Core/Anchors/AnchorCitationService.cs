@@ -82,14 +82,26 @@ public sealed class AnchorCitationService(
     /// </summary>
     private const int BinaryProbeLength = 8000;
 
-    /// <summary>References tried, in order, when the repository does not say which branch is default.</summary>
-    private static readonly string[] DefaultBranchCandidates =
-        ["origin/main", "origin/master", "main", "master"];
-
     private readonly IHarnessContextLoader _contextLoader = contextLoader;
     private readonly IAnchorRegistryService _registryService = registryService;
     private readonly IGitClient _gitClient = gitClient;
     private readonly IFileSystem _fileSystem = fileSystem;
+
+    /// <summary>
+    /// The roots <paramref name="anchors"/> declares the check scans, each once, as the check reads them: normalized,
+    /// and a root that names nothing once normalized left out. The one reading of them, so whatever says the repository
+    /// declares citation roots says what the check would scan.
+    /// </summary>
+    /// <param name="anchors">The repository's anchor settings.</param>
+    public static IReadOnlyList<string> RootsOf(Configuration.AnchorSettings anchors)
+    {
+        ArgumentNullException.ThrowIfNull(anchors);
+
+        return [.. anchors.CitationRoots
+            .Select(AnchorRegistryLocator.Normalize)
+            .Where(value => value.Length > 0)
+            .Distinct(StringComparer.Ordinal)];
+    }
 
     public async Task<AnchorCitationReport> CheckAsync(
         string startDirectory,
@@ -99,11 +111,7 @@ public sealed class AnchorCitationService(
         var context = await _contextLoader.LoadAsync(startDirectory, cancellationToken).ConfigureAwait(false);
         var root = context.Layout.RepositoryRoot;
 
-        var roots = context.Config.Anchors.CitationRoots
-            .Select(AnchorRegistryLocator.Normalize)
-            .Where(value => value.Length > 0)
-            .Distinct(StringComparer.Ordinal)
-            .ToList();
+        var roots = RootsOf(context.Config.Anchors);
 
         if (roots.Count == 0)
         {
@@ -283,33 +291,32 @@ public sealed class AnchorCitationService(
     /// </summary>
     private async Task<string> ResolveDefaultBranchAsync(string root, CancellationToken cancellationToken)
     {
-        var declared = await _gitClient
-            .RunAsync(root, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], cancellationToken: cancellationToken)
-            .ConfigureAwait(false);
+        const string Remote = GitRemotes.ConventionalRemote;
+        var remote = await _gitClient.DefaultBranchAsync(root, Remote, cancellationToken).ConfigureAwait(false);
 
-        var name = declared.Succeeded ? declared.StandardOutput.Trim() : string.Empty;
-
-        if (name.Length > 0 && await _gitClient.ResolveCommitAsync(root, name, cancellationToken).ConfigureAwait(false) is not null)
+        if (remote.Reference is { } found)
         {
-            return name;
+            return found;
         }
 
-        foreach (var candidate in DefaultBranchCandidates)
+        // A repository with no remote, or one never fetched, is compared with its own default branch.
+        foreach (var local in GitRemotes.ConventionalBranches)
         {
-            if (await _gitClient.ResolveCommitAsync(root, candidate, cancellationToken).ConfigureAwait(false) is not null)
+            if (await _gitClient.ResolveCommitAsync(root, local, cancellationToken).ConfigureAwait(false) is not null)
             {
-                return candidate;
+                return local;
             }
         }
 
-        var dangling = name.Length > 0;
+        var dangling = remote.Named is not null;
+        IReadOnlyList<string> tried = [.. GitRemotes.ConventionalBranches.Select(branch => $"{Remote}/{branch}"), .. GitRemotes.ConventionalBranches];
 
         throw new HarnessException(
             HarnessExit.Refused,
             $"No default branch was found to compare with (tried the remote's own HEAD"
-            + (dangling ? $", which names {name}, a branch not here" : string.Empty)
-            + $", then {string.Join(", ", DefaultBranchCandidates)}). Fetch the remote"
-            + (dangling ? ", or run git remote set-head origin --auto" : string.Empty)
+            + (dangling ? $", which names {remote.Named}, a branch not here" : string.Empty)
+            + $", then {string.Join(", ", tried)}). Fetch the remote"
+            + (dangling ? $", or run git remote set-head {Remote} --auto" : string.Empty)
             + ", or use --current-tree or --current-commit.");
     }
 

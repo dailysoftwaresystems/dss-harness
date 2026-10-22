@@ -41,6 +41,66 @@ public static class FlowGraph
     {
         ArgumentNullException.ThrowIfNull(definition);
 
+        var (order, edges) = Build(definition);
+
+        return Walk(order, edges);
+    }
+
+    /// <summary>
+    /// Whether the step at <paramref name="waiter"/> waits for the one at <paramref name="target"/> to end before it
+    /// starts: through its dependencies and a handler's source - its own, and those of every group around it, which it
+    /// starts within - and the children of a group it waits for, followed as far as they go. Paths are as
+    /// <see cref="FlowScope"/> spells them.
+    /// </summary>
+    /// <param name="definition">The workflow, as it was read.</param>
+    /// <param name="waiter">The step that would wait.</param>
+    /// <param name="target">The step it would wait for.</param>
+    public static bool Waits(WorkflowDefinition definition, string waiter, string target)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(waiter);
+        ArgumentNullException.ThrowIfNull(target);
+
+        var (_, edges) = Build(definition);
+
+        // A group around the waiter holds it and its siblings: what the group waits for, the waiter waits for, and the
+        // group's own members are not among that.
+        var first = new List<string>(edges.GetValueOrDefault(waiter) ?? []);
+
+        for (var dot = waiter.LastIndexOf('.'); dot > 0; dot = waiter.LastIndexOf('.', dot - 1))
+        {
+            var group = waiter[..dot];
+            first.AddRange((edges.GetValueOrDefault(group) ?? []).Where(waited => !waited.StartsWith(group + ".", StringComparison.Ordinal)));
+        }
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var next = new Stack<string>(first);
+
+        while (next.TryPop(out var at))
+        {
+            if (string.Equals(at, target, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            if (seen.Add(at))
+            {
+                foreach (var further in edges.GetValueOrDefault(at) ?? [])
+                {
+                    next.Push(further);
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// The graph of <paramref name="definition"/>: every step a node, in declaration order - the flow's, then the
+    /// recovery's - with the edges from each to what it waits for.
+    /// </summary>
+    private static (List<string> Order, Dictionary<string, List<string>> Edges) Build(WorkflowDefinition definition)
+    {
         // Steps that share a name share a path, and so one node: a duplicate is the validator's to refuse, and the
         // walk still answers over what was read, with the edges of every declaration of it.
         var order = new List<string>();
@@ -53,7 +113,7 @@ public static class FlowGraph
             Collect(recover.Steps, FlowScope.Recovery, inherited: [], definition, order, edges);
         }
 
-        return Walk(order, edges);
+        return (order, edges);
     }
 
     /// <summary>

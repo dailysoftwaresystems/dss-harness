@@ -181,11 +181,14 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
     /// <summary>Whether a resume brought this instance in as it stood: what it left Running is a crash's own, for nothing else runs between two sessions.</summary>
     internal bool FromResume;
 
-    /// <summary>The agent this step works in - the one its <c>in</c> or <c>of</c> names, made by its create-agent - where it names one.</summary>
-    public string? Agent { get; internal set; }
-
-    /// <summary>The agent a create-agent step made, as its output names it; null for every other step.</summary>
+    /// <summary>
+    /// The agent a create-agent step makes, as the engine named it before the step first ran - its output names the same
+    /// agent once it is made; null for every other step, and for one whose name is spent until it runs again.
+    /// </summary>
     public string? Made { get; internal set; }
+
+    /// <summary>The model the agent of <see cref="Made"/> is made for; null where <see cref="Made"/> is, and where none resolved.</summary>
+    public string? MadeModel { get; internal set; }
 
     /// <summary>Cancels what this instance's runner runs: a safe pause that stops machine steps and a hard stop cancel it.</summary>
     internal CancellationTokenSource? Stoppable;
@@ -314,6 +317,11 @@ public sealed class FlowCoordinator
     private readonly IFlowRunnerFacts _runnerFacts;
     private readonly TimeProvider _clock;
     private readonly IReadOnlyDictionary<string, string> _inputs;
+    private readonly FlowRunPlace? _place;
+    private readonly IReadOnlyDictionary<string, string> _agentModels;
+
+    /// <summary>Every agent name the session gave, a spent one's among them: never given again, though no step holds it any more.</summary>
+    private readonly HashSet<string> _agentNamesGiven = new(StringComparer.Ordinal);
 
     private readonly Channel<Message> _messages = Channel.CreateUnbounded<Message>(new UnboundedChannelOptions { SingleReader = true });
     private readonly Dictionary<string, FlowInstance> _instances = new(StringComparer.Ordinal);
@@ -444,6 +452,11 @@ public sealed class FlowCoordinator
     /// The run's name - <c>r&lt;N&gt;</c>, or the one <c>--run</c> gave - which <c>run.name</c> reads and the budget's
     /// question says; null for a run held in memory alone, whose name reads empty and whose question says "the run".
     /// </param>
+    /// <param name="place">Where the run works, handed to every step; null for a run held in memory alone.</param>
+    /// <param name="agentModels">
+    /// The model each create-agent step makes its agent for, by the step's path (<see cref="WorkflowValidator.AgentModels"/>);
+    /// a step it names none for is handed none, which its runner refuses.
+    /// </param>
     /// <exception cref="HarnessException">An input the run needs is missing, or a value is outside the ones its input takes.</exception>
     public FlowCoordinator(
         WorkflowDefinition definition,
@@ -453,7 +466,9 @@ public sealed class FlowCoordinator
         IReadOnlyDictionary<string, string>? inputs = null,
         IFlowRecords? records = null,
         FlowResumeState? resume = null,
-        string? runName = null)
+        string? runName = null,
+        FlowRunPlace? place = null,
+        IReadOnlyDictionary<string, string>? agentModels = null)
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(runner);
@@ -466,6 +481,8 @@ public sealed class FlowCoordinator
         _inputs = FlowInputs.Resolve(definition, inputs);
         _records = records;
         _runName = runName;
+        _place = place;
+        _agentModels = agentModels ?? new Dictionary<string, string>(StringComparer.Ordinal);
 
         foreach (var (path, _) in FlowScope.Declared(definition))
         {
@@ -2120,7 +2137,7 @@ public sealed class FlowCoordinator
             {
                 // A create-agent step visited again in the same scope, while the agent it made is live, is Done at once
                 // with that agent and makes nothing: the agent's slot passes to the new visit.
-                var made = Create(scope, declaration, FlowInstanceState.NotStarted, made: made => made.Made = live.Made);
+                var made = Create(scope, declaration, FlowInstanceState.NotStarted, made: made => (made.Made, made.MadeModel) = (live.Made, live.MadeModel));
                 _ = _agentsOpen.Remove(live.Id);
                 End(made, FlowInstanceState.Done, HarnessExit.Success, null);
                 changed = true;
@@ -2598,6 +2615,17 @@ public sealed class FlowCoordinator
         instance.EveryLegPlaced = false;
         instance.Draining = false;
         instance.PastTimeLimit = false;
+
+        // The agent a create-agent step makes is named, with the model it is made for, before the record that says the
+        // step runs - written before its runner is asked - so a step run again, after a crash or a stop, asks for the
+        // same agent whatever the configuration says by then. A name once given is never given again; a model that did
+        // not resolve is looked for again, since nothing was made without one.
+        if (instance.Step.Type == "create-agent")
+        {
+            instance.Made ??= NameAgent();
+            instance.MadeModel ??= _agentModels.GetValueOrDefault(instance.Path);
+        }
+
         Record(FlowChangeKind.Step, instance, from: was, to: FlowInstanceState.Running, attempt: instance.Attempt);
 
         if (instance.Step.Type == "pause")
@@ -2642,32 +2670,22 @@ public sealed class FlowCoordinator
                     _reasonStarted[instance.Id] = _clock.GetUtcNow();
                 }
 
-                // A test step's filterWhen, read where the step starts, as when is read where it is admitted: false
-                // gives the runner no filter and fills no template, so every test of the step's legs runs; an
-                // unreadable one fails the step as an unreadable when does.
+                // What the step reads where it starts, as when is read where it is admitted (ReadAtStart): a test
+                // step's filterWhen - false gives the runner no filter and fills no template, so every test of the
+                // step's legs runs - a validate-plan's items and scope, and the pull request's base orient says. One
+                // that cannot be read fails the step as an unreadable when does.
                 var step = instance.Step;
+                var read = new Dictionary<string, FlowValue>(StringComparer.Ordinal);
 
-                if (step.Type == "test" && step.FilterWhen is { } filterWhen)
+                if (ReadAtStart(instance, read) is { } unreadable)
                 {
-                    try
-                    {
-                        var read = Evaluate(filterWhen, instance.DeclaredScope!, out var problem, reader: instance);
+                    _ = _messages.Writer.TryWrite(new Message(instance, FlowStepResult.Ended(passed: false, HarnessExit.ConfigInvalid, unreadable), null, Attempt: attempt));
+                    return;
+                }
 
-                        if (problem is not null)
-                        {
-                            throw new UnresolvedReadException(problem);
-                        }
-
-                        if (!read.AsBoolean(filterWhen))
-                        {
-                            step = step with { Filter = null };
-                        }
-                    }
-                    catch (Exception unreadable) when (unreadable is UnresolvedReadException or ArgumentException)
-                    {
-                        _ = _messages.Writer.TryWrite(new Message(instance, FlowStepResult.Ended(passed: false, HarnessExit.ConfigInvalid, Unreadable("filterWhen", instance.Id, unreadable.Message)), null, Attempt: attempt));
-                        return;
-                    }
+                if (read.Remove("filterWhen", out var filterWhen) && !filterWhen.AsBoolean(step.FilterWhen!))
+                {
+                    step = step with { Filter = null };
                 }
 
                 var result = await _runner.RunAsync(
@@ -2682,7 +2700,10 @@ public sealed class FlowCoordinator
                         new RunEvents(this, instance, attempt),
                         handoff?.Text,
                         instance.Issue,
-                        instance.Visit),
+                        instance.Visit,
+                        _place,
+                        read,
+                        instance.Made is { } made ? new FlowMadeAgent(made, instance.MadeModel) : null),
                     token).ConfigureAwait(false);
 
                 _ = _messages.Writer.TryWrite(new Message(instance, result, null, Attempt: attempt));
@@ -2796,11 +2817,21 @@ public sealed class FlowCoordinator
             (passed, exit, error) = (false, HarnessExit.ConfigInvalid, refused);
         }
 
-        // The agent a create-agent step made, as its output names it: the one every step that names the step with in
-        // or of works in, and the one whose directory those steps keep theirs in.
-        if (instance.Step.Type == "create-agent" && passed && TextOf(result.Output?["agent"]) is { Length: > 0 } agent)
+        // The agent a create-agent step made is the one the engine named for it - the one every step that names the step
+        // with in or of works in, and whose directory those steps keep theirs in: an output that names another is the
+        // engine's own fault. A name the step's runner says is spent is given again to none, and the step's next attempt
+        // is named anew.
+        if (instance.Step.Type == "create-agent")
         {
-            instance.Made = agent;
+            if (passed && TextOf(result.Output?["agent"]) is { } named && !string.Equals(named, instance.Made, StringComparison.Ordinal))
+            {
+                (passed, exit, error) = (false, HarnessExit.InternalError, $"'{instance.Id}' answered that it made agent '{named}', and the engine named its agent '{instance.Made}'");
+            }
+
+            if (!passed && result.NameSpent)
+            {
+                (instance.Made, instance.MadeModel) = (null, null);
+            }
         }
 
         // An incomplete step is run again by the table's row for its code, capped by its retries: a reasoning step is
@@ -5317,17 +5348,7 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>The run's inputs as one object.</summary>
-    private JsonObject Inputs()
-    {
-        var values = new JsonObject();
-
-        foreach (var (name, value) in _inputs)
-        {
-            values[name] = value;
-        }
-
-        return values;
-    }
+    private JsonObject Inputs() => FlowInputs.AsObject(_inputs);
 
     /// <summary>The workflow's params as one object.</summary>
     private JsonObject Params()
@@ -5391,13 +5412,14 @@ public sealed class FlowCoordinator
     /// <param name="source">The ending a handler's when reads as <c>source</c>; null for what raised the reader or the group around it.</param>
     /// <param name="reader">The instance the expression is read for, where one is.</param>
     /// <param name="drawing">The visit a declaration being drawn will be, where its when is read as it is drawn.</param>
-    private FlowValue Evaluate(string expression, Scope scope, out string? problem, FlowInstance? source = null, FlowInstance? reader = null, int? drawing = null)
+    /// <param name="mayReadNothing">Whether reading nothing is what the key means by nothing, and is yielded as read rather than said to be a problem.</param>
+    private FlowValue Evaluate(string expression, Scope scope, out string? problem, FlowInstance? source = null, FlowInstance? reader = null, int? drawing = null, bool mayReadNothing = false)
     {
         try
         {
             var value = FlowExpression.Parse(expression).Evaluate(path => Read(path, scope, source, reader, drawing));
 
-            if (value.IsMissing)
+            if (value.IsMissing && !mayReadNothing)
             {
                 problem = $"'{expression}' reads nothing";
                 return FlowValue.Of(false);
@@ -5440,89 +5462,75 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// Fills a template of <paramref name="instance"/>'s step - a pause step's question - by the one grammar: a brace
-    /// doubled stands for one, and any other name in braces is read by the same roots an expression reads. A name that
-    /// reads nothing says why, in <paramref name="problem"/>, and fills nothing.
+    /// What <paramref name="instance"/>'s step reads where it starts, into <paramref name="read"/> by key: a test step's
+    /// <c>filterWhen</c>; a <c>validate-plan</c> step's <c>items</c> and <c>scope</c>, each where it gives it - a scope
+    /// that reads nothing is no update, and is handed on as read; an <c>orient</c> step's <c>base</c>, the flow's pull
+    /// request's base filled as the run's start fills it, where a pull-request step names one. Why one could not be
+    /// read, as the step's record keeps it; null where each was.
     /// </summary>
-    private string? Filled(FlowInstance instance, string template, out string? problem)
+    private string? ReadAtStart(FlowInstance instance, Dictionary<string, FlowValue> read)
     {
-        var filled = new StringBuilder(template.Length);
-        var at = 0;
-
-        while (at < template.Length)
+        var step = instance.Step;
+        IEnumerable<(string Key, string? Expression, bool MayReadNothing)> expressions = step.Type switch
         {
-            if (template[at..].StartsWith("{{", StringComparison.Ordinal))
+            "test" => [("filterWhen", step.FilterWhen, false)],
+            "validate-plan" => [("items", step.Items, false), ("scope", step.Scope, true)],
+            _ => [],
+        };
+
+        foreach (var (key, expression, mayReadNothing) in expressions)
+        {
+            if (expression is null)
             {
-                // A doubled brace stands for one.
-                filled.Append('{');
-                at += 2;
                 continue;
             }
 
-            if (template[at] != '{')
+            var value = Evaluate(expression, instance.DeclaredScope!, out var problem, reader: instance, mayReadNothing: mayReadNothing);
+
+            if (problem is not null)
             {
-                var next = template.IndexOf('{', at);
-
-                if (next < 0)
-                {
-                    filled.Append(template[at..]);
-                    break;
-                }
-
-                filled.Append(template[at..next]);
-                at = next;
-                continue;
+                return Unreadable(key, instance.Id, problem);
             }
 
-            var close = template.IndexOf('}', at);
-
-            if (close < 0)
-            {
-                problem = $"'{template[at..]}' is no name in braces";
-                return null;
-            }
-
-            var name = template[(at + 1)..close];
-
-            // The grammar every template is read by: the name may say how its value is written, after '|', and the
-            // filler fills the value and not the writing of it; whitespace around the name is nothing.
-            name = name.Split('|', 2)[0].Trim();
-
-            if (name.Length == 0)
-            {
-                problem = $"'{{{template[(at + 1)..close]}}}' is no name in braces";
-                return null;
-            }
-
-            try
-            {
-                var value = FlowExpression.Parse(name).Evaluate(path => Read(path, instance.DeclaredScope!, reader: instance));
-
-                if (value.IsMissing)
-                {
-                    problem = $"'{{{name}}}' reads nothing";
-                    return null;
-                }
-
-                filled.Append(value.AsTemplateText());
-            }
-            catch (UnresolvedReadException unreadable)
-            {
-                problem = $"'{{{name}}}': {unreadable.Message}";
-                return null;
-            }
-            catch (ArgumentException notWhole)
-            {
-                problem = $"'{{{name}}}': {notWhole.Message}";
-                return null;
-            }
-
-            at = close + 1;
+            read[key] = value;
         }
 
-        problem = null;
-        return filled.ToString();
+        if (step.Type == "orient")
+        {
+            if (FlowTemplate.PullRequestBase(_definition, _inputs, _runName ?? string.Empty, out var problem) is { } filled)
+            {
+                read["base"] = FlowValue.Of(filled);
+            }
+            else if (problem is not null)
+            {
+                return Unreadable("base", instance.Id, problem);
+            }
+        }
+
+        return null;
     }
+
+    /// <summary>
+    /// The name the run gives the next agent it makes: one past the highest any step of it holds, any name the session
+    /// gave and any agent directory the run has (<see cref="IFlowRecords.NameAgent"/>); a run held in memory alone
+    /// reckons by the names it holds and gave.
+    /// </summary>
+    private string NameAgent()
+    {
+        IReadOnlyCollection<string> taken = [.. _created.Select(instance => instance.Made).OfType<string>().Concat(_agentNamesGiven).Distinct(StringComparer.Ordinal)];
+        var name = _records is null ? OrchestrationRules.NextAgentName(taken) : _records.NameAgent(taken);
+
+        _ = _agentNamesGiven.Add(name);
+        return name;
+    }
+
+    /// <summary>
+    /// Fills a template of <paramref name="instance"/>'s step - a pause step's question - by the one grammar
+    /// (<see cref="FlowTemplate.Fill"/>), each name read by the same roots an expression reads. A name that reads nothing
+    /// says why, in <paramref name="problem"/>, and fills nothing.
+    /// </summary>
+    private string? Filled(FlowInstance instance, string template, out string? problem)
+        => FlowTemplate.Fill(template, path => Read(path, instance.DeclaredScope!, reader: instance), out problem);
 
     /// <summary>The question kind a consent a fold's dry run lacks is named by.</summary>
     private static string ConsentNameOf(ConsentKind consent)
@@ -5731,9 +5739,13 @@ public sealed class FlowCoordinator
             instance.Issue,
             instance.IssuesOwed.Count == 0 ? null : [.. instance.IssuesOwed],
             instance.LeftBy,
-            instance.Cause);
+            instance.Cause,
+            instance.MadeModel);
 
-    /// <summary>The agent this step works in: the one its <c>in</c> or <c>of</c> names, made by its create-agent; null for the create-agent itself and every step that names none.</summary>
+    /// <summary>
+    /// The agent this step works in: the one its <c>in</c> or <c>of</c> names, once its create-agent has made it - the
+    /// name it was given beforehand names no agent yet; null for the create-agent itself and every step that names none.
+    /// </summary>
     private string? WorksInOf(FlowInstance instance)
     {
         if (instance.Step.Type == "create-agent"
@@ -5742,7 +5754,7 @@ public sealed class FlowCoordinator
             return null;
         }
 
-        return CreateStepOf(instance, instance.Step.In ?? instance.Step.Of!)?.Made;
+        return CreateStepOf(instance, instance.Step.In ?? instance.Step.Of!) is { State: FlowInstanceState.Done, Made: { } made } ? made : null;
     }
 
     /// <summary>What one instance waits on, where it waits: the question it asked, the resume, or what admission says keeps it - a dependency, the quiet an alone step waits for, a claim, a counter, a redirect, the resume.</summary>
@@ -6115,6 +6127,7 @@ public sealed class FlowCoordinator
             instance.StartedAt = record.StartedAt;
             instance.FinishedAt = record.FinishedAt;
             instance.Made = record.Made;
+            instance.MadeModel = record.Model;
             instance.WaitingQuestion = record.Question;
             instance.HandledBy = record.HandledBy;
             instance.Leftover = record.Leftover?.DeepClone();

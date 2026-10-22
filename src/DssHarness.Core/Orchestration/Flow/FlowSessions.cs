@@ -76,8 +76,8 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
     /// <param name="startCommit">The commit the run starts from; null where it starts beside the tree's history.</param>
     /// <param name="branch">The branch the run starts on.</param>
     /// <param name="refusal">
-    /// What the run's name chosen is still held to before anything of it is written - its path budget - as a refusal's
-    /// sentence; null where nothing refuses it.
+    /// What the run's name chosen is still held to before anything of it is written - the checkout it starts from, its
+    /// pull request's base and its path budget - as a refusal's sentence; null where nothing refuses it.
     /// </param>
     /// <returns>The run's layout and what the run is, as its records name it.</returns>
     /// <exception cref="HarnessException">Another run of the repository is unfinished, the name is taken, or <paramref name="refusal"/> refuses it (<see cref="HarnessExit.Refused"/>).</exception>
@@ -291,6 +291,10 @@ public static class FlowRunPaths
     /// <param name="agentName">The longest agent name the run makes.</param>
     /// <param name="copied">Each variant a leg of the run builds in a copy, <c>.legs/&lt;key&gt;</c> below its tree.</param>
     /// <param name="swept">Each variant a sweep of the run keeps workers of, <c>.mutations/&lt;key&gt;&lt;mark&gt;-&lt;n&gt;</c> below its tree.</param>
+    /// <param name="written">
+    /// The longest path, relative to the tree, a work item says it writes - in the tree and in every copy and worker of
+    /// it, which hold the tree's files; 0 where none is said.
+    /// </param>
     /// <returns>Whether the longest path stays within the budget, with what it needs and what it may have.</returns>
     public static PathBudgetResult Check(
         IPathBudget budget,
@@ -298,7 +302,8 @@ public static class FlowRunPaths
         string worktreesRoot,
         string agentName,
         IReadOnlyList<VariantKey> copied,
-        IReadOnlyList<VariantKey> swept)
+        IReadOnlyList<VariantKey> swept,
+        int written = 0)
     {
         ArgumentNullException.ThrowIfNull(budget);
         ArgumentNullException.ThrowIfNull(settings);
@@ -310,18 +315,20 @@ public static class FlowRunPaths
         // The deepest tree the run works in: the longest agent's worktree.
         var tree = Path.Combine(worktreesRoot, agentName);
 
-        // The longest thing kept inside a tree the run works in, below the tree: a copy a leg works in, or a mutation
-        // worker - each with its variant's build directory below it and the build below that.
-        var inside = 0;
+        // The longest thing kept inside a tree the run works in, below the tree: a file a work item writes, or a copy a
+        // leg works in or a mutation worker - each with its variant's build directory below it and the build below
+        // that, or the item's file, which a copy holds as the tree does.
+        var file = written;
+        var inside = file;
 
         foreach (var variant in copied)
         {
-            inside = Math.Max(inside, Below(tree, LegCopies.PathOf(tree, variant), variant, settings.PathBudgetReserve));
+            inside = Math.Max(inside, Below(tree, LegCopies.PathOf(tree, variant), variant, settings.PathBudgetReserve, file));
         }
 
         foreach (var variant in swept)
         {
-            inside = Math.Max(inside, Below(tree, MutationWorkers.PathOf(tree, variant, 1), variant, settings.PathBudgetReserve));
+            inside = Math.Max(inside, Below(tree, MutationWorkers.PathOf(tree, variant, 1), variant, settings.PathBudgetReserve, file));
         }
 
         return budget.Check(tree, inside, settings.PathBudgetMargin, settings.PathLimit);
@@ -331,19 +338,18 @@ public static class FlowRunPaths
     /// The path budget of a run of <paramref name="definition"/> at its start: its agents' worktrees under the
     /// repository's worktrees root, the longest name it gives an agent (<see cref="OrchestrationRules.LongestGeneratedAgentName"/>),
     /// and the variants of every leg this machine runs that a leg step of the run may name - every leg a step names
-    /// through its <c>legs</c>, leg sets read out, and every declared leg where one names none - copied, and swept where
-    /// a <c>check-mutations</c> step names them.
+    /// through its <c>legs</c>, leg sets read out, and every declared leg where one names none - copied where the leg
+    /// works in a copy there (<see cref="LegTrees.InLocalCopy"/>), and swept where a <c>check-mutations</c> step names them.
     /// </summary>
     /// <param name="budget">Reckons a path against this machine's limit.</param>
-    /// <param name="config">The repository's configuration.</param>
-    /// <param name="layout">The repository.</param>
+    /// <param name="context">The repository and its configuration.</param>
     /// <param name="run">The run's name.</param>
     /// <param name="definition">The workflow, as it was read.</param>
     /// <param name="platformKey">This machine's operating system, as a leg names one.</param>
     /// <returns>What a refusal says where the longest path passes the budget; null where it stays within it.</returns>
-    public static string? RefusalAtStart(IPathBudget budget, HarnessConfig config, HarnessLayout layout, string run, WorkflowDefinition definition, string platformKey)
+    public static string? RefusalAtStart(IPathBudget budget, HarnessContext context, string run, WorkflowDefinition definition, string platformKey)
     {
-        var (result, tree) = AtStart(budget, config, layout, run, definition, platformKey);
+        var (result, tree) = AtStart(budget, context, run, definition, platformKey);
 
         return result.IsWithinBudget
             ? null
@@ -353,19 +359,19 @@ public static class FlowRunPaths
 
     /// <summary>The path budget of a run of <paramref name="definition"/> at its start, and the deepest worktree it reckons from; see <see cref="RefusalAtStart"/>.</summary>
     /// <param name="budget">Reckons a path against this machine's limit.</param>
-    /// <param name="config">The repository's configuration.</param>
-    /// <param name="layout">The repository.</param>
+    /// <param name="context">The repository and its configuration.</param>
     /// <param name="run">The run's name.</param>
     /// <param name="definition">The workflow, as it was read.</param>
     /// <param name="platformKey">This machine's operating system, as a leg names one.</param>
+    /// <param name="written">The longest path, relative to the tree, a work item says it writes; 0 where none is said (<see cref="Check"/>).</param>
     /// <returns>Whether the longest path stays within the budget, with what it needs and what it may have, and the worktree it was reckoned from.</returns>
-    public static (PathBudgetResult Result, string Tree) AtStart(IPathBudget budget, HarnessConfig config, HarnessLayout layout, string run, WorkflowDefinition definition, string platformKey)
+    public static (PathBudgetResult Result, string Tree) AtStart(IPathBudget budget, HarnessContext context, string run, WorkflowDefinition definition, string platformKey, int written = 0)
     {
-        ArgumentNullException.ThrowIfNull(config);
-        ArgumentNullException.ThrowIfNull(layout);
+        ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentException.ThrowIfNullOrWhiteSpace(run);
 
+        var config = context.Config;
         var settings = config.Worktrees;
         var digits = OrchestrationRules.LongestGeneratedAgentName(definition.MaxInstances ?? WorkflowDefinition.DefaultMaxInstances) - OrchestrationRules.GeneratedAgentPrefix.Length;
         var agent = OrchestrationRules.GeneratedAgentPrefix + new string('9', digits);
@@ -374,10 +380,14 @@ public static class FlowRunPaths
 
         foreach (var step in WorkflowFiles.Steps(definition).Select(entry => entry.Step).Where(step => step.Type is { } type && LegSteps.Contains(type)))
         {
-            foreach (var leg in LegsOf(step, config).Where(leg => leg.Os == platformKey && leg.Wsl is null && leg.Ssh is null))
+            foreach (var leg in LegsOf(step, config).Where(leg => LegTrees.BuildsHere(leg, platformKey)))
             {
                 var variant = VariantKey.For(config, leg, platformKey);
-                copied.Add(variant);
+
+                if (LegTrees.InLocalCopy(context, leg, here: null, LocalTrees.AsConfigured))
+                {
+                    copied.Add(variant);
+                }
 
                 if (step.Type == "check-mutations")
                 {
@@ -386,14 +396,17 @@ public static class FlowRunPaths
             }
         }
 
-        var root = WorktreeAddress.Plain(run).PathUnder(layout.WorktreesDirectoryUnder(settings.Root));
+        var root = WorktreeAddress.Plain(run).PathUnder(context.Layout.WorktreesDirectoryUnder(settings.Root));
 
-        return (Check(budget, settings, root, agent, copied, swept), Path.Combine(root, agent));
+        return (Check(budget, settings, root, agent, copied, swept, written), Path.Combine(root, agent));
     }
 
-    /// <summary>What a copy or a worker inside <paramref name="tree"/> adds below it: its own path, its variant's build directory, and the build below that.</summary>
-    private static int Below(string tree, string copy, VariantKey variant, int reserve)
-        => copy.Length - Path.TrimEndingDirectorySeparator(tree).Length + CopyPathBudget.BuildBelow(copy, variant, reserve);
+    /// <summary>
+    /// What a copy or a worker inside <paramref name="tree"/> adds below it: its own path, and the deeper of its
+    /// variant's build directory with the build below that, and <paramref name="file"/>, a work item's file in it.
+    /// </summary>
+    private static int Below(string tree, string copy, VariantKey variant, int reserve, int file)
+        => copy.Length - Path.TrimEndingDirectorySeparator(tree).Length + Math.Max(CopyPathBudget.BuildBelow(copy, variant, reserve), file);
 
     /// <summary>The legs <paramref name="step"/> may name: those its <c>legs</c> names, leg sets read out; every declared leg where it names none.</summary>
     private static IEnumerable<LegConfig> LegsOf(WorkflowStep step, HarnessConfig config)

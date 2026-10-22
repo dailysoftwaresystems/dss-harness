@@ -1,3 +1,4 @@
+using DssHarness.Core.Configuration;
 using DssHarness.Core.Legs;
 using DssHarness.Core.Results;
 
@@ -19,6 +20,19 @@ public sealed class LegTreesTests
     [InlineData(false, true, LocalTrees.InPlace)]
     public void WhereThisRunsOwnLegsWork_IsAsItsTwoOptionsSayIt(bool localCopy, bool inPlace, LocalTrees where)
         => Assert.Equal(where, LegTrees.Asked(localCopy, inPlace));
+
+    /// <summary>
+    /// A leg builds in this machine's own tree where it names no host - no WSL distribution, no ssh host - and its os is
+    /// this machine's, however its case is written; one that names a host builds there, whatever its os says.
+    /// </summary>
+    [Theory]
+    [InlineData("linux", null, null, true)]
+    [InlineData("Linux", null, null, true)]
+    [InlineData("windows", null, null, false)]
+    [InlineData("linux", "ubuntu", null, false)]
+    [InlineData("linux", null, "builder", false)]
+    public void ALegBuildsHere_WhereItNamesNoHost_AndItsOsIsThisMachines(string os, string? wsl, string? ssh, bool here)
+        => Assert.Equal(here, LegTrees.BuildsHere(new LegConfig { Os = os, Processor = "x64", Config = "debug", Wsl = wsl, Ssh = ssh }, "linux"));
 
     /// <summary>
     /// Both given is a mistake on the command line alone, refused as one before any configuration is read: naming the

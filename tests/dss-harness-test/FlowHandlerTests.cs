@@ -451,7 +451,7 @@ public sealed class FlowHandlerTests
             """);
         var runner = new FakeRunner()
             .On("work", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
-            .On("agent", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"agent": "a3"}""")));
+            .On("agent", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"agent": "a1"}""")));
         var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var end = await coordinator.RunAsync(TestContext.Current.CancellationToken);
@@ -460,7 +460,7 @@ public sealed class FlowHandlerTests
         // visit at once, for the agent it made is live.
         Assert.Equal(["work", "agent", "replan"], runner.Started);
         Assert.Equal(FlowInstanceState.Done, coordinator.Instances["agent+2"].State);
-        Assert.Equal("a3", coordinator.Instances["agent+2"].Made);
+        Assert.Equal("a1", coordinator.Instances["agent+2"].Made);
         Assert.Equal(FlowRunStatus.Done, end.Status);
     }
 
@@ -487,7 +487,7 @@ public sealed class FlowHandlerTests
                     then: plan
             """);
         var runner = new FakeRunner()
-            .On("worker", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"agent": "a3"}""")))
+            .On("worker", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"agent": "a1"}""")))
             .On("check", FlowStepResult.Ended(passed: false, HarnessExit.CommandFailed, error: "leg 'windows' ended Red (20)"))
             .On("fix", FlowStepResult.Ended(passed: true, HarnessExit.Success));
         var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
@@ -498,7 +498,7 @@ public sealed class FlowHandlerTests
         // question is of the handler's ending: the handler stays done while it is open.
         Assert.Equal(FlowRunStatus.Paused, first.Status);
         var asked = AssertSingle(coordinator.OpenQuestions, question => question.Kind == "openAgents");
-        Assert.Equal("'fix' would go back to 'plan', and agents 'a3', made since, are still open", asked.Problem);
+        Assert.Equal("'fix' would go back to 'plan', and agents 'a1', made since, are still open", asked.Problem);
         Assert.Equal(["retry", "stay", "abort"], asked.Options);
         Assert.Equal(FlowInstanceState.Done, coordinator.Instances["round.fix"].State);
         Assert.Equal(asked.Id, coordinator.Instances["round.fix"].WaitingQuestion);

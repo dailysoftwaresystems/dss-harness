@@ -16,8 +16,8 @@ Implemented today: `init`, `verify-git`, `create-worktree`, `delete-worktree`,
 `list-worktree`, the orchestrator commands (`create-orchestrator`, `delete-orchestrator`,
 `list-orchestrator`, `create-agent`, `seed-agent`, `refresh-agent`, `rebase-agent`,
 `fold-agent`, `delete-agent`), the run commands (`run-orchestrator`, `resume-orchestrator`,
-`answer-orchestrator`, `pause-orchestrator`, `stop-orchestrator`; each step of a run fails until
-the step runners land), `validate-workflow`, `export-workflow`, `list-agent-providers`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
+`answer-orchestrator`, `pause-orchestrator`, `stop-orchestrator`; `orient`, `validate-plan` and
+`create-agent` are served, and a step of any other type fails until its runner lands), `validate-workflow`, `export-workflow`, `list-agent-providers`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
 `read-anchor`, `read-anchors`, `check-anchor-balance`, `check-anchor-citations`),
 `fix-line-endings`, `check-ci-legs`, `legs`, `host-exec`, `install-missing-tools`,
 `update-tool`, `sync`, `build`, `test`, `run`, `check-mutations`, `stop-run`, `clean`, `up`, `down` and
@@ -1466,9 +1466,22 @@ tools and credential source (`ClaudeLaunch.ApiKeySources`) held to the launch's,
 that ran (`ClaudeLine.CallResult.Ran`) one the engine was asked about and allowed; a decline is
 `Refused` and an account at its limit (`ClaudeLine.RateLimit`, or the turn's error) `RateLimited`
 with an `AgentAccountLimit`. The API clients are the next thing the tool grows. This build checks workflow definitions and
-starts and drives a run of one (see "Running a workflow" below); the step runners - the agents, the
-steps over the services the tool already has - are the next thing the tool grows, and until they land
-each step of a run fails, saying no runner serves its type.
+starts and drives a run of one (see "Running a workflow" below). Each step is given to the runner of its type
+(`FlowStepRunners`, over every `IFlowStepTypeRunner` the root registers - `FlowStepRunners.Served` lists them, and a test
+holds the two to each other); a step of a type none serves yet fails, saying no runner serves its type. The first three
+are machine steps, each a thin adapter over the owner of its rule: `OrientRunner` reads the main checkout by
+`FlowCheckout` - the one probe the run's start reads too, over `IGitClient` and `GitRemotes` - and each fact by its owner
+(`LegSelection`, `TestInvocationResolver`, `AnchorCitationService.RootsOf`, `CiSettings.Unset`, `MutationService.Declares`,
+`OrchestrationRules.OpenAgents`, `TreeHolders`); `PlanCheckRunner` holds the items its `items` yields to `PlanValidator`, whose path budget is
+`FlowRunPaths`'s with the deepest file an item owns; `CreateAgentRunner` makes the agent the coordinator named
+(`OrchestrationRules.NextAgentName` over the run's agent directories, read under the orchestrator's lock by
+`IFlowRecords.NameAgent`, and every name its steps hold) for the model `WorkflowValidator.AgentModels` resolved, both
+written to `step.json` before `IAgentService.CreateAsync` is called; run again it reads the agent first and finishes or
+drops a making cut part way, and finishes the removal of one found closed (`FlowStepResult.NameSpent`), and `MakeAsync(noWorktree: true)` makes a read-only reason
+step's agent the same way. Each step is handed the run it belongs to (`FlowRunPlace`) and what the engine read for it
+where it starts (`FlowStepRun.Read`: a plan check's `items` and `scope`, the pull request's base `FlowTemplate` fills for
+orient). The other step runners - the agents, the rest of the steps over the services the tool already has - are the
+next thing the tool grows.
 
 A definition is held to the `config.json` it is checked under as well: a `run` step whose runner -
 or a runner its run checks name - says `writesTree` names with `in` the create-agent step whose
@@ -1482,7 +1495,11 @@ requires and none for one it does not declare - or, with no template, a `message
 it; `whenAddScope` names a step declared directly in a `forEach` group - the work-item group - and
 `whenChangeScope` and `whenRemoveScope` that step or alternatives of its type beside it, which say
 no wiring of their own and which no other step names; and the work-item group expands from the
-`items` of a `validate-plan` step it waits for. `piece` is read only in that group, and what only a
+`items` of a `validate-plan` step it waits for. A step that names a create-agent step with `in` or
+`of` waits for it - through its own `dependsOn`, a group's around it, a handler's source or the step
+it is an alternative to (`FlowGraph.Waits`) - since it starts once the agent is made. A template is
+read by the configuration's one brace grammar (`FlowTemplate.Pieces`): `{{` and `}}` are braces,
+`${...}` is left as written, and a placeholder that names nothing is refused. `piece` is read only in the work-item group, and what only a
 prompt reads - `recommendations`, `question`, `status`, `update`, a skill - by no step's own key.
 What only a prompt reads stands where its agent is asked it: `{recommendations}` in a reason step's
 prompt and the advisor's, `{question.*}` in the advisor's alone, `{status.*}` in the reporter's two -
@@ -1650,9 +1667,9 @@ in the run's log. A hang-up keeps the process to pause the run but leaves nobody
 terminal: from it on the terminal says nothing, and a line said while the session runs - an
 interrupt's, the poller's (`FlowTerminal.Warn`) - is dropped where the terminal can no longer be
 written to, never an exception that ends the process part way; the run's records hold what happened. The engine's loop alone applies either,
-and a cancellation of the session's token is the second, never a cut-off. Until the step runners
-land, the runner registered is `NoStepRunner`: each step of a run fails, saying no runner serves its
-type (its code 14).
+and a cancellation of the session's token is the second, never a cut-off. A step of a type no
+runner serves yet is given to `NoStepRunner`, `FlowStepRunners`' fallback: it fails, saying no
+runner serves its type (its code 14).
 
 ## Anchor registries
 

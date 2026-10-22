@@ -130,7 +130,11 @@ public sealed record FlowEvent(
 /// </param>
 /// <param name="EndedByQuestion">The kind of the question whose <c>fail</c> answer ended this step, where one did.</param>
 /// <param name="Agent">The agent the step works in - as its <c>in</c> or <c>of</c> names, made by its create-agent - where it names one.</param>
-/// <param name="Made">The agent a create-agent step made, as its output names it; null for every other step.</param>
+/// <param name="Made">
+/// The agent a create-agent step makes: named by the engine and written here, with <paramref name="Model"/>, before
+/// anything makes it, so the step run again asks for the same agent; null for every other step, and for one whose name
+/// is spent.
+/// </param>
 /// <param name="Question">The id of the question the step asks and no answer has come for; null where none is open.</param>
 /// <param name="Handoff">The handoff a stop left, where one was written: who wrote it and why.</param>
 /// <param name="Output">The step's output, as later steps read it; null where it wrote none.</param>
@@ -161,6 +165,7 @@ public sealed record FlowEvent(
 /// refusal whose only obstacle was a lock another run held, which the retry table runs again and a run that ended on it
 /// counts as incomplete (21). Null for every other ending.
 /// </param>
+/// <param name="Model">The model the agent a create-agent step makes is made for, written with <paramref name="Made"/>; null where that is.</param>
 public sealed record FlowStepRecord(
     string Instance,
     string Step,
@@ -196,7 +201,8 @@ public sealed record FlowStepRecord(
     FlowPreExistingReport? Issue = null,
     IReadOnlyList<FlowPreExistingReport>? IssuesOwed = null,
     string? LeftBy = null,
-    string? Cause = null)
+    string? Cause = null,
+    string? Model = null)
 {
     /// <summary>Where a failure can leave the run, as the record names each of <see cref="FlowFailure"/>'s values.</summary>
     public static readonly IReadOnlyList<string> Failures = [.. Enum.GetValues<FlowFailure>().Select(NameOf)];
@@ -710,7 +716,7 @@ public sealed record FlowSnapshot(
 /// <param name="Failure">Where this step's failure left the run; null for every other ending.</param>
 /// <param name="EndedByQuestion">The kind of the question whose fail answer ended this step, where one did.</param>
 /// <param name="Agent">The agent the step works in, where it names one with in or of.</param>
-/// <param name="Made">The agent a create-agent step made; null for every other step.</param>
+/// <param name="Made">The agent a create-agent step makes, as the engine named it; null for every other step.</param>
 /// <param name="Question">The id of the question the step asks and no answer has come for; null where none is open.</param>
 /// <param name="Handoff">The handoff a stop left, where one was written: its text, who wrote it and why.</param>
 /// <param name="Output">The step's output; null where it wrote none.</param>
@@ -729,6 +735,7 @@ public sealed record FlowSnapshot(
 /// <param name="IssuesOwed">The pre-existing issues this step reported whose triage is not raised yet; null where none is owed.</param>
 /// <param name="LeftBy">The handler whose redirect sent the run back past this visit; null where none did.</param>
 /// <param name="Cause">What the code alone cannot say of its ending: a refusal over a held lock; none for every other.</param>
+/// <param name="Model">The model the agent a create-agent step makes is made for; null where <paramref name="Made"/> is.</param>
 public sealed record FlowSnapshotStep(
     string Instance,
     string Step,
@@ -764,4 +771,5 @@ public sealed record FlowSnapshotStep(
     FlowPreExistingReport? Issue = null,
     IReadOnlyList<FlowPreExistingReport>? IssuesOwed = null,
     string? LeftBy = null,
-    OutcomeCause Cause = OutcomeCause.None);
+    OutcomeCause Cause = OutcomeCause.None,
+    string? Model = null);

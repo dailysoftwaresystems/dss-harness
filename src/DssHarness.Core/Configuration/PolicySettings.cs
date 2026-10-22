@@ -67,4 +67,13 @@ public sealed class CiSettings
 
     /// <summary>What stands for a leg's name in <see cref="WorkflowBudgetPattern"/>.</summary>
     public const string LegPlaceholder = "{leg}";
+
+    /// <summary>
+    /// The keys CI is read by that are not set, as the configuration spells them: a repository whose CI can be read sets
+    /// every one, and one that sets none declares no CI. Empty where CI can be read.
+    /// </summary>
+    public IReadOnlyList<string> Unset()
+        => [.. new[] { ("ci.legJobPattern", LegJobPattern), ("ci.buildStep", BuildStep), ("ci.testStep", TestStep) }
+            .Where(setting => string.IsNullOrWhiteSpace(setting.Item2))
+            .Select(setting => setting.Item1)];
 }
