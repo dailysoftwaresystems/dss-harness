@@ -338,6 +338,17 @@ public sealed record WorkflowStep
     /// <summary>How often this handler may be raised; past it the run asks.</summary>
     public int? MaxVisits { get; init; } = null;
 
+    /// <summary>
+    /// The longest one attempt of a step that runs may take, in whole minutes, where the file says: counted by the engine
+    /// from each start of the step and never while it waits on a question, and past it the step is stopped and ends
+    /// incomplete (21). Absent, the step has no limit of its own. A reason step's handoff turn at a pause is bounded by
+    /// the pause's own handoffSeconds, not by this. Never a group's or a pause step's key.
+    /// </summary>
+    public int? TimeoutMinutes { get; init; } = null;
+
+    /// <summary>The most minutes <see cref="TimeoutMinutes"/> may say: a day.</summary>
+    public const int MostTimeoutMinutes = 1_440;
+
     /// <summary>An expression yielding the work items a <c>forEach</c> group runs its steps for, once each.</summary>
     public string? ForEach { get; init; } = null;
 
@@ -549,17 +560,17 @@ public sealed record WorkflowStep
     /// <summary>How long a CI wait waits for the first check to appear.</summary>
     public int? AppearSeconds { get; init; } = null;
 
-    /// <summary>How long a CI wait waits, from its start, for every check to end.</summary>
+    /// <summary>How long a CI wait waits, from its start, for every check to end; absent, <see cref="DefaultWaitMinutes"/>.</summary>
     public int? WaitMinutes { get; init; } = null;
+
+    /// <summary>How long a CI wait waits for every check to end where the file says not: an hour.</summary>
+    public const int DefaultWaitMinutes = 60;
 
     /// <summary>How often a CI wait reads the checks while it waits.</summary>
     public int? PollSeconds { get; init; } = null;
 
     /// <summary>The checks a CI wait does not count, by name.</summary>
     public IReadOnlyList<string> Ignore { get; init; } = [];
-
-    /// <summary>Minutes a short call of git or the forge is given, where the file says.</summary>
-    public int? TimeoutMinutes { get; init; } = null;
 
     /// <summary>The commit message a commit step writes, a template.</summary>
     public string? Message { get; init; } = null;

@@ -218,4 +218,37 @@ public sealed class WorkflowStepTypesTests
 
         Assert.All(WorkflowStepTypes.ExpressionKeys.Concat(WorkflowStepTypes.ListOrExpressionKeys), key => Assert.Contains(key, keys));
     }
+
+    /// <summary>
+    /// A pause step alone only asks: every other type takes the keys of every step that runs - a time limit among them -
+    /// and the flattened list a step's unknown keys are refused against names each key once.
+    /// </summary>
+    [Fact]
+    public void APauseStepAloneOnlyAsks_AndEveryOtherTypeTakesTheKeysOfAStepThatRuns()
+    {
+        Assert.Equal(["pause"], WorkflowStepTypes.All.Where(type => type.Asks).Select(type => type.Type));
+        Assert.Equal(["timeoutMinutes"], KeyDescription.Names(WorkflowStepTypes.Running));
+        Assert.All(
+            WorkflowStepTypes.All,
+            type => Assert.Equal(!type.Asks, WorkflowStepTypes.KeysOf(type).Contains("timeoutMinutes", StringComparer.Ordinal)));
+        Assert.Equal(WorkflowStepTypes.AllKeys.Count, WorkflowStepTypes.AllKeys.Distinct(StringComparer.Ordinal).Count());
+    }
+
+    /// <summary>
+    /// The keys <c>help workflows</c> lists for a step are every key the reader takes on one: the common keys, a group's,
+    /// those of every step that runs, and each type's own under its name - none read without being listed.
+    /// </summary>
+    [Fact]
+    public void TheStepKeysHelpLists_AreEveryKeyTheReaderTakesOnAStep()
+    {
+        var listed = KeyDescription.Names(WorkflowKeys.Step).ToHashSet(StringComparer.Ordinal);
+        var typed = WorkflowStepTypes.All.SelectMany(type => WorkflowStepTypes.KeysOf(type).Select(key => (Type: type.Type, Key: key)));
+
+        Assert.All(KeyDescription.Names(WorkflowStepTypes.Common), key => Assert.Contains(key, listed));
+        Assert.All(KeyDescription.Names(WorkflowStepTypes.Group), key => Assert.Contains(key, listed));
+        Assert.Contains("timeoutMinutes", listed);
+        Assert.All(
+            typed.Where(pair => !KeyDescription.Names(WorkflowStepTypes.Running).Contains(pair.Key, StringComparer.Ordinal)),
+            pair => Assert.Contains($"{pair.Type}.{pair.Key}", listed));
+    }
 }

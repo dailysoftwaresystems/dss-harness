@@ -176,12 +176,18 @@ public sealed class FlowPauseTests
         public bool WritesTree(string runner) => false;
     }
 
-    /// <summary>A run's records that keep nothing, but signal each change as the coordinator writes it - the run's own signal, on its own thread.</summary>
-    private sealed class RecordsWatch(Action<FlowChangeKind, FlowSnapshot, string?, string?> written) : IFlowRecords
+    /// <summary>
+    /// A run's records that keep nothing, but signal each change as the coordinator writes it - the run's own signal, on
+    /// its own thread - and, where the test asks, what each change says.
+    /// </summary>
+    private sealed class RecordsWatch(Action<FlowChangeKind, FlowSnapshot, string?, string?> written, Action<FlowChangeKind, string?>? said = null) : IFlowRecords
     {
         /// <inheritdoc/>
         public void Write(FlowChangeKind kind, FlowSnapshot snapshot, string? instance = null, string? from = null, string? to = null, int? attempt = null, string? detail = null)
-            => written(kind, snapshot, instance, to);
+        {
+            written(kind, snapshot, instance, to);
+            said?.Invoke(kind, detail);
+        }
 
         /// <inheritdoc/>
         public void Question(IReadOnlyList<FlowQuestionEntry> questions, IReadOnlyList<FlowRefusedAnswer>? refused)
@@ -1830,5 +1836,322 @@ public sealed class FlowPauseTests
         end = await run.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(FlowRunStatus.Stopped, end.Status);
+    }
+
+    /// <summary>
+    /// A pause meets a reasoning step its time limit has stopped already: it gives it no handoff turn and stops it no
+    /// second time. The step ends as the limit's stop ends it - failed, once its runner answers or once the drain's bound
+    /// passes - and its failure is owed to the next session, as every failure a pause records is.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task APauseMeetingAStepItsTimeLimitStopped_LeavesItToEndAsThatStopEndsIt(bool runnerAnswers)
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                timeoutMinutes: 1
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner().HandsOff("think", "an account no turn was asked for");
+        var thinking = runner.Hold("think", hearsTheStop: false);
+        var limitStopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var pauseCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var records = new RecordsWatch(
+            (kind, _, _, _) => { if (kind == FlowChangeKind.PauseCompleted) { pauseCompleted.TrySetResult(); } },
+            (_, detail) => { if (detail == "passed its timeoutMinutes (1): stopped") { limitStopped.TrySetResult(); } });
+        var clock = new TimerClock();
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+
+        var session = coordinator.RunAsync(cancel);
+        await runner.StartedAsync("think").WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        clock.Advance(TimeSpan.FromMinutes(1));
+        await limitStopped.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        coordinator.RequestPause("command");
+        await pauseCompleted.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        if (runnerAnswers)
+        {
+            thinking.Done(output: Output("""{"plan": "late"}"""));
+        }
+        else
+        {
+            clock.Advance(TimeSpan.FromSeconds(90));
+        }
+
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        var think = coordinator.Instances["think"];
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Empty(end.Pause!.Handoffs);
+        Assert.Null(think.Handoff);
+        Assert.Equal((FlowInstanceState.Failed, HarnessExit.Incomplete, FlowFailure.Owed), (think.State, think.Exit, think.Failure));
+        Assert.Equal(
+            runnerAnswers ? "passed its timeoutMinutes (1)" : "passed its timeoutMinutes (1), and its runner did not end within 90 s of the stop",
+            think.Error);
+        thinking.Done();
+    }
+
+    /// <summary>
+    /// A pause meets a machine step its time limit has stopped already, with a retry left: once its runner answers, the
+    /// step ends incomplete and is recorded as the pause records such an ending - stopped, to run again at the resume.
+    /// </summary>
+    [Fact]
+    public async Task APauseMeetingAMachineStepItsTimeLimitStopped_WithARetryLeft_LeavesItStoppedForTheResume()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: gate
+                type: build
+                timeoutMinutes: 1
+                retries: 1
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner();
+        var gate = runner.Hold("gate", hearsTheStop: false);
+        var limitStopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var pauseCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var records = new RecordsWatch(
+            (kind, _, _, _) => { if (kind == FlowChangeKind.PauseCompleted) { pauseCompleted.TrySetResult(); } },
+            (_, detail) => { if (detail == "passed its timeoutMinutes (1): stopped") { limitStopped.TrySetResult(); } });
+        var clock = new TimerClock();
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+
+        var session = coordinator.RunAsync(cancel);
+        await runner.StartedAsync("gate").WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        clock.Advance(TimeSpan.FromMinutes(1));
+        await limitStopped.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        coordinator.RequestPause("command");
+        await pauseCompleted.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        gate.Done();
+
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        var stopped = coordinator.Instances["gate"];
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Equal((FlowInstanceState.Stopped, HarnessExit.Incomplete, "passed its timeoutMinutes (1)"), (stopped.State, stopped.Exit, stopped.Error));
+    }
+
+    /// <summary>
+    /// A machine step a safe pause left running that passes its time limit is stopped and ends incomplete as it would
+    /// outside a pause, recorded as a pause records an ending: with a retry left it stands stopped, to run again at the
+    /// resume; with its retries spent it fails, its failure owed to the next session.
+    /// </summary>
+    [Theory]
+    [InlineData(1, FlowInstanceState.Stopped)]
+    [InlineData(0, FlowInstanceState.Failed)]
+    public async Task AMachineStepAPauseLeftRunning_PastItsTimeLimit_EndsIncompleteAsThePauseRecordsIt(int retries, FlowInstanceState state)
+    {
+        var definition = Parse($"""
+            name: flow
+            steps:
+              - name: gate
+                type: build
+                timeoutMinutes: 1
+                retries: {retries}
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner();
+        _ = runner.Hold("gate");
+        var pauseCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var records = new RecordsWatch((kind, _, _, _) => { if (kind == FlowChangeKind.PauseCompleted) { pauseCompleted.TrySetResult(); } });
+        var clock = new TimerClock();
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+
+        var session = coordinator.RunAsync(cancel);
+        await runner.StartedAsync("gate").WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        coordinator.RequestPause("command");
+        await pauseCompleted.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        clock.Advance(TimeSpan.FromMinutes(1));
+
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        var gate = coordinator.Instances["gate"];
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Equal((state, HarnessExit.Incomplete, "passed its timeoutMinutes (1)"), (gate.State, gate.Exit, gate.Error));
+        Assert.Equal(retries == 0 ? FlowFailure.Owed : null, gate.Failure);
+    }
+
+    /// <summary>
+    /// A pause that says all, asked after one that did not, stops the machine steps the first left running - but no second
+    /// time one its time limit stopped already: that step ends as the limit's stop ends it, failed and owed to the next
+    /// session, never stopped to run again.
+    /// </summary>
+    [Fact]
+    public async Task APauseThatSaysAllLater_StopsNoSecondTimeAStepItsTimeLimitStopped()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: other
+                type: ci-read
+              - name: gate
+                type: build
+                timeoutMinutes: 1
+                retries: 0
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner();
+        var other = runner.Hold("other", hearsTheStop: false);
+        var gate = runner.Hold("gate", hearsTheStop: false);
+        var limitStopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var pauseCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var records = new RecordsWatch(
+            (kind, _, _, _) => { if (kind == FlowChangeKind.PauseCompleted) { pauseCompleted.TrySetResult(); } },
+            (_, detail) => { if (detail == "passed its timeoutMinutes (1): stopped") { limitStopped.TrySetResult(); } });
+        var clock = new TimerClock();
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+
+        var session = coordinator.RunAsync(cancel);
+        await runner.StartedAsync("other").WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        await runner.StartedAsync("gate").WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        clock.Advance(TimeSpan.FromMinutes(1));
+        await limitStopped.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        coordinator.RequestPause("command");
+        await pauseCompleted.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        // The later request stops 'other', arming its own drain beside the limit's; 'gate' is left as its limit left it.
+        coordinator.RequestPause("frontEnd", all: true);
+        await clock.WaitingAsync(2).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        clock.Advance(TimeSpan.FromSeconds(90));
+
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        var limited = coordinator.Instances["gate"];
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Equal(FlowInstanceState.Stopped, coordinator.Instances["other"].State);
+        Assert.Equal((FlowInstanceState.Failed, HarnessExit.Incomplete, FlowFailure.Owed), (limited.State, limited.Exit, limited.Failure));
+        Assert.Equal("passed its timeoutMinutes (1), and its runner did not end within 90 s of the stop", limited.Error);
+        other.Done();
+        gate.Done();
+    }
+
+    /// <summary>
+    /// A reasoning step's minutes are counted once, at its time limit: the wait for its runner after the stop spends none
+    /// of the run's budget, whatever the runner answers then.
+    /// </summary>
+    [Fact]
+    public async Task AReasonStepPastItsTimeLimit_CountsItsMinutesOnce_AtTheLimit()
+    {
+        var definition = Parse("""
+            name: flow
+            budget:
+              minutes: 100
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                timeoutMinutes: 5
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner();
+        var thinking = runner.Hold("think", hearsTheStop: false);
+        var limitStopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        FlowBudgetSpent? spent = null;
+        var records = new RecordsWatch(
+            (_, snapshot, _, _) => spent = snapshot.Spent,
+            (_, detail) => { if (detail == "passed its timeoutMinutes (5): stopped") { limitStopped.TrySetResult(); } });
+        var clock = new TimerClock();
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+
+        var session = coordinator.RunAsync(cancel);
+        await runner.StartedAsync("think").WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        clock.Advance(TimeSpan.FromMinutes(5));
+        await limitStopped.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        clock.Advance(TimeSpan.FromSeconds(60));
+        thinking.Done(output: Output("""{"plan": "late"}"""));
+
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Failed, end.Status);
+        Assert.Equal(5.0, spent!.Minutes, 6);
+    }
+
+    /// <summary>
+    /// A pause that says all stops a machine step with a time limit, and the limit's timer with it: what waits on the
+    /// clock is the stop's drain alone, and the step stands stopped once its runner ends.
+    /// </summary>
+    [Fact]
+    public async Task APauseThatSaysAll_EndsTheTimeLimitOfAStepItStops()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: gate
+                type: build
+                timeoutMinutes: 1
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner();
+        var gate = runner.Hold("gate", hearsTheStop: false);
+        var pauseCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var records = new RecordsWatch((kind, _, _, _) => { if (kind == FlowChangeKind.PauseCompleted) { pauseCompleted.TrySetResult(); } });
+        var clock = new TimerClock();
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock, records: records);
+
+        var session = coordinator.RunAsync(cancel);
+        await runner.StartedAsync("gate").WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        coordinator.RequestPause("frontEnd", all: true);
+        await pauseCompleted.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(1, clock.Waiting);
+        gate.Done();
+
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Equal(FlowInstanceState.Stopped, coordinator.Instances["gate"].State);
+    }
+
+    /// <summary>
+    /// A reasoning step a pause handed off counts its time limit anew at the resume, from the start of its run there: the
+    /// minutes it ran before the pause are not the next run's.
+    /// </summary>
+    [Fact]
+    public async Task AReasonStepPausedAndResumed_CountsItsTimeLimitAnewFromTheResume()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                timeoutMinutes: 2
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner().HandsOff("think", "half way through");
+
+        // Its agent does not hear the pause: nothing but the pause itself ends the limit's timer.
+        var thinking = runner.Hold("think", hearsTheStop: false);
+        var clock = new TimerClock();
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock);
+
+        var session = coordinator.RunAsync(cancel);
+        await runner.StartedAsync("think").WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        clock.Advance(TimeSpan.FromSeconds(90));
+        coordinator.RequestPause("command");
+
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Paused, end.Status);
+        Assert.Equal(0, clock.Waiting);
+
+        session = coordinator.RunAsync(cancel);
+        await clock.WaitingAsync().WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        clock.Advance(TimeSpan.FromSeconds(90));
+        thinking.Done(output: Output("""{"plan": "done"}"""));
+        end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal((FlowInstanceState.Done, null), (coordinator.Instances["think"].State, coordinator.Instances["think"].Error));
+        Assert.Equal(2, runner.Runs.Count);
     }
 }

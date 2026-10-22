@@ -196,6 +196,15 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
     /// <summary>Whether a stop cancelled this attempt and waits, bounded, for its runner to end: whatever it then answers, it ends stopped.</summary>
     internal bool Draining;
 
+    /// <summary>
+    /// The timer of the step's time limit (<see cref="WorkflowStep.TimeoutMinutes"/>) for the run in flight, from its start
+    /// until its runner answers; null where the step says none, and while it waits on a question.
+    /// </summary>
+    internal CancellationTokenSource? TimeLimit;
+
+    /// <summary>Whether this attempt passed its time limit and was stopped for it: whatever its runner then answers, it ends incomplete.</summary>
+    internal bool PastTimeLimit;
+
     /// <summary>Whether this step runs in the always phase: it says <c>always</c>, or a group around it does.</summary>
     public bool IsAlways { get; internal set; }
 
@@ -522,7 +531,8 @@ public sealed class FlowCoordinator
     /// this run is in ends in order: no step more is started, every reason step in progress hands off, the machine
     /// steps in progress are left to finish (<paramref name="all"/> stops them) and are recorded, and the run ends
     /// <see cref="FlowRunStatus.Paused"/>. A later request that says <paramref name="all"/> after one that did not
-    /// stops the machine steps the first left running.
+    /// stops the machine steps the first left running. A step its time limit stopped already is neither handed off nor
+    /// stopped again: it ends as that stop ends it.
     /// </summary>
     /// <param name="cause">Who asks for the pause, one of <see cref="FlowPauseRequest.Causes"/>.</param>
     /// <param name="all">Whether the machine steps in progress are stopped too.</param>
@@ -629,24 +639,40 @@ public sealed class FlowCoordinator
     /// </summary>
     private void Stop(FlowInstance instance)
     {
-        instance.Stoppable?.Cancel();
-        _ = _wakes.RemoveAll(wake => ReferenceEquals(wake.Instance, instance));
-
-        if (instance.Step.Type == "reason" && _reasonStarted.Remove(instance.Id, out var began))
-        {
-            CountMinutes(began);
-        }
-
-        if (instance.Runner is { IsCompleted: false })
+        if (StopWork(instance))
         {
             instance.Draining = true;
-            var bound = PointOfNoReturn.SafePauseDrain;
-            _wakes.Add(new Wake(instance, _clock.GetUtcNow() + bound, Task.Delay(bound, _clock), Drain: true));
             return;
         }
 
         End(instance, FlowInstanceState.Stopped, null, null);
     }
+
+    /// <summary>
+    /// What every stop of a step in flight does first - a stop's, and its time limit's: its work cancelled, its timer and
+    /// its wakes gone, a reason step's minutes counted, and where its runner still runs the drain's bound armed, by which a
+    /// runner that does not end is waited for no longer. Whether its runner still runs.
+    /// </summary>
+    private bool StopWork(FlowInstance instance)
+    {
+        instance.Stoppable?.Cancel();
+        DisarmTimeLimit(instance);
+        _ = _wakes.RemoveAll(wake => ReferenceEquals(wake.Instance, instance));
+        CountMinutes(instance);
+
+        if (instance.Runner is not { IsCompleted: false })
+        {
+            return false;
+        }
+
+        var bound = PointOfNoReturn.SafePauseDrain;
+        _wakes.Add(new Wake(instance, _clock.GetUtcNow() + bound, Task.Delay(bound, _clock), Drain: true));
+        return true;
+    }
+
+    /// <summary>What a step whose runner did not end within the drain's bound of its stop says of it.</summary>
+    private static string RunnerNotEnded
+        => $"its runner did not end within {PointOfNoReturn.SafePauseDrain.TotalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} s of the stop";
 
     /// <summary>Cancels every handoff turn in flight, wherever the loop is parked awaiting them.</summary>
     private void CancelHandoffTurns()
@@ -807,11 +833,12 @@ public sealed class FlowCoordinator
                 {
                     // A later request that says all, after one that did not - or a stop once the pause is complete:
                     // it stops the machine steps the first left running, never a group, which stands open over its
-                    // members, and the pause's record says so.
+                    // members, and the pause's record says so. A step its time limit stopped already is stopped no
+                    // second time: it ends as that stop ends it, as the pause itself left it.
                     _pauseAllAsked = false;
                     _pause.All = true;
 
-                    foreach (var instance in _created.Where(instance => instance.State is FlowInstanceState.Running && !instance.Step.IsGroup && instance.Step.Type is not ("reason" or "ci-wait") && !instance.Draining).ToList())
+                    foreach (var instance in _created.Where(instance => instance.State is FlowInstanceState.Running && !instance.Step.IsGroup && instance.Step.Type is not ("reason" or "ci-wait") && !instance.Draining && !instance.PastTimeLimit).ToList())
                     {
                         Stop(instance);
                     }
@@ -1014,7 +1041,7 @@ public sealed class FlowCoordinator
     /// step in progress handed off, all at once, each within the run's <c>handoffSeconds</c> - an agent that gives no
     /// account leaves a handoff the engine writes; the machine steps in progress left to finish - or stopped, where
     /// the request says <c>all</c> - and recorded as they end; a <c>ci-wait</c> ends Stopped at once, for it runs
-    /// nothing between two reads.
+    /// nothing between two reads. A step its time limit stopped already is left to end as that stop ends it.
     /// </summary>
     private async Task PauseInOrderAsync(FlowPauseRequest request, CancellationToken cancellationToken)
     {
@@ -1033,15 +1060,18 @@ public sealed class FlowCoordinator
         var bound = _definition.HandoffSeconds ?? 180;
         var handingOff = new List<FlowInstance>();
 
-        foreach (var instance in _created.Where(instance => instance.State is FlowInstanceState.Running && !instance.Step.IsGroup).ToList())
+        // A step its time limit has stopped already is left to end as that stop ends it - incomplete, whatever its runner
+        // answers or once the drain's bound passes, and recorded as the pause records an ending: failed, or stopped where
+        // a retry is left - with no handoff turn and no second stop.
+        foreach (var instance in _created.Where(instance => instance.State is FlowInstanceState.Running && !instance.Step.IsGroup && !instance.PastTimeLimit).ToList())
         {
             if (instance.Step.Type == "reason")
             {
                 // Its turn is ended where it stands - what it started is cancelled - and it is given one more, the
-                // handoff turn, beside the others.
+                // handoff turn, beside the others - which its time limit does not bound: the pause's own does.
                 instance.Stoppable?.Cancel();
-                _reasonStarted.Remove(instance.Id, out var began);
-                CountMinutes(began);
+                DisarmTimeLimit(instance);
+                CountMinutes(instance);
                 Release(instance);
                 handingOff.Add(instance);
             }
@@ -1184,9 +1214,17 @@ public sealed class FlowCoordinator
         return (text, _clock.GetUtcNow() - began, why);
     }
 
-    /// <summary>Adds the minutes a reason step ran from <paramref name="began"/> to now, where it was running.</summary>
-    private void CountMinutes(DateTimeOffset began)
-        => _spent.Minutes += (_clock.GetUtcNow() - began).TotalMinutes;
+    /// <summary>
+    /// Adds the minutes <paramref name="instance"/>'s turn ran, where it is a reason step counted running: once, whichever of its
+    /// endings - its answer, a stop, a pause, its time limit - reaches it first.
+    /// </summary>
+    private void CountMinutes(FlowInstance instance)
+    {
+        if (instance.Step.Type == "reason" && _reasonStarted.Remove(instance.Id, out var began))
+        {
+            _spent.Minutes += (_clock.GetUtcNow() - began).TotalMinutes;
+        }
+    }
 
     /// <summary>
     /// The minutes the run's reasoning has spent as it stands now: what the ended attempts and handoff turns counted,
@@ -1796,6 +1834,7 @@ public sealed class FlowCoordinator
     {
         instance.Attempt++;
         instance.State = FlowInstanceState.NotStarted;
+        DisarmTimeLimit(instance);
         instance.Exit = null;
         instance.Error = null;
         instance.Cause = OutcomeCause.None;
@@ -2558,6 +2597,7 @@ public sealed class FlowCoordinator
         instance.TreeLegsEnded.Clear();
         instance.EveryLegPlaced = false;
         instance.Draining = false;
+        instance.PastTimeLimit = false;
         Record(FlowChangeKind.Step, instance, from: was, to: FlowInstanceState.Running, attempt: instance.Attempt);
 
         if (instance.Step.Type == "pause")
@@ -2581,6 +2621,7 @@ public sealed class FlowCoordinator
             return false;
         }
 
+        ArmTimeLimit(instance);
         instance.Runner = AskRunner();
 
         return true;
@@ -2676,11 +2717,15 @@ public sealed class FlowCoordinator
             return;
         }
 
-        if (instance.Step.Type == "reason" && _reasonStarted.Remove(instance.Id, out var began))
+        if (instance.PastTimeLimit)
         {
-            // The budget's minutes are the time reason steps ran, each attempt and each handoff turn counted.
-            CountMinutes(began);
+            // The attempt passed its time limit and was stopped for it: whatever its runner answered once stopped, the
+            // step ends incomplete, and runs again as an incomplete step does.
+            result = FlowStepResult.Ended(passed: false, HarnessExit.Incomplete, PastTimeLimitError(instance));
         }
+
+        // The budget's minutes are the time reason steps ran, each attempt and each handoff turn counted.
+        CountMinutes(instance);
 
         if (result.Asked is { } asking)
         {
@@ -2810,18 +2855,7 @@ public sealed class FlowCoordinator
 
         if (!passed)
         {
-            if (_pausing)
-            {
-                // A machine step the pause left running ended failed: it is recorded as it ended, its failure owed, and
-                // what its ending owes - its policy, the handler it would raise - waits for the next session, for
-                // nothing is started and no question is asked while the run records what it left running.
-                _ = OweHandlers(instance);
-                instance.FailureSettled = false;
-            }
-            else
-            {
-                HandleFailure(instance);
-            }
+            AfterFailure(instance);
         }
 
         if (instance.Step.Raised == WorkflowStep.RaisedByPreExisting && instance.State == FlowInstanceState.Done && CourseOf(instance) == "fix")
@@ -2846,6 +2880,92 @@ public sealed class FlowCoordinator
             }
         }
     }
+
+    /// <summary>What a failure that has just ended a step goes on to: what handles it, now or, under a pause, in the next session.</summary>
+    private void AfterFailure(FlowInstance instance)
+    {
+        if (_pausing)
+        {
+            // A machine step the pause left running ended failed: it is recorded as it ended, its failure owed, and
+            // what its ending owes - its policy, the handler it would raise - waits for the next session, for
+            // nothing is started and no question is asked while the run records what it left running.
+            _ = OweHandlers(instance);
+            instance.FailureSettled = false;
+        }
+        else
+        {
+            HandleFailure(instance);
+        }
+    }
+
+    /// <summary>
+    /// Arms the time limit of the run of <paramref name="instance"/> that starts now, where its step says one: a timer of
+    /// the engine's clock that tells the loop once it passes. The message names the timer it came from, so a run that
+    /// starts again in the same attempt - after an answer - is never ended by the timer of the run before it.
+    /// </summary>
+    private void ArmTimeLimit(FlowInstance instance)
+    {
+        DisarmTimeLimit(instance);
+
+        if (instance.Step.TimeoutMinutes is not { } minutes)
+        {
+            return;
+        }
+
+        var limit = instance.TimeLimit = new CancellationTokenSource();
+        var attempt = instance.Attempt;
+        _ = PassAsync(limit.Token);
+
+        async Task PassAsync(CancellationToken disarmed)
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromMinutes(minutes), _clock, disarmed).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+
+            _ = _messages.Writer.TryWrite(new Message(instance, null, null, Attempt: attempt, TimeLimit: limit));
+        }
+    }
+
+    /// <summary>Ends the timer of <paramref name="instance"/>'s time limit, where one runs: its run has answered, stopped or ended.</summary>
+    private static void DisarmTimeLimit(FlowInstance instance)
+    {
+        if (instance.TimeLimit is { } limit)
+        {
+            instance.TimeLimit = null;
+            limit.Cancel();
+            limit.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// The run of <paramref name="instance"/> in flight passed its step's time limit: it is stopped as a stop stops one -
+    /// its work cancelled, a reason step's minutes counted - and once its runner has answered it ends incomplete,
+    /// whatever it answered (<see cref="Complete"/>). A runner that does not end within
+    /// <see cref="PointOfNoReturn.SafePauseDrain"/> fails the step all the same, saying so, and the step is not retried.
+    /// A runner that has answered already is left to its answer, which is on its way to the loop.
+    /// </summary>
+    private void PassTimeLimit(FlowInstance instance)
+    {
+        DisarmTimeLimit(instance);
+
+        if (instance.State is not FlowInstanceState.Running || instance.Draining || instance.Runner is not { IsCompleted: false })
+        {
+            return;
+        }
+
+        instance.PastTimeLimit = true;
+        Record(FlowChangeKind.Step, instance, from: instance.State, to: instance.State, attempt: instance.Attempt, detail: $"{PastTimeLimitError(instance)}: stopped");
+        _ = StopWork(instance);
+    }
+
+    /// <summary>What a step that passed its time limit says of its ending.</summary>
+    private static string PastTimeLimitError(FlowInstance instance)
+        => $"passed its timeoutMinutes ({instance.Step.TimeoutMinutes?.ToString(System.Globalization.CultureInfo.InvariantCulture)})";
 
     /// <summary>
     /// Raises the triage of the issues <paramref name="reporter"/>'s record holds owed, and then writes them raised: a
@@ -4183,6 +4303,7 @@ public sealed class FlowCoordinator
         Release(instance);
         instance.Stoppable?.Dispose();
         instance.Stoppable = null;
+        DisarmTimeLimit(instance);
         Record(FlowChangeKind.Step, instance, from: was, to: state, attempt: instance.Attempt);
 
         if (instance.Step.Type == "create-agent" && state == FlowInstanceState.Done)
@@ -4547,9 +4668,18 @@ public sealed class FlowCoordinator
 
             if (earliest.Drain)
             {
+                if (earliest.Instance.PastTimeLimit && !earliest.Instance.Draining)
+                {
+                    // A step stopped for its time limit whose runner did not end within the drain's bound: it fails
+                    // all the same, saying so, and is not retried beside a runner still going.
+                    End(earliest.Instance, FlowInstanceState.Failed, HarnessExit.Incomplete, $"{PastTimeLimitError(earliest.Instance)}, and {RunnerNotEnded}");
+                    AfterFailure(earliest.Instance);
+                    return;
+                }
+
                 // A stopped step's runner did not end within the drain's bound: it is recorded stopped all the same,
                 // saying so, and what it answers later says nothing of the run.
-                End(earliest.Instance, FlowInstanceState.Stopped, null, $"its runner did not end within {PointOfNoReturn.SafePauseDrain.TotalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} s of the stop");
+                End(earliest.Instance, FlowInstanceState.Stopped, null, RunnerNotEnded);
                 return;
             }
 
@@ -4634,7 +4764,16 @@ public sealed class FlowCoordinator
         if (message.Result is { } result)
         {
             _ = _wakes.RemoveAll(wake => ReferenceEquals(wake.Instance, message.Instance));
+            DisarmTimeLimit(message.Instance);
             Complete(message.Instance, result);
+        }
+        else if (message.TimeLimit is { } limit)
+        {
+            // Only the timer of the run in flight speaks: one of a run that answered already was disarmed with it.
+            if (ReferenceEquals(limit, message.Instance.TimeLimit))
+            {
+                PassTimeLimit(message.Instance);
+            }
         }
         else if (message.HandoffTaken)
         {
@@ -6064,8 +6203,12 @@ public sealed class FlowCoordinator
         }
     }
 
-    /// <summary>One thing the coordinator learns while it waits: a step's ending, or an event of one of its legs.</summary>
-    private readonly record struct Message(FlowInstance Instance, FlowStepResult? Result, FlowLegEvent? Leg, (double Usd, long Tokens)? Usage = null, int Attempt = 0, (string Question, string Answer, string? Text, string? Through, string? Inbox, TaskCompletionSource<FlowHandedOver> Completion)? Offered = null, bool HandoffTaken = false);
+    /// <summary>
+    /// One thing the coordinator learns while it waits: a step's ending, an event of one of its legs, what a reasoning step
+    /// spent, an answer offered from outside, a handoff taken, or a step's time limit passing - named by the timer it came
+    /// from, so the timer of a run that has answered already says nothing.
+    /// </summary>
+    private readonly record struct Message(FlowInstance Instance, FlowStepResult? Result, FlowLegEvent? Leg, (double Usd, long Tokens)? Usage = null, int Attempt = 0, (string Question, string Answer, string? Text, string? Through, string? Inbox, TaskCompletionSource<FlowHandedOver> Completion)? Offered = null, bool HandoffTaken = false, CancellationTokenSource? TimeLimit = null);
 
     /// <summary>
     /// Offers an answer to a running session from outside it - taken from the run's inbox while the engine runs, by

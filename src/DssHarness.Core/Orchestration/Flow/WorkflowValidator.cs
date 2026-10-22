@@ -518,6 +518,10 @@ public static class WorkflowValidator
                     continue;
                 }
 
+                // Every step that runs may bound one attempt; a group and a step that only asks were refused the key
+                // where the file was read.
+                var limitHolds = Within(entry.Step.TimeoutMinutes, 1, WorkflowStep.MostTimeoutMinutes, $"{where}: timeoutMinutes");
+
                 switch (type.Type)
                 {
                     case "reason":
@@ -555,9 +559,24 @@ public static class WorkflowValidator
                     case "ci-wait":
                         Positive(entry.Step.Limit, $"{where}: limit");
                         Within(entry.Step.AppearSeconds, 30, 3_600, $"{where}: appearSeconds");
-                        Within(entry.Step.WaitMinutes, 1, 720, $"{where}: waitMinutes");
+                        var waitHolds = Within(entry.Step.WaitMinutes, 1, 720, $"{where}: waitMinutes");
                         Within(entry.Step.PollSeconds, 10, 600, $"{where}: pollSeconds");
-                        Within(entry.Step.TimeoutMinutes, 1, 240, $"{where}: timeoutMinutes");
+
+                        // One attempt of a wait waits as long as its waitMinutes say, and reads its checks once more as
+                        // they end: a time limit not past that would end a wait that ran its course as incomplete, or race
+                        // its own answer. Weighed only where both are in their ranges, each refused on its own otherwise.
+                        if (type.Type == "ci-wait"
+                            && limitHolds
+                            && waitHolds
+                            && entry.Step.TimeoutMinutes is { } limit
+                            && (entry.Step.WaitMinutes ?? WorkflowStep.DefaultWaitMinutes) is var wait
+                            && limit <= wait)
+                        {
+                            _problems.Add(string.Create(
+                                System.Globalization.CultureInfo.InvariantCulture,
+                                $"{where}: timeoutMinutes ({limit}) is not more than its waitMinutes ({wait}{(entry.Step.WaitMinutes is null ? ", the default" : string.Empty)}); one attempt waits that long for its checks, so its time limit is longer"));
+                        }
+
                         break;
 
                     case "fold":
@@ -589,13 +608,6 @@ public static class WorkflowValidator
                         }
 
                         CommitVariablesWithoutATemplate(entry);
-
-                        Within(entry.Step.TimeoutMinutes, 1, 240, $"{where}: timeoutMinutes");
-                        break;
-
-                    case "push":
-                    case "pull-request":
-                        Within(entry.Step.TimeoutMinutes, 1, 240, $"{where}: timeoutMinutes");
                         break;
 
                     case "pause":
@@ -2000,12 +2012,16 @@ public static class WorkflowValidator
         private IEnumerable<Entry> Triages()
             => _entries.Where(entry => entry.ParentPath is null && entry != _recover && entry.Step.Raised == WorkflowStep.RaisedByPreExisting);
 
-        private void Within(int? value, int least, int most, string what)
+        /// <summary>Refuses <paramref name="value"/> outside <paramref name="least"/> to <paramref name="most"/>; whether it holds, absent among them.</summary>
+        private bool Within(int? value, int least, int most, string what)
         {
             if (value < least || value > most)
             {
-                _problems.Add($"{what} must be from {least.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} to {most.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)}, found {value}");
+                _problems.Add($"{what} must be from {least.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} to {most.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)}, found {value?.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+                return false;
             }
+
+            return true;
         }
 
         private static string IsAre(int count) => count == 1 ? "is" : "are";

@@ -901,6 +901,274 @@ public sealed class FlowCoordinatorTests
         Assert.Equal(FlowRunStatus.Done, end.Status);
     }
 
+    /// <summary>
+    /// A step past its time limit is stopped - its runner's work cancelled - and ends incomplete, whatever its runner then
+    /// answered, and runs again as an incomplete step does, each attempt given its whole limit anew; past its retries it
+    /// fails, saying it passed its timeoutMinutes.
+    /// </summary>
+    [Fact]
+    public async Task AStepPastItsTimeLimit_IsStopped_AndRunsAgainAsAnIncompleteStep_EachAttemptCountedAnew()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: gate
+                type: build
+                timeoutMinutes: 2
+                retries: 1
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner();
+        _ = runner.OnAsync("gate", async run =>
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, TokenOf(runner, run.Instance));
+            return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+        });
+        var clock = new TimerClock();
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock);
+
+        var session = coordinator.RunAsync(cancel);
+        await clock.WaitingAsync().WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        clock.Advance(TimeSpan.FromMinutes(2));
+
+        // The first attempt's stop has its drain's bound armed; the second attempt its own limit, counted from its start.
+        await clock.WaitingAsync(2).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        clock.Advance(TimeSpan.FromMinutes(2));
+
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        var gate = coordinator.Instances["gate"];
+
+        Assert.Equal(FlowRunStatus.Failed, end.Status);
+        Assert.Equal((FlowInstanceState.Failed, HarnessExit.Incomplete), (gate.State, gate.Exit));
+        Assert.Equal("passed its timeoutMinutes (2), and still so after 2 attempts", gate.Error);
+        Assert.Equal([1, 2], runner.Runs.Select(run => run.Attempt));
+    }
+
+    /// <summary>
+    /// An attempt after one that passed its time limit is counted as its own: one that answers within its limit ends as it
+    /// answered, never incomplete for the attempt before it.
+    /// </summary>
+    [Fact]
+    public async Task AnAttemptAfterOnePastItsTimeLimit_EndsAsItAnswers_WithinItsOwnLimit()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: gate
+                type: build
+                timeoutMinutes: 2
+                retries: 1
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner();
+        _ = runner.OnAsync("gate", async run =>
+        {
+            if (run.Attempt == 1)
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, TokenOf(runner, run.Instance));
+            }
+
+            return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+        });
+        var clock = new TimerClock();
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock);
+
+        var session = coordinator.RunAsync(cancel);
+        await clock.WaitingAsync().WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        clock.Advance(TimeSpan.FromMinutes(2));
+
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        var gate = coordinator.Instances["gate"];
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal((FlowInstanceState.Done, 2, null), (gate.State, gate.Attempt, gate.Error));
+    }
+
+    /// <summary>A reasoning step past its time limit fails incomplete and is never run again at step level: what handles its failure takes it.</summary>
+    [Fact]
+    public async Task AReasoningStepPastItsTimeLimit_FailsIncomplete_AndIsNotRunAgainAtStepLevel()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                timeoutMinutes: 1
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner();
+        _ = runner.OnAsync("think", async run =>
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, TokenOf(runner, run.Instance));
+            return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+        });
+        var clock = new TimerClock();
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock);
+
+        var session = coordinator.RunAsync(cancel);
+        await clock.WaitingAsync().WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        clock.Advance(TimeSpan.FromMinutes(1));
+
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        var think = coordinator.Instances["think"];
+
+        Assert.Equal(FlowRunStatus.Failed, end.Status);
+        Assert.Equal((FlowInstanceState.Failed, HarnessExit.Incomplete, "passed its timeoutMinutes (1)"), (think.State, think.Exit, think.Error));
+        Assert.Single(runner.Runs);
+    }
+
+    /// <summary>
+    /// A step's time limit is never counted while it waits on a question of its own - its timer goes as it asks - and the
+    /// run after the answer is counted from its own start; a step that ends within its limit leaves no timer behind.
+    /// </summary>
+    [Fact]
+    public async Task ATimeLimit_IsNotCountedWhileTheStepWaitsOnAQuestion_AndStartsAgainWithTheRunAfterTheAnswer()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: gate
+                type: build
+                timeoutMinutes: 1
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner();
+        var answered = new TaskCompletionSource<FlowStepResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _ = runner.OnAsync("gate", run => runner.Runs.Count == 1
+            ? Task.FromResult(FlowStepResult.Asking(new FlowQuestion(string.Empty, "foldNewRows", string.Empty, "the fold found a new row", ["allow", "abort"])))
+            : answered.Task);
+        var clock = new TimerClock();
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock);
+
+        var asked = await coordinator.RunAsync(cancel).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Paused, asked.Status);
+        Assert.Equal(0, clock.Waiting);
+        clock.Advance(TimeSpan.FromMinutes(10));
+        Assert.True(coordinator.TryAnswer(Assert.Single(coordinator.OpenQuestions).Id, "allow", out _));
+
+        var session = coordinator.RunAsync(cancel);
+        await clock.WaitingAsync().WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        clock.Advance(TimeSpan.FromSeconds(59));
+        answered.SetResult(FlowStepResult.Ended(passed: true, HarnessExit.Success));
+
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["gate"].State);
+        Assert.Equal(0, clock.Waiting);
+    }
+
+    /// <summary>
+    /// A runner that does not end once stopped for its step's time limit is waited for no longer than the drain's 90 s:
+    /// the step then fails incomplete, saying so, and is never run again beside a runner still going.
+    /// </summary>
+    [Fact]
+    public async Task ARunnerThatDoesNotEndPastItsTimeLimit_FailsOnceTheDrainBoundPasses_AndIsNotRunAgain()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: gate
+                type: build
+                timeoutMinutes: 1
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner();
+        var gate = runner.Hold("gate");
+        var clock = new TimerClock();
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock);
+
+        var session = coordinator.RunAsync(cancel);
+        await clock.WaitingAsync().WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        clock.Advance(TimeSpan.FromMinutes(1));
+
+        // Its runner was told to stop, and runs on: the drain's bound is armed.
+        await clock.WaitingAsync().WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        Assert.True(TokenOf(runner, "gate").IsCancellationRequested);
+        clock.Advance(TimeSpan.FromSeconds(90));
+
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        var stopped = coordinator.Instances["gate"];
+
+        Assert.Equal(FlowRunStatus.Failed, end.Status);
+        Assert.Equal((FlowInstanceState.Failed, HarnessExit.Incomplete), (stopped.State, stopped.Exit));
+        Assert.Equal("passed its timeoutMinutes (1), and its runner did not end within 90 s of the stop", stopped.Error);
+        Assert.Single(runner.Runs);
+        gate.Done();
+    }
+
+    /// <summary>A hard stop met while a step drains for its time limit wins: the step ends stopped, to run again at the resume, and not failed.</summary>
+    [Fact]
+    public async Task AHardStopWhileAStepDrainsForItsTimeLimit_StopsIt()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: gate
+                type: build
+                timeoutMinutes: 1
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner();
+        var gate = runner.Hold("gate");
+        var clock = new TimerClock();
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock);
+
+        var session = coordinator.RunAsync(cancel);
+        await clock.WaitingAsync().WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        clock.Advance(TimeSpan.FromMinutes(1));
+        await clock.WaitingAsync().WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        coordinator.RequestStop();
+
+        // The stop arms its own drain's bound; the time limit's, taken off the wakes, waits on the clock unread.
+        await clock.WaitingAsync(2).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        gate.Done();
+
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        var stopped = coordinator.Instances["gate"];
+
+        Assert.Equal(FlowRunStatus.Stopped, end.Status);
+        Assert.Equal(FlowInstanceState.Stopped, stopped.State);
+        Assert.Null(stopped.Error);
+    }
+
+    /// <summary>The architecture says what a step's time limit is, as the reader, the validator and the coordinator hold it.</summary>
+    [Fact]
+    public void TheArchitecture_SaysWhatAStepsTimeLimitIs()
+    {
+        Assert.Contains(
+            "Every step that runs - every typed step but a `pause` step, which only asks (`StepType.Asks`) - may say `timeoutMinutes` "
+                + "(`WorkflowStepTypes.Running`): the longest one attempt of it may take, in whole minutes from 1 to "
+                + $"{WorkflowStep.MostTimeoutMinutes.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} (`WorkflowStep.MostTimeoutMinutes`); "
+                + "a group, which runs nothing of its own, and a `pause` step are refused the key where the file is read, and a `ci-wait`'s is "
+                + "always more than its `waitMinutes` (absent, `WorkflowStep.DefaultWaitMinutes`). The coordinator counts it with the engine's "
+                + "clock from each start of the step - an attempt, or its run after a question of its own was answered (a timer armed at `Start`, "
+                + "disarmed as its runner answers) - and never while the step waits on a question; a reason step's handoff turn at a pause is "
+                + "bounded by the pause's `handoffSeconds`, not by it, and its run at the resume counts anew, while a machine step a pause leaves "
+                + "running keeps its count. Past it the step is stopped as a stop stops one - its runner cancelled, a reason step's minutes "
+                + "counted - and, once its runner has answered, ends `Failed` with 21 whatever it answered, its error saying "
+                + "`passed its timeoutMinutes (<n>)`: a machine or leg step runs again by the retry table's row for 21, a reasoning step goes to "
+                + "its handlers and its `onFailure`. A runner that does not end within `PointOfNoReturn.SafePauseDrain` of that stop fails the "
+                + "step all the same, saying so; it goes to its handlers and its `onFailure` and is not retried. Both stops share one body "
+                + "(`StopWork`). A pause leaves a step its limit stopped to end as that stop ends it, with no handoff turn - a failure it owes "
+                + "while the run is paused waits for the next session - and a stop of the run records it stopped, as it records every step in "
+                + "flight.",
+            Prose.Document("docs", "architecture.md"),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>The token the coordinator gave <paramref name="instance"/>'s last attempt, read as the runner sets it.</summary>
+    private static CancellationToken TokenOf(FakeRunner runner, string instance)
+    {
+        lock (runner.Tokens)
+        {
+            return runner.Tokens[instance];
+        }
+    }
+
     /// <summary>An incomplete step past its retries fails with the incomplete code it kept meeting.</summary>
     [Fact]
     public async Task AnIncompleteStepPastItsRetries_FailsWithTheIncompleteCode()

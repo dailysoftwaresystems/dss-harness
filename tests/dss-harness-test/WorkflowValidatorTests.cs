@@ -2755,7 +2755,7 @@ public sealed class WorkflowValidatorTests
             ],
             problems);
 
-        // The counts of what runs at once, the reporter's tries, every wait of git, the forge and the checks, a loop's
+        // The counts of what runs at once, the reporter's tries, every wait of the checks and every step's time limit, a loop's
         // rounds, and how long an answer can be changed for.
         Assert.Equal(
             [
@@ -2763,15 +2763,16 @@ public sealed class WorkflowValidatorTests
                 "maxOpenAgents is 0, and so not one or more",
                 "reporter.retries must be from 1 to 20, found 21",
                 "reporter.backoffSeconds must be from 1 to 900, found 0",
+                "step 'replan': timeoutMinutes must be from 1 to 1,440, found 1441",
+                "step 'ci': timeoutMinutes must be from 1 to 1,440, found 1441",
                 "step 'ci': limit is 0, and so not one or more",
-                "step 'ci': timeoutMinutes must be from 1 to 240, found 241",
+                "step 'checks': timeoutMinutes must be from 1 to 1,440, found 0",
                 "step 'checks': appearSeconds must be from 30 to 3,600, found 29",
                 "step 'checks': waitMinutes must be from 1 to 720, found 721",
                 "step 'checks': pollSeconds must be from 10 to 600, found 601",
-                "step 'checks': timeoutMinutes must be from 1 to 240, found 0",
-                "step 'commit': timeoutMinutes must be from 1 to 240, found 0",
-                "step 'push': timeoutMinutes must be from 1 to 240, found 241",
-                "step 'pr': timeoutMinutes must be from 1 to 240, found 0",
+                "step 'commit': timeoutMinutes must be from 1 to 1,440, found 0",
+                "step 'push': timeoutMinutes must be from 1 to 1,440, found 1441",
+                "step 'pr': timeoutMinutes must be from 1 to 1,440, found 0",
                 "group 'rounds': repeat.rounds must be from 1 to 20, found 21",
                 "group 'rounds': repeat.blockersLimitRounds must be from 1 to 20, found 0",
                 "amend.changedAnswerMinutes must be from 1 to 60, found 61",
@@ -2795,10 +2796,11 @@ public sealed class WorkflowValidatorTests
                     agent: planner
                     prompt: prompts/plan.md
                     outputs: schemas/plan.json
+                    timeoutMinutes: 1441
                   - name: ci
                     type: ci-read
                     limit: 0
-                    timeoutMinutes: 241
+                    timeoutMinutes: 1441
                   - name: checks
                     type: ci-wait
                     appearSeconds: 29
@@ -2811,7 +2813,7 @@ public sealed class WorkflowValidatorTests
                     timeoutMinutes: 0
                   - name: push
                     type: push
-                    timeoutMinutes: 241
+                    timeoutMinutes: 1441
                   - name: pr
                     type: pull-request
                     title: 'pr'
@@ -3888,6 +3890,53 @@ public sealed class WorkflowValidatorTests
     /// </summary>
     private static IReadOnlyList<string> Problems(string text, IReadOnlyDictionary<string, string> files)
         => [.. WorkflowValidator.Validate(Parse(text), hasCommitTemplate: false, path => files.GetValueOrDefault(path))];
+
+    /// <summary>
+    /// V41: a ci-wait's time limit is always more than its wait - the hour it waits where it says none among them - for one
+    /// attempt waits that long for its checks and reads them once more; a limit past the wait, or with no wait to meet -
+    /// a ci-read's, however short - holds, from 1 to 1,440.
+    /// </summary>
+    [Fact]
+    public void ACiWaitsTimeLimit_IsAlwaysMoreThanItsWait_TheDefaultHourAmongThem()
+    {
+        Assert.Equal(
+            [
+                "step 'short': timeoutMinutes (30) is not more than its waitMinutes (60, the default); one attempt waits that long for its checks, so its time limit is longer",
+                "step 'shorter': timeoutMinutes (89) is not more than its waitMinutes (90); one attempt waits that long for its checks, so its time limit is longer",
+                "step 'even': timeoutMinutes (90) is not more than its waitMinutes (90); one attempt waits that long for its checks, so its time limit is longer",
+                "step 'hour': timeoutMinutes (60) is not more than its waitMinutes (60, the default); one attempt waits that long for its checks, so its time limit is longer",
+            ],
+            Problems("""
+                name: flow
+                steps:
+                  - name: short
+                    type: ci-wait
+                    timeoutMinutes: 30
+                  - name: shorter
+                    type: ci-wait
+                    waitMinutes: 90
+                    timeoutMinutes: 89
+                  - name: even
+                    type: ci-wait
+                    waitMinutes: 90
+                    timeoutMinutes: 90
+                  - name: hour
+                    type: ci-wait
+                    timeoutMinutes: 60
+                  - name: past
+                    type: ci-wait
+                    waitMinutes: 90
+                    timeoutMinutes: 91
+                  - name: quick
+                    type: ci-read
+                    branch: main
+                    timeoutMinutes: 5
+                  - name: day
+                    type: ci-read
+                    branch: main
+                    timeoutMinutes: 1440
+                """));
+    }
 
     /// <summary>
     /// V16-V19's types, for a built-in step: a path is typed by the output part 04 lists for its type, and one no

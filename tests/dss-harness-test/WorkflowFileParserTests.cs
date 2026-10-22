@@ -456,6 +456,80 @@ public sealed class WorkflowFileParserTests
         Assert.Equal(["line 5, column 13: 'runner' is not a key of a test step; it is one of a run step."], problems);
     }
 
+    /// <summary>
+    /// A time limit is a key of every step that runs, read on each - a reason step, a leg step, a machine step and one that
+    /// takes no key of its own alike - and refused on a group, which runs nothing of its own, and on a pause step, which
+    /// only asks: each saying why, never that another type takes it.
+    /// </summary>
+    [Fact]
+    public void ATimeLimit_IsReadOnEveryStepThatRuns_AndRefusedOnAGroupAndAPauseStep()
+    {
+        var definition = WorkflowFileParser.Parse(
+            "workflows/default/default.yml",
+            """
+            name: default
+            steps:
+              - name: look
+                type: orient
+                timeoutMinutes: 3
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+                timeoutMinutes: 45
+              - name: suite
+                type: test
+                timeoutMinutes: 90
+              - name: push
+                type: push
+                timeoutMinutes: 7
+            """);
+
+        Assert.Equal([3, 45, 90, 7], definition.Steps.Select(step => step.TimeoutMinutes));
+
+        var problems = Problems(
+            """
+            name: default
+            steps:
+              - name: block
+                timeoutMinutes: 5
+                steps:
+                  - name: look
+                    type: orient
+              - name: ask
+                type: pause
+                question: may it go ahead?
+                timeoutMinutes: 5
+            """);
+
+        Assert.Equal(
+            [
+                "line 4, column 21: 'timeoutMinutes' is not a key of a group; it is one of every step that runs, and a group runs nothing of its own.",
+                "line 11, column 21: 'timeoutMinutes' is not a key of a pause step; it is one of every step that runs, and a pause step only asks.",
+            ],
+            problems);
+    }
+
+    /// <summary>An unknown key of a step is refused with every key a step takes, each named once - the time limit every type that runs shares among them.</summary>
+    [Fact]
+    public void AnUnknownStepKey_IsRefusedWithEveryKnownKey_EachOnce()
+    {
+        var problems = Problems(
+            """
+            name: default
+            steps:
+              - name: look
+                type: orient
+                timeoutMinute: 3
+            """);
+
+        var known = Assert.Single(problems).Split("Known: ")[1].TrimEnd('.').Split(", ");
+
+        Assert.StartsWith("line 5, column 5: 'timeoutMinute' is not a key of a step.", problems[0], StringComparison.Ordinal);
+        Assert.Equal(known.Length, known.Distinct(StringComparer.Ordinal).Count());
+        Assert.Single(known, key => key == "'timeoutMinutes'");
+    }
+
     [Fact]
     public void AnUnknownStepType_IsRefusedWithEveryKnownOne()
     {

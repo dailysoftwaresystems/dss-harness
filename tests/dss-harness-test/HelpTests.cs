@@ -3095,7 +3095,25 @@ public sealed partial class HelpTests
         Assert.All(WorkflowKeys.File, key => Assert.Contains($"  {key.Name}", result.StandardOutput, StringComparison.Ordinal));
         Assert.All(WorkflowStepTypes.Common, key => Assert.Contains($"  {key.Name}", result.StandardOutput, StringComparison.Ordinal));
         Assert.All(WorkflowStepTypes.Group, key => Assert.Contains($"  {key.Name}", result.StandardOutput, StringComparison.Ordinal));
+        Assert.All(WorkflowStepTypes.Running, key => Assert.Contains($"  {key.Name}", result.StandardOutput, StringComparison.Ordinal));
         Assert.All(WorkflowStepTypes.All, type => Assert.Contains($"  {type.Type}", result.StandardOutput, StringComparison.Ordinal));
+        Assert.Contains(
+            "What every step that runs takes, beyond the common keys - every typed step but pause, which only asks:",
+            prose,
+            StringComparison.Ordinal);
+
+        // A step's time limit, from the bounds the validator and the coordinator hold.
+        Assert.Contains(
+            $"A step that runs may bound each of its attempts with timeoutMinutes, from 1 to {WorkflowStep.MostTimeoutMinutes.ToString("N0", CultureInfo.InvariantCulture)}: "
+                + "the engine counts it from each start of the step - an attempt, or its run after a question of its own was answered - and "
+                + "never while it waits on a question. Past it the step is stopped as a stop stops one and ends incomplete "
+                + $"({HarnessExit.Incomplete}), saying it passed its timeoutMinutes: a reasoning step goes to what handles its failure, any other "
+                + $"runs again as an incomplete step does; one whose runner does not end within {PointOfNoReturn.SafePauseDrain.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s "
+                + "of that stop fails all the same, goes to what handles its failure and is not retried. A reasoning step's handoff turn at a "
+                + "pause is bounded by handoffSeconds, not by this. A ci-wait's is always more than its waitMinutes (absent, "
+                + $"{WorkflowStep.DefaultWaitMinutes}); a group and a pause step take none, running nothing of their own.",
+            prose,
+            StringComparison.Ordinal);
     }
 
     /// <summary>

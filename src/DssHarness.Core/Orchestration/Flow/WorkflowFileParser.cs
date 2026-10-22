@@ -807,7 +807,9 @@ public static class WorkflowFileParser
             {
                 var owner = typed is null ? "a group" : $"a {typed.Type} step";
                 var taken = WorkflowStepTypes.All.FirstOrDefault(other => other != typed && WorkflowStepTypes.KeysOf(other).Contains(key, StringComparer.Ordinal));
-                var takenBy = taken is not null
+                var takenBy = KeyDescription.Names(WorkflowStepTypes.Running).Contains(key, StringComparer.Ordinal)
+                    ? $"; it is one of every step that runs, and {(typed is null ? "a group runs nothing of its own" : $"a {typed.Type} step only asks")}"
+                    : taken is not null
                     ? $"; it is one of a {taken.Type} step"
                     : typed is not null && KeyDescription.Names(WorkflowStepTypes.Group).Contains(key, StringComparer.Ordinal) ? "; it is one of a group, which names no type" : "";
 
@@ -1016,6 +1018,7 @@ public static class WorkflowFileParser
             FailOn = failOn,
             Legs = StringListIn(keys, $"{where}.legs", problems) ?? [],
             In = ScalarIn(keys, $"{where}.in", problems),
+            TimeoutMinutes = IntIn(keys, $"{where}.timeoutMinutes", problems),
         };
 
         switch (type.Type)
@@ -1155,7 +1158,6 @@ public static class WorkflowFileParser
                 {
                     Branch = ScalarIn(keys, $"{where}.branch", problems),
                     Limit = IntIn(keys, $"{where}.limit", problems),
-                    TimeoutMinutes = IntIn(keys, $"{where}.timeoutMinutes", problems),
                 };
                 break;
 
@@ -1167,7 +1169,6 @@ public static class WorkflowFileParser
                     WaitMinutes = IntIn(keys, $"{where}.waitMinutes", problems),
                     PollSeconds = IntIn(keys, $"{where}.pollSeconds", problems),
                     Ignore = StringListIn(keys, $"{where}.ignore", problems) ?? [],
-                    TimeoutMinutes = IntIn(keys, $"{where}.timeoutMinutes", problems),
                 };
 
                 RefuseGivenEmpty(keys, $"{where}.ignore", "name the checks it does not count", "every check counted", problems);
@@ -1178,7 +1179,6 @@ public static class WorkflowFileParser
                 {
                     Message = ScalarIn(keys, $"{where}.message", problems),
                     Variables = StringMapIn(keys, $"{where}.variables", problems),
-                    TimeoutMinutes = IntIn(keys, $"{where}.timeoutMinutes", problems),
                 };
                 break;
 
@@ -1187,7 +1187,6 @@ public static class WorkflowFileParser
                 {
                     Remote = ScalarIn(keys, $"{where}.remote", problems),
                     Checkpoint = BooleanIn(keys, $"{where}.checkpoint", problems),
-                    TimeoutMinutes = IntIn(keys, $"{where}.timeoutMinutes", problems),
                 };
                 break;
 
@@ -1198,7 +1197,6 @@ public static class WorkflowFileParser
                     Body = ScalarIn(keys, $"{where}.body", problems),
                     Base = ScalarIn(keys, $"{where}.base", problems),
                     Draft = BooleanIn(keys, $"{where}.draft", problems),
-                    TimeoutMinutes = IntIn(keys, $"{where}.timeoutMinutes", problems),
                 };
                 break;
 

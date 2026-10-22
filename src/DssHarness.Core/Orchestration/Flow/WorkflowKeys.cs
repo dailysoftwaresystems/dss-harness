@@ -128,11 +128,12 @@ public static class WorkflowKeys
         new("maxAddedIterations", "iterations a run at the end of its loop is given to carry an update"),
     ];
 
-    /// <summary>What one step takes: the common keys, the group's, and the types', each under its own name.</summary>
+    /// <summary>What one step takes: the common keys, the group's, those of every step that runs, and the types', each under its own name.</summary>
     public static IReadOnlyList<KeyDescription> Step =>
     [
         .. WorkflowStepTypes.Common,
         .. WorkflowStepTypes.Group,
+        .. WorkflowStepTypes.Running,
         .. WorkflowStepTypes.All.SelectMany(type => type.Keys.Select(key => new KeyDescription($"{type.Type}.{key.Name}", key.Meaning) { Required = key.Required })),
     ];
 }

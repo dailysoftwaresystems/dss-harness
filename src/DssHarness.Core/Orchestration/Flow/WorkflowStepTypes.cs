@@ -1,4 +1,5 @@
 using DssHarness.Core.Configuration;
+using DssHarness.Core.Results;
 
 namespace DssHarness.Core.Orchestration.Flow;
 
@@ -45,6 +46,10 @@ public static class WorkflowStepTypes
     /// reason step's is the schema file it names, and a type the plan lists no output for has none, so a read of one is
     /// refused.
     /// </param>
+    /// <param name="Asks">
+    /// Whether a step of the type only asks a person and runs nothing: it takes none of <see cref="Running"/>, for there is
+    /// nothing of its own to bound.
+    /// </param>
     public sealed record StepType(
         string Type,
         IReadOnlyList<KeyDescription> Keys,
@@ -53,7 +58,8 @@ public static class WorkflowStepTypes
         string Calls = "",
         IReadOnlyList<string>? Claims = null,
         string? CountsAgainst = null,
-        string? Output = null)
+        string? Output = null,
+        bool Asks = false)
     {
         /// <summary>Whether the type checks something, so that its verdicts can be red.</summary>
         public bool IsCheck => FailOnDefault is not null;
@@ -82,6 +88,17 @@ public static class WorkflowStepTypes
         new("on", "the ending of another step that raises this one; it is never started by the schedule") { Keys = OnKeys },
         new("then", "the step the run goes back to once this handler is done"),
         new("maxVisits", "how often this handler may be raised in one scope, from 1 to 20; absent, 3; past it the run asks"),
+    ];
+
+    /// <summary>
+    /// The keys every step that runs takes, beyond the common ones: every typed step but one whose type only asks
+    /// (<see cref="StepType.Asks"/>). A group runs nothing of its own, and takes none of them either.
+    /// </summary>
+    public static IReadOnlyList<KeyDescription> Running =>
+    [
+        new(
+            "timeoutMinutes",
+            $"the longest one attempt of the step may take, in whole minutes from 1 to {WorkflowStep.MostTimeoutMinutes.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)}; absent, none; how it is counted and how a step past it ends is the time limit's paragraph above"),
     ];
 
     /// <summary>
@@ -217,7 +234,7 @@ public static class WorkflowStepTypes
             AnchorOutput),
         new(
             "ci-read",
-            [new("branch", "the branch it reads"), new("limit", "how many of the branch's runs it looks at"), new("timeoutMinutes", "minutes the read is given"), new("failOn", "what a red leg does: never (the default) or red")],
+            [new("branch", "the branch it reads"), new("limit", "how many of the branch's runs it looks at"), new("failOn", "what a red leg does: never (the default) or red")],
             ["branch"],
             "never",
             "ICiLegsService.CheckAsync",
@@ -229,11 +246,10 @@ public static class WorkflowStepTypes
             [
                 new("commit", "the commit whose checks it waits for; absent, the commit this run last pushed"),
                 new("appearSeconds", "how long it waits for the first check to appear"),
-                new("waitMinutes", "how long it waits, from its start, for every check to end"),
+                new("waitMinutes", $"how long it waits, from its start, for every check to end; absent, {WorkflowStep.DefaultWaitMinutes}"),
                 new("pollSeconds", "how often it reads the checks while it waits"),
                 new("ignore", "checks it does not count, by name"),
-                new("timeoutMinutes", "minutes one read is given"),
-                new("failOn", "what a red check does: red (the default) or never"),
+               new("failOn", "what a red check does: red (the default) or never"),
             ],
             ["commit"],
             "red",
@@ -243,7 +259,7 @@ public static class WorkflowStepTypes
             CiWaitOutput),
         new(
             "commit",
-            [new("message", "the commit message it writes; required where the config declares no commit.template, and not used where it declares one"), new("variables", "the values the message template reads"), new("timeoutMinutes", "minutes git is given")],
+            [new("message", "the commit message it writes; required where the config declares no commit.template, and not used where it declares one"), new("variables", "the values the message template reads")],
             ["message", "variables"],
             null,
             "IGitPublisher",
@@ -252,7 +268,7 @@ public static class WorkflowStepTypes
             ObjectOf(("committed", Flag), ("sha", TextOrNull), ("paths", ListOf(Text)))),
         new(
             "push",
-            [new("remote", "the remote it pushes to; absent, the tracked one"), new("checkpoint", "push a checkpoint commit"), new("timeoutMinutes", "minutes git is given")],
+            [new("remote", "the remote it pushes to; absent, the tracked one"), new("checkpoint", "push a checkpoint commit")],
             [],
             null,
             "IGitPublisher",
@@ -266,8 +282,7 @@ public static class WorkflowStepTypes
                 new("body", "the file holding the pull request's body") { Required = true },
                 new("base", "the branch it goes to; absent, the remote's default branch"),
                 new("draft", "open it as a draft"),
-                new("timeoutMinutes", "minutes the forge is given"),
-            ],
+           ],
             ["title", "base"],
             null,
             "IGitPublisher",
@@ -289,7 +304,8 @@ public static class WorkflowStepTypes
             "the engine itself",
             [],
             null,
-            ObjectOf(("answer", Text), ("text", Text))),
+            ObjectOf(("answer", Text), ("text", Text)),
+            Asks: true),
     ];
 
     /// <summary>
@@ -335,17 +351,20 @@ public static class WorkflowStepTypes
                 && (step.Resume is null || string.Equals(step.Resume, step.Name, StringComparison.Ordinal)));
     }
 
-    /// <summary>The keys <paramref name="type"/>'s steps take, spelled as the file spells them.</summary>
+    /// <summary>
+    /// The keys <paramref name="type"/>'s steps take beyond the common ones, spelled as the file spells them: its own, and
+    /// <see cref="Running"/>'s where it runs.
+    /// </summary>
     /// <param name="type">A step type.</param>
     public static IReadOnlyList<string> KeysOf(StepType type)
     {
         ArgumentNullException.ThrowIfNull(type);
 
-        return KeyDescription.Names(type.Keys);
+        return type.Asks ? KeyDescription.Names(type.Keys) : [.. KeyDescription.Names(type.Keys), .. KeyDescription.Names(Running)];
     }
 
-    /// <summary>Every key any step type takes, flattened: the list a step's unknown keys are refused against.</summary>
-    public static IReadOnlyList<string> AllKeys { get; } = [.. All.SelectMany(KeysOf)];
+    /// <summary>Every key any step type takes, flattened and each once: the list a step's unknown keys are refused against.</summary>
+    public static IReadOnlyList<string> AllKeys { get; } = [.. All.SelectMany(KeysOf).Distinct(StringComparer.Ordinal)];
 
     /// <summary>The keys every leg step takes, shared by <c>build</c>, <c>test</c>, <c>run</c> and <c>check-mutations</c>.</summary>
     private static IReadOnlyList<KeyDescription> LegKeys =>

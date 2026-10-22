@@ -3184,6 +3184,17 @@ public static class HelpTopics
         builder.AppendLine("more, one more recovery; direct, with the fix in words, for the next one; skip, where the");
         builder.AppendLine("step is skippable; or abort.");
         builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"A step that runs may bound each of its attempts with timeoutMinutes, from 1 to {WorkflowStep.MostTimeoutMinutes.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)}: the engine counts "
+            + "it from each start of the step - an attempt, or its run after a question of its own was answered - and never while it "
+            + "waits on a question. Past it the step is stopped as a stop stops one and ends incomplete "
+            + $"({HarnessExit.Incomplete}), saying it passed its timeoutMinutes: a reasoning step goes to what handles its failure, any "
+            + $"other runs again as an incomplete step does; one whose runner does not end within {PointOfNoReturn.SafePauseDrain.TotalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} s "
+            + "of that stop fails all the same, goes to what handles its failure and is not retried. A reasoning step's handoff turn at a "
+            + "pause is bounded by handoffSeconds, not by this. A ci-wait's is always more than its waitMinutes (absent, "
+            + $"{WorkflowStep.DefaultWaitMinutes}); a group and a pause step take none, running nothing of their own.");
+        builder.AppendLine();
         builder.AppendLine("An issue a reasoning step meets that was there before the run, it reports in its answer");
         builder.AppendLine($"(preExisting) and never fixes itself; onPreExisting names the step of the flow's top level");
         builder.AppendLine($"that triages each one. That step says raised: {WorkflowStep.RaisedByPreExisting} - it is raised once per issue and never");
@@ -3234,9 +3245,14 @@ public static class HelpTopics
         builder.AppendLine();
         AppendKeys(builder, WorkflowStepTypes.Group);
         builder.AppendLine();
-        builder.AppendLine("The step types, and what each takes beyond the common keys (a check's failOn says what");
-        builder.AppendLine("a red verdict does to the step: red fails it, never records it; each type's default is");
-        builder.AppendLine("in its list):");
+        builder.AppendLine($"What every step that runs takes, beyond the common keys - every typed step but {string.Join(" and ", WorkflowStepTypes.All.Where(type => type.Asks).Select(type => type.Type))},");
+        builder.AppendLine("which only asks:");
+        builder.AppendLine();
+        AppendKeys(builder, WorkflowStepTypes.Running);
+        builder.AppendLine();
+        builder.AppendLine("The step types, and what each takes beyond those (a check's failOn says what a red");
+        builder.AppendLine("verdict does to the step: red fails it, never records it; each type's default is in its");
+        builder.AppendLine("list):");
         builder.AppendLine();
 
         foreach (var type in WorkflowStepTypes.All)

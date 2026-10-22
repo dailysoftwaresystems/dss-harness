@@ -1283,6 +1283,26 @@ reasoning step; its recovery diagnoses the failure (`diagnose`, which goes on wi
 the visits), asks a person only for what only a person can give (`direction`), and builds, tests,
 folds and reviews its fix as a round's work items are.
 
+Every step that runs - every typed step but a `pause` step, which only asks (`StepType.Asks`) - may
+say `timeoutMinutes` (`WorkflowStepTypes.Running`): the longest one attempt of it may take, in whole
+minutes from 1 to 1,440 (`WorkflowStep.MostTimeoutMinutes`); a group, which runs nothing of its own,
+and a `pause` step are refused the key where the file is read, and a `ci-wait`'s is always more than
+its `waitMinutes` (absent, `WorkflowStep.DefaultWaitMinutes`). The coordinator counts it with the
+engine's clock from each start of the step - an attempt, or its run after a question of its own was
+answered (a timer armed at `Start`, disarmed as its runner answers) - and never while the step waits
+on a question; a reason step's handoff turn at a pause is bounded by the pause's `handoffSeconds`,
+not by it, and its run at the resume counts anew, while a machine step a pause leaves running keeps
+its count. Past it
+the step is stopped as a stop stops one - its runner cancelled, a reason step's minutes counted -
+and, once its runner has answered, ends `Failed` with 21 whatever it answered, its error saying
+`passed its timeoutMinutes (<n>)`: a machine or leg step runs again by the retry table's row for
+21, a reasoning step goes to its handlers and its `onFailure`. A runner that does not end within
+`PointOfNoReturn.SafePauseDrain` of that stop fails the step all the same, saying so; it goes to
+its handlers and its `onFailure` and is not retried. Both stops share one body (`StopWork`). A pause
+leaves a step its limit stopped to end as that stop ends it, with no handoff turn - a failure it
+owes while the run is paused waits for the next session - and a stop of the run records it stopped,
+as it records every step in flight.
+
 A pre-existing issue - one a reasoning step meets that was there before the run - is reported in the
 step's answer (`preExisting`, a member of every shipped reasoning schema but the triage's) and triaged by the step its
 `onPreExisting` names: a reason step of the flow's top level that says `raised: preExisting`, which
