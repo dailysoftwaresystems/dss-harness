@@ -391,6 +391,8 @@ public sealed class LegRunService(
             }
             catch (HarnessException ex)
             {
+                await stop.EndAsync().ConfigureAwait(false);
+
                 // The ledger is reported first, then the refusal. A leg that finished before another
                 // leg's configuration turned out to be unsatisfiable still reached a verdict, and
                 // throwing it away would make the reader run everything again to learn what they
@@ -407,6 +409,10 @@ public sealed class LegRunService(
                     [.. reached.Render(), .. Logs(runDirectory, reached, placed)],
                     runDirectory);
             }
+
+            // The legs have ended: the watch ends before the report is made, so a stop asked while it is made is taken
+            // back, never taken by a run whose work is done, nor said to have stopped it.
+            await stop.EndAsync().ConfigureAwait(false);
 
             return Report(commandName, context, ledger, execution, runId, runDirectory, placed, request.MutationRecord);
         }

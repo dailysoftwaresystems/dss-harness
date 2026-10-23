@@ -737,6 +737,42 @@ public sealed class RunStopTests
         Assert.False(stops.TakenBack(directory, "test"), "a stop asked as the directory was given up was taken by the run that ended");
     }
 
+    /// <summary>
+    /// Ended as the run's work ends, before its report, the watch takes back what was asked and takes nothing asked while
+    /// the report is made - the directory still the run's - and its end at the giving up takes back what was asked since,
+    /// before the directory goes.
+    /// </summary>
+    [Fact]
+    public async Task AWatchEndedAsTheWorkEnds_TakesNothingAskedWhileTheRunReports()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var stops = new RunStops(harness.FileSystem, harness.Identity, harness.Output, new LogOwnership(harness.FileSystem, harness.Output, harness.Identity), new TimerClock());
+        var directory = temp.Combine("runs", Run);
+        Directory.CreateDirectory(Path.GetDirectoryName(directory)!);
+
+        var watch = stops.Watch(directory, "test", TestContext.Current.CancellationToken);
+        stops.Ask(directory);
+
+        await watch.EndAsync();
+
+        Assert.False(File.Exists(RunStops.FileOf(directory)), "a request asked before the work ended was left asked");
+
+        // Asked while the run reports: never taken, and taken back as the directory is given up.
+        stops.Ask(directory);
+        bool? leftAtGivingUp = null;
+
+        await watch.EndThenAsync(() =>
+        {
+            leftAtGivingUp = File.Exists(RunStops.FileOf(directory));
+            return Task.CompletedTask;
+        });
+
+        Assert.False(leftAtGivingUp, "a request asked while the run reported was left at its directory's giving up");
+        Assert.Null(watch.Taken);
+        Assert.False(watch.Stopping.IsCancellationRequested);
+    }
+
     /// <summary>A request that does not read as one is said, removed, and stops nothing: no run is stopped on a record nobody can say who wrote.</summary>
     [Theory]
     [InlineData("{ \"schema\": 1 }", "")]

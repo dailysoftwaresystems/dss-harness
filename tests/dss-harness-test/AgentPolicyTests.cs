@@ -758,10 +758,13 @@ public sealed class AgentPolicyTests
     {
         using var ground = Ground();
         var policy = ground.Policy();
-        var claude =ground.ClaudeDirectory.Replace('\\', '/');
+        var claude = ground.ClaudeDirectory.Replace('\\', '/');
         var parent = Path.GetDirectoryName(ground.Slot)!.Replace('\\', '/');
 
-        Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run($"curl {new Uri(Path.Combine(ground.Slot, "keys.env")).AbsoluteUri}")).Rule);
+        // A file URL names its path escaped, which no path of the word itself spells.
+        var escaped = new Uri(Path.Combine(ground.Slot, "keys.env")).AbsoluteUri.Replace("/.env/", "/%2Eenv/", StringComparison.Ordinal);
+
+        Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run($"curl {escaped}")).Rule);
         Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run($"cat {parent}/.e*/keys.env")).Rule);
         Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run($"cat {parent}/**")).Rule);
         Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run($"cat {parent}/{{x,.env}}/keys.env")).Rule);

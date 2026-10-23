@@ -413,35 +413,20 @@ public sealed class RunStopWatch
     /// <summary>
     /// Ends the watch - the run has ended - takes back a request it never took (<see cref="RunStops.Forget"/>), and only
     /// then runs <paramref name="giveUp"/>, which gives up the run's directory: so no stop is ever taken by a run whose
-    /// directory is given up, and one a process that asked reads as taken is one this run took. Ended twice, it ends once,
-    /// and gives up the directory each time it is asked to.
+    /// directory is given up, and one a process that asked reads as taken is one this run took. A watch ended before -
+    /// as the run's work ended (<see cref="EndAsync"/>) - takes back what was asked since. Ended twice, it ends once, and
+    /// gives up the directory each time it is asked to.
     /// </summary>
     /// <param name="giveUp">Gives up the run's directory.</param>
     public async Task EndThenAsync(Func<Task> giveUp)
     {
         ArgumentNullException.ThrowIfNull(giveUp);
 
-        var first = false;
-
-        lock (_gate)
-        {
-            if (!_ended)
-            {
-                _ended = first = true;
-            }
-        }
-
         try
         {
-            if (first)
+            if (!await EndedNowAsync().ConfigureAwait(false))
             {
-                await _done.CancelAsync().ConfigureAwait(false);
-                await _watching.ConfigureAwait(false);
-
                 _stops.Forget(_runDirectory, _command);
-
-                _done.Dispose();
-                _stopping.Dispose();
             }
         }
         finally
@@ -449,6 +434,37 @@ public sealed class RunStopWatch
             // The directory is given up however the watch ended: a run never keeps its records claimed past its end.
             await giveUp().ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// Ends the watch as the run's work ends, before its report is made, and takes back a request it never took
+    /// (<see cref="RunStops.Forget"/>), the directory still the run's: a stop asked while the run reports is never taken,
+    /// nor said to have stopped a run whose work was done. Ended twice, it ends once.
+    /// </summary>
+    public Task EndAsync() => EndedNowAsync();
+
+    /// <summary>Ends the watch where it has not ended, taking back a request it never took; whether this call ended it.</summary>
+    private async Task<bool> EndedNowAsync()
+    {
+        lock (_gate)
+        {
+            if (_ended)
+            {
+                return false;
+            }
+
+            _ended = true;
+        }
+
+        await _done.CancelAsync().ConfigureAwait(false);
+        await _watching.ConfigureAwait(false);
+
+        _stops.Forget(_runDirectory, _command);
+
+        _done.Dispose();
+        _stopping.Dispose();
+
+        return true;
     }
 
     private async Task WatchAsync(Func<TimeSpan, CancellationToken, Task> wait)
