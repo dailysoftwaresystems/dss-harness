@@ -23,8 +23,10 @@ namespace DssHarness.Core.Agents.Policy;
 /// the client that waits for this answer holds every action behind it.
 /// </para>
 /// <para>
-/// A path is decided as asked and as resolved, each spelled whole first - a device prefix
-/// (<c>\\?\</c>) dropped, a home (<c>~</c>, <c>$HOME</c>) expanded - and a refusal's places are
+/// A path is decided as asked and as resolved, each spelled whole first - a home (<c>~</c>,
+/// <c>$HOME</c>) expanded, and on Windows a device prefix (<c>\\?\</c>) dropped and a shell's
+/// spelling of a drive (<c>/c/x</c>) read as the drive and as the directory it also names, a
+/// decision holding for both - and a refusal's places are
 /// compared without regard to case on every system, each spelled whole as the runtime spells a
 /// full path - on Windows each short name (<c>HARNES~1</c>) given as the long name it stands for -
 /// so no spelling a file system finds the place by reaches past one. What a refusal allows - a writable root, the step's <c>writes</c> -
@@ -92,6 +94,13 @@ public sealed partial class AgentPolicy
     ];
 
     /// <summary>
+    /// The rule git's own files are refused by as writes under the worktree rules, whatever
+    /// <c>protectedPaths</c> says: a <c>.git</c>, file or directory, at any depth beneath a root and
+    /// in any case - a nested repository's and a submodule's as well as the root's own.
+    /// </summary>
+    public const string GitsOwnRule = "Write(**/.git/**)";
+
+    /// <summary>
     /// The files that hold the tool's own policy and what the next launch loads, refused as writes
     /// by the worktree rules: an agent does not edit its own policy or what the next launch loads.
     /// The skills directory's exception - a step whose <c>writes</c> names one skill's own directory
@@ -143,6 +152,7 @@ public sealed partial class AgentPolicy
     private readonly IReadOnlyList<(GlobPattern Pattern, string Text)> _protectedPaths;
     private readonly string _workingRoot;
     private readonly string? _reporterRoot;
+    private readonly string? _resolvedReporterRoot;
 
     /// <summary>
     /// Reads the ground once: its roots and the places no action reaches resolved, its restrictions
@@ -181,8 +191,12 @@ public sealed partial class AgentPolicy
                .. NeverCiCommands.Select(command => AgentRule.Parse($"Run({command} *)"))];
         _worktreePolicyWrites = [.. WorktreePolicyWrites.Select(pattern => (GlobPattern.Parse(pattern), pattern))];
         _protectedPaths = [.. ProtectedPathRules.Select(pattern => (GlobPattern.Parse(pattern), pattern))];
-        _workingRoot = _fileSystem.ResolveLinks(Whole(ground.WorkingDirectory));
-        _reporterRoot = ground.ReporterRoot is { } root ? _fileSystem.ResolveLinks(Whole(root)) : null;
+        _workingRoot = Resolved(Whole(ground.WorkingDirectory));
+
+        // The reporter's root as it was given, and where it resolves: a path asked is asked by one of
+        // its names, and lands where the other says.
+        _reporterRoot = ground.ReporterRoot is { } root ? Whole(Plain(root, ground.WorkingDirectory)) : null;
+        _resolvedReporterRoot = ground.ReporterRoot is { } given ? Resolved(Whole(given)) : null;
     }
 
     /// <summary>
@@ -441,10 +455,12 @@ public sealed partial class AgentPolicy
 
                 if (_ground.WorktreeRules)
                 {
-                    if (relative.Equals(".git", Refusals) || relative.StartsWith(".git/", Refusals))
+                    // Git's own at any depth, as Claude Code's own guard holds it: a nested repository's
+                    // or a submodule's .git runs its hooks as surely as the root's.
+                    if (relative.Split('/').Any(segment => segment.Equals(".git", Refusals)))
                     {
                         return new AgentPolicyAnswer.Denied(
-                            "Write(.git/**)",
+                            GitsOwnRule,
                             AgentPolicySource.Builtin,
                             $"'{form}' is git's own: written by git's verbs and this tool's, never by an agent's file tool, whatever protectedPaths says");
                     }
@@ -547,16 +563,20 @@ public sealed partial class AgentPolicy
     /// <summary>Whether the path stands inside the reporter's one root, where this agent is the run's reporter.</summary>
     private AgentPolicyAnswer? OutsideReporterRoot(string asked, string resolved)
     {
-        if (_reporterRoot is not { } root)
+        if (_reporterRoot is not { } root || _resolvedReporterRoot is not { } resolvedRoot)
         {
             return null;
         }
 
         var comparison = _platform.PathComparison;
 
-        // Both of its forms must stand inside: a link inside the root that resolves outside it is
-        // a read of what it points at, which is outside what the reporter may read.
-        if (new[] { asked, resolved }.All(form => PathContainment.IsInsideOrSame(root, form, comparison)))
+        // Both of its forms must stand inside, each in the root as it is spelled: the path as asked
+        // inside the root by either of its names - as given, a link it is reached through kept, or
+        // where that resolves - and where it resolves inside where the root resolves, for a link
+        // inside the root that resolves outside it is a read of what it points at, which is outside
+        // what the reporter may read.
+        if ((PathContainment.IsInsideOrSame(root, asked, comparison) || PathContainment.IsInsideOrSame(resolvedRoot, asked, comparison))
+            && PathContainment.IsInsideOrSame(resolvedRoot, resolved, comparison))
         {
             return null;
         }
@@ -606,10 +626,7 @@ public sealed partial class AgentPolicy
                 }
             }
 
-            if (MovedTo(command, places) is { } moved)
-            {
-                places.Add(moved);
-            }
+            places.AddRange(MovedTo(command, places));
 
             // wsl starting a root user, and schtasks running a task as another account: neither is
             // a word the list above holds, and both are as root.
@@ -986,37 +1003,48 @@ public sealed partial class AgentPolicy
     }
 
     /// <summary>
-    /// The directory a command moves the commands after it to - <c>cd</c>, <c>pushd</c>,
-    /// <c>chdir</c>, PowerShell's <c>Set-Location</c> - as a path is resolved against the places
-    /// already reached; the home where it names none, and null where it is no such command or names
-    /// a place this cannot tell.
+    /// Every directory a command moves the commands after it to - <c>cd</c>, <c>pushd</c>,
+    /// <c>chdir</c>, PowerShell's <c>Set-Location</c> - spelled as a path asked is, against every
+    /// place already reached, for a subshell's <c>cd</c> ends with it and a drive's two readings are
+    /// both places a <c>cd</c> may have gone: each place a spelling of it may reach, the home where it
+    /// names none, and none where it is no such command or names a place this cannot tell.
     /// </summary>
-    private string? MovedTo(IReadOnlyList<string> command, IReadOnlyList<string> places)
+    /// <exception cref="NotSupportedException">The command's moves reach more places than <see cref="MaxPlaces"/>, which this does not follow, so no decision is made on it.</exception>
+    private IReadOnlyList<string> MovedTo(IReadOnlyList<string> command, IReadOnlyList<string> places)
     {
         var environment = CommandAnalysis.EnvironmentOf(command);
 
         if (environment == command.Count
             || !new[] { "cd", "pushd", "chdir", "Set-Location", "sl" }.Contains(CommandAnalysis.Name(command[environment]), StringComparer.OrdinalIgnoreCase))
         {
-            return null;
+            return [];
         }
 
         var target = command.Skip(environment + 1).FirstOrDefault(word => !word.StartsWith('-') || word == "-");
 
         if (target == "-")
         {
-            return null;
+            return [];
         }
+
+        IReadOnlyList<string> moved;
 
         try
         {
-            return target is null ? _platform.HomeDirectory : Path.GetFullPath(HomeExpanded(target), places[^1]);
+            moved = [.. places.SelectMany(place => Spelled(target ?? "~", place)).Except(places, StringComparer.OrdinalIgnoreCase).Distinct(StringComparer.OrdinalIgnoreCase)];
         }
         catch (Exception exception) when (exception is ArgumentException or System.Security.SecurityException or PathTooLongException)
         {
-            return null;
+            return [];
         }
+
+        return places.Count + moved.Count <= MaxPlaces
+            ? moved
+            : throw new NotSupportedException($"its moves reach more than {MaxPlaces} places, which this does not follow");
     }
+
+    /// <summary>The most places a command's moves are followed to; past them it is not decided, and so denied.</summary>
+    public const int MaxPlaces = 64;
 
     /// <summary>
     /// Whether <paramref name="word"/> names a path into a credential slot or a Claude Code
@@ -1056,11 +1084,11 @@ public sealed partial class AgentPolicy
 
         foreach (var (candidate, place) in candidates.Where(candidate => candidate.Length > 0).Distinct().SelectMany(candidate => places.Distinct().Select(place => (candidate, place))))
         {
-            string asked;
+            IReadOnlyList<string> readings;
 
             try
             {
-                asked = Spelled(candidate, place);
+                readings = Spelled(candidate, place);
             }
             catch (Exception exception) when (exception is ArgumentException or System.Security.SecurityException or PathTooLongException)
             {
@@ -1070,7 +1098,7 @@ public sealed partial class AgentPolicy
 
             // A pattern the shell expands names every path it may match: refused where one of them
             // may be a slot or a Claude Code directory, or lie beneath one.
-            if (asked.IndexOfAny(['*', '?', '[']) >= 0)
+            foreach (var asked in readings.Where(reading => reading.IndexOfAny(['*', '?', '[']) >= 0))
             {
                 if (_slots.FirstOrDefault(slot => GlobReaches(asked, slot)) is not null)
                 {
@@ -1089,7 +1117,7 @@ public sealed partial class AgentPolicy
                 }
             }
 
-            foreach (var form in new[] { asked, _fileSystem.ResolveLinks(asked) })
+            foreach (var form in readings.SelectMany(asked => new[] { asked, Resolved(asked) }))
             {
                 if (_slots.Any(slot => PathContainment.IsInsideOrSame(slot, form, Refusals)))
                 {
@@ -1154,7 +1182,8 @@ public sealed partial class AgentPolicy
     /// <summary>
     /// One path decision, made on the path as asked and as resolved, each spelled whole: a
     /// restriction is tried on both, so no path reaches through a link past a rule that was written
-    /// for where it lands. A path this cannot read, or one blank, is undecided.
+    /// for where it lands - and on each place a spelling of it may reach, allowed only where every
+    /// one of them is. A path this cannot read, or one blank, is undecided.
     /// </summary>
     private AgentPolicyAnswer Decide(string path, Func<string, string, AgentPolicyAnswer> decide)
     {
@@ -1165,9 +1194,15 @@ public sealed partial class AgentPolicy
                 throw new ArgumentException("it names no path");
             }
 
-            var asked = Spelled(path, _ground.WorkingDirectory);
+            foreach (var asked in Spelled(path, _ground.WorkingDirectory))
+            {
+                if (decide(asked, Resolved(asked)) is AgentPolicyAnswer.Denied denied)
+                {
+                    return denied;
+                }
+            }
 
-            return decide(asked, _fileSystem.ResolveLinks(asked));
+            return AgentPolicyAnswer.Allow;
         }
         catch (Exception exception) when (Undecidable(exception))
         {
@@ -1176,28 +1211,105 @@ public sealed partial class AgentPolicy
     }
 
     /// <summary>
-    /// <paramref name="path"/> spelled whole, as the system would reach it: a home expanded
-    /// (<c>~</c>, <c>$HOME</c>, <c>%USERPROFILE%</c>), a device prefix dropped (<c>\\?\</c>,
-    /// <c>\\.\</c>), made absolute against <paramref name="directory"/> - on Windows each short name
-    /// along it given as its long name, as far as it exists, as the runtime makes a path absolute.
+    /// Every place <paramref name="path"/> may reach, each spelled whole as the system would reach
+    /// it: a home expanded (<c>~</c>, <c>$HOME</c>, <c>$USERPROFILE</c>, <c>%USERPROFILE%</c>), made
+    /// absolute against <paramref name="directory"/> as <see cref="Plain"/> makes one. On Windows a
+    /// shell's spelling of a drive - <c>/c/x</c> as Git Bash spells <c>C:\x</c>, <c>/cygdrive/c/x</c>,
+    /// <c>/mnt/c/x</c> - reaches the drive in the shell that spells it so and <c>\c\x</c> on the
+    /// current drive in one that does not: both places are given, the drive's first, and a refusal
+    /// holds where it holds for either.
     /// </summary>
-    private string Spelled(string path, string directory)
+    private IReadOnlyList<string> Spelled(string path, string directory)
     {
         var text = HomeExpanded(path.Trim());
+        IReadOnlyList<string> readings = OnWindows && DriveSpelled(text) is { } drive ? [drive, text] : [text];
 
-        foreach (var (prefix, replacement) in new[] { (@"\\?\UNC\", @"\\"), (@"\\?\", string.Empty), (@"\\.\", string.Empty), ("//?/UNC/", "//"), ("//?/", string.Empty), ("//./", string.Empty) })
+        return [.. readings.Select(reading => Plain(reading, directory)).Distinct(StringComparer.OrdinalIgnoreCase)];
+    }
+
+    /// <summary>
+    /// <paramref name="path"/> made absolute against <paramref name="directory"/> as the runtime makes
+    /// it - on Windows each short name along it given as its long name, as far as it exists - and on
+    /// Windows with no device prefix left (<see cref="Undeviced"/>): dropped from the text, and from
+    /// what the runtime makes of it, which turns a prefix spelled with mixed separators
+    /// (<c>\/?/C:/x</c>) into one of its own (<c>\\?\C:\x</c>). The one spelling of every place this
+    /// compares: a path asked, where it resolves, where a command moves to, and the ground's own.
+    /// </summary>
+    private string Plain(string path, string directory)
+    {
+        var whole = Path.GetFullPath(Undeviced(path), directory);
+
+        // Each prefix dropped shortens the path, so the runtime's spelling of it is plain in a few turns.
+        for (var undeviced = Undeviced(whole); !ReferenceEquals(undeviced, whole); undeviced = Undeviced(whole))
         {
-            if (text.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            whole = Path.GetFullPath(undeviced, directory);
+        }
+
+        return whole;
+    }
+
+    /// <summary>A path as it resolves, its links followed, spelled as <see cref="Plain"/> spells it: a link's target may name its place with a device prefix.</summary>
+    private string Resolved(string path) => Plain(_fileSystem.ResolveLinks(path), _ground.WorkingDirectory);
+
+    /// <summary>
+    /// <paramref name="path"/> without the device prefix at its start, on Windows - <c>\\?\</c>,
+    /// <c>\\.\</c> and <c>\??\</c>, in either separator, <c>UNC\</c> after one given as the
+    /// <c>\\</c> of the share it names - and the path itself where it has none, or where the
+    /// platform is another, whose system reads no prefix and where the runtime spells the path as
+    /// that system reaches it.
+    /// </summary>
+    /// <exception cref="NotSupportedException">The prefix names a device that is no drive and no share - a volume by its id, a pipe - whose place this cannot tell, so no decision is made on it.</exception>
+    private string Undeviced(string path)
+    {
+        if (!OnWindows
+            || path.Length < 4
+            || !IsSeparator(path[0])
+            || !IsSeparator(path[3])
+            || !((IsSeparator(path[1]) && path[2] is '?' or '.') || (path[1] == '?' && path[2] == '?')))
+        {
+            return path;
+        }
+
+        var rest = path[4..];
+
+        if (rest.Length >= 4 && rest.StartsWith("UNC", StringComparison.OrdinalIgnoreCase) && IsSeparator(rest[3]))
+        {
+            return @"\\" + rest[4..];
+        }
+
+        return rest.Length >= 2 && char.IsAsciiLetter(rest[0]) && rest[1] == ':' && (rest.Length == 2 || IsSeparator(rest[2]))
+            ? rest
+            : throw new NotSupportedException($"'{path}' names a device that is no drive and no share, whose place this cannot tell");
+    }
+
+    /// <summary>
+    /// The drive a shell's POSIX spelling of one names - <c>/c/x</c> as Git Bash and MSYS spell
+    /// <c>C:\x</c>, <c>/cygdrive/c/x</c> as Cygwin does, <c>/mnt/c/x</c> as WSL does - as Windows
+    /// spells it; null where the path spells no drive so.
+    /// </summary>
+    private static string? DriveSpelled(string path)
+    {
+        foreach (var mount in new[] { "/", "/cygdrive/", "/mnt/" })
+        {
+            if (path.StartsWith(mount, StringComparison.OrdinalIgnoreCase)
+                && path.Length > mount.Length
+                && char.IsAsciiLetter(path[mount.Length])
+                && (path.Length == mount.Length + 1 || path[mount.Length + 1] == '/'))
             {
-                text = replacement + text[prefix.Length..];
-                break;
+                return $"{char.ToUpperInvariant(path[mount.Length])}:\\{path[(mount.Length + 1)..].TrimStart('/')}";
             }
         }
 
-        return Path.GetFullPath(text, directory);
+        return null;
     }
 
-    /// <summary>The path with a home at its start expanded to the user's own: <c>~</c>, <c>$HOME</c>, <c>${HOME}</c>, <c>$env:HOME</c>, <c>$env:USERPROFILE</c> and <c>%USERPROFILE%</c>.</summary>
+    /// <summary>Whether the platform is Windows, whose paths take a device prefix and a shell's spelling of a drive.</summary>
+    private bool OnWindows => _platform.Current is PlatformId.Windows;
+
+    /// <summary>Whether <paramref name="character"/> separates a path on Windows, either way it is written.</summary>
+    private static bool IsSeparator(char character) => character is '\\' or '/';
+
+    /// <summary>The path with a home at its start expanded to the user's own: <c>~</c>, <c>$HOME</c>, <c>${HOME}</c>, <c>$env:HOME</c>, <c>$USERPROFILE</c>, <c>${USERPROFILE}</c>, <c>$env:USERPROFILE</c> and <c>%USERPROFILE%</c>.</summary>
     private string HomeExpanded(string path)
     {
         if (path == "~" || path.StartsWith("~/", StringComparison.Ordinal) || path.StartsWith(@"~\", StringComparison.Ordinal))
@@ -1205,7 +1317,7 @@ public sealed partial class AgentPolicy
             return _platform.HomeDirectory + path[1..];
         }
 
-        foreach (var home in new[] { "${HOME}", "$HOME", "$env:HOME", "$env:USERPROFILE", "%USERPROFILE%" })
+        foreach (var home in new[] { "${HOME}", "$HOME", "$env:HOME", "${USERPROFILE}", "$USERPROFILE", "$env:USERPROFILE", "%USERPROFILE%" })
         {
             if (path.StartsWith(home, StringComparison.OrdinalIgnoreCase)
                 && (path.Length == home.Length || path[home.Length] is '/' or '\\'))
@@ -1274,9 +1386,9 @@ public sealed partial class AgentPolicy
     /// <summary>The path made absolute as the runtime makes it - on Windows each short name along it given as its long name, as far as it exists - its trailing separator gone.</summary>
     private static string Whole(string path) => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
 
-    /// <summary>Every directory of the ground, resolved once, its duplicates gone.</summary>
+    /// <summary>Every directory of the ground, resolved once and spelled as every path asked is, its duplicates gone.</summary>
     private IReadOnlyList<string> Resolve(IReadOnlyList<string> directories)
         => [.. directories
-            .Select(directory => _fileSystem.ResolveLinks(Whole(directory)))
+            .Select(directory => Resolved(Whole(directory)))
             .Distinct(StringComparer.FromComparison(_platform.PathComparison))];
 }

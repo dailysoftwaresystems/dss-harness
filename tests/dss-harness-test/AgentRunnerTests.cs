@@ -901,23 +901,91 @@ public sealed class AgentRunnerTests
     }
 
     /// <summary>
-    /// A result a client answers that does not hold together is no ending the engine could read: the run fails, naming
-    /// the client and what is wrong, and <c>result.json</c> says that - never the result as the client answered it.
+    /// A step whose policy names a directory that cannot be compared with the one the agent starts in - blank, or holding
+    /// a character no path does - is never begun either, and recorded as one: the comparison's failure is the
+    /// configuration's, never a fault that escapes before the run's records are written.
     /// </summary>
-    [Fact]
-    public async Task AResultThatDoesNotHoldTogether_FailsTheRun_NamingWhy()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AStepWhosePolicyDirectoryCannotBeCompared_IsNeverStarted_AndRecordedSo(bool holdsNul)
     {
         using var temp = new TempDirectory();
+        var client = new FakeClient();
+        var resolvedFrom = holdsNul ? WorkDirectory(temp) + "\0" : string.Empty;
+        var step = Step(temp) with { Ground = PolicyGrounds.Of(resolvedFrom, [], [WorkDirectory(temp)], [], [], []) };
+
+        var result = await Runner(client).RunAsync(step, events: null, TestContext.Current.CancellationToken);
+
+        Assert.Equal((AgentRunStatus.NotStarted, AgentNotStartedBecause.ConfigurationWrong), (result.Status, result.NotStartedBecause));
+        Assert.StartsWith(
+            $"The step's policy resolves the agent's paths from '{resolvedFrom}', and the agent starts in '{WorkDirectory(temp)}': the two cannot be compared (",
+            result.Error,
+            StringComparison.Ordinal);
+        Assert.Null(client.Run);
+        Assert.Equal(["runStarted", "runFinished"], Lines(temp).Select(LineKind));
+        Assert.Equal((AgentRunStatus.NotStarted, AgentNotStartedBecause.ConfigurationWrong, result.Error), (ReadResult(temp).Status, ReadResult(temp).NotStartedBecause, ReadResult(temp).Error));
+    }
+
+    /// <summary>
+    /// A result a client answers that does not hold together is no ending the engine could read: the run fails, naming
+    /// the client and what is wrong, and <c>result.json</c> says that - never the result as the client answered it. What a
+    /// failed run keeps of it stays: what the run did and used and cost, the children it could not end, the session files
+    /// it removed, its session and the keys refused; what only its own ending carried goes.
+    /// </summary>
+    [Fact]
+    public async Task AResultThatDoesNotHoldTogether_FailsTheRun_NamingWhy_AndKeepsWhatAFailedRunKeeps()
+    {
+        using var temp = new TempDirectory();
+        var usage = new AgentUsageReport(new AgentUsage(100, 20, 0, 0, 0, 0), [], new AgentCost(Reported: 0.25m));
         var client = new FakeClient
         {
-            Script = (_, _, _) => Task.FromResult(new AgentRunResult(AgentRunStatus.Completed, FinalText: "done") { Limit = new AgentAccountLimit(BalanceSpent: true) }),
+            Script = (_, _, _) => Task.FromResult(new AgentRunResult(AgentRunStatus.Completed, FinalText: "done", Session: "s-1", Usage: usage, Turns: 3)
+            {
+                Limit = new AgentAccountLimit(BalanceSpent: true),
+                Uncontained = ["child 41 left a process its container could not reach"],
+                SessionFilesRemoved = ["s-1.jsonl"],
+                KeysRefused = ["KEY_A"],
+            }),
         };
 
         var result = await Runner(client).RunAsync(Step(temp), events: null, TestContext.Current.CancellationToken);
 
         const string Said = "Client 'fake' answered a result that does not hold together: it ended Completed, and names an account's limit, which only a run that ended RateLimited does.";
-        Assert.Equal((AgentRunStatus.Failed, Said, null, null), (result.Status, result.Error, result.Limit, result.FinalText));
-        Assert.Equal((AgentRunStatus.Failed, Said), (ReadResult(temp).Status, ReadResult(temp).Error));
+        Assert.Equal((AgentRunStatus.Failed, Said, null), (result.Status, result.Error, result.Limit));
+
+        foreach (var kept in new[] { result, ReadResult(temp) })
+        {
+            Assert.Equal((AgentRunStatus.Failed, Said, "s-1", 3, "done"), (kept.Status, kept.Error, kept.Session, kept.Turns, kept.FinalText));
+            Assert.Equal(0.25m, kept.Usage?.Cost?.Usd);
+            Assert.Equal(["child 41 left a process its container could not reach"], kept.Uncontained);
+            Assert.Equal(["s-1.jsonl"], kept.SessionFilesRemoved);
+            Assert.Equal(["KEY_A"], kept.KeysRefused);
+        }
+    }
+
+    /// <summary>
+    /// Where what a failed run would keep of a client's result is itself what does not hold together - a count below
+    /// naught, a list never written - the run fails bare, naming why, for no result is written that does not read back.
+    /// </summary>
+    [Fact]
+    public async Task AResultWhoseKeptPartsDoNotHoldTogether_FailsTheRunBare()
+    {
+        using var temp = new TempDirectory();
+        var client = new FakeClient
+        {
+            Script = (_, _, _) => Task.FromResult(new AgentRunResult(AgentRunStatus.Completed, FinalText: "done", Session: "s-1", Turns: -1) { KeysRefused = ["KEY_A"] }),
+        };
+
+        var result = await Runner(client).RunAsync(Step(temp), events: null, TestContext.Current.CancellationToken);
+
+        const string Said = "Client 'fake' answered a result that does not hold together: its turns is -1, and a count is never below naught.";
+
+        foreach (var bare in new[] { result, ReadResult(temp) })
+        {
+            Assert.Equal((AgentRunStatus.Failed, Said, "model-x", null, 0, null), (bare.Status, bare.Error, bare.Model, bare.Session, bare.Turns, bare.FinalText));
+            Assert.Empty(bare.KeysRefused);
+        }
     }
 
     /// <summary>

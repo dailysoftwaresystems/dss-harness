@@ -41,13 +41,15 @@ namespace DssHarness.Core.Agents;
 /// Every launch of every client passes here, so this is where no agent starts while this tool itself runs elevated: such
 /// a step is recorded <see cref="AgentNotStartedBecause.Elevated"/> before any client is taken, in the words of the
 /// policy's own refusal (<see cref="AgentPolicy.RefusedWhileElevated"/>), for every rule of that policy assumes a user's
-/// powers. So is where a step whose policy resolves the agent's paths from another directory than the one it starts in
-/// is recorded <see cref="AgentNotStartedBecause.ConfigurationWrong"/>: that policy would decide for places it is not
-/// asked about.
+/// powers. So is where a step whose policy resolves the agent's paths from another directory than the one it starts in -
+/// or from one that cannot be compared with it, blank or holding a character no path does - is recorded
+/// <see cref="AgentNotStartedBecause.ConfigurationWrong"/>: that policy would decide for places it is not asked about.
 /// </para>
 /// <para>
 /// A result is what <c>result.json</c> says and what the engine reads: one a client answers that does not hold together
-/// (<see cref="AgentRunResult.Problem"/>) ends the run failed, naming why, and none is written that does not.
+/// (<see cref="AgentRunResult.Problem"/>) ends the run failed, naming why, keeping what a failed run keeps
+/// (<see cref="AgentRunResult.FailedFor"/>) - bare where what it would keep is itself what is wrong - and none is
+/// written that does not.
 /// </para>
 /// </remarks>
 /// <param name="clients">The clients registered, one of which works each step.</param>
@@ -262,15 +264,15 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                 null);
         }
 
-        if (step.Ground is { } ground && !PathContainment.AreSame(ground.WorkingDirectory, step.Workspace.WorkingDirectory, _platform.PathComparison))
+        if (step.Ground is { } ground && Elsewhere(ground.WorkingDirectory, step.Workspace.WorkingDirectory) is { } elsewhere)
         {
-            // Never begun: a policy that resolves the agent's paths from one directory while it starts in another decides
-            // for places it is not asked about.
+            // Never begun: a policy that resolves the agent's paths from one directory while it starts in another - or
+            // in one that cannot be told from it - decides for places it is not asked about.
             return (new AgentRunResult(
                 AgentRunStatus.NotStarted,
                 AgentNotStartedBecause.ConfigurationWrong,
                 Model: step.Model,
-                Error: $"The step's policy resolves the agent's paths from '{ground.WorkingDirectory}', but the agent starts in '{step.Workspace.WorkingDirectory}'."),
+                Error: elsewhere),
                 null);
         }
 
@@ -293,14 +295,19 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
         {
             var result = await client.RunAsync(Resolved(step, directory, mask, messages), pump, pump.Stopping).ConfigureAwait(false);
 
-            // An answer that does not hold together is no ending the engine could read: the run failed, saying why.
-            return (result.Problem() is { } wrong
-                ? new AgentRunResult(
-                    AgentRunStatus.Failed,
-                    Model: step.Model,
-                    Error: mask.Redact($"Client '{client.Name}' answered a result that does not hold together: {wrong}."))
-                : result,
-                null);
+            if (result.Problem() is not { } wrong)
+            {
+                return (result, null);
+            }
+
+            // An answer that does not hold together is no ending the engine could read: the run failed, saying why, and
+            // keeps what a failed run keeps of what the client reported - what it did and used, the children it could not
+            // end, the session files it removed, the keys refused. Where what it keeps is itself what is wrong, it fails
+            // bare.
+            var error = mask.Redact($"Client '{client.Name}' answered a result that does not hold together: {wrong}.");
+            var failed = result.FailedFor(error);
+
+            return (failed.Problem() is null ? failed : new AgentRunResult(AgentRunStatus.Failed, Model: step.Model, Error: error), null);
         }
         catch (Exception ex)
         {
@@ -315,6 +322,27 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
         finally
         {
             messages.Complete();
+        }
+    }
+
+    /// <summary>
+    /// Why a policy resolving the agent's paths from <paramref name="resolvedFrom"/> is not the agent's, which starts in
+    /// <paramref name="startsIn"/>: the two are other directories, or one is no directory the two could be compared by
+    /// (blank, or holding a character no path does); null where they are the same.
+    /// </summary>
+    /// <param name="resolvedFrom">The directory the step's policy resolves the agent's paths from.</param>
+    /// <param name="startsIn">The directory the agent starts in.</param>
+    private string? Elsewhere(string resolvedFrom, string startsIn)
+    {
+        try
+        {
+            return PathContainment.AreSame(resolvedFrom, startsIn, _platform.PathComparison)
+                ? null
+                : $"The step's policy resolves the agent's paths from '{resolvedFrom}', but the agent starts in '{startsIn}'.";
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException or System.Security.SecurityException)
+        {
+            return $"The step's policy resolves the agent's paths from '{resolvedFrom}', and the agent starts in '{startsIn}': the two cannot be compared ({ex.Message}).";
         }
     }
 

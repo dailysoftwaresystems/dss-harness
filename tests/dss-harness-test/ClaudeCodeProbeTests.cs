@@ -1037,6 +1037,7 @@ public sealed class ClaudeCodeProbeTests
                     ["DISABLE_AUTOUPDATER"] = "1",
                     ["CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"] = "1",
                     ["CLAUDE_CODE_RETRY_WATCHDOG"] = "0",
+                    ["CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR"] = "1",
                     ["PROBE_MARKER"] = "settings",
                 },
             };

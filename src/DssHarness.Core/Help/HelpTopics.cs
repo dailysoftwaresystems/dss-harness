@@ -2495,7 +2495,13 @@ public static class HelpTopics
         builder.AppendLine("No agent starts while this tool itself runs elevated: its step is recorded never started,");
         builder.AppendLine("saying so, before any client is taken. A path is decided as asked and as resolved, and a");
         builder.AppendLine("refusal's places compare in any case on every system, a Windows short name read as its long");
-        builder.AppendLine("one.");
+        builder.AppendLine("one. On Windows a device prefix (\\\\?\\, \\\\.\\, \\??\\) is dropped from a path and from what");
+        builder.AppendLine("the runtime makes of it - one naming no drive and no share, a volume by its id or a pipe, is");
+        builder.AppendLine("a place it cannot tell, and denied - and a shell's spelling of a drive (/c/x, /cygdrive/c/x,");
+        builder.AppendLine("/mnt/c/x) is read both as the drive (C:\\x) and as the directory it names on the current");
+        builder.AppendLine("drive, an action allowed only where both are; a cd is followed the same way, from every");
+        builder.AppendLine($"place the command reached before it, up to {Agents.Policy.AgentPolicy.MaxPlaces} places, past which the command is");
+        builder.AppendLine("denied.");
         AppendWrapped(builder, ShellReadingProse());
         builder.AppendLine("The protected paths (agentPolicy.protectedPaths, true where nothing is said) are the");
         builder.AppendLine("writes Claude Code guards, refused on every client so a role is not stopped on one where");
@@ -2516,7 +2522,9 @@ public static class HelpTopics
         builder.AppendLine("narrowed to the run's directory alone, with no command, no write and no web at all. For");
         builder.AppendLine("Claude Code the same policy is rendered, never re-decided, into the launch's settings: an");
         builder.AppendLine("ask rule for every tool the launch has, and the restriction rules as deny rules, absolute");
-        builder.AppendLine("once for each root, a read of each credential slot and Claude Code directory beside them -");
+        builder.AppendLine("once for each root in the POSIX form Claude Code matches (//c/x for C:\\x), a Write rule as");
+        builder.AppendLine("the Edit rule Claude Code holds its file tools' writes to, a read of each credential slot");
+        builder.AppendLine("and Claude Code directory beside them -");
         builder.AppendLine("a second layer, for the engine is asked about every call");
         builder.AppendLine("and answers from this policy in its own process. This is policy, not a sandbox - a");
         builder.AppendLine("program an agent runs opens files as the user it runs as, a file of the credential slot");
@@ -2570,9 +2578,11 @@ public static class HelpTopics
             + "runs (a -c or --config-env of any key but the ones that only shape what git prints, --exec-path, "
             + "GIT_CONFIG and the names through which git finds its programs and hooks) is the git config it is - and so "
             + "are gh pr merge, gh workflow run and gh run rerun, the gh api endpoints and GraphQL mutations that merge "
-            + "or start CI, and gh alias set, for never merges, never starts CI binds the agents too; git's own files "
-            + "(Write(.git), Write(.git/**)) are not written by a tool, whatever protectedPaths says; and an agent does "
-            + "not edit its own policy or what the next launch loads: .harness-config/config.json, "
+            + "or start CI, and gh alias set, for never merges, never starts CI binds the agents too; git's own files - a "
+            + ".git, file or directory, at any depth beneath a root and in any case, a nested repository's and a "
+            + $"submodule's too ({Agents.Policy.AgentPolicy.GitsOwnRule}) - are not written by a tool, whatever "
+            + "protectedPaths says; and an agent does not edit its own policy or what the next launch loads: "
+            + ".harness-config/config.json, "
             + ".harness-config/orchestrators/**, .harness-config/skills/** (but for a step whose writes names one "
             + "skill's own directory by name, .harness-config/skills/<name>/..., which opens that skill alone), "
             + ".harness-config/runner/**, .claude/settings*.json and .mcp.json are not written. Whatever any switch says, "

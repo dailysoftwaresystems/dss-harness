@@ -855,8 +855,37 @@ public sealed class AgentPolicyTests
 
         foreach (var path in new[] { ".git", ".GIT", ".Git/config", Path.Combine(ground.Main, ".GIT", "hooks", "pre-commit") })
         {
-            Assert.Equal("Write(.git/**)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Write(path)).Rule);
+            Assert.Equal("Write(**/.git/**)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Write(path)).Rule);
         }
+    }
+
+    /// <summary>
+    /// A nested repository's or a submodule's .git is git's own as the root's is, at any depth beneath any root and in
+    /// any case: its hooks run as surely. A name that merely begins with .git is no repository's.
+    /// </summary>
+    [Fact]
+    public void ANestedRepositorysGit_IsGitsOwnToo_AtAnyDepthAndInAnyCase()
+    {
+        using var ground = Ground();
+        var policy = ground.Policy(protectedPaths: false);
+
+        foreach (var path in new[]
+        {
+            "vendor/lib/.git/hooks/post-checkout",
+            "vendor/lib/.git",
+            "modules/sub/.GIT/config",
+            Path.Combine(ground.WorkDirectory, "clone", ".Git", "hooks", "pre-commit"),
+        })
+        {
+            var denied = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Write(path));
+
+            Assert.Equal(AgentPolicy.GitsOwnRule, denied.Rule);
+            Assert.Contains("is git's own: written by git's verbs and this tool's, never by an agent's file tool", denied.Reason, StringComparison.Ordinal);
+        }
+
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Write("vendor/lib/.github/workflows/ci.yml"));
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Write("vendor/lib/.gitignore"));
+        Assert.Equal(AgentPolicyAnswer.Allow, ground.Policy(worktreeRules: false, protectedPaths: false).Write("vendor/lib/.git/hooks/post-checkout"));
     }
 
     [Fact]
@@ -884,6 +913,97 @@ public sealed class AgentPolicyTests
         Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Read(@"\\.\" + Path.Combine(ground.Slot, "keys.env"))).Rule);
     }
 
+    /// <summary>
+    /// Every device spelling of a place is the place: the object manager's <c>\??\</c>, a prefix spelled with mixed
+    /// separators that the runtime itself turns into <c>\\?\</c>, and a cd to a device spelling that the paths after it
+    /// are read against. A device that is no drive and no share - a volume by its id - is a place this cannot tell.
+    /// </summary>
+    [Fact]
+    public void OnWindows_EveryDeviceSpellingOfASlot_IsStillTheSlot()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows reads a device prefix.");
+
+        using var ground = Ground(PlatformId.Windows);
+        var policy = ground.Policy();
+        var keys = Path.Combine(ground.Slot, "keys.env");
+
+        foreach (var spelled in new[] { @"\??\" + keys, @"\/?/" + keys.Replace('\\', '/'), "//?/" + keys.Replace('\\', '/'), @"\\.\" + keys.Replace('\\', '/') })
+        {
+            Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Read(spelled)).Rule);
+            Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run((IReadOnlyList<string>)["cat", spelled])).Rule);
+        }
+
+        var workflows = Path.Combine(ground.Main, ".harness-config", "workflows");
+
+        foreach (var command in new[] { $@"cd '\\?\{workflows}' && cat .env/keys.env", $@"cd '\/?/{workflows.Replace('\\', '/')}' && cat .env/keys.env", $@"cd '\??\{workflows}' && cat .env/keys.env" })
+        {
+            Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(command)).Rule);
+        }
+
+        Assert.Equal("undecided", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Read(@"\\?\Volume{0c1d3a5e-0000-0000-0000-100000000000}\keys.env")).Rule);
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Read(@"\\?\" + Path.Combine(ground.Worktree, "src", "a.cs")));
+    }
+
+    /// <summary>
+    /// On Windows a shell's spelling of a drive - Git Bash's <c>/c/x</c>, Cygwin's <c>/cygdrive/c/x</c>, WSL's
+    /// <c>/mnt/c/x</c> - is read as the drive, so no such spelling reaches a slot; and as the directory it also names on the
+    /// current drive, in a shell that does not read it so, an action allowed only where both readings are.
+    /// </summary>
+    [Fact]
+    public void OnWindows_AShellsSpellingOfADrive_IsReadAsTheDriveAndAsTheDirectoryItNames()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows reads a shell's spelling of a drive.");
+
+        using var ground = Ground(PlatformId.Windows);
+        var policy = ground.Policy();
+        var keys = Path.Combine(ground.Slot, "keys.env");
+
+        foreach (var spelled in new[] { Posix(keys), "/cygdrive" + Posix(keys), "/mnt" + Posix(keys), Posix(keys).ToUpperInvariant() })
+        {
+            Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Read(spelled)).Rule);
+            Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run($"cat {spelled}")).Rule);
+        }
+
+        // A cd to the drive's spelling, and a relative path after it, and after a further cd.
+        var workflows = Posix(Path.Combine(ground.Main, ".harness-config", "workflows"));
+
+        Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run($"cd {workflows} && cat .env/keys.env")).Rule);
+        Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run($"cd {Posix(ground.Main)} && cd .harness-config/workflows && cat .env/keys.env")).Rule);
+
+        // Both readings are decided: a read allowed by both is allowed, and a write into the worktree by the drive's
+        // spelling is refused for the directory the same text names on the current drive, outside the writable roots.
+        var file = Path.Combine(ground.Worktree, "src", "a.cs");
+
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Read(Posix(file)));
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Write(file));
+
+        var denied = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Write(Posix(file)));
+
+        Assert.Equal("the writable roots", denied.Rule);
+        Assert.StartsWith($"'{Path.GetPathRoot(ground.Worktree)}{Posix(file)[1..].Replace('/', '\\')}' is outside the writable roots", denied.Reason, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Elsewhere than Windows no path takes a device prefix: <c>//./x</c> is <c>/x</c> there and <c>//?/x</c> is <c>/?/x</c>,
+    /// as the system reads them - never <c>x</c> beneath the working directory, which would be another place.
+    /// </summary>
+    [Fact]
+    public void ElsewhereThanWindows_ADevicePrefixIsNone_AndThePathIsWhatTheSystemReads()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Windows reads a device prefix.");
+
+        using var ground = Ground();
+        var policy = ground.Policy();
+        var keys = Path.Combine(ground.Slot, "keys.env");
+
+        Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Read("//." + keys)).Rule);
+        Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run($"cat //.{keys}")).Rule);
+        Assert.Equal("the writable roots", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Write("//?" + Path.Combine(ground.Worktree, "x.txt"))).Rule);
+    }
+
+    /// <summary>A Windows path as Git Bash spells it: <c>C:\x\y</c> is <c>/c/x/y</c>.</summary>
+    private static string Posix(string path) => $"/{char.ToLowerInvariant(path[0])}{path[2..].Replace('\\', '/')}";
+
     [Fact]
     public void AClaudeCodeDirectory_IsNeitherReadNorWrittenNorNamedByItsHome()
     {
@@ -894,12 +1014,18 @@ public sealed class AgentPolicyTests
         Assert.Equal("the Claude Code directories", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Read(Path.Combine(ground.ClaudeDirectory, ".credentials.json"))).Rule);
         Assert.Equal("the Claude Code directories", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Write(Path.Combine(ground.ClaudeDirectory, "settings.json"))).Rule);
 
-        foreach (var command in new[] { $"cat ~/{name}/.credentials.json", $"cat $HOME/{name}/x", $"cat ${{HOME}}/{name}/x", $"echo x>~/{name}/x", $"tool --file=~/{name}/x", $"ssh host 'cat ~/{name}/x'" })
+        foreach (var command in new[]
+        {
+            $"cat ~/{name}/.credentials.json", $"cat $HOME/{name}/x", $"cat ${{HOME}}/{name}/x", $"echo x>~/{name}/x", $"tool --file=~/{name}/x", $"ssh host 'cat ~/{name}/x'",
+            $"cat $USERPROFILE/{name}/x", $"cat ${{USERPROFILE}}/{name}/x",
+        })
         {
             Assert.Equal("the Claude Code directories", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(command)).Rule);
         }
 
         Assert.Equal("the Claude Code directories", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Read($"~/{name}/x")).Rule);
+        Assert.Equal("the Claude Code directories", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Read($"$USERPROFILE/{name}/x")).Rule);
+        Assert.Equal("the Claude Code directories", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Read($"${{USERPROFILE}}/{name}/x")).Rule);
     }
 
     [Fact]
@@ -914,6 +1040,30 @@ public sealed class AgentPolicyTests
 
         // A cd in a subshell ends with it; the paths after are tried where the string stands too.
         Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run($"(cd /) ; cd {ground.Main.Replace('\\', '/')}; cat .harness-config/workflows/.env/k")).Rule);
+    }
+
+    /// <summary>
+    /// A cd is followed from every place the command reached before it: a relative cd after a subshell's is tried where
+    /// the subshell left it and where the string stands, for the subshell's ended with it. A command whose moves reach
+    /// more places than are followed is not decided, and so denied.
+    /// </summary>
+    [Fact]
+    public void ACdIsFollowedFromEveryPlaceReached_AndOneMovingPastTheBound_IsDenied()
+    {
+        using var ground = Ground();
+        var policy = ground.Policy();
+        var parent = Path.GetDirectoryName(ground.Main)!.Replace('\\', '/');
+        var name = Path.GetFileName(ground.Main);
+
+        Assert.Equal(
+            "the credential slots",
+            Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run($"cd {parent} && (cd /) ; cd {name}/.harness-config/workflows; cat .env/keys.env")).Rule);
+
+        var bounded = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(string.Join(" && ", Enumerable.Range(0, 8).Select(at => $"cd d{at}"))));
+
+        Assert.Equal("undecided", bounded.Rule);
+        Assert.Contains($"its moves reach more than {AgentPolicy.MaxPlaces} places, which this does not follow", bounded.Reason, StringComparison.Ordinal);
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("cd a && cd b && cd ../c && make"));
     }
 
     [Fact]
@@ -1012,7 +1162,7 @@ public sealed class AgentPolicyTests
 
         var denied = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Write(".git/config"));
 
-        Assert.Equal("Write(.git/**)", denied.Rule);
+        Assert.Equal("Write(**/.git/**)", denied.Rule);
         Assert.Contains("is git's own: written by git's verbs and this tool's, never by an agent's file tool, whatever protectedPaths says", denied.Reason, StringComparison.Ordinal);
 
         var off = ground.Policy(worktreeRules: false, protectedPaths: false);
@@ -1062,7 +1212,15 @@ public sealed class AgentPolicyTests
     public void TheToolsOwnStateIsWrittenByItsVerbsAlone_ItsOwnWorkDirectoryAloneExcepted()
     {
         using var ground = Ground();
-        var policy = ground.Policy(stateDirectories: [Path.Combine(ground.Main, ".orchestrators"), Path.Combine(ground.Main, "build", "worktrees")]);
+
+        // Laid out as a run lays it: the agent's worktree under the worktrees root, its work
+        // directory under the run's - each strictly inside the tool's own state.
+        var worktree = Path.Combine(ground.Main, "build", "worktrees", "a1");
+        var work = Path.Combine(ground.Main, ".orchestrators", "r1", "work", "a1");
+        var policy = ground.Policy(
+            stateDirectories: [Path.Combine(ground.Main, ".orchestrators"), Path.Combine(ground.Main, "build", "worktrees")],
+            worktree: worktree,
+            workDirectory: work);
 
         var denied = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Write(Path.Combine(ground.Main, ".orchestrators", "r1", "flow.json")));
 
@@ -1070,9 +1228,12 @@ public sealed class AgentPolicyTests
         Assert.Contains("the tool's own state: written by its verbs alone, never by an agent's - its own place within it alone excepted", denied.Reason, StringComparison.Ordinal);
 
         // The agent's own work directory and worktree are writable roots of their own: the one
-        // exception the rule makes, in whichever switch the rest of the rules stand.
-        Assert.Equal(AgentPolicyAnswer.Allow, policy.Write(Path.Combine(ground.WorkDirectory, "notes.md")));
+        // exception the rule makes, in whichever switch the rest of the rules stand - and another
+        // agent's place in the same state is not this agent's.
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Write(Path.Combine(work, "notes.md")));
         Assert.Equal(AgentPolicyAnswer.Allow, policy.Write("src/a.cs"));
+        Assert.Equal("the tool's own state", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Write(Path.Combine(ground.Main, ".orchestrators", "r1", "work", "a2", "notes.md"))).Rule);
+        Assert.Equal("the tool's own state", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Write(Path.Combine(ground.Main, "build", "worktrees", "a2", "src", "a.cs"))).Rule);
 
         var off = ground.Policy(worktreeRules: false, protectedPaths: false, stateDirectories: [Path.Combine(ground.Main, ".orchestrators")]);
 
@@ -1147,6 +1308,39 @@ public sealed class AgentPolicyTests
         Assert.Equal("the reporter's reads", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("git status")).Rule);
         Assert.Equal("the reporter's reads", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Write(Path.Combine(run, "x.md"))).Rule);
         Assert.Equal("the reporter's reads", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Web("https://example.com/x")).Rule);
+    }
+
+    /// <summary>
+    /// A reporter whose root is given by a link reads it by that name and by the name it resolves to: the path as asked
+    /// stands in the root as given, where it lands in where the root resolves. A link inside the root that leads out of it
+    /// is still a read of what it points at.
+    /// </summary>
+    [Fact]
+    public void TheReporterReadsItsRootThroughTheLinkItIsGivenBy()
+    {
+        using var ground = Ground();
+        var run = Path.Combine(ground.Main, ".orchestrators", "r1");
+        var outside = Path.Combine(ground.Main, "elsewhere");
+        var linked = Path.Combine(ground.WorkDirectory, "run");
+        Directory.CreateDirectory(run);
+        Directory.CreateDirectory(outside);
+        TestLinks.OrSkip(() =>
+        {
+            TestLinks.DirectoryLink(linked, run);
+            TestLinks.DirectoryLink(Path.Combine(run, "out"), outside);
+        });
+        var policy = ground.Policy(reporterRoot: linked);
+
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Read(linked));
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Read(Path.Combine(linked, "flow.json")));
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Search(linked));
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Read(Path.Combine(run, "flow.json")));
+
+        var denied = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Read(Path.Combine(linked, "out", "x.md")));
+
+        Assert.Equal("the reporter's reads", denied.Rule);
+        Assert.EndsWith($"is outside what this agent may read: {linked.Replace('\\', '/')}/**", denied.Reason, StringComparison.Ordinal);
+        Assert.Equal("the reporter's reads", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Read(Path.Combine(ground.Main, "README.md"))).Rule);
     }
 
     [Fact]
@@ -1290,14 +1484,16 @@ public sealed class AgentPolicyTests
             IReadOnlyList<string>? writes = null,
             string? reporterRoot = null,
             IReadOnlyList<string>? stateDirectories = null,
-            string? home = null)
+            string? home = null,
+            string? worktree = null,
+            string? workDirectory = null)
             => new(
                 new PassThroughFileSystem(new PhysicalFileSystem(FilePermissionsFactory.Create())),
                 HostDoubles.Platform(platform, home: home),
                 PolicyGrounds.Of(
-                    Worktree,
+                    worktree ?? Worktree,
                     [Main],
-                    [Worktree, WorkDirectory],
+                    [worktree ?? Worktree, workDirectory ?? WorkDirectory],
                     [Slot],
                     [ClaudeDirectory],
                     restrictions ?? [],
