@@ -132,7 +132,7 @@ public static class WorkflowStepTypes
         new(
             "graphify-codebase",
             [
-                new("in", $"the create-agent step whose agent's worktree it would sync the view of; refused, since {GraphViewsLater}"),
+                new("in", "the create-agent step whose agent's worktree it syncs the view of, held against the base - the base synced first where the run has none; an agent that only reads has the base for its view"),
                 new("rebuild", "extract every file of the tree it syncs again, reusing no extract"),
                 new("failOn", "what a graph with files it could not read does: never (the default), the step ends done and lists them, or incomplete, it fails"),
             ],
@@ -356,9 +356,6 @@ public static class WorkflowStepTypes
 
     /// <summary>The <c>failOn</c> a <c>graphify-codebase</c> step fails under where its graph has files it could not read.</summary>
     public const string GraphIncomplete = "incomplete";
-
-    /// <summary>Why a <c>graphify-codebase</c> step that names an agent's worktree with <c>in</c> is refused: the one place it is said.</summary>
-    public const string GraphViewsLater = "this build syncs the main checkout's graph alone, and an agent's view of it is a later part of the graph: leave 'in' out";
 
     /// <summary>
     /// The time limit of one attempt of <paramref name="step"/>, in minutes: its own <c>timeoutMinutes</c>, else its type's

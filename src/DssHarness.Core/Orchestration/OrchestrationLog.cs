@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
@@ -47,8 +48,8 @@ public sealed class OrchestrationLog(IFileSystem fileSystem, TimeProvider clock,
     /// <param name="command">The command.</param>
     /// <param name="outcome">What it did.</param>
     /// <remarks>
-    /// The whole file is written again with the line added, under the one lock every append to it takes, so a line is
-    /// never half written and two appends never interleave.
+    /// The whole file is written again with the line added - the lines before it copied a block at a time - under the one
+    /// lock every append to it takes, so a line is never half written and two appends never interleave.
     /// </remarks>
     public string Append(OrchestratorLayout orchestrator, string subject, string command, CommandOutcome outcome)
     {
@@ -63,8 +64,17 @@ public sealed class OrchestrationLog(IFileSystem fileSystem, TimeProvider clock,
 
         MachineWideFile.Update(path, Window, () =>
         {
-            var before = _fileSystem.FileExists(path) ? _fileSystem.ReadAllText(path) : string.Empty;
-            _fileSystem.WriteAllTextAtomic(path, before + line + "\n");
+            // The lines before it copied as they are, a block at a time: the log grows with its orchestrator.
+            _fileSystem.WriteAtomic(path, written =>
+            {
+                if (_fileSystem.FileExists(path))
+                {
+                    using var before = _fileSystem.OpenRead(path);
+                    before.CopyTo(written);
+                }
+
+                written.Write(Encoding.UTF8.GetBytes(line + "\n"));
+            });
             return true;
         });
 
@@ -109,7 +119,7 @@ public sealed class OrchestrationLog(IFileSystem fileSystem, TimeProvider clock,
         var events = new List<OrchestrationEvent>();
         var number = 0;
 
-        foreach (var line in _fileSystem.ReadAllText(path).Split('\n'))
+        foreach (var (line, _) in FileLines.Read(_fileSystem, path))
         {
             number++;
 

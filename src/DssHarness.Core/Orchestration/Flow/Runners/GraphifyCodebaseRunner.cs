@@ -10,20 +10,23 @@ namespace DssHarness.Core.Orchestration.Flow;
 
 /// <summary>
 /// The <c>graphify-codebase</c> step: one sync of the run's one codebase graph, wherever the flow puts it - each instance,
-/// visit and retry one more, a sync of a tree that did not change reading nothing. Its output is that sync's; a graph is a
-/// map, never red, and fails only where its <c>failOn: incomplete</c> says a file it could not read fails it.
+/// visit and retry one more, a sync of a tree that did not change reading nothing - of the base, or with <c>in</c> of that
+/// agent's view. Its output is that sync's; a graph is a map, never red, and fails only where its <c>failOn: incomplete</c>
+/// says a file it could not read fails it.
 /// </summary>
 /// <param name="contextLoader">Finds the repository and its configuration.</param>
 /// <param name="platform">This machine.</param>
 /// <param name="graph">Syncs the graph.</param>
 /// <param name="pathBudget">Checks the graph's longest path fits under the run's directory.</param>
 /// <param name="extractors">The implementations of the contract, whose names and versions the graph's longest path holds.</param>
+/// <param name="store">Reads the record of the agent a step names with <c>in</c>.</param>
 public sealed class GraphifyCodebaseRunner(
     IHarnessContextLoader contextLoader,
     IHostPlatform platform,
     ICodebaseGraphService graph,
     IPathBudget pathBudget,
-    CodeGraphExtractors extractors) : IFlowStepTypeRunner
+    CodeGraphExtractors extractors,
+    OrchestrationStore store) : IFlowStepTypeRunner
 {
     /// <inheritdoc/>
     public string Type => "graphify-codebase";
@@ -34,13 +37,6 @@ public sealed class GraphifyCodebaseRunner(
         ArgumentNullException.ThrowIfNull(run);
 
         var (place, context) = await FlowStepRunners.PlaceOf(run, contextLoader, platform, cancellationToken).ConfigureAwait(false);
-
-        // The check of the definition refuses it first (V52); a definition held in memory is never checked.
-        if (run.Step.In is { } named)
-        {
-            return FlowStepResult.Ended(passed: false, HarnessExit.Refused, $"'{run.Instance}' names in: '{named}', and {WorkflowStepTypes.GraphViewsLater}. Nothing was synced.");
-        }
-
         var layout = OrchestratorLayout.Of(context.Layout, place.Run);
 
         if (Budget(layout, place, context.Config.Worktrees) is { } refusal)
@@ -48,10 +44,32 @@ public sealed class GraphifyCodebaseRunner(
             return FlowStepResult.Ended(passed: false, HarnessExit.Refused, refusal);
         }
 
-        var shape = place.Definition.CodebaseGraph?.Shape ?? CodebaseGraphShape.Default;
-        var synced = await graph.SyncAsync(
-            new CodebaseGraphSync(context.Layout, layout, shape, context.Config.Worktrees.Root, run.Step.Rebuild == true, run.Instance),
-            cancellationToken).ConfigureAwait(false);
+        var request = new CodebaseGraphSync(context.Layout, layout, place.Definition.CodebaseGraph?.Shape ?? CodebaseGraphShape.Default, context.Config.Worktrees.Root, run.Step.Rebuild == true, run.Instance);
+
+        if (run.Step.In is { } named)
+        {
+            // The view of the worktree of the agent the step's create-agent made, which the step waited for; an agent that
+            // only reads has none, and reads the main tree: its view is the base.
+            if (run.WorksIn is not { } agent)
+            {
+                return FlowStepResult.Ended(passed: false, HarnessExit.InternalError, $"'{run.Instance}' syncs the view of the agent '{named}' makes, and the run has made none for it");
+            }
+
+            switch (store.ReadAgent(layout, agent))
+            {
+                case { State: AgentStates.Live } record when record.WorktreePath(context.Layout) is { } worktree:
+                    request = request with { Agent = agent, Worktree = worktree };
+                    break;
+
+                case { State: AgentStates.Live, Reads: true }:
+                    break;
+
+                default:
+                    return FlowStepResult.Ended(passed: false, HarnessExit.Refused, $"'{run.Instance}' syncs the view of agent '{agent}' of '{place.Run}', which has no worktree to list. Nothing was synced.");
+            }
+        }
+
+        var synced = await graph.SyncAsync(request, cancellationToken).ConfigureAwait(false);
 
         var output = Output(synced);
 

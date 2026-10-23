@@ -271,6 +271,17 @@ public sealed class HarnessFactory
 
     public AgentService AgentService { get; }
 
+    /// <summary>The sync of a run's codebase graph over this build's implementations, as the tool registers it: one for the factory, as one for the process.</summary>
+    public DssHarness.Core.Codebase.CodebaseGraphService CodebaseGraph
+        => _codebaseGraph ??= new(GitClient, FileSystem, OrchestrationStore, DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild, Platform, RunningTool, Output, TimeProvider.System);
+
+    /// <summary>The engine's own syncs of a run's codebase graph, over <see cref="CodebaseGraph"/>.</summary>
+    public DssHarness.Core.Orchestration.Flow.FlowGraphSyncs GraphSyncs
+        => _graphSyncs ??= new(CodebaseGraph, OrchestrationStore, new DssHarness.Core.Orchestration.Flow.FoldLedger(OrchestrationStore, FileSystem, TimeProvider.System), ContextLoader, Platform, FileSystem, Output, TimeProvider.System);
+
+    private DssHarness.Core.Codebase.CodebaseGraphService? _codebaseGraph;
+    private DssHarness.Core.Orchestration.Flow.FlowGraphSyncs? _graphSyncs;
+
     /// <summary>Creates a git repository with one commit, so worktrees can be added.</summary>
     public async Task InitializeGitRepositoryAsync(string path, CancellationToken cancellationToken)
     {

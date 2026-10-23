@@ -224,7 +224,7 @@ public sealed class ChildSessions(IFileSystem fileSystem, IProcessIdentity ident
         var file = OrchestratorLayout.ChildFile(stepDirectory, leader);
 
         _fileSystem.CreateDirectory(OrchestratorLayout.ChildrenDirectory(stepDirectory));
-        _fileSystem.WriteAllTextAtomic(file, JsonSerializer.Serialize(record, JsonStateFile.Options) + "\n");
+        JsonStateFile.Write(_fileSystem, file, record);
 
         return file;
     }
@@ -279,7 +279,7 @@ public sealed class ChildSessions(IFileSystem fileSystem, IProcessIdentity ident
 
         try
         {
-            var record = JsonSerializer.Deserialize<ChildSessionRecord>(_fileSystem.ReadAllText(file), JsonStateFile.Options);
+            var record = JsonStateFile.Read<ChildSessionRecord>(_fileSystem, file);
 
             if (record?.Problem() is null && record is not null)
             {

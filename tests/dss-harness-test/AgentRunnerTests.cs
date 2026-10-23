@@ -1209,10 +1209,10 @@ public sealed class AgentRunnerTests
             return base.OpenForAppend(path);
         }
 
-        public override void WriteAllTextAtomic(string path, string contents)
+        public override void WriteAtomic(string path, Action<Stream> write)
         {
             Written.Add(path);
-            base.WriteAllTextAtomic(path, contents);
+            base.WriteAtomic(path, write);
         }
     }
 }

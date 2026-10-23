@@ -626,7 +626,7 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
 
         if (step.Output is not null)
         {
-            _fileSystem.WriteAllTextAtomic(Path.Combine(directory, OrchestratorLayout.StepOutputFileName), JsonSerializer.Serialize(step.Output, JsonStateFile.Options) + "\n");
+            JsonStateFile.Write(_fileSystem, Path.Combine(directory, OrchestratorLayout.StepOutputFileName), step.Output);
         }
 
         _store.WriteStepRecord(Path.Combine(directory, OrchestratorLayout.StepRecordFileName), StepRecordOf(step));

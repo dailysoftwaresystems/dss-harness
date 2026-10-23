@@ -110,7 +110,7 @@ public sealed class MemoryGaugeTests
     /// <summary>The real file system, except that what Linux publishes of its memory may not be read.</summary>
     private sealed class UnreadableMeminfo(IFileSystem inner) : PassThroughFileSystem(inner)
     {
-        public override string ReadAllText(string path)
-            => path == "/proc/meminfo" ? throw new UnauthorizedAccessException("Access to the path '/proc/meminfo' is denied.") : base.ReadAllText(path);
+        public override Stream OpenRead(string path)
+            => path == "/proc/meminfo" ? throw new UnauthorizedAccessException("Access to the path '/proc/meminfo' is denied.") : base.OpenRead(path);
     }
 }

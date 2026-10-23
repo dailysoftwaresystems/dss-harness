@@ -181,6 +181,7 @@ public static class ServiceRegistration
         services.AddSingleton<IFlowStepTypeRunner, CiReadStepRunner>();
         services.AddSingleton<IFlowStepTypeRunner, CiWaitStepRunner>();
         services.AddSingleton<FoldLedger>();
+        services.AddSingleton<FlowGraphSyncs>();
         services.AddSingleton<IFlowStepTypeRunner, FoldStepRunner>();
         services.AddSingleton<IFlowStepTypeRunner, DeleteAgentStepRunner>();
         services.AddSingleton<IFlowStepTypeRunner, RefreshStepRunner>();

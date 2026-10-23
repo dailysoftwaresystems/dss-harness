@@ -2395,8 +2395,8 @@ public sealed class LegRunServiceTests
     /// <summary>The real file system, except that what is mounted reads as <paramref name="mounts"/> says.</summary>
     private sealed class MountsListing(IFileSystem inner, string mounts) : PassThroughFileSystem(inner)
     {
-        public override string ReadAllText(string path)
-            => path == WindowsDriveMounts.MountsFile ? mounts : base.ReadAllText(path);
+        public override Stream OpenRead(string path)
+            => path == WindowsDriveMounts.MountsFile ? Reading(mounts) : base.OpenRead(path);
     }
 
     /// <summary>
@@ -3049,8 +3049,8 @@ public sealed class LegRunServiceTests
         public override PathKind KindOf(string path)
             => path.EndsWith(LogOwnership.OwnerSuffix, StringComparison.Ordinal) ? PathKind.File : base.KindOf(path);
 
-        public override string ReadAllText(string path)
-            => path.EndsWith(LogOwnership.OwnerSuffix, StringComparison.Ordinal) ? Owner : base.ReadAllText(path);
+        public override Stream OpenRead(string path)
+            => path.EndsWith(LogOwnership.OwnerSuffix, StringComparison.Ordinal) ? Reading(Owner) : base.OpenRead(path);
     }
 
     /// <summary>

@@ -128,7 +128,7 @@ public static class FlowReports
             ["leftForAPerson"] = new JsonArray([.. left.Select(line => JsonValue.Create(line))]),
         };
 
-        fileSystem.WriteAllTextAtomic(layout.ReportJsonFile, json.ToJsonString(JsonStateFile.Options) + "\n");
+        JsonStateFile.Write(fileSystem, layout.ReportJsonFile, json);
         fileSystem.WriteAllTextAtomic(layout.ReportFile, MarkdownOf(flow, questions, handoffs, summary, exitCode, left) + "\n");
 
         return left;

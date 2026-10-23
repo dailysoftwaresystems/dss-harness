@@ -4606,12 +4606,14 @@ public sealed class WorkflowValidatorTests
             WorkflowValidator.Validate(definition, hasCommitTemplate: false, files: null, languages: DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild.Languages));
     }
 
-    /// <summary>A graph step that names any step with <c>in</c> is refused when its workflow is checked: this build syncs the main checkout's graph alone.</summary>
+    /// <summary>
+    /// A graph step's <c>in</c> names a create-agent step, whose agent's view it syncs, as a build's does; one that names
+    /// another kind of step is refused when its workflow is checked.
+    /// </summary>
     [Fact]
-    public void AGraphStepsIn_IsRefused_ForAnAgentsViewIsALaterPartOfTheGraph()
+    public void AGraphStepsIn_NamesACreateAgentStep_AsABuildsDoes()
     {
-        Assert.Equal(
-            [$"step 'map' names in: 'make', and {WorkflowStepTypes.GraphViewsLater}"],
+        Assert.Empty(
             Problems("""
             name: flow
             steps:
@@ -4625,7 +4627,7 @@ public sealed class WorkflowValidatorTests
             """));
 
         Assert.Equal(
-            [$"step 'map' names in: 'look', and {WorkflowStepTypes.GraphViewsLater}"],
+            ["step 'map' works in 'look', which is a orient step; a worktree is made by a create-agent step"],
             Problems("""
                 name: flow
                 steps:

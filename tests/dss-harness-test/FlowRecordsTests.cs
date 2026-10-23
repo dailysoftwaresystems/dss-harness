@@ -732,9 +732,9 @@ public sealed class FlowRecordsTests
         /// <summary>Each file written atomically, in the order they were written.</summary>
         public List<string> Writes { get; } = [];
 
-        public override void WriteAllTextAtomic(string path, string contents)
+        public override void WriteAtomic(string path, Action<Stream> write)
         {
-            base.WriteAllTextAtomic(path, contents);
+            base.WriteAtomic(path, write);
             Writes.Add(path);
         }
     }

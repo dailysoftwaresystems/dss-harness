@@ -64,7 +64,7 @@ public sealed class HoldAwakeStore(IFileSystem fileSystem, Func<string> path)
     {
         ArgumentNullException.ThrowIfNull(state);
 
-        _fileSystem.WriteAllTextAtomic(Location, JsonSerializer.Serialize(state, JsonOptions));
+        JsonStateFile.Write(_fileSystem, Location, state, JsonOptions);
     }
 
     /// <summary>The hold that stands, or <see langword="null"/> where none does, or its state cannot be read.</summary>
@@ -73,7 +73,7 @@ public sealed class HoldAwakeStore(IFileSystem fileSystem, Func<string> path)
         try
         {
             return _fileSystem.FileExists(Location)
-                ? JsonSerializer.Deserialize<HoldAwakeState>(_fileSystem.ReadAllText(Location), JsonOptions)
+                ? JsonStateFile.Read<HoldAwakeState>(_fileSystem, Location, JsonOptions)
                 : null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)

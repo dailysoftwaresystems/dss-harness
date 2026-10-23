@@ -2651,9 +2651,10 @@ public sealed class FlowCoordinator
                 continue;
             }
 
-            // A step that names an agent claims that agent's own tree, as its instance's create-agent made it; a step of
-            // others claims its target's alone, each target admitted on its own.
-            var claims = FlowClaims.Of(instance.Step, _runnerFacts, instance.Step.Others is null ? WorksInOf(instance) : TargetOf(instance));
+            // A step that names an agent claims that agent's own tree, as its instance's create-agent made it - one that
+            // goes on with another's work, that step's; a step of others claims its target's alone, each target admitted
+            // on its own.
+            var claims = FlowClaims.Of(ClaimingStepOf(instance), _runnerFacts, instance.Step.Others is null ? WorksInOf(instance) : TargetOf(instance));
 
             if (claims.Any(claim => held.Concat(reserved).Any(claim.Conflicts)))
             {
@@ -4624,11 +4625,14 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>The create-agent step a fold family step's <c>of</c> names, found in its own scope or one around it.</summary>
-    private FlowInstance? CreateStepOf(FlowInstance instance, string made)
+    private static FlowInstance? CreateStepOf(FlowInstance instance, string made) => DeclaredOf(instance, made, "create-agent");
+
+    /// <summary>The step of <paramref name="type"/> named <paramref name="name"/>, found in <paramref name="instance"/>'s own scope or one around it.</summary>
+    private static FlowInstance? DeclaredOf(FlowInstance instance, string name, string type)
     {
         for (var at = instance.DeclaredScope; at is not null; at = at.Parent)
         {
-            if (at.Members.TryGetValue(made, out var found) && found.Step.Type == "create-agent")
+            if (at.Members.TryGetValue(name, out var found) && found.Step.Type == type)
             {
                 return found;
             }
@@ -4636,6 +4640,36 @@ public sealed class FlowCoordinator
 
         return null;
     }
+
+    /// <summary>
+    /// The instance whose agent, access and tree <paramref name="instance"/> works with: its own - or, for a reason step that
+    /// goes on with another's work, that of the step it resumes, found in its own scope or one around it, through each
+    /// resume in turn.
+    /// </summary>
+    private static FlowInstance WorkingOf(FlowInstance instance)
+    {
+        var at = instance;
+        var seen = new HashSet<FlowInstance>(ReferenceEqualityComparer.Instance);
+
+        while (at.Step is { Type: "reason", Resume: { } resumed } step
+            && !string.Equals(resumed, step.Name, StringComparison.Ordinal)
+            && seen.Add(at)
+            && DeclaredOf(at, resumed, "reason") is { } found)
+        {
+            at = found;
+        }
+
+        return at;
+    }
+
+    /// <summary>
+    /// The step as its claims are read: its own - a reason step that goes on with another's work with that step's <c>in</c>
+    /// and access, which it names none of.
+    /// </summary>
+    private static WorkflowStep ClaimingStepOf(FlowInstance instance)
+        => WorkingOf(instance) is { } working && !ReferenceEquals(working, instance)
+            ? instance.Step with { In = working.Step.In, Access = working.Step.Access }
+            : instance.Step;
 
     /// <summary>Gives back every claim <paramref name="instance"/> still holds.</summary>
     private void Release(FlowInstance instance)
@@ -5993,17 +6027,20 @@ public sealed class FlowCoordinator
 
     /// <summary>
     /// The agent this step works in: the one its <c>in</c> or <c>of</c> names, once its create-agent has made it - the
-    /// name it was given beforehand names no agent yet; null for the create-agent itself and every step that names none.
+    /// name it was given beforehand names no agent yet - or, for a reason step that goes on with another's work, the one
+    /// that step works in; null for the create-agent itself and every step that names none.
     /// </summary>
-    private string? WorksInOf(FlowInstance instance)
+    private static string? WorksInOf(FlowInstance instance)
     {
-        if (instance.Step.Type == "create-agent"
-            || instance.Step.In is null && instance.Step.Of is null)
+        var working = WorkingOf(instance);
+
+        if (working.Step.Type == "create-agent"
+            || working.Step.In is null && working.Step.Of is null)
         {
             return null;
         }
 
-        return CreateStepOf(instance, instance.Step.In ?? instance.Step.Of!) is { State: FlowInstanceState.Done, Made: { } made } ? made : null;
+        return CreateStepOf(working, working.Step.In ?? working.Step.Of!) is { State: FlowInstanceState.Done, Made: { } made } ? made : null;
     }
 
     /// <summary>What one instance waits on, where it waits: the question it asked, the resume, or what admission says keeps it - a dependency, the quiet an alone step waits for, a claim, a counter, a redirect, the resume.</summary>

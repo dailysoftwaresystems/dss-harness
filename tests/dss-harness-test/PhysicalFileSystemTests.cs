@@ -44,9 +44,12 @@ public sealed class PhysicalFileSystemTests
         Assert.Equal(1024, Create().DirectorySize(tree));
     }
 
-    /// <summary>A file read whole is read while another program holds it open for writing, as a stream read of it is: a log being appended to among them.</summary>
+    /// <summary>
+    /// A file read whole - as bytes or as text - is read while another program holds it open for writing, as a stream read
+    /// of it is: a log being appended to among them.
+    /// </summary>
     [Fact]
-    public async Task ReadAllBytes_ReadsAFileAnotherProgramHoldsOpenForWriting()
+    public async Task AWholeRead_ReadsAFileAnotherProgramHoldsOpenForWriting()
     {
         using var temp = new TempDirectory();
         var path = temp.Combine("growing.log");
@@ -59,7 +62,72 @@ public sealed class PhysicalFileSystemTests
 
             Assert.Equal("line one\n"u8.ToArray(), fileSystem.ReadAllBytes(path));
             Assert.Equal("line one\n"u8.ToArray(), await fileSystem.ReadAllBytesAsync(path, TestContext.Current.CancellationToken));
+            Assert.Equal("line one\n", fileSystem.ReadAllText(path));
         }
+    }
+
+    /// <summary>
+    /// A file's lines are split at a line feed alone - a carriage return before it kept - each saying whether a feed ended
+    /// it, with no empty line after a file's last feed, a byte order mark left out or read as the encoding it names, a line
+    /// longer than a block whole, and a feed at either edge of a block read once.
+    /// </summary>
+    [Fact]
+    public void FileLines_AreSplitAtALineFeedAlone_EachSayingWhetherOneEndedIt()
+    {
+        using var temp = new TempDirectory();
+        var longLine = new string('x', 40_000);
+        var path = temp.Combine("log.jsonl");
+        File.WriteAllBytes(path, [.. Encoding.UTF8.Preamble, .. Encoding.UTF8.GetBytes($"a\r\n\nb\rc\n{longLine}\ntorn")]);
+        var ended = temp.WriteFile("ended.jsonl", "a\n");
+
+        Assert.Equal(
+            [new FileLine("a\r", true), new FileLine("", true), new FileLine("b\rc", true), new FileLine(longLine, true), new FileLine("torn", false)],
+            FileLines.Read(Create(), path));
+        Assert.Equal([new FileLine("a", true)], FileLines.Read(Create(), ended));
+        Assert.Empty(FileLines.Read(Create(), temp.WriteFile("empty.jsonl", "")));
+
+        // A feed that is the last character of a block read, and one that is the first of the next.
+        var block = 16 << 10;
+        Assert.Equal(
+            [new FileLine(new string('y', block - 1), true), new FileLine("z", true)],
+            FileLines.Read(Create(), temp.WriteFile("last.jsonl", new string('y', block - 1) + "\nz\n")));
+        Assert.Equal(
+            [new FileLine(new string('y', block), true), new FileLine("z", false)],
+            FileLines.Read(Create(), temp.WriteFile("first.jsonl", new string('y', block) + "\nz")));
+
+        // A file a byte order mark says is UTF-16.
+        var wide = temp.Combine("wide.jsonl");
+        File.WriteAllBytes(wide, [.. Encoding.Unicode.Preamble, .. Encoding.Unicode.GetBytes("a\u00E7\nb")]);
+        Assert.Equal([new FileLine("a\u00E7", true), new FileLine("b", false)], FileLines.Read(Create(), wide));
+    }
+
+    /// <summary>A whole read of a file's bytes stops when asked, rather than reading the rest of the file.</summary>
+    [Fact]
+    public async Task ReadAllBytesAsync_StopsWhenAsked()
+    {
+        using var temp = new TempDirectory();
+        var path = temp.WriteFile("large.bin", new string('a', 1 << 20));
+        using var stopped = new CancellationTokenSource();
+        await stopped.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Create().ReadAllBytesAsync(path, stopped.Token));
+    }
+
+    /// <summary>A file read as text is UTF-8, its byte order mark left out, unless a byte order mark says it is another encoding.</summary>
+    [Fact]
+    public void ReadAllText_ReadsUtf8_OrTheEncodingAByteOrderMarkNames()
+    {
+        using var temp = new TempDirectory();
+        var plain = temp.Combine("plain.txt");
+        var marked = temp.Combine("marked.txt");
+        var wide = temp.Combine("wide.txt");
+        File.WriteAllBytes(plain, Encoding.UTF8.GetBytes("a\u00E7\u00E3o"));
+        File.WriteAllBytes(marked, [.. Encoding.UTF8.Preamble, .. Encoding.UTF8.GetBytes("a\u00E7\u00E3o")]);
+        File.WriteAllBytes(wide, [.. Encoding.Unicode.Preamble, .. Encoding.Unicode.GetBytes("a\u00E7\u00E3o")]);
+
+        Assert.Equal("a\u00E7\u00E3o", Create().ReadAllText(plain));
+        Assert.Equal("a\u00E7\u00E3o", Create().ReadAllText(marked));
+        Assert.Equal("a\u00E7\u00E3o", Create().ReadAllText(wide));
     }
 
     /// <summary>
@@ -544,6 +612,71 @@ public sealed class PhysicalFileSystemTests
 
         Assert.Equal("new", File.ReadAllText(path));
         Assert.Equal([path], Directory.GetFiles(temp.Path));
+    }
+
+    /// <summary>
+    /// A write that fails part of the way through leaves the file as it was, and no temporary file beside it: the rename
+    /// that puts the new file in place is never made.
+    /// </summary>
+    [Fact]
+    public void WriteAtomic_AWriteThatFails_LeavesTheFileAsItWas_AndNoTemporaryFileBehind()
+    {
+        using var temp = new TempDirectory();
+        var path = temp.WriteFile("record.json", "old");
+
+        var raised = Assert.Throws<IOException>(() => Create().WriteAtomic(path, stream =>
+        {
+            stream.Write("half of the new"u8);
+            throw new IOException("There is not enough space on the disk.");
+        }));
+
+        Assert.Equal("There is not enough space on the disk.", raised.Message);
+        Assert.Equal("old", File.ReadAllText(path));
+        Assert.Equal([path], Directory.GetFiles(temp.Path));
+    }
+
+    /// <summary>
+    /// A file a reader holds open, as every read here holds one - sharing its deletion - is replaced all the same, on every
+    /// system: the reader goes on reading the file it opened, and the next to open it reads the new one. A record is
+    /// streamed while it is read, and another sync may write it meanwhile.
+    /// </summary>
+    [Fact]
+    public void WriteAtomic_ReplacesAFileAReaderHoldsOpen_WhichGoesOnReadingTheOldOne()
+    {
+        using var temp = new TempDirectory();
+        var path = temp.WriteFile("graph.json", "old");
+        var fileSystem = Create();
+
+        using (var reader = new StreamReader(fileSystem.OpenRead(path)))
+        {
+            fileSystem.WriteAllTextAtomic(path, "new");
+
+            Assert.Equal("old", reader.ReadToEnd());
+            Assert.Equal("new", fileSystem.ReadAllText(path));
+        }
+
+        Assert.Equal([path], Directory.GetFiles(temp.Path));
+    }
+
+    /// <summary>
+    /// A large text is encoded a little at a time, never into one buffer: encoding it at once takes a buffer of the most
+    /// bytes it could encode to, three times its length, which the runtime's shared pool then keeps.
+    /// </summary>
+    [Fact]
+    public void WriteAllTextAtomic_EncodesALargeTextALittleAtATime()
+    {
+        using var temp = new TempDirectory();
+        var path = temp.Combine("large.txt");
+        var text = new string('a', 8 << 20);
+        var fileSystem = Create();
+        fileSystem.WriteAllTextAtomic(temp.Combine("warm.txt"), "warm");
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        fileSystem.WriteAllTextAtomic(path, text);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.Equal(text.Length, new FileInfo(path).Length);
+        Assert.True(allocated < text.Length / 8, $"writing a text of {text.Length:N0} characters allocated {allocated:N0} bytes");
     }
 
     [Fact]

@@ -3043,9 +3043,9 @@ public sealed class FlowServiceTests
         /// <summary>Reads <paramref name="path"/> as it is again.</summary>
         public void Mends(string path) => _broken.TryRemove(Path.GetFullPath(path), out _);
 
-        public override void WriteAllTextAtomic(string path, string contents)
+        public override void WriteAtomic(string path, Action<Stream> write)
         {
-            base.WriteAllTextAtomic(path, contents);
+            base.WriteAtomic(path, write);
             _ = Of(_written, path).TrySetResult();
         }
 
@@ -3065,10 +3065,10 @@ public sealed class FlowServiceTests
             _ = Of(_deleted, path).TrySetResult();
         }
 
-        public override string ReadAllText(string path)
+        public override Stream OpenRead(string path)
             => _broken.ContainsKey(Path.GetFullPath(path))
                 ? throw new InvalidOperationException("the disk said something no one expected.")
-                : base.ReadAllText(path);
+                : base.OpenRead(path);
 
         public override PathKind KindOf(string path)
         {

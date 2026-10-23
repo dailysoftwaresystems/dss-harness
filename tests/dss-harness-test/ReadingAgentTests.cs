@@ -536,10 +536,10 @@ public sealed class ReadingAgentTests
             base.CreateDirectory(path);
         }
 
-        public override void WriteAllTextAtomic(string path, string contents)
+        public override void WriteAtomic(string path, Action<Stream> write)
         {
             Written.Add(path);
-            base.WriteAllTextAtomic(path, contents);
+            base.WriteAtomic(path, write);
         }
 
         public override Task WriteAllBytesAtomicAsync(string path, byte[] contents, CancellationToken cancellationToken = default)

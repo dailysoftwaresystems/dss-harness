@@ -1349,9 +1349,10 @@ public sealed class AgentDeletionTests
     /// <summary>The real file system, except that recording the agent closed changes one file, as a program still writing it would.</summary>
     private sealed class ChangedOnClosingFileSystem(IFileSystem inner, string record, string changed) : PassThroughFileSystem(inner)
     {
-        public override void WriteAllTextAtomic(string path, string contents)
+        public override void WriteAtomic(string path, Action<Stream> write)
         {
-            base.WriteAllTextAtomic(path, contents);
+            var (contents, again) = WrittenText(write);
+            base.WriteAtomic(path, again);
 
             if (string.Equals(Path.GetFullPath(path), Path.GetFullPath(record), StringComparison.OrdinalIgnoreCase)
                 && contents.Contains($"\"state\": \"{AgentStates.Closed}\"", StringComparison.Ordinal))
@@ -1399,9 +1400,9 @@ public sealed class AgentDeletionTests
     /// </summary>
     private sealed class ChangedOnSeedWriteFileSystem(IFileSystem inner, string seed, string changed) : PassThroughFileSystem(inner)
     {
-        public override void WriteAllTextAtomic(string path, string contents)
+        public override void WriteAtomic(string path, Action<Stream> write)
         {
-            base.WriteAllTextAtomic(path, contents);
+            base.WriteAtomic(path, write);
 
             if (string.Equals(Path.GetFullPath(path), Path.GetFullPath(seed), StringComparison.OrdinalIgnoreCase))
             {

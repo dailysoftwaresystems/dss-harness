@@ -23,7 +23,7 @@ namespace DssHarness.Core.Orchestration;
 /// agents/&lt;agent&gt;/steps/&lt;instance&gt;/   one step the agent runs, or that runs in or for its worktree, everything of the step in it
 /// steps/&lt;instance&gt;/          one step of the run that no agent owns, the create-agent that makes an agent included
 /// graph/graph.json            the run's codebase graph: the base's manifest, every file it keeps with its blob, state and extract
-/// graph/symbols.json          the base's link result: every node and edge, with the digest of the manifest it was made from
+/// graph/symbols.jsonl         the base's link result, as lines: every node and edge, with the digest of the manifest it was made from
 /// graph/extracts/&lt;ab&gt;/&lt;name&gt;   one file's extract, written once, named by its blob, its path, its implementation and version
 /// graph/sync.jsonl            one line for each sync of the graph
 /// &lt;step&gt;/children/&lt;id&gt;.json   in either kind of step's directory, on Linux and macOS: a session a contained child of the step leads while it runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what carries a leg to a host leads while anything is in it
@@ -156,13 +156,16 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     public const string GraphManifestFileName = "graph.json";
 
     /// <summary>The name of the file the base's link result is kept in, in the graph's directory.</summary>
-    public const string GraphSymbolsFileName = "symbols.json";
+    public const string GraphSymbolsFileName = "symbols.jsonl";
 
     /// <summary>The name of the directory every file's extract is kept in, once, in the graph's directory.</summary>
     public const string GraphExtractsDirectoryName = "extracts";
 
     /// <summary>The name of the file one line is appended to for each sync of the graph, in its directory.</summary>
     public const string GraphSyncFileName = "sync.jsonl";
+
+    /// <summary>The name of the directory each agent's view of the graph is kept in, in the graph's directory.</summary>
+    public const string GraphViewsDirectoryName = "views";
 
     /// <summary>The extension of a file's extract.</summary>
     public const string GraphExtractExtension = ".json";
@@ -344,6 +347,17 @@ public sealed record OrchestratorLayout(string Name, string Directory)
 
     /// <summary>One line for each sync of the graph: when, which view, why, and what it listed, read and reused.</summary>
     public string GraphSyncFile => Path.Combine(GraphDirectory, GraphSyncFileName);
+
+    /// <summary>Where each agent's view of the graph is kept: what its worktree holds that the base does not.</summary>
+    public string GraphViewsDirectory => Path.Combine(GraphDirectory, GraphViewsDirectoryName);
+
+    /// <summary>The view of the graph of the agent <paramref name="agent"/>'s worktree.</summary>
+    /// <param name="agent">The agent's name.</param>
+    public string GraphViewFile(string agent)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(agent);
+        return Path.Combine(GraphViewsDirectory, agent + GraphExtractExtension);
+    }
 
     /// <summary>The extract named <paramref name="name"/> (<see cref="DssHarness.Core.Codebase.CodeGraphIds.ExtractName"/>).</summary>
     /// <param name="name">Its name, under the extracts directory.</param>

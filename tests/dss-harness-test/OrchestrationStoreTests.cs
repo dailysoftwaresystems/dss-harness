@@ -46,6 +46,27 @@ public sealed class OrchestrationStoreTests
             sink.Seen.Select(@event => @event with { Operation = null, Sequence = 0, At = default }));
     }
 
+    /// <summary>
+    /// A log keeps every line appended to it, in order: each append writes the file again with the lines before it, and a
+    /// read takes them a line at a time.
+    /// </summary>
+    [Fact]
+    public async Task ALog_KeepsEveryLineAppendedToIt_InOrder()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var log = new OrchestrationLog(kit.Harness.FileSystem, TimeProvider.System, kit.Harness.Output);
+        var file = kit.Layout.LogFile("ag");
+
+        foreach (var at in Enumerable.Range(1, 3))
+        {
+            log.Append(kit.Layout, "ag", $"command {at}", CommandOutcome.Ok($"done {at}"));
+        }
+
+        Assert.Equal(["command 1", "command 2", "command 3"], log.Read(file).Select(entry => entry.Command));
+        Assert.Equal(["done 1", "done 2", "done 3"], log.Read(file).Select(entry => entry.Message));
+    }
+
     /// <summary>An agent's record that does not read as one - in any of the ways a hand or a crash leaves it - is refused, naming its file.</summary>
     [Theory]
     [InlineData("not JSON")]

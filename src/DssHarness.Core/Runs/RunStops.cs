@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Text.Json;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Output;
@@ -260,7 +259,7 @@ public sealed class RunStops(IFileSystem fileSystem, IProcessIdentity identity, 
         => MachineWideFile.Written(
             $"The stop request '{file}'",
             until,
-            () => _fileSystem.WriteAllTextAtomic(file, JsonSerializer.Serialize(request, JsonStateFile.Options) + "\n"));
+            () => JsonStateFile.Write(_fileSystem, file, request));
 
     /// <summary>Removes a request, where one is there; one that cannot be removed is said, and left for the next to find it.</summary>
     private void Remove(string file, string command)

@@ -1,3 +1,4 @@
+using System.Text;
 using DssHarness.Core.FileSystem;
 
 namespace DssHarness.Tests;
@@ -53,13 +54,6 @@ internal class PassThroughFileSystem(IFileSystem inner) : IFileSystem
 
     public virtual IEnumerable<string> EnumerateDirectories(string path) => inner.EnumerateDirectories(path);
 
-    public virtual string ReadAllText(string path) => inner.ReadAllText(path);
-
-    public virtual byte[] ReadAllBytes(string path) => inner.ReadAllBytes(path);
-
-    public virtual Task<byte[]> ReadAllBytesAsync(string path, CancellationToken cancellationToken = default)
-        => inner.ReadAllBytesAsync(path, cancellationToken);
-
     public virtual Stream OpenRead(string path) => inner.OpenRead(path);
 
     public virtual IAppendFile OpenForAppend(string path) => inner.OpenForAppend(path);
@@ -73,9 +67,27 @@ internal class PassThroughFileSystem(IFileSystem inner) : IFileSystem
     public virtual Task WriteAllBytesAtomicAsync(string path, byte[] contents, CancellationToken cancellationToken = default)
         => inner.WriteAllBytesAtomicAsync(path, contents, cancellationToken);
 
-    public virtual void WriteAllTextAtomic(string path, string contents) => inner.WriteAllTextAtomic(path, contents);
+    public virtual void WriteAtomic(string path, Action<Stream> write) => inner.WriteAtomic(path, write);
 
     public virtual void ProtectSecretFile(string path) => inner.ProtectSecretFile(path);
+
+    /// <summary><paramref name="text"/>, as a file holding it reads: for a double that says what a file holds.</summary>
+    /// <param name="text">What the file holds.</param>
+    protected static Stream Reading(string text) => new MemoryStream(Encoding.UTF8.GetBytes(text));
+
+    /// <summary>
+    /// What <paramref name="write"/> writes, as text, and a write of those same bytes again: for a double that decides by
+    /// what a file is written holding, and still writes it.
+    /// </summary>
+    /// <param name="write">The write.</param>
+    protected static (string Text, Action<Stream> Again) WrittenText(Action<Stream> write)
+    {
+        using var buffer = new MemoryStream();
+        write(buffer);
+        var bytes = buffer.ToArray();
+
+        return (Encoding.UTF8.GetString(bytes), stream => stream.Write(bytes));
+    }
 }
 
 /// <summary>
@@ -91,8 +103,8 @@ internal sealed class Held(IFileSystem inner, string path, bool denied = false) 
     /// <summary>Why it cannot be read, as whatever reads it says.</summary>
     public const string Why = "it is held by another process";
 
-    public override string ReadAllText(string read)
-        => Path.GetFullPath(read) != Path.GetFullPath(path) ? base.ReadAllText(read)
+    public override Stream OpenRead(string read)
+        => Path.GetFullPath(read) != Path.GetFullPath(path) ? base.OpenRead(read)
             : denied ? throw new UnauthorizedAccessException(Why)
             : throw new IOException(Why);
 
@@ -114,15 +126,18 @@ internal sealed class FullDiskFileSystem(IFileSystem inner) : PassThroughFileSys
     /// <summary>Whether a write fails.</summary>
     public bool Full { get; set; }
 
-    public override void WriteAllTextAtomic(string path, string contents)
+    public override void WriteAtomic(string path, Action<Stream> write)
     {
         if (Full)
         {
             throw new IOException(Why);
         }
 
-        base.WriteAllTextAtomic(path, contents);
+        base.WriteAtomic(path, write);
     }
+
+    public override Task WriteAllBytesAtomicAsync(string path, byte[] contents, CancellationToken cancellationToken = default)
+        => Full ? Task.FromException(new IOException(Why)) : base.WriteAllBytesAtomicAsync(path, contents, cancellationToken);
 
     public override IAppendFile OpenForAppend(string path) => new Appending(base.OpenForAppend(path), this);
 

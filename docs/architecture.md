@@ -57,6 +57,20 @@ that `ContainExec` places a child through), `UserState`,
 `WslDiskImages`, `CMakeToolchainReader`, `ProcessContext` (the process's current directory) and the
 command that holds a host awake.
 
+A file is read through one stream (`IFileSystem.OpenRead`) and written whole by one of two atomic writes, each writing
+a temporary file beside the target and renaming it over the target: `IFileSystem.WriteAtomic`, handed a stream, for
+what is made as it is written - a record, a text - and `WriteAllBytesAtomicAsync` for bytes already in hand, which a
+tree sync, a fold's copy and a mutation write, waiting between its attempts without holding a thread. A whole text or
+a whole file's bytes is read and a text written by a convenience over those (`WholeFiles`), so a double that changes
+how a file reads or writes changes it for every caller, whatever form the caller takes it in. A state file
+(`JsonStateFile.Read`, `JsonStateFile.Write`) is parsed straight off that stream and serialized straight onto it,
+never held as one text: a codebase graph's link result runs to tens of megabytes, and held as text it costs twice its
+size again, in buffers the runtime's shared pool keeps. A file is renamed into place as POSIX renames, on Windows too
+(`Win32Files.TryReplace`): one who holds the old file open - every read here shares its deletion - goes on reading it
+while the new one takes its name, where Windows' own rename is refused while the old file is open at all, so a writer
+could not replace a record another sync was streaming. A volume that cannot rename so - FAT, some shares - is renamed
+Windows' own way.
+
 A platform-specific implementation is created only where behaviour genuinely
 differs. Today that is three families of behaviour.
 
@@ -1774,8 +1788,15 @@ its name in the repository, never to a type and never to the caller's own scopes
 `unique`, to a member that `Extends` that type or a base of it, as the extension's own file names the type - or a type
 the repository lacks, by its written name - where the call's file reaches it: the scope of the extension's type, or
 the one holding that, is one the call is written in or its file imports, or is the top, or the call's file imports the
-extension's by path; one in a closed scope is reached from its own file alone, and no override is an extension. Extracts keep names, not targets, so a sync links the whole tree again and a name a changed file adds
-binds callers in files that did not change. A global import is read from the file that makes it, so a relative one
+extension's by path; one in a closed scope is reached from its own file alone, and no override is an extension. Extracts keep names, not targets, so a name a changed file adds
+binds callers in files that did not change. Each finding keeps every key it read - a name's declarations, an id's parts,
+a qualified name's containers, a name's run's end, a scope's parent, a type's bases, a file's imports and open scopes,
+a language's global imports, the address roots, a path, a file name - each read through the one accessor of its index,
+which says the key (`Named`, `ScopeNamed`, `ContainersOf`, `ParentOf`, `PartsOf`, `BasesOf`, `ImportsOf`, `IsFile` and
+the rest); `CodeGraphLinker.Relink` takes the link it is made from (`CodeGraphLinked.Memory`, held in memory alone)
+and finds again only the references of the files not given as the very object that link was given, and those whose
+finding read a key whose part - what each changed file holds of it - is not what it was, the bases each pass found moved
+among them; every other reference keeps its finding, and `References` counts what was found. A global import is read from the file that makes it, so a relative one
 names the same file from every file of its language. An interface's member dispatches, for each type that implements it -
 itself or through a base, the interface itself or one extending it - to the member with a body that answers it: the type's
 own, else its nearest base's it inherits or mixes in, never an interface's own, which has none. A dispatch is as sure as
@@ -1800,13 +1821,51 @@ version, or what `maxFileBytes` or `languages` decide of it changed, or where it
 could not read again at every sync; a run with no graph starts from the newest earlier run's manifest
 that reads, its extracts copied as they are reused and a file whose extract that run lacks read again. Its records go
 through `OrchestrationStore`, each strict with its `Problem()` and placed by `OrchestratorLayout`: `graph.json`, the
-manifest with its digest; `symbols.json`, the link result naming the manifest's digest and the linker's revision, made
-again where either does not match; `extracts/<ab>/<blob>-<path>.<language>-<version>.json`, written once, before the manifest that names them;
-and `sync.jsonl`. An extract is named by its path too: an implementation's answer may read the path - its generated
-names, its test directories, a file's own names - so a renamed file is read again. Every sync removes each extract its
-manifest does not name. Syncs of one graph wait for each other; extraction runs on one of every
-`CodebaseGraphService.ReadShare` (2) of the processors. A step that names an agent's worktree with `in` is refused when
-its workflow is checked, and by the runner (13) where it was not: this build syncs the main checkout's graph alone.
+manifest with its digest; `symbols.jsonl`, the link result naming the manifest's digest and the linker's revision, made
+again where either does not match - as lines, its head counting what follows and then each node, edge and count on one
+of its own, since it grows with the repository and a list read or written whole is held whole while it is
+(`JsonLineWriter`, `JsonLineReader`); `extracts/<ab>/<blob>-<path>.<language>-<version>.json`, written once, before the manifest that names them;
+`views/<agent>.json`, an agent's view (`CodeGraphView`); and `sync.jsonl`, one line for each sync - what it listed,
+hashed, read, reused and removed, the references it found and, for one that failed, why (`Failed`); the store's appends
+to it take turns within the process. An extract is named by its path too: an implementation's answer may read the path - its generated
+names, its test directories, a file's own names - so a renamed file is read again. The last sync to end with none under
+way removes each extract neither the manifest nor a view names, where one may have been left: at a process's first
+sync, after a record was written that no longer names an extract the one it replaced named - or in place of one the
+sync did not hold, a view's first, a seeded base, a rebuild - after a sync that did not end, and after a view was
+dropped - a sync that changed nothing does not look. A sync that failed, not one stopped, also leaves the process
+holding no tree of the graph, so the next sync takes each tree as its records say (`CheckAsync` syncs it first, as it
+does a tree this process has not linked). Extraction runs on one of every
+`CodebaseGraphService.ReadShare` (2) of the processors.
+
+An agent's view is its worktree listed the same way and held against the base - the main checkout's manifest, synced
+first where the run has none - as the overlay of each file the worktree holds otherwise and each of the base's it does
+not hold, the digest of the base it stands on with it: a file whose extract the base or an earlier sync of the view made
+is not read. A `graphify-codebase` step with `in` syncs that agent's view, or the base for an agent that only reads. Each
+tree has its gate: syncs of one wait for each other, syncs of different trees run side by side, and a view takes the base
+as one snapshot, which a view reads without the base's gate and never puts back older than a sync left it
+(`Graph.Adopt`). When the base moves, every view - one whose first sync is under way among them - is held against it
+again under its gate with no file read, from the earlier manifest it stood on. `SyncPathsAsync` brings a tree up to date
+by the paths given alone, git asked of those paths (`--literal-pathspecs`), with no listing of the rest; `CheckAsync` is
+the check an answer of the graph makes of the files it names before it is given - no command answers from the graph
+yet - a `stat` against what the view recorded, or against what an earlier
+check found of a file whose time alone moved, a hash only of a file either moved, and a file whose blob moved read again,
+its tree linked again and written, before the answer is made, and a tree this process has not linked synced first, so
+the answer is its own link's; `DropViewAsync` takes a view out. What a process linked of each tree is held in memory,
+with the base's link result, and the next sync links again from it (`Relink`) - or keeps it, unread and unwritten,
+where nothing changed; a process begun again links its first sync whole, from the extracts.
+
+The engine syncs on its own, through `FlowGraphSyncs`, only where the run has a graph and under the claim its step already
+holds: `FlowStepRunners` syncs a reason step's view where it starts - its agent's, the one the step it goes on with
+works in (`FlowCoordinator.WorkingOf`, which its claims are read through too), the base for one that reads; `fold` and
+`delete-agent` sync the base by every path the run's folds changed that the graph has not taken yet
+(`FoldLedger.Ungraphed`, `FoldLedger.Changed`) - before each attempt does anything and after its apply - and record each
+fold it took (`graphed` in `folds.json`), so a sync that failed, was stopped or was cut off by a crash is owed until one
+goes through - a graph whose manifest does not read takes none of them, which is said, and they stay owed until a
+whole sync builds it again; `refresh` and `rebase` sync their target's view where it has one; every one of these first drops the view
+of each agent that is no longer live, `delete-agent`'s own after its deletion among them, so a drop that failed is tried
+again. A sync of these that fails, for any cause but a stop, is said - a line of `sync.jsonl` that says why, where it
+names the view, and a warning that says what takes it up again - and never fails its step - nor does a reason step's repository that does not read where
+the hook looks for it, which its runner finds as it does.
 `delete-orchestrator` removes the graph with its run, outside what `--delete-evidence` guards.
 
 ## Anchor registries

@@ -22,7 +22,7 @@ public interface IFlowStepTypeRunner
 /// <summary>
 /// The runner a run's steps are given: each step to the runner of its type, and a step of a type no runner serves yet
 /// refused loudly as <see cref="NoStepRunner"/> refuses it - a run that says what it cannot do, never one that passes a
-/// step over.
+/// step over. A reason step's view of the run's codebase graph is synced where it starts, before its runner is asked.
 /// </summary>
 public sealed class FlowStepRunners : IFlowStepRunner
 {
@@ -31,14 +31,19 @@ public sealed class FlowStepRunners : IFlowStepRunner
         ["orient", "graphify-codebase", "validate-plan", "create-agent", "build", "test", "run", "check-mutations", "anchor-balance", "anchor-citations", "ci-read", "ci-wait", "fold", "delete-agent", "refresh", "rebase"];
 
     private readonly IReadOnlyDictionary<string, IFlowStepTypeRunner> _byType;
+    private readonly FlowGraphSyncs _graph;
     private readonly NoStepRunner _none = new();
 
     /// <summary>Serves each step type by the runner registered for it.</summary>
     /// <param name="runners">The runners, one for each type they serve.</param>
+    /// <param name="graph">The engine's own syncs of a run's codebase graph: a reason step's view where it starts.</param>
     /// <exception cref="ArgumentException">Two runners serve one type.</exception>
-    public FlowStepRunners(IEnumerable<IFlowStepTypeRunner> runners)
+    public FlowStepRunners(IEnumerable<IFlowStepTypeRunner> runners, FlowGraphSyncs graph)
     {
         ArgumentNullException.ThrowIfNull(runners);
+        ArgumentNullException.ThrowIfNull(graph);
+
+        _graph = graph;
 
         var byType = new Dictionary<string, IFlowStepTypeRunner>(StringComparer.Ordinal);
 
@@ -54,13 +59,20 @@ public sealed class FlowStepRunners : IFlowStepRunner
     }
 
     /// <inheritdoc/>
-    public Task<FlowStepResult> RunAsync(FlowStepRun run, CancellationToken cancellationToken)
+    public async Task<FlowStepResult> RunAsync(FlowStepRun run, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(run);
 
-        return run.Step.Type is { } type && _byType.TryGetValue(type, out var runner)
+        // A person may have changed the main tree by hand, and an agent its own since its last step: the step is served
+        // the graph as it stands where it starts.
+        if (run.Step.Type == "reason")
+        {
+            await _graph.AtStartAsync(run, cancellationToken).ConfigureAwait(false);
+        }
+
+        return await (run.Step.Type is { } type && _byType.TryGetValue(type, out var runner)
             ? runner.RunAsync(run, cancellationToken)
-            : _none.RunAsync(run, cancellationToken);
+            : _none.RunAsync(run, cancellationToken)).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>

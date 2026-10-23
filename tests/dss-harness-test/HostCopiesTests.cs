@@ -2670,14 +2670,14 @@ public sealed class HostCopiesTests
     /// <summary>A disk on which the record of host copies can be read, and not written: a full disk, say.</summary>
     private sealed class WritesNoRecord(IFileSystem inner) : PassThroughFileSystem(inner)
     {
-        public override void WriteAllTextAtomic(string path, string contents)
+        public override void WriteAtomic(string path, Action<Stream> write)
         {
             if (string.Equals(Path.GetFileName(path), HostCopyRecord.FileName, StringComparison.Ordinal))
             {
                 throw new IOException("There is not enough space on the disk.");
             }
 
-            base.WriteAllTextAtomic(path, contents);
+            base.WriteAtomic(path, write);
         }
     }
 }

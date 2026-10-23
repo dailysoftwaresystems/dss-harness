@@ -601,6 +601,16 @@ public interface IGitClient
     Task<IReadOnlyList<GitListedFile>> ListIndexedFilesAsync(string directory, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// What the index lists of <paramref name="paths"/> alone, as <see cref="ListIndexedFilesAsync(string, CancellationToken)"/>
+    /// lists every path: each path named as it is spelt, never read as a pattern, and given in batches of a few hundred.
+    /// </summary>
+    /// <param name="directory">The top of the tree.</param>
+    /// <param name="paths">The paths, relative to the tree's top with forward separators.</param>
+    /// <param name="cancellationToken">Cancels the git processes.</param>
+    /// <exception cref="HarnessException">git failed, or listed what this build cannot read.</exception>
+    Task<IReadOnlyList<GitListedFile>> ListIndexedFilesAsync(string directory, IReadOnlyList<string> paths, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Every path of the tree at <paramref name="directory"/> whose working file is not what the index holds - changed,
     /// gone, conflicted - and every untracked one git does not ignore, as <c>status --porcelain=v2 -z
     /// --untracked-files=all --no-renames</c> lists them, without taking the index's lock.
@@ -609,6 +619,17 @@ public interface IGitClient
     /// <param name="cancellationToken">Cancels the git process.</param>
     /// <exception cref="HarnessException">git failed, or listed what this build cannot read.</exception>
     Task<IReadOnlyList<GitWorkingFile>> ListWorkingFilesAsync(string directory, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// What the working tree's status says of <paramref name="paths"/> alone, as
+    /// <see cref="ListWorkingFilesAsync(string, CancellationToken)"/> says it of every path: each path named as it is spelt,
+    /// never read as a pattern, and given in batches of a few hundred.
+    /// </summary>
+    /// <param name="directory">The top of the tree.</param>
+    /// <param name="paths">The paths, relative to the tree's top with forward separators.</param>
+    /// <param name="cancellationToken">Cancels the git processes.</param>
+    /// <exception cref="HarnessException">git failed, or listed what this build cannot read.</exception>
+    Task<IReadOnlyList<GitWorkingFile>> ListWorkingFilesAsync(string directory, IReadOnlyList<string> paths, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// The blob id git would store each of <paramref name="paths"/>' working files as, its filters applied, in the same

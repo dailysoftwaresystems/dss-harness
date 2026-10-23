@@ -12,6 +12,7 @@ using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 using DssHarness.Core.Worktrees;
 using Microsoft.Extensions.DependencyInjection;
+using NSubstitute;
 
 namespace DssHarness.Tests;
 
@@ -286,14 +287,14 @@ public sealed class FlowStepRunnerTests : IDisposable
     public async Task TheDispatcher_ServesTheTypesItHasRunnersFor_AndRefusesTheRest()
     {
         var (harness, repository) = await RepositoryAsync();
-        var runners = new FlowStepRunners([Orient(harness)]);
+        var runners = new FlowStepRunners([Orient(harness)], harness.GraphSyncs);
 
         Assert.True((await runners.RunAsync(Run(OrientStep, repository.Path), Token)).Passed);
 
         var build = await runners.RunAsync(Run(new WorkflowStep { Name = "build", Type = "build" }, repository.Path), Token);
         Assert.Equal(HarnessExit.ToolMissing, build.Exit);
         Assert.StartsWith("no runner serves a step of type 'build' yet", build.Error, StringComparison.Ordinal);
-        Assert.Throws<ArgumentException>(() => new FlowStepRunners([Orient(harness), Orient(harness)]));
+        Assert.Throws<ArgumentException>(() => new FlowStepRunners([Orient(harness), Orient(harness)], harness.GraphSyncs));
 
         using var provider = new ServiceCollection()
             .AddDssHarness(new SessionOptions { Command = "test" }, OperationId.New())
@@ -314,6 +315,131 @@ public sealed class FlowStepRunnerTests : IDisposable
         Assert.All(FlowStepRunners.Served, type => Assert.Contains($"`{type}`", listed, StringComparison.Ordinal));
         Assert.IsType<FlowStepRunners>(provider.GetRequiredService<IFlowStepRunner>());
     }
+
+    /// <summary>
+    /// A reason step's start syncs its view through the dispatcher before its runner is asked - its agent's, the base for
+    /// one that reads, none for an agent the run has no record of - where the run has a graph, each a line of the sync log
+    /// naming the step's start; a run with no graph has none made.
+    /// </summary>
+    [Fact]
+    public async Task AReasonStepsStart_SyncsItsView_WhereTheRunHasAGraph()
+    {
+        var temp = new TempDirectory();
+        _made.Add(temp);
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        await kit.CreateReadingAgentAsync("reader");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        var runners = new FlowStepRunners([], kit.Harness.GraphSyncs);
+
+        var none = await runners.RunAsync(Reason(kit, "ag"), Token);
+
+        Assert.Equal(HarnessExit.ToolMissing, none.Exit);
+        Assert.False(File.Exists(kit.Layout.GraphManifestFile));
+
+        await kit.Harness.CodebaseGraph.SyncAsync(GraphRequest(kit), Token);
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nby hand\n");
+
+        await runners.RunAsync(Reason(kit, "ag"), Token);
+        await runners.RunAsync(Reason(kit, "reader"), Token);
+
+        // An agent the run has no record of has no view to sync.
+        await runners.RunAsync(Reason(kit, "nobody"), Token);
+
+        var lines = File.ReadAllLines(kit.Layout.GraphSyncFile).Select(line => JsonNode.Parse(line)!).Select(line => ((string?)line["view"], (string?)line["why"]));
+
+        Assert.Equal([("base", "test"), ("ag", "think:start"), ("base", "think:start")], lines);
+        Assert.Contains("b.txt", kit.Harness.OrchestrationStore.ReadGraphView(kit.Layout, "ag")!.Files.Keys);
+        Assert.Equal(
+            (await kit.Harness.RunGitAsync(kit.Main, ["hash-object", "a.txt"], Token)).StandardOutput.Trim(),
+            kit.Harness.OrchestrationStore.ReadGraphManifest(kit.Layout)!.Files["a.txt"].Blob);
+    }
+
+    /// <summary>
+    /// A sync the engine makes of its own that fails never fails its step: it is a line of the sync log saying why, and a
+    /// warning - and where the run has no graph, none is tried.
+    /// </summary>
+    [Fact]
+    public async Task AnEngineSyncThatFails_IsSaid_AndItsStepGoesOn()
+    {
+        var temp = new TempDirectory();
+        _made.Add(temp);
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var graph = Substitute.For<DssHarness.Core.Codebase.ICodebaseGraphService>();
+        var output = Substitute.For<IHarnessOutput>();
+        graph.SyncAsync(Arg.Any<DssHarness.Core.Codebase.CodebaseGraphSync>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<DssHarness.Core.Codebase.CodebaseGraphSynced>(new HarnessException(HarnessExit.ToolMissing, "git did not answer.")));
+        var syncs = new FlowGraphSyncs(graph, kit.Harness.OrchestrationStore, new FoldLedger(kit.Harness.OrchestrationStore, kit.Harness.FileSystem, TimeProvider.System), kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.FileSystem, output, TimeProvider.System);
+
+        await syncs.AtStartAsync(Reason(kit, null), Token);
+
+        _ = await graph.DidNotReceive().SyncAsync(Arg.Any<DssHarness.Core.Codebase.CodebaseGraphSync>(), Arg.Any<CancellationToken>());
+
+        await kit.Harness.CodebaseGraph.SyncAsync(GraphRequest(kit), Token);
+        await syncs.AtStartAsync(Reason(kit, null), Token);
+
+        var line = JsonNode.Parse(File.ReadLines(kit.Layout.GraphSyncFile).Last())!;
+
+        Assert.Equal(("base", "think:start", "git did not answer."), ((string?)line["view"], (string?)line["why"], (string?)line["failed"]));
+        output.Received(1).Warn("reason", $"the codebase graph's view 'base' of run '{OrchestrationKit.Orchestrator}' was not synced (think:start): git did not answer. The step goes on; the next sync of that view brings it up to date.");
+    }
+
+    /// <summary>
+    /// Whatever fails in a sync the engine makes of its own but a stop - a defect of the graph's as much as git - is said
+    /// and never fails its step, and a stop stops it; a reason step whose repository does not read where it starts is said
+    /// with no line, its step left to find that out as its runner does.
+    /// </summary>
+    [Fact]
+    public async Task AnEngineSyncThatFailsAnyWayButAStop_IsSaid_AndAStopStopsIt()
+    {
+        var temp = new TempDirectory();
+        _made.Add(temp);
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var graph = Substitute.For<DssHarness.Core.Codebase.ICodebaseGraphService>();
+        var output = Substitute.For<IHarnessOutput>();
+        var syncs = new FlowGraphSyncs(graph, kit.Harness.OrchestrationStore, new FoldLedger(kit.Harness.OrchestrationStore, kit.Harness.FileSystem, TimeProvider.System), kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.FileSystem, output, TimeProvider.System);
+        await kit.Harness.CodebaseGraph.SyncAsync(GraphRequest(kit), Token);
+        graph.SyncAsync(Arg.Any<DssHarness.Core.Codebase.CodebaseGraphSync>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<DssHarness.Core.Codebase.CodebaseGraphSynced>(new InvalidOperationException("a defect of the graph's.")));
+
+        await syncs.AtStartAsync(Reason(kit, null), Token);
+
+        output.Received(1).Warn("reason", $"the codebase graph's view 'base' of run '{OrchestrationKit.Orchestrator}' was not synced (think:start): a defect of the graph's. The step goes on; the next sync of that view brings it up to date.");
+
+        graph.SyncAsync(Arg.Any<DssHarness.Core.Codebase.CodebaseGraphSync>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<DssHarness.Core.Codebase.CodebaseGraphSynced>(new OperationCanceledException()));
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() => syncs.AtStartAsync(Reason(kit, null), Token));
+
+        var lines = File.ReadAllLines(kit.Layout.GraphSyncFile).Length;
+        var nowhere = Reason(kit, null) with { Place = new FlowRunPlace(Path.Combine(temp.Path, "gone"), OrchestrationKit.Orchestrator, null, Flow) };
+
+        await syncs.AtStartAsync(nowhere, Token);
+
+        output.Received(1).Warn("reason", Arg.Is<string>(text => text.StartsWith($"the codebase graph's view 'base' of run '{OrchestrationKit.Orchestrator}' was not synced (think:start): ", StringComparison.Ordinal)
+            && text.EndsWith("The step goes on; the next sync of that view brings it up to date.", StringComparison.Ordinal)
+            && !text.Contains("a defect", StringComparison.Ordinal)));
+        Assert.Equal(lines, File.ReadAllLines(kit.Layout.GraphSyncFile).Length);
+    }
+
+    /// <summary>A reason step <c>think</c> of the kit's run, working in <paramref name="worksIn"/>.</summary>
+    private static FlowStepRun Reason(OrchestrationKit kit, string? worksIn)
+        => new(
+            new WorkflowStep { Name = "think", Type = "reason" },
+            "think",
+            1,
+            FlowValue.Missing,
+            null,
+            null,
+            [],
+            new NoEvents(),
+            Place: new FlowRunPlace(kit.Main, OrchestrationKit.Orchestrator, null, Flow),
+            Read: new Dictionary<string, FlowValue>(),
+            WorksIn: worksIn);
+
+    /// <summary>A whole sync of the base of the kit's run.</summary>
+    private static DssHarness.Core.Codebase.CodebaseGraphSync GraphRequest(OrchestrationKit kit)
+        => new(new HarnessLayout(kit.Main, kit.Main), kit.Layout, DssHarness.Core.Codebase.CodebaseGraphShape.Default, OrchestrationKit.Settings.Root, Rebuild: false, "test");
 
     private static PlanValidator Validator(HarnessFactory harness) => new(harness.FileSystem, harness.PathBudget, harness.Platform);
 

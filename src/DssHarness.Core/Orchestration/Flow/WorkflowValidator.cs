@@ -565,17 +565,10 @@ public static class WorkflowValidator
                     case "test":
                     case "run":
                     case "check-mutations":
+                    case "graphify-codebase":
                         if (entry.Step.In is not null)
                         {
                             WorksIn(entry, entry.Step.In);
-                        }
-
-                        break;
-
-                    case "graphify-codebase":
-                        if (entry.Step.In is { } view)
-                        {
-                            _problems.Add($"step '{entry.Path}' names in: '{view}', and {WorkflowStepTypes.GraphViewsLater}");
                         }
 
                         break;

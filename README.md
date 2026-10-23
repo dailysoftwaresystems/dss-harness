@@ -648,7 +648,12 @@ of the repository - every file a node, each declaration a language's implementat
 the first sentence the code writes of itself (C# through the compiler's own parser, MSBuild's projects and solutions,
 Markdown's headings; every other file by its name and size), and the edges between them, each saying how sure it is - under the run's
 `graph/`, reading again only the files whose content, reader, reader's version, size limit or languages changed and those it could not read, and starting a run's first
-graph from the newest earlier run's (`dssharness help codebase-graph`; the workflow's `codebaseGraph` shapes it);
+graph from the newest earlier run's - or, with `in`, the view of that agent's worktree, held against the main checkout's
+graph as an overlay of what the worktree holds otherwise, so no file is read whose extract either made; the engine syncs
+on its own too, under the claim its step holds - a reason step's view where it starts, the main checkout's by every path
+the run's folds changed that it has not taken yet, a worktree's after a refresh or a rebase moved it, and a view dropped
+once its agent is no longer live - and a sync of its own that fails is said, owed until one goes through, and never
+fails the step (`dssharness help codebase-graph`; the workflow's `codebaseGraph` shapes it);
 `validate-plan`, the machine's check of a plan's
 work items; `create-agent`, which makes the agent the engine named for it (`a<N>`, never twice) for the model its
 first reason step runs on, both recorded before the agent is made so a step run again asks for the same one; and the leg

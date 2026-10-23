@@ -498,7 +498,7 @@ public sealed class WorkflowTemplatesTests
     /// <summary>The real file system, but one file by its name cannot be read, as one another process holds.</summary>
     private sealed class UnreadDefinition(IFileSystem inner, string name) : PassThroughFileSystem(inner)
     {
-        public override string ReadAllText(string path)
-            => Path.GetFileName(path) == name ? throw new IOException("it is held.") : base.ReadAllText(path);
+        public override Stream OpenRead(string path)
+            => Path.GetFileName(path) == name ? throw new IOException("it is held.") : base.OpenRead(path);
     }
 }

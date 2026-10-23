@@ -3265,6 +3265,25 @@ public static class HelpTopics
         builder.AppendLine();
         AppendWrapped(
             builder,
+            "An agent's view. With in, a graphify-codebase step syncs the view of that agent's worktree: the worktree listed the "
+            + "same way and held against the base - the main checkout's graph, synced first where the run has none - as an "
+            + "overlay of each file the worktree holds otherwise and each of the base's it does not hold, so no file is read "
+            + "whose extract the base or an earlier sync made. An agent that only reads has no worktree: its view is the base. "
+            + "The engine syncs on its own too, under the claim its step already holds: a reason step's view where it starts - "
+            + "its agent's, the one the step it goes on with works in, or the base for one that reads; the base by every path "
+            + "the run's folds changed that it has not taken yet - after a fold or a delete-agent's fold, and before each "
+            + "attempt of one - with no listing, the run's ledger of its folds saying which it took; the target's view after a "
+            + "refresh or a rebase, which write the agent's tree alone; and the view of each agent no longer live leaves the "
+            + "graph. One of these that fails, for any cause but a stop, is said - a warning that says what takes it up again, "
+            + "and a line of the sync log that says why where it names the view - and its step goes on, since the graph is a "
+            + "map. Syncs "
+            + "of one view wait for each other and syncs of different views run side by side, each on one snapshot of the base; "
+            + "when the base moves, each view is held against it again and no file is read. Linking again finds again only the "
+            + "references of the files that changed and those that read what a change altered - a name, a scope, a base, an "
+            + "import, a path - and every other reference keeps what it found.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
             "What it does not see. The credential slots and the tool's own state are never listed, so never served. A file "
             + $"with a NUL among its first {BinaryContent.Window.ToString("N0", CultureInfo.InvariantCulture)} bytes - git's own window - or a Git LFS pointer, is {CodeFileStates.Binary}; one over "
             + $"codebaseGraph.maxFileBytes is {CodeFileStates.TooLarge}; one that is neither UTF-8 nor UTF-16 by its mark is "
@@ -3309,9 +3328,11 @@ public static class HelpTopics
             + $"its state and its extract; {OrchestratorLayout.GraphSymbolsFileName}, the link result - every node with its handle, every "
             + $"edge - made again where it does not match its manifest; {OrchestratorLayout.GraphExtractsDirectoryName}/<ab>/<blob>-<path>.<language>-<version>.json, "
             + "one file's extract, written once and named by its blob, its path, its implementation and version; and "
+            + $"{OrchestratorLayout.GraphViewsDirectoryName}/<agent>.json, an agent's view - the base it is held against, the "
+            + "worktree's HEAD, each file it holds otherwise and each it does not hold; and "
             + $"{OrchestratorLayout.GraphSyncFileName}, one line for each sync. Each is written whole, an extract before the manifest "
-            + "that names it, so a sync that stops part way leaves the last whole manifest, and every sync removes each extract its "
-            + "manifest does not name; a manifest that does not read is built again whole, and never guessed at, and a link result "
+            + "or view that names it, so a sync that stops part way leaves the last whole manifest, and the last sync to end with "
+            + "none under way removes each extract neither the manifest nor a view names; a manifest that does not read is built again whole, and never guessed at, and a link result "
             + "linked by another build's linker is linked again, no file read again. delete-orchestrator removes the graph with its run, and never counts it among what "
             + "--delete-evidence guards: it is made from the tree, and made again whenever asked.");
         builder.AppendLine();
@@ -3325,8 +3346,8 @@ public static class HelpTopics
             + $"answering fails it ({HarnessExit.ToolMissing}), and so does a time limit passed ({HarnessExit.Incomplete}; "
             + $"{WorkflowStepTypes.Find("graphify-codebase")!.DefaultTimeoutMinutes} minutes where it says no timeoutMinutes). Its extraction "
             + $"runs in the engine's process on one of every {CodebaseGraphService.ReadShare} of the machine's processors, so a build beside it is not starved; it "
-            + "runs no leg and counts against no limit. A step that names an agent's worktree with in is refused when its workflow "
-            + $"is checked: {WorkflowStepTypes.GraphViewsLater}.");
+            + "runs no leg and counts against no limit; with in, its view is that agent's - the base for one that only reads - "
+            + "and its output's view names the one it synced.");
 
         return builder.ToString();
     }

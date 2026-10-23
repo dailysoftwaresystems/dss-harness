@@ -660,10 +660,10 @@ public sealed class AgentStreamTests
     {
         public List<string> Written { get; } = [];
 
-        public override void WriteAllTextAtomic(string path, string contents)
+        public override void WriteAtomic(string path, Action<Stream> write)
         {
             Written.Add(path);
-            base.WriteAllTextAtomic(path, contents);
+            base.WriteAtomic(path, write);
         }
     }
 }

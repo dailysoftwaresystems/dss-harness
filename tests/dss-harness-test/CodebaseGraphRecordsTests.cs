@@ -4,6 +4,7 @@ using DssHarness.Core.Codebase;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
 
 namespace DssHarness.Tests;
 
@@ -316,6 +317,25 @@ public sealed class CodebaseGraphRecordsTests
         Assert.Contains("its lines 1-3 are not lines of the file's 2", (stored with { Lines = 2 }).Problem(), StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A manifest's digest is the hash of the text its implementations and files serialize to, in ordinal order of path -
+    /// hashed as it is serialized, never held as that text.
+    /// </summary>
+    [Fact]
+    public void AManifestsDigest_IsTheHashOfTheTextItsFilesSerializeTo()
+    {
+        var files = new Dictionary<string, CodeGraphFileEntry>(StringComparer.Ordinal)
+        {
+            ["src/b.toy"] = new(Blob, CodeFileStates.Parsed, 10) { Language = "toy", Extract = "aa/b.json" },
+            ["src/a.toy"] = new(Blob, CodeFileStates.Parsed, 20) { Language = "toy", Extract = "aa/a.json" },
+            ["link"] = new(null, CodeFileStates.Link, 0),
+        };
+        var extractors = new[] { new CodeGraphExtractorVersion("toy", 1) };
+        var text = JsonSerializer.Serialize(new { extractors, files = files.OrderBy(file => file.Key, StringComparer.Ordinal).ToList() }, JsonStateFile.LineOptions);
+
+        Assert.Equal(CodeGraphIds.Sha256(text), CodeGraphManifest.DigestOf(extractors, files));
+    }
+
     /// <summary>A link result is refused for another schema, no manifest, a node with no handle or twice, and an edge that is not one between its nodes.</summary>
     [Fact]
     public void ALinkResult_IsRefusedForEachThingItGetsWrong()
@@ -341,6 +361,91 @@ public sealed class CodebaseGraphRecordsTests
         Assert.NotNull((symbols with { Edges = [new CodeEdge("file:a.toy", "toy:A", CodeEdgeKinds.Contains, 1, "probably")] }).Problem());
     }
 
+    /// <summary>
+    /// A link result is kept as lines: its head, counting what follows, then each node, each edge, each count of what a
+    /// node's references named outside the repository and each of what they named ambiguously, on a line of its own - and
+    /// reads back as it was written.
+    /// </summary>
+    [Fact]
+    public void ALinkResult_IsKeptAsLines_ItsHeadCountingWhatFollows()
+    {
+        using var directory = new TempDirectory();
+        var (store, layout) = Store(directory);
+        var symbols = Symbols();
+
+        store.WriteGraphSymbols(layout, symbols);
+
+        Assert.Equal(
+            [
+                Json(new CodeGraphSymbolsHead(CodeGraphManifest.CurrentSchema, "digest", CodeGraphLinker.Revision, 2, 1, 1, 1)),
+                Json(symbols.Nodes[0]),
+                Json(symbols.Nodes[1]),
+                Json(symbols.Edges[0]),
+                Json(new CodeGraphCount("toy:A", 1)),
+                Json(new CodeGraphCount("file:a.toy", 2)),
+                "",
+            ],
+            File.ReadAllText(layout.GraphSymbolsFile).Split('\n'));
+        Assert.Equal(Json(symbols), Json(store.ReadGraphSymbols(layout)!));
+    }
+
+    /// <summary>
+    /// A link result's file of fewer or more lines than its head counts, a line that does not read as what it is there, a
+    /// head that counts fewer than none of a kind and a node counted twice are each refused, naming the line where there is
+    /// one.
+    /// </summary>
+    [Fact]
+    public void ALinkResultsFile_OfOtherLinesThanItsHeadCounts_IsRefused_NamingTheLine()
+    {
+        using var directory = new TempDirectory();
+        var (store, layout) = Store(directory);
+        store.WriteGraphSymbols(layout, Symbols());
+        var lines = File.ReadAllLines(layout.GraphSymbolsFile);
+        var head = new CodeGraphSymbolsHead(CodeGraphManifest.CurrentSchema, "digest", CodeGraphLinker.Revision, 2, 1, 1, 1);
+
+        string Refused(params string[] written)
+        {
+            File.WriteAllText(layout.GraphSymbolsFile, string.Concat(written.Select(line => line + "\n")));
+            return Assert.Throws<HarnessException>(() => store.ReadGraphSymbols(layout)).Message;
+        }
+
+        Assert.Equal(Json(head), lines[0]);
+        Assert.Contains("it ends after line 5, where a count of what a node's references named ambiguously was to be", Refused(lines[..^1]), StringComparison.Ordinal);
+        Assert.Contains("it goes on past line 6, where it was to end", Refused([.. lines, lines[^1]]), StringComparison.Ordinal);
+        Assert.Contains("line 4, an edge, does not read: it holds null", Refused([.. lines[..3], "null", .. lines[4..]]), StringComparison.Ordinal);
+        Assert.Contains("line 2, a node, does not read: ", Refused([lines[0], "{\"id\":\"toy:B\"}", .. lines[2..]]), StringComparison.Ordinal);
+        Assert.Contains("its head counts fewer than no lines of a kind", Refused([Json(head with { Edges = -1 }), .. lines[1..]]), StringComparison.Ordinal);
+        Assert.Contains("it counts the node 'toy:A' twice", Refused([Json(head with { External = 2, Unresolved = 0 }), .. lines[1..^1], lines[^2]]), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A large link result is written and read a line at a time: no write to its file and no read of it is larger than a
+    /// few lines, where a list written or read whole is held whole while it is.
+    /// </summary>
+    [Fact]
+    public void ALargeLinkResult_IsWrittenAndReadALineAtATime()
+    {
+        using var directory = new TempDirectory();
+        var harness = new HarnessFactory();
+        var disk = new Transfers(harness.FileSystem);
+        var store = new OrchestrationStore(disk, harness.Output);
+        var layout = OrchestratorLayout.Of(new HarnessLayout(directory.Path, directory.Path), "run");
+        var nodes = Enumerable.Range(0, 20_000).Select(at => new CodeGraphSymbolEntry($"toy:N{at}", $"{at:x6}", CodeNodeKinds.Type, ["a.toy"])).ToList();
+        var symbols = Symbols() with
+        {
+            Nodes = [.. Symbols().Nodes, .. nodes],
+            Edges = [.. Enumerable.Range(0, 100_000).Select(at => new CodeEdge("file:a.toy", nodes[at % nodes.Count].Id, CodeEdgeKinds.Contains, at, CodeConfidences.Exact))],
+        };
+
+        store.WriteGraphSymbols(layout, symbols);
+        var read = store.ReadGraphSymbols(layout)!;
+
+        Assert.True(new FileInfo(layout.GraphSymbolsFile).Length > 4 << 20);
+        Assert.Equal(symbols.Edges.Count, read.Edges.Count);
+        Assert.InRange(disk.LargestWrite, 1, 64 << 10);
+        Assert.InRange(disk.LargestRead, 1, 64 << 10);
+    }
+
     /// <summary>An extract's name holds its blob, a digest of its path, its implementation and version: a renamed file is read again, a raised version too.</summary>
     [Fact]
     public void AnExtractsName_HoldsItsBlobPathImplementationAndVersion()
@@ -361,4 +466,74 @@ public sealed class CodebaseGraphRecordsTests
 
     /// <summary>A record as the store writes it, on one line.</summary>
     private static string Json<T>(T record) => JsonSerializer.Serialize(record, JsonStateFile.LineOptions);
+
+    /// <summary>A link result of two nodes, an edge between them and a count of each kind.</summary>
+    private static CodeGraphSymbolsFile Symbols() => new(
+        CodeGraphManifest.CurrentSchema,
+        "digest",
+        CodeGraphLinker.Revision,
+        [new("file:a.toy", "abcdef", CodeNodeKinds.File, ["a.toy"]), new("toy:A", "123456", CodeNodeKinds.Type, ["a.toy"])],
+        [new CodeEdge("file:a.toy", "toy:A", CodeEdgeKinds.Contains, 1, CodeConfidences.Exact)],
+        new Dictionary<string, int> { ["toy:A"] = 1 },
+        new Dictionary<string, int> { ["file:a.toy"] = 2 });
+
+    /// <summary>The real file system, noting the most bytes any one read of a file asked for, and any one write of one gave.</summary>
+    private sealed class Transfers(IFileSystem inner) : PassThroughFileSystem(inner)
+    {
+        /// <summary>The most bytes one read asked for.</summary>
+        public int LargestRead { get; private set; }
+
+        /// <summary>The most bytes one write gave.</summary>
+        public int LargestWrite { get; private set; }
+
+        public override Stream OpenRead(string path) => new Noted(base.OpenRead(path), this);
+
+        public override void WriteAtomic(string path, Action<Stream> write) => base.WriteAtomic(path, stream => write(new Noted(stream, this)));
+
+        /// <summary>A stream that notes each read's and each write's size.</summary>
+        private sealed class Noted(Stream inner, Transfers noted) : Stream
+        {
+            public override bool CanRead => inner.CanRead;
+
+            public override bool CanSeek => false;
+
+            public override bool CanWrite => inner.CanWrite;
+
+            public override long Length => throw new NotSupportedException();
+
+            public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+            public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
+
+            public override int Read(Span<byte> buffer)
+            {
+                noted.LargestRead = Math.Max(noted.LargestRead, buffer.Length);
+                return inner.Read(buffer);
+            }
+
+            public override void Write(byte[] buffer, int offset, int count) => Write(buffer.AsSpan(offset, count));
+
+            public override void Write(ReadOnlySpan<byte> buffer)
+            {
+                noted.LargestWrite = Math.Max(noted.LargestWrite, buffer.Length);
+                inner.Write(buffer);
+            }
+
+            public override void Flush() => inner.Flush();
+
+            public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+            public override void SetLength(long value) => throw new NotSupportedException();
+
+            protected override void Dispose(bool disposing)
+            {
+                if (disposing)
+                {
+                    inner.Dispose();
+                }
+
+                base.Dispose(disposing);
+            }
+        }
+    }
 }

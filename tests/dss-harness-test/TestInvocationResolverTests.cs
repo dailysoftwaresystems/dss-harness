@@ -813,7 +813,7 @@ public sealed class TestInvocationResolverTests
     {
         public override bool FileExists(string path) => On(path) && base.FileExists(Mapped(path));
 
-        public override string ReadAllText(string path) => base.ReadAllText(Mapped(path));
+        public override Stream OpenRead(string path) => base.OpenRead(Mapped(path));
 
         private bool On(string path) => path.StartsWith(drive, StringComparison.OrdinalIgnoreCase);
 

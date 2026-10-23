@@ -49,7 +49,7 @@ them.
 | `Anchors` | Anchor registry rows, balance and citations (`IAnchorRegistryService`, `AnchorBalanceService`, `AnchorCitationService`) |
 | `Build` | Build adapters and CMake/Ninja inspection (`BuildService`, `BuildDirectoryGuard`, `CMakeToolchainReader`) |
 | `Ci` | `check-ci-legs` (`CiLegsService`) |
-| `Codebase` | A run's codebase graph: the one contract and its registry (`ICodeGraphExtractor`, `CodeGraphExtractors`), the extract model (`FileExtract`), the one linker (`CodeGraphLinker`), the sync and its records (`CodebaseGraphService`, `CodebaseGraphRecords`); each implementation in `Languages/`, which nothing else names |
+| `Codebase` | A run's codebase graph: the one contract and its registry (`ICodeGraphExtractor`, `CodeGraphExtractors`), the extract model (`FileExtract`), the one linker (`CodeGraphLinker`, which links again only what a change could have changed), the sync of the main checkout and of each agent's view, by a listing or by paths, the check an answer makes of its files, and their records (`CodebaseGraphService`, `CodebaseGraphRecords`); each implementation in `Languages/`, which nothing else names |
 | `Commands` | Services for commands with no domain folder (`InitService`, `VerifyGitService`) |
 | `Configuration` | `config.json`: model, load, validation, key lists (`HarnessConfig`, `HarnessConfigValidator`, `ConfigKeys`, `DefaultConfigFactory`) |
 | `Execution` | A leg's run: phases, locks, ledgers, verdicts, admission, input watch (`LegExecutor`, `PhaseRunner`, `RunLock`, `LegLedger`, `LegVerdict`, `LegAdmission`) |
@@ -59,7 +59,7 @@ them.
 | `Legs` | Leg placement and selection (`LegsService`, `LegPlacement`, `LegSelection`) |
 | `LineEndings` | `.gitattributes` policy (`LineEndingService`) |
 | `Mutations` | `check-mutations` (`MutationService`, `MutationRegistry*`, `ArmJudge`, `MutationFixture`) |
-| `Orchestration` | Orchestrators and agents: seeding, folding, rebasing (`OrchestratorService`, `AgentService`, `AgentFold`) |
+| `Orchestration` | Orchestrators and agents: seeding, folding, rebasing (`OrchestratorService`, `AgentService`, `AgentFold`); the engine in `Flow`, its step runners in `Flow/Runners`, and its own syncs of a run's graph (`FlowGraphSyncs`) |
 | `Output` | `IHarnessOutput`/`ConsoleHarnessOutput`, text and JSON reports |
 | `Platform` | The operating-system seam (`IHostPlatform`, `IFilePermissions`, `IProcessTable`, `PathBudget`) |
 | `Processes` | `IProcessRunner`/`ProcessRunner`, `ProcessRequest`/`ProcessResult`, `CommandLineText` (the one no-shell line splitter) |

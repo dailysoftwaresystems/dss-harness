@@ -2993,14 +2993,14 @@ public sealed class SyncServiceTests
     /// <summary>The real file system, save that no copy's marker can be written: the disk it is on is full.</summary>
     private sealed class MarkerUnwritable(IFileSystem inner) : PassThroughFileSystem(inner)
     {
-        public override void WriteAllTextAtomic(string path, string contents)
+        public override void WriteAtomic(string path, Action<Stream> write)
         {
             if (path.EndsWith(HarnessLayout.SyncedCopyMarkerName, StringComparison.Ordinal))
             {
                 throw new IOException("no space left on device");
             }
 
-            base.WriteAllTextAtomic(path, contents);
+            base.WriteAtomic(path, write);
         }
     }
 
@@ -3701,12 +3701,14 @@ public sealed class SyncServiceTests
     /// </summary>
     private sealed class MovesBeforeTheSecondLook(Core.FileSystem.IFileSystem inner, string root, Action move) : PassThroughFileSystem(inner)
     {
+        private bool _listed;
         private bool _hashing;
         private bool _moved;
 
         public override Stream OpenRead(string path)
         {
-            _hashing = true;
+            // Read once the root was first listed: a file of the tree being hashed, never a setting read before the listing.
+            _hashing |= _listed;
             return base.OpenRead(path);
         }
 
@@ -3718,6 +3720,9 @@ public sealed class SyncServiceTests
                 _moved = true;
                 move();
             }
+
+            _listed |= !recursive
+                && string.Equals(Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar), Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase);
 
             return base.EnumerateFiles(path, recursive);
         }

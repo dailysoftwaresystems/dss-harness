@@ -37,4 +37,74 @@ public static class JsonStateFile
 
     /// <summary>The same, one object to a line: a log's entries, each appended whole.</summary>
     public static JsonSerializerOptions LineOptions { get; } = new(Options) { WriteIndented = false };
+
+    /// <summary>
+    /// Reads a state file, parsed straight from the disk a little at a time, never held as one text. A list of reference
+    /// items is the exception: the converter that refuses its null items is one the serializer cannot pause inside, so the
+    /// list's bytes are held whole while it is read - a record that grows with what it describes is kept as lines instead
+    /// (<see cref="ReadLines"/>).
+    /// </summary>
+    /// <typeparam name="T">The record.</typeparam>
+    /// <param name="fileSystem">The file system it is read through.</param>
+    /// <param name="path">The file.</param>
+    /// <param name="options">Its options; <see cref="Options"/> where none are given, which also read a file of one line.</param>
+    /// <returns>The record, or null where the file holds null.</returns>
+    /// <exception cref="JsonException">It does not read as the record.</exception>
+    public static T? Read<T>(IFileSystem fileSystem, string path, JsonSerializerOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(fileSystem);
+
+        using var stream = fileSystem.OpenRead(path);
+        return JsonSerializer.Deserialize<T>(stream, options ?? Options);
+    }
+
+    /// <summary>
+    /// Writes a state file whole and atomically, ending with a newline, serialized straight to the disk a little at a
+    /// time: never made into one text first. A list of reference items is written whole before any of it reaches the disk,
+    /// for the reason <see cref="Read"/> gives; a record that grows with what it describes is kept as lines instead
+    /// (<see cref="WriteLines"/>).
+    /// </summary>
+    /// <typeparam name="T">The record.</typeparam>
+    /// <param name="fileSystem">The file system it is written through.</param>
+    /// <param name="path">The file.</param>
+    /// <param name="record">The record.</param>
+    /// <param name="options">Its options; <see cref="Options"/> where none are given.</param>
+    public static void Write<T>(IFileSystem fileSystem, string path, T record, JsonSerializerOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(fileSystem);
+
+        fileSystem.WriteAtomic(path, stream =>
+        {
+            JsonSerializer.Serialize(stream, record, options ?? Options);
+            stream.WriteByte((byte)'\n');
+        });
+    }
+
+    /// <summary>Reads a state file of lines (<see cref="JsonLineReader"/>), one line at a time, as <paramref name="read"/> takes them.</summary>
+    /// <typeparam name="T">The record.</typeparam>
+    /// <param name="fileSystem">The file system it is read through.</param>
+    /// <param name="path">The file.</param>
+    /// <param name="read">Reads the record from the file's lines, each by its number.</param>
+    /// <returns>The record.</returns>
+    /// <exception cref="JsonException">A line does not read as the record says it is.</exception>
+    public static T ReadLines<T>(IFileSystem fileSystem, string path, Func<JsonLineReader, T> read)
+    {
+        ArgumentNullException.ThrowIfNull(fileSystem);
+        ArgumentNullException.ThrowIfNull(read);
+
+        using var lines = FileLines.Read(fileSystem, path).GetEnumerator();
+        return read(new JsonLineReader(lines));
+    }
+
+    /// <summary>Writes a state file as lines (<see cref="JsonLineWriter"/>), whole and atomically, as <paramref name="write"/> gives them.</summary>
+    /// <param name="fileSystem">The file system it is written through.</param>
+    /// <param name="path">The file.</param>
+    /// <param name="write">Writes the record's lines, each value on one of its own.</param>
+    public static void WriteLines(IFileSystem fileSystem, string path, Action<JsonLineWriter> write)
+    {
+        ArgumentNullException.ThrowIfNull(fileSystem);
+        ArgumentNullException.ThrowIfNull(write);
+
+        fileSystem.WriteAtomic(path, stream => write(new JsonLineWriter(stream)));
+    }
 }

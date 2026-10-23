@@ -2111,14 +2111,16 @@ public sealed class AgentRebaseTests
     /// <summary>The real file system, except that writing <paramref name="file"/> holding <paramref name="holding"/> fails, as a full disk would, writing nothing.</summary>
     private sealed class UnwritableFileSystem(IFileSystem inner, string file, string holding) : PassThroughFileSystem(inner)
     {
-        public override void WriteAllTextAtomic(string path, string contents)
+        public override void WriteAtomic(string path, Action<Stream> write)
         {
+            var (contents, again) = WrittenText(write);
+
             if (string.Equals(Path.GetFullPath(path), Path.GetFullPath(file), StringComparison.OrdinalIgnoreCase) && contents.Contains(holding, StringComparison.Ordinal))
             {
                 throw new IOException("There is not enough space on the disk.");
             }
 
-            base.WriteAllTextAtomic(path, contents);
+            base.WriteAtomic(path, again);
         }
     }
 
@@ -2127,9 +2129,10 @@ public sealed class AgentRebaseTests
     {
         private int _done;
 
-        public override void WriteAllTextAtomic(string path, string contents)
+        public override void WriteAtomic(string path, Action<Stream> write)
         {
-            base.WriteAllTextAtomic(path, contents);
+            var (contents, again) = WrittenText(write);
+            base.WriteAtomic(path, again);
 
             if (string.Equals(Path.GetFullPath(path), Path.GetFullPath(file), StringComparison.OrdinalIgnoreCase)
                 && contents.Contains(holding, StringComparison.Ordinal)

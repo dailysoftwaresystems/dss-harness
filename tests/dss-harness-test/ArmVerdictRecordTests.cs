@@ -184,7 +184,7 @@ public sealed class ArmVerdictRecordTests : IDisposable
 
         Assert.Null(Record.Merge(Leg, "charge", Verdict("passed", "k1", Noon, shared), [shared, unnamed]));
 
-        Assert.Equal(JsonSerializer.Serialize(shared, JsonStateFile.Options), File.ReadAllText(Record.TableFile(Leg, shared.Digest())));
+        Assert.Equal(JsonSerializer.Serialize(shared, JsonStateFile.Options) + "\n", File.ReadAllText(Record.TableFile(Leg, shared.Digest())));
         Assert.False(File.Exists(Record.TableFile(Leg, unnamed.Digest())));
         Assert.Equal([shared.Digest()], Record.Read(Leg).Tables.Keys);
 

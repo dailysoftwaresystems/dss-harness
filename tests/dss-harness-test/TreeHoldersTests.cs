@@ -817,14 +817,14 @@ public sealed class TreeHoldersTests
         /// <summary>How often the file was read since this was last set.</summary>
         public int Count { get; set; }
 
-        public override string ReadAllText(string path)
+        public override Stream OpenRead(string path)
         {
             if (string.Equals(Path.GetFullPath(path), Path.GetFullPath(counted), StringComparison.OrdinalIgnoreCase))
             {
                 Count++;
             }
 
-            return base.ReadAllText(path);
+            return base.OpenRead(path);
         }
     }
 

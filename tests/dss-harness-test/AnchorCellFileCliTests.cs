@@ -242,8 +242,6 @@ public sealed class AnchorCellFileCliTests
     {
         public override Stream OpenRead(string path) => throw Held(path);
 
-        public override byte[] ReadAllBytes(string path) => throw Held(path);
-
         private static IOException Held(string path)
             => new($"The process cannot access the file '{path}' because it is being used by another process.");
     }

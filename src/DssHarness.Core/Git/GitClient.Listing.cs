@@ -12,9 +12,47 @@ public sealed partial class GitClient
     /// <summary>The option that keeps git from taking the index's lock to refresh it on its own, which a person's git or a fold may need.</summary>
     private const string NoOptionalLocks = "--no-optional-locks";
 
-    public async Task<IReadOnlyList<GitListedFile>> ListIndexedFilesAsync(string directory, CancellationToken cancellationToken = default)
+    public Task<IReadOnlyList<GitListedFile>> ListIndexedFilesAsync(string directory, CancellationToken cancellationToken = default)
+        => ListIndexedAsync(directory, null, cancellationToken);
+
+    public async Task<IReadOnlyList<GitListedFile>> ListIndexedFilesAsync(string directory, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
     {
-        var result = await RunForBytesAsync(directory, [NoOptionalLocks, "ls-files", "-s", "-t", "-z"], cancellationToken).ConfigureAwait(false);
+        ArgumentNullException.ThrowIfNull(paths);
+
+        var listed = new List<GitListedFile>();
+
+        foreach (var batch in paths.Chunk(HashBatch))
+        {
+            listed.AddRange(await ListIndexedAsync(directory, batch, cancellationToken).ConfigureAwait(false));
+        }
+
+        return listed;
+    }
+
+    public Task<IReadOnlyList<GitWorkingFile>> ListWorkingFilesAsync(string directory, CancellationToken cancellationToken = default)
+        => ListWorkingAsync(directory, null, cancellationToken);
+
+    public async Task<IReadOnlyList<GitWorkingFile>> ListWorkingFilesAsync(string directory, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+
+        var working = new List<GitWorkingFile>();
+
+        foreach (var batch in paths.Chunk(HashBatch))
+        {
+            working.AddRange(await ListWorkingAsync(directory, batch, cancellationToken).ConfigureAwait(false));
+        }
+
+        return working;
+    }
+
+    /// <summary>The arguments of a listing of every path, or of <paramref name="paths"/> alone, each spelt as it is.</summary>
+    private static string[] Listing(string[] command, IReadOnlyList<string>? paths)
+        => paths is null ? [NoOptionalLocks, .. command] : ["--literal-pathspecs", NoOptionalLocks, .. command, "--", .. paths];
+
+    private async Task<IReadOnlyList<GitListedFile>> ListIndexedAsync(string directory, IReadOnlyList<string>? paths, CancellationToken cancellationToken)
+    {
+        var result = await RunForBytesAsync(directory, Listing(["ls-files", "-s", "-t", "-z"], paths), cancellationToken).ConfigureAwait(false);
 
         Ensure(result, "list the index");
 
@@ -45,11 +83,11 @@ public sealed partial class GitClient
         return listed;
     }
 
-    public async Task<IReadOnlyList<GitWorkingFile>> ListWorkingFilesAsync(string directory, CancellationToken cancellationToken = default)
+    private async Task<IReadOnlyList<GitWorkingFile>> ListWorkingAsync(string directory, IReadOnlyList<string>? paths, CancellationToken cancellationToken)
     {
         var result = await RunForBytesAsync(
             directory,
-            [NoOptionalLocks, "status", "--porcelain=v2", "-z", "--untracked-files=all", "--no-renames"],
+            Listing(["status", "--porcelain=v2", "-z", "--untracked-files=all", "--no-renames"], paths),
             cancellationToken).ConfigureAwait(false);
 
         Ensure(result, "read the working tree's status");

@@ -788,6 +788,96 @@ public sealed class FlowStepStartTests
     }
 
     /// <summary>
+    /// A reason step that goes on with another's work works in that step's agent and holds that step's claims: it is
+    /// handed the agent the resumed step's <c>in</c> names, and holds write on its tree, as the resumed step's access says.
+    /// </summary>
+    [Fact]
+    public async Task AReasonStepThatResumesAnother_WorksInThatStepsAgent_AndHoldsItsClaims()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: work
+                type: create-agent
+                agent: agents/worker.md
+              - name: think
+                type: reason
+                agent: agents/thinker.md
+                prompt: think.md
+                outputs: think.json
+                in: work
+                access: write
+                dependsOn: [work]
+              - name: again
+                type: reason
+                prompt: again.md
+                outputs: again.json
+                resume: think
+                dependsOn: [think]
+            """);
+        FlowCoordinator? coordinator = null;
+        List<FlowClaim>? held = null;
+        var runner = new Runner().On("again", _ =>
+        {
+            held = [.. coordinator!.Instances["again"].HeldClaims];
+            return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+        });
+        coordinator = Coordinator(definition, runner);
+
+        _ = await coordinator.RunAsync(Token);
+
+        Assert.Equal("a1", runner.Runs.Single(run => run.Instance == "again").WorksIn);
+        Assert.Equal(runner.Runs.Single(run => run.Instance == "think").WorksIn, runner.Runs.Single(run => run.Instance == "again").WorksIn);
+        Assert.Contains(new FlowClaim("a1", FlowClaimKind.Write), held!);
+    }
+
+    /// <summary>
+    /// Each item of a forEach goes on with its own item's work: the step it resumes is found in its own item's scope,
+    /// never a sibling's, so each works in the agent its item made.
+    /// </summary>
+    [Fact]
+    public async Task EachItemsResume_WorksInItsOwnItemsAgent()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: plan
+                type: orient
+              - name: items
+                forEach: plan.list
+                dependsOn: [plan]
+                steps:
+                  - name: work
+                    type: create-agent
+                    agent: agents/worker.md
+                  - name: think
+                    type: reason
+                    agent: agents/thinker.md
+                    prompt: think.md
+                    outputs: think.json
+                    in: work
+                    access: write
+                    dependsOn: [work]
+                  - name: again
+                    type: reason
+                    prompt: again.md
+                    outputs: again.json
+                    resume: think
+                    dependsOn: [think]
+            """);
+        var runner = new Runner().On("plan", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: System.Text.Json.Nodes.JsonNode.Parse("""{"list": ["x", "y"]}""")!.AsObject()));
+
+        _ = await Coordinator(definition, runner).RunAsync(Token);
+
+        string? WorksIn(string instance) => runner.Runs.Single(run => run.Instance == instance).WorksIn;
+
+        Assert.Equal(WorksIn("items[0].think"), WorksIn("items[0].again"));
+        Assert.Equal(WorksIn("items[1].think"), WorksIn("items[1].again"));
+        Assert.NotNull(WorksIn("items[0].again"));
+        Assert.NotEqual(WorksIn("items[0].again"), WorksIn("items[1].again"));
+    }
+
+    /// <summary>
     /// What an attempt said of its tree is its own: one run again after an attempt that let its tree go - once the step's
     /// failure is answered retry, and the record of the attempt waiting to start is written - has let nothing go until
     /// its own legs do, and no record of it says otherwise.

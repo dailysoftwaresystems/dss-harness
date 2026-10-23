@@ -75,7 +75,7 @@ internal sealed class MachineWideList<TEntry>(IFileSystem fileSystem, string pat
                 Written(() =>
                 {
                     _fileSystem.CreateDirectory(System.IO.Path.GetDirectoryName(Path)!);
-                    _fileSystem.WriteAllTextAtomic(Path, JsonSerializer.Serialize(written, JsonStateFile.Options) + "\n");
+                    JsonStateFile.Write(_fileSystem, Path, written);
                 });
 
                 // Written from a list they were left out of, so the file no longer holds them either.

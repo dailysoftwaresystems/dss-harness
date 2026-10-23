@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using DssHarness.Core.Application;
 using DssHarness.Core.Configuration;
+using DssHarness.Core.Repository;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Results;
@@ -82,6 +83,9 @@ public sealed class FoldStepTests
 
         Assert.Equal((0, "f1"), (record.Applied!.ExitCode, record.Applied.Ledger));
         Assert.Null(record.Asked);
+
+        // The run has no graph: none is made.
+        Assert.False(File.Exists(kit.Layout.GraphManifestFile));
     }
 
     /// <summary>
@@ -212,6 +216,171 @@ public sealed class FoldStepTests
     }
 
     /// <summary>
+    /// Where the run has a graph, a fold syncs the base by the paths it wrote and deleted alone - a change of the main tree
+    /// it did not touch left to the next listing - and holds each view against it; a refresh syncs the view of the worktree
+    /// it wrote; a deletion drops its agent's view; each sync a line of the run's sync log naming its step.
+    /// </summary>
+    [Fact]
+    public async Task TheFoldFamily_SyncsTheRunsGraph_ByWhatEachWrote()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync(Agent);
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        File.Delete(Path.Combine(worktree, "docs", "x.md"));
+        var request = new DssHarness.Core.Codebase.CodebaseGraphSync(new HarnessLayout(kit.Main, kit.Main), kit.Layout, DssHarness.Core.Codebase.CodebaseGraphShape.Default, OrchestrationKit.Settings.Root, Rebuild: false, "test");
+        await kit.Harness.CodebaseGraph.SyncAsync(request with { Agent = Agent, Worktree = worktree }, Token);
+        var store = kit.Harness.OrchestrationStore;
+        var untouched = store.ReadGraphManifest(kit.Layout)!.Files["a.txt"];
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nby hand\n");
+
+        var folded = await Runner(kit).RunAsync(Run(kit, Fold()), Token);
+
+        Assert.True(folded.Passed, folded.Error);
+        var manifest = store.ReadGraphManifest(kit.Layout)!;
+        var line = JsonNode.Parse(File.ReadLines(kit.Layout.GraphSyncFile).Last())!;
+
+        Assert.Equal((await kit.Harness.RunGitAsync(kit.Main, ["hash-object", "b.txt"], Token)).StandardOutput.Trim(), manifest.Files["b.txt"].Blob);
+        Assert.DoesNotContain("docs/x.md", manifest.Files.Keys);
+        Assert.Equal(untouched, manifest.Files["a.txt"]);
+        Assert.Equal(("base", "fold:fold", 2), ((string?)line["view"], (string?)line["why"], (int)line["listed"]!));
+        Assert.Equal(manifest.Digest, store.ReadGraphView(kit.Layout, Agent)!.Base);
+        Assert.Empty(store.ReadGraphView(kit.Layout, Agent)!.Files);
+        Assert.True(store.ReadFolds(kit.Layout)!.Folds.Single().Graphed);
+
+        var refresh = new WorkflowStep { Name = "refresh", Type = "refresh", Of = "made", Paths = new FlowList(["a.txt"], null) };
+        var refreshed = await Refreshing(kit).RunAsync(Run(kit, refresh), Token);
+
+        Assert.True(refreshed.Passed, refreshed.Error);
+        Assert.Equal("one\nby hand\n", OrchestrationKit.Read(worktree, "a.txt"));
+        Assert.Equal(["a.txt"], store.ReadGraphView(kit.Layout, Agent)!.Files.Keys);
+        Assert.Equal((Agent, "refresh:refresh"), ((string?)JsonNode.Parse(File.ReadLines(kit.Layout.GraphSyncFile).Last())!["view"], (string?)JsonNode.Parse(File.ReadLines(kit.Layout.GraphSyncFile).Last())!["why"]));
+
+        var deleted = await Deleting(kit).RunAsync(Run(kit, Delete()), Token);
+
+        Assert.True(deleted.Passed, deleted.Error);
+        Assert.Empty(store.GraphViews(kit.Layout));
+        Assert.NotNull(store.ReadGraphManifest(kit.Layout));
+    }
+
+    /// <summary>
+    /// What a fold changed that the graph did not take - its sync failed - stays owed in the run's ledger and is said; the
+    /// next sync of the folds takes it, this step's next attempt's among them, and the ledger says the graph took it.
+    /// </summary>
+    [Fact]
+    public async Task WhatAFoldChanged_ThatTheGraphDidNotTake_IsOwed_UntilASyncTakesIt()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var store = kit.Harness.OrchestrationStore;
+        var worktree = await kit.CreateAgentAsync(Agent);
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        await kit.Harness.CodebaseGraph.SyncAsync(GraphRequest(kit), Token);
+        var graph = Substitute.For<DssHarness.Core.Codebase.ICodebaseGraphService>();
+        graph.SyncPathsAsync(Arg.Any<DssHarness.Core.Codebase.CodebaseGraphSync>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<DssHarness.Core.Codebase.CodebaseGraphSynced?>(new HarnessException(HarnessExit.ToolMissing, "git did not answer.")));
+        var output = Substitute.For<DssHarness.Core.Output.IHarnessOutput>();
+        var failing = new FlowGraphSyncs(graph, store, Ledger(kit), kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.FileSystem, output, TimeProvider.System);
+
+        var folded = await new FoldStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, store, kit.Harness.AgentService, Ledger(kit), failing).RunAsync(Run(kit, Fold()), Token);
+
+        var blob = (await kit.Harness.RunGitAsync(kit.Main, ["hash-object", "b.txt"], Token)).StandardOutput.Trim();
+        Assert.True(folded.Passed, folded.Error);
+        Assert.Null(store.ReadFolds(kit.Layout)!.Folds.Single().Graphed);
+        Assert.NotEqual(blob, store.ReadGraphManifest(kit.Layout)!.Files["b.txt"].Blob);
+        output.Received(1).Warn("fold", $"the codebase graph's view 'base' of run '{OrchestrationKit.Orchestrator}' was not synced (fold:fold): git did not answer. The step goes on; the paths it owes are synced again by the next fold or deletion, and by this step's next attempt.");
+
+        // A sync by paths that takes nothing - the graph's manifest does not read - leaves what it was given owed, the
+        // first fold's and the next's alike; an attempt that ends before it applies anything - its allow filled wrong -
+        // takes every fold owed where it starts.
+        var nothing = Substitute.For<DssHarness.Core.Codebase.ICodebaseGraphService>();
+        nothing.SyncPathsAsync(Arg.Any<DssHarness.Core.Codebase.CodebaseGraphSync>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<DssHarness.Core.Codebase.CodebaseGraphSynced?>(null));
+        var taking = new FlowGraphSyncs(nothing, store, Ledger(kit), kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.FileSystem, output, TimeProvider.System);
+        OrchestrationKit.Write(worktree, "c.txt", "three\n");
+
+        var next = await new FoldStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, store, kit.Harness.AgentService, Ledger(kit), taking).RunAsync(Run(kit, Fold(), attempt: 2), Token);
+
+        Assert.True(next.Passed, next.Error);
+        Assert.Equal([null, null], store.ReadFolds(kit.Layout)!.Folds.Select(fold => fold.Graphed));
+        output.Received().Warn("fold", $"the codebase graph's manifest of run '{OrchestrationKit.Orchestrator}' does not read (fold:fold), so it took none of the paths the run's folds changed. The step goes on; they stay owed until a whole sync builds the graph again.");
+        Assert.DoesNotContain("c.txt", store.ReadGraphManifest(kit.Layout)!.Files.Keys);
+
+        var typo = Fold() with { Allow = new FlowAllow([], new FlowList([], "steps.find.output.ids"), [], null, []) };
+        var taken = await Runner(kit).RunAsync(Run(kit, typo, attempt: 3, read: Names("allow.new", "not an id")), Token);
+
+        Assert.Equal(HarnessExit.ConfigInvalid, taken.Exit);
+        Assert.Equal([true, true], store.ReadFolds(kit.Layout)!.Folds.Select(fold => fold.Graphed));
+        Assert.Equal(blob, store.ReadGraphManifest(kit.Layout)!.Files["b.txt"].Blob);
+        Assert.Contains("c.txt", store.ReadGraphManifest(kit.Layout)!.Files.Keys);
+    }
+
+    /// <summary>
+    /// The view a drop that failed left of a deleted agent is dropped by the engine's next sync of the run's graph, which
+    /// drops the view of every agent no longer live.
+    /// </summary>
+    [Fact]
+    public async Task AViewADropLeft_IsDroppedByTheEnginesNextSync()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var store = kit.Harness.OrchestrationStore;
+        var worktree = await kit.CreateAgentAsync(Agent);
+        await kit.Harness.CodebaseGraph.SyncAsync(GraphRequest(kit) with { Agent = Agent, Worktree = worktree }, Token);
+        var graph = Substitute.For<DssHarness.Core.Codebase.ICodebaseGraphService>();
+        graph.DropViewAsync(Arg.Any<OrchestratorLayout>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException(new IOException("the view is held open.")));
+        var output = Substitute.For<DssHarness.Core.Output.IHarnessOutput>();
+        var failing = new FlowGraphSyncs(graph, store, Ledger(kit), kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.FileSystem, output, TimeProvider.System);
+
+        var deleted = await new DeleteAgentStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, store, kit.Harness.AgentService, Ledger(kit), failing).RunAsync(Run(kit, Delete()), Token);
+
+        Assert.True(deleted.Passed, deleted.Error);
+        Assert.Equal([Agent], store.GraphViews(kit.Layout));
+        output.Received().Warn("delete-agent", $"the codebase graph's view '{Agent}' of run '{OrchestrationKit.Orchestrator}' was not dropped (delete:delete-agent): the view is held open. The step goes on; the engine's next sync of the run's graph drops it again.");
+
+        await kit.Harness.GraphSyncs.AtStartAsync(Run(kit, new WorkflowStep { Name = "think", Type = "reason" }, worksIn: null), Token);
+
+        Assert.Empty(store.GraphViews(kit.Layout));
+    }
+
+    /// <summary>
+    /// A rebase that moved an agent's worktree syncs that agent's view, and a refresh of an agent the graph has no view of
+    /// makes none: the graph keeps the views the run made.
+    /// </summary>
+    [Fact]
+    public async Task ARebaseSyncsItsTargetsView_AndARefreshMakesNoneTheRunDidNot()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var store = kit.Harness.OrchestrationStore;
+        var worktree = await kit.CreateAgentAsync(Agent);
+        await kit.Harness.CodebaseGraph.SyncAsync(GraphRequest(kit), Token);
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nby hand\n");
+
+        var refreshed = await Refreshing(kit).RunAsync(Run(kit, new WorkflowStep { Name = "refresh", Type = "refresh", Of = "made", Paths = new FlowList(["a.txt"], null) }), Token);
+
+        Assert.True(refreshed.Passed, refreshed.Error);
+        Assert.Empty(store.GraphViews(kit.Layout));
+
+        await kit.Harness.CodebaseGraph.SyncAsync(GraphRequest(kit) with { Agent = Agent, Worktree = worktree }, Token);
+        OrchestrationKit.Write(kit.Main, "c.txt", "three\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "a file the agent's base lacks", Token);
+
+        var rebased = await new RebaseStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, store, kit.Harness.AgentService, kit.Harness.GraphSyncs)
+            .RunAsync(Run(kit, new WorkflowStep { Name = "rebase", Type = "rebase", Of = "made" }), Token);
+        var line = JsonNode.Parse(File.ReadLines(kit.Layout.GraphSyncFile).Last())!;
+
+        Assert.True(rebased.Passed, rebased.Error);
+        Assert.Equal((Agent, "rebase:rebase"), ((string?)line["view"], (string?)line["why"]));
+        Assert.True(File.Exists(Path.Combine(worktree, "c.txt")));
+    }
+
+    /// <summary>A whole sync of the base of the kit's run.</summary>
+    private static DssHarness.Core.Codebase.CodebaseGraphSync GraphRequest(OrchestrationKit kit)
+        => new(new HarnessLayout(kit.Main, kit.Main), kit.Layout, DssHarness.Core.Codebase.CodebaseGraphShape.Default, OrchestrationKit.Settings.Root, Rebuild: false, "test");
+
+    /// <summary>
     /// A refresh refused for conflicting merges alone hands every path that does not conflict, then asks foldConflicts of
     /// those it left, naming them - kept in its record; one over a clean merge nobody asked for asks foldTwoChanges, and
     /// answered merge takes it.
@@ -264,7 +433,7 @@ public sealed class FoldStepTests
         await kit.Harness.CommitAllAsync(kit.Main, "between waves", Token);
         var step = new WorkflowStep { Name = "rebase", Type = "rebase", Of = "made" };
 
-        var asked = await new RebaseStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, kit.Harness.AgentService).RunAsync(Run(kit, step), Token);
+        var asked = await new RebaseStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, kit.Harness.AgentService, kit.Harness.GraphSyncs).RunAsync(Run(kit, step), Token);
 
         Assert.Equal("foldConflicts", FlowQuestions.FoldQuestionOf(asked.DryRun!)!.Kind);
         Assert.Equal(["b.txt"], asked.DryRun!.Conflicting);
@@ -286,7 +455,7 @@ public sealed class FoldStepTests
 
         var refreshed = await Refreshing(kit).RunAsync(Run(kit, others, worksIn: null, target: Agent), Token);
         var none = Substitute.For<IAgentService>();
-        var nothing = await new RefreshStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, none).RunAsync(
+        var nothing = await new RefreshStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, none, kit.Harness.GraphSyncs).RunAsync(
             Run(kit, others with { Paths = new FlowList([], "steps.find.output.paths") }, worksIn: null, target: Agent, read: Names("paths")),
             Token);
 
@@ -329,7 +498,7 @@ public sealed class FoldStepTests
         var dry = Answer(dryCode, "the dry run", standing, needs, refusals, dryCause);
         var agents = Scripted(dry, Answer(HarnessExit.Success, "folded", RequestStanding.Sound, [], []));
 
-        var result = await new FoldStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, agents, Ledger(kit)).RunAsync(Run(kit, Fold()), Token);
+        var result = await new FoldStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, agents, Ledger(kit), kit.Harness.GraphSyncs).RunAsync(Run(kit, Fold()), Token);
 
         switch (does)
         {
@@ -370,9 +539,9 @@ public sealed class FoldStepTests
         var always = Scripted(sound, moved);
         var waiting = Scripted(sound, held);
 
-        var passed = await new FoldStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, once, Ledger(kit)).RunAsync(Run(kit, Fold()), Token);
-        var failed = await new FoldStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, always, Ledger(kit)).RunAsync(Run(kit, Fold()), Token);
-        var lockHeld = await new FoldStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, waiting, Ledger(kit)).RunAsync(Run(kit, Fold()), Token);
+        var passed = await new FoldStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, once, Ledger(kit), kit.Harness.GraphSyncs).RunAsync(Run(kit, Fold()), Token);
+        var failed = await new FoldStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, always, Ledger(kit), kit.Harness.GraphSyncs).RunAsync(Run(kit, Fold()), Token);
+        var lockHeld = await new FoldStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, waiting, Ledger(kit), kit.Harness.GraphSyncs).RunAsync(Run(kit, Fold()), Token);
 
         Assert.True(passed.Passed, passed.Error);
         _ = await once.Received(2).FoldAsync(Arg.Is<FoldAgentRequest>(request => request.Apply && ReferenceEquals(request.Expected, named)), Arg.Any<CancellationToken>());
@@ -397,7 +566,7 @@ public sealed class FoldStepTests
         var throwing = Substitute.For<IAgentService>();
         throwing.FoldAsync(Arg.Any<FoldAgentRequest>(), Arg.Any<CancellationToken>())
             .Returns(call => call.Arg<FoldAgentRequest>().Apply ? Task.FromException<UseCaseResult<AgentVerbFacts>>(new IOException("the disk went away")) : Task.FromResult(sound));
-        FoldStepRunner Folding(IAgentService agents) => new(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, agents, Ledger(kit));
+        FoldStepRunner Folding(IAgentService agents) => new(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, agents, Ledger(kit), kit.Harness.GraphSyncs);
 
         var stopped = await Folding(Scripted(sound, Answer(HarnessExit.Incomplete, "stopped part way", null, [], []))).RunAsync(Run(kit, Fold()), Token);
         var thrown = await Assert.ThrowsAsync<IOException>(() => Folding(throwing).RunAsync(Run(kit, Fold(), attempt: 2), Token));
@@ -436,7 +605,7 @@ public sealed class FoldStepTests
         agents.FoldAsync(Arg.Any<FoldAgentRequest>(), Arg.Any<CancellationToken>())
             .Returns(call => Task.FromResult(call.Arg<FoldAgentRequest>().Apply ? Answer(HarnessExit.Success, "folded", RequestStanding.Sound, [], [])
                 : call.Arg<FoldAgentRequest>().Allowances.New.Count > 0 ? Answer(HarnessExit.Success, "would fold", RequestStanding.Sound, [], []) : drys.Dequeue()));
-        var runner = new FoldStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, agents, Ledger(kit));
+        var runner = new FoldStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, agents, Ledger(kit), kit.Harness.GraphSyncs);
         var answered = new[] { new FlowAnswerGiven("q1", "allow") };
 
         var asked = await runner.RunAsync(Run(kit, Fold()), Token);
@@ -454,7 +623,7 @@ public sealed class FoldStepTests
     /// <summary>
     /// A deletion of an agent whose deletion began - closed, its fold made - folds nothing: it writes no intent, holds no
     /// path to within, and takes no allowance, whatever its allow names; an intent a crash left after the closing is
-    /// settled all the same, from what the tree holds.
+    /// settled all the same, from what the tree holds, and the run's graph's base is synced by what it changed.
     /// </summary>
     [Fact]
     public async Task ADeletionOfAClosedAgent_FoldsNothing_AndTakesNoAllowance()
@@ -474,9 +643,17 @@ public sealed class FoldStepTests
         var step = Delete() with { Within = new FlowList(["b.txt"], null), Allow = new FlowAllow([], new FlowList(["not an id"], null), [], null, []) };
         var crashed = await Ledger(kit).IntendAsync(kit.Layout, kit.Main, "delete", 1, "delete-agent", Agent, new AgentPlanned([], [], [], [], null) { Written = ["b.txt"] }, Token);
 
-        var deleted = await new DeleteAgentStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, agents, Ledger(kit)).RunAsync(Run(kit, step, attempt: 2), Token);
+        // The run has a graph, and what the crashed fold wrote reaches its base where the ledger settles it.
+        await kit.Harness.CodebaseGraph.SyncAsync(new DssHarness.Core.Codebase.CodebaseGraphSync(new HarnessLayout(kit.Main, kit.Main), kit.Layout, DssHarness.Core.Codebase.CodebaseGraphShape.Default, OrchestrationKit.Settings.Root, Rebuild: false, "test"), Token);
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\nwritten by the fold that crashed\n");
+
+        var deleted = await new DeleteAgentStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, agents, Ledger(kit), kit.Harness.GraphSyncs).RunAsync(Run(kit, step, attempt: 2), Token);
 
         Assert.True(deleted.Passed, deleted.Error);
+        Assert.Equal(
+            (await kit.Harness.RunGitAsync(kit.Main, ["hash-object", "b.txt"], Token)).StandardOutput.Trim(),
+            kit.Harness.OrchestrationStore.ReadGraphManifest(kit.Layout)!.Files["b.txt"].Blob);
+        Assert.Contains("\"why\":\"delete:delete-agent\"", File.ReadLines(kit.Layout.GraphSyncFile).Last(), StringComparison.Ordinal);
         Assert.Equal((crashed, FlowFoldEntry.Interrupted), Assert.Single(kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)!.Folds) is var entry ? (entry.Id, entry.State) : default);
         _ = await agents.Received(1).DeleteAsync(
             Arg.Is<DeleteAgentRequest>(request => request.Apply && request.Expected == null && request.Allowances.New.Count == 0),
@@ -515,13 +692,13 @@ public sealed class FoldStepTests
     private static FoldLedger Ledger(OrchestrationKit kit) => new(kit.Harness.OrchestrationStore, kit.Harness.FileSystem, TimeProvider.System);
 
     private static FoldStepRunner Runner(OrchestrationKit kit)
-        => new(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, kit.Harness.AgentService, Ledger(kit));
+        => new(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, kit.Harness.AgentService, Ledger(kit), kit.Harness.GraphSyncs);
 
     private static DeleteAgentStepRunner Deleting(OrchestrationKit kit)
-        => new(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, kit.Harness.AgentService, Ledger(kit));
+        => new(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, kit.Harness.AgentService, Ledger(kit), kit.Harness.GraphSyncs);
 
     private static RefreshStepRunner Refreshing(OrchestrationKit kit)
-        => new(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, kit.Harness.AgentService);
+        => new(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, kit.Harness.AgentService, kit.Harness.GraphSyncs);
 
     /// <summary>One run of <paramref name="step"/> on <paramref name="kit"/>'s orchestrator, working in <paramref name="worksIn"/> - or on <paramref name="target"/>.</summary>
     private static FlowStepRun Run(

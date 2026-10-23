@@ -46,6 +46,10 @@ public sealed record FlowFoldLedgerFile(int Schema, string Run, IReadOnlyList<Fl
 /// <param name="Paths">Every path it meant to write in the main tree, the registry files its rows change among them, in order.</param>
 /// <param name="Rows">The ids of the rows it meant to apply, in order.</param>
 /// <param name="SettledAt">When what became of it was written; null while it is intended.</param>
+/// <param name="Graphed">
+/// Whether the run's codebase graph took the paths it changed: true once the graph's base was synced by them; null until
+/// then - a sync of them that failed, was stopped or was cut off owes them still - and in a run with no graph.
+/// </param>
 public sealed record FlowFoldEntry(
     string Id,
     string Instance,
@@ -56,7 +60,8 @@ public sealed record FlowFoldEntry(
     [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset IntendedAt,
     IReadOnlyList<FlowFoldPath> Paths,
     IReadOnlyList<string> Rows,
-    [property: JsonConverter(typeof(FlowTimeConverter)), JsonIgnore(Condition = JsonIgnoreCondition.Never)] DateTimeOffset? SettledAt = null)
+    [property: JsonConverter(typeof(FlowTimeConverter)), JsonIgnore(Condition = JsonIgnoreCondition.Never)] DateTimeOffset? SettledAt = null,
+    bool? Graphed = null)
 {
     /// <summary>The state an entry is written in before its verb is called.</summary>
     public const string Intended = "intended";
@@ -98,6 +103,7 @@ public sealed record FlowFoldEntry(
             : Paths.FirstOrDefault(path => (State is Intended or Refused) != (path.Changed is null)) is { } unread
                 ? $"'{unread.Path}' says what the fold left exactly where it {(State is Intended or Refused ? "wrote nothing yet" : "was settled")}"
             : Rows.Any(string.IsNullOrWhiteSpace) ? "a row it names is empty"
+            : Graphed is { } graphed && (!graphed || State is Intended or Refused) ? "it says the graph took what it changed where it changed nothing yet, or says it did not"
             : null;
 }
 

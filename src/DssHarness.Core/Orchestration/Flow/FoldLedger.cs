@@ -72,7 +72,8 @@ public sealed class FoldLedger(OrchestrationStore store, IFileSystem fileSystem,
     /// <param name="main">The main tree's root.</param>
     /// <param name="id">The entry's id, as <see cref="IntendAsync"/> gave it.</param>
     /// <param name="exitCode">The code the verb answered with.</param>
-    public async Task SettleAsync(OrchestratorLayout layout, string main, string id, int exitCode)
+    /// <returns>The entry as it was settled.</returns>
+    public async Task<FlowFoldEntry> SettleAsync(OrchestratorLayout layout, string main, string id, int exitCode)
     {
         ArgumentNullException.ThrowIfNull(layout);
 
@@ -85,8 +86,10 @@ public sealed class FoldLedger(OrchestrationStore store, IFileSystem fileSystem,
 
         var entry = store.ReadFolds(layout)?.Of(id) ?? throw new HarnessException(HarnessExit.InternalError, $"the run's ledger of its folds holds no fold '{id}' to settle");
         var paths = state == FlowFoldEntry.Refused ? entry.Paths : await LeftAsync(main, entry.Paths).ConfigureAwait(false);
+        var settled = entry with { State = state, SettledAt = clock.GetUtcNow(), Paths = paths };
 
-        Replace(layout, entry with { State = state, SettledAt = clock.GetUtcNow(), Paths = paths });
+        Replace(layout, settled);
+        return settled;
     }
 
     /// <summary>
@@ -97,21 +100,50 @@ public sealed class FoldLedger(OrchestrationStore store, IFileSystem fileSystem,
     /// <param name="layout">The run's orchestrator.</param>
     /// <param name="main">The main tree's root.</param>
     /// <param name="instance">The step instance.</param>
-    /// <returns>How many intents it settled.</returns>
-    public async Task<int> SettleInterruptedAsync(OrchestratorLayout layout, string main, string instance)
+    /// <returns>Each intent it settled, as it was settled.</returns>
+    public async Task<IReadOnlyList<FlowFoldEntry>> SettleInterruptedAsync(OrchestratorLayout layout, string main, string instance)
     {
         ArgumentNullException.ThrowIfNull(layout);
 
         var left = (store.ReadFolds(layout)?.Folds ?? [])
             .Where(entry => entry.State == FlowFoldEntry.Intended && string.Equals(entry.Instance, instance, StringComparison.Ordinal))
             .ToList();
+        var settled = new List<FlowFoldEntry>();
 
         foreach (var entry in left)
         {
-            Replace(layout, entry with { State = FlowFoldEntry.Interrupted, SettledAt = clock.GetUtcNow(), Paths = await LeftAsync(main, entry.Paths).ConfigureAwait(false) });
+            settled.Add(entry with { State = FlowFoldEntry.Interrupted, SettledAt = clock.GetUtcNow(), Paths = await LeftAsync(main, entry.Paths).ConfigureAwait(false) });
+            Replace(layout, settled[^1]);
         }
 
-        return left.Count;
+        return settled;
+    }
+
+    /// <summary>Every path <paramref name="entries"/> changed in the main tree, each once: what a fold left otherwise than it found.</summary>
+    /// <param name="entries">Settled entries of the ledger.</param>
+    public static IReadOnlyList<string> Changed(IEnumerable<FlowFoldEntry> entries)
+        => [.. entries.SelectMany(entry => entry.Paths).Where(path => path.Changed == true).Select(path => path.Path).Distinct(StringComparer.Ordinal)];
+
+    /// <summary>
+    /// The settled folds of <paramref name="ledger"/> whose changed paths the run's codebase graph has not taken yet - a
+    /// sync of them failed, was stopped, or was never reached for a crash or a throw: what the next sync of the folds takes.
+    /// </summary>
+    /// <param name="ledger">The run's ledger; null where it holds none.</param>
+    public static IReadOnlyList<FlowFoldEntry> Ungraphed(FlowFoldLedgerFile? ledger)
+        => [.. (ledger?.Folds ?? []).Where(entry => entry.State is not (FlowFoldEntry.Intended or FlowFoldEntry.Refused) && entry.Graphed != true)];
+
+    /// <summary>Records that the run's codebase graph took the paths each fold of <paramref name="ids"/> changed.</summary>
+    /// <param name="layout">The run's orchestrator.</param>
+    /// <param name="ids">The folds' ids.</param>
+    public void Graphed(OrchestratorLayout layout, IReadOnlyCollection<string> ids)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+        ArgumentNullException.ThrowIfNull(ids);
+
+        store.UpdateFolds(layout, ledger => ledger with
+        {
+            Folds = [.. ledger.Folds.Select(fold => ids.Contains(fold.Id, StringComparer.Ordinal) ? fold with { Graphed = true } : fold)],
+        });
     }
 
     /// <summary>

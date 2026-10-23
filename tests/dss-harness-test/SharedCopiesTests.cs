@@ -730,14 +730,14 @@ public sealed class SharedCopiesTests
     /// <summary>The real file system, except that one record cannot be written, as onto a disk with no room left.</summary>
     private sealed class UnwritableFileSystem(IFileSystem inner, string record) : PassThroughFileSystem(inner)
     {
-        public override void WriteAllTextAtomic(string path, string contents)
+        public override void WriteAtomic(string path, Action<Stream> write)
         {
             if (string.Equals(Path.GetFullPath(path), Path.GetFullPath(record), StringComparison.OrdinalIgnoreCase))
             {
                 throw new IOException("There is not enough space on the disk.");
             }
 
-            base.WriteAllTextAtomic(path, contents);
+            base.WriteAtomic(path, write);
         }
     }
 

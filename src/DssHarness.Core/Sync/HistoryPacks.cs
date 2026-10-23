@@ -160,9 +160,7 @@ internal sealed class HistoryPacks : IDisposable
         try
         {
             // Before the directory is made: one found with no record beside it would be nobody's to clear.
-            _fileSystem.WriteAllTextAtomic(
-                record,
-                JsonSerializer.Serialize(new Owner(_identity.CurrentMachine, _identity.CurrentId, _identity.Current), JsonStateFile.Options) + "\n");
+            JsonStateFile.Write(_fileSystem, record, new Owner(_identity.CurrentMachine, _identity.CurrentId, _identity.Current));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -198,7 +196,7 @@ internal sealed class HistoryPacks : IDisposable
             try
             {
                 // One that reads as nothing is left: what it records cannot be told to be nobody's.
-                if (JsonSerializer.Deserialize<Owner>(_fileSystem.ReadAllText(record), JsonStateFile.Options) is not { } owner
+                if (JsonStateFile.Read<Owner>(_fileSystem, record) is not { } owner
                     || _identity.Stands(owner.Machine, owner.ProcessId, owner.ProcessStamp))
                 {
                     continue;

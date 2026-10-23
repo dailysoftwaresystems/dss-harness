@@ -109,13 +109,16 @@ public static class FoldStandings
 /// in the step's directory (<c>fold.json</c>); answered, the dry run made again, and the consent given by name only where
 /// that names exactly what the question showed - a consent that no longer does is never passed; then the apply, held to
 /// what the dry run named, a fold's written ahead to the run's ledger of its folds and settled after. An apply its trees
-/// moved under is weighed again, at most <see cref="MostPasses"/> times.
+/// moved under is weighed again, at most <see cref="MostPasses"/> times. What a fold settled in the main tree - and what a
+/// crash left settled by the next attempt - syncs the run's graph's base by those paths; a refresh or a rebase that applied
+/// syncs its target's view; a deletion that applied drops its agent's view.
 /// </summary>
 /// <param name="contextLoader">Finds the repository and its configuration.</param>
 /// <param name="platform">This machine.</param>
 /// <param name="store">Reads the agent's record, and keeps the step's.</param>
 /// <param name="ledger">The run's ledger of its folds; null for a step that folds nothing into the main tree.</param>
-public abstract class FoldFamilyStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, FoldLedger? ledger) : IFlowStepTypeRunner
+/// <param name="graph">The engine's own syncs of the run's codebase graph.</param>
+public abstract class FoldFamilyStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, FoldLedger? ledger, FlowGraphSyncs graph) : IFlowStepTypeRunner
 {
     /// <summary>The most times one attempt weighs its dry run and applies, its trees moving under it each time, before it fails.</summary>
     public const int MostPasses = 3;
@@ -153,6 +156,18 @@ public abstract class FoldFamilyStepRunner(IHarnessContextLoader contextLoader, 
     /// <param name="applied">The apply's facts.</param>
     protected virtual JsonObject? OutputOf(AgentVerbFacts applied) => null;
 
+    /// <summary>
+    /// What an apply that answered <paramref name="applied"/> moves of the run's codebase graph beside what it folded into the
+    /// main tree, which the ledger's paths sync: nothing, unless a step says otherwise.
+    /// </summary>
+    /// <param name="graph">The engine's own syncs of the graph.</param>
+    /// <param name="call">The apply's call.</param>
+    /// <param name="context">The repository's context.</param>
+    /// <param name="applied">What the apply answered.</param>
+    /// <param name="cancellationToken">Stops the sync.</param>
+    protected virtual Task GraphAfterAsync(FlowGraphSyncs graph, FoldCall call, HarnessContext context, UseCaseResult<AgentVerbFacts> applied, CancellationToken cancellationToken)
+        => Task.CompletedTask;
+
     /// <inheritdoc/>
     public async Task<FlowStepResult> RunAsync(FlowStepRun run, CancellationToken cancellationToken)
     {
@@ -188,8 +203,10 @@ public abstract class FoldFamilyStepRunner(IHarnessContextLoader contextLoader, 
         {
             // An intent a crash left - the verb called, nothing recorded after - is settled from what the tree holds,
             // before this attempt does anything: a deletion whose crash came after its closing folds nothing now, and
-            // what its fold wrote is the ledger's all the same.
+            // what its fold wrote is the ledger's all the same - and the graph's base is synced by every path the
+            // ledger's folds changed that it has not taken yet.
             _ = await ledger.SettleInterruptedAsync(layout, place.Repository, run.Instance).ConfigureAwait(false);
+            await graph.AfterFoldAsync(run, place, context, cancellationToken).ConfigureAwait(false);
         }
 
         // The answer the question this step asked was given, where it came back with it: it stands where the answers stood
@@ -304,11 +321,20 @@ public abstract class FoldFamilyStepRunner(IHarnessContextLoader contextLoader, 
 
             if (intent is not null)
             {
-                await ledger!.SettleAsync(layout, place.Repository, intent, applied.Outcome.ExitCode).ConfigureAwait(false);
+                _ = await ledger!.SettleAsync(layout, place.Repository, intent, applied.Outcome.ExitCode).ConfigureAwait(false);
             }
 
+            // The step's record first: a stop while the graph is synced leaves the apply recorded, as the ledger has it,
+            // and what the graph was not given stays owed in the ledger.
             record = record with { Applied = AppliedOf(applied, intent) };
             store.WriteFoldRecord(directory, record);
+
+            if (ledger is not null)
+            {
+                await graph.AfterFoldAsync(run, place, context, cancellationToken).ConfigureAwait(false);
+            }
+
+            await GraphAfterAsync(graph, applying, context, applied, cancellationToken).ConfigureAwait(false);
 
             if (applied.Outcome.Succeeded)
             {
@@ -403,6 +429,26 @@ public abstract class FoldFamilyStepRunner(IHarnessContextLoader contextLoader, 
         };
     }
 
+    /// <summary>
+    /// The view of the agent whose worktree a refresh or a rebase wrote, synced where the apply wrote anything - it applied,
+    /// or stopped part way; the main tree is only read by either, so the base does not move.
+    /// </summary>
+    /// <param name="graph">The engine's own syncs of the graph.</param>
+    /// <param name="call">The apply's call.</param>
+    /// <param name="context">The repository's context.</param>
+    /// <param name="applied">What the apply answered.</param>
+    /// <param name="cancellationToken">Stops the sync.</param>
+    protected static Task Moved(FlowGraphSyncs graph, FoldCall call, HarnessContext context, UseCaseResult<AgentVerbFacts> applied, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(graph);
+        ArgumentNullException.ThrowIfNull(call);
+        ArgumentNullException.ThrowIfNull(applied);
+
+        return applied.Outcome.ExitCode is HarnessExit.Success or HarnessExit.Incomplete
+            ? graph.AfterMoveAsync(call.Run, call.Place, context, call.Agent, cancellationToken)
+            : Task.CompletedTask;
+    }
+
     /// <summary><paramref name="first"/>'s names, then each of <paramref name="second"/>'s not among them.</summary>
     /// <param name="first">The names a key gives; null where it gives none.</param>
     /// <param name="second">The names given by consent.</param>
@@ -432,8 +478,9 @@ public abstract class FoldFamilyStepRunner(IHarnessContextLoader contextLoader, 
 /// <param name="store">Reads the agent's record, and keeps the step's.</param>
 /// <param name="agents">Folds the agent.</param>
 /// <param name="ledger">The run's ledger of its folds.</param>
-public sealed class FoldStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IAgentService agents, FoldLedger ledger)
-    : FoldFamilyStepRunner(contextLoader, platform, store, ledger)
+/// <param name="graph">The engine's own syncs of the run's codebase graph.</param>
+public sealed class FoldStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IAgentService agents, FoldLedger ledger, FlowGraphSyncs graph)
+    : FoldFamilyStepRunner(contextLoader, platform, store, ledger, graph)
 {
     /// <inheritdoc/>
     public override string Type => "fold";
@@ -468,8 +515,9 @@ public sealed class FoldStepRunner(IHarnessContextLoader contextLoader, IHostPla
 /// <param name="store">Reads the agent's record, and keeps the step's.</param>
 /// <param name="agents">Deletes the agent.</param>
 /// <param name="ledger">The run's ledger of its folds.</param>
-public sealed class DeleteAgentStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IAgentService agents, FoldLedger ledger)
-    : FoldFamilyStepRunner(contextLoader, platform, store, ledger)
+/// <param name="graph">The engine's own syncs of the run's codebase graph.</param>
+public sealed class DeleteAgentStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IAgentService agents, FoldLedger ledger, FlowGraphSyncs graph)
+    : FoldFamilyStepRunner(contextLoader, platform, store, ledger, graph)
 {
     /// <inheritdoc/>
     public override string Type => "delete-agent";
@@ -497,6 +545,17 @@ public sealed class DeleteAgentStepRunner(IHarnessContextLoader contextLoader, I
     /// <inheritdoc/>
     protected override JsonObject? OutputOf(AgentVerbFacts applied) => FoldOutputOf(applied?.Folded);
 
+    /// <inheritdoc/>
+    /// <remarks>A deletion leaves the agent no longer live, whatever it answered: the view of each such agent leaves the graph.</remarks>
+    protected override Task GraphAfterAsync(FlowGraphSyncs graph, FoldCall call, HarnessContext context, UseCaseResult<AgentVerbFacts> applied, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(graph);
+        ArgumentNullException.ThrowIfNull(call);
+        ArgumentNullException.ThrowIfNull(applied);
+
+        return graph.AfterDeleteAsync(call.Run, call.Place, context, cancellationToken);
+    }
+
     private static bool Discards(FoldCall call) => call.Run.Step.DiscardUncommitted is true;
 }
 
@@ -509,11 +568,16 @@ public sealed class DeleteAgentStepRunner(IHarnessContextLoader contextLoader, I
 /// <param name="platform">This machine.</param>
 /// <param name="store">Reads the agent's record, and keeps the step's.</param>
 /// <param name="agents">Refreshes the agent.</param>
-public sealed class RefreshStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IAgentService agents)
-    : FoldFamilyStepRunner(contextLoader, platform, store, ledger: null)
+/// <param name="graph">The engine's own syncs of the run's codebase graph.</param>
+public sealed class RefreshStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IAgentService agents, FlowGraphSyncs graph)
+    : FoldFamilyStepRunner(contextLoader, platform, store, ledger: null, graph)
 {
     /// <inheritdoc/>
     public override string Type => "refresh";
+
+    /// <inheritdoc/>
+    protected override Task GraphAfterAsync(FlowGraphSyncs graph, FoldCall call, HarnessContext context, UseCaseResult<AgentVerbFacts> applied, CancellationToken cancellationToken)
+        => Moved(graph, call, context, applied, cancellationToken);
 
     /// <inheritdoc/>
     protected override bool HandsAroundConflicts => true;
@@ -560,11 +624,16 @@ public sealed class RefreshStepRunner(IHarnessContextLoader contextLoader, IHost
 /// <param name="platform">This machine.</param>
 /// <param name="store">Reads the agent's record, and keeps the step's.</param>
 /// <param name="agents">Moves the agent's base.</param>
-public sealed class RebaseStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IAgentService agents)
-    : FoldFamilyStepRunner(contextLoader, platform, store, ledger: null)
+/// <param name="graph">The engine's own syncs of the run's codebase graph.</param>
+public sealed class RebaseStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IAgentService agents, FlowGraphSyncs graph)
+    : FoldFamilyStepRunner(contextLoader, platform, store, ledger: null, graph)
 {
     /// <inheritdoc/>
     public override string Type => "rebase";
+
+    /// <inheritdoc/>
+    protected override Task GraphAfterAsync(FlowGraphSyncs graph, FoldCall call, HarnessContext context, UseCaseResult<AgentVerbFacts> applied, CancellationToken cancellationToken)
+        => Moved(graph, call, context, applied, cancellationToken);
 
     /// <inheritdoc/>
     protected override string? ProblemOf(FoldCall call) => RequestOf(call).Problem(OptionSpelling.Key) is { } problem ? $"a rebase: {problem}" : null;

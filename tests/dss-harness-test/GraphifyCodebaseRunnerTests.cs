@@ -104,13 +104,22 @@ public sealed class GraphifyCodebaseRunnerTests : IDisposable
     }
 
     /// <summary>
-    /// A step that names an agent's tree, run where its definition was not checked, is refused (13) and syncs nothing: an
-    /// agent's view is a later part of the graph, as the check of the definition says first.
+    /// With in, the step syncs the view of the worktree of the agent its create-agent made, held against the base - synced
+    /// first where the run has none - as an overlay of each file the worktree holds otherwise and each of the base's it does
+    /// not hold, its output's view naming the agent; an agent that only reads has the base for its view, and an agent with
+    /// no worktree to list is refused (13), syncing nothing of it.
     /// </summary>
     [Fact]
-    public async Task AStepNamingAnAgentsTree_IsRefused_AndSyncsNothing()
+    public async Task AStepNamingAnAgentsTree_SyncsThatAgentsView_HeldAgainstTheBase()
     {
-        var (harness, repository) = await RepositoryAsync();
+        var temp = new TempDirectory();
+        _made.Add(temp);
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("worker");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        OrchestrationKit.Write(worktree, Path.Combine("docs", "new.md"), "# New\n");
+        File.Delete(Path.Combine(worktree, "a.txt"));
+        await kit.CreateReadingAgentAsync("reader");
         var definition = Parse("""
             name: flow
             steps:
@@ -122,12 +131,24 @@ public sealed class GraphifyCodebaseRunnerTests : IDisposable
                 in: make
                 dependsOn: [make]
             """);
+        var step = Step(definition, "map");
 
-        var result = await Runner(harness).RunAsync(Run(Step(definition, "map"), repository.Path, definition), Token);
+        var viewed = await Runner(kit.Harness).RunAsync(Run(step, kit.Main, definition, OrchestrationKit.Orchestrator) with { WorksIn = "worker" }, Token);
+        var read = await Runner(kit.Harness).RunAsync(Run(step, kit.Main, definition, OrchestrationKit.Orchestrator) with { WorksIn = "reader" }, Token);
+        var none = await Runner(kit.Harness).RunAsync(Run(step, kit.Main, definition, OrchestrationKit.Orchestrator) with { WorksIn = "nobody" }, Token);
 
-        Assert.Equal((false, HarnessExit.Refused), (result.Passed, result.Exit));
-        Assert.EndsWith($" names in: 'make', and {WorkflowStepTypes.GraphViewsLater}. Nothing was synced.", result.Error, StringComparison.Ordinal);
-        Assert.False(Directory.Exists(OrchestratorLayout.Of(new HarnessLayout(repository.Path, repository.Path), "r1").GraphDirectory));
+        Assert.True(viewed.Passed, viewed.Error);
+        Assert.Equal("worker", (string?)viewed.Output!["view"]);
+        var view = kit.Harness.OrchestrationStore.ReadGraphView(kit.Layout, "worker")!;
+        Assert.Equal(kit.Harness.OrchestrationStore.ReadGraphManifest(kit.Layout)!.Digest, view.Base);
+        Assert.Equal(["b.txt", "docs/new.md"], view.Files.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(["a.txt"], view.Deleted);
+        Assert.Contains(kit.Harness.OrchestrationStore.ReadGraphManifest(kit.Layout)!.Files.Keys, path => path == "a.txt");
+        Assert.True(read.Passed, read.Error);
+        Assert.Equal(CodebaseGraphService.BaseView, (string?)read.Output!["view"]);
+        Assert.Equal((false, HarnessExit.Refused), (none.Passed, none.Exit));
+        Assert.EndsWith("of 'o1', which has no worktree to list. Nothing was synced.", none.Error, StringComparison.Ordinal);
+        Assert.Equal(["worker"], kit.Harness.OrchestrationStore.GraphViews(kit.Layout));
     }
 
     /// <summary>A graph whose longest path would not fit under the run's directory is refused before anything is synced.</summary>
@@ -248,10 +269,11 @@ public sealed class GraphifyCodebaseRunnerTests : IDisposable
             harness.Platform,
             new CodebaseGraphService(harness.GitClient, harness.FileSystem, harness.OrchestrationStore, CodeGraphExtractors.OfThisBuild, harness.Platform, new RunningToolDouble(), harness.Output, TimeProvider.System),
             harness.PathBudget,
-            CodeGraphExtractors.OfThisBuild);
+            CodeGraphExtractors.OfThisBuild,
+            harness.OrchestrationStore);
 
-    private static FlowStepRun Run(WorkflowStep step, string repository, WorkflowDefinition definition)
-        => new(step, step.Name, 1, FlowValue.Missing, null, null, [], new NoEvents(), Place: new FlowRunPlace(repository, "r1", null, definition), Read: new Dictionary<string, FlowValue>());
+    private static FlowStepRun Run(WorkflowStep step, string repository, WorkflowDefinition definition, string run = "r1")
+        => new(step, step.Name, 1, FlowValue.Missing, null, null, [], new NoEvents(), Place: new FlowRunPlace(repository, run, null, definition), Read: new Dictionary<string, FlowValue>());
 
     /// <summary>
     /// The real graph step for every graphify-codebase step - its first attempt of <c>flaky</c> ending incomplete (21), as a

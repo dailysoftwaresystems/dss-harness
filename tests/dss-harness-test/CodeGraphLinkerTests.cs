@@ -931,6 +931,798 @@ public sealed class CodeGraphLinkerTests
         Assert.DoesNotContain(linked.Edges, edge => edge is { From: "t:X.Go", To: "t:Other.Inner.Run" });
     }
 
+    /// <summary>
+    /// A link made again after any one file of a tree changed, came or went is the whole link of the tree as it stands - in
+    /// every edge, node and count, in order - whatever the change touched: a name, a base, a value's type, an extension, a
+    /// scope's parent or whether it is closed, an import by scope, path or address, what every file imports, an address root;
+    /// and so is a link made again from one made again.
+    /// </summary>
+    [Fact]
+    public void ALinkMadeAgain_IsTheWholeLinkOfTheTreeAsItStands_WhateverOneFileChanged()
+    {
+        var world = World();
+
+        foreach (var (path, versions) in Versions())
+        {
+            foreach (var version in versions.Append(null))
+            {
+                var after = Replaced(world, path, version);
+
+                var forth = Again(world, after);
+                var back = Again(after, world);
+
+                Assert.Equal(CodeGraphLinker.Link(world).Edges, CodeGraphLinker.Relink(forth, world).Edges);
+                Assert.True(back.References <= CodeGraphLinker.Link(world).References);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Over trees made at random - scopes open and closed with their parents, namespaces, imports of every form with
+    /// prefixes and filters, global imports, address roots, partial and nested types and their bases, values and their
+    /// types, extensions, every kind of qualifier - and one small change of one file at a time made at random - a value's
+    /// type, what a member extends, what it takes, a scope's parent or whether it is closed, an import or one of its fields,
+    /// an address root, a base, a type's qualified name or id, a declaration or a namespace come or gone, lines moved, a
+    /// language, a file come, gone or made anew - each link made again from the one before is the whole link of the tree as
+    /// it then stands.
+    /// </summary>
+    [Fact]
+    public void ALinkMadeAgain_IsTheWholeLink_OverTreesAndChangesMadeAtRandom()
+    {
+        var random = new Random(20_23);
+
+        for (var round = 0; round < 80; round++)
+        {
+            var tree = Enumerable.Range(0, 9).Select(_ => RandomFile(random)).DistinctBy(file => file.Path).ToArray();
+            var linked = CodeGraphLinker.Link(tree);
+
+            for (var change = 0; change < 30; change++)
+            {
+                var after = Changed(random, tree);
+                var again = CodeGraphLinker.Relink(linked, after);
+                var whole = CodeGraphLinker.Link(after);
+
+                Assert.Equal(whole.Edges, again.Edges);
+                Assert.Equal(whole.Symbols, again.Symbols, SymbolComparer.Instance);
+                Assert.Equal([.. whole.External], [.. again.External]);
+                Assert.Equal([.. whole.Unresolved], [.. again.Unresolved]);
+
+                (tree, linked) = (after, again);
+            }
+        }
+    }
+
+    /// <summary>
+    /// A link made again finds again the references of the file that changed and those that read a name its change added,
+    /// and keeps every other: a file whose declarations stand as they stood, its lines moved, has its own found again alone.
+    /// </summary>
+    [Fact]
+    public void ALinkMadeAgain_FindsOnlyWhatTheChangeCouldHaveChanged()
+    {
+        var caller = File("a.t", [Member("Go", 0)], [Call("Go", "Fresh", 0), Call("Go", "Kept", 0) with { Line = 2 }]);
+        var other = File("b.t", [Member("Other", 0)], [Call("Other", "Kept", 0)]);
+        var kept = File("k.t", [Member("Kept", 0)]);
+        var lib = File("lib.t", [Member("Old", 0)], [Call("Old", "Kept", 0)]);
+        CodeGraphFile[] before = [caller, other, kept, lib];
+
+        var added = Again(before, [caller, other, kept, File("lib.t", [Member("Old", 0), Member("Fresh", 0) with { Start = 2, End = 2 }], [Call("Old", "Kept", 0)])]);
+        var moved = Again(before, [caller, other, kept, File("lib.t", [Member("Old", 0) with { Start = 3, End = 4 }], [Call("Old", "Kept", 0) with { Line = 4 }])]);
+        var whole = CodeGraphLinker.Link(before);
+
+        Assert.Equal(4, whole.References);
+        Assert.Equal(2, added.References);
+        Assert.Contains(Edge("t:Go", "t:Fresh", CodeEdgeKinds.Calls, CodeConfidences.Unique), added.Edges);
+        Assert.Equal(1, moved.References);
+        Assert.Contains(new CodeEdge("t:Old", "t:Kept", CodeEdgeKinds.Calls, 4, CodeConfidences.Unique), moved.Edges);
+    }
+
+    /// <summary>A base that moved in one file finds again a call through that type made in another, and nothing else.</summary>
+    [Fact]
+    public void ALinkMadeAgain_FollowsABaseThatMoved_IntoAFileThatDidNot()
+    {
+        var shape = File("shape.t", [Type("Shape"), Member("Shape.Area", 0)]);
+        var round = File("round.t", [Type("Round"), Member("Round.Area", 0)]);
+        var use = File("use.t", [Type("Use"), Value("Use.circle", "Circle"), Member("Use.Go", 0)], [Call("Use.Go", "Area", 0, Named("circle")), Call("Use.Go", "Use", 0)]);
+        var circle = File("circle.t", [Type("Circle")], [Ref("Circle", CodeEdgeKinds.Inherits, "Shape")]);
+
+        var again = Again([shape, round, use, circle], [shape, round, use, File("circle.t", [Type("Circle")], [Ref("Circle", CodeEdgeKinds.Inherits, "Round")])]);
+
+        Assert.Contains(Edge("t:Use.Go", "t:Round.Area", CodeEdgeKinds.Calls, CodeConfidences.Exact), again.Edges);
+        Assert.Equal(2, again.References);
+    }
+
+    /// <summary>
+    /// Each kind of thing a finding reads of a file it is not made in, changed alone in that file while the finding's own
+    /// file stays as it was: a link made again finds that reference again, and is the whole link - the change altering
+    /// what the reading declaration's references find, so a finding that did not keep what it read would keep what it
+    /// found before.
+    /// </summary>
+    /// <param name="read">The thing read, as <see cref="ThingsAFindingReads"/> names it.</param>
+    [Theory]
+    [MemberData(nameof(ThingsAFindingReads))]
+    public void ALinkMadeAgain_FindsAgainAReferenceThatReadWhatAChangeAltered(string read)
+    {
+        var (reader, before, after) = Reading()[read];
+
+        Assert.NotEqual(Found(CodeGraphLinker.Link(before), reader), Found(CodeGraphLinker.Link(after), reader));
+        Again(before, after);
+    }
+
+    /// <summary>What the references of the declaration <paramref name="reader"/> found in <paramref name="linked"/>: its edges, and its counts of names found nowhere and of several.</summary>
+    private static string Found(CodeGraphLinked linked, string reader)
+        => string.Join(
+            '\n',
+            linked.Edges.Where(edge => edge.From == reader)
+                .Select(edge => $"{edge.To} {edge.Kind} {edge.Confidence}")
+                .Append($"external {linked.External.GetValueOrDefault(reader)}")
+                .Append($"unresolved {linked.Unresolved.GetValueOrDefault(reader)}"));
+
+    /// <summary>Every thing <see cref="Reading"/> changes alone.</summary>
+    public static TheoryData<string> ThingsAFindingReads() => [.. Reading().Keys];
+
+    /// <summary>
+    /// For each thing a finding reads of another file, the declaration whose reference reads it, a tree, and the same tree
+    /// with that one thing of that one file changed - every other file the very same object.
+    /// </summary>
+    private static Dictionary<string, (string Reader, CodeGraphFile[] Before, CodeGraphFile[] After)> Reading()
+    {
+        static ExtractQualifier TypeQualifier(string name) => new(CodeQualifierKinds.Type, name);
+        static ExtractQualifier Prefix(string name) => new(CodeQualifierKinds.Prefix, name);
+        static ExtractNode Node(string id, string kind, string qualified, string? scope) => new(id, kind, Last(qualified), qualified, 1, 1, qualified) { Scope = scope };
+
+        var cases = new Dictionary<string, (string Reader, CodeGraphFile[] Before, CodeGraphFile[] After)>(StringComparer.Ordinal);
+        var reader = "t:Go";
+
+        void Case(string read, CodeGraphFile[] kept, CodeGraphFile? was, CodeGraphFile? now)
+            => cases[read] = (reader, [.. kept, .. was is null ? [] : new[] { was }], [.. kept, .. now is null ? [] : new[] { now }]);
+
+        var go = Member("Go", 0);
+
+        // The repository by a name: a declaration of it come.
+        Case("a name, in the repository", [File("use.t", [go], [Call("Go", "Run", 0)])], null, File("run.t", [Member("Run", 0)]));
+
+        // An extension by its name: a member extending a type nothing declares, which the call's qualifier names.
+        Case(
+            "a name, among the extensions",
+            [File("use.t", [go], [Call("Go", "Run", 0, TypeQualifier("Ghost"))])],
+            null,
+            File("ext.t", [Type("Ext"), Member("Ext.Run", 0) with { Extends = "Ghost" }]));
+
+        // What a file imported by its path declares at its top.
+        var importsLib = File("use.t", [go], [Call("Go", "Run", 0, Prefix("p"))], imports: [Import(CodeImportForms.Relative, "lib.t") with { Prefix = "p" }]);
+        Case("a name, at the top of a file imported by its path", [importsLib], File("lib.t", [Member("Stop", 0)]), File("lib.t", [Member("Stop", 0), Member("Run", 0)]));
+
+        // Whether a declaration of a file imported by its path is at its top: one held by another is not.
+        Case(
+            "whether a declaration is at its file's top",
+            [importsLib],
+            File("lib.t", [Member("Stop", 0), Member("Run", 0)]),
+            File("lib.t", [Member("Stop", 0), Member("Run", 0) with { Parent = "t:Stop" }]));
+
+        // The open scopes of a file imported by its path: one it declares open now, which another file declares into.
+        Case(
+            "the open scopes of a file imported by its path",
+            [importsLib, File("s.t", [Member("lib.Run", 0)])],
+            File("lib.t", [Member("Stop", 0)]),
+            File("lib.t", [Member("Stop", 0)], scopes: [Open("lib")]));
+
+        // Whether a path is a file of the tree.
+        Case("a path", [importsLib], null, File("lib.t", [Member("Run", 0)]));
+
+        // The files of a name an import by a path's ending looks for.
+        Case(
+            "a file name",
+            [File("use.t", [go], [Call("Go", "Run", 0, Prefix("p"))], imports: [Import(CodeImportForms.Ending, "x.t") with { Prefix = "p" }])],
+            null,
+            File("deep/x.t", [Member("Run", 0)]));
+
+        // The address roots every file declares, which an import by an address is found through: one moved to the file's.
+        Case(
+            "the address roots",
+            [File("use.t", [go], [Call("Go", "Run", 0, Prefix("p"))], imports: [Import(CodeImportForms.Address, "pkg:x.t") with { Prefix = "p" }]), File("lib/x.t", [Member("Run", 0)])],
+            new CodeGraphFile("r.t", "t", Extract([]) with { AddressRoots = [new ExtractAddressRoot("pkg:", "elsewhere")] }),
+            new CodeGraphFile("r.t", "t", Extract([]) with { AddressRoots = [new ExtractAddressRoot("pkg:", "lib")] }));
+
+        // The containers of a qualified name: a type come where a namespace of that name was, whose base holds the call.
+        var stop = File("b.t", [Type("B"), Member("B.Stop", 0)]);
+        var callsStop = File("use.t", [go], [Call("Go", "Stop", 0, TypeQualifier("lib.A"))]);
+        Case(
+            "a qualified name",
+            [callsStop, stop, File("s.t", [Node("n:lib.A", CodeNodeKinds.Namespace, "lib.A", "lib")])],
+            null,
+            File("a.t", [Type("lib.A")], [Ref("lib.A", CodeEdgeKinds.Inherits, "B")]));
+
+        // The qualified names a written name's last run ends: a type come whose name ends with the qualifier.
+        Case(
+            "a name's last run",
+            [File("use.t", [go], [Call("Go", "Run", 0, TypeQualifier("in.B"))]), File("m.t", [Member("lib.in.B.Run", 0)])],
+            null,
+            File("t.t", [Type("lib.in.B")]));
+
+        // The parts of an id: a part come of another qualified name, whose scope holds the call.
+        Case(
+            "an id",
+            [File("use.t", [go], [Call("Go", "Run", 0, TypeQualifier("lib.A"))]), File("a.t", [Type("lib.A")]), File("f.t", [Member("far.A.Run", 0)])],
+            null,
+            File("b.t", [Node("t:lib.A", CodeNodeKinds.Type, "far.A", "far")]));
+
+        // The scope a type's own scope is declared in, as the type's file places it: the type that holds the call's moved to
+        // the scope an extension's type is declared in, so the call's file now reaches the extension.
+        reader = "t:lib.T.N.Go";
+        Case(
+            "the scope a type is",
+            [
+                File("b.t", [Type("lib.T.N"), Member("lib.T.N.Go", 0) with { Parent = "t:lib.T.N" }], [Call("lib.T.N.Go", "Run", 0, new ExtractQualifier(CodeQualifierKinds.This))]),
+                File("x.t", [Type("app.X"), Member("app.X.Run", 0) with { Extends = "lib.T.N" }]),
+            ],
+            File("a.t", [Type("lib.T")]),
+            File("a.t", [Type("lib.T") with { Scope = "app" }]));
+
+        // A type's bases as the first pass found them, which a base named through that type's bases is found again by.
+        reader = "t:C";
+        Case(
+            "a type's first bases",
+            [
+                File("b1.t", [Type("B1"), Type("B1.Inner")]),
+                File("b2.t", [Type("B2"), Type("B2.Inner")]),
+                File("c.t", [Type("C")], [Ref("C", CodeEdgeKinds.Inherits, "Inner") with { Qualifier = TypeQualifier("T") }]),
+            ],
+            File("t.t", [Type("T")], [Ref("T", CodeEdgeKinds.Inherits, "B1")]),
+            File("t.t", [Type("T")], [Ref("T", CodeEdgeKinds.Inherits, "B2")]));
+
+        // A type's bases as the second pass found them - through another type's first - which a call on the type looks in.
+        reader = "t:Go";
+        Case(
+            "a type's final bases",
+            [
+                File("b1.t", [Type("B1"), Type("B1.Inner"), Member("B1.Inner.Run", 0)]),
+                File("b2.t", [Type("B2"), Type("B2.Inner"), Member("B2.Inner.Run", 0)]),
+                File("t.t", [Type("T")], [Ref("T", CodeEdgeKinds.Inherits, "Inner") with { Qualifier = TypeQualifier("Q") }]),
+                File("use.t", [go], [Call("Go", "Run", 0, TypeQualifier("T"))]),
+            ],
+            File("q.t", [Type("Q")], [Ref("Q", CodeEdgeKinds.Inherits, "B1")]),
+            File("q.t", [Type("Q")], [Ref("Q", CodeEdgeKinds.Inherits, "B2")]));
+
+        // The scope a container is: closed in its own file, it is that file's alone, and not seen from the call's.
+        Case(
+            "the scope a container is",
+            [File("use.t", [go], [Call("Go", "Run", 0, TypeQualifier("lib.A"))]), File("m.t", [Member("lib.A.Run", 0)])],
+            File("a.t", [Type("lib.A")]),
+            File("a.t", [Type("lib.A")], scopes: [new ExtractScope("lib.A", Open: false)]));
+
+        // What a declaration is: a type become a namespace of the same id, which has no bases to look in.
+        Case(
+            "what a declaration is",
+            [callsStop, stop],
+            File("a.t", [Type("lib.A")], [Ref("lib.A", CodeEdgeKinds.Inherits, "B")]),
+            File("a.t", [Node("t:lib.A", CodeNodeKinds.Namespace, "lib.A", "lib")], [Ref("lib.A", CodeEdgeKinds.Inherits, "B")]));
+
+        // What a member takes: the fewest arguments, and the most.
+        Case("the fewest arguments a member takes", [File("use.t", [go], [Call("Go", "Run", 0)])], File("run.t", [Member("Run", 1)]), File("run.t", [Member("Run", 1) with { MinArity = 0 }]));
+        Case("the most arguments a member takes", [File("use.t", [go], [Call("Go", "Run", 1)])], File("run.t", [Member("Run", 0)]), File("run.t", [Member("Run", 0) with { MaxArity = 1 }]));
+
+        // A value's type, a call on which goes through it.
+        reader = "t:lib.U.Go";
+        Case(
+            "a value's type",
+            [
+                File("u.t", [Type("lib.U"), Member("lib.U.Go", 0)], [Call("lib.U.Go", "Stop", 0, new ExtractQualifier(CodeQualifierKinds.Value, "cur"))]),
+                File("bc.t", [Type("lib.B"), Member("lib.B.Stop", 0), Type("lib.C"), Member("lib.C.Stop", 0)]),
+            ],
+            File("v.t", [Value("lib.U.cur", "B")]),
+            File("v.t", [Value("lib.U.cur", "C")]));
+
+        // What another file imports, which what its extension extends is found through: each of an import's fields, and the
+        // language its global imports come by.
+        reader = "t:Go";
+        var shapes = new[] { File("g.t", [Type("geo.Shape")]), File("f.t", [Type("far.Shape")]), File("use.t", [go], [Call("Go", "Run", 0, TypeQualifier("far.Shape"))]) };
+        var extension = new[] { Type("Ext"), Member("Ext.Run", 0) with { Extends = "Shape" } };
+        var geo = Import(CodeImportForms.Scope, "geo");
+        var importing = File("ext.t", extension, imports: [geo]);
+
+        Case("an import's form", shapes, importing, File("ext.t", extension, imports: [geo with { Form = CodeImportForms.Relative }]));
+        Case("an import's target", shapes, importing, File("ext.t", extension, imports: [geo with { Target = "far" }]));
+        Case("an import's prefix", shapes, importing, File("ext.t", extension, imports: [geo with { Prefix = "G" }]));
+        Case("what an import shows", shapes, importing, File("ext.t", extension, imports: [geo with { Show = ["Other"] }]));
+        Case("what an import hides", shapes, importing, File("ext.t", extension, imports: [geo with { Hide = ["Shape"] }]));
+        Case(
+            "the language a file's global imports come by",
+            [.. shapes, File("usings.t", [], imports: [geo with { Global = true }])],
+            File("ext.t", extension),
+            new CodeGraphFile("ext.t", "u", File("ext.t", extension).Extract));
+
+        return cases;
+    }
+
+    /// <summary>Two files of one path are no tree: the linker refuses them.</summary>
+    [Fact]
+    public void TwoFilesOfOnePath_AreRefused()
+        => Assert.Throws<ArgumentException>(() => Link(File("a.t", [Member("Go", 0)]), File("a.t", [Member("Stop", 0)])));
+
+    /// <summary>
+    /// The link made again from <paramref name="before"/>'s, each file of <paramref name="after"/> that is one of
+    /// <paramref name="before"/>'s given as that very object - held to be the whole link of <paramref name="after"/>.
+    /// </summary>
+    private static CodeGraphLinked Again(IReadOnlyList<CodeGraphFile> before, IReadOnlyList<CodeGraphFile> after)
+    {
+        var again = CodeGraphLinker.Relink(CodeGraphLinker.Link(before), after);
+        var whole = CodeGraphLinker.Link(after);
+
+        Assert.Equal(whole.Edges, again.Edges);
+        Assert.Equal(whole.Symbols, again.Symbols, SymbolComparer.Instance);
+        Assert.Equal([.. whole.External], [.. again.External]);
+        Assert.Equal([.. whole.Unresolved], [.. again.Unresolved]);
+        Assert.True(again.References <= whole.References);
+        return again;
+    }
+
+    /// <summary>The paths a tree made at random holds its files at.</summary>
+    private static readonly string[] RandomPaths = ["lib/x.t", "lib/y.t", "lib/in/w.t", "app/m.t", "app/n.t", "app/ui/v.t", "far/z.t", "top.t", "q/r.t", "s.t"];
+
+    /// <summary>The scopes a tree made at random declares.</summary>
+    private static readonly string[] RandomScopes = ["lib", "app", "far", "lib.in", "app.ui"];
+
+    /// <summary>The names a tree made at random declares and names: few enough to meet, enough that a change touches some alone.</summary>
+    private static readonly string[] RandomNames = ["A", "B", "C", "D", "E", "F", "G", "H", "Run", "Stop", "Make", "Next"];
+
+    private static T Pick<T>(Random random, IReadOnlyList<T> from) => from[random.Next(from.Count)];
+
+    private static bool Chance(Random random, int one) => random.Next(one) == 0;
+
+    /// <summary>The first parts a dotted name made at random may begin with: a scope, a scope's last part, a name.</summary>
+    private static readonly string[] RandomHeads = [.. RandomScopes, "in", "ui", .. RandomNames];
+
+    /// <summary>A name, or a dotted name of two or three parts: a scope, a scope's last part or a name, then names.</summary>
+    private static string Dotted(Random random)
+        => random.Next(5) switch
+        {
+            0 or 1 => Pick(random, RandomNames),
+            2 => $"{Pick(random, RandomHeads)}.{Pick(random, RandomNames)}.{Pick(random, RandomNames)}",
+            _ => $"{Pick(random, RandomHeads)}.{Pick(random, RandomNames)}",
+        };
+
+    /// <summary>A file of a tree made at random, at a path of <see cref="RandomPaths"/>.</summary>
+    private static CodeGraphFile RandomFile(Random random, string? at = null)
+    {
+        var path = at ?? Pick(random, RandomPaths);
+
+        if (Chance(random, 15))
+        {
+            return new CodeGraphFile(path, "t", null);
+        }
+
+        var declared = RandomScopes.Where(_ => Chance(random, 2)).Select(scope => new ExtractScope(scope, Open: !Chance(random, 6)) { Parent = Chance(random, 3) ? Pick(random, RandomScopes) : null }).ToList();
+        var nodes = new List<ExtractNode>();
+
+        for (var types = random.Next(0, 4); types > 0; types--)
+        {
+            AddType(random, nodes, declared);
+        }
+
+        if (Chance(random, 4) && declared.Count > 0)
+        {
+            AddNamespace(random, nodes, declared);
+        }
+
+        if (Chance(random, 3))
+        {
+            nodes.Add(new ExtractNode($"t:{path}.Go", CodeNodeKinds.Member, "Go", "Go", 1, 1, "Go") { MinArity = 0, MaxArity = 0 });
+        }
+
+        var references = new List<ExtractReference>();
+
+        foreach (var type in nodes.Where(node => node.Kind == CodeNodeKinds.Type && Chance(random, 2)))
+        {
+            references.Add(RandomBase(random, type.Id));
+        }
+
+        for (var made = nodes.Count == 0 ? 0 : random.Next(0, 9); made > 0; made--)
+        {
+            references.Add(RandomReference(random, Pick(random, nodes).Id, made));
+        }
+
+        return new CodeGraphFile(path, Chance(random, 12) ? "u" : "t", new FileExtract(nodes)
+        {
+            References = references,
+            Scopes = declared,
+            Imports = [.. Enumerable.Range(0, random.Next(0, 3)).Select(_ => RandomImport(random))],
+            AddressRoots = Chance(random, 5) ? [RandomRoot(random)] : [],
+        });
+    }
+
+    /// <summary>
+    /// Adds a type of a scope <paramref name="declared"/> holds, of a type <paramref name="nodes"/> holds - a nested one -
+    /// or of none, with members: values of a type or of none, members that take one or no argument, some extending a type.
+    /// </summary>
+    private static void AddType(Random random, List<ExtractNode> nodes, IReadOnlyList<ExtractScope> declared)
+    {
+        var holders = nodes.Where(node => node.Kind == CodeNodeKinds.Type).Select(node => node.Qualified).ToList();
+        var scope = holders.Count > 0 && Chance(random, 4) ? Pick(random, holders)
+            : Chance(random, 4) || declared.Count == 0 ? null
+            : Pick(random, declared).Name;
+        var name = Pick(random, RandomNames);
+        var qualified = scope is null ? name : $"{scope}.{name}";
+
+        if (nodes.Any(node => node.Id == $"t:{qualified}"))
+        {
+            return;
+        }
+
+        nodes.Add(new ExtractNode($"t:{qualified}", CodeNodeKinds.Type, name, qualified, 1, 1, qualified) { Scope = scope });
+
+        for (var members = random.Next(0, 5); members > 0; members--)
+        {
+            AddMember(random, nodes, qualified);
+        }
+    }
+
+    /// <summary>Adds a namespace node for a scope <paramref name="declared"/> holds, placed in its parent where it names one.</summary>
+    private static void AddNamespace(Random random, List<ExtractNode> nodes, IReadOnlyList<ExtractScope> declared)
+    {
+        var scope = Pick(random, declared);
+        var dot = scope.Name.LastIndexOf('.');
+
+        if (nodes.Any(node => node.Id == $"n:{scope.Name}"))
+        {
+            return;
+        }
+
+        nodes.Add(new ExtractNode($"n:{scope.Name}", CodeNodeKinds.Namespace, scope.Name[(dot + 1)..], scope.Name, 1, 1, scope.Name) { Scope = dot < 0 ? null : scope.Name[..dot] });
+    }
+
+    private static void AddMember(Random random, List<ExtractNode> nodes, string type)
+    {
+        var member = Pick(random, RandomNames);
+        var value = Chance(random, 2);
+        var arity = random.Next(0, 2);
+        var id = value ? $"t:{type}.{member}" : $"t:{type}.{member}({arity})";
+
+        if (nodes.Any(node => node.Id == id))
+        {
+            return;
+        }
+
+        nodes.Add(new ExtractNode(id, CodeNodeKinds.Member, member, $"{type}.{member}", 1, 1, member)
+        {
+            Scope = type,
+            Parent = $"t:{type}",
+            MinArity = value ? null : arity,
+            MaxArity = value ? null : arity,
+            ValueType = value && !Chance(random, 3) ? Dotted(random) : null,
+            Extends = !value && Chance(random, 3) ? Dotted(random) : null,
+            Prototype = !value && Chance(random, 8),
+            Test = !value && Chance(random, 8),
+        });
+    }
+
+    private static ExtractReference RandomBase(Random random, string type)
+        => new(type, Pick(random, [CodeEdgeKinds.Inherits, CodeEdgeKinds.Implements, CodeEdgeKinds.MixesIn]), Pick(random, RandomNames), 1)
+        {
+            Qualifier = random.Next(4) switch
+            {
+                0 => new ExtractQualifier(CodeQualifierKinds.Type, Pick(random, RandomScopes)),
+                1 => new ExtractQualifier(CodeQualifierKinds.Type, Dotted(random)),
+                _ => null,
+            },
+        };
+
+    private static ExtractReference RandomReference(Random random, string from, int line)
+        => new(from, Pick(random, [CodeEdgeKinds.Calls, CodeEdgeKinds.Calls, CodeEdgeKinds.References]), Pick(random, RandomNames), line)
+        {
+            Arity = random.Next(0, 2),
+            Qualifier = random.Next(9) switch
+            {
+                0 or 1 => null,
+                2 => new ExtractQualifier(CodeQualifierKinds.Named, Dotted(random)),
+                3 => new ExtractQualifier(CodeQualifierKinds.Type, Dotted(random)),
+                4 or 5 => new ExtractQualifier(CodeQualifierKinds.Value, Dotted(random)),
+                6 => new ExtractQualifier(CodeQualifierKinds.This, null),
+                7 => new ExtractQualifier(CodeQualifierKinds.Base, null),
+                _ => new ExtractQualifier(CodeQualifierKinds.Prefix, "p"),
+            },
+        };
+
+    private static ExtractImport RandomImport(Random random)
+        => random.Next(4) switch
+        {
+            0 or 1 => Import(CodeImportForms.Scope, Pick(random, [.. RandomScopes, "lib.A", "app.B", "far.C"])) with
+            {
+                Prefix = Chance(random, 3) ? Pick(random, ["p", "A"]) : null,
+                Global = Chance(random, 6),
+                Show = Chance(random, 6) ? [Pick(random, RandomNames)] : null,
+                Hide = Chance(random, 6) ? [Pick(random, RandomNames)] : null,
+            },
+            2 => Import(Pick(random, [CodeImportForms.Relative, CodeImportForms.Ending]), Pick(random, ["../lib/x.t", "x.t", "../top.t", "y.t", "../app/m.t", "in/w.t", "lib/y.t", "z.t"])) with
+            {
+                Prefix = Chance(random, 3) ? "p" : null,
+            },
+            _ => Import(CodeImportForms.Address, Pick(random, ["pkg:x.t", "pkg:in/w.t", "q:m.t", "q:ui/v.t"])),
+        };
+
+    private static ExtractAddressRoot RandomRoot(Random random) => new(Pick(random, ["pkg:", "q:"]), Pick(random, ["../lib", "../app", "lib", ".", "../../out"]));
+
+    /// <summary>
+    /// <paramref name="tree"/> with one small change of one file made at random: a value's type, what a member extends, a
+    /// scope's parent or whether it is closed, an import, an address root, a base, a declaration come or gone, what holds
+    /// one, lines moved, a language - or a file come, gone or made anew.
+    /// </summary>
+    private static CodeGraphFile[] Changed(Random random, CodeGraphFile[] tree)
+    {
+        var file = Pick(random, tree);
+
+        switch (random.Next(14))
+        {
+            case 0:
+                var made = RandomFile(random);
+                return Replaced(tree, made.Path, made);
+
+            case 1 when tree.Length > 2:
+                return [.. tree.Where(other => other.Path != file.Path)];
+        }
+
+        if (file.Extract is not { } extract)
+        {
+            return Replaced(tree, file.Path, RandomFile(random, file.Path));
+        }
+
+        var nodes = extract.Nodes.ToList();
+        var references = extract.References.ToList();
+        var scopes = extract.Scopes.ToList();
+        var imports = extract.Imports.ToList();
+        var roots = extract.AddressRoots.ToList();
+        var language = file.Language;
+
+        void Each(Func<ExtractNode, bool> which, Func<ExtractNode, ExtractNode> change)
+        {
+            var at = nodes.FindIndex(node => which(node));
+
+            if (at >= 0)
+            {
+                nodes[at] = change(nodes[at]);
+            }
+        }
+
+        switch (random.Next(20))
+        {
+            case 0:
+                Each(node => node.Kind == CodeNodeKinds.Member && node.MinArity is null && Chance(random, 2), node => node with { ValueType = Chance(random, 4) ? null : Dotted(random) });
+                break;
+
+            case 13:
+                Each(node => node.Kind == CodeNodeKinds.Member && node.MinArity is not null && Chance(random, 2), node => node with { MinArity = 1 - node.MinArity, MaxArity = 1 - node.MinArity });
+                break;
+
+            case 14 when imports.Count > 0:
+                var changing = random.Next(imports.Count);
+                imports[changing] = random.Next(4) switch
+                {
+                    0 => imports[changing] with { Prefix = imports[changing].Prefix is null ? Pick(random, ["p", "A"]) : null },
+                    1 => imports[changing] with { Show = imports[changing].Show is null ? [Pick(random, RandomNames)] : null },
+                    2 => imports[changing] with { Hide = imports[changing].Hide is null ? [Pick(random, RandomNames)] : null },
+                    _ => imports[changing] with { Global = !imports[changing].Global },
+                };
+                break;
+
+            case 15:
+                // A type named otherwise, its id kept: its qualified name and its run's end move, and what its members are in stays.
+                Each(node => node.Kind == CodeNodeKinds.Type && Chance(random, 2), node => node with { Qualified = Pick(random, [.. RandomHeads, "lib.in"]) + "." + node.Name });
+                break;
+
+            case 16 when nodes.FirstOrDefault(node => node.Kind == CodeNodeKinds.Type) is { } renamed:
+                // A type whose id is another's: one type of two parts, or two of one - what is in it, and its references, with it.
+                var id = $"t:{Pick(random, RandomScopes)}.{renamed.Name}";
+
+                if (nodes.All(node => node.Id != id))
+                {
+                    nodes = [.. nodes.Select(node => node.Id == renamed.Id ? node with { Id = id } : node.Parent == renamed.Id ? node with { Parent = id } : node)];
+                    references = [.. references.Select(reference => reference.From == renamed.Id ? reference with { From = id } : reference)];
+                }
+
+                break;
+
+            case 18 when nodes.Count > 1:
+                // What holds a declaration: none, which sets it at its file's top where it is in no scope, or another.
+                var held = random.Next(nodes.Count);
+                nodes[held] = nodes[held] with { Parent = nodes[held].Parent is null ? Pick(random, nodes).Id : null };
+                break;
+
+            case 17:
+                if (nodes.FirstOrDefault(node => node.Kind == CodeNodeKinds.Namespace) is { } space && Chance(random, 2))
+                {
+                    nodes.Remove(space);
+                    references.RemoveAll(reference => reference.From == space.Id);
+                }
+                else if (scopes.Count > 0)
+                {
+                    AddNamespace(random, nodes, scopes);
+                }
+
+                break;
+
+            case 1:
+                Each(node => node.Kind == CodeNodeKinds.Member && node.MinArity is not null && Chance(random, 2), node => node with { Extends = Chance(random, 3) ? null : Dotted(random) });
+                break;
+
+            case 2 when scopes.Count > 0:
+                var parented = random.Next(scopes.Count);
+                scopes[parented] = scopes[parented] with { Parent = Chance(random, 3) ? null : Pick(random, RandomScopes) };
+                break;
+
+            case 3 when scopes.Count > 0:
+                var toggled = random.Next(scopes.Count);
+                scopes[toggled] = scopes[toggled] with { Open = !scopes[toggled].Open };
+                break;
+
+            case 4:
+                if (imports.Count > 0 && Chance(random, 2))
+                {
+                    imports.RemoveAt(random.Next(imports.Count));
+                }
+                else
+                {
+                    imports.Insert(random.Next(imports.Count + 1), RandomImport(random));
+                }
+
+                break;
+
+            case 5:
+                roots = roots.Count > 0 && Chance(random, 2) ? [] : [RandomRoot(random)];
+                break;
+
+            case 6:
+                var bases = references.FindIndex(reference => reference.Kind is CodeEdgeKinds.Inherits or CodeEdgeKinds.Implements or CodeEdgeKinds.MixesIn);
+                var type = nodes.FirstOrDefault(node => node.Kind == CodeNodeKinds.Type);
+
+                if (bases >= 0 && Chance(random, 3))
+                {
+                    references.RemoveAt(bases);
+                }
+                else if (bases >= 0)
+                {
+                    references[bases] = references[bases] with { Name = Pick(random, RandomNames) };
+                }
+                else if (type is not null)
+                {
+                    references.Add(RandomBase(random, type.Id));
+                }
+
+                break;
+
+            case 7:
+                if (nodes.FirstOrDefault(node => node.Kind == CodeNodeKinds.Type && Chance(random, 2)) is { } holder)
+                {
+                    AddMember(random, nodes, holder.Qualified);
+                }
+                else
+                {
+                    AddType(random, nodes, scopes);
+                }
+
+                break;
+
+            case 8 when nodes.Count > 0:
+                var gone = Pick(random, nodes).Id;
+                nodes.RemoveAll(node => node.Id == gone || node.Parent == gone);
+                references.RemoveAll(reference => nodes.All(node => node.Id != reference.From));
+                break;
+
+            case 9:
+                nodes = [.. nodes.Select(node => node with { Start = node.Start + 1, End = node.End + 2 })];
+                references = [.. references.Select(reference => reference with { Line = reference.Line + 3 })];
+                break;
+
+            case 10:
+                language = language == "t" ? "u" : "t";
+                break;
+
+            case 11 when nodes.Count > 0:
+                references.Add(RandomReference(random, Pick(random, nodes).Id, references.Count + 1));
+                break;
+
+            default:
+                Each(node => node.Kind == CodeNodeKinds.Type && Chance(random, 2), node => node with { Scope = Chance(random, 3) ? null : Pick(random, RandomScopes) });
+                break;
+        }
+
+        return Replaced(tree, file.Path, file with
+        {
+            Language = language,
+            Extract = extract with { Nodes = nodes, References = references, Scopes = scopes, Imports = imports, AddressRoots = roots },
+        });
+    }
+
+    /// <summary><paramref name="world"/> with the file at <paramref name="path"/> made <paramref name="version"/>, or gone where it is null - and added where it was not there.</summary>
+    private static CodeGraphFile[] Replaced(CodeGraphFile[] world, string path, CodeGraphFile? version)
+        => [.. world.Where(file => file.Path != path), .. version is null ? [] : new[] { version }];
+
+    /// <summary>A tree that reads every kind of thing a finding may read.</summary>
+    private static CodeGraphFile[] World()
+        =>
+        [
+            File("lib/base.t", [Type("lib.Base"), Member("lib.Base.Run", 0), Member("lib.Base.Stop", 0)], scopes: [Open("lib")]),
+            File("lib/shape.t", [Type("lib.Shape"), Member("lib.Shape.Area", 0), Value("lib.Shape.Next", "Shape")], [Ref("lib.Shape", CodeEdgeKinds.Inherits, "Base")], [Open("lib")]),
+            File("lib/ext.t", [Type("lib.Ext"), Member("lib.Ext.Scale", 1) with { Extends = "Shape" }], scopes: [Open("lib")]),
+            File(
+                "app/main.t",
+                [Type("app.Main"), Member("app.Main.Go", 0), Value("app.Main.shape", "Shape")],
+                [
+                    Call("app.Main.Go", "Run", 0, Named("shape")),
+                    Call("app.Main.Go", "Scale", 1, Named("shape")) with { Line = 2 },
+                    Call("app.Main.Go", "Area", 0, new ExtractQualifier(CodeQualifierKinds.Value, "shape.Next")) with { Line = 3 },
+                    Call("app.Main.Go", "Helper", 0) with { Line = 4 },
+                    Ref("app.Main", CodeEdgeKinds.References, "Shape") with { Line = 5 },
+                    Call("app.Main.Go", "Secret", 0) with { Line = 6 },
+                    Call("app.Main.Go", "Tool", 0, new ExtractQualifier(CodeQualifierKinds.Prefix, "g")) with { Line = 7 },
+                ],
+                [Open("app")],
+                [Import(CodeImportForms.Scope, "lib")]),
+            File("app/helper.t", [Member("app.Helper", 0)], scopes: [new ExtractScope("app", Open: true) { Parent = "lib" }]),
+            File("app/rel.t", [Member("Rel", 0)], [Call("Rel", "Base", 0)], imports: [Import(CodeImportForms.Relative, "../lib/base.t"), Import(CodeImportForms.Relative, "tools.t") with { Prefix = "g" }]),
+            File("app/tools.t", [Member("Tool", 0)]),
+            File("cfg/roots.t", []) with { Extract = new FileExtract([]) { AddressRoots = [new("pkg:", "lib")] } },
+            File("app/addr.t", [Member("Addr", 0)], [Call("Addr", "Shape", 0)], imports: [Import(CodeImportForms.Address, "pkg:shape.t")]),
+            File("glob.t", [], imports: [Import(CodeImportForms.Scope, "lib") with { Global = true }]),
+            File("closed.t", [Member("Go2", 0), Member("hidden.Secret", 0) with { Scope = "hidden" }], [Call("Go2", "Secret", 0)], [new ExtractScope("hidden", Open: false)]),
+            File("notes.t", []) with { Extract = null },
+        ];
+
+    /// <summary>For each file of <see cref="World"/>, the other versions of it a change may make.</summary>
+    private static IEnumerable<(string Path, CodeGraphFile[] Versions)> Versions()
+    {
+        yield return ("lib/base.t",
+        [
+            File("lib/base.t", [Type("lib.Base"), Member("lib.Base.Run", 0) with { Start = 4, End = 9 }, Member("lib.Base.Stop", 0)], scopes: [Open("lib")]),
+            File("lib/base.t", [Type("lib.Base"), Member("lib.Base.Walk", 0), Member("lib.Base.Stop", 0)], scopes: [Open("lib")]),
+            File("lib/base.t", [Type("lib.Base"), Member("lib.Base.Run", 0), Member("lib.Base.Run", 1) with { Id = "t:lib.Base.Run(1)" }], scopes: [Open("lib")]),
+            File("lib/base.t", [Type("lib.Base"), Member("lib.Base.Run", 0)], scopes: [new ExtractScope("lib", Open: false)]),
+        ]);
+        yield return ("lib/shape.t",
+        [
+            File("lib/shape.t", [Type("lib.Shape"), Member("lib.Shape.Area", 0), Value("lib.Shape.Next", "Shape")], [Ref("lib.Shape", CodeEdgeKinds.Inherits, "Ext")], [Open("lib")]),
+            File("lib/shape.t", [Type("lib.Shape"), Member("lib.Shape.Area", 0), Value("lib.Shape.Next", "Base")], scopes: [Open("lib")]),
+            File("lib/shape.t", [Type("lib.Shape"), Member("lib.Shape.Run", 0), Value("lib.Shape.Next", null)], [Ref("lib.Shape", CodeEdgeKinds.Inherits, "Base")], [Open("lib")]),
+        ]);
+        yield return ("lib/ext.t",
+        [
+            File("lib/ext.t", [Type("lib.Ext"), Member("lib.Ext.Scale", 1) with { Extends = "Base" }], scopes: [Open("lib")]),
+            File("lib/ext.t", [Type("lib.Ext"), Member("lib.Ext.Scale", 1)], scopes: [Open("lib")]),
+            File("lib/ext.t", [Type("far.Ext"), Member("far.Ext.Scale", 1) with { Extends = "Shape" }], scopes: [Open("far")]),
+        ]);
+        yield return ("app/main.t",
+        [
+            File("app/main.t", [Type("app.Main"), Member("app.Main.Go", 0), Value("app.Main.shape", "Base")], [Call("app.Main.Go", "Run", 0, Named("shape"))], [Open("app")], [Import(CodeImportForms.Scope, "lib")]),
+            File("app/main.t", [Type("app.Main"), Member("app.Main.Go", 0)], [Call("app.Main.Go", "Rel", 0)], [Open("app")]),
+        ]);
+        yield return ("app/helper.t",
+        [
+            File("app/helper.t", [Member("app.Helper", 0)], scopes: [Open("app")]),
+            File("app/helper.t", [Member("app.Helper", 0), Member("app.Run", 0)], scopes: [new ExtractScope("app", Open: true) { Parent = "lib" }]),
+        ]);
+        yield return ("app/rel.t",
+        [
+            File("app/rel.t", [Member("Rel", 0)], [Call("Rel", "Base", 0)], imports: [Import(CodeImportForms.Relative, "../lib/shape.t")]),
+            File("app/rel.t", [Member("Rel", 0)], [Call("Rel", "Base", 0)], imports: [Import(CodeImportForms.Ending, "base.t")]),
+        ]);
+        yield return ("app/tools.t", [File("app/tools.t", [Member("Tool", 0), Member("Tool2", 0)])]);
+        yield return ("cfg/roots.t",
+        [
+            File("cfg/roots.t", []) with { Extract = new FileExtract([]) { AddressRoots = [new("pkg:", "app")] } },
+            File("cfg/roots.t", []) with { Extract = new FileExtract([]) { AddressRoots = [new("lib:", "lib")] } },
+        ]);
+        yield return ("app/addr.t", [File("app/addr.t", [Member("Addr", 0)], [Call("Addr", "Shape", 0)], imports: [Import(CodeImportForms.Address, "pkg:base.t")])]);
+        yield return ("glob.t",
+        [
+            File("glob.t", [], imports: [Import(CodeImportForms.Scope, "app") with { Global = true }]),
+            File("glob.t", []) with { Language = "u" },
+        ]);
+        yield return ("closed.t",
+        [
+            File("closed.t", [Member("Go2", 0), Member("hidden.Secret", 0) with { Scope = "hidden" }], [Call("Go2", "Secret", 0)], [new ExtractScope("hidden", Open: true)]),
+        ]);
+        yield return ("notes.t", [File("notes.t", [Member("Helper", 0)])]);
+        yield return ("app/new.t", [File("app/new.t", [Member("app.Helper", 0), Type("lib.Shape")], scopes: [Open("app"), Open("lib")])]);
+    }
+
     private static CodeGraphLinked Link(params CodeGraphFile[] files) => CodeGraphLinker.Link(files);
 
     private static CodeGraphFile File(string path, IReadOnlyList<ExtractNode> nodes, IReadOnlyList<ExtractReference>? references = null, IReadOnlyList<ExtractScope>? scopes = null, IReadOnlyList<ExtractImport>? imports = null)

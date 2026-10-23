@@ -111,6 +111,36 @@ public sealed class FoldLedgerTests
     }
 
     /// <summary>
+    /// What the run's graph is owed is every settled fold - one that wrote, one that stopped part way, one a crash cut off -
+    /// until the graph is said to have taken it; an intent and a refusal owe it nothing.
+    /// </summary>
+    [Fact]
+    public async Task TheFoldsTheGraphIsOwed_AreTheSettledOnes_UntilEachIsTaken()
+    {
+        using var temp = new TempDirectory();
+        var (harness, layout, ledger) = Ledger(temp);
+        var planned = new AgentPlanned([], [], [], [], null) { Written = ["a.txt"] };
+
+        var applied = await ledger.IntendAsync(layout, temp.Path, "fold", 1, "fold", "a1", planned, Token);
+        File.WriteAllText(Path.Combine(temp.Path, "a.txt"), "after\n");
+        await ledger.SettleAsync(layout, temp.Path, applied, HarnessExit.Success);
+        var refused = await ledger.IntendAsync(layout, temp.Path, "fold", 2, "fold", "a1", planned, Token);
+        await ledger.SettleAsync(layout, temp.Path, refused, HarnessExit.Refused);
+        var interrupted = await ledger.IntendAsync(layout, temp.Path, "fold", 3, "fold", "a1", planned, Token);
+        _ = await ledger.SettleInterruptedAsync(layout, temp.Path, "fold");
+        _ = await ledger.IntendAsync(layout, temp.Path, "other", 1, "fold", "a2", planned, Token);
+
+        Assert.Equal([applied, interrupted], FoldLedger.Ungraphed(harness.OrchestrationStore.ReadFolds(layout)).Select(entry => entry.Id));
+        Assert.Equal(["a.txt"], FoldLedger.Changed(FoldLedger.Ungraphed(harness.OrchestrationStore.ReadFolds(layout))));
+
+        ledger.Graphed(layout, [applied]);
+
+        Assert.Equal([interrupted], FoldLedger.Ungraphed(harness.OrchestrationStore.ReadFolds(layout)).Select(entry => entry.Id));
+        Assert.True(harness.OrchestrationStore.ReadFolds(layout)!.Of(applied)!.Graphed);
+        Assert.Empty(FoldLedger.Ungraphed(null));
+    }
+
+    /// <summary>
     /// An intent a crash left - the verb called, nothing recorded after - is settled interrupted by the step's next attempt,
     /// with what the tree holds now: another instance's intent is left as it is.
     /// </summary>
@@ -128,11 +158,11 @@ public sealed class FoldLedgerTests
         var settled = await ledger.SettleInterruptedAsync(layout, temp.Path, "fold");
         var file = harness.OrchestrationStore.ReadFolds(layout)!;
 
-        Assert.Equal(1, settled);
+        Assert.Single(settled);
         Assert.Equal(FlowFoldEntry.Interrupted, file.Of(mine)!.State);
         Assert.Equal((FileContentHash.Of("written before the crash\n"u8), true), (file.Of(mine)!.Paths[0].Left, file.Of(mine)!.Paths[0].Changed));
         Assert.Equal(FlowFoldEntry.Intended, file.Of(other)!.State);
-        Assert.Equal(0, await ledger.SettleInterruptedAsync(layout, temp.Path, "fold"));
+        Assert.Empty(await ledger.SettleInterruptedAsync(layout, temp.Path, "fold"));
     }
 
     /// <summary>
@@ -180,6 +210,8 @@ public sealed class FoldLedgerTests
     [InlineData("twice", "its fold 'f1': 'a.txt' is named twice")]
     [InlineData("readWhileRefused", "its fold 'f1': 'a.txt' says what the fold left exactly where it wrote nothing yet")]
     [InlineData("unreadSettled", "its fold 'f1': 'a.txt' says what the fold left exactly where it was settled")]
+    [InlineData("graphedRefused", "its fold 'f1': it says the graph took what it changed where it changed nothing yet, or says it did not")]
+    [InlineData("graphedFalse", "its fold 'f1': it says the graph took what it changed where it changed nothing yet, or says it did not")]
     public void TheFoldLedger_IsStrict(string wrong, string problem)
     {
         var path = new FlowFoldPath("a.txt", "written", Digest, Left: null, Changed: true);
@@ -203,6 +235,8 @@ public sealed class FoldLedgerTests
             "twice" => ledger with { Folds = [entry with { Paths = [path, path with { What = "merged" }] }] },
             "readWhileRefused" => ledger with { Folds = [entry with { State = FlowFoldEntry.Refused }] },
             "unreadSettled" => ledger with { Folds = [entry with { Paths = [path with { Changed = null }] }] },
+            "graphedRefused" => ledger with { Folds = [entry with { State = FlowFoldEntry.Refused, Paths = [path with { Changed = null }], Graphed = true }] },
+            "graphedFalse" => ledger with { Folds = [entry with { Graphed = false }] },
             _ => throw new ArgumentOutOfRangeException(nameof(wrong), wrong, "no such case"),
         };
 

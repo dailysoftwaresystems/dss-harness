@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text;
 using DssHarness.Core.Codebase;
 using DssHarness.Core.Codebase.Languages;
+using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Output;
@@ -178,8 +179,15 @@ public sealed class CodebaseGraphServiceTests
         await graph.SyncAsync();
         File.WriteAllText(graph.Run.GraphManifestFile, File.ReadAllText(graph.Run.GraphManifestFile).Replace("\"schema\": 1", "\"schema\": 99", StringComparison.Ordinal));
 
+        // What only the manifest that does not read named is named by no record once it is written again - an extract
+        // of it, as the stray stands for, goes with the sweep, though this process synced the graph before.
+        var stray = Path.Combine(graph.Run.GraphExtractsDirectory, "ab", "stray.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(stray)!);
+        File.WriteAllText(stray, "{}");
+
         var synced = await graph.SyncAsync();
 
+        Assert.False(File.Exists(stray));
         Assert.Equal(2, synced.Extracted);
         Assert.StartsWith("its manifest did not read, and a graph is never guessed at: ", synced.Rebuilt, StringComparison.Ordinal);
         Assert.Contains("schema is 99", synced.Rebuilt, StringComparison.Ordinal);
@@ -187,8 +195,8 @@ public sealed class CodebaseGraphServiceTests
     }
 
     /// <summary>
-    /// A link result another linker's revision made is linked again, though no file changed, and no file is read again:
-    /// the manifest still reads, and only the link result names the linker.
+    /// A link result another linker's revision made is linked again by the next process, though no file changed, and no
+    /// file is read again: the manifest still reads, and only the link result names the linker.
     /// </summary>
     [Fact]
     public async Task ALinkResultOfAnotherLinker_IsLinkedAgain_AndNoFileIsReadAgain()
@@ -201,7 +209,7 @@ public sealed class CodebaseGraphServiceTests
         graph.Store.WriteGraphSymbols(graph.Run, graph.Symbols() with { Linker = CodeGraphLinker.Revision + 1, Edges = [] });
         var reads = graph.Toy.Reads;
 
-        var synced = await graph.SyncAsync();
+        var synced = await graph.Restarted().SyncAsync();
 
         Assert.Equal((0, 3, null), (synced.Extracted, synced.Reused, synced.Rebuilt));
         Assert.Equal(reads, graph.Toy.Reads);
@@ -414,11 +422,12 @@ public sealed class CodebaseGraphServiceTests
     }
 
     /// <summary>
-    /// An extract the manifest does not name - what a crash or an earlier state left - is removed by the next sync, one of
-    /// a tree that did not change as much as one that links again.
+    /// An extract no record names - what a crash or an earlier state left - is removed by a process's first sync, of a tree
+    /// that did not change too; then by a sync that wrote a record no longer naming one it named, and never looked for by
+    /// a sync that did not.
     /// </summary>
     [Fact]
-    public async Task AnExtractTheManifestDoesNotName_IsRemoved_ByEverySync()
+    public async Task AnExtractNoRecordNames_IsRemoved_ByAProcesssFirstSync_AndByOneThatUnnamedAnExtract()
     {
         using var graph = await Graph.CreateAsync();
         graph.Write("src/a.toy", "class A\n");
@@ -428,7 +437,7 @@ public sealed class CodebaseGraphServiceTests
         Directory.CreateDirectory(Path.GetDirectoryName(stray)!);
         File.WriteAllText(stray, "{}");
 
-        var unchanged = await graph.SyncAsync();
+        var unchanged = await graph.Restarted().SyncAsync();
 
         Assert.Equal(0, unchanged.Extracted);
         Assert.False(File.Exists(stray));
@@ -437,11 +446,20 @@ public sealed class CodebaseGraphServiceTests
         graph.Write("src/b.toy", "class B\n");
         await graph.SyncAsync();
 
+        Assert.True(File.Exists(stray));
+        Assert.Equal(4, graph.Extracts().Count);
+
+        graph.Write("src/a.toy", "class A\nclass A2\n");
+        await graph.SyncAsync();
+
         Assert.False(File.Exists(stray));
         Assert.Equal(3, graph.Extracts().Count);
     }
 
-    /// <summary>An extract that does not read is made again from its file while linking, never linked as it is.</summary>
+    /// <summary>
+    /// An extract that does not read is made again from its file while linking, never linked as it is, by a process that
+    /// holds no link of the graph: one that does links from what it holds, and reads no extract back.
+    /// </summary>
     [Fact]
     public async Task AnExtractThatDoesNotRead_IsMadeAgainWhileLinking()
     {
@@ -454,7 +472,12 @@ public sealed class CodebaseGraphServiceTests
         File.WriteAllText(graph.Run.GraphExtractFile(name), "not json");
 
         graph.Write("src/b.toy", "class B\nclass C\n");
-        var synced = await graph.SyncAsync();
+        var held = await graph.SyncAsync();
+
+        Assert.Equal((1, 2, 3), (held.Extracted, held.Reused, held.Files));
+
+        graph.Write("src/b.toy", "class B\nclass D\n");
+        var synced = await graph.Restarted().SyncAsync();
 
         // The file made again is counted read, and no longer kept: every file is counted once.
         Assert.Equal((2, 1, 3), (synced.Extracted, synced.Reused, synced.Files));
@@ -786,14 +809,677 @@ public sealed class CodebaseGraphServiceTests
         }
     }
 
+    /// <summary>
+    /// An agent's view is held against the base - synced first where the run has none - as the overlay of each file its
+    /// worktree holds otherwise and each of the base's it does not hold: no file is read whose extract the base made, and a
+    /// sync of a worktree that did not change reads none; the base keeps what the worktree deleted, and the view's link
+    /// holds the worktree's files alone.
+    /// </summary>
+    [Fact]
+    public async Task AnAgentsView_HoldsWhatItsWorktreeHoldsOtherwise_AndReadsNoFileTheBaseRead()
+    {
+        using var graph = await Graph.CreateAsync();
+        graph.Write("a.toy", "class A\ncall B\n");
+        graph.Write("b.toy", "class B\n");
+        graph.Write("c.toy", "class C\n");
+        await graph.CommitAsync();
+        var worktree = await graph.WorktreeAsync("w");
+        Graph.WriteIn(worktree, "b.toy", "class B\nclass Bee\n");
+        Graph.WriteIn(worktree, "d.toy", "class D\ncall A\n");
+        File.Delete(Path.Combine(worktree, "c.toy"));
+
+        var synced = await graph.SyncViewAsync("w", worktree);
+        var view = graph.View("w");
+        var again = await graph.SyncViewAsync("w", worktree);
+        var read = (await graph.CheckAsync("w", worktree, "d.toy")).Read;
+
+        // The repository's README is the base's, and the view's alike.
+        Assert.Equal(("w", 4, 2, 2), (synced.View, synced.Files, synced.Extracted, synced.Reused));
+
+        // Linked again from the base's link: d's call alone is found - b's new name is named by no reference.
+        Assert.Equal(1, synced.Resolved);
+        Assert.Equal(5, graph.Toy.Reads);
+        Assert.Equal((graph.Manifest().Digest, worktree, "w"), (view.Base, view.Tree, view.Agent));
+        Assert.Equal(graph.Manifest().Digest, synced.Base);
+        Assert.Equal(["b.toy", "d.toy"], view.Files.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(["c.toy"], view.Deleted);
+        Assert.Contains("c.toy", graph.Manifest().Files.Keys);
+        Assert.Equal((0, 4), (again.Extracted, again.Reused));
+        Assert.Equal(5, graph.Toy.Reads);
+        Assert.Contains(read.Symbols.Edges, edge => edge is { From: "toy:D", To: "toy:A" });
+        Assert.Contains(read.Symbols.Nodes, node => node.Id == "toy:Bee");
+        Assert.DoesNotContain(read.Symbols.Nodes, node => node.Id == "toy:C");
+        Assert.Equal(["base", "w", "w"], graph.SyncLines().Select(line => (string)System.Text.Json.Nodes.JsonNode.Parse(line)!["view"]!));
+    }
+
+    /// <summary>
+    /// A view is held against a base that moved without a file read: each file of its worktree the new base holds alike
+    /// leaves its overlay, each the base changed and the worktree did not joins it with its earlier extract, which the sweep
+    /// keeps - and the next sync of the view, in this process or one begun again, reads no file whose extract exists.
+    /// </summary>
+    [Fact]
+    public async Task AViewIsHeldAgainstABaseThatMoved_AndReadsNoFileWhoseExtractExists()
+    {
+        using var graph = await Graph.CreateAsync();
+        graph.Write("a.toy", "class A\n");
+        graph.Write("b.toy", "class B\n");
+        await graph.CommitAsync();
+        var worktree = await graph.WorktreeAsync("w");
+        Graph.WriteIn(worktree, "b.toy", "class B\nclass Bee\n");
+        await graph.SyncViewAsync("w", worktree);
+        var before = graph.Manifest();
+
+        graph.Write("b.toy", "class B\nclass Bee\n");
+        graph.Write("a.toy", "class A\ncall B\n");
+        graph.Write("e.toy", "class E\n");
+        var moved = await graph.SyncAsync();
+        var view = graph.View("w");
+
+        Assert.Equal(3, moved.Extracted);
+        Assert.Equal(6, graph.Toy.Reads);
+        Assert.NotEqual(before.Digest, view.Base);
+        Assert.Equal(graph.Manifest().Digest, view.Base);
+        Assert.Equal(["a.toy"], view.Files.Keys);
+        Assert.Equal(before.Files["a.toy"], view.Files["a.toy"]);
+        Assert.Equal(["e.toy"], view.Deleted);
+        Assert.True(File.Exists(graph.Run.GraphExtractFile(view.Files["a.toy"].Extract!)));
+
+        var synced = await graph.SyncViewAsync("w", worktree);
+        var restarted = await graph.Restarted().SyncViewAsync("w", worktree);
+
+        Assert.Equal((0, 3), (synced.Extracted, synced.Reused));
+        Assert.Equal((0, 3), (restarted.Extracted, restarted.Reused));
+        Assert.Equal(6, graph.Toy.Reads);
+        Assert.Equal(view.Base, graph.View("w").Base);
+        Assert.Equal(["a.toy"], graph.View("w").Files.Keys);
+    }
+
+    /// <summary>
+    /// Syncs of one view wait for each other by its gate, and syncs of different views and of the base run side by side -
+    /// each listing held open long enough for another to begin - each view on one snapshot of the base: a base that moved
+    /// among them leaves every view held against the manifest it wrote, whatever their order.
+    /// </summary>
+    [Fact]
+    public async Task SyncsOfOneView_WaitForEachOther_AndOfDifferentViews_RunSideBySide()
+    {
+        using var graph = await Graph.CreateAsync();
+        graph.Write("a.toy", "class A\n");
+        await graph.CommitAsync();
+        var one = await graph.WorktreeAsync("one");
+        var two = await graph.WorktreeAsync("two");
+        Graph.WriteIn(one, "b.toy", "class B\n");
+        Graph.WriteIn(two, "c.toy", "class C\n");
+        await graph.SyncAsync();
+        graph.Write("a.toy", "class A\ncall B\n");
+
+        var real = graph.Harness.GitClient;
+        var git = Substitute.For<IGitClient>();
+        var gate = new object();
+        var listing = new Dictionary<string, int>(StringComparer.Ordinal);
+        var mostOfOne = 0;
+        var most = 0;
+
+        git.ListIndexedFilesAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(async call =>
+        {
+            var tree = call.ArgAt<string>(0);
+
+            lock (gate)
+            {
+                listing[tree] = listing.GetValueOrDefault(tree) + 1;
+                mostOfOne = Math.Max(mostOfOne, listing[tree]);
+                most = Math.Max(most, listing.Values.Sum());
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(200), call.ArgAt<CancellationToken>(1));
+            return await real.ListIndexedFilesAsync(tree, call.ArgAt<CancellationToken>(1));
+        });
+        git.ListWorkingFilesAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(call => real.ListWorkingFilesAsync(call.ArgAt<string>(0), call.ArgAt<CancellationToken>(1)));
+        git.HashWorkingFilesAsync(Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>()).Returns(call => real.HashWorkingFilesAsync(call.ArgAt<string>(0), call.ArgAt<IReadOnlyList<string>>(1), call.ArgAt<CancellationToken>(2)));
+        git.ResolveCommitAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(async call =>
+        {
+            var head = await real.ResolveCommitAsync(call.ArgAt<string>(0), call.ArgAt<string>(1), call.ArgAt<CancellationToken>(2));
+
+            lock (gate)
+            {
+                listing[call.ArgAt<string>(0)]--;
+            }
+
+            return head;
+        });
+
+        graph.WithGit(git);
+        await Task.WhenAll(graph.SyncViewAsync("one", one), graph.SyncViewAsync("one", one), graph.SyncViewAsync("two", two), graph.SyncViewAsync("two", two), graph.SyncAsync());
+
+        Assert.Equal(1, mostOfOne);
+        Assert.True(most > 1, $"at most {most} listing(s) at once");
+        Assert.All(new[] { "one", "two" }, agent => Assert.Equal(graph.Manifest().Digest, graph.View(agent).Base));
+        Assert.Equal(["a.toy", "b.toy"], graph.View("one").Files.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(["a.toy", "c.toy"], graph.View("two").Files.Keys.Order(StringComparer.Ordinal));
+        Assert.All(new[] { "one", "two" }, agent => Assert.Empty(graph.View(agent).Deleted));
+    }
+
+    /// <summary>
+    /// A base synced by paths asks git of those paths alone: each changed one read again, each gone one taken out, a path git
+    /// holds nothing of counted and left - and a file it was not given kept as the graph had it, though it changed; a view
+    /// held against the base after. A run with no graph is not brought up to date: nothing is made.
+    /// </summary>
+    [Fact]
+    public async Task ABaseSyncedByPaths_TakesThosePathsAlone()
+    {
+        using var graph = await Graph.CreateAsync();
+        graph.Write("a.toy", "class A\n");
+        graph.Write("b.toy", "class B\n");
+        graph.Write("c.toy", "class C\n");
+        await graph.CommitAsync();
+        var worktree = await graph.WorktreeAsync("w");
+
+        Assert.Null(await graph.SyncPathsAsync("a.toy"));
+        Assert.False(File.Exists(graph.Run.GraphManifestFile));
+
+        await graph.SyncViewAsync("w", worktree);
+        var b = graph.Manifest().Files["b.toy"];
+        graph.Write("a.toy", "class A\ncall B\n");
+        graph.Write("b.toy", "class B\nclass Bee\n");
+        graph.Write("e.toy", "class E\n");
+        File.Delete(Path.Combine(graph.Tree, "c.toy"));
+
+        var synced = (await graph.SyncPathsAsync("a.toy", "c.toy", "e.toy", "gone.toy"))!;
+
+        Assert.Equal((4, 2, 1, 2), (synced.Listed, synced.Extracted, synced.Removed, synced.Hashed));
+        Assert.Equal(5, graph.Toy.Reads);
+        Assert.Equal(["README.md", "a.toy", "b.toy", "e.toy"], graph.Manifest().Files.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(b, graph.Manifest().Files["b.toy"]);
+        Assert.True(graph.Manifest().Dirty);
+        Assert.Contains(graph.Symbols().Edges, edge => edge is { From: "toy:A", To: "toy:B" });
+        Assert.Equal(graph.Manifest().Digest, graph.View("w").Base);
+        Assert.Equal(["a.toy", "c.toy"], graph.View("w").Files.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(["e.toy"], graph.View("w").Deleted);
+    }
+
+    /// <summary>
+    /// The check of the files an answer names stats each against what the view recorded, hashes only one whose size or time
+    /// moved, and reads again one whose blob moved before it answers: a file changed under a view between two answers is
+    /// answered the second time with its new span and blob, never the old; one whose time alone moved is hashed once, and
+    /// one gone leaves the view - and the base's own check holds every view against what it moved.
+    /// </summary>
+    [Fact]
+    public async Task TheCheckOfTheFilesAnAnswerNames_AnswersEachAsItIs()
+    {
+        using var graph = await Graph.CreateAsync();
+        graph.Write("a.toy", "class A\n");
+        graph.Write("b.toy", "class B\n");
+        await graph.CommitAsync();
+        var worktree = await graph.WorktreeAsync("w");
+        Graph.WriteIn(worktree, "a.toy", "class A\nclass Aye\n");
+        await graph.SyncViewAsync("w", worktree);
+
+        var first = await graph.CheckAsync("w", worktree, "a.toy", "b.toy", "none.toy");
+        Graph.WriteIn(worktree, "a.toy", "\n\nclass A\n");
+        File.SetLastWriteTimeUtc(Path.Combine(worktree, "b.toy"), DateTime.UtcNow.AddMinutes(5));
+        var second = await graph.CheckAsync("w", worktree, "a.toy", "b.toy");
+        var third = await graph.CheckAsync("w", worktree, "a.toy", "b.toy");
+
+        Assert.Equal((2, 1, 0, 0), (first.Checked, first.Hashed, first.Extracted, first.Removed));
+        Assert.Equal(2, first.Read.Extract("a.toy")!.Nodes.Count(node => node.Kind == CodeNodeKinds.Type));
+        Assert.Equal((2, 2, 1, 0), (second.Checked, second.Hashed, second.Extracted, second.Removed));
+        Assert.Equal((2, 0, 0, 0), (third.Checked, third.Hashed, third.Extracted, third.Removed));
+
+        var blob = (await graph.Harness.RunGitAsync(worktree, ["hash-object", "a.toy"], TestContext.Current.CancellationToken)).StandardOutput.Trim();
+
+        Assert.All(new[] { second, third }, made => Assert.Equal((3, blob), (made.Read.Extract("a.toy")!.Nodes.Single(node => node.Name == "A").Start, made.Read.Files["a.toy"].Blob)));
+        Assert.DoesNotContain(third.Read.Symbols.Nodes, node => node.Id == "toy:Aye");
+        Assert.Equal(blob, graph.View("w").Files["a.toy"].Blob);
+        Assert.Equal(4, graph.Toy.Reads);
+
+        File.Delete(Path.Combine(worktree, "b.toy"));
+        var gone = await graph.CheckAsync("w", worktree, "b.toy");
+
+        Assert.Equal((1, 0, 0, 1), (gone.Checked, gone.Hashed, gone.Extracted, gone.Removed));
+        Assert.Equal(["b.toy"], graph.View("w").Deleted);
+
+        graph.Write("a.toy", "class A\ncall B\n");
+        var own = await graph.CheckAsync(null, null, "a.toy");
+
+        Assert.Equal((1, 1, 1, 0), (own.Checked, own.Hashed, own.Extracted, own.Removed));
+        Assert.Contains(own.Read.Symbols.Edges, edge => edge is { From: "toy:A", To: "toy:B" });
+        Assert.Equal(graph.Manifest().Digest, graph.View("w").Base);
+    }
+
+    /// <summary>
+    /// A view a process begun again did not link is answered from its own link: the check of a file that did not move holds
+    /// what the view holds, never what the base does, and reads no file again.
+    /// </summary>
+    [Fact]
+    public async Task ACheckOfAViewTheProcessDidNotLink_AnswersFromTheViewsOwnLink()
+    {
+        using var graph = await Graph.CreateAsync();
+        graph.Write("a.toy", "class A\n");
+        graph.Write("b.toy", "class B\n");
+        await graph.CommitAsync();
+        var worktree = await graph.WorktreeAsync("w");
+        await graph.SyncAsync();
+        Graph.WriteIn(worktree, "a.toy", "class A\nclass Aye\n");
+        await graph.SyncViewAsync("w", worktree);
+        var reads = graph.Toy.Reads;
+
+        var check = await graph.Restarted().CheckAsync("w", worktree, "b.toy");
+
+        Assert.Equal((1, 0, 0), (check.Checked, check.Extracted, check.Removed));
+        Assert.Contains(check.Read.Symbols.Nodes, node => node.Id == "toy:Aye");
+        Assert.Equal(reads, graph.Toy.Reads);
+    }
+
+    /// <summary>
+    /// A view's file whose content goes back to the base's is taken from the base by the next check, its file not read
+    /// again: the view holds it as the base does.
+    /// </summary>
+    [Fact]
+    public async Task AViewsFileThatGoesBackToTheBases_IsTakenFromTheBase_AtItsCheck()
+    {
+        using var graph = await Graph.CreateAsync();
+        graph.Write("a.toy", "class A\n");
+        await graph.CommitAsync();
+        var worktree = await graph.WorktreeAsync("w");
+        await graph.SyncAsync();
+        Graph.WriteIn(worktree, "a.toy", "class A\nclass Aye\n");
+        await graph.SyncViewAsync("w", worktree);
+        var reads = graph.Toy.Reads;
+        Graph.WriteIn(worktree, "a.toy", "class A\n");
+
+        var check = await graph.CheckAsync("w", worktree, "a.toy");
+
+        Assert.Equal((1, 1, 0), (check.Checked, check.Hashed, check.Extracted));
+        Assert.Equal(reads, graph.Toy.Reads);
+        Assert.DoesNotContain("a.toy", graph.View("w").Files.Keys);
+        Assert.DoesNotContain(check.Read.Symbols.Nodes, node => node.Id == "toy:Aye");
+    }
+
+    /// <summary>The sync log's lines appended at once by many syncs are each written whole, and none is lost.</summary>
+    [Fact]
+    public async Task SyncLinesAppendedAtOnce_AreEachWrittenWhole()
+    {
+        using var graph = await Graph.CreateAsync();
+        graph.Write("a.toy", "class A\n");
+        await graph.CommitAsync();
+        await graph.SyncAsync();
+        var before = graph.SyncLines().Count;
+
+        Parallel.For(0, 64, at => graph.Store.AppendGraphSync(graph.Run, new CodeGraphSyncLine(DateTimeOffset.UnixEpoch, $"v{at}", "test", 0, 0, 0, 0, 0, 0)));
+
+        Assert.Equal(before + 64, graph.SyncLines().Count);
+        Assert.All(graph.SyncLines(), line => Assert.NotNull(System.Text.Json.Nodes.JsonNode.Parse(line)));
+    }
+
+    /// <summary>
+    /// A link or a submodule the graph lists without a read is no file a check looks at: neither is hashed nor taken out,
+    /// though the submodule stands as a directory and the link's file holds other text than git's.
+    /// </summary>
+    [Fact]
+    public async Task TheCheck_LooksAtNoLinkNorSubmodule()
+    {
+        using var graph = await Graph.CreateAsync();
+        var head = await graph.HeadAsync();
+        graph.Write("linked", "target.toy");
+        await graph.RunGitAsync("config", "core.symlinks", "false");
+        await graph.CommitAsync();
+        var blob = (await graph.RunGitAsync("hash-object", "-w", "linked")).Trim();
+        await graph.RunGitAsync("rm", "--cached", "--quiet", "linked");
+        await graph.RunGitAsync("update-index", "--add", "--cacheinfo", $"120000,{blob},linked");
+        await graph.RunGitAsync("update-index", "--add", "--cacheinfo", $"160000,{head},vendor/sub");
+        Directory.CreateDirectory(Path.Combine(graph.Tree, "vendor", "sub"));
+        await graph.RunGitAsync("commit", "--quiet", "-m", "link and submodule");
+        await graph.SyncAsync();
+        graph.Write("linked", "elsewhere.toy");
+
+        var check = await graph.CheckAsync(null, null, "linked", "vendor/sub");
+
+        Assert.Equal((0, 0, 0), (check.Checked, check.Hashed, check.Removed));
+        Assert.Equal((CodeFileStates.Link, CodeFileStates.Submodule), (graph.Manifest().Files["linked"].State, graph.Manifest().Files["vendor/sub"].State));
+    }
+
+    /// <summary>
+    /// A file gone between its check's look at it and its hash is never given to git to hash: it leaves the tree, as one
+    /// gone before the look does.
+    /// </summary>
+    [Fact]
+    public async Task AFileGoneBetweenItsLookAndItsHash_LeavesTheTree()
+    {
+        using var graph = await Graph.CreateAsync();
+        var (files, watch) = Watched.Over(graph.Harness.FileSystem);
+        graph.WithFiles(files);
+        graph.Write("a.toy", "class A\n");
+        graph.Write("b.toy", "class B\n");
+        await graph.CommitAsync();
+        await graph.SyncAsync();
+        graph.Write("b.toy", "class B\nclass Bee\n");
+        watch.After = (method, args) =>
+        {
+            if (method == nameof(IFileSystem.StandingOf) && args?[0] is string path && Path.GetFileName(path) == "b.toy")
+            {
+                File.Delete(path);
+            }
+        };
+
+        var check = await graph.CheckAsync(null, null, "a.toy", "b.toy");
+
+        Assert.Equal((2, 0, 0, 1), (check.Checked, check.Hashed, check.Extracted, check.Removed));
+        Assert.DoesNotContain("b.toy", graph.Manifest().Files.Keys);
+    }
+
+    /// <summary>
+    /// What a sync that did not end read is on disk, and no record names it: the sweep at its end removes it, though no
+    /// record it wrote named less than the one before; and the process holds nothing of the graph after it, so the next
+    /// sync takes the tree as its records say and links it whole.
+    /// </summary>
+    [Fact]
+    public async Task WhatASyncThatDidNotEndRead_IsRemovedAtItsEnd_AndTheNextTakesTheRecords()
+    {
+        using var graph = await Graph.CreateAsync();
+        var (files, watch) = Watched.Over(graph.Harness.FileSystem);
+        graph.WithFiles(files);
+        graph.Write("a.toy", "class A\n");
+        graph.Write("b.toy", "class B\n");
+        graph.Write("c.toy", "class C\ncall D\n");
+        graph.Write("d.toy", "class D\n");
+        await graph.CommitAsync();
+        var first = await graph.SyncAsync();
+        var held = graph.Extracts();
+        var made = 0;
+        watch.Before = (method, args) =>
+        {
+            if (method == nameof(IFileSystem.CreateDirectory) && args?[0] is string directory
+                && directory.StartsWith(graph.Run.GraphExtractsDirectory, StringComparison.Ordinal)
+                && Interlocked.Increment(ref made) == 2)
+            {
+                throw new IOException("the disk is full");
+            }
+        };
+        graph.Write("a.toy", "class A\nclass Aye\n");
+        graph.Write("b.toy", "class B\nclass Bee\n");
+
+        await Assert.ThrowsAsync<IOException>(() => graph.SyncAsync());
+
+        Assert.Equal(held, graph.Extracts());
+
+        watch.Before = null;
+        var again = await graph.SyncAsync();
+
+        Assert.True(first.Resolved > 0);
+        Assert.Equal(first.Resolved, again.Resolved);
+    }
+
+    /// <summary>
+    /// A sync links again only what its change could have changed, in the process that linked the tree before: the first
+    /// finds every reference; one of a file whose calls alone changed finds its own again; one that adds a name finds again
+    /// the reference naming it - each as its sync line says; and a process begun again over a tree that did not change
+    /// links nothing.
+    /// </summary>
+    [Fact]
+    public async Task ASync_LinksAgainOnlyWhatItsChangeCouldHaveChanged()
+    {
+        using var graph = await Graph.CreateAsync();
+        graph.Write("a.toy", "class A\ncall B\ncall Fresh\n");
+        graph.Write("b.toy", "class B\ncall A\n");
+        graph.Write("c.toy", "class C\ncall A\ncall B\n");
+        await graph.CommitAsync();
+
+        var whole = await graph.SyncAsync();
+        graph.Write("c.toy", "class C\ncall B\n");
+        var own = await graph.SyncAsync();
+        graph.Write("fresh.toy", "class Fresh\n");
+        var named = await graph.SyncAsync();
+        var restarted = await graph.Restarted().SyncAsync();
+
+        Assert.Equal((5, 1, 1), (whole.Resolved, own.Resolved, named.Resolved));
+        Assert.Null(restarted.Resolved);
+        Assert.Contains("\"resolved\":5", graph.SyncLines()[0], StringComparison.Ordinal);
+        Assert.Contains("\"resolved\":1", graph.SyncLines()[1], StringComparison.Ordinal);
+        Assert.DoesNotContain("\"resolved\"", graph.SyncLines()[3], StringComparison.Ordinal);
+        Assert.Contains(graph.Symbols().Edges, edge => edge is { From: "toy:A", To: "toy:Fresh" });
+        Assert.DoesNotContain(graph.Symbols().Edges, edge => edge is { From: "toy:C", To: "toy:A" });
+    }
+
+    /// <summary>A view dropped leaves the graph, and what only it named goes with the sync that ends it; the base keeps its own.</summary>
+    [Fact]
+    public async Task ADroppedView_LeavesTheGraph_AndWhatOnlyItNamedGoes()
+    {
+        using var graph = await Graph.CreateAsync();
+        graph.Write("b.toy", "class B\n");
+        await graph.CommitAsync();
+        var worktree = await graph.WorktreeAsync("w");
+        Graph.WriteIn(worktree, "b.toy", "class B\nclass Bee\n");
+        await graph.SyncViewAsync("w", worktree);
+        var own = graph.View("w").Files["b.toy"].Extract!;
+
+        await graph.DropAsync("w");
+
+        Assert.Empty(graph.Store.GraphViews(graph.Run));
+        Assert.False(File.Exists(graph.Run.GraphExtractFile(own)));
+        Assert.True(File.Exists(graph.Run.GraphExtractFile(graph.Manifest().Files["b.toy"].Extract!)));
+
+        // Made again, the view reads its file again: nothing of it was kept.
+        Assert.Equal(1, (await graph.SyncViewAsync("w", worktree)).Extracted);
+    }
+
+    /// <summary>
+    /// A file a view took from the base is no file the view read: its first check hashes it whatever its size and time say,
+    /// though both are the base's file's - and a content that differs is read again.
+    /// </summary>
+    [Fact]
+    public async Task AFileAViewTookFromTheBase_IsHashedAtItsFirstCheck_WhateverItsSizeAndTime()
+    {
+        using var graph = await Graph.CreateAsync();
+        graph.Write("b.toy", "class B\n");
+        await graph.CommitAsync();
+        var worktree = await graph.WorktreeAsync("w");
+        await graph.SyncViewAsync("w", worktree);
+
+        Graph.WriteIn(worktree, "b.toy", "class Q\n");
+        File.SetLastWriteTimeUtc(Path.Combine(worktree, "b.toy"), File.GetLastWriteTimeUtc(Path.Combine(graph.Tree, "b.toy")));
+        var check = await graph.CheckAsync("w", worktree, "b.toy");
+
+        Assert.Equal((1, 1, 1), (check.Checked, check.Hashed, check.Extracted));
+        Assert.Contains(check.Read.Symbols.Nodes, node => node.Id == "toy:Q");
+    }
+
+    /// <summary>
+    /// A view's sync reads the base without the base's gate: one that read the base's manifest before a base sync moved it
+    /// never puts that older base back as the one the process holds, so the next sync of the base starts from what the
+    /// moved one left.
+    /// </summary>
+    [Fact]
+    public async Task AViewThatReadTheBaseBeforeItMoved_NeverPutsTheOlderBaseBack()
+    {
+        using var graph = await Graph.CreateAsync();
+        graph.Write("a.toy", "class A\n");
+        graph.Write("c.toy", "class C\n");
+        await graph.CommitAsync();
+        var worktree = await graph.WorktreeAsync("w");
+        await graph.SyncAsync();
+        graph.Write("a.toy", "class A\nclass Aye\n");
+
+        var (files, watch) = Watched.Over(graph.Harness.FileSystem);
+        using var read = new ManualResetEventSlim();
+        using var moved = new ManualResetEventSlim();
+        var armed = 1;
+
+        // The view opens the manifest and is held there until the base's sync has moved it and said so: it reads the older
+        // manifest through the handle it holds.
+        watch.After = (method, arguments) =>
+        {
+            if (method == nameof(IFileSystem.OpenRead) && arguments?[0] as string == graph.Run.GraphManifestFile && Interlocked.Exchange(ref armed, 0) == 1)
+            {
+                read.Set();
+                Assert.True(moved.Wait(TimeSpan.FromSeconds(30)));
+            }
+        };
+        watch.Before = (method, arguments) =>
+        {
+            if (method == nameof(IFileSystem.OpenForAppend) && read.IsSet)
+            {
+                moved.Set();
+            }
+        };
+
+        graph.WithFiles(files);
+        var view = Task.Run(() => graph.SyncViewAsync("w", worktree), TestContext.Current.CancellationToken);
+        Assert.True(read.Wait(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken));
+        await graph.SyncAsync();
+        await view;
+        await graph.SyncPathsAsync("c.toy");
+
+        var blob = (await graph.RunGitAsync("hash-object", "a.toy")).Trim();
+
+        Assert.Equal(blob, graph.Manifest().Files["a.toy"].Blob);
+        Assert.Equal(graph.Manifest().Digest, graph.View("w").Base);
+    }
+
+    /// <summary>
+    /// A view whose first sync is under way when the base moves - no record of it written yet - is held against the moved
+    /// base all the same: the base's sync waits for its gate, and holds it against the new manifest once it is written.
+    /// </summary>
+    [Fact]
+    public async Task AViewWhoseFirstSyncIsUnderWay_IsHeldAgainstTheBaseThatMovedMeanwhile()
+    {
+        using var graph = await Graph.CreateAsync();
+        graph.Write("a.toy", "class A\n");
+        await graph.CommitAsync();
+        var worktree = await graph.WorktreeAsync("w");
+        Graph.WriteIn(worktree, "b.toy", "class B\n");
+        await graph.SyncAsync();
+        graph.Write("a.toy", "class A\ncall B\n");
+
+        var real = graph.Harness.GitClient;
+        var git = Substitute.For<IGitClient>();
+        var listed = new TaskCompletionSource();
+
+        // The view lists its worktree once the base has listed the main tree, and hashes it slowly: its record is written
+        // after the base's sync has moved the base.
+        git.ListIndexedFilesAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(async call =>
+        {
+            if (call.ArgAt<string>(0) == worktree)
+            {
+                await listed.Task.WaitAsync(TimeSpan.FromSeconds(30), call.ArgAt<CancellationToken>(1));
+            }
+
+            return await real.ListIndexedFilesAsync(call.ArgAt<string>(0), call.ArgAt<CancellationToken>(1));
+        });
+        git.ListWorkingFilesAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(call => real.ListWorkingFilesAsync(call.ArgAt<string>(0), call.ArgAt<CancellationToken>(1)));
+        git.ResolveCommitAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(async call =>
+        {
+            var head = await real.ResolveCommitAsync(call.ArgAt<string>(0), call.ArgAt<string>(1), call.ArgAt<CancellationToken>(2));
+
+            if (call.ArgAt<string>(0) == graph.Tree)
+            {
+                listed.TrySetResult();
+            }
+
+            return head;
+        });
+        git.HashWorkingFilesAsync(Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>()).Returns(async call =>
+        {
+            if (call.ArgAt<string>(0) == worktree)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(400), call.ArgAt<CancellationToken>(2));
+            }
+
+            return await real.HashWorkingFilesAsync(call.ArgAt<string>(0), call.ArgAt<IReadOnlyList<string>>(1), call.ArgAt<CancellationToken>(2));
+        });
+
+        graph.WithGit(git);
+        await Task.WhenAll(graph.SyncViewAsync("w", worktree), graph.SyncAsync());
+
+        Assert.Equal(graph.Manifest().Digest, graph.View("w").Base);
+        Assert.Equal(["a.toy", "b.toy"], graph.View("w").Files.Keys.Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// Only the last sync to end with none under way removes what no record names: a sync that ends while a view's sync
+    /// has written an extract its view does not name yet leaves it, and the view names it once written.
+    /// </summary>
+    [Fact]
+    public async Task ASyncThatEndsWhileAnotherIsUnderWay_RemovesNothingItHasWritten()
+    {
+        using var graph = await Graph.CreateAsync();
+        graph.Write("a.toy", "class A\n");
+        await graph.CommitAsync();
+        var worktree = await graph.WorktreeAsync("w");
+        var other = await graph.WorktreeAsync("v");
+        Graph.WriteIn(worktree, "x.toy", "class X\n");
+        Graph.WriteIn(worktree, "y.toy", "class Y\nhold\n");
+        await graph.SyncAsync();
+        var held = graph.Extracts().Count;
+
+        using var gate = new ManualResetEventSlim();
+        graph.Toy.Gate = gate;
+        var view = Task.Run(() => graph.SyncViewAsync("w", worktree), TestContext.Current.CancellationToken);
+        Assert.True(graph.Toy.Holding.Wait(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken));
+
+        // x's extract is written before y is read, which waits: the first sync of another view ends meanwhile - one that
+        // replaced a record it did not hold, after which a sweep is owed, and that waits for no other view's gate.
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+
+        while (graph.Extracts().Count <= held && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(20, TestContext.Current.CancellationToken);
+        }
+
+        await graph.SyncViewAsync("v", other);
+        gate.Set();
+        await view;
+
+        Assert.True(File.Exists(graph.Run.GraphExtractFile(graph.View("w").Files["x.toy"].Extract!)));
+        Assert.True(File.Exists(graph.Run.GraphExtractFile(graph.View("w").Files["y.toy"].Extract!)));
+    }
+
+    /// <summary>A file system that hands every call to another, and lets a test act before and after each.</summary>
+    public class Watched : System.Reflection.DispatchProxy
+    {
+        private IFileSystem _inner = null!;
+
+        /// <summary>Called before each call, with its method's name and its arguments.</summary>
+        public Action<string, object?[]?>? Before { get; set; }
+
+        /// <summary>Called after each call that returned, with its method's name and its arguments.</summary>
+        public Action<string, object?[]?>? After { get; set; }
+
+        public static (IFileSystem Files, Watched Watch) Over(IFileSystem inner)
+        {
+            var files = Create<IFileSystem, Watched>();
+            var watch = (Watched)(object)files;
+            watch._inner = inner;
+            return (files, watch);
+        }
+
+        protected override object? Invoke(System.Reflection.MethodInfo? targetMethod, object?[]? args)
+        {
+            ArgumentNullException.ThrowIfNull(targetMethod);
+            Before?.Invoke(targetMethod.Name, args);
+
+            try
+            {
+                var result = targetMethod.Invoke(_inner, args);
+                After?.Invoke(targetMethod.Name, args);
+                return result;
+            }
+            catch (System.Reflection.TargetInvocationException ex) when (ex.InnerException is not null)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex.InnerException).Throw();
+                throw;
+            }
+        }
+    }
+
     /// <summary>A tree, a run of it, and the sync of its graph over a registry the test chooses.</summary>
     private sealed class Graph : IDisposable
     {
         private readonly TempDirectory _temp;
+        private readonly TempDirectory _worktrees = new();
         private readonly CancellationToken _token = TestContext.Current.CancellationToken;
         private CodeGraphExtractors _registry;
         private CodebaseGraphShape _shape;
         private IGitClient _git;
+        private IFileSystem? _files;
         private IHostPlatform _platform;
         private CodebaseGraphService _service;
 
@@ -862,6 +1548,22 @@ public sealed class CodebaseGraphServiceTests
 
         public async Task<string> HeadAsync() => (await RunGitAsync("rev-parse", "HEAD")).Trim();
 
+        /// <summary>A worktree of the tree's HEAD for <paramref name="agent"/>, outside the tree, as an agent's is.</summary>
+        public async Task<string> WorktreeAsync(string agent)
+        {
+            var path = Path.Combine(_worktrees.Path, agent);
+            await RunGitAsync("worktree", "add", "--detach", path);
+            return path;
+        }
+
+        /// <summary>Writes <paramref name="text"/> to <paramref name="path"/> under <paramref name="tree"/>.</summary>
+        public static void WriteIn(string tree, string path, string text)
+        {
+            var file = Path.Combine(tree, path.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+            File.WriteAllText(file, text);
+        }
+
         /// <summary>This graph synced over a registry of <paramref name="extractors"/> from now on.</summary>
         public Graph Over(params ICodeGraphExtractor[] extractors)
         {
@@ -874,6 +1576,21 @@ public sealed class CodebaseGraphServiceTests
         public Graph WithGit(IGitClient git)
         {
             _git = git;
+            _service = Service();
+            return this;
+        }
+
+        /// <summary>This graph synced by a service that holds nothing of it from now on, as a process begun again is.</summary>
+        public Graph Restarted()
+        {
+            _service = Service();
+            return this;
+        }
+
+        /// <summary>This graph synced by a service that holds nothing of it, over <paramref name="files"/>, from now on.</summary>
+        public Graph WithFiles(IFileSystem files)
+        {
+            _files = files;
             _service = Service();
             return this;
         }
@@ -906,8 +1623,25 @@ public sealed class CodebaseGraphServiceTests
         {
             // Every sync of the test is told apart by the clock, as syncs a minute apart are.
             Clock.Advance(TimeSpan.FromSeconds(1));
-            return await _service.SyncAsync(new CodebaseGraphSync(Layout, Run, _shape, WorktreesRoot, rebuild, "graph#1"), _token);
+            return await _service.SyncAsync(Request(rebuild: rebuild), _token);
         }
+
+        /// <summary>A whole sync of <paramref name="agent"/>'s view of <paramref name="worktree"/>.</summary>
+        public async Task<CodebaseGraphSynced> SyncViewAsync(string agent, string worktree)
+        {
+            Clock.Advance(TimeSpan.FromSeconds(1));
+            return await _service.SyncAsync(Request(agent, worktree), _token);
+        }
+
+        /// <summary>A sync of the base by <paramref name="paths"/> alone.</summary>
+        public Task<CodebaseGraphSynced?> SyncPathsAsync(params string[] paths) => _service.SyncPathsAsync(Request(), paths, _token);
+
+        /// <summary>The check of <paramref name="paths"/> in <paramref name="agent"/>'s view - the base's where it names none.</summary>
+        public Task<CodebaseGraphChecked> CheckAsync(string? agent, string? worktree, params string[] paths) => _service.CheckAsync(Request(agent, worktree), paths, _token);
+
+        public Task DropAsync(string agent) => _service.DropViewAsync(Run, agent, _token);
+
+        public CodeGraphView View(string agent) => Store.ReadGraphView(Run, agent)!;
 
         public CodeGraphManifest Manifest() => Store.ReadGraphManifest(Run)!;
 
@@ -920,20 +1654,36 @@ public sealed class CodebaseGraphServiceTests
 
         public IReadOnlyList<string> SyncLines() => File.ReadAllLines(Run.GraphSyncFile);
 
-        public void Dispose() => _temp.Dispose();
+        public void Dispose()
+        {
+            _temp.Dispose();
+            _worktrees.Dispose();
+        }
+
+        private CodebaseGraphSync Request(string? agent = null, string? worktree = null, bool rebuild = false)
+            => new(Layout, Run, _shape, WorktreesRoot, rebuild, "graph#1") { Agent = agent, Worktree = worktree };
 
         private CodebaseGraphService Service()
-            => new(_git, Harness.FileSystem, Store, _registry, _platform, new RunningToolDouble("9.9.9"), Output, Clock);
+            => _files is { } files
+                ? new(_git, files, new OrchestrationStore(files, Output), _registry, _platform, new RunningToolDouble("9.9.9"), Output, Clock)
+                : new(_git, Harness.FileSystem, Store, _registry, _platform, new RunningToolDouble("9.9.9"), Output, Clock);
     }
 
     /// <summary>
     /// A toy language: each <c>class X</c> line declares the type <c>X</c>, each <c>call Y</c> line calls <c>Y</c> from the
     /// type above it, a first line <c>// generated</c> marks the file generated, a file that says <c>boom</c> fails it, and
-    /// a line <c>wrong</c> declares a type whose lines are not the file's.
+    /// a line <c>wrong</c> declares a type whose lines are not the file's, and one that says <c>hold</c> waits for
+    /// <see cref="Gate"/> where it is set.
     /// </summary>
     private sealed class ToyExtractor : ICodeGraphExtractor
     {
         private int _reads;
+
+        /// <summary>What a file that says <c>hold</c> waits for; none where it is not set.</summary>
+        public ManualResetEventSlim? Gate { get; set; }
+
+        /// <summary>Set once a file that says <c>hold</c> waits.</summary>
+        public ManualResetEventSlim Holding { get; } = new();
 
         /// <summary>How many files it has read.</summary>
         public int Reads => _reads;
@@ -955,6 +1705,12 @@ public sealed class CodebaseGraphServiceTests
             if (input.Text.Contains("boom", StringComparison.Ordinal))
             {
                 throw new InvalidOperationException("boom");
+            }
+
+            if (input.Text.Contains("hold", StringComparison.Ordinal) && Gate is { } gate)
+            {
+                Holding.Set();
+                gate.Wait(TimeSpan.FromSeconds(30));
             }
 
             var lines = input.Lines;

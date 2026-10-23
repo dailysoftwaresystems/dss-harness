@@ -1,7 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
 using System.Text;
-using System.Text.Json;
 using System.Threading.Channels;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
@@ -286,7 +285,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
     /// <param name="directory">The step's own directory.</param>
     /// <param name="result">How the run ended.</param>
     private void Ended(string directory, AgentRunResult result)
-        => _fileSystem.WriteAllTextAtomic(Path.Combine(directory, ResultFileName), JsonSerializer.Serialize(result, JsonStateFile.Options) + "\n");
+        => JsonStateFile.Write(_fileSystem, Path.Combine(directory, ResultFileName), result);
 
     /// <summary>The step's run, as the client takes it: the prompt filled, the places as they are, the directory its own.</summary>
     /// <param name="step">The step.</param>

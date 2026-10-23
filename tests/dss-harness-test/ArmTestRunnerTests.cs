@@ -348,16 +348,16 @@ public sealed class ArmTestRunnerTests
         /// <summary>How many times the report was read, or tried.</summary>
         public int Reads => _reads;
 
-        public override string ReadAllText(string path)
+        public override Stream OpenRead(string path)
         {
             if (Path.GetFileName(path) != ArmTestRunner.ReportFileName)
             {
-                return base.ReadAllText(path);
+                return base.OpenRead(path);
             }
 
             if (Interlocked.Increment(ref _reads) > heldFor)
             {
-                return base.ReadAllText(path);
+                return base.OpenRead(path);
             }
 
             const string Held = "'report.xml' is held by another process";
