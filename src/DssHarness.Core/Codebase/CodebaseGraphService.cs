@@ -1560,6 +1560,10 @@ public sealed class CodebaseGraphService(
                 return new Listing(new SortedDictionary<string, Listed>(StringComparer.Ordinal), null, false, unnamed, 0);
             }
 
+            // HEAD is asked before the tree is listed, so the head recorded is never newer than what the listing took: a
+            // HEAD that moves while it is listed leaves an older head, whose next sync by paths takes again what moved.
+            var head = withHead ? await HeadAsync().ConfigureAwait(false) : null;
+
             try
             {
                 var git = _service._gitClient;
@@ -1570,8 +1574,6 @@ public sealed class CodebaseGraphService(
             {
                 throw Unlisted(ex);
             }
-
-            var head = withHead ? await HeadAsync().ConfigureAwait(false) : null;
 
             var files = new SortedDictionary<string, Listed>(StringComparer.Ordinal);
             var toHash = new List<string>();

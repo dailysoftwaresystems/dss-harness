@@ -2417,6 +2417,46 @@ public sealed class CodebaseGraphServiceTests
     }
 
     /// <summary>
+    /// A whole sync asks HEAD before it lists the tree: a commit landing while the tree is listed leaves the older head
+    /// recorded, never one newer than what was listed, so the next sync by paths takes what that commit changed.
+    /// </summary>
+    [Fact]
+    public async Task ACommitLandingWhileAWholeSyncLists_IsTakenByTheNextSyncByPaths()
+    {
+        using var graph = await Graph.CreateAsync();
+        graph.Write("a.toy", "class A\n");
+        graph.Write("b.toy", "class B\n");
+        await graph.CommitAsync();
+        var real = graph.Harness.GitClient;
+        var git = Forwarding(real);
+        var committed = false;
+
+        // As the whole tree's working files are listed, b.toy is changed and committed.
+        git.ListWorkingFilesAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(async call =>
+        {
+            var working = await real.ListWorkingFilesAsync(call.ArgAt<string>(0), call.ArgAt<CancellationToken>(1));
+
+            if (!committed)
+            {
+                committed = true;
+                graph.Write("b.toy", "class B\nclass Bee\n");
+                await graph.CommitAsync();
+            }
+
+            return working;
+        });
+
+        await graph.WithGit(git).SyncAsync();
+        graph.Write("a.toy", "class A\nclass Aye\n");
+
+        await graph.SyncPathsAsync("a.toy");
+
+        Assert.True(committed);
+        Assert.Equal(await graph.HeadAsync(), graph.Manifest().Head);
+        Assert.Contains(graph.Symbols().Nodes, node => node.Id == "toy:Bee");
+    }
+
+    /// <summary>
     /// A sync by paths of a tree whose last sync recorded a commit the repository no longer holds - amended, and pruned -
     /// cannot be told what changed since: the tree is synced whole.
     /// </summary>
