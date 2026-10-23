@@ -20,7 +20,10 @@ namespace DssHarness.Core.Agents.Policy;
 /// </para>
 /// <para>
 /// Every path in a deny rule is written as an absolute path, once for each root the launch has, so
-/// no rule is read against a working directory it was not meant for. Claude Code's deny rules know
+/// no rule is read against a working directory it was not meant for, and in the form Claude Code
+/// matches - a Windows path as its POSIX spelling, <c>//c/x</c> for <c>C:\x</c> - and a rule that
+/// refuses a write is an <c>Edit</c> rule, for Claude Code holds every file tool's path to its
+/// <c>Read</c> and <c>Edit</c> rules alone. Claude Code's deny rules know
 /// no exception, so a rule is not written for a root where its pattern there would cover a root the
 /// launch writes - the main checkout's <c>.orchestrators/**</c> holds the agent's own work
 /// directory: the engine holds it alone there, as it holds every rule first.
@@ -31,7 +34,9 @@ public static class ClaudeSettings
     /// <summary>
     /// The names the engine controls in every launch, with their values, in the order they are written: compaction off,
     /// for the engine compacts; the auto-updater off, for only this tool moves the installation; the key a launch signs
-    /// in with kept from the commands it runs; and the retry watchdog off, which would retry a limit without end. Set
+    /// in with kept from the commands it runs; the retry watchdog off, which would retry a limit without end; and every
+    /// shell command started in the launch's own directory, never where a <c>cd</c> of an earlier one left it, for the
+    /// policy reads a command's relative paths against that directory and the places the command itself moves to. Set
     /// in the settings' <c>env</c>, which outranks the user's own, and in the child's environment, which a host session's
     /// would otherwise outrank.
     /// </summary>
@@ -41,6 +46,7 @@ public static class ClaudeSettings
         .. ClaudeCode.ClaudeCodeInstall.EveryStart.Select(start => new KeyValuePair<string, string>(start.Key, start.Value!)),
         new("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB", "1"),
         new("CLAUDE_CODE_RETRY_WATCHDOG", "0"),
+        new("CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR", "1"),
     ];
 
     /// <summary>
@@ -104,7 +110,7 @@ public static class ClaudeSettings
     /// The deny rules of one ground: a read of each credential slot and Claude Code directory, and
     /// each restriction as Claude Code spells its own - a <c>Run</c> rule a <c>Bash</c> prefix rule,
     /// a path rule absolute once for each root of the launch, but where its pattern there would
-    /// cover a root the launch writes, a <c>Web</c> rule a <c>WebFetch</c> domain rule and, where it
+    /// cover a root the launch writes, a <c>Write</c> rule as an <c>Edit</c> rule, a <c>Web</c> rule a <c>WebFetch</c> domain rule and, where it
     /// refuses the web whole, <c>WebSearch</c> beside it.
     /// </summary>
     private static IEnumerable<string> DenyRules(AgentPolicyGround ground, StringComparison comparison)
@@ -200,15 +206,24 @@ public static class ClaudeSettings
                 continue;
             }
 
-            yield return $"{rule.Verb}({Absolute(root)}/{rule.Pattern})";
+            // Claude Code checks every file tool's path against its Read and Edit rules alone: a write is
+            // refused by an Edit rule, which it holds its Write and NotebookEdit tools to as well.
+            yield return $"{(rule.Verb is AgentRuleVerb.Write ? "Edit" : "Read")}({Absolute(root)}/{rule.Pattern})";
         }
     }
 
     /// <summary>
-    /// A directory as Claude Code's own absolute rules begin: with two slashes whatever the system
-    /// spells beneath them - '//C:/x/y' on Windows, '//home/x/y' on Linux, the root's own leading
-    /// slash one of the two.
+    /// A directory as Claude Code's own absolute rules begin: two slashes before the path in the POSIX
+    /// form Claude Code matches every path in - '//home/x/y' on Linux, the root's own leading slash one of
+    /// the two, and on Windows the drive a lowercase segment of its own, its colon gone, as Claude Code
+    /// spells a Windows path before it matches one: 'C:\x\y' is '//c/x/y'.
     /// </summary>
     private static string Absolute(string directory)
-        => directory.StartsWith('/') ? "/" + directory.TrimEnd('/') : "//" + directory.TrimEnd('/');
+    {
+        var path = directory.Replace('\\', '/').TrimEnd('/');
+
+        return path.Length >= 2 && char.IsAsciiLetter(path[0]) && path[1] == ':' && (path.Length == 2 || path[2] == '/')
+            ? $"//{char.ToLowerInvariant(path[0])}{path[2..]}"
+            : path.StartsWith('/') ? "/" + path : "//" + path;
+    }
 }

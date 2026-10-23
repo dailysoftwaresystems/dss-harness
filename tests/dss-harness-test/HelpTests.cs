@@ -284,6 +284,14 @@ public sealed partial class HelpTests
         Assert.Contains("this tool's own verbs and run-side-task, run by any program or from a response file, whatever any switch says: an agent", prose, StringComparison.Ordinal);
         Assert.Contains("every read and write of a credential slot or a Claude Code directory of the run's and every search over one", prose, StringComparison.Ordinal);
         Assert.Contains("a refusal's places compare in any case on every system, a Windows short name read as its long one", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            @"On Windows a device prefix (\\?\, \\.\, \??\) is dropped from a path and from what the runtime makes of it - one naming no "
+                + "drive and no share, a volume by its id or a pipe, is a place it cannot tell, and denied - and a shell's "
+                + @"spelling of a drive (/c/x, /cygdrive/c/x, /mnt/c/x) is read both as the drive (C:\x) and as the directory it names on the "
+                + "current drive, an action allowed only where both are; a cd is followed the same way, from every place the command reached "
+                + "before it, up to 64 places, past which the command is denied.",
+            prose,
+            StringComparison.Ordinal);
         Assert.Contains("No agent starts while this tool itself runs elevated: its step is recorded never started, saying so, before any client is taken.", prose, StringComparison.Ordinal);
         Assert.Contains(
             "wrappers (env, nohup, time, timeout, nice, xargs, command, builtin, exec, eval, Invoke-Expression) stripped, and it goes into "
@@ -303,7 +311,11 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains("gh pr merge, gh workflow run and gh run rerun, the gh api endpoints and GraphQL mutations that merge or start CI, and gh alias set, for never merges,", prose, StringComparison.Ordinal);
-        Assert.Contains("whatever protectedPaths says", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            "git's own files - a .git, file or directory, at any depth beneath a root and in any case, a nested repository's and a "
+                + "submodule's too (Write(**/.git/**)) - are not written by a tool, whatever protectedPaths says",
+            prose,
+            StringComparison.Ordinal);
         Assert.Contains("an agent does not edit its own policy or what the next launch loads", prose, StringComparison.Ordinal);
         Assert.Contains("The protected paths (agentPolicy.protectedPaths, true where nothing is said)", prose, StringComparison.Ordinal);
         Assert.Contains("written out once as rules, each said whole: Write(.git/**), Write(.config/git/**),", prose, StringComparison.Ordinal);
@@ -311,7 +323,11 @@ public sealed partial class HelpTests
         Assert.Contains("Claude Code's own guard stays Claude Code's", prose, StringComparison.Ordinal);
         Assert.Contains("A step's writes is the one source that narrows", prose, StringComparison.Ordinal);
         Assert.Contains("the reporter's reads are narrowed to the run's directory alone", prose, StringComparison.Ordinal);
-        Assert.Contains("an ask rule for every tool the launch has, and the restriction rules as deny rules", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            @"an ask rule for every tool the launch has, and the restriction rules as deny rules, absolute once for each root in the POSIX "
+                + @"form Claude Code matches (//c/x for C:\x), a Write rule as the Edit rule Claude Code holds its file tools' writes to",
+            prose,
+            StringComparison.Ordinal);
         Assert.Contains("This is policy, not a sandbox", prose, StringComparison.Ordinal);
         Assert.Contains("Where this tool cannot decide a call it denies it, never allows", prose, StringComparison.Ordinal);
     }
@@ -346,7 +362,8 @@ public sealed partial class HelpTests
         Assert.Contains("Every message is held to the model asked for, a date after its id the same model", prose, StringComparison.Ordinal);
         Assert.Contains("(CLAUDECODE and every CLAUDE_CODE_ name but CLAUDE_CODE_GIT_BASH_PATH, which says only where a program is)", prose, StringComparison.Ordinal);
         Assert.Contains(
-            "the names the engine sets: DISABLE_COMPACT=1, DISABLE_AUTOUPDATER=1, CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1, CLAUDE_CODE_RETRY_WATCHDOG=0.",
+            "the names the engine sets: DISABLE_COMPACT=1, DISABLE_AUTOUPDATER=1, CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1, CLAUDE_CODE_RETRY_WATCHDOG=0, "
+                + "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR=1.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains("A key Claude Code reports invalid is passed over, and while the step has done no work the next key is given a new launch", prose, StringComparison.Ordinal);

@@ -1467,7 +1467,14 @@ naming one - by `~` or `$HOME`, as a redirect's file or an option's value, again
 (`IHostPlatform.IsPrivilegedProcess`, the runtime's own answer): `AgentRunner`, which every client's
 launch passes, records such a step `NotStarted` (`AgentNotStartedBecause.Elevated`, in the words of
 `AgentPolicy.RefusedWhileElevated`) before it takes a client. A path is decided as asked and as
-resolved, its device prefix dropped and its home expanded, and a refusal's places compare in any
+resolved, its home expanded - and on Windows its device prefix (`\\?\`, `\\.\`, `\??\`, in either
+separator) dropped from the text and from what `Path.GetFullPath` makes of it, one naming no drive
+and no share undecided, and a shell's spelling of a drive (`/c/x`, `/cygdrive/c/x`, `/mnt/c/x`)
+read both as the drive and as the directory it names on the current drive, each decided and the
+action allowed only where both are (`AgentPolicy.Spelled`, `AgentPolicy.Plain`); where a link
+resolves, where a `cd` moves to and the ground's own directories are spelled the same way, a `cd`
+from every place the command reached before it, up to `AgentPolicy.MaxPlaces`, past which the
+command is undecided - and a refusal's places compare in any
 case on every system, each Windows short name read as its long one (as `Path.GetFullPath` spells it); what a
 refusal allows - a writable root, the step's `writes` - compares as the platform does. A command is
 read whole before it is matched, `Agents\Policy\CommandAnalysis`: a shell string split on `;`, `&&`,
@@ -1496,7 +1503,9 @@ in help: the inside of a script file a command runs. The worktree rules
 (`agentPolicy.worktreeRules`, on unless turned off) refuse git's state-writing verbs and the merges
 and CI starts of `gh` - `gh pr merge`, `gh workflow run`, `gh run rerun`, the `gh api` endpoints and
 GraphQL mutations of the same (`AgentPolicy.GhApiEndpoints`, `AgentPolicy.GhApiMutations`) and `gh
-alias set` - keep git's own files unwritten whatever `protectedPaths` says, and hold the tool's own
+alias set` - keep git's own files unwritten whatever `protectedPaths` says (`AgentPolicy.GitsOwnRule`:
+a `.git` segment at any depth beneath a root, in any case, so a nested repository's hooks are as
+safe as the root's), and hold the tool's own
 policy and what the next launch loads unwritten by any agent; its own state
 (`HarnessLayout.StatePaths`, the one owner of where that state is) is held so whatever any switch
 says, a writable root standing inside it - the agent's own work directory - the one exception; the
@@ -1510,14 +1519,18 @@ no web). For Claude Code the policy is rendered, never re-decided, into the laun
 (`Agents\Policy\ClaudeSettings`): an ask rule for every tool the launch has, a read of each
 credential slot and Claude Code directory as a deny rule - which Claude Code applies to its searches
 too - and the restriction rules as deny rules, absolute once for each root, but where a rule's
-pattern there would cover a root the launch writes - a second layer, for the engine is asked about
+pattern there would cover a root the launch writes, each path in the POSIX form Claude Code matches
+(`//c/x` for `C:\x`) and a `Write` rule as an `Edit` rule, for Claude Code holds every file tool to
+its `Read` and `Edit` rules alone - a second layer, for the engine is asked about
 every call and answers from the same policy in its own
 process. Where the policy cannot decide a call it denies it, never
 allows - nothing runs while the host that would answer is silent or gone. The first client that
 asks it is `Agents\ClaudeCode\ClaudeCodeClient`, the `IAgentClient` of `claude-code`: each
 launch a new session (`ClaudeLaunch` builds its one argument list and its environment - nothing of
-a Claude Code session the tool was started in, the names `ClaudeSettings.Controlled` sets, and the
-one credential an `AgentCredential` gives), streamed both ways and read line by line as
+a Claude Code session the tool was started in, the names `ClaudeSettings.Controlled` sets -
+`CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR` among them, so every shell command starts in the
+launch's directory, where the policy reads its relative paths, never where an earlier command's
+`cd` left it - and the one credential an `AgentCredential` gives), streamed both ways and read line by line as
 `ClaudeLine`s (every kind the probe's recordings hold), each `can_use_tool` it asks decided by
 `ClaudeToolDecider` through the policy, the tools it is given - and what a call of each is of - from
 the one table `ClaudeCodeTools` holds; an answer held to a schema checked by `StructuredOutputGate`
