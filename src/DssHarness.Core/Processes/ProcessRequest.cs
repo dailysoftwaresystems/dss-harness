@@ -73,10 +73,12 @@ public sealed record ProcessRequest
     public Action? OnStarted { get; init; }
 
     /// <summary>
-    /// Where a <see cref="Contained"/> child's session is recorded while it runs, so a later run of the tool ends it where
-    /// this process was killed and left it running; <see langword="null"/> where it is recorded nowhere. Written on Linux
-    /// and macOS alone, where a session outlives the process that started it: on Windows the job that holds the child ends
-    /// it with this process, and nothing is recorded. A record that cannot be written is a start that failed.
+    /// Where a <see cref="Contained"/> child's session, or the group of a child <see cref="ApartFromTerminal"/>, is recorded
+    /// while it runs - and a group, while anything it left is still in it - so a later run of the tool ends it where this
+    /// process was killed and left it running; <see langword="null"/> where it is recorded nowhere - save a bound child's,
+    /// which the operation's <see cref="ProcessScope"/> records where it runs under one. Written on Linux and macOS alone,
+    /// where a session and a group outlive the process that started them: on Windows the job that holds the child ends it
+    /// with this process, and nothing is recorded. A record that cannot be written is a start that failed.
     /// </summary>
     public IContainedSessionRecord? SessionRecord { get; init; }
 
@@ -133,7 +135,10 @@ public sealed record ProcessRequest
     /// gone. Its own end and a stop are as any other child's: what it leaves running at its normal end lives on until this
     /// process ends. On Linux and macOS the child starts as any other: an interrupt or a termination signal this process
     /// is given ends it with this process's stop, its terminal's hang-up reaches it as it reaches this process, and a kill
-    /// of this process alone does not reach it. A <see cref="Contained"/> child is bound already, by its own job.
+    /// of this process alone does not reach it - save under an operation's <see cref="ProcessScope"/>, a run's machine
+    /// step's, which starts it apart from the terminal and records its group while anything is in it, for the next run of
+    /// the tool over the run to end once this process has gone. A <see cref="Contained"/> child is bound already, by its
+    /// own job.
     /// </summary>
     public bool Bound { get; init; }
 
@@ -142,8 +147,10 @@ public sealed record ProcessRequest
     /// terminal: an interruption typed where this process runs is sent to a group, and that group is
     /// not this child's. On Windows the child starts as any other, whose console of its own already
     /// keeps an interruption typed at this one's from it. Either way it is stopped as any other child
-    /// is, by its tree, and what it leaves at its own end is left; the session, and a container that
-    /// ends what outlives it, are <see cref="Contained"/>'s to give.
+    /// is, by its tree - and on Linux and macOS by its group as well, at once, which reaches what its
+    /// tree handed on - and what it leaves at its own end is left; the session, and a container that
+    /// ends what outlives it, are <see cref="Contained"/>'s to give. What an operation under a
+    /// <see cref="ProcessScope"/> starts is apart from the terminal whatever this says.
     /// </summary>
     public bool ApartFromTerminal { get; init; }
 }

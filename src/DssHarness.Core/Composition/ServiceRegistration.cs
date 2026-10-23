@@ -151,8 +151,8 @@ public static class ServiceRegistration
         services.AddSingleton<OrchestrationStore>();
         services.AddSingleton<OrchestrationLog>();
 
-        // The sessions a killed tool left its contained children running in, recorded where their steps are and ended by
-        // the next command over the orchestrator.
+        // The sessions and groups a killed tool left its contained children and its legs' work running in, recorded where
+        // their steps are and ended by the next command over the orchestrator.
         services.AddSingleton<LeftSessions>();
         services.AddSingleton<EndedChildSessions>();
         services.AddSingleton<IDocumentFacts>(provider => provider.GetRequiredService<EndedChildSessions>());

@@ -142,7 +142,7 @@ public interface IAgentService : IUseCase
 /// <param name="transcripts">Finds and keeps an agent's Claude transcripts.</param>
 /// <param name="store">The records.</param>
 /// <param name="log">The logs.</param>
-/// <param name="sessions">Ends what a killed process left of an orchestrator's contained children, first in every command over it.</param>
+/// <param name="sessions">Ends what an orchestrator's steps left running once their starter has gone - a contained child's session, a leg's process group - first in every command over it.</param>
 /// <param name="clock">When things happen.</param>
 /// <param name="processContext">This process's current directory, read per call: where a verb was typed, when none is named.</param>
 public sealed class AgentService(
@@ -3175,8 +3175,8 @@ public sealed class AgentService(
     }
 
     /// <summary>
-    /// The orchestrator named, in the main checkout's context, once what a killed process left running of its steps'
-    /// contained children is ended - every command on an orchestrator's agents starts here; refused where it has no record.
+    /// The orchestrator named, in the main checkout's context, once what its steps left running once their starter has gone
+    /// is ended - every command on an orchestrator's agents starts here; refused where it has no record.
     /// </summary>
     /// <param name="startDirectory">Where the command was typed.</param>
     /// <param name="orchestrator">The orchestrator's name.</param>
@@ -3196,7 +3196,7 @@ public sealed class AgentService(
             throw new HarnessException(HarnessExit.Refused, OrchestrationReports.NoOrchestrator(orchestrator));
         }
 
-        // Before anything else of it is read: what a killed process left running of its steps' contained children. What
+        // Before anything else of it is read: what its steps left running once their starter has gone. What
         // it ended, every document this command answers with says, whatever it goes on to meet (EndedChildSessions).
         await _sessions.SweepAsync(layout, command).ConfigureAwait(false);
 

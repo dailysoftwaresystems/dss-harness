@@ -141,14 +141,14 @@ public sealed class HarnessFactory
     }
 
     /// <summary>
-    /// The records of orchestrators' contained children over <paramref name="fileSystem"/>, ending what a killed process
+    /// The records of what orchestrators' steps leave running over <paramref name="fileSystem"/>, ending what a gone process
     /// left as the real command ends it, and saying so on this factory's output.
     /// </summary>
     /// <param name="fileSystem">Reads, writes and removes the records.</param>
     public ChildSessions SessionsOver(IFileSystem fileSystem)
         => new(fileSystem, Identity, new LeftSessions(Platform, ProcessTable), Output, new EndedChildSessions());
 
-    /// <summary>The records of orchestrators' contained children over the real disk.</summary>
+    /// <summary>The records of what orchestrators' steps leave running over the real disk.</summary>
     public ChildSessions ChildSessions { get; }
 
     /// <summary>

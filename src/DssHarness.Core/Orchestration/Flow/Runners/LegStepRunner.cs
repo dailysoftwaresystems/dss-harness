@@ -3,6 +3,7 @@ using DssHarness.Core.Application.Legs;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Platform;
+using DssHarness.Core.Processes;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 using DssHarness.Core.Runs;
@@ -22,7 +23,8 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="platform">This machine.</param>
 /// <param name="store">Reads the record of the agent the step works in.</param>
 /// <param name="fileSystem">Keeps the ledger and the red logs in the step's directory.</param>
-public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem) : IFlowStepTypeRunner
+/// <param name="children">Records in its directory the group of what the step's legs start bound, while anything is in it.</param>
+public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, ChildSessions children) : IFlowStepTypeRunner
 {
     /// <inheritdoc/>
     public abstract string Type { get; }
@@ -54,9 +56,19 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
         }
 
         var watch = new StepWatch(run.Events);
-        var result = await RunLegsAsync(run, context, tree, watch, cancellationToken).ConfigureAwait(false);
+        var directory = layout.InstanceDirectory(run.Instance, run.WorksIn);
+        LegRunResult result;
 
-        Keep(result, layout.InstanceDirectory(run.Instance, run.WorksIn), redLogs: run.WorksIn is not null);
+        // What its legs start here is apart from the engine's terminal, so a first interruption typed there leaves it
+        // running for the pause to wait out; and the group of each phase - a set-up's up line apart - a leg's keep-awake and
+        // what carries a leg to a host is recorded in the step's directory while anything is in it, so what a killed engine
+        // left is ended by the next command over the run, a resume's first among them.
+        using (ProcessScope.Enter(new ProcessScope(() => children.For(directory))))
+        {
+            result = await RunLegsAsync(run, context, tree, watch, cancellationToken).ConfigureAwait(false);
+        }
+
+        Keep(result, directory, redLogs: run.WorksIn is not null);
 
         var output = Output(result, arms: Type == "check-mutations");
         var lines = result.Report.Lines;
@@ -233,9 +245,10 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
 /// <param name="platform">This machine.</param>
 /// <param name="store">Reads the record of the agent the step works in.</param>
 /// <param name="fileSystem">Keeps the step's records.</param>
+/// <param name="children">Records the group of what the step's legs start bound, while anything is in it.</param>
 /// <param name="builds">Builds the legs.</param>
-public sealed class BuildStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, IBuildLegs builds)
-    : LegStepRunner(contextLoader, platform, store, fileSystem)
+public sealed class BuildStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, ChildSessions children, IBuildLegs builds)
+    : LegStepRunner(contextLoader, platform, store, fileSystem, children)
 {
     /// <inheritdoc/>
     public override string Type => "build";
@@ -254,9 +267,10 @@ public sealed class BuildStepRunner(IHarnessContextLoader contextLoader, IHostPl
 /// <param name="platform">This machine.</param>
 /// <param name="store">Reads the record of the agent the step works in.</param>
 /// <param name="fileSystem">Keeps the step's records.</param>
+/// <param name="children">Records the group of what the step's legs start bound, while anything is in it.</param>
 /// <param name="tests">Tests the legs.</param>
-public sealed class TestStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, ITestLegs tests)
-    : LegStepRunner(contextLoader, platform, store, fileSystem)
+public sealed class TestStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, ChildSessions children, ITestLegs tests)
+    : LegStepRunner(contextLoader, platform, store, fileSystem, children)
 {
     /// <inheritdoc/>
     public override string Type => "test";
@@ -288,9 +302,10 @@ public sealed class TestStepRunner(IHarnessContextLoader contextLoader, IHostPla
 /// <param name="platform">This machine.</param>
 /// <param name="store">Reads the record of the agent the step works in.</param>
 /// <param name="fileSystem">Keeps the step's records.</param>
+/// <param name="children">Records the group of what the step's legs start bound, while anything is in it.</param>
 /// <param name="runners">Runs the runner on the legs.</param>
-public sealed class RunStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, IRunnerLegs runners)
-    : LegStepRunner(contextLoader, platform, store, fileSystem)
+public sealed class RunStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, ChildSessions children, IRunnerLegs runners)
+    : LegStepRunner(contextLoader, platform, store, fileSystem, children)
 {
     /// <inheritdoc/>
     public override string Type => "run";
@@ -325,9 +340,10 @@ public sealed class RunStepRunner(IHarnessContextLoader contextLoader, IHostPlat
 /// <param name="platform">This machine.</param>
 /// <param name="store">Reads the record of the agent the step works in.</param>
 /// <param name="fileSystem">Keeps the step's records.</param>
+/// <param name="children">Records the group of what the step's legs start bound, while anything is in it.</param>
 /// <param name="mutations">Sweeps the arms on the legs.</param>
-public sealed class SweepStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, IMutationLegs mutations)
-    : LegStepRunner(contextLoader, platform, store, fileSystem)
+public sealed class SweepStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, ChildSessions children, IMutationLegs mutations)
+    : LegStepRunner(contextLoader, platform, store, fileSystem, children)
 {
     /// <inheritdoc/>
     public override string Type => "check-mutations";

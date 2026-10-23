@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Output;
@@ -8,19 +9,28 @@ using DssHarness.Core.Processes;
 namespace DssHarness.Core.Orchestration;
 
 /// <summary>
-/// The record of a session a contained child of an orchestrator's step leads while it runs, on Linux and macOS:
+/// The record of what a child of an orchestrator's step leads while it runs, on Linux and macOS - a contained child's
+/// session, or the process group of what a machine step's legs start bound, apart from the terminal:
 /// <c>&lt;step&gt;/children/&lt;session&gt;.json</c> in the step's own directory, a step of the run's or of an agent's alike.
 /// </summary>
 /// <remarks>
 /// Kept where the step's own records are, so a resume of the run reads what the step left running from the place it reads
-/// the step from. The child leads its session under its own process id, which is the session's; the stamp beside it tells
-/// that process from a later one given the same id, and the owner is the process that started it, whose end - killed, so
-/// that it never ended the session itself - is what makes the session one to end.
+/// the step from. The child leads its session or its group under its own process id, which is the session's or the
+/// group's; the stamp beside it tells that process from a later one given the same id, and the owner is the process that
+/// started it, whose end - killed before it ended the child, or any end once a group still holds what the child left - is
+/// what makes what the record names one to end.
 /// </remarks>
 public sealed record ChildSessionRecord
 {
-    /// <summary>The session's id: the process id of the child, which leads it.</summary>
+    /// <summary>The id of the session or the group the child leads: the child's own process id.</summary>
     public required int Session { get; init; }
+
+    /// <summary>
+    /// Whether the child leads a process group within its starter's session - what a machine step's legs start, apart from
+    /// the terminal - rather than a session of its own; written only where it does.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Group { get; init; }
 
     /// <summary>What tells the child from a later process given its id (<see cref="IProcessIdentity.StampOf"/>).</summary>
     public required string Started { get; init; }
@@ -28,7 +38,7 @@ public sealed record ChildSessionRecord
     /// <summary>The program the child runs, by its resolved path.</summary>
     public required string Program { get; init; }
 
-    /// <summary>The process that started the child, and ends its session when it ends it.</summary>
+    /// <summary>The process that started the child, whose end - however it ends - leaves what the child leads to the sweep.</summary>
     public required ChildSessionOwner Owner { get; init; }
 
     /// <summary>What is wrong with this record; null when nothing is.</summary>
@@ -40,54 +50,59 @@ public sealed record ChildSessionRecord
             : null;
 }
 
-/// <summary>The process that started a contained child, as its session's record names it.</summary>
+/// <summary>The process that started a child, as the record of its session or its group names it.</summary>
 /// <param name="Machine">The machine it runs on.</param>
 /// <param name="ProcessId">Its process id.</param>
 /// <param name="Stamp">What tells it from a later process given its id; null where this machine would not say.</param>
 public sealed record ChildSessionOwner(string Machine, int ProcessId, string? Stamp = null);
 
-/// <summary>A session a sweep ended, as a command's document names it.</summary>
+/// <summary>A session or a process group a sweep ended, as a command's document names it.</summary>
 /// <param name="Orchestrator">The orchestrator whose step left it.</param>
 /// <param name="Agent">The agent whose step left it; null for a step of the run that no agent owns.</param>
 /// <param name="Step">The step instance that left it.</param>
-/// <param name="Session">The session's id: its leader's process id.</param>
+/// <param name="Session">The id of the session or the group: its leader's process id.</param>
 /// <param name="Program">The program its leader ran.</param>
 /// <param name="Owner">The process id of the process that started it and had gone.</param>
-/// <param name="Unreached">What of the session could not be reached, and why; null where everything in it was.</param>
-public sealed record EndedChildSession(string Orchestrator, string? Agent, string Step, int Session, string Program, int Owner, string? Unreached);
+/// <param name="Unreached">What of it could not be reached, and why; null where everything in it was.</param>
+/// <param name="Group">Whether it was a process group - of what a machine step's legs start - rather than a contained child's session.</param>
+public sealed record EndedChildSession(string Orchestrator, string? Agent, string Step, int Session, string Program, int Owner, string? Unreached, bool Group = false);
 
 /// <summary>
-/// Keeps the records of the sessions contained children of an orchestrator's steps lead, and ends the ones a killed process
-/// left: the one writer and the one reader of <see cref="ChildSessionRecord"/>.
+/// Keeps the records of the sessions contained children of an orchestrator's steps lead, and of the process groups of
+/// what its machine steps' legs start, and ends the ones the process that started them left once it has gone: the one
+/// writer and the one reader of <see cref="ChildSessionRecord"/>.
 /// </summary>
 /// <remarks>
 /// <para>
-/// A record is written by the process runner, through the recorder <see cref="For"/> hands a request, once the child is
-/// placed in its session and before it is said to have started; and taken back once the runner has ended the session, at
-/// the child's own end or at a stop. A record is never written by hand.
+/// A record is written by the process runner, through the recorder <see cref="For"/> hands a request or a process scope,
+/// once the child is placed in its session or its group and before it is said to have started; and taken back once the
+/// child has ended, at its own end or at a stop, and nothing is left in it - a group that still holds what the child left
+/// keeps its record. A record is never written by hand.
 /// </para>
 /// <para>
 /// Every command that works an orchestrator sweeps its records first (<see cref="SweepAsync"/>), before it reads anything
-/// else of it: a session whose owner still runs is its owner's to end and is left as it is; one whose owner has gone was
-/// left running by a process killed before it could end it, and is ended as that process would have ended it - where its
-/// leader is still the process recorded, and never where another process has been given its id - and its record removed.
-/// An owner on another machine is never taken to have gone, since nothing here can ask that machine. Windows records
-/// nothing: a contained child there is held in a job that ends with the process holding it.
+/// else of it: a session or a group whose owner still runs is its owner's to end and is left as it is; one whose owner has
+/// gone was left running by it - killed before it could end it, or a group holding what its child left at its own end -
+/// and is ended as a contained child's session is ended at its end -
+/// where its leader is still the process recorded, or where no process carries its id, since none is given an id a
+/// session or a group still carries, and never where another process has been given it - and its record removed. An
+/// owner on another machine is never taken to have gone, since nothing here can ask that machine. Windows records
+/// nothing: a child there is held in a job that ends with the process holding it.
 /// </para>
 /// <para>
-/// Each session a sweep ends is said as it is ended, and kept in the operation's <see cref="EndedChildSessions"/>, which
-/// every document the operation answers with says, however it goes on to end.
+/// Each session or group a sweep ends with anything still in it is said as it is ended, and kept in the operation's
+/// <see cref="EndedChildSessions"/>, which every document the operation answers with says, however it goes on to end.
 /// </para>
 /// </remarks>
 /// <param name="fileSystem">Reads, writes and removes the records.</param>
 /// <param name="identity">This process, the owner of what it records, and how another process's liveness and start are told.</param>
-/// <param name="left">Ends a session its owner left running.</param>
+/// <param name="left">Ends a session or a group its owner left running.</param>
 /// <param name="output">Says what a sweep ended, and a record it could not read or remove.</param>
 /// <param name="ended">What this operation's sweeps ended, for its documents.</param>
 public sealed class ChildSessions(IFileSystem fileSystem, IProcessIdentity identity, LeftSessions left, IHarnessOutput output, EndedChildSessions ended)
 {
     /// <summary>What a record is, as a line that cannot read one names it.</summary>
-    public const string RecordKind = "the record of a contained child's session";
+    public const string RecordKind = "the record of a step's child's session or process group";
 
     private readonly IFileSystem _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
 
@@ -99,7 +114,10 @@ public sealed class ChildSessions(IFileSystem fileSystem, IProcessIdentity ident
 
     private readonly EndedChildSessions _ended = ended ?? throw new ArgumentNullException(nameof(ended));
 
-    /// <summary>Where a contained child of the step kept at <paramref name="stepDirectory"/> records its session, as its request names it.</summary>
+    /// <summary>
+    /// Where a child of the step kept at <paramref name="stepDirectory"/> records its session or its group, as its request
+    /// or its operation's process scope names it.
+    /// </summary>
     /// <param name="stepDirectory">The step's own directory.</param>
     public IContainedSessionRecord For(string stepDirectory)
     {
@@ -108,13 +126,13 @@ public sealed class ChildSessions(IFileSystem fileSystem, IProcessIdentity ident
     }
 
     /// <summary>
-    /// Ends each session a contained child of the orchestrator's steps leads whose owner has gone, as that owner would have
+    /// Ends each session or group a child of the orchestrator's steps leads whose owner has gone, as that owner would have
     /// ended it, and removes its record: said, each, as a line of <paramref name="command"/>, and kept for the documents
     /// the operation answers with (<see cref="EndedChildSessions"/>).
     /// </summary>
     /// <param name="orchestrator">The orchestrator.</param>
     /// <param name="command">The command sweeping, which its lines name.</param>
-    /// <returns>Each session ended, in the order its record was found.</returns>
+    /// <returns>Each session or group ended with anything still in it, in the order its record was found.</returns>
     public async Task<IReadOnlyList<EndedChildSession>> SweepAsync(OrchestratorLayout orchestrator, string command)
     {
         ArgumentNullException.ThrowIfNull(orchestrator);
@@ -129,20 +147,22 @@ public sealed class ChildSessions(IFileSystem fileSystem, IProcessIdentity ident
                 continue;
             }
 
-            // A session whose owner runs is its owner's to end.
+            // A session or a group whose owner runs is its owner's to end.
             if (_identity.Stands(record.Owner.Machine, record.Owner.ProcessId, record.Owner.Stamp))
             {
                 continue;
             }
 
-            string? unreached = null;
-            var leads = _identity.IsSame(record.Session, record.Started);
+            // Led by the process recorded, it is ended. Led by none - its leader gone, as the hard stop that ended the
+            // engine's tree took it - what it led may still hold what was handed on, and no later process is given the id
+            // a session or a group still carries, so that is ended too. Led by another process given its id, it had ended.
+            HeldEnding ending = default;
 
-            if (leads)
+            if (_identity.IsSame(record.Session, record.Started) || !_identity.IsAlive(record.Session, stamp: null))
             {
                 try
                 {
-                    unreached = await _left.EndAsync(record.Session).ConfigureAwait(false);
+                    ending = await _left.EndAsync(record.Session, record.Group).ConfigureAwait(false);
                 }
                 catch (PlatformNotSupportedException ex)
                 {
@@ -151,13 +171,13 @@ public sealed class ChildSessions(IFileSystem fileSystem, IProcessIdentity ident
                 }
             }
 
-            // Ended, or led by nothing recorded any more - its leader gone, or its id another process's - the record has
-            // nothing left to name.
+            // Ended, or holding nothing any more - its id another process's, or nothing left in it - the record has nothing
+            // left to name.
             Remove(file, command, orchestrator.Name);
 
-            if (leads)
+            if (ending.Found)
             {
-                var session = new EndedChildSession(orchestrator.Name, agent, step, record.Session, record.Program, record.Owner.ProcessId, unreached);
+                var session = new EndedChildSession(orchestrator.Name, agent, step, record.Session, record.Program, record.Owner.ProcessId, ending.Unreached, record.Group);
 
                 _output.Info(command, Line(session));
                 _ended.Add(session);
@@ -168,8 +188,8 @@ public sealed class ChildSessions(IFileSystem fileSystem, IProcessIdentity ident
         return ended;
     }
 
-    /// <summary>The line a command says a session it ended with.</summary>
-    /// <param name="session">The session ended.</param>
+    /// <summary>The line a command says a session or a group it ended with.</summary>
+    /// <param name="session">The session or group ended.</param>
     public static string Line(EndedChildSession session)
     {
         ArgumentNullException.ThrowIfNull(session);
@@ -180,12 +200,12 @@ public sealed class ChildSessions(IFileSystem fileSystem, IProcessIdentity ident
 
         return string.Create(
             CultureInfo.InvariantCulture,
-            $"{step} left session {session.Session} ('{session.Program}') running, and the process that started it (pid {session.Owner}) has gone; it was ended{(session.Unreached is { } unreached ? $", and {unreached}" : string.Empty)}");
+            $"{step} left {LeftSessions.Noun(session.Group)} {session.Session} ('{session.Program}') running, and the process that started it (pid {session.Owner}) has gone; it was ended{(session.Unreached is { } unreached ? $", and {unreached}" : string.Empty)}");
     }
 
-    /// <summary>Writes the record of a session placed in the step at <paramref name="stepDirectory"/>, whole.</summary>
+    /// <summary>Writes the record of a session or a group placed in the step at <paramref name="stepDirectory"/>, whole.</summary>
     /// <returns>The record's path; null where the leader's start cannot be read, since it has then ended and no record of it could ever be matched.</returns>
-    private string? Write(string stepDirectory, int leader, string program)
+    private string? Write(string stepDirectory, int leader, string program, bool group)
     {
         if (_identity.StampOf(leader) is not { Length: > 0 } started)
         {
@@ -195,6 +215,7 @@ public sealed class ChildSessions(IFileSystem fileSystem, IProcessIdentity ident
         var record = new ChildSessionRecord
         {
             Session = leader,
+            Group = group,
             Started = started,
             Program = program,
             Owner = new ChildSessionOwner(_identity.CurrentMachine, _identity.CurrentId, _identity.Current),
@@ -296,17 +317,17 @@ public sealed class ChildSessions(IFileSystem fileSystem, IProcessIdentity ident
     /// <summary>A directory's own name.</summary>
     private static string Name(string directory) => Path.GetFileName(Path.TrimEndingDirectorySeparator(directory));
 
-    /// <summary>The recorder a contained child's request is handed: the record written once it is placed, and taken back once it is ended.</summary>
+    /// <summary>The recorder a child's request or its process scope hands the runner: the record written once it is placed, and taken back once it has ended.</summary>
     /// <param name="sessions">The records.</param>
     /// <param name="stepDirectory">The step's own directory.</param>
     private sealed class Recorder(ChildSessions sessions, string stepDirectory) : IContainedSessionRecord
     {
         private string? _file;
 
-        public void Placed(int leader, string program)
+        public void Placed(int leader, string program, bool group)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(program);
-            _file = sessions.Write(stepDirectory, leader, program);
+            _file = sessions.Write(stepDirectory, leader, program, group);
         }
 
         public void Ended()

@@ -1241,9 +1241,9 @@ public sealed class FlowService(
 
     /// <summary>
     /// <c>stop-orchestrator --now</c>: the engine's process ended without asking it - only one of this machine's, only
-    /// the process its owner names by its start, and never this one - then what its steps' contained children left is
-    /// ended and its owner is removed. A process that could not be ended is a failure, said; what is left is what a crash
-    /// leaves, less those processes.
+    /// the process its owner names by its start, and never this one - then its owner is removed and what its steps left
+    /// running is ended: a contained child's session, a leg's process group. A process that could not be ended is a
+    /// failure, said; what is left is what a crash leaves, less those processes.
     /// </summary>
     private async Task<CommandOutcome> EndNowAsync(OrchestratorLayout layout, RunOwner held, bool json, CancellationToken cancellationToken)
     {
@@ -1258,21 +1258,21 @@ public sealed class FlowService(
             return Answer(nothingMore);
         }
 
-        if (ending.How == ProcessEnded.AlreadyGone)
-        {
-            _owner.RemoveGone(layout);
-            return Answer(CommandOutcome.Ok($"the engine of run '{layout.Name}' ({name}) had already ended; its owner was removed", [$"{ResumeCommand} goes on from the records"]));
-        }
-
+        // Gone already or ended now, the engine leaves its steps' children to the sweep, which ends what its owner's end left.
         _owner.RemoveGone(layout);
         var ended = await _children.SweepAsync(layout, StopCommand).ConfigureAwait(false);
+        IReadOnlyList<string> endedWithIt = ended.Count == 0 ? [] : [$"what its steps left running was ended with it: {EndedChildSessions.Counted(ended)}"];
+
+        if (ending.How == ProcessEnded.AlreadyGone)
+        {
+            return Answer(CommandOutcome.Ok(
+                $"the engine of run '{layout.Name}' ({name}) had already ended; its owner was removed",
+                [.. endedWithIt, $"{ResumeCommand} goes on from the records"]));
+        }
 
         return Answer(CommandOutcome.Ok(
             $"ended the engine of run '{layout.Name}' ({name}) where it stood",
-            [
-                .. ended.Count == 0 ? [] : new[] { $"{ReportText.Counted(ended.Count, "session")} its steps' contained children led {(ended.Count == 1 ? "was" : "were")} ended with it" },
-                $"what it left is what a crash leaves; {ResumeCommand} goes on from the records",
-            ]));
+            [.. endedWithIt, $"what it left is what a crash leaves; {ResumeCommand} goes on from the records"]));
     }
 
     /// <summary>A record read for an answer that must not fail for it: null where it is not there or does not read.</summary>

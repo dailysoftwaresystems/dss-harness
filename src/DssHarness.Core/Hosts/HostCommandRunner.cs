@@ -184,6 +184,14 @@ public sealed record HostCommand
     public TimeSpan? Timeout { get; init; }
 
     /// <summary>
+    /// Binds the local process that reaches the host - ssh, wsl.exe, or the program itself on this machine - to this
+    /// process's life, as a leg's own phase is bound; see <see cref="ProcessRequest.Bound"/>. A leg dispatched to a host
+    /// is: its dispatcher on Windows ends with this process, and under a machine step's process scope it is apart from
+    /// the engine's terminal and recorded while it runs, as a local leg's phase is.
+    /// </summary>
+    public bool Bound { get; init; }
+
+    /// <summary>
     /// Runs the program as root: in a WSL distribution, as WSL's own root user, which asks for no password. No other host
     /// runs a command so, and one asked to starts nothing: root is reached there only through a password.
     /// </summary>
@@ -546,6 +554,7 @@ public sealed class HostCommandRunner(IProcessRunner processRunner) : IHostComma
             HoldStandardInputOpen = command.HoldStandardInputOpen,
             StandardInputBeat = command.StandardInputBeat,
             Timeout = command.Timeout,
+            Bound = command.Bound,
             OnOutputLine = command.OnOutputLine,
             OnErrorLine = command.OnErrorLine,
             OutputKept = command.OutputKept,

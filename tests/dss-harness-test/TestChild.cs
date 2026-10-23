@@ -51,7 +51,8 @@ internal static class TestChild
             "say-pid-and-sleep" => SayPidAndSleep(standardOutput, arguments),
             "say-pid-then" => SayPidThen(standardOutput, arguments),
             "contain-and-wait" => ContainAndWait(standardOutput, arguments),
-            "contain-recorded-and-wait" => ContainRecordedAndWait(standardOutput, arguments),
+            "contain-recorded-and-wait" => RecordedAndWait(standardOutput, arguments, scoped: false),
+            "scoped-recorded-and-wait" => RecordedAndWait(standardOutput, arguments, scoped: true),
             "bind-and-wait" => BindAndWait(standardOutput, arguments),
             "interrupt-own-console" => InterruptOwnConsole(standardOutput),
             "print-code-page" => PrintCodePage(standardOutput),
@@ -474,6 +475,12 @@ internal static class TestChild
         return 0;
     }
 
+    /// <summary>The session <paramref name="process"/> is in - 0 for this one - on Linux and macOS; -1 where it is not there.</summary>
+    internal static int SessionOf(int process) => getsid(process);
+
+    /// <summary>The process group <paramref name="process"/> is in - 0 for this one - on Linux and macOS; -1 where it is not there.</summary>
+    internal static int GroupOf(int process) => getpgid(process);
+
     [System.Runtime.InteropServices.DllImport("libc")]
     private static extern int getpid();
 
@@ -719,12 +726,16 @@ internal static class TestChild
     }
 
     /// <summary>
-    /// Starts a sleeper for <c>arguments[2]</c> milliseconds contained, through a process runner of its own that starts
-    /// contained children through the tool <c>arguments[0]</c> names, its session recorded in the step directory
-    /// <c>arguments[1]</c> as an orchestrator's step records it; writes its own id and the sleeper's on one line once the
-    /// record is written, and waits for it: the process a test kills, so the record names a session whose owner has gone.
+    /// Starts a child through a process runner of its own that starts its contained and apart children through the tool
+    /// <c>arguments[0]</c> names, recorded in the step directory <c>arguments[1]</c> as an orchestrator's step records one:
+    /// a sleeper for <c>arguments[2]</c> milliseconds, contained, writing its own id and the sleeper's as <c>child</c> -
+    /// or, where <paramref name="scoped"/>, the behaviour <c>arguments[2]</c> names, given every argument after it, bound
+    /// under a process scope as a machine step's leg phase starts, writing its own id and the first line naming an id the
+    /// child wrote. Writes them on one line once the child has said, and waits for it to end: the process a test kills,
+    /// so the record names a session or a group whose owner has gone, or the job that bound the child ends it - or lets
+    /// end, leaving what its child left.
     /// </summary>
-    private static int ContainRecordedAndWait(TextWriter output, string[] arguments)
+    private static int RecordedAndWait(TextWriter output, string[] arguments, bool scoped)
     {
         var platform = new Core.Platform.HostPlatform();
         var permissions = Core.Platform.FilePermissionsFactory.Create();
@@ -736,31 +747,43 @@ internal static class TestChild
             new Core.Output.ConsoleHarnessOutput(TextWriter.Null, TextWriter.Null, verbose: false, home: null),
             new Core.Orchestration.EndedChildSessions());
         var said = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        string[] childArguments = scoped ? arguments[3..] : [arguments[2]];
 
         // Its lines are read only once it is said to have started, and it is said to have started only once its record
         // is written: its id heard, the record names it.
-        var contained = runner.RunAsync(TestHost.ChildRequest("say-pid-and-sleep", arguments[2]) with
+        var request = TestHost.ChildRequest(scoped ? arguments[2] : "say-pid-and-sleep", childArguments) with
         {
             FileName = TestHost.AssemblyProgram,
-            Arguments = [arguments[2]],
-            Contained = true,
-            SessionRecord = sessions.For(arguments[1]),
+            Arguments = childArguments,
             OnOutputLine = line =>
             {
-                if (line.StartsWith("pid=", StringComparison.Ordinal))
+                if (line.Contains('=', StringComparison.Ordinal))
                 {
-                    said.TrySetResult(line["pid=".Length..]);
+                    said.TrySetResult(line.Trim());
                 }
             },
-        });
+        };
+        Task<Core.Processes.ProcessResult> child;
 
-        if (Task.WhenAny(said.Task, contained).GetAwaiter().GetResult() != said.Task)
+        if (scoped)
+        {
+            using (Core.Processes.ProcessScope.Enter(new Core.Processes.ProcessScope(() => sessions.For(arguments[1]))))
+            {
+                child = runner.RunAsync(request with { Bound = true });
+            }
+        }
+        else
+        {
+            child = runner.RunAsync(request with { Contained = true, SessionRecord = sessions.For(arguments[1]) });
+        }
+
+        if (Task.WhenAny(said.Task, child).GetAwaiter().GetResult() != said.Task)
         {
             return 95;
         }
 
-        output.Write($"owner={Environment.ProcessId} contained={said.Task.Result}\n");
-        contained.GetAwaiter().GetResult();
+        output.Write($"owner={Environment.ProcessId} {(scoped ? said.Task.Result : $"child={said.Task.Result["pid=".Length..]}")}\n");
+        child.GetAwaiter().GetResult();
 
         return 0;
     }

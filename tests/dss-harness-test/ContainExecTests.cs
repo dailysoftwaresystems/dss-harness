@@ -719,6 +719,61 @@ public sealed class ContainExecTests
     }
 
     /// <summary>
+    /// A process group a sweep ends where the process table cannot be read is ended by its id, which needs no table, and
+    /// says what was not reached as a group's: where the table cannot be read at all, and where it reads once and not
+    /// again once the group was asked to end. One already ended, its table unread, is said as one that could not be told
+    /// to have nothing left - never taken for one that held nothing.
+    /// </summary>
+    [Theory]
+    [InlineData("never")]
+    [InlineData("once")]
+    [InlineData("ended")]
+    public async Task AGroupLeftRunning_IsEndedByItsId_WhereTheTableCannotBeRead_SayingWhatWasNotReached(string read)
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "a group is read from the process table on Linux and macOS; Windows records none to end.");
+
+        using var group = Process.Start(TestHost.StartOf(Child("own-group-and-sleep", "300000")))!;
+
+        try
+        {
+            Assert.True(Until(() => GroupOf(group.Id) == group.Id), $"the process {group.Id} never led a group of its own");
+
+            if (read == "ended")
+            {
+                group.Kill();
+                await group.WaitForExitAsync(TestContext.Current.CancellationToken);
+            }
+
+            var platform = new HostPlatform();
+            IProcessTable table = read == "once"
+                ? new ReadOnce(ProcessTableFactory.Create(platform, ContainingRunner()), UnreadableTable.Raising)
+                : UnreadableTable.Raising;
+
+            var ending = await new LeftSessions(platform, table).EndAsync(group.Id, group: true).WaitAsync(LongBound, TestContext.Current.CancellationToken);
+
+            Assert.Equal(
+                new HeldEnding(
+                    Found: true,
+                    read switch
+                    {
+                        "never" => UnreadableTable.Unreached("its group was ended", group: true),
+                        "ended" => UnreadableTable.Unreached("its group had already ended", group: true),
+                        _ => "the process table could not be read again once the process group a child apart from the terminal led had been asked "
+                            + $"to end ({UnreadableTable.PsNotStarted}): its group was ended, and what of its tree had left the group was not reached",
+                    }),
+                ending);
+            Assert.True(group.WaitForExit(LongBound), $"the group {group.Id} outlived its end");
+        }
+        finally
+        {
+            if (!group.HasExited)
+            {
+                group.Kill();
+            }
+        }
+    }
+
+    /// <summary>
     /// A contained child that ends of itself on Linux or macOS where the process table cannot be
     /// read - on macOS it is read through <c>ps</c>, which a session that has used up its processes
     /// leaves unable to start - still has its group ended, which needs no table, and the run ends
@@ -1290,14 +1345,14 @@ public sealed class ContainExecTests
     private sealed class UnreadableTable(Exception raised) : IProcessTable
     {
         /// <summary>What a table read through a <c>ps</c> that cannot start raises, as the process runner words it.</summary>
-        private const string PsNotStarted = "'ps' could not be started: Resource temporarily unavailable";
+        public const string PsNotStarted = "'ps' could not be started: Resource temporarily unavailable";
 
         /// <summary>A table whose program could not start, as macOS's does in a session that has used up its processes.</summary>
         public static UnreadableTable Raising => new(new ProgramStartException("ps", PsNotStarted));
 
-        /// <summary>What a session ended without this table says it did not reach, <paramref name="ended"/> said of its group.</summary>
-        public static string Unreached(string ended)
-            => $"the process table could not be read to end the contained child's session ({PsNotStarted}): {ended}, "
+        /// <summary>What a session - or a group - ended without this table says it did not reach, <paramref name="ended"/> said of its group.</summary>
+        public static string Unreached(string ended, bool group = false)
+            => $"the process table could not be read to end {(group ? "the process group a child apart from the terminal led" : "the contained child's session")} ({PsNotStarted}): {ended}, "
                 + "and what it started outside the group was not reached";
 
         public Task<ProcessTableReading> ReadAsync(CancellationToken cancellationToken = default)
@@ -1305,6 +1360,17 @@ public sealed class ContainExecTests
     }
 
     private static int GetGroupOfThisProcess() => getpgid(0);
+
+    private static int GroupOf(int process) => getpgid(process);
+
+    /// <summary>A process table read once from <paramref name="first"/>, and from <paramref name="then"/> ever after.</summary>
+    private sealed class ReadOnce(IProcessTable first, IProcessTable then) : IProcessTable
+    {
+        private int _reads;
+
+        public Task<ProcessTableReading> ReadAsync(CancellationToken cancellationToken = default)
+            => (Interlocked.Increment(ref _reads) == 1 ? first : then).ReadAsync(cancellationToken);
+    }
 
     private static int GetSidOfThisProcess() => getsid(0);
 }

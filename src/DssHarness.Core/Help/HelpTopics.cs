@@ -904,7 +904,8 @@ public static class HelpTopics
             + $"- and {RunStopService.CommandName} waits {RunStopService.StopWait.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s for it, saying "
             + $"the run stopped only where its dispatcher took the stop: one that ended on its own first is nothing it stopped ({HarnessExit.Refused}). "
             + "--now ends the dispatcher's process where it stands, with all it started, and its ledger is never written. On Windows every phase "
-            + "a leg runs on its own machine, and its keepAwake command, is bound to its dispatcher - a set-up's up line apart - and ends with it "
+            + "a leg runs on its own machine, its keepAwake command, and the ssh or wsl.exe that carries a leg to a host, is bound to its "
+            + "dispatcher - a set-up's up line apart - and ends with it "
             + $"however it ends, a kill among them. On Linux and macOS a kill of the dispatcher alone does not reach its legs, and "
             + $"{RunStopService.CommandName} --now does.");
         builder.AppendLine();
@@ -2795,7 +2796,7 @@ public static class HelpTopics
                 ($"  {OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.SessionsDirectoryName}/<id>/", "API clients only: one conversation with the provider, in the provider's own form"),
                 ($"  {OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.StepsDirectoryName}/<instance>/", "one step the agent runs, or that runs in or for its worktree: everything of the step, its handoff.md where one stopped it"),
                 ($"  {OrchestratorLayout.StepsDirectoryName}/<instance>/", "one step of the run that no agent owns, the create-agent that makes an agent included"),
-                ($"  <step>/{OrchestratorLayout.ChildrenDirectoryName}/<session>{OrchestratorLayout.ChildExtension}", "in either kind of step, on Linux and macOS: a session a contained child of the step leads while it runs"),
+                ($"  <step>/{OrchestratorLayout.ChildrenDirectoryName}/<session>{OrchestratorLayout.ChildExtension}", "in either kind of step, on Linux and macOS: a session a contained child of the step leads while it runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what carries a leg to a host leads while anything is in it"),
                 ($"  {OrchestratorLayout.FlowFileName}", "a run's state in one file - the truth a resume goes on from"),
                 ($"  {OrchestratorLayout.WorkflowStatusFileName}", "a run's status for a person: each step of its definition, its instances, progress and what it waits on"),
                 ($"  {OrchestratorLayout.DefinitionFileName}", "the workflow's definition as the run began with it"),
@@ -2901,16 +2902,20 @@ public static class HelpTopics
         builder.AppendLine();
         AppendWrapped(
             builder,
-            "What a killed process left running. On Linux and macOS a contained child of a step leads a session of its own, "
-            + $"which nothing ends when the process that started it is killed, so it is recorded in its step's {OrchestratorLayout.ChildrenDirectoryName}/ "
-            + "while it runs and the record taken back once that process ends it. Every command over an orchestrator - the three "
+            "What a killed process left running. On Linux and macOS a contained child of a step leads a session of its own, and "
+            + "what a machine step's legs start a process group of its own, apart from the engine's terminal; nothing ends either "
+            + "when the process that started it is killed, so each session, and the group of each phase - a set-up's up line apart - "
+            + $"keepAwake command and ssh that carries a leg to a host, is recorded in its step's {OrchestratorLayout.ChildrenDirectoryName}/ "
+            + "while it runs, and the record taken back once nothing is left in it: a group still holding what its child left at its "
+            + "own end keeps it. Every command over an orchestrator - the three "
             + "orchestrator commands, each agent command, and each run verb over a run already made - first ends each recorded "
-            + "session whose starter has gone, as a stop "
-            + "ends one (SIGTERM, then SIGKILL five seconds later), removes its record, and says so in a line, and in the document's "
-            + "ended where it answers with --json. A session whose starter still runs is left; one whose id a later process "
+            + "session or group whose starter has gone, its leader standing or not (SIGTERM, then SIGKILL five seconds later), "
+            + "removes its record, and says so in a line, and in the document's "
+            + "ended where it answers with --json; stop-orchestrator --now does it again once it has ended the engine and its "
+            + "tree, and says what it ended. A session or group whose starter still runs is left; one whose id a later process "
             + "carries ends nothing, and its record goes; a record that does not read as one is said and left; a starter on another "
-            + "machine is never taken to have gone. Windows records nothing: a job ends a contained child with the process that "
-            + "started it.");
+            + "machine is never taken to have gone. Windows records nothing: a job ends a contained or bound child with the process "
+            + "that started it.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -3545,8 +3550,13 @@ public static class HelpTopics
         builder.AppendLine($"  <step>/{OrchestratorLayout.ChildrenDirectoryName}/<session>{OrchestratorLayout.ChildExtension}");
         builder.AppendLine("                                     ignored; in either kind of step, on Linux and");
         builder.AppendLine("                                     macOS: a session a contained child of the step");
-        builder.AppendLine("                                     leads while it runs, ended by the next command");
-        builder.AppendLine("                                     over the orchestrator where its starter was killed");
+        builder.AppendLine("                                     leads while it runs, or the process group a phase");
+        builder.AppendLine("                                     of its legs - a set-up's up line apart - its");
+        builder.AppendLine("                                     keepAwake command or what carries a leg to a host");
+        builder.AppendLine("                                     leads while anything is in it, ended by the next");
+        builder.AppendLine("                                     command over the orchestrator - and by");
+        builder.AppendLine("                                     stop-orchestrator --now - once its starter has");
+        builder.AppendLine("                                     gone");
         builder.AppendLine($"  {HarnessLayout.MutationsDirectoryName}/                        contents ignored, .gitkeep tracked; the tree's");
         builder.AppendLine("                                     mutation workers, in every tree, never sent to");
         builder.AppendLine($"                                     a host by sync ('{ToolPackage.Command} help mutations')");

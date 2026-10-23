@@ -145,6 +145,11 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
                     HoldStandardInputOpen = true,
                     StandardInputBeat = HostAgentProtocol.BeatOf(request),
 
+                    // Bound as a local leg's phase is: what reaches the host ends with this process on Windows, and
+                    // under a run's machine step is out of reach of the engine's terminal and recorded while it runs,
+                    // so a safe pause leaves the host's leg running and a killed engine leaves nothing unrecorded.
+                    Bound = true,
+
                     // What the host's command prints is relayed line by line, under --verbose every line of
                     // every step, and the end of it is all the result keeps; its ledger arrives whole, a
                     // line at a time, and is kept below.

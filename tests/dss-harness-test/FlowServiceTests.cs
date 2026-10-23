@@ -8,6 +8,8 @@ using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Output;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
 
 namespace DssHarness.Tests;
@@ -66,7 +68,8 @@ public sealed class FlowServiceTests
         FlowTimings? timings = null,
         IHarnessOutput? output = null,
         IFileSystem? fileSystem = null,
-        IProcessIdentity? identity = null)
+        IProcessIdentity? identity = null,
+        ChildSessions? children = null)
     {
         var files = fileSystem ?? harness.FileSystem;
         var store = fileSystem is null ? harness.OrchestrationStore : new OrchestrationStore(files, harness.Output);
@@ -82,7 +85,7 @@ public sealed class FlowServiceTests
             new WorkflowValidationService(harness.ContextLoader, harness.FileSystem, harness.Platform, new DssHarness.Core.Secrets.AgentKeyStore(harness.FileSystem, harness.FilePermissions, harness.Platform)),
             runner,
             harness.OrchestrationLog,
-            harness.ChildSessions,
+            children ?? harness.ChildSessions,
             harness.PathBudget,
             output ?? harness.Output,
             harness.GitClient,
@@ -364,7 +367,7 @@ public sealed class FlowServiceTests
             _ => await service.QuestionsAsync(repository.Path, "r1", json: false, Token).WaitAsync(Bound, Token),
         };
 
-        var warning = $"{command}: WARN - '{record}' is the record of a contained child's session, and does not read as one: "
+        var warning = $"{command}: WARN - '{record}' is the record of a step's child's session or process group, and does not read as one: "
             + "its session is 0, and a session is a process's id. It was left as it is, and nothing it names was ended.";
 
         Assert.Equal(warning, repository.Harness.StandardError.ToString().Split('\n').Select(line => line.TrimEnd('\r')).FirstOrDefault(line => line.StartsWith($"{command}: ", StringComparison.Ordinal)));
@@ -1041,6 +1044,173 @@ public sealed class FlowServiceTests
         finally
         {
             Ending(engine);
+        }
+    }
+
+    /// <summary>
+    /// <c>--now</c> ends what the engine's steps left running once it has ended the engine where it stood - the engine's
+    /// whole tree, its leg's phase among it: here what the phase handed on, no one's child and still in the phase's group,
+    /// ended by the sweep that follows though the phase that led the group is gone, and a contained child's session the
+    /// engine recorded; said in the answer by kind, their records removed. An engine found gone already - a crash, which
+    /// ends nothing it started - is nothing to stop, and the sweep every verb over the run starts with has ended what it
+    /// left all the same, its phase still leading its group, said in its lines.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task StopNow_EndsTheProcessGroupsTheEnginesStepsLeftRunning(bool goneAlready)
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "a leg's phase there is bound by the engine's job, which ends it with the engine, and nothing is recorded.");
+
+        var (repository, service, runner) = await ServiceAsync();
+        using var disposed = repository;
+
+        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+        _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var run = RunOf(repository);
+        var identity = repository.Harness.Identity;
+        var step = run.StepDirectory("one");
+        var said = new TaskCompletionSource<(LearnedProcess Engine, LearnedProcess HandedOn)>(TaskCreationOptions.RunContinuationsAsynchronously);
+        (LearnedProcess Engine, LearnedProcess HandedOn) ids = default;
+        using var contained = Process.Start(TestHost.StartOf(TestHost.ChildRequest("own-session-and-sleep", "300000")))!;
+
+        // The engine starts its leg's phase as a machine step does - bound, under a process scope that records its group
+        // in the step's directory - and the phase hands on a process of its own, no one's child, still in its group.
+        var engineRun = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram).RunAsync(
+            TestHost.ChildRequest("scoped-recorded-and-wait", CliRunner.CliProgram, step, "spawn-orphan-and-sleep", "300000") with
+            {
+                Timeout = Bound,
+                OnOutputLine = line =>
+                {
+                    var words = line.Split(' ').Select(word => word.Split('=')).ToDictionary(pair => pair[0], pair => int.Parse(pair[1], CultureInfo.InvariantCulture));
+                    said.TrySetResult((LearnedProcess.Of(words["owner"]), LearnedProcess.Of(words["orphan"])));
+                },
+            },
+            Token);
+
+        try
+        {
+            ids = await said.Task.WaitAsync(Bound, Token);
+
+            var groupRecord = Assert.Single(Directory.GetFiles(OrchestratorLayout.ChildrenDirectory(step)));
+            var phase = LearnedProcess.Of(JsonNode.Parse(File.ReadAllText(groupRecord))!["session"]!.GetValue<int>());
+            var session = OrchestratorLayout.ChildFile(step, contained.Id);
+
+            Assert.True(SpinWait.SpinUntil(() => TestChild.SessionOf(contained.Id) == contained.Id, Bound), $"the child {contained.Id} never led a session of its own");
+
+            File.WriteAllText(session, new JsonObject
+            {
+                ["session"] = contained.Id,
+                ["started"] = identity.StampOf(contained.Id),
+                ["program"] = "dotnet",
+                ["owner"] = new JsonObject { ["machine"] = identity.CurrentMachine, ["processId"] = ids.Engine.Id, ["stamp"] = ids.Engine.Stamp },
+            }.ToJsonString() + "\n");
+
+            if (goneAlready)
+            {
+                // Killed alone, as a crash ends it: its phase still leads its group.
+                using (var killed = Process.GetProcessById(ids.Engine.Id))
+                {
+                    killed.Kill(entireProcessTree: false);
+                }
+
+                await Record.ExceptionAsync(() => engineRun.WaitAsync(Bound, Token));
+            }
+
+            repository.Harness.OrchestrationStore.WriteOwner(run, new RunOwner(identity.CurrentMachine, ids.Engine.Id, DateTimeOffset.UtcNow, ids.Engine.Stamp));
+
+            var outcome = await service.StopAsync(repository.Path, "r1", now: true, json: false, Token).WaitAsync(Bound, Token);
+
+            Assert.True(ids.HandedOn.AwaitGone(), $"what the phase handed on, {ids.HandedOn}, outlived the stop of the engine that left it");
+            Assert.True(phase.AwaitGone(), $"the phase {phase} outlived the stop of the engine that left it");
+            Assert.True(contained.WaitForExit(Bound), $"the contained child {contained.Id} outlived the stop of the engine that left it");
+            Assert.False(File.Exists(groupRecord), $"the record of the ended group is still at '{groupRecord}'");
+            Assert.False(File.Exists(session), $"the record of the ended session is still at '{session}'");
+
+            var groupLine = $"{FlowService.StopCommand}: step 'one' of 'r1' left process group {phase.Id} ('{TestHost.AssemblyProgram}') running, "
+                + $"and the process that started it (pid {ids.Engine.Id}) has gone; it was ended";
+            Assert.Contains(groupLine, repository.Harness.StandardOutput.ToString().Split('\n').Select(line => line.TrimEnd('\r')));
+
+            if (goneAlready)
+            {
+                Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
+                Assert.Equal("run 'r1' is not being run by an engine: there is nothing to stop", outcome.Message);
+                return;
+            }
+
+            Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+            Assert.Equal($"ended the engine of run 'r1' (process {ids.Engine.Id}) where it stood", outcome.Message);
+            Assert.Equal(
+                ["what its steps left running was ended with it: 1 session(s), 1 process group(s)", $"what it left is what a crash leaves; {FlowService.ResumeCommand} goes on from the records"],
+                outcome.Details!.Take(2));
+        }
+        finally
+        {
+            ids.HandedOn.TryEnding();
+            ids.Engine.TryEnding();
+            Ending(contained);
+            await Record.ExceptionAsync(() => engineRun.WaitAsync(Bound, Token));
+        }
+    }
+
+    /// <summary>
+    /// <c>--now</c> over an engine that ended in the moment it was stopped - standing when the stop read its owner, gone
+    /// when it came to end it - removes its owner, and ends what its steps left running all the same, said in the answer.
+    /// </summary>
+    [Fact]
+    public async Task StopNow_OverAnEngineThatEndedAsItWasStopped_EndsWhatItsStepsLeftAllTheSame()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "a leg's phase there is bound by the engine's job, which ends it with the engine, and nothing is recorded.");
+
+        var (repository, finished, runner) = await ServiceAsync();
+        using var disposed = repository;
+
+        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+        _ = await finished.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var run = RunOf(repository);
+        var engines = new Engines(repository.Harness.Identity) { GoesWhenEnded = true };
+        var harness = repository.Harness;
+        var service = Service(
+            harness,
+            runner,
+            identity: engines,
+            children: new ChildSessions(harness.FileSystem, engines, new LeftSessions(harness.Platform, harness.ProcessTable), harness.Output, new EndedChildSessions()));
+        var step = run.StepDirectory("one");
+        using var phase = Process.Start(TestHost.StartOf(TestHost.ChildRequest("own-group-and-sleep", "300000")))!;
+
+        try
+        {
+            Assert.True(SpinWait.SpinUntil(() => TestChild.GroupOf(phase.Id) == phase.Id, Bound), $"the phase {phase.Id} never led a group of its own");
+
+            var record = OrchestratorLayout.ChildFile(step, phase.Id);
+
+            Directory.CreateDirectory(OrchestratorLayout.ChildrenDirectory(step));
+            File.WriteAllText(record, new JsonObject
+            {
+                ["session"] = phase.Id,
+                ["group"] = true,
+                ["started"] = engines.StampOf(phase.Id),
+                ["program"] = "dotnet",
+                ["owner"] = new JsonObject { ["machine"] = engines.CurrentMachine, ["processId"] = Engines.Engine, ["stamp"] = "its start" },
+            }.ToJsonString() + "\n");
+            repository.Harness.OrchestrationStore.WriteOwner(run, new RunOwner(engines.CurrentMachine, Engines.Engine, DateTimeOffset.UtcNow, "its start"));
+
+            var outcome = await service.StopAsync(repository.Path, "r1", now: true, json: false, Token).WaitAsync(Bound, Token);
+
+            Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+            Assert.Equal($"the engine of run 'r1' (process {Engines.Engine}) had already ended; its owner was removed", outcome.Message);
+            Assert.Equal(
+                ["what its steps left running was ended with it: 1 process group(s)", $"{FlowService.ResumeCommand} goes on from the records"],
+                outcome.Details!.Take(2));
+            Assert.True(phase.WaitForExit(Bound), $"the phase {phase.Id} outlived the stop of the engine that left it");
+            Assert.False(File.Exists(record), $"the record of the ended group is still at '{record}'");
+            Assert.Null(repository.Harness.OrchestrationStore.ReadOwner(run));
+        }
+        finally
+        {
+            Ending(phase);
         }
     }
 
@@ -2806,6 +2976,9 @@ public sealed class FlowServiceTests
             set => _alive = value;
         }
 
+        /// <summary>Whether the engine ends in the moment a stop comes to end it: as it is told apart, before it is ended.</summary>
+        public bool GoesWhenEnded { get; init; }
+
         public int CurrentId => real.CurrentId;
 
         public string CurrentMachine => real.CurrentMachine;
@@ -2816,7 +2989,15 @@ public sealed class FlowServiceTests
 
         public string? StampOf(int processId) => real.StampOf(processId);
 
-        public bool IsSame(int processId, string stamp) => processId != Engine && real.IsSame(processId, stamp);
+        public bool IsSame(int processId, string stamp)
+        {
+            if (processId == Engine && GoesWhenEnded)
+            {
+                _alive = false;
+            }
+
+            return processId != Engine && real.IsSame(processId, stamp);
+        }
     }
 
     /// <summary>A file system that says when a file is written or deleted, and can be made to meet a defect reading one.</summary>

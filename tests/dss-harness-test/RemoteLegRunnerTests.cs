@@ -49,6 +49,10 @@ public sealed class RemoteLegRunnerTests
         Assert.Equal(HostAgentProtocol.BeatSeconds, request.BeatSeconds);
         Assert.Equal(new InputBeat(TimeSpan.FromSeconds(HostAgentProtocol.BeatSeconds), HostAgentProtocol.BeatLine), sent.StandardInputBeat);
 
+        // What reaches the host is bound as a local leg's phase is: on Windows it ends with this process, and under a
+        // run's machine step it is apart from the engine's terminal and recorded while it runs.
+        Assert.True(sent.Bound);
+
         // The command this machine was asked to run, for this leg only, answered as data, and with
         // the host told to run it on itself: a host free to dispatch onward would put the verdict one
         // further hop from the reader, and could not terminate by construction.

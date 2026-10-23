@@ -66,7 +66,7 @@ public interface IOrchestratorService : IUseCase
 /// <param name="worktrees">The worktrees there are, for the listing.</param>
 /// <param name="store">The records.</param>
 /// <param name="log">The logs.</param>
-/// <param name="sessions">Ends what a killed process left of an orchestrator's contained children, first in every command over it.</param>
+/// <param name="sessions">Ends what an orchestrator's steps left running once their starter has gone - a contained child's session, a leg's process group - first in every command over it.</param>
 /// <param name="identity">How the liveness of a run's engine is told, through the run's one owner of it (<see cref="Flow.FlowRunOwner"/>).</param>
 /// <param name="clock">When an orchestrator is created.</param>
 public sealed class OrchestratorService(
@@ -144,7 +144,7 @@ public sealed class OrchestratorService(
 
         var orchestrator = OrchestratorLayout.Of(layout, name);
 
-        // Before anything else of it is read: what a killed process left running of its steps' contained children.
+        // Before anything else of it is read: what its steps left running once their starter has gone.
         await _sessions.SweepAsync(orchestrator, CreateCommand).ConfigureAwait(false);
 
         // Everything an orchestrator keeps is machine-local: a record, a log, a transcript committed by `git add -A` would
@@ -253,8 +253,8 @@ public sealed class OrchestratorService(
         var layout = context.Layout;
         var orchestrator = OrchestratorLayout.Of(layout, name);
 
-        // Before anything else of it is read, and before its records can go with it: what a killed process left running
-        // of its steps' contained children.
+        // Before anything else of it is read, and before its records can go with it: what its steps left running once
+        // their starter has gone.
         await _sessions.SweepAsync(orchestrator, DeleteCommand).ConfigureAwait(false);
 
         var worktreesDirectory = layout.WorktreesDirectoryUnder(context.Config.Worktrees.Root);
@@ -522,7 +522,7 @@ public sealed class OrchestratorService(
             return CommandOutcome.Refused(OrchestrationReports.NoOrchestrator(name));
         }
 
-        // Before anything else of each is read: what a killed process left running of its steps' contained children.
+        // Before anything else of each is read: what its steps left running once their starter has gone.
         foreach (var orchestrator in orchestrators)
         {
             await _sessions.SweepAsync(orchestrator, ListCommand).ConfigureAwait(false);

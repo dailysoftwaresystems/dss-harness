@@ -51,19 +51,4 @@ public sealed record SessionOptions
     /// outer operation has already taken its ends runs its own at once.
     /// </summary>
     public bool DefersCommandEnd { get; init; }
-
-    /// <summary>
-    /// Whether a first interrupt asks this operation for a safe pause, and only a second cancels it. Refused with
-    /// <see cref="NotSupportedException"/> until the run verbs of an orchestrator run honour it: every interrupt still
-    /// cancels, and a session that asked otherwise would be told nothing.
-    /// </summary>
-    public bool PausesOnInterrupt { get; init; }
-
-    /// <summary>
-    /// Whether what this operation starts is out of reach of an interrupt typed at the terminal. Refused with
-    /// <see cref="NotSupportedException"/> until a session hands it to the processes its operation starts
-    /// (<see cref="Processes.ProcessRequest.ApartFromTerminal"/>, which a process runner already honours), which this
-    /// build does not do yet.
-    /// </summary>
-    public bool ApartFromTerminal { get; init; }
 }

@@ -149,14 +149,24 @@ by the runner through the tool's own records: once the child is placed in its se
 it is said to have started, `<step>/children/<session>.json` in the step's own directory - its
 session (the child's process id), the child's start stamp, its program, and the process that
 started it with that process's machine and stamp (`ChildSessions`, the request's
-`SessionRecord`) - and taken back once the runner has ended the session. A record that cannot be
+`SessionRecord`) - and taken back once the runner has ended the session. The same record, with
+`group: true`, names the process group a run's machine step's legs' work leads (below: a bound child
+under a `ProcessScope`), taken back once the child has ended and nothing is left in its group. A
+record that cannot be
 written is a start that failed: the child is ended, and never said to have started. Every command
-over an orchestrator - `create-`, `list-` and `delete-orchestrator`, and each agent verb - first
-sweeps its records, before it reads anything else of it: a session whose starter still stands is
-its starter's and is left; one whose starter has gone is ended as the runner ends one at a stop,
+over an orchestrator - `create-`, `list-` and `delete-orchestrator`, each agent verb, and each run
+verb over a run already made - first
+sweeps its records, before it reads anything else of it: a session or group whose starter still stands is
+its starter's and is left; one whose starter has gone is ended as the runner ends a contained
+child's session at its end - a group by its own members and the tree its leader stands over, never
+the session it shares with its starter (`Containment.EndSessionAsync`, `group`) -
 its record removed and the end said in the command's lines and in its document's `ended` where it
-answers with one - but only where the process carrying the session's id still has the recorded
-start, since a session's id given to a later process ends nothing, and that record simply goes. A
+answers with one, where anything was left in it - but only where the process carrying its id still
+has the recorded start, or no process carries the id at all: none is given an id a session or a
+group still carries, so what a leader killed with the engine's tree handed on is still found by
+it. An id given to a later process ends nothing, and that record simply goes.
+`stop-orchestrator --now` sweeps again once it has ended the engine and its tree, and says what it
+ended. A
 record that does not read as one is said and left, and a starter on another machine is never taken
 to have gone. Windows records nothing: its job already ends a killed starter's children.
 
@@ -174,10 +184,18 @@ line. A child held in a job - contained or bound - is given build servers of its
 environment names none: the compiler's program-database server listens at an endpoint named for
 the job (`_MSPDBSRV_ENDPOINT_`), and the build engine leaves no node for a later build
 (`MSBUILDDISABLENODEREUSE=1`) - a server a member starts ends with the job, and one shared with
-another dispatcher's builds would be taken from them mid-build. On Linux and macOS a bound child
-starts as any other: an interrupt or a termination signal given to the harness ends it with the
-harness's stop, a hang-up of its terminal reaches it as it reaches the harness, and a kill of the
-harness alone does not reach it - `stop-run --now` ends the harness with its whole tree.
+another dispatcher's builds would be taken from them mid-build. So is the ssh or wsl.exe that
+carries a leg to a host (`HostCommand.Bound`): the host's leg ends when its input does. On Linux
+and macOS a bound child starts as any other: an interrupt or a termination signal given to the
+harness ends it with the harness's stop, a hang-up of its terminal reaches it as it reaches the
+harness, and a kill of the harness alone does not reach it - `stop-run --now` ends the harness with
+its whole tree. Save under a **process scope** (`ProcessScope`), which a run's machine step opens
+around its legs (`LegStepRunner`), flowing with the operation and seen by nothing outside it: there
+every child but a contained one is started apart from the terminal, so the engine's first Ctrl+C -
+a safe pause - leaves the builds running, and a bound child's group is recorded in the step's
+directory as a contained child's session is, while anything is in it, so a killed engine leaves
+none of it unrecorded; a stop ends the group at once with the tree. On Windows a child keeps the
+console of its own it always has, the job binds a bound one, and nothing is recorded.
 
 Whether the program started is said on a channel of the runner's own (`--status`), never in the
 program's streams or an exit code a program could give too: a program that cannot start is
@@ -189,8 +207,8 @@ terminal but within the session, is the lesser level a request asks for by name
 interruption typed at the harness's terminal is sent to a group, and that group is not the child's.
 On Windows such a child starts as any other, since a child started with no window already has a
 console of its own that an interruption typed at the harness's never reaches. A child apart from
-the terminal is stopped by its process tree, as any other, and what it leaves at its own end is
-left. No leg is contained: a `build`, `test` or `run` typed by hand starts its legs' phases bound on
+the terminal is stopped by its process tree, as any other, and on Linux and macOS by its group as
+well, at once, which reaches what its tree handed on; what it leaves at its own end is left. No leg is contained: a `build`, `test` or `run` typed by hand starts its legs' phases bound on
 Windows, as above, and as any other child elsewhere.
 
 ### Paths come from git
@@ -757,9 +775,10 @@ initialised, another usage error, or a refusal met before then, an agent that is
 the same document, empty (`OrchestrationReports.Stopped`): `applied` false, `request`, `heldNow` and `heldUnread` null, no `lines`, no
 `needs`, no `refusals`, and `folded` and `planned` null, its `exitCode` and `summary` the code it exits with and the line it ends on.
 Each of these documents, and list-orchestrator's, also says `ended` where finding the orchestrator ended a session a
-killed process left running (see containment, above): one object per session, its `orchestrator`, `agent` (null for a
-step no agent owns), `step`, `session`, `program`, `owner` (the process id that had gone) and `unreached` (null where
-everything in it was reached); with nothing ended there is no `ended`, and the document is what it always was. No
+killed process left running (see containment, above): one object per session or group, its `orchestrator`, `agent`
+(null for a step no agent owns), `step`, `session` (the leader's id), `group` (whether it was the process group of
+its legs' work), `program`, `owner` (the process id that had gone) and `unreached` (null where everything in it was
+reached); with nothing ended there is no `ended`, and the document is what it always was. No
 command writes it: the operation keeps what its sweeps ended (`EndedChildSessions`, one per operation), and its session
 writes it into whatever document the operation answers with (`IDocumentFacts`) - its own, or the stopped form where it
 answered without one, threw or stopped after the sweep - so a command over an orchestrator added later says it too.

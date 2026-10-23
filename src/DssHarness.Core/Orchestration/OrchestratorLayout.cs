@@ -22,7 +22,7 @@ namespace DssHarness.Core.Orchestration;
 /// agents/&lt;agent&gt;/sessions/&lt;id&gt;/   API clients only: one conversation with the provider, in the provider's own form
 /// agents/&lt;agent&gt;/steps/&lt;instance&gt;/   one step the agent runs, or that runs in or for its worktree, everything of the step in it
 /// steps/&lt;instance&gt;/          one step of the run that no agent owns, the create-agent that makes an agent included
-/// &lt;step&gt;/children/&lt;id&gt;.json   in either kind of step's directory: a session a contained child of the step leads while it runs, on Linux and macOS
+/// &lt;step&gt;/children/&lt;id&gt;.json   in either kind of step's directory, on Linux and macOS: a session a contained child of the step leads while it runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what carries a leg to a host leads while anything is in it
 /// </code>
 /// The orchestrator's name and each agent's are the directories they are kept in, and an agent is never named as its
 /// orchestrator, since the two would share a log and a plans directory.
@@ -73,10 +73,10 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <summary>The extension of a log: one JSON object to a line.</summary>
     public const string LogExtension = ".jsonl";
 
-    /// <summary>The directory, in a step's own, where each session a contained child of the step leads is recorded while it runs.</summary>
+    /// <summary>The directory, in a step's own, where each session a contained child of the step leads, and each group its legs' work leads, is recorded while it runs.</summary>
     public const string ChildrenDirectoryName = "children";
 
-    /// <summary>The extension of the record of a contained child's session.</summary>
+    /// <summary>The extension of the record of a step's child's session or process group.</summary>
     public const string ChildExtension = ".json";
 
     /// <summary>The name of the file a run's state is kept in, whole.</summary>
@@ -259,15 +259,15 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     public string HandoffFile(string agent, string instance) => Path.Combine(AgentStepDirectory(agent, instance), HandoffFileName);
 
     /// <summary>
-    /// Where the sessions the contained children of the step kept at <paramref name="stepDirectory"/> lead are recorded
-    /// while they run: a step of the run's or of an agent's alike.
+    /// Where the sessions the contained children of the step kept at <paramref name="stepDirectory"/> lead, and the groups
+    /// its legs' work leads, are recorded while they run: a step of the run's or of an agent's alike.
     /// </summary>
     /// <param name="stepDirectory">The step's own directory.</param>
     public static string ChildrenDirectory(string stepDirectory) => Path.Combine(stepDirectory, ChildrenDirectoryName);
 
-    /// <summary>The record of the session <paramref name="session"/>, which a contained child of the step at <paramref name="stepDirectory"/> leads.</summary>
+    /// <summary>The record of the session or the group <paramref name="session"/>, which a child of the step at <paramref name="stepDirectory"/> leads.</summary>
     /// <param name="stepDirectory">The step's own directory.</param>
-    /// <param name="session">The session's id: its leader's process id.</param>
+    /// <param name="session">The id of the session or the group: its leader's process id.</param>
     public static string ChildFile(string stepDirectory, int session)
         => Path.Combine(ChildrenDirectory(stepDirectory), session.ToString(System.Globalization.CultureInfo.InvariantCulture) + ChildExtension);
 

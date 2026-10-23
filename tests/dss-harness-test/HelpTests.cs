@@ -505,7 +505,8 @@ public sealed partial class HelpTests
                 + $"- and {RunStopService.CommandName} waits {RunStopService.StopWait.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s for it, saying "
                 + $"the run stopped only where its dispatcher took the stop: one that ended on its own first is nothing it stopped ({HarnessExit.Refused}). "
                 + "--now ends the dispatcher's process where it stands, with all it started, and its ledger is never written. On Windows every phase a "
-                + "leg runs on its own machine, and its keepAwake command, is bound to its dispatcher - a set-up's up line apart - and ends with it however "
+                + "leg runs on its own machine, its keepAwake command, and the ssh or wsl.exe that carries a leg to a host, is bound to its dispatcher - "
+                + "a set-up's up line apart - and ends with it however "
                 + $"it ends, a kill among them. On Linux and macOS a kill of the dispatcher alone does not reach its legs, and {RunStopService.CommandName} "
                 + "--now does.",
             prose,
@@ -1528,6 +1529,20 @@ public sealed partial class HelpTests
         Assert.Contains(
             "--local-copy and --in-place say opposite things about where this run's own legs work. Give one.",
             outcome.StandardOutput + outcome.StandardError,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>stop-orchestrator's --now says it ends what the engine's steps left running with the engine, by kind.</summary>
+    [Fact]
+    public async Task StopOrchestratorsNow_SaysWhatItsStepsLeftRunningIsEndedWithIt()
+    {
+        var result = await CliRunner.RunAsync([FlowService.StopCommand, "--help"], TestContext.Current.CancellationToken);
+
+        Assert.Contains(
+            "End the engine's process and all it started, without asking it - only an engine of this machine, and only the process "
+                + "its owner names by its start: for an engine that no longer answers. What its steps left running - a contained "
+                + "child's session, the process group of what its legs started - is ended with it.",
+            Prose.Words(result.StandardOutput),
             StringComparison.Ordinal);
     }
 
@@ -2810,7 +2825,7 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
-    /// The orchestrators and layout topics say where a step's contained child's session is recorded, and that every command
+    /// The orchestrators and layout topics say where a step's contained child's session, and the group of its legs' work, is recorded, and that every command
     /// over an orchestrator first ends what a killed process left of them - and on which systems - from the layout's own names.
     /// </summary>
     [Fact]
@@ -2820,23 +2835,29 @@ public sealed partial class HelpTests
         var layout = Prose.Words(HelpText.Of("layout").StandardOutput);
         var record = $"<step>/{OrchestratorLayout.ChildrenDirectoryName}/<session>{OrchestratorLayout.ChildExtension}";
 
-        Assert.Contains($"{record} in either kind of step, on Linux and macOS: a session a contained child of the step leads while it runs", orchestrators, StringComparison.Ordinal);
+        Assert.Contains($"{record} in either kind of step, on Linux and macOS: a session a contained child of the step leads while it runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what carries a leg to a host leads while anything is in it", orchestrators, StringComparison.Ordinal);
         Assert.Contains(
-            "What a killed process left running. On Linux and macOS a contained child of a step leads a session of its own, "
-            + $"which nothing ends when the process that started it is killed, so it is recorded in its step's {OrchestratorLayout.ChildrenDirectoryName}/ "
-            + "while it runs and the record taken back once that process ends it. Every command over an orchestrator - the three "
+            "What a killed process left running. On Linux and macOS a contained child of a step leads a session of its own, and "
+            + "what a machine step's legs start a process group of its own, apart from the engine's terminal; nothing ends either "
+            + "when the process that started it is killed, so each session, and the group of each phase - a set-up's up line apart - "
+            + $"keepAwake command and ssh that carries a leg to a host, is recorded in its step's {OrchestratorLayout.ChildrenDirectoryName}/ "
+            + "while it runs, and the record taken back once nothing is left in it: a group still holding what its child left at its "
+            + "own end keeps it. Every command over an orchestrator - the three "
             + "orchestrator commands, each agent command, and each run verb over a run already made - first ends each recorded "
-            + "session whose starter has gone, as a stop "
-            + "ends one (SIGTERM, then SIGKILL five seconds later), removes its record, and says so in a line, and in the document's "
-            + "ended where it answers with --json. A session whose starter still runs is left; one whose id a later process "
+            + "session or group whose starter has gone, its leader standing or not (SIGTERM, then SIGKILL five seconds later), "
+            + "removes its record, and says so in a line, and in the document's "
+            + "ended where it answers with --json; stop-orchestrator --now does it again once it has ended the engine and its "
+            + "tree, and says what it ended. A session or group whose starter still runs is left; one whose id a later process "
             + "carries ends nothing, and its record goes; a record that does not read as one is said and left; a starter on another "
-            + "machine is never taken to have gone. Windows records nothing: a job ends a contained child with the process that "
-            + "started it.",
+            + "machine is never taken to have gone. Windows records nothing: a job ends a contained or bound child with the process "
+            + "that started it.",
             orchestrators,
             StringComparison.Ordinal);
         Assert.Contains(
             $"{record} ignored; in either kind of step, on Linux and macOS: a session a contained child of the step leads while it "
-            + "runs, ended by the next command over the orchestrator where its starter was killed",
+            + "runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what carries a "
+            + "leg to a host leads while anything is in it, ended by the next command over the orchestrator - and by "
+            + "stop-orchestrator --now - once its starter has gone",
             layout,
             StringComparison.Ordinal);
     }
