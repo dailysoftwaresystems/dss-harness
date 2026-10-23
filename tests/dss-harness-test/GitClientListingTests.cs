@@ -218,6 +218,34 @@ public sealed class GitClientListingTests
         });
     }
 
+    /// <summary>
+    /// A file not there when git hashed its batch answers null and fails nothing else: the batch git stopped in is asked
+    /// again a file at a time, every other file's blob given in order; a batch whose files are all there is asked once.
+    /// </summary>
+    [Fact]
+    public async Task AFileNotThereWhenGitHashedIt_AnswersNull_AndEveryOtherIsHashed()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        await harness.InitializeGitRepositoryAsync(temp.Path, Token);
+        var paths = Enumerable.Range(0, 203).Select(at => $"f/{at:D3}.txt").ToList();
+
+        foreach (var path in paths.Where(path => path != "f/001.txt"))
+        {
+            temp.WriteFile(path, $"text {path}\n");
+        }
+
+        var processes = new CountingProcesses(harness.ProcessRunner);
+
+        var blobs = await Git(harness, processes).HashWorkingFilesAsync(temp.Path, paths, Token);
+
+        await harness.RunGitAsync(temp.Path, ["add", "-A"], Token);
+        var stored = (await harness.GitClient.ListIndexAsync(temp.Path, Token)).ToDictionary(entry => entry.Path, entry => entry.ObjectId);
+        Assert.Equal(paths.Select(path => stored.GetValueOrDefault(path)), blobs);
+        Assert.Null(blobs[1]);
+        Assert.Equal([200, .. Enumerable.Repeat(1, 200), 3], processes.Started.Where(request => request.Arguments.Contains("hash-object")).Select(PathsGiven));
+    }
+
     /// <summary>Two names that are no UTF-8, alike once decoded, are each listed: told apart by their bytes.</summary>
     [Fact]
     public async Task TwoNamesThatAreNoUtf8_AreListedApart_ThoughTheyDecodeAlike()

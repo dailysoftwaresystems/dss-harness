@@ -628,13 +628,15 @@ public interface IGitClient
 
     /// <summary>
     /// The blob id git would store each of <paramref name="paths"/>' working files as, its filters applied, in the same
-    /// order - nothing written, no lock taken, the paths given on standard input <see cref="GitClient.HashBatch"/> at a time.
+    /// order - nothing written, no lock taken, the paths given on standard input <see cref="GitClient.HashBatch"/> at a time
+    /// - and null for each whose file was not there when git looked: a batch git could not hash is asked again a file at a
+    /// time, so a file that went while it was hashed fails nothing but its own answer.
     /// </summary>
     /// <param name="directory">The top of the tree, which the paths are relative to.</param>
-    /// <param name="paths">The files, each there.</param>
+    /// <param name="paths">The files.</param>
     /// <param name="cancellationToken">Cancels the git processes.</param>
-    /// <exception cref="HarnessException">git failed: a file it was given was not there, among other causes.</exception>
-    Task<IReadOnlyList<string>> HashWorkingFilesAsync(string directory, IReadOnlyList<string> paths, CancellationToken cancellationToken = default);
+    /// <exception cref="HarnessException">git failed on a file that is there, or answered what this build cannot read.</exception>
+    Task<IReadOnlyList<string?>> HashWorkingFilesAsync(string directory, IReadOnlyList<string> paths, CancellationToken cancellationToken = default);
 
     /// <summary>Runs an arbitrary git subcommand, returning its exit code and output.</summary>
     Task<GitCommandResult> RunAsync(

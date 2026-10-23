@@ -170,9 +170,10 @@ public static class CodeFileStates
     public const string TooLarge = "tooLarge";
 
     /// <summary>
-    /// Not read, with why: neither UTF-8 nor UTF-16 by its mark; named in no UTF-8; gone, or changed, between its listing and
-    /// the end of its read; an I/O error; a content test that threw; or an implementation that threw on it or answered no
-    /// sound extract - a defect of that implementation, which <c>failOn: incomplete</c> fails on too.
+    /// Not read, with why: neither UTF-8 nor UTF-16 by its mark; named in no UTF-8, or by a name no record can hold; gone,
+    /// or changed, between its listing and the listing after its read; an I/O error; a content test that threw; or an
+    /// implementation that threw on it or answered no sound extract - a defect of that implementation, which
+    /// <c>failOn: incomplete</c> fails on too.
     /// </summary>
     public const string Unreadable = "unreadable";
 
