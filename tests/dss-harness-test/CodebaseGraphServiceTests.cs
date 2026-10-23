@@ -547,7 +547,7 @@ public sealed class CodebaseGraphServiceTests
         var refused = await Assert.ThrowsAsync<HarnessException>(() => graph.SyncAsync());
 
         Assert.Equal(HarnessExit.CommandFailed, refused.ExitCode);
-        Assert.StartsWith($"git could not list '{graph.Tree}' for the codebase graph: Could not read the index: ", refused.Message, StringComparison.Ordinal);
+        Assert.StartsWith($"git could not list '{graph.Tree}' for the codebase graph: Could not resolve 'HEAD': ", refused.Message, StringComparison.Ordinal);
         Assert.False(File.Exists(graph.Run.GraphManifestFile));
     }
 
@@ -978,16 +978,18 @@ public sealed class CodebaseGraphServiceTests
             await Task.Delay(TimeSpan.FromMilliseconds(200), call.ArgAt<CancellationToken>(1));
             return await real.ListIndexAsync(tree, call.ArgAt<CancellationToken>(1));
         });
-        git.ResolveCommitAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(async call =>
+
+        // A whole listing ends with its working files.
+        git.ListWorkingFilesAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(async call =>
         {
-            var head = await real.ResolveCommitAsync(call.ArgAt<string>(0), call.ArgAt<string>(1), call.ArgAt<CancellationToken>(2));
+            var working = await real.ListWorkingFilesAsync(call.ArgAt<string>(0), call.ArgAt<CancellationToken>(1));
 
             lock (gate)
             {
                 listing[call.ArgAt<string>(0)]--;
             }
 
-            return head;
+            return working;
         });
 
         graph.WithGit(git);
