@@ -1653,11 +1653,14 @@ public sealed class ClaudeCodeClientTests : IDisposable
         var run = kit.Run();
         var children = OrchestratorLayout.ChildrenDirectory(kit.StepDirectory);
         string[] whileItRan = [];
+        var recorded = string.Empty;
         var sink = new Sink(@event =>
         {
             if (@event is TurnStarted { Turn: 1 })
             {
+                // Read while the launch runs: the record is taken back once it has ended.
                 whileItRan = Directory.GetFiles(children);
+                recorded = whileItRan.Length == 1 ? File.ReadAllText(whileItRan[0]) : string.Empty;
                 run.Handoff.Ask();
             }
         });
@@ -1665,8 +1668,9 @@ public sealed class ClaudeCodeClientTests : IDisposable
         var result = await kit.Client().RunAsync(run, sink, Token);
 
         Assert.Equal(AgentRunStatus.HandedOff, result.Status);
+        Assert.Single(whileItRan);
 
-        var record = JsonNode.Parse(File.ReadAllText(Assert.Single(whileItRan)))!;
+        var record = JsonNode.Parse(recorded)!;
         var session = record["session"]!.GetValue<int>();
         Assert.Equal(OrchestratorLayout.ChildFile(kit.StepDirectory, session), whileItRan[0]);
         Assert.Equal((TestHost.AssemblyProgram, Environment.ProcessId), (record["program"]!.GetValue<string>(), record["owner"]!["processId"]!.GetValue<int>()));
