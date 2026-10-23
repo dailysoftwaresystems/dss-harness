@@ -52,8 +52,9 @@ public interface ICodebaseGraphService
     /// <summary>
     /// The check every answer makes of the files it names, before it is given: each file's size and time against what the
     /// tree's graph recorded - trusted only where that time is older than the tree's last whole sync, as git trusts an
-    /// entry older than its index - a hash only of a file either of them moved or whose time is not older, and a file whose
-    /// blob moved read again, its view updated and linked again, on the spot - so what the answer is made from is each file
+    /// entry older than its index - a file either of them moved, whose time is not older, or that could not be read listed
+    /// again by its path, as a sync by paths lists it, and one whose blob moved or that could not be read read again, its
+    /// view updated and linked again, on the spot - so what the answer is made from is each file
     /// as it is, and each extract it names is read before the check returns. A tree with no graph yet, or one this process
     /// holds neither a link nor a link result of, is synced whole first; a link or a submodule stands as it was listed.
     /// </summary>
@@ -118,7 +119,7 @@ public sealed record CodebaseGraphWorktree
 /// <param name="Dirty">Whether the tree held anything its HEAD does not.</param>
 /// <param name="Files">How many files the view keeps.</param>
 /// <param name="Listed">How many files the tree listed that the view keeps, every one looked at; a sync by paths, how many it was given.</param>
-/// <param name="Hashed">How many files git was asked the blob of to know what changed; the hash of each file read, once its read is done, is not counted.</param>
+/// <param name="Hashed">How many files git was asked the blob of to know what changed; the listing of each file read, once the reads are done, is not counted.</param>
 /// <param name="Extracted">How many files an implementation read.</param>
 /// <param name="Reused">How many files kept an extract already made, or a state already found.</param>
 /// <param name="Removed">How many paths left the view.</param>
@@ -166,8 +167,11 @@ public sealed record CodebaseGraphSynced(
 /// <summary>What one check of the files an answer names found, and the view the answer is made from.</summary>
 /// <param name="Read">The view as it is once the check is made: each file it names as it is.</param>
 /// <param name="Checked">How many of the files named the view holds, each looked at.</param>
-/// <param name="Hashed">How many git was asked the blob of: those whose size or time moved, or were never recorded.</param>
-/// <param name="Extracted">How many an implementation read again: those whose blob moved.</param>
+/// <param name="Hashed">
+/// How many git was asked of again, as a sync by their paths lists them: those whose size or time moved, were never recorded,
+/// are not older than the tree's last whole sync, or could not be read.
+/// </param>
+/// <param name="Extracted">How many an implementation read again: those whose blob moved, or that could not be read.</param>
 /// <param name="Removed">How many were gone, and left the view.</param>
 public sealed record CodebaseGraphChecked(CodebaseGraphRead Read, int Checked, int Hashed, int Extracted, int Removed);
 
@@ -508,31 +512,56 @@ public sealed class CodebaseGraphService(
     /// hold - the base's earlier entries among them, their extracts kept. A view made against a base this process no longer
     /// knows is left to its next sync, which lists its worktree; so is every view once a newer sync of the base holds them
     /// all, so none is put back on an older base. A view whose first sync is under way is among them: its gate is waited
-    /// for, and its record held against the new base once written. A view that could not be held is said - a line of
-    /// <c>sync.jsonl</c> and a warning - and left to its next sync, the base's sync standing as it went.
+    /// for, and its record held against the new base once written. A view that could not be held - its record not read or
+    /// not written, or the views not listed - is said, a line of <c>sync.jsonl</c> and a warning, and left to its next
+    /// sync: the base's sync stands as it went, and nothing it holds is let go but what it held of that view.
     /// </summary>
     private async Task RebaseViewsAsync(Graph graph, OrchestratorLayout run, CodeGraphManifest before, CodeGraphManifest after, string why, CancellationToken cancellationToken)
     {
         graph.Bases[before.Digest] = before;
         graph.Bases[after.Digest] = after;
 
-        foreach (var agent in _store.GraphViews(run).Union(graph.ViewGates.Keys, StringComparer.Ordinal).ToList())
+        // The base each view stands on once held, as this rebase found it; where one is not known, every base is kept.
+        var stand = new HashSet<string>(StringComparer.Ordinal);
+        var known = true;
+        IReadOnlyList<string> recorded;
+
+        try
+        {
+            recorded = _store.GraphViews(run);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or HarnessException)
+        {
+            // Each view this process knows is still held; one only its record names is left to its next sync.
+            recorded = [];
+            known = false;
+            Unheld(run, null, why, ex);
+        }
+
+        foreach (var agent in recorded.Union(graph.ViewGates.Keys, StringComparer.Ordinal).ToList())
         {
             var gate = graph.GateOf(agent);
             await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
 
             try
             {
-                // A newer sync of the base holds every view against what it made: this one's is no longer the base.
+                // A newer sync of the base holds every view against what it made, and keeps what they stand on: this
+                // one's is no longer the base.
                 if (graph.Base?.Base != after.Digest)
                 {
-                    break;
+                    return;
                 }
 
                 var view = ViewOrNull(run, agent);
 
-                if (view is null || view.Base == after.Digest || !graph.Bases.TryGetValue(view.Base, out var stood))
+                if (view is null)
                 {
+                    continue;
+                }
+
+                if (view.Base == after.Digest || !graph.Bases.TryGetValue(view.Base, out var stood))
+                {
+                    stand.Add(view.Base);
                     continue;
                 }
 
@@ -551,6 +580,7 @@ public sealed class CodebaseGraphService(
             {
                 // What this process held of it is let go: its next sync takes it as its record says, and lists its worktree.
                 graph.Views.TryRemove(agent, out _);
+                known = false;
                 Unheld(run, agent, why, ex);
             }
             finally
@@ -560,9 +590,7 @@ public sealed class CodebaseGraphService(
         }
 
         // A manifest no view stands on is kept no longer.
-        var stand = _store.GraphViews(run).Select(agent => ViewOrNull(run, agent)?.Base).ToHashSet(StringComparer.Ordinal);
-
-        foreach (var digest in graph.Bases.Keys.Where(digest => digest != after.Digest && digest != graph.Base?.Base && !stand.Contains(digest)).ToList())
+        foreach (var digest in known ? graph.Bases.Keys.Where(digest => digest != after.Digest && digest != graph.Base?.Base && !stand.Contains(digest)).ToList() : [])
         {
             graph.Bases.TryRemove(digest, out _);
         }
@@ -570,10 +598,17 @@ public sealed class CodebaseGraphService(
 
     /// <summary>
     /// Says that <paramref name="agent"/>'s view was not held against the base's new manifest by the base's sync that
-    /// <paramref name="why"/> asked for, and why: a line of <c>sync.jsonl</c> for the view, and a warning.
+    /// <paramref name="why"/> asked for, and why: a line of <c>sync.jsonl</c> for the view, and a warning. Where no agent
+    /// is named, the views were not listed, and those only their records name are said in a warning alone.
     /// </summary>
-    private void Unheld(OrchestratorLayout run, string agent, string why, Exception ex)
+    private void Unheld(OrchestratorLayout run, string? agent, string why, Exception ex)
     {
+        if (agent is null)
+        {
+            _output.Warn("graph", $"the codebase graph's views of run '{run.Name}' that this process does not hold stand as they were ({why}): they could not be listed to be held against the base's new manifest: {ex.Message.TrimEnd('.')}. The base's sync went through; each view's next whole sync makes it again against the base as it stands.");
+            return;
+        }
+
         var failed = $"it was not held against the base's new manifest: {ex.Message.TrimEnd('.')}";
 
         try
@@ -1130,7 +1165,20 @@ public sealed class CodebaseGraphService(
         /// </summary>
         public async Task<Tree> PathsAsync(Tree current, IReadOnlyList<string> paths)
         {
-            var asked = paths.Distinct(StringComparer.Ordinal).Where(path => OrchestrationRules.RelativePathProblem(path, "a path") is null).ToList();
+            var asked = new List<string>();
+
+            foreach (var path in paths.Distinct(StringComparer.Ordinal))
+            {
+                // A path the graph's records cannot name is said, as a listing says it, and never asked of git.
+                if (Unnameable(path))
+                {
+                    _ = Kept(new GitName(path, IsUtf8: true), _unnamed);
+                    continue;
+                }
+
+                asked.Add(path);
+            }
+
             var (listed, head, _) = await ListAsync(asked).ConfigureAwait(false);
             var changed = asked.Count(path => listed.TryGetValue(path, out var file) ? current.Entries.GetValueOrDefault(path)?.Blob != file.Blob : current.Entries.ContainsKey(path));
 
@@ -1138,9 +1186,10 @@ public sealed class CodebaseGraphService(
         }
 
         /// <summary>
-        /// The check of <paramref name="paths"/>: each one the tree keeps looked at, a file whose size or time moved - or was
-        /// never recorded, or is not older than the tree's last whole sync (<see cref="Tree.Written"/>) - hashed, one whose
-        /// blob moved read again and one gone taken out, and the tree linked again and written where any moved; then each
+        /// The check of <paramref name="paths"/>: each one the tree keeps looked at, and a file whose size or time moved - or
+        /// was never recorded, is not older than the tree's last whole sync (<see cref="Tree.Written"/>), or could not be read
+        /// - listed again as a sync by its path lists it; one whose blob moved, or that could not be read, read again, one that
+        /// is a link now kept as one, and one gone taken out, and the tree linked again and written where any moved; then each
         /// extract the files name read, before any sync can take it out.
         /// </summary>
         public async Task<(Tree Tree, CodebaseGraphChecked Checked)> CheckAsync(Tree current, IReadOnlyList<string> paths)
@@ -1152,7 +1201,7 @@ public sealed class CodebaseGraphService(
                 .Where(path => current.Entries.TryGetValue(path, out var entry) && entry.State is not (CodeFileStates.Link or CodeFileStates.Submodule))
                 .ToList();
             var moved = new Dictionary<string, Listed?>(StringComparer.Ordinal);
-            var toHash = new List<(string Path, FileStanding Standing)>();
+            var toList = new List<(string Path, FileStanding Standing)>();
 
             foreach (var path in named)
             {
@@ -1165,6 +1214,13 @@ public sealed class CodebaseGraphService(
                     continue;
                 }
 
+                // A file the tree could not read is read again by every check, as by every sync, whatever its blob.
+                if (entry.State == CodeFileStates.Unreadable)
+                {
+                    toList.Add((path, standing));
+                    continue;
+                }
+
                 // What was recorded of the file of this blob: by a check that found it moved and its blob not, else by its read.
                 var recorded = standings.TryGetValue(path, out var seen) && seen.Blob == entry.Blob ? (seen.Bytes, seen.Written)
                     : current.Here.Contains(path) ? (entry.Bytes, entry.Mtime)
@@ -1172,43 +1228,34 @@ public sealed class CodebaseGraphService(
 
                 // Trusted only where its time is older than the tree's last whole sync, as git trusts an entry older than
                 // its index: one written in the tick it was looked at, or after, may have been written again since with
-                // neither its size nor its time moving. The order only ever asks for a hash: what is trusted is equal.
+                // neither its size nor its time moving. The order only ever asks git again: what is trusted is equal.
                 if (recorded is not { Written: { } at } stood || current.Written is not { } synced || at >= synced
                     || stood.Bytes != standing.Length || at != standing.Written)
                 {
-                    toHash.Add((path, standing));
+                    toList.Add((path, standing));
                 }
             }
 
-            // A file that leads out of the tree since it was read is a link now, and a file gone since it was looked at is
-            // gone, as one gone before it is: neither is given to git to hash.
-            var (there, linked, gone) = Looked(toHash.Select(file => file.Path));
+            // The one question every listing asks, asked of these paths alone: the index's blob where git finds a file clean -
+            // which is no hash of what it holds where git would clean it otherwise - the one git gives its working file where
+            // it changed, a link where one lies along it, and none where it went.
+            var (listed, _, _) = await ListAsync([.. toList.Select(file => file.Path)]).ConfigureAwait(false);
 
-            foreach (var path in linked)
+            foreach (var (path, standing) in toList)
             {
-                moved[path] = new Listed(null, Link: true, Submodule: false);
-            }
+                var entry = current.Entries[path];
 
-            foreach (var path in gone)
-            {
-                moved[path] = null;
-            }
-
-            var looked = there.ToHashSet(StringComparer.Ordinal);
-            toHash.RemoveAll(file => !looked.Contains(file.Path));
-            var blobs = await HashAsync([.. toHash.Select(file => file.Path)]).ConfigureAwait(false);
-
-            for (var at = 0; at < toHash.Count; at++)
-            {
-                var (path, standing) = toHash[at];
-
-                if (blobs[at] == current.Entries[path].Blob)
+                if (listed.GetValueOrDefault(path) is not { } file)
                 {
-                    standings[path] = (standing.Length, standing.Written, blobs[at]);
+                    moved[path] = null;
+                }
+                else if (file is { Link: false, Submodule: false } && file.Blob == entry.Blob && entry.State != CodeFileStates.Unreadable)
+                {
+                    standings[path] = (standing.Length, standing.Written, file.Blob);
                 }
                 else
                 {
-                    moved[path] = new Listed(blobs[at], Link: false, Submodule: false);
+                    moved[path] = file;
                 }
             }
 
@@ -1232,7 +1279,7 @@ public sealed class CodebaseGraphService(
                 }
             }
 
-            return (tree, new CodebaseGraphChecked(read, named.Count, toHash.Count, _extracted, moved.Values.Count(file => file is null)));
+            return (tree, new CodebaseGraphChecked(read, named.Count, toList.Count, _extracted, moved.Values.Count(file => file is null)));
         }
 
         /// <summary>
@@ -1421,18 +1468,36 @@ public sealed class CodebaseGraphService(
         /// name that is not UTF-8 names no file this tool opens, and is said as unreadable. A path whose file git does not look
         /// at - kept out of the checkout, as a sparse checkout or skip-worktree keeps it, or marked assume-unchanged - is in the
         /// graph where its file is there, hashed and read as it stands, and nowhere else; a repository inside the tree that git
-        /// lists whole as untracked is not entered, as a submodule is not.
+        /// lists whole as untracked is not entered, as a submodule is not. What it could not name is said by this sync, and
+        /// what it hashed counted.
         /// </summary>
         private async Task<(SortedDictionary<string, Listed> Files, string? Head, bool Dirty)> ListAsync(IReadOnlyList<string>? paths)
+        {
+            var listing = await ListingOf(paths).ConfigureAwait(false);
+
+            foreach (var (name, skipped) in listing.Unnamed)
+            {
+                _unnamed.TryAdd(name, skipped);
+            }
+
+            _hashed += listing.Hashed;
+            return (listing.Files, listing.Head, listing.Dirty);
+        }
+
+        /// <summary>
+        /// The listing <see cref="ListAsync"/> takes, and nothing said or counted of it: what a check after a read asks again.
+        /// </summary>
+        private async Task<Listing> ListingOf(IReadOnlyList<string>? paths)
         {
             IReadOnlyList<GitIndexEntry> indexed;
             IReadOnlyList<GitWorkingFile> working;
             string? head;
+            var unnamed = new SortedDictionary<string, CodebaseGraphSkipped>(StringComparer.Ordinal);
 
             // No path is no listing: an empty list of paths names the whole tree to git.
             if (paths is { Count: 0 })
             {
-                return (new SortedDictionary<string, Listed>(StringComparer.Ordinal), null, false);
+                return new Listing(new SortedDictionary<string, Listed>(StringComparer.Ordinal), null, false, unnamed, 0);
             }
 
             try
@@ -1452,18 +1517,23 @@ public sealed class CodebaseGraphService(
 
             // A conflicted path is listed once for each of its stages, and taken once; by its bytes, since two names that
             // are no UTF-8 can decode to one text.
+            // Whether each directory a path git does not look at lies in stands, asked once a directory: a sparse checkout
+            // leaves out whole directories, and their paths are looked at no further.
+            var standing = new Dictionary<string, bool>(StringComparer.Ordinal);
+
             foreach (var file in indexed.DistinctBy(entry => entry.Name.Quoted, StringComparer.Ordinal))
             {
-                if (!Kept(file.Name))
+                if (!Kept(file.Name, unnamed))
                 {
                     continue;
                 }
 
                 // git does not look at the file of a path marked skip-worktree or assume-unchanged, so its index object says
-                // nothing of what is there: an edit of it is in no listing.
+                // nothing of what is there: an edit of it is in no listing. One whose file is not there is in the graph only
+                // as a link left there, leading nowhere - which only a directory that stands can hold.
                 if ((file.IsSkipWorktree || file.IsAssumedUnchanged) && !file.IsSubmodule && !file.IsLink)
                 {
-                    if (_service._fileSystem.FileExists(Absolute(file.Name.Text)) || ThroughLink(file.Name.Text))
+                    if (_service._fileSystem.FileExists(Absolute(file.Name.Text)) || (DirectoryStands(file.Name.Text, standing) && ThroughLink(file.Name.Text)))
                     {
                         files[file.Name.Text] = new Listed(null, Link: false, Submodule: false);
                         toHash.Add(file.Name.Text);
@@ -1483,7 +1553,7 @@ public sealed class CodebaseGraphService(
             }
 
             // An untracked repository inside the tree is listed whole, by its directory's name.
-            foreach (var file in working.Where(file => !file.Gone && file.Differs && !file.Name.Text.EndsWith('/') && Kept(file.Name)))
+            foreach (var file in working.Where(file => !file.Gone && file.Differs && !file.Name.Text.EndsWith('/') && Kept(file.Name, unnamed)))
             {
                 var path = file.Name.Text;
                 var known = files.GetValueOrDefault(path);
@@ -1510,32 +1580,34 @@ public sealed class CodebaseGraphService(
                 files[path] = new Listed(null, Link: true, Submodule: false);
             }
 
-            // A file gone since git listed it is not given to git to hash: it is listed unreadable, as one gone before its read is.
-            foreach (var path in gone)
+            var blobs = await HashAsync(there).ConfigureAwait(false);
+
+            // A file gone since git listed it is not given to git to hash, nor one gone while git hashed it: it is listed
+            // unreadable, as one gone before its read is.
+            foreach (var path in gone.Concat(there.Where((_, at) => blobs[at] is null)))
             {
                 files.Remove(path);
-                _unnamed.TryAdd(path, new CodebaseGraphSkipped(path, CodeFileStates.Unreadable, "it was gone when it was read"));
+                unnamed.TryAdd(path, new CodebaseGraphSkipped(path, CodeFileStates.Unreadable, "it was gone when it was read"));
             }
-
-            var blobs = await HashAsync(there).ConfigureAwait(false);
 
             for (var at = 0; at < there.Count; at++)
             {
-                files[there[at]] = files[there[at]] with { Blob = blobs[at] };
+                if (blobs[at] is { } blob)
+                {
+                    files[there[at]] = files[there[at]] with { Blob = blob };
+                }
             }
 
             // The tool's own state and the credential slots are no change of the tree, though git lists them where they are not ignored.
-            return (files, head, working.Any(file => !Never(file.Name.Text)));
+            return new Listing(files, head, working.Any(file => !Never(file.Name.Text)), unnamed, blobs.Count(blob => blob is not null));
         }
 
-        /// <summary>The blob git gives each of <paramref name="paths"/>' working files, each counted as hashed where <paramref name="counted"/>.</summary>
-        private async Task<IReadOnlyList<string>> HashAsync(IReadOnlyList<string> paths, bool counted = true)
+        /// <summary>The blob git gives each of <paramref name="paths"/>' working files; null for each that was gone when git looked.</summary>
+        private async Task<IReadOnlyList<string?>> HashAsync(IReadOnlyList<string> paths)
         {
             try
             {
-                var blobs = await _service._gitClient.HashWorkingFilesAsync(_tree, paths, _cancellationToken).ConfigureAwait(false);
-                _hashed += counted ? paths.Count : 0;
-                return blobs;
+                return await _service._gitClient.HashWorkingFilesAsync(_tree, paths, _cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is HarnessException or ProgramStartException)
             {
@@ -1544,24 +1616,66 @@ public sealed class CodebaseGraphService(
         }
 
         /// <summary>
-        /// Whether the graph keeps the file git names <paramref name="name"/>: one this tool can open, never one of the
-        /// credential slots or the tool's own state - what the graph never extracts it never serves - and one the workflow's
-        /// patterns graph.
+        /// Whether the graph keeps the file git names <paramref name="name"/>: never one of the credential slots or the tool's
+        /// own state - what the graph never extracts it never serves - only one the workflow's patterns graph, and only one
+        /// this tool can open and its records can name; one of those it cannot is said in <paramref name="unnamed"/>.
         /// </summary>
-        private bool Kept(GitName name)
+        private bool Kept(GitName name, IDictionary<string, CodebaseGraphSkipped> unnamed)
         {
-            if (!name.IsUtf8)
+            if (Never(name.Text) || !Graphs(name.Text))
             {
-                // Listed by the index and by status alike where it changed: said once.
-                if (!Never(name.Text) && Graphs(name.Text))
-                {
-                    _unnamed.TryAdd(name.Quoted, new CodebaseGraphSkipped(name.Quoted, CodeFileStates.Unreadable, "its name is not UTF-8, and this tool opens a file only by a UTF-8 name"));
-                }
-
                 return false;
             }
 
-            return !Never(name.Text) && Graphs(name.Text);
+            var why = !name.IsUtf8 ? "its name is not UTF-8, and this tool opens a file only by a UTF-8 name"
+                : Unnameable(name.Text) ? NoRecordedName
+                : null;
+
+            if (why is null)
+            {
+                return true;
+            }
+
+            // Listed by the index and by status alike where it changed: said once.
+            unnamed.TryAdd(name.Quoted, new CodebaseGraphSkipped(name.Quoted, CodeFileStates.Unreadable, why));
+            return false;
+        }
+
+        /// <summary>Why a file written while it was read keeps nothing.</summary>
+        private const string ChangedWhileRead = "it changed while it was read";
+
+        /// <summary>Why a file whose name its records cannot hold is not in the graph.</summary>
+        private const string NoRecordedName = "its name is no path relative to the tree that every machine reads alike - a drive, a leading "
+            + "slash or backslash, or a part empty, '.' or '..', by either slash - and the graph's records name a file only by one";
+
+        /// <summary>
+        /// Whether <paramref name="path"/> is a name the graph's records cannot hold (<see cref="OrchestrationRules.RelativePathProblem"/>):
+        /// a file git holds by such a name on a machine that allows it is said, never written into a record that would not read back.
+        /// </summary>
+        private static bool Unnameable(string path) => OrchestrationRules.RelativePathProblem(path, "a file's path") is not null;
+
+        /// <summary>
+        /// Whether the directory <paramref name="path"/> lies in stands, asked of the file system once a directory and kept in
+        /// <paramref name="standing"/>: the tree's root always does.
+        /// </summary>
+        private bool DirectoryStands(string path, Dictionary<string, bool> standing)
+        {
+            var slash = path.LastIndexOf('/');
+
+            if (slash < 0)
+            {
+                return true;
+            }
+
+            var directory = path[..slash];
+
+            if (!standing.TryGetValue(directory, out var stands))
+            {
+                stands = _service._fileSystem.DirectoryExists(Absolute(directory));
+                standing[directory] = stands;
+            }
+
+            return stands;
         }
 
         /// <summary>Whether the workflow's patterns graph <paramref name="path"/>, as this machine's file system compares names.</summary>
@@ -1574,8 +1688,8 @@ public sealed class CodebaseGraphService(
         /// <summary>
         /// Each of <paramref name="paths"/> as it stands before git is asked to hash it: a file there; one that leads out of
         /// what git names - a link, or a path a link lies along, a directory junction git walks into as a directory among
-        /// them - which is listed a link and neither hashed nor read; or one gone. The one look both a listing and a check
-        /// take of a file they are to hash, so nothing is ever read through a link.
+        /// them - which is listed a link and neither hashed nor read; or one gone. The look every listing - a check's among
+        /// them - takes of a file it is to hash, so nothing is ever read through a link.
         /// </summary>
         private (List<string> There, List<string> Linked, List<string> Gone) Looked(IEnumerable<string> paths)
         {
@@ -1713,11 +1827,18 @@ public sealed class CodebaseGraphService(
 
         /// <summary>
         /// Reads each of <paramref name="files"/> and gives it to its implementation, in parallel on one of every
-        /// <see cref="ReadShare"/> of the machine's processors; then hashes every file it looked at once more, in one batch,
-        /// and keeps what was made of each only where its blob is still the one listed - an extract is never stored under a
-        /// blob its bytes were not. A file whose blob moved, or that went, while it was read is listed unreadable, which the
-        /// next sync reads again.
+        /// <see cref="ReadShare"/> of the machine's processors; then lists every file whose bytes decided its entry once more,
+        /// as a sync by its path would, and keeps what was made of each only where the listing still gives it the blob it was
+        /// read under - an extract is never stored under a blob its bytes were not. A file whose size or time moved while it
+        /// was read, or whose blob moved or that went by the listing after, is listed unreadable, which the next sync reads again.
         /// </summary>
+        /// <remarks>
+        /// The listing, not a hash of the file, is asked again because the blob a file is read under is the listing's: the
+        /// index's where git finds the file clean - which, for one git would clean otherwise than the index holds it, is no hash
+        /// of what it holds - and the one git gives its working file where it changed. Asking the one question twice compares
+        /// like with like, and runs no clean filter over a file git found clean. A file too large is not read, and an
+        /// unreadable one keeps nothing: neither is asked again.
+        /// </remarks>
         private async Task<IReadOnlyList<(string Path, CodeGraphFileEntry Entry)>> ReadAsync(IReadOnlyList<(string Path, string Blob)> files)
         {
             var read = new ConcurrentBag<(string Path, string Blob, CodeGraphFileEntry Entry, CodeGraphStoredExtract? Stored)>();
@@ -1729,18 +1850,13 @@ public sealed class CodebaseGraphService(
                 read.Add((file.Path, file.Blob, entry, stored));
             }).ConfigureAwait(false);
 
-            // An unreadable file keeps nothing, and is read again by the next sync whatever its blob.
-            var looked = read.Where(file => file.Entry.State != CodeFileStates.Unreadable).ToList();
-            var there = looked.Where(file => _service._fileSystem.FileExists(Absolute(file.Path))).ToList();
-            var blobs = there.Count == 0 ? [] : await HashAsync([.. there.Select(file => file.Path)], counted: false).ConfigureAwait(false);
-            var moved = looked.Select(file => file.Path).Except(there.Select(file => file.Path), StringComparer.Ordinal).ToHashSet(StringComparer.Ordinal);
+            var looked = read.Where(file => file.Entry.State is not (CodeFileStates.Unreadable or CodeFileStates.TooLarge)).ToList();
+            var moved = new HashSet<string>(StringComparer.Ordinal);
 
-            for (var at = 0; at < there.Count; at++)
+            if (looked.Count > 0)
             {
-                if (blobs[at] != there[at].Blob)
-                {
-                    moved.Add(there[at].Path);
-                }
+                var again = (await ListingOf([.. looked.Select(file => file.Path)]).ConfigureAwait(false)).Files;
+                moved.UnionWith(looked.Where(file => !again.TryGetValue(file.Path, out var now) || now.Link || now.Submodule || now.Blob != file.Blob).Select(file => file.Path));
             }
 
             var entries = new List<(string Path, CodeGraphFileEntry Entry)>(read.Count);
@@ -1749,7 +1865,7 @@ public sealed class CodebaseGraphService(
             {
                 if (moved.Contains(file.Path))
                 {
-                    entries.Add((file.Path, new CodeGraphFileEntry(file.Blob, CodeFileStates.Unreadable, 0) { Why = "it changed while it was read" }));
+                    entries.Add((file.Path, new CodeGraphFileEntry(file.Blob, CodeFileStates.Unreadable, 0) { Why = ChangedWhileRead }));
                     continue;
                 }
 
@@ -1794,6 +1910,13 @@ public sealed class CodebaseGraphService(
                 }
 
                 bytes = await _service._fileSystem.ReadAllBytesAsync(absolute, token).ConfigureAwait(false);
+
+                // A write while it was read leaves bytes of no one content, though it may leave the file's blob as it was:
+                // its size or time moved, or it read to another length than it stood at.
+                if (_service._fileSystem.StandingOf(absolute) is not { } after || after.Length != standing.Length || after.Written != standing.Written || bytes.Length != standing.Length)
+                {
+                    return (new CodeGraphFileEntry(blob, CodeFileStates.Unreadable, 0) { Why = ChangedWhileRead }, null);
+                }
             }
             catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
             {
@@ -2045,4 +2168,12 @@ public sealed class CodebaseGraphService(
     /// <param name="Link">Whether it is a link - git records it as one, or a link lies along its path on disk.</param>
     /// <param name="Submodule">Whether it is a submodule.</param>
     private sealed record Listed(string? Blob, bool Link, bool Submodule);
+
+    /// <summary>What one listing of a tree found.</summary>
+    /// <param name="Files">Each file the graph keeps, as it was listed.</param>
+    /// <param name="Head">The tree's HEAD; null where it has no commit.</param>
+    /// <param name="Dirty">Whether git listed anything that is not the tree's HEAD.</param>
+    /// <param name="Unnamed">Each file it could not name, or found gone before git hashed it, by the name it is said by.</param>
+    /// <param name="Hashed">How many working files git hashed.</param>
+    private sealed record Listing(SortedDictionary<string, Listed> Files, string? Head, bool Dirty, IReadOnlyDictionary<string, CodebaseGraphSkipped> Unnamed, int Hashed);
 }

@@ -1469,7 +1469,7 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
     public Task<IReadOnlyList<GitWorkingFile>> ListWorkingFilesAsync(string directory, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
         => Call(() => inner.ListWorkingFilesAsync(directory, paths, Token(cancellationToken)));
 
-    public Task<IReadOnlyList<string>> HashWorkingFilesAsync(string directory, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
+    public Task<IReadOnlyList<string?>> HashWorkingFilesAsync(string directory, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
         => Call(() => inner.HashWorkingFilesAsync(directory, paths, Token(cancellationToken)));
 
     /// <summary>

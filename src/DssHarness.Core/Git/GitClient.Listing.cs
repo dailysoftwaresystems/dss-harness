@@ -127,15 +127,36 @@ public sealed partial class GitClient
         return working;
     }
 
-    public async Task<IReadOnlyList<string>> HashWorkingFilesAsync(string directory, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<string?>> HashWorkingFilesAsync(string directory, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(paths);
 
-        var ids = new List<string>(paths.Count);
+        var how = new Hashing(Written: false, Filtered: true, Told: [NoOptionalLocks]);
+        const string What = "hash the working tree's files";
+        var ids = new List<string?>(paths.Count);
 
         foreach (var batch in paths.Chunk(HashBatch))
         {
-            ids.AddRange(await HashAsync(directory, batch, new Hashing(Written: false, Filtered: true, Told: [NoOptionalLocks]), "hash the working tree's files", cancellationToken).ConfigureAwait(false));
+            try
+            {
+                ids.AddRange(await HashAsync(directory, batch, how, What, cancellationToken).ConfigureAwait(false));
+            }
+            catch (HarnessException) when (batch.Any(path => !_fileSystem.FileExists(Path.Combine(directory, path))))
+            {
+                // git stops at the first file it cannot open, and says nothing of the rest: each is asked on its own, and
+                // one whose file is not there answers null where git cannot hash it.
+                foreach (var path in batch)
+                {
+                    try
+                    {
+                        ids.Add((await HashAsync(directory, [path], how, What, cancellationToken).ConfigureAwait(false))[0]);
+                    }
+                    catch (HarnessException) when (!_fileSystem.FileExists(Path.Combine(directory, path)))
+                    {
+                        ids.Add(null);
+                    }
+                }
+            }
         }
 
         return ids;
