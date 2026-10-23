@@ -1938,7 +1938,10 @@ out where it is not, looked at no further than its directory where that is not t
 its file), since neither its file nor a link can be in it; a repository inside the tree that git lists whole as
 untracked is not entered; a file about to be hashed - changed, untracked or not looked at by git - that is a link, or
 that a link lies along (`LinkPaths.LeadsElsewhere`, a directory junction git walks into among them), is listed a link
-and neither hashed nor read, by the one look every listing takes. Each file whose bytes decided its entry is listed
+and neither hashed nor read, by the one look every listing takes; and a tracked file git finds gone where a link lies
+along its directory - git takes a file below a symbolic link to a directory for gone, where it walks into a junction -
+is listed a link too, never gone (asked once a directory), as a check that finds a file not there asks of it, so a path
+a link lies along is a link on every system, whether or not a file is where the link leads. Each file whose bytes decided its entry is listed
 once more when the reads are done, as a sync lists it (`ListingOf`, nothing said or counted, no HEAD asked; by its
 path, or - where the sync listed the tree whole and read more than `ListedWholePast` files, which by their paths take at
 least three command lines, each having git read the whole index - by one listing of the tree, so a sync by paths or a

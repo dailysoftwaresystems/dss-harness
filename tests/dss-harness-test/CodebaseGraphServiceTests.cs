@@ -1899,6 +1899,39 @@ public sealed class CodebaseGraphServiceTests
     }
 
     /// <summary>
+    /// A tracked file whose directory is replaced by a directory link leading where no such file is - which git lists as
+    /// gone, below a junction and a symbolic link alike - is a link of the graph, never gone: by a check, which asks git
+    /// nothing of a file it finds not there, and by a whole sync.
+    /// </summary>
+    [Fact]
+    public async Task AFileWhoseDirectoryALinkReplaced_LeadingWhereNoSuchFileIs_IsALink_NeverGone()
+    {
+        using var graph = await Graph.CreateAsync();
+        using var outside = new TempDirectory();
+        Directory.CreateDirectory(Path.Combine(outside.Path, "empty"));
+        graph.Write("dir/inner.toy", "class Within\n");
+        graph.Write("other/inner.toy", "class Other\n");
+        await graph.CommitAsync();
+        await graph.SyncAsync();
+        Directory.Delete(Path.Combine(graph.Tree, "dir"), recursive: true);
+        TestLinks.DirectoryLink(Path.Combine(graph.Tree, "dir"), Path.Combine(outside.Path, "empty"));
+
+        var check = await graph.CheckAsync(null, null, "dir/inner.toy");
+
+        Assert.Equal((1, 0, 0, 0), (check.Checked, check.Hashed, check.Extracted, check.Removed));
+        Assert.Equal(CodeFileStates.Link, graph.Manifest().Files["dir/inner.toy"].State);
+
+        Directory.Delete(Path.Combine(graph.Tree, "other"), recursive: true);
+        TestLinks.DirectoryLink(Path.Combine(graph.Tree, "other"), Path.Combine(outside.Path, "empty"));
+
+        var synced = await graph.SyncAsync();
+
+        Assert.Equal(0, synced.Removed);
+        Assert.Equal((CodeFileStates.Link, CodeFileStates.Link), (graph.Manifest().Files["dir/inner.toy"].State, graph.Manifest().Files["other/inner.toy"].State));
+        Assert.DoesNotContain(graph.Symbols().Nodes, node => node.Id is "toy:Within" or "toy:Other");
+    }
+
+    /// <summary>
     /// A file git holds by a name the graph's records cannot hold - where a machine allows one: a backslash part, a drive, a
     /// leading backslash, an empty part, a '..' - is said unreadable, why named, as a name that is not UTF-8 is, and the
     /// graph builds; a sync by paths given one says it too, and never asks git of it.
