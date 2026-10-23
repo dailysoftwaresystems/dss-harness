@@ -4551,7 +4551,7 @@ public sealed class WorkflowValidatorTests
                 "codebaseGraph.languages names 'markdown' more than once",
                 "codebaseGraph.maxFileBytes must be from 4,096 to 16,777,216, found 4095",
                 "codebaseGraph.mapTokens must be from 0 to 2,000, found 2001",
-                "codebaseGraph.generated is 'drop', which is none of 'low', 'exclude': generated code's declarations are kept and ranked last, or left out with the file listed",
+                "codebaseGraph.generated is 'drop', which is none of 'low', 'exclude': generated code's declarations are kept, its file's entry naming why it is generated, or left out with the file listed",
             ],
             Problems("""
                 name: flow

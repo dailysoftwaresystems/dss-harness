@@ -11,8 +11,11 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <summary>
 /// The <c>graphify-codebase</c> step: one sync of the run's one codebase graph, wherever the flow puts it - each instance,
 /// visit and retry one more, a sync of a tree that did not change reading nothing - of the base, or with <c>in</c> of that
-/// agent's view. Its output is that sync's; a graph is a map, never red, and fails only where its <c>failOn: incomplete</c>
-/// says a file it could not read fails it.
+/// agent's view. Its output is that sync's. A graph is a map, never red over what it holds: the step fails over a file it
+/// could not read only where its <c>failOn: incomplete</c> says so (<see cref="HarnessExit.CommandFailed"/>). It is refused
+/// (<see cref="HarnessExit.Refused"/>) where the graph's paths would not fit under the run's directory, or the agent it
+/// names has no worktree to list; and it fails where git could not be started (<see cref="HarnessExit.ToolMissing"/>) or
+/// failed to list the tree (<see cref="HarnessExit.CommandFailed"/>).
 /// </summary>
 /// <param name="contextLoader">Finds the repository and its configuration.</param>
 /// <param name="platform">This machine.</param>
@@ -58,7 +61,7 @@ public sealed class GraphifyCodebaseRunner(
             switch (store.ReadAgent(layout, agent))
             {
                 case { State: AgentStates.Live } record when record.WorktreePath(context.Layout) is { } worktree:
-                    request = request with { Agent = agent, Worktree = worktree };
+                    request = request with { Worktree = new CodebaseGraphWorktree(agent, worktree) };
                     break;
 
                 case { State: AgentStates.Live, Reads: true }:

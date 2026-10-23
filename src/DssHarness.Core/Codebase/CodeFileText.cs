@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using DssHarness.Core.FileSystem;
 
@@ -11,10 +13,11 @@ namespace DssHarness.Core.Codebase;
 public static class CodeFileText
 {
     /// <summary>
-    /// How many of a file's first bytes are given as text to a claim's content test: the window a file is binary by a NUL
-    /// in (<see cref="BinaryContent.Window"/>), so a test is given what was looked at and nothing more.
+    /// How many of a file's first characters, once decoded, are given to a claim's content test: as many as the bytes of
+    /// the window a file is binary by a NUL in (<see cref="BinaryContent.Window"/>), so a test is given about what was
+    /// looked at.
     /// </summary>
-    public const int ProbeBytes = BinaryContent.Window;
+    public const int ProbeCharacters = BinaryContent.Window;
 
     /// <summary>How a Git LFS pointer begins: a file of a few lines that stands for one git keeps elsewhere.</summary>
     private static readonly byte[] LfsPointer = "version https://git-lfs.github.com/spec/"u8.ToArray();
@@ -30,8 +33,8 @@ public static class CodeFileText
 
     /// <summary>
     /// What <paramref name="bytes"/>, a file's whole content, are to the graph: a Git LFS pointer and a file with a NUL in
-    /// its first <see cref="ProbeBytes"/> bytes are binary; UTF-16 is read by its mark, and UTF-8 with or without its
-    /// mark; anything else is unreadable, with why.
+    /// its first <see cref="BinaryContent.Window"/> bytes are binary; UTF-16 is read by its mark, and UTF-8 with or without
+    /// its mark; anything else is unreadable, with why.
     /// </summary>
     /// <param name="bytes">The file's bytes.</param>
     public static CodeFileDecoding Decode(ReadOnlySpan<byte> bytes)
@@ -128,14 +131,14 @@ public static class CodeFileText
         return lines;
     }
 
-    /// <summary>The first <see cref="ProbeBytes"/> bytes of a file's text, as a claim's content test is given them.</summary>
+    /// <summary>The first <see cref="ProbeCharacters"/> characters of a file's decoded text, as a claim's content test is given them.</summary>
     /// <param name="text">The file's decoded text.</param>
     public static string Probe(string text)
     {
         ArgumentNullException.ThrowIfNull(text);
 
-        // Cut by characters as near the bytes as a text can be cut, never inside a surrogate pair.
-        var length = Math.Min(text.Length, ProbeBytes);
+        // Cut by characters, never inside a surrogate pair.
+        var length = Math.Min(text.Length, ProbeCharacters);
 
         if (length > 0 && length < text.Length && char.IsHighSurrogate(text[length - 1]))
         {
@@ -176,15 +179,57 @@ public sealed record CodeLineIndex(IReadOnlyList<int> Starts)
     }
 }
 
-/// <summary>What a file's bytes are to the graph: its text, or the state it is listed with and why.</summary>
-/// <param name="Text">The decoded text; <see langword="null"/> where it is not read.</param>
-/// <param name="State">The state it is listed with where it is not read (<see cref="CodeFileStates"/>); <see langword="null"/> where it is.</param>
-/// <param name="Why">Why it is not read.</param>
-public sealed record CodeFileDecoding(string? Text, string? State, string? Why)
+/// <summary>
+/// What a file's bytes are to the graph: its text, or the state it is listed with and why - one or the other, as
+/// <see cref="Read"/> and <see cref="Refused"/> alone make it.
+/// </summary>
+public sealed record CodeFileDecoding
 {
+    private CodeFileDecoding(string? text, string? state, string? why)
+    {
+        Text = text;
+        State = state;
+        Why = why;
+    }
+
+    /// <summary>The decoded text; <see langword="null"/> where it is not read.</summary>
+    public string? Text { get; }
+
+    /// <summary>The state it is listed with where it is not read (<see cref="CodeFileStates"/>); <see langword="null"/> where it is.</summary>
+    public string? State { get; }
+
+    /// <summary>Why it is not read; <see langword="null"/> where it is.</summary>
+    public string? Why { get; }
+
+    /// <summary>Whether the file was read as text: its text there, else its state and why.</summary>
+    [MemberNotNullWhen(true, nameof(Text))]
+    [MemberNotNullWhen(false, nameof(State), nameof(Why))]
+    public bool IsRead
+    {
+        get
+        {
+            if (Text is not null)
+            {
+                return true;
+            }
+
+            // Made by Read or Refused alone, so a file not read has its state and why.
+            return State is null || Why is null ? throw new UnreachableException("a decoding holds neither a text nor a state") : false;
+        }
+    }
+
     /// <summary>A file read as <paramref name="text"/>.</summary>
-    internal static CodeFileDecoding Read(string text) => new(text, null, null);
+    internal static CodeFileDecoding Read(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        return new(text, null, null);
+    }
 
     /// <summary>A file not read, listed as <paramref name="state"/> for <paramref name="why"/>.</summary>
-    internal static CodeFileDecoding Refused(string state, string why) => new(null, state, why);
+    internal static CodeFileDecoding Refused(string state, string why)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(state);
+        ArgumentException.ThrowIfNullOrWhiteSpace(why);
+        return new(null, state, why);
+    }
 }

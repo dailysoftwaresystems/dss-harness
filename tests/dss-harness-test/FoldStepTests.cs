@@ -229,7 +229,7 @@ public sealed class FoldStepTests
         OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
         File.Delete(Path.Combine(worktree, "docs", "x.md"));
         var request = new DssHarness.Core.Codebase.CodebaseGraphSync(new HarnessLayout(kit.Main, kit.Main), kit.Layout, DssHarness.Core.Codebase.CodebaseGraphShape.Default, OrchestrationKit.Settings.Root, Rebuild: false, "test");
-        await kit.Harness.CodebaseGraph.SyncAsync(request with { Agent = Agent, Worktree = worktree }, Token);
+        await kit.Harness.CodebaseGraph.SyncAsync(request with { Worktree = new DssHarness.Core.Codebase.CodebaseGraphWorktree(Agent, worktree) }, Token);
         var store = kit.Harness.OrchestrationStore;
         var untouched = store.ReadGraphManifest(kit.Layout)!.Files["a.txt"];
         OrchestrationKit.Write(kit.Main, "a.txt", "one\nby hand\n");
@@ -291,19 +291,21 @@ public sealed class FoldStepTests
         output.Received(1).Warn("fold", $"the codebase graph's view 'base' of run '{OrchestrationKit.Orchestrator}' was not synced (fold:fold): git did not answer. The step goes on; the paths it owes are synced again by the next fold or deletion, and by this step's next attempt.");
 
         // A sync by paths that takes nothing - the graph's manifest does not read - leaves what it was given owed, the
-        // first fold's and the next's alike; an attempt that ends before it applies anything - its allow filled wrong -
-        // takes every fold owed where it starts.
+        // first fold's and the next's alike, and says why; an attempt that ends before it applies anything - its allow
+        // filled wrong - takes every fold owed where it starts.
         var nothing = Substitute.For<DssHarness.Core.Codebase.ICodebaseGraphService>();
         nothing.SyncPathsAsync(Arg.Any<DssHarness.Core.Codebase.CodebaseGraphSync>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<DssHarness.Core.Codebase.CodebaseGraphSynced?>(null));
+            .Returns(Task.FromException<DssHarness.Core.Codebase.CodebaseGraphSynced?>(new HarnessException(HarnessExit.Refused, "'graph.json' does not read as one: its schema is 99.")));
         var taking = new FlowGraphSyncs(nothing, store, Ledger(kit), kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.FileSystem, output, TimeProvider.System);
         OrchestrationKit.Write(worktree, "c.txt", "three\n");
+        var lines = File.ReadAllLines(kit.Layout.GraphSyncFile).Length;
 
         var next = await new FoldStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, store, kit.Harness.AgentService, Ledger(kit), taking).RunAsync(Run(kit, Fold(), attempt: 2), Token);
 
         Assert.True(next.Passed, next.Error);
         Assert.Equal([null, null], store.ReadFolds(kit.Layout)!.Folds.Select(fold => fold.Graphed));
-        output.Received().Warn("fold", $"the codebase graph's manifest of run '{OrchestrationKit.Orchestrator}' does not read (fold:fold), so it took none of the paths the run's folds changed. The step goes on; they stay owed until a whole sync builds the graph again.");
+        output.Received().Warn("fold", $"the codebase graph's view 'base' of run '{OrchestrationKit.Orchestrator}' was not synced (fold:fold): 'graph.json' does not read as one: its schema is 99. The step goes on; the paths the run's folds changed stay owed until a whole sync builds the graph again.");
+        Assert.Equal("'graph.json' does not read as one: its schema is 99.", (string?)System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllLines(kit.Layout.GraphSyncFile)[lines])!["failed"]);
         Assert.DoesNotContain("c.txt", store.ReadGraphManifest(kit.Layout)!.Files.Keys);
 
         var typo = Fold() with { Allow = new FlowAllow([], new FlowList([], "steps.find.output.ids"), [], null, []) };
@@ -326,7 +328,7 @@ public sealed class FoldStepTests
         var kit = await OrchestrationKit.PrepareAsync(temp);
         var store = kit.Harness.OrchestrationStore;
         var worktree = await kit.CreateAgentAsync(Agent);
-        await kit.Harness.CodebaseGraph.SyncAsync(GraphRequest(kit) with { Agent = Agent, Worktree = worktree }, Token);
+        await kit.Harness.CodebaseGraph.SyncAsync(GraphRequest(kit) with { Worktree = new DssHarness.Core.Codebase.CodebaseGraphWorktree(Agent, worktree) }, Token);
         var graph = Substitute.For<DssHarness.Core.Codebase.ICodebaseGraphService>();
         graph.DropViewAsync(Arg.Any<OrchestratorLayout>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromException(new IOException("the view is held open.")));
@@ -363,7 +365,7 @@ public sealed class FoldStepTests
         Assert.True(refreshed.Passed, refreshed.Error);
         Assert.Empty(store.GraphViews(kit.Layout));
 
-        await kit.Harness.CodebaseGraph.SyncAsync(GraphRequest(kit) with { Agent = Agent, Worktree = worktree }, Token);
+        await kit.Harness.CodebaseGraph.SyncAsync(GraphRequest(kit) with { Worktree = new DssHarness.Core.Codebase.CodebaseGraphWorktree(Agent, worktree) }, Token);
         OrchestrationKit.Write(kit.Main, "c.txt", "three\n");
         await kit.Harness.CommitAllAsync(kit.Main, "a file the agent's base lacks", Token);
 

@@ -5,7 +5,8 @@ namespace DssHarness.Core.Repository;
 
 /// <summary>
 /// One path pattern as the agent clients' rules take it - a restriction's path, a step's
-/// <c>writes</c>, the glob of a file search - read once and matched against many paths.
+/// <c>writes</c>, the glob of a file search - and as a workflow's <c>codebaseGraph.include</c> and
+/// <c>codebaseGraph.exclude</c> say which paths are graphed: read once and matched against many paths.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -21,11 +22,11 @@ namespace DssHarness.Core.Repository;
 /// ordinary character, said here so nobody reads a character class into one.
 /// </para>
 /// <para>
-/// Deliberately not <see cref="PathPatterns"/>, which stays the one matcher of the configured path
-/// lists (<c>sync.neverTransfer</c>, <c>sync.exclude</c>, <c>lineEndings.exclude</c>, the roots an
-/// anchor cites): that grammar is poorer on purpose - an entry is rooted and <c>*</c> is refused -
-/// and no configured list is read by this and no rule by that. A pattern that would mean one thing
-/// as each of the two is a pattern nobody can read. What the two share is the spelling rule
+/// Deliberately not <see cref="PathPatterns"/>, which stays the one matcher of the path lists of
+/// <c>config.json</c> (<c>sync.neverTransfer</c>, <c>sync.exclude</c>, <c>lineEndings.exclude</c>, the
+/// roots an anchor cites): that grammar is poorer on purpose - an entry is rooted and <c>*</c> is
+/// refused - and no list of <c>config.json</c> is read by this, and no rule nor workflow pattern by
+/// that. A pattern that would mean one thing as each of the two is a pattern nobody can read. What the two share is the spelling rule
 /// (<see cref="PathPatterns.Misspelling"/>) and the rule that a path climbing out of the tree names
 /// nothing in it (<see cref="PlatformPaths.ClimbsOut"/>), which a pattern here and a path matched
 /// against it are both held to.

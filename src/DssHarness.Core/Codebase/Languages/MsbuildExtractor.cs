@@ -7,7 +7,7 @@ namespace DssHarness.Core.Codebase.Languages;
 /// named by its file name, its header its root element's line and a project's summary the first sentence of its
 /// <c>&lt;Description&gt;</c>, with a <c>projectReference</c> to each project it names - a project's
 /// <c>&lt;ProjectReference Include&gt;</c>, a solution's <c>&lt;Project Path&gt;</c> - by that project's file name. The
-/// file is read as XML as far as it parses; nothing MSBuild evaluates is evaluated.
+/// file is read as XML as far as it parses, the line it stops at marked dynamic; nothing MSBuild evaluates is evaluated.
 /// </summary>
 public sealed class MsbuildExtractor : ICodeGraphExtractor
 {
@@ -15,7 +15,7 @@ public sealed class MsbuildExtractor : ICodeGraphExtractor
     public string Language => "msbuild";
 
     /// <inheritdoc/>
-    public int Version => 1;
+    public int Version => 2;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = CodeGraphClaims.OfExtensions(".csproj", ".slnx");
@@ -30,6 +30,7 @@ public sealed class MsbuildExtractor : ICodeGraphExtractor
             "what MSBuild evaluates: a reference under a condition is taken whatever the condition, a property in a path is left as written, and imported .props and .targets files are not read",
             "a project named by a wildcard, and two projects of one file name, which a reference names both of",
             "a solution in the older .sln form",
+            "what follows the point a file stops reading as XML, a line its extract marks dynamic",
         ]);
 
     /// <inheritdoc/>
@@ -44,6 +45,7 @@ public sealed class MsbuildExtractor : ICodeGraphExtractor
         var references = new List<ExtractReference>();
         string? signature = null;
         string? summary = null;
+        ExtractDynamic? stopped = null;
 
         var settings = new XmlReaderSettings { DtdProcessing = DtdProcessing.Ignore, IgnoreComments = true, IgnoreProcessingInstructions = true };
 
@@ -84,9 +86,11 @@ public sealed class MsbuildExtractor : ICodeGraphExtractor
                 }
             }
         }
-        catch (XmlException)
+        catch (XmlException ex)
         {
-            // What follows the first fault is not read: the file is graphed as far as it parses.
+            // What follows the first fault is not read: the file is graphed as far as it parses, and its extract says where
+            // it stopped, so a reference missing after it is never taken for one the project does not make.
+            stopped = new ExtractDynamic(Math.Clamp(ex.LineNumber, 1, lines.Count), "the file stops reading as XML here, and nothing after it is read");
         }
 
         var node = new ExtractNode(id, CodeNodeKinds.Project, name, input.Path, 1, lines.Count, signature ?? name)
@@ -94,7 +98,7 @@ public sealed class MsbuildExtractor : ICodeGraphExtractor
             Summary = summary,
         };
 
-        return new FileExtract([node]) { References = references };
+        return new FileExtract([node]) { References = references, Dynamic = stopped is null ? [] : [stopped] };
     }
 
     /// <summary>The file name of the project <paramref name="path"/> names, as its node is named; <see langword="null"/> where it names none, or names it by a wildcard.</summary>

@@ -146,6 +146,7 @@ public sealed class CodebaseGraphRecordsTests
         Assert.Equal("it counts files below zero", (line with { Extracted = -1 }).Problem());
         Assert.Equal("it counts files below zero", (line with { Reused = -1 }).Problem());
         Assert.Equal("it counts files below zero", (line with { Removed = -1 }).Problem());
+        Assert.Equal("it counts files below zero", (line with { Unreadable = -1 }).Problem());
         Assert.Equal("its time is no time a clock gives", (line with { Seconds = double.NaN }).Problem());
         Assert.Equal("its time is no time a clock gives", (line with { Seconds = -0.1 }).Problem());
         Assert.Equal("its time is no time a clock gives", (line with { Seconds = double.PositiveInfinity }).Problem());
@@ -212,8 +213,8 @@ public sealed class CodebaseGraphRecordsTests
             CodeGraphLinker.Revision,
             [new("file:src/a.toy", "abcdef", CodeNodeKinds.File, ["src/a.toy"]), new("toy:A", "123456", CodeNodeKinds.Type, ["src/a.toy"])],
             [new CodeEdge("file:src/a.toy", "toy:A", CodeEdgeKinds.Contains, 1, CodeConfidences.Exact)],
-            new Dictionary<string, int> { ["toy"] = 1 },
-            new Dictionary<string, int> { ["toy"] = 2 });
+            new Dictionary<string, int> { ["toy:A"] = 1 },
+            new Dictionary<string, int> { ["toy:A"] = 2 });
 
         store.WriteGraphSymbols(layout, symbols);
         Assert.Equal(Json(symbols), Json(store.ReadGraphSymbols(layout)!));
@@ -277,11 +278,15 @@ public sealed class CodebaseGraphRecordsTests
         Assert.NotNull((read with { Extract = "../x.json" }).Problem());
     }
 
-    /// <summary>A manifest is refused for another schema, no tool or tree, an implementation unnamed, a path that is none, a bad entry, and a digest that is not its own.</summary>
+    /// <summary>
+    /// A manifest is refused for another schema, no tool or tree, an implementation unnamed or named twice, a path that is
+    /// none, a bad entry, a file read by an implementation it names no version of or naming another extract than that
+    /// version makes of its blob, and a digest that is not its own.
+    /// </summary>
     [Fact]
     public void AManifest_IsRefusedForEachThingItGetsWrong()
     {
-        var files = new Dictionary<string, CodeGraphFileEntry>(StringComparer.Ordinal) { ["src/a.toy"] = new(Blob, CodeFileStates.Parsed, 10) { Language = "toy", Extract = "aa/x.json" } };
+        var files = new Dictionary<string, CodeGraphFileEntry>(StringComparer.Ordinal) { ["src/a.toy"] = new(Blob, CodeFileStates.Parsed, 10) { Language = "toy", Extract = CodeGraphIds.ExtractName(Blob, "src/a.toy", "toy", 1) } };
         var extractors = new[] { new CodeGraphExtractorVersion("toy", 1) };
         var manifest = new CodeGraphManifest(CodeGraphManifest.CurrentSchema, "1.0.0", extractors, "/tree", null, false, DateTimeOffset.UnixEpoch, files, CodeGraphManifest.DigestOf(extractors, files));
 
@@ -292,6 +297,14 @@ public sealed class CodebaseGraphRecordsTests
         Assert.Contains("it names an implementation as 'toy' at version 0", (manifest with { Extractors = [new("toy", 0)] }).Problem(), StringComparison.Ordinal);
         Assert.NotNull((manifest with { Files = new Dictionary<string, CodeGraphFileEntry> { ["../a.toy"] = files["src/a.toy"] } }).Problem());
         Assert.Equal("its file 'src/a.toy': its size is below zero", (manifest with { Files = new Dictionary<string, CodeGraphFileEntry> { ["src/a.toy"] = files["src/a.toy"] with { Bytes = -1 } } }).Problem());
+        Assert.Equal("it names the implementation 'toy' twice", (manifest with { Extractors = [new("toy", 1), new("toy", 2)] }).Problem());
+        Assert.Equal("its file 'src/a.toy' was read by 'toy', which it names no version of", (manifest with { Extractors = [new("other", 1)] }).Problem());
+        Assert.Equal(
+            $"its file 'src/a.toy' names the extract '{files["src/a.toy"].Extract}', which is not the one 'toy' at version 2 makes of its blob",
+            (manifest with { Extractors = [new("toy", 2)] }).Problem());
+        Assert.Equal(
+            "its file 'src/a.toy' names the extract 'aa/x.json', which is not the one 'toy' at version 1 makes of its blob",
+            (manifest with { Files = new Dictionary<string, CodeGraphFileEntry> { ["src/a.toy"] = files["src/a.toy"] with { Extract = "aa/x.json" } } }).Problem());
         Assert.Equal("its digest is not the digest of what it says", (manifest with { Digest = "0" }).Problem());
 
         // When it was synced and the tool that synced it are not what the link result is made from.
@@ -336,7 +349,11 @@ public sealed class CodebaseGraphRecordsTests
         Assert.Equal(CodeGraphIds.Sha256(text), CodeGraphManifest.DigestOf(extractors, files));
     }
 
-    /// <summary>A link result is refused for another schema, no manifest, a node with no handle or twice, and an edge that is not one between its nodes.</summary>
+    /// <summary>
+    /// A link result is refused for another schema, no manifest, a node with no handle or twice, a handle two nodes share, a
+    /// node of no kind a graph holds, an edge that is not one between its nodes, and a count of what references named that is
+    /// below zero or of no node it holds.
+    /// </summary>
     [Fact]
     public void ALinkResult_IsRefusedForEachThingItGetsWrong()
     {
@@ -359,6 +376,17 @@ public sealed class CodebaseGraphRecordsTests
         Assert.StartsWith("its edge 'file:a.toy' -> 'toy:Z'", (symbols with { Edges = [new CodeEdge("file:a.toy", "toy:Z", CodeEdgeKinds.Contains, 1, CodeConfidences.Exact)] }).Problem(), StringComparison.Ordinal);
         Assert.NotNull((symbols with { Edges = [new CodeEdge("file:a.toy", "toy:A", "owns", 1, CodeConfidences.Exact)] }).Problem());
         Assert.NotNull((symbols with { Edges = [new CodeEdge("file:a.toy", "toy:A", CodeEdgeKinds.Contains, 1, "probably")] }).Problem());
+        Assert.Equal(
+            "its node 'toy:A' has the handle 'abcdef', which another node has: a handle names one node of its view",
+            (symbols with { Nodes = [symbols.Nodes[0], symbols.Nodes[1] with { Handle = "abcdef" }] }).Problem());
+        Assert.Equal("its node 'toy:A' is of the kind 'gadget', which no node of a graph is", (symbols with { Nodes = [symbols.Nodes[0], symbols.Nodes[1] with { Kind = "gadget" }] }).Problem());
+        Assert.Equal(
+            "it counts 1 of what the references of 'toy:Z' named outside the repository, and that is no count of one of its nodes",
+            (symbols with { External = new Dictionary<string, int> { ["toy:Z"] = 1 } }).Problem());
+        Assert.Equal(
+            "it counts -1 of what the references of 'toy:A' named ambiguously, and that is no count of one of its nodes",
+            (symbols with { Unresolved = new Dictionary<string, int> { ["toy:A"] = -1 } }).Problem());
+        Assert.Null((symbols with { External = new Dictionary<string, int> { ["toy:A"] = 0 }, Unresolved = new Dictionary<string, int> { ["file:a.toy"] = 2 } }).Problem());
     }
 
     /// <summary>

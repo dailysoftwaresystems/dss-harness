@@ -47,8 +47,8 @@ public static class WorkflowKeys
         new("exclude", "patterns: the paths one of them matches are not graphed; absent, none"),
         new("languages", "the implementations used, by name - 'help codebase-graph' lists them; a file whose claimant is left out is only listed; absent, every one"),
         new("maxFileBytes", string.Create(System.Globalization.CultureInfo.InvariantCulture, $"the largest file read, from {Codebase.CodebaseGraphShape.LeastMaxFileBytes:N0} to {Codebase.CodebaseGraphShape.MostMaxFileBytes:N0}; a larger one is listed tooLarge; absent, {Codebase.CodebaseGraphShape.DefaultMaxFileBytes:N0}")),
-        new("generated", $"what becomes of generated code: {Codebase.CodebaseGraphShape.GeneratedLow} (the default), its declarations kept, marked and ranked last, or {Codebase.CodebaseGraphShape.GeneratedExclude}, the file listed and its declarations left out"),
-        new("mapTokens", string.Create(System.Globalization.CultureInfo.InvariantCulture, $"the repository map's cap, from 0 to {Codebase.CodebaseGraphShape.MostMapTokens:N0} tokens; 0 gives no map; absent, {Codebase.CodebaseGraphShape.DefaultMapTokens:N0}")),
+        new("generated", $"what becomes of generated code: {Codebase.CodebaseGraphShape.GeneratedLow} (the default), its declarations kept, its file's entry naming why it is generated, or {Codebase.CodebaseGraphShape.GeneratedExclude}, the file listed and its declarations left out"),
+        new("mapTokens", string.Create(System.Globalization.CultureInfo.InvariantCulture, $"the cap of a later slice's repository map, from 0 to {Codebase.CodebaseGraphShape.MostMapTokens:N0} tokens - nothing reads it yet; 0 asks for no map; absent, {Codebase.CodebaseGraphShape.DefaultMapTokens:N0}")),
     ];
 
     /// <summary>What the <c>recover</c> section takes.</summary>

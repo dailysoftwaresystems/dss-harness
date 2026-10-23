@@ -82,7 +82,7 @@ public sealed class CodeGraphExtractors
                 .FirstOrDefault(group => group.Count() > 1 && group.Any(claimed => claimed.Claim.ContentTest is null));
 
             Refuse(shared is null ? null
-                : $"{ReportText.Listed([.. shared.Select(claimed => $"'{claimed.Extractor.Language}'")])} each claim the {what} '{shared.Key}', and {ReportText.Listed([.. shared.Where(claimed => claimed.Claim.ContentTest is null).Select(claimed => $"'{claimed.Extractor.Language}'")])} give{(shared.Count(claimed => claimed.Claim.ContentTest is null) == 1 ? "s" : string.Empty)} it no content test: two that claim one {what} each say by a test of a file's first bytes which file is theirs, and a file is never given to one by order");
+                : $"{ReportText.Listed([.. shared.Select(claimed => $"'{claimed.Extractor.Language}'")])} each claim the {what} '{shared.Key}', and {ReportText.Listed([.. shared.Where(claimed => claimed.Claim.ContentTest is null).Select(claimed => $"'{claimed.Extractor.Language}'")])} give{(shared.Count(claimed => claimed.Claim.ContentTest is null) == 1 ? "s" : string.Empty)} it no content test: two that claim one {what} each say by a test of a file's first characters which file is theirs, and a file is never given to one by order");
         }
 
         All = all;
@@ -152,7 +152,7 @@ public sealed class CodeGraphExtractors
     /// none or several of its claimants say yes, no implementation reads it, and it is listed <c>ambiguous</c>.
     /// </summary>
     /// <param name="path">The file's path, relative to the tree's root with forward separators.</param>
-    /// <param name="probe">Its first bytes as text (<see cref="CodeFileText.Probe"/>).</param>
+    /// <param name="probe">Its first characters, decoded (<see cref="CodeFileText.Probe"/>).</param>
     public CodeGraphRoute Route(string path, string probe)
     {
         ArgumentNullException.ThrowIfNull(probe);
@@ -161,7 +161,7 @@ public sealed class CodeGraphExtractors
 
         if (claimants.Count == 0)
         {
-            return new CodeGraphRoute(_fallback, null);
+            return CodeGraphRoute.To(_fallback);
         }
 
         var yes = new List<ICodeGraphExtractor>();
@@ -178,7 +178,7 @@ public sealed class CodeGraphExtractors
             {
                 // The contract's kit holds every content test to answering for any text; one that throws is a defect of its
                 // implementation, said for the one file.
-                return new CodeGraphRoute(null, null) { Failed = $"its implementation '{extractor.Language}' failed on it in the content test of its claim '{claim.Value}': {ex.Message.TrimEnd('.')}" };
+                return CodeGraphRoute.FailedFor($"its implementation '{extractor.Language}' failed on it in the content test of its claim '{claim.Value}': {ex.Message.TrimEnd('.')}");
             }
 
             if (says)
@@ -188,8 +188,8 @@ public sealed class CodeGraphExtractors
         }
 
         return yes.Count == 1
-            ? new CodeGraphRoute(yes[0], null)
-            : new CodeGraphRoute(null, yes.Count == 0
+            ? CodeGraphRoute.To(yes[0])
+            : CodeGraphRoute.AmbiguousFor(yes.Count == 0
                 ? $"{ReportText.Listed([.. claimants.Select(claimed => $"'{claimed.Extractor.Language}'")])} claim it, and none of their content tests says it is theirs"
                 : $"{ReportText.Listed([.. yes.Select(extractor => $"'{extractor.Language}'")])} each say by their content tests that it is theirs");
     }
@@ -226,11 +226,46 @@ public sealed class CodeGraphExtractors
         => [.. All.SelectMany(extractor => claimsOf(extractor).Where(matches).Select(claim => (extractor, claim)))];
 }
 
-/// <summary>Which implementation reads a file, or why none does.</summary>
-/// <param name="Extractor">The implementation; <see langword="null"/> where the file is ambiguous, or a content test failed.</param>
-/// <param name="Ambiguous">Why no implementation reads it, its claimants' tests saying none or several; <see langword="null"/> where they said one.</param>
-public sealed record CodeGraphRoute(ICodeGraphExtractor? Extractor, string? Ambiguous)
+/// <summary>
+/// Which implementation reads a file, or why none does - one of the three, as <see cref="To"/>, <see cref="AmbiguousFor"/>
+/// and <see cref="FailedFor"/> alone make it.
+/// </summary>
+public sealed record CodeGraphRoute
 {
-    /// <summary>Why no implementation reads it, a content test of a claimant having failed on it; <see langword="null"/> where none did.</summary>
-    public string? Failed { get; init; }
+    private CodeGraphRoute(ICodeGraphExtractor? extractor, string? ambiguous, string? failed)
+    {
+        Extractor = extractor;
+        Ambiguous = ambiguous;
+        Failed = failed;
+    }
+
+    /// <summary>The implementation; <see langword="null"/> where the file is ambiguous, or a content test failed.</summary>
+    public ICodeGraphExtractor? Extractor { get; }
+
+    /// <summary>Why no implementation reads it, its claimants' tests saying none or several; <see langword="null"/> otherwise.</summary>
+    public string? Ambiguous { get; }
+
+    /// <summary>Why no implementation reads it, a content test of a claimant having failed on it; <see langword="null"/> otherwise.</summary>
+    public string? Failed { get; }
+
+    /// <summary>The file goes to <paramref name="extractor"/>.</summary>
+    internal static CodeGraphRoute To(ICodeGraphExtractor extractor)
+    {
+        ArgumentNullException.ThrowIfNull(extractor);
+        return new(extractor, null, null);
+    }
+
+    /// <summary>No implementation reads the file, its claimants' tests saying none or several, as <paramref name="why"/> says.</summary>
+    internal static CodeGraphRoute AmbiguousFor(string why)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(why);
+        return new(null, why, null);
+    }
+
+    /// <summary>No implementation reads the file, a content test having failed on it, as <paramref name="why"/> says.</summary>
+    internal static CodeGraphRoute FailedFor(string why)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(why);
+        return new(null, null, why);
+    }
 }

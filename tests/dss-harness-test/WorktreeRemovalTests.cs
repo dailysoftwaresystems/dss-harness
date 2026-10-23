@@ -1317,6 +1317,9 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
     public Task<IReadOnlyList<GitIndexEntry>> ListIndexAsync(string directory, CancellationToken cancellationToken = default)
         => Call(() => inner.ListIndexAsync(directory, Token(cancellationToken)));
 
+    public Task<IReadOnlyList<GitIndexEntry>> ListIndexAsync(string directory, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
+        => Call(() => inner.ListIndexAsync(directory, paths, Token(cancellationToken)));
+
     public Task IndexExactlyAsync(string directory, IReadOnlyCollection<string> paths, CancellationToken cancellationToken = default)
     {
         BeforeEveryCall?.Invoke();
@@ -1460,14 +1463,8 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
             return inner.ListNamesAsync(directory, arguments, Token(cancellationToken));
         });
 
-    public Task<IReadOnlyList<GitListedFile>> ListIndexedFilesAsync(string directory, CancellationToken cancellationToken = default)
-        => Call(() => inner.ListIndexedFilesAsync(directory, Token(cancellationToken)));
-
     public Task<IReadOnlyList<GitWorkingFile>> ListWorkingFilesAsync(string directory, CancellationToken cancellationToken = default)
         => Call(() => inner.ListWorkingFilesAsync(directory, Token(cancellationToken)));
-
-    public Task<IReadOnlyList<GitListedFile>> ListIndexedFilesAsync(string directory, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
-        => Call(() => inner.ListIndexedFilesAsync(directory, paths, Token(cancellationToken)));
 
     public Task<IReadOnlyList<GitWorkingFile>> ListWorkingFilesAsync(string directory, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
         => Call(() => inner.ListWorkingFilesAsync(directory, paths, Token(cancellationToken)));

@@ -2112,7 +2112,7 @@ public static class WorkflowValidator
 
             if (graph.Generated is { } generated && !Codebase.CodebaseGraphShape.GeneratedValues.Contains(generated, StringComparer.Ordinal))
             {
-                _problems.Add($"codebaseGraph.generated is '{generated}', which is none of {string.Join(", ", Codebase.CodebaseGraphShape.GeneratedValues.Select(value => $"'{value}'"))}: generated code's declarations are kept and ranked last, or left out with the file listed");
+                _problems.Add($"codebaseGraph.generated is '{generated}', which is none of {string.Join(", ", Codebase.CodebaseGraphShape.GeneratedValues.Select(value => $"'{value}'"))}: generated code's declarations are kept, its file's entry naming why it is generated, or left out with the file listed");
             }
         }
 

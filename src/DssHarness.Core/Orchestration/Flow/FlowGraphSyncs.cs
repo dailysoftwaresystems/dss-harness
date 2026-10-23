@@ -33,7 +33,10 @@ public sealed class FlowGraphSyncs(
     IHarnessOutput output,
     TimeProvider time)
 {
-    /// <summary>A whole sync of a tree, which takes every file it lists.</summary>
+    /// <summary>
+    /// A whole sync of a tree, which takes every file it lists: one it could not read is counted in its line of
+    /// <c>sync.jsonl</c> (<see cref="CodeGraphSyncLine.Unreadable"/>), since no step answers for the engine's own syncs.
+    /// </summary>
     private async Task<bool> Whole(CodebaseGraphSync request, CancellationToken cancellationToken)
     {
         _ = await graph.SyncAsync(request, cancellationToken).ConfigureAwait(false);
@@ -120,16 +123,18 @@ public sealed class FlowGraphSyncs(
 
         var paths = FoldLedger.Changed(owed);
 
-        // A graph whose manifest does not read takes no path: the folds stay owed, and it is said.
+        // A graph whose manifest does not read takes no path: the folds stay owed, and it is said with why.
         async Task<bool> TakesAsync(CodebaseGraphSync request, CancellationToken token)
         {
-            if (await graph.SyncPathsAsync(request, paths, token).ConfigureAwait(false) is not null)
+            try
             {
-                return true;
+                return await graph.SyncPathsAsync(request, paths, token).ConfigureAwait(false) is not null;
             }
-
-            output.Warn(run.Step.Type ?? "graph", $"the codebase graph's manifest of run '{place.Run}' does not read ({why}), so it took none of the paths the run's folds changed. The step goes on; they stay owed until a whole sync builds the graph again.");
-            return false;
+            catch (HarnessException ex) when (ex.ExitCode == HarnessExit.Refused)
+            {
+                Said(run, place.Run, layout, CodebaseGraphService.BaseView, why, ex, "synced", WholeAgain);
+                return false;
+            }
         }
 
         if (paths.Count > 0 && !await SyncAsync(run, place, context, agent: null, why, TakesAsync, cancellationToken, FoldAgain).ConfigureAwait(false))
@@ -189,6 +194,9 @@ public sealed class FlowGraphSyncs(
     /// <summary>What a base sync by a fold's paths that failed is taken up by.</summary>
     private const string FoldAgain = "the paths it owes are synced again by the next fold or deletion, and by this step's next attempt";
 
+    /// <summary>What a base sync by a fold's paths of a graph whose manifest does not read is taken up by.</summary>
+    private const string WholeAgain = "the paths the run's folds changed stay owed until a whole sync builds the graph again";
+
     /// <summary>
     /// Drops the view of each agent of the run whose record says it is no longer live - deleted, closed, or none - one
     /// at a time under that view's gate; one that fails is said, and the engine's next sync of the graph tries it again.
@@ -233,7 +241,7 @@ public sealed class FlowGraphSyncs(
     /// </summary>
     /// <returns>
     /// Whether the sync was made and went through: a sync by paths of a graph whose manifest does not read takes nothing,
-    /// and what it was given stays owed until the whole sync that builds the graph again.
+    /// said with why, and what it was given stays owed until the whole sync that builds the graph again.
     /// </returns>
     private async Task<bool> SyncAsync(
         FlowStepRun run,
@@ -267,10 +275,10 @@ public sealed class FlowGraphSyncs(
                 switch (store.ReadAgent(layout, agent))
                 {
                     case { State: AgentStates.Live } record when record.WorktreePath(context.Layout) is { } worktree:
-                        request = request with { Agent = agent, Worktree = worktree };
+                        request = request with { Worktree = new CodebaseGraphWorktree(agent, worktree) };
                         break;
 
-                    case { Reads: true }:
+                    case { State: AgentStates.Live, Reads: true }:
                         view = CodebaseGraphService.BaseView;
                         break;
 

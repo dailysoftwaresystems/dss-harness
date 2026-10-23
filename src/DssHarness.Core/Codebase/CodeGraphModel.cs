@@ -154,10 +154,13 @@ public static class CodeFileStates
     /// <summary>Read by an implementation that outlines its file (<see cref="ICodeGraphExtractor.Outlines"/>).</summary>
     public const string Outlined = "outlined";
 
-    /// <summary>Read by the fallback alone: found, sized, never read past its first bytes.</summary>
+    /// <summary>Read by the fallback alone: decoded and counted whole like any file read, and holding no declaration.</summary>
     public const string Listed = "listed";
 
-    /// <summary>Generated code, under <c>codebaseGraph.generated: exclude</c>: listed and sized, its declarations not kept.</summary>
+    /// <summary>
+    /// Generated code, under <c>codebaseGraph.generated: exclude</c>: read, its extract kept, and its declarations left out
+    /// of the link, so a change of the shape alone reads nothing again.
+    /// </summary>
     public const string Generated = "generated";
 
     /// <summary>A NUL in its first bytes, or a Git LFS pointer.</summary>
@@ -166,13 +169,17 @@ public static class CodeFileStates
     /// <summary>Larger than <c>codebaseGraph.maxFileBytes</c>.</summary>
     public const string TooLarge = "tooLarge";
 
-    /// <summary>Not UTF-8 or UTF-16 by its mark, or gone between its listing and its read.</summary>
+    /// <summary>
+    /// Not read, with why: neither UTF-8 nor UTF-16 by its mark; named in no UTF-8; gone, or changed, between its listing and
+    /// the end of its read; an I/O error; a content test that threw; or an implementation that threw on it or answered no
+    /// sound extract - a defect of that implementation, which <c>failOn: incomplete</c> fails on too.
+    /// </summary>
     public const string Unreadable = "unreadable";
 
     /// <summary>The implementations that claim it said yes several times, or none did.</summary>
     public const string Ambiguous = "ambiguous";
 
-    /// <summary>A link git records as one: listed, and not followed.</summary>
+    /// <summary>A link git records as one, or a path a link lies along on disk, a directory junction among them: listed, and not followed.</summary>
     public const string Link = "link";
 
     /// <summary>A submodule: listed, and not entered.</summary>

@@ -1,5 +1,6 @@
 using System.Text;
 using DssHarness.Core.Codebase;
+using DssHarness.Core.FileSystem;
 
 namespace DssHarness.Tests;
 
@@ -48,14 +49,14 @@ public sealed class CodeFileTextTests
     [Fact]
     public void ANulAmongTheFirstBytes_MakesAFileBinary_AndOnePastThemDoesNot()
     {
-        var inside = Enumerable.Repeat((byte)'a', CodeFileText.ProbeBytes + 10).ToArray();
-        inside[CodeFileText.ProbeBytes - 1] = 0;
+        var inside = Enumerable.Repeat((byte)'a', BinaryContent.Window + 10).ToArray();
+        inside[BinaryContent.Window - 1] = 0;
         Assert.Equal((null, CodeFileStates.Binary), Read(inside));
         Assert.Equal("a NUL among its first bytes", CodeFileText.Decode(inside).Why);
 
-        var past = Enumerable.Repeat((byte)'a', CodeFileText.ProbeBytes + 10).ToArray();
-        past[CodeFileText.ProbeBytes] = 0;
-        Assert.Equal(CodeFileText.ProbeBytes + 10, CodeFileText.Decode(past).Text?.Length);
+        var past = Enumerable.Repeat((byte)'a', BinaryContent.Window + 10).ToArray();
+        past[BinaryContent.Window] = 0;
+        Assert.Equal(BinaryContent.Window + 10, CodeFileText.Decode(past).Text?.Length);
     }
 
     /// <summary>UTF-8 is read with its mark or without, the mark not part of the text; an empty file is an empty text.</summary>
@@ -115,17 +116,17 @@ public sealed class CodeFileTextTests
         Assert.Equal(1, CodeFileText.LineIndex(string.Empty).LineAt(0));
     }
 
-    /// <summary>A probe is a text's first characters as near its first bytes as a text is cut, never inside a surrogate pair.</summary>
+    /// <summary>A probe is a decoded text's first characters, never cut inside a surrogate pair.</summary>
     [Fact]
     public void AProbe_IsTheTextsFirstCharacters_NeverInsideASurrogatePair()
     {
         Assert.Equal("short", CodeFileText.Probe("short"));
-        Assert.Equal(CodeFileText.ProbeBytes, CodeFileText.Probe(new string('a', CodeFileText.ProbeBytes * 2)).Length);
+        Assert.Equal(CodeFileText.ProbeCharacters, CodeFileText.Probe(new string('a', CodeFileText.ProbeCharacters * 2)).Length);
 
-        var split = new string('a', CodeFileText.ProbeBytes - 1) + "😀" + "tail";
+        var split = new string('a', CodeFileText.ProbeCharacters - 1) + "😀" + "tail";
         var probe = CodeFileText.Probe(split);
 
-        Assert.Equal(CodeFileText.ProbeBytes - 1, probe.Length);
+        Assert.Equal(CodeFileText.ProbeCharacters - 1, probe.Length);
         Assert.False(char.IsHighSurrogate(probe[^1]));
     }
 

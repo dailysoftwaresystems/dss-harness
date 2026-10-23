@@ -930,41 +930,6 @@ public sealed partial class GitClient(
         }
     }
 
-    public async Task<IReadOnlyList<GitIndexEntry>> ListIndexAsync(
-        string directory,
-        CancellationToken cancellationToken = default)
-    {
-        // -v is what shows the flags that hide an edit from status, and -z keeps every path intact.
-        var result = await RunAsync(
-            directory,
-            ["ls-files", "--stage", "-v", "-z"],
-            cancellationToken: cancellationToken).ConfigureAwait(false);
-
-        Ensure(result, "read the index");
-
-        var entries = new List<GitIndexEntry>();
-
-        foreach (var field in result.StandardOutput.Split('\0', StringSplitOptions.RemoveEmptyEntries))
-        {
-            // The tag, mode, object and stage, separated by spaces, then a tab and the path.
-            var tab = field.IndexOf('\t');
-            string[] parts = tab < 0 ? [] : field[..tab].Split(' ');
-
-            if (parts.Length != 4
-                || parts[0].Length != 1
-                || !int.TryParse(parts[3], NumberStyles.None, CultureInfo.InvariantCulture, out var stage))
-            {
-                throw new HarnessException(
-                    HarnessExit.CommandFailed,
-                    $"git listed an index entry in a form this build cannot read: '{field}'");
-            }
-
-            entries.Add(new GitIndexEntry(parts[0][0], parts[1], parts[2], stage, field[(tab + 1)..]));
-        }
-
-        return entries;
-    }
-
     public Task<string> GetIndexFileAsync(string directory, CancellationToken cancellationToken = default)
         => GitPathAsync(directory, "index", "find the index", cancellationToken);
 
