@@ -1417,6 +1417,40 @@ public sealed class MutationRegistryMergeTests
     }
 
     /// <summary>
+    /// A heading the agent's own text holds twice - again above a row of a new arm, under the same heading above it - stands
+    /// twice, as the agent wrote it, whatever the main tree did with the first: renamed alike where both held it, held with
+    /// no text both held, or moved above a new first arm of its own (the second was taken for the main tree's and dropped
+    /// without a word).
+    /// </summary>
+    [Fact]
+    public void AHeadingTheAgentsTextHoldsTwice_StandsTwice_WhateverTheMainTreeDidWithTheFirst()
+    {
+        string[] z = ["# the arms", "", A("z"), C("z")];
+        string[] a1 = [A("a1"), C("a1")];
+        string[] a2 = [A("a2"), C("a2")];
+        string[] a3 = [A("a3"), C("a3")];
+        string[] m = [A("m"), C("m")];
+
+        var renamedAgent = Text([.. z, "", "# R", "", .. a1, "", .. a2, "", "# R", "", .. a3]);
+        var renamed = Assert.IsType<RegistryMerge.Merged>(Merge(
+            Text([.. z, "", "# one", "", .. a1, "", .. a2]),
+            Text([.. z, "", "# R", "", .. a1, "", .. a2]),
+            renamedAgent));
+
+        var unheldAgent = Text([.. z, "", "# H", "", .. a1, "", .. a2, "", "# H", "", .. a3]);
+        var unheld = Assert.IsType<RegistryMerge.Merged>(Merge(null, Text([.. z, "", "# H", "", .. a1, "", .. a2]), unheldAgent));
+
+        var moved = Assert.IsType<RegistryMerge.Merged>(Merge(
+            Text([.. z, "", "# H", "", .. a1, "", .. a2]),
+            Text([.. z, "", "# H", "", .. m, "", .. a1, "", .. a2]),
+            Text([.. z, "", "# H", "", .. a1, "", .. a2, "", "# H", "", .. a3])));
+
+        Assert.Equal(Bytes(renamedAgent), renamed.Bytes);
+        Assert.Equal(Bytes(unheldAgent), unheld.Bytes);
+        Assert.Equal(Text([.. z, "", "# H", "", .. m, "", .. a1, "", .. a2, "", "# H", "", .. a3]), moved.Text);
+    }
+
+    /// <summary>
     /// Where new arms take the header from an old first arm on one side, that arm is not changed by the taking: an arm
     /// whose rows both sides reworded alike is no conflict, and the header the new arms took stands once (the same
     /// defect's second face: a false conflict on an arm whose lines were byte-equal on both sides) - above the new arm, as

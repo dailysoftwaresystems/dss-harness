@@ -4772,9 +4772,11 @@ nearest written above it, with only rows between, one the main tree wrote where 
 one both held there - is that one heading, written once, whether both held it elsewhere before or
 both renamed or added it alike, each above a new first arm of its own. Any other stands where the
 agent stood it: above a row the merged text stands anywhere else, though the main tree added one of
-the same lines elsewhere, and under a heading of the same lines the agent wrote or both held, which
-the agent's text then holds twice - so a merge in which the main tree changed nothing still gives
-the agent's headings as it wrote them. A heading taken for a
+the same lines elsewhere; under a heading of the same lines the agent wrote or both held; and
+wherever the agent's own text holds a heading of the same lines nearest above it - each a heading
+the agent's text holds twice, whatever the main tree did with the first: renamed it alike, held it
+with no text both held, or moved it above a new first arm of its own - so a merge in which the main
+tree changed nothing still gives the agent's headings as it wrote them. A heading taken for a
 place no segment of the merged text stands in - its
 row dropped by one side, the heading kept or changed by the other - would be read back as part of
 what stands below it, and is a conflict of its own (`ArmConflictKind.HeadsNoArm`). A segment of an

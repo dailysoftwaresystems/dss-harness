@@ -411,12 +411,13 @@ public abstract record RegistryMerge
 /// the main tree wrote where it stands, never one both held there - is that heading, whether both held it elsewhere
 /// before or both renamed or added it alike, each above a new first arm of its own: it is not written again. Any other
 /// stands where the agent stood it: above a row the result stands anywhere else, though the main tree added one of the
-/// same lines elsewhere, and under a heading of the same lines the agent wrote or both held, which the agent's text then
-/// holds twice. A heading taken for a place no segment of the result stands in is a conflict of its own
-/// (<see cref="ArmConflictKind.HeadsNoArm"/>). The segment that comes to
-/// stand first is written without the blank lines that open it. Each of the main tree's lines is written as the main tree
-/// holds it, each of the agent's with the ending of the main tree's first line, behind a byte order mark where the main
-/// tree's text has one and ending with a line ending where it does.
+/// same lines elsewhere; under a heading of the same lines the agent wrote or both held; and wherever the agent's own text
+/// holds a heading of the same lines nearest above it - each a heading the agent's text holds twice, whatever the main
+/// tree did with the first. A heading taken for a place no segment of the result stands in is a conflict of its own
+/// (<see cref="ArmConflictKind.HeadsNoArm"/>). The segment that comes to stand first is written without the blank lines
+/// that open it. Each of the main tree's lines is written as the main tree holds it, each of the agent's with the ending
+/// of the main tree's first line, behind a byte order mark where the main tree's text has one and ending with a line
+/// ending where it does.
 /// </para>
 /// <para>
 /// So a text merged with itself is itself, and a merge in which the agent changed nothing is the main tree's text,
@@ -883,8 +884,10 @@ public static class MutationRegistryMerge
         /// one heading is written once, where the main tree stands it; whether both held it elsewhere before is no part of
         /// it, and one both renamed or added alike is as much one heading as one both held. Any other stands where the
         /// agent stood it, as any heading added at a place does: above a row the result stands under another heading or
-        /// none, though the main tree added one of the same lines elsewhere; and where the nearest heading above is one
-        /// the agent wrote, or one both held there, it is the agent's text that holds the heading twice.
+        /// none, though the main tree added one of the same lines elsewhere; under one the agent wrote, or one both held
+        /// there; and wherever the agent's own text holds a heading of those lines nearest above its own - the agent wrote
+        /// it twice, whatever the main tree did with the first: renamed it alike, held it with no text both held, or moved
+        /// it above a new first arm of its own.
         /// </summary>
         private void Join()
         {
@@ -906,7 +909,8 @@ public static class MutationRegistryMerge
                     && headings[Place(above)] == Taken.Main
                     && mains.HeadedAt(Place(above)) is { } theirs
                     && !Same(held?.HeadedAt(Place(above))?.Heading, theirs.Heading)
-                    && Same(theirs.Heading, Heading(place)))
+                    && Same(theirs.Heading, Heading(place))
+                    && !Same(agents.HeadingAbove(agents.HeadedAt(place)!), theirs.Heading))
                 {
                     _written.Remove(place);
                     _joined.Add(place);
@@ -1224,6 +1228,11 @@ public static class MutationRegistryMerge
 
         /// <summary>The segments naming <paramref name="arm"/>, in order, ids compared ignoring case; <see langword="null"/> where none does.</summary>
         public IReadOnlyList<Segment>? Arm(string arm) => _arms.GetValueOrDefault(arm);
+
+        /// <summary>The nearest heading this text holds above <paramref name="segment"/>'s own; <see langword="null"/> where it holds none above it.</summary>
+        /// <param name="segment">One of this text's segments.</param>
+        public IReadOnlyList<Line>? HeadingAbove(Segment segment)
+            => Segments.Take(segment.At).LastOrDefault(above => above.Heading.Count > 0)?.Heading;
 
         /// <summary>The segment standing at <paramref name="place"/> where a heading stands above it; <see langword="null"/> where none does.</summary>
         /// <param name="place">An arm and a place among its segments (<see cref="Place(string, int)"/>).</param>
