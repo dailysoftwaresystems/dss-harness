@@ -230,10 +230,16 @@ public sealed record FlowStepRecord(
             : Enum.GetValues<FlowFailure>().Where(value => string.Equals(NameOf(value), Failure, StringComparison.Ordinal)).Cast<FlowFailure?>().FirstOrDefault()
                 ?? throw new InvalidOperationException($"'{Failure}' is not where a failure leaves the run: {string.Join(", ", Failures)}.");
 
-    /// <summary>What is wrong with this record; null when nothing is.</summary>
+    /// <summary>
+    /// What is wrong with this record; null when nothing is. The agent it works in and the one it makes are held to the
+    /// one rule of agents' names, for each names a directory of the run - the step's own, its handoff's - as a fold's
+    /// record and a target's are.
+    /// </summary>
     public string? Problem()
         => !FlowInstanceId.IsWellFormed(Instance) ? $"'{Instance}' is not an instance id"
             : string.IsNullOrWhiteSpace(Step) ? "it names no step"
+            : Agent is not null && OrchestrationRules.NameProblem(Agent) is { } agent ? $"its agent: {agent}"
+            : Made is not null && OrchestrationRules.NameProblem(Made) is { } made ? $"the agent it makes: {made}"
             : !FlowRecordNames.Is<FlowInstanceState>(State) ? $"'{State}' is not an instance state"
             : Attempt < 1 ? $"its attempt is {Attempt.ToString(CultureInfo.InvariantCulture)}, and the first is 1"
             : Visit < 1 ? $"its visit is {Visit.ToString(CultureInfo.InvariantCulture)}, and the first is 1"

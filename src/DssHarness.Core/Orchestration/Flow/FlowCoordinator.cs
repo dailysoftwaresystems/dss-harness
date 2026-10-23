@@ -287,11 +287,13 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
     internal readonly List<FlowClaim> HeldClaims = [];
 
     /// <summary>
-    /// What an attempt that ended while its runner still ran - its drain's bound passed - claimed, with that attempt: held
-    /// until its runner answers, so nothing that conflicts with what the runner may still write is admitted meanwhile, a
-    /// later attempt of the step itself among it. Null where no runner outlived its attempt.
+    /// What each attempt that ended while its runner still ran - its drain's bound passed - claimed, by that attempt: each
+    /// held until its own runner answers, so nothing that conflicts with what that runner may still write is admitted
+    /// meanwhile, a later attempt of the step itself among it. A step of <c>others</c> may have more than one - one for
+    /// each target whose runner outlived its turn - and the answer of one gives back its own alone. Empty where no runner
+    /// outlived its attempt.
     /// </summary>
-    internal (int Attempt, IReadOnlyList<FlowClaim> Claims)? Lingering;
+    internal readonly List<(int Attempt, IReadOnlyList<FlowClaim> Claims)> Lingering = [];
 
     internal readonly HashSet<string> LegsInCopies = [];
     internal readonly HashSet<string> LegsInTree = [];
@@ -934,7 +936,7 @@ public sealed class FlowCoordinator
 
                 // A step that waits on a claim a runner that outlived its attempt still holds waits for that runner's
                 // answer, which gives it back: it is never failed as stalled over a claim that will be freed.
-                if (_created.Any(instance => instance.Lingering is not null) && AdmissionWalk().Any(decision => decision.WaitsOn.Contains("claim")))
+                if (_created.Any(instance => instance.Lingering.Count > 0) && AdmissionWalk().Any(decision => decision.WaitsOn.Contains("claim")))
                 {
                     await WaitNextAsync(cancellationToken).ConfigureAwait(false);
                     continue;
@@ -2652,7 +2654,7 @@ public sealed class FlowCoordinator
         var running = _created.Where(instance => instance.State is FlowInstanceState.Running && !instance.Step.IsGroup).ToList();
 
         // What runs holds its claims, and so does a runner that outlived its attempt until it answers.
-        var held = running.SelectMany(instance => instance.HeldClaims).Concat(_created.SelectMany(instance => instance.Lingering?.Claims ?? [])).ToList();
+        var held = running.SelectMany(instance => instance.HeldClaims).Concat(_created.SelectMany(instance => instance.Lingering.SelectMany(lingering => lingering.Claims))).ToList();
         var reserved = new List<FlowClaim>();
         var decisions = new List<Admission>();
 
@@ -4729,24 +4731,24 @@ public sealed class FlowCoordinator
     {
         if (instance.HeldClaims.Count > 0)
         {
-            instance.Lingering = (instance.Attempt, [.. instance.HeldClaims, .. instance.Lingering?.Claims ?? []]);
+            instance.Lingering.Add((instance.Attempt, [.. instance.HeldClaims]));
             instance.HeldClaims.Clear();
         }
     }
 
     /// <summary>
-    /// Gives back what an attempt kept held past its end, where <paramref name="message"/> is its runner's answer: the
-    /// runner has ended, and writes nothing more. Whether it was such an answer.
+    /// Gives back what the attempt <paramref name="message"/> answers for kept held past its end, where it is that
+    /// attempt's runner's answer: that runner has ended, and writes nothing more. What another attempt's runner still
+    /// holds stays held. Whether it was such an answer.
     /// </summary>
     private static bool Outlived(Message message)
     {
-        if (message is not { Result: not null, Instance.Lingering: { } lingering } || lingering.Attempt != message.Attempt)
+        if (message is not { Result: not null, Instance: { } instance })
         {
             return false;
         }
 
-        message.Instance.Lingering = null;
-        return true;
+        return instance.Lingering.RemoveAll(lingering => lingering.Attempt == message.Attempt) > 0;
     }
 
     /// <summary>
