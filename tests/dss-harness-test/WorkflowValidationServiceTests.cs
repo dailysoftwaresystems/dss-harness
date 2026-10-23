@@ -1318,7 +1318,8 @@ public sealed class WorkflowValidationServiceTests
             repository.Harness.ContextLoader,
             fileSystem ?? repository.Harness.FileSystem,
             repository.Harness.Platform,
-            new DssHarness.Core.Secrets.AgentKeyStore(fileSystem ?? repository.Harness.FileSystem, repository.Harness.FilePermissions, repository.Harness.Platform));
+            new DssHarness.Core.Secrets.AgentKeyStore(fileSystem ?? repository.Harness.FileSystem, repository.Harness.FilePermissions, repository.Harness.Platform),
+            DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild);
 
     /// <summary>
     /// A repository of one commit whose config declares the workflows asked for, with the default's files written where

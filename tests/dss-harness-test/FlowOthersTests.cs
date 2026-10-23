@@ -627,4 +627,16 @@ public sealed class FlowOthersTests
             }
         }
     }
+
+    /// <summary>A graph step reads the main tree, and - where its <c>in</c> names an agent - that agent's tree too.</summary>
+    [Fact]
+    public void AGraphStep_ReadsTheMainTree_AndTheTreeItsInNames()
+    {
+        var main = new WorkflowStep { Name = "map", Type = "graphify-codebase" };
+        var agents = main with { In = "make" };
+
+        Assert.Equal([new FlowClaim(FlowClaims.Main, FlowClaimKind.Read)], FlowClaims.Of(main, new Facts()));
+        Assert.Equal([new FlowClaim(FlowClaims.Main, FlowClaimKind.Read), new FlowClaim("a4", FlowClaimKind.Read)], FlowClaims.Of(agents, new Facts(), "a4"));
+        Assert.Equal([new FlowClaim(FlowClaims.Main, FlowClaimKind.Read), new FlowClaim("make", FlowClaimKind.Read)], FlowClaims.Of(agents, new Facts(), agent: null));
+    }
 }

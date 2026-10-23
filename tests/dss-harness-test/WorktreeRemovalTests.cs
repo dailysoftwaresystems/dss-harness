@@ -1460,6 +1460,15 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
             return inner.ListNamesAsync(directory, arguments, Token(cancellationToken));
         });
 
+    public Task<IReadOnlyList<GitListedFile>> ListIndexedFilesAsync(string directory, CancellationToken cancellationToken = default)
+        => Call(() => inner.ListIndexedFilesAsync(directory, Token(cancellationToken)));
+
+    public Task<IReadOnlyList<GitWorkingFile>> ListWorkingFilesAsync(string directory, CancellationToken cancellationToken = default)
+        => Call(() => inner.ListWorkingFilesAsync(directory, Token(cancellationToken)));
+
+    public Task<IReadOnlyList<string>> HashWorkingFilesAsync(string directory, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
+        => Call(() => inner.HashWorkingFilesAsync(directory, paths, Token(cancellationToken)));
+
     /// <summary>
     /// An answer to give once the call's own token is in hand, or <see langword="null"/> to run the
     /// command: a stand-in for a git that hangs until it is stopped.

@@ -3116,7 +3116,7 @@ public sealed class FlowCoordinator
     {
         DisarmTimeLimit(instance);
 
-        if (instance.Step.TimeoutMinutes is not { } minutes)
+        if (WorkflowStepTypes.TimeLimitOf(instance.Step) is not { } minutes)
         {
             return;
         }
@@ -3174,7 +3174,7 @@ public sealed class FlowCoordinator
 
     /// <summary>What a step that passed its time limit says of its ending.</summary>
     private static string PastTimeLimitError(FlowInstance instance)
-        => $"passed its timeoutMinutes ({instance.Step.TimeoutMinutes?.ToString(System.Globalization.CultureInfo.InvariantCulture)})";
+        => $"passed its timeoutMinutes ({WorkflowStepTypes.TimeLimitOf(instance.Step)?.ToString(System.Globalization.CultureInfo.InvariantCulture)}{(instance.Step.TimeoutMinutes is null ? ", its type's" : string.Empty)})";
 
     /// <summary>
     /// Raises the triage of the issues <paramref name="reporter"/>'s record holds owed, and then writes them raised: a

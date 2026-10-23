@@ -2,9 +2,11 @@ using System.Globalization;
 using System.Text;
 using DssHarness.Core.Ci;
 using DssHarness.Core.Anchors;
+using DssHarness.Core.Codebase;
 using DssHarness.Core.Build;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
+using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Legs;
@@ -62,6 +64,7 @@ public static class HelpTopics
         new("worktrees", ["worktree"], "Naming rules, the path budget, and when deleting refuses", RenderWorktrees),
         new("orchestrators", ["orchestrator", "agents", "agent"], "Orchestrators, their agents, and folding an agent's work", RenderOrchestrators),
         new("workflows", ["workflow"], "Workflow definitions: what config.json declares and the yml file defines", RenderWorkflows),
+        new("codebase-graph", ["graph", "graphify-codebase"], "A run's map of the repository: what it reads, and what it does not see", RenderCodebaseGraph),
         new("agent-clients", ["clients", "models"], "Providers, models, tiers and keys in config.json", RenderAgentClients),
         new("anchors", ["anchor"], "Anchor registries and the commands that change them", RenderAnchors),
         new("layout", [], "What init creates, and what git tracks", RenderLayout),
@@ -2804,6 +2807,10 @@ public static class HelpTopics
                 ($"  {OrchestratorLayout.FoldsFileName}", "the ledger of the run's folds: each path a fold means to write, what the main tree held there before it and what it left"),
                 ($"  <step>/{OrchestratorLayout.StepFoldFileName}", "a fold, delete-agent, refresh or rebase step: what its dry run named and stood, the question it asked, each consent given by name, how its apply ended"),
                 ($"  <step>/{OrchestratorLayout.StepTargetsDirectoryName}/<agent>/", "a refresh or a rebase of others: what it did to each target, as above"),
+                ($"  {OrchestratorLayout.GraphDirectoryName}/{OrchestratorLayout.GraphManifestFileName}", "the run's codebase graph: the main checkout's manifest, every file it keeps with its blob, state and extract ('help codebase-graph')"),
+                ($"  {OrchestratorLayout.GraphDirectoryName}/{OrchestratorLayout.GraphSymbolsFileName}", "the graph's link result: every node and edge, with the digest of the manifest it was made from"),
+                ($"  {OrchestratorLayout.GraphDirectoryName}/{OrchestratorLayout.GraphExtractsDirectoryName}/<ab>/<name>", "one file's extract, written once, named by its blob, its path, its implementation and version"),
+                ($"  {OrchestratorLayout.GraphDirectoryName}/{OrchestratorLayout.GraphSyncFileName}", "one line for each sync of the graph"),
                 ($"  {OrchestratorLayout.PreExistingIssuesFileName}", "each pre-existing issue the run listed, proven"),
                 ($"  {OrchestratorLayout.EventsFileName}", "the run's history, one event to a line, written after the state it tells of"),
                 ($"  {OrchestratorLayout.ReportFileName}, {OrchestratorLayout.ReportJsonFileName}", "the report of the run's last session"),
@@ -3214,8 +3221,112 @@ public static class HelpTopics
             + "left below its directory, nor any directory holding a .git of its own that git records no worktree at - until then "
             + $"it refuses ({HarnessExit.Refused}), naming each - and the evidence, transcripts, steps and sessions its agents "
             + "kept, whatever their kind or state, only with --delete-evidence; an agent with no worktree holds nothing but "
-            + "records, and goes with it, deleted or not. It "
+            + "records, and goes with it, deleted or not, and a run's codebase graph - made from the tree, and made again whenever "
+            + "asked - goes with it and is never counted among what --delete-evidence guards. It "
             + "removes the record last, so one that stops part way finishes when run again.");
+
+        return builder.ToString();
+    }
+
+    private static string RenderCodebaseGraph()
+    {
+        var builder = new StringBuilder();
+        var extractors = CodeGraphExtractors.OfThisBuild;
+
+        builder.AppendLine("Codebase graph");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "A run's graphify-codebase step maps the repository and keeps the map in the run's directory, "
+            + $"{HarnessLayout.OrchestratorsDirectoryName}/<run>/{OrchestratorLayout.GraphDirectoryName}/: every file the tree lists is a node, "
+            + "and each file an implementation reads gives the declarations in it - namespaces, types, members, a document's "
+            + "sections - each with its lines, its header on one line and the first sentence the code writes of itself, and the "
+            + $"directed edges between them, each of one kind: {string.Join("; ", CodeEdgeKinds.Described.Select(described => $"{described.Kind}, {described.Meaning}"))}. "
+            + $"An edge says how sure it is: {CodeConfidences.Exact} where the code itself says where to look, "
+            + $"{CodeConfidences.Unique} where one declaration has that name and arity, {CodeConfidences.Candidates} where two to "
+            + $"{CodeConfidences.MostCandidates} do, an edge to each and none picked; a name with more is counted unresolved, and one "
+            + "the repository does not declare is counted external. No model writes any of it: every node and edge is read from "
+            + "a file by a program.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "What it reads. The main checkout as it stands - its HEAD and whatever is uncommitted in it - listed by three calls of "
+            + "git that take no lock: ls-files, status and hash-object, so a file git ignores is not in it; a path git keeps out of "
+            + "the checkout - a sparse checkout's, or one marked skip-worktree - is in it where its file is there, read as it stands, "
+            + "and a repository inside the tree that git lists whole is not entered. Each file is read by "
+            + "the one implementation that claims it: by its exact name, else by its extension, else by the fallback, which lists "
+            + "it; where two claim one file their tests of its first bytes decide, and a file both or neither says is theirs is "
+            + "listed ambiguous. A sync reads a file again only where its blob, the implementation that claims it, that "
+            + "implementation's version, or what maxFileBytes or languages decide of it changed, or where its extract is gone; a "
+            + "file it could not read is tried again at every sync, and every other file keeps its extract. A run with no graph "
+            + "yet starts from the newest earlier run's. Every graphify-codebase step of a run syncs the one graph, wherever the "
+            + "flow puts it - each instance, visit and retry one more sync, and a sync of a tree that did not change reading "
+            + "nothing but what it could not read before.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "What it does not see. The credential slots and the tool's own state are never listed, so never served. A file "
+            + $"with a NUL among its first {BinaryContent.Window.ToString("N0", CultureInfo.InvariantCulture)} bytes - git's own window - or a Git LFS pointer, is {CodeFileStates.Binary}; one over "
+            + $"codebaseGraph.maxFileBytes is {CodeFileStates.TooLarge}; one that is neither UTF-8 nor UTF-16 by its mark is "
+            + $"{CodeFileStates.Unreadable}, with why; a link is listed and not followed; a submodule is listed and not entered. "
+            + "Generated code is kept, marked and ranked after everything else, or - under generated: exclude - listed with its "
+            + "declarations left out. What a program cannot bind by reading the code - reflection, a call a macro writes, a call "
+            + "through a pointer, what dependency injection hands in - is no edge; an interface's call reaches each implementation "
+            + "through a dispatches edge.");
+        builder.AppendLine();
+        builder.AppendLine("The implementations this build holds, each with what it reads and what it does not see:");
+        builder.AppendLine();
+
+        foreach (var extractor in extractors.All)
+        {
+            var claims = extractor.Claims.Fallback
+                ? "every file no other claims"
+                : string.Join(", ", extractor.Claims.Names.Concat(extractor.Claims.Extensions).Select(claim => claim.Value + (claim.ContentTest is null ? string.Empty : " (by a test of its first bytes)")));
+
+            builder.AppendLine($"  {extractor.Language} (version {extractor.Version.ToString(CultureInfo.InvariantCulture)}; {claims})");
+            AppendWrapped(builder, $"    reads {extractor.Help.Reads}.");
+
+            foreach (var unseen in extractor.Help.DoesNotSee)
+            {
+                AppendWrapped(builder, $"    does not see {unseen}.");
+            }
+
+            builder.AppendLine();
+        }
+
+        AppendWrapped(
+            builder,
+            "The workflow's codebaseGraph shapes the run's one graph, said once for the run since every graphify-codebase step "
+            + $"syncs the same graph; codebaseGraph.languages names the implementations used - {string.Join(", ", extractors.Languages)} - and "
+            + "a file whose claimant is left out is listed by the fallback:");
+        builder.AppendLine();
+        AppendKeys(builder, WorkflowKeys.CodebaseGraph);
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "The graph's files, under its directory: "
+            + $"{OrchestratorLayout.GraphManifestFileName}, the manifest of the main checkout - every file it keeps, with its blob, "
+            + $"its state and its extract; {OrchestratorLayout.GraphSymbolsFileName}, the link result - every node with its handle, every "
+            + $"edge - made again where it does not match its manifest; {OrchestratorLayout.GraphExtractsDirectoryName}/<ab>/<blob>-<path>.<language>-<version>.json, "
+            + "one file's extract, written once and named by its blob, its path, its implementation and version; and "
+            + $"{OrchestratorLayout.GraphSyncFileName}, one line for each sync. Each is written whole, an extract before the manifest "
+            + "that names it, so a sync that stops part way leaves the last whole manifest, and every sync removes each extract its "
+            + "manifest does not name; a manifest that does not read is built again whole, and never guessed at, and a link result "
+            + "linked by another build's linker is linked again, no file read again. delete-orchestrator removes the graph with its run, and never counts it among what "
+            + "--delete-evidence guards: it is made from the tree, and made again whenever asked.");
+        builder.AppendLine();
+        var answers = System.Text.Json.Nodes.JsonNode.Parse(WorkflowStepTypes.Find("graphify-codebase")!.Output!)!["properties"]!.AsObject().Select(member => member.Key).ToList();
+
+        AppendWrapped(
+            builder,
+            $"A graphify-codebase step answers {string.Join(", ", answers)}: languages gives each implementation's files and nodes, "
+            + "and skipped every file the graph holds no declaration of, with its state and why. A graph is a map, never red: a file it could not read leaves the step done, listing it, "
+            + $"unless the step says failOn: {WorkflowStepTypes.GraphIncomplete}, which fails it ({HarnessExit.CommandFailed}) naming each. git not "
+            + $"answering fails it ({HarnessExit.ToolMissing}), and so does a time limit passed ({HarnessExit.Incomplete}; "
+            + $"{WorkflowStepTypes.Find("graphify-codebase")!.DefaultTimeoutMinutes} minutes where it says no timeoutMinutes). Its extraction "
+            + $"runs in the engine's process on one of every {CodebaseGraphService.ReadShare} of the machine's processors, so a build beside it is not starved; it "
+            + "runs no leg and counts against no limit. A step that names an agent's worktree with in is refused when its workflow "
+            + $"is checked: {WorkflowStepTypes.GraphViewsLater}.");
 
         return builder.ToString();
     }
@@ -3291,7 +3402,8 @@ public static class HelpTopics
             + $"other runs again as an incomplete step does; one whose runner does not end within {PointOfNoReturn.SafePauseDrain.TotalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} s "
             + "of that stop fails all the same, goes to what handles its failure and is not retried. A reasoning step's handoff turn at a "
             + "pause is bounded by handoffSeconds, not by this. A ci-wait's is always more than its waitMinutes (absent, "
-            + $"{WorkflowStep.DefaultWaitMinutes}); a group and a pause step take none, running nothing of their own.");
+            + $"{WorkflowStep.DefaultWaitMinutes}); a group and a pause step take none, running nothing of their own; a type whose step "
+            + "has a limit of its own where it says none says so beside its name below.");
         builder.AppendLine();
         builder.AppendLine("An issue a reasoning step meets that was there before the run, it reports in its answer");
         builder.AppendLine($"(preExisting) and never fixes itself; onPreExisting names the step of the flow's top level");
@@ -3356,7 +3468,13 @@ public static class HelpTopics
         foreach (var type in WorkflowStepTypes.All)
         {
             // orient takes nothing beyond the common keys: its line stands alone.
-            builder.AppendLine($"  {type.Type}{(type.IsCheck ? $" (a check; failOn {type.FailOnDefault} by default)" : string.Empty)}");
+            var said = new[]
+            {
+                type.IsCheck ? $"a check; failOn {type.FailOnDefault} by default" : null,
+                type.DefaultTimeoutMinutes is { } minutes ? $"timeoutMinutes {minutes.ToString(CultureInfo.InvariantCulture)} by default" : null,
+            }.OfType<string>().ToList();
+
+            builder.AppendLine($"  {type.Type}{(said.Count > 0 ? $" ({string.Join("; ", said)})" : string.Empty)}");
             builder.AppendLine();
 
             if (type.Keys.Count > 0)
@@ -3380,6 +3498,8 @@ public static class HelpTopics
             + "ctest is given -LE more than once, a test is left out only where it matches every one); "
             + "dirtyPaths, every path git status names; openAgents, each agent that counts against its run's open-agent limit, of every orchestrator of the "
             + "repository, as {run, agent}; and inFlight, who holds the main tree now, each as a held-now line says it. "
+            + "graphify-codebase syncs the run's one codebase graph with the main checkout, reading only what changed, and answers "
+            + "what it kept, read, reused and removed and what it could not read ('help codebase-graph'). "
             + $"validate-plan checks the work items its items yields and answers ok, problems and the items, never a failure: at "
             + $"least one item and at most {PlanValidator.MostItems}; each with a name in lowercase letters, digits and single "
             + "hyphens, used once, ownedPaths, forbiddenPaths and the lists reuses, creates and replaces - an item without them is of "

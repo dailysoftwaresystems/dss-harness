@@ -23,6 +23,7 @@ public sealed class WorkflowStepTypesTests
         Assert.Equal(
             [
                 ("orient", "OrientRunner: FlowCheckout over IGitClient and GitRemotes, LegSelection.Resolve, TestInvocationResolver, AnchorCitationService.RootsOf, CiSettings.Unset, MutationService.Declares, OrchestrationRules.OpenAgents, TreeHolders"),
+                ("graphify-codebase", "GraphifyCodebaseRunner: ICodebaseGraphService.SyncAsync over IGitClient, CodeGraphExtractors and CodeGraphLinker, through OrchestrationStore"),
                 ("reason", "IAgentClient; a read-only one that begins work first makes its agent (IAgentService.CreateAsync, no worktree)"),
                 ("build", "BuildStepRunner: IBuildLegs over LegRunService"),
                 ("test", "TestStepRunner: ITestLegs over LegRunService"),
@@ -55,6 +56,7 @@ public sealed class WorkflowStepTypesTests
         Assert.Equal(
             [
                 ("orient", "read main"),
+                ("graphify-codebase", "read main, read the agent's tree where in names one"),
                 ("reason", "read main, write the agent's tree where its access is write"),
                 ("build", "run(tree)"),
                 ("test", "run(tree)"),
@@ -91,6 +93,7 @@ public sealed class WorkflowStepTypesTests
         Assert.Equal(
             [
                 ("orient", null),
+                ("graphify-codebase", null),
                 ("reason", "maxReasoningAgents"),
                 ("build", "maxParallelProcesses"),
                 ("test", "maxParallelProcesses"),
@@ -155,6 +158,7 @@ public sealed class WorkflowStepTypesTests
         Assert.Equal(
             [
                 ("orient", "branch, baseBranch, startCommit, hasRemote, hasLegs, legCount, anchors, ciConfigured, hasMutations, tests, dirtyPaths, openAgents, inFlight"),
+                ("graphify-codebase", "graph, view, commit, dirty, files, extracted, reused, removed, nodes, edges, languages, skipped, seconds"),
                 ("reason", null),
                 ("build", "passed, exitCode, verdicts, red, runDirectory"),
                 ("test", "passed, exitCode, verdicts, red, runDirectory"),
@@ -255,5 +259,17 @@ public sealed class WorkflowStepTypesTests
         Assert.All(
             typed.Where(pair => !KeyDescription.Names(WorkflowStepTypes.Running).Contains(pair.Key, StringComparer.Ordinal)),
             pair => Assert.Contains($"{pair.Type}.{pair.Key}", listed));
+    }
+
+    /// <summary>A step's time limit is its own timeoutMinutes, else its type's where the type has one, else none.</summary>
+    [Fact]
+    public void AStepsTimeLimit_IsItsOwn_ElseItsTypes_ElseNone()
+    {
+        Assert.Equal(30, WorkflowStepTypes.TimeLimitOf(new WorkflowStep { Name = "map", Type = "graphify-codebase" }));
+        Assert.Equal(5, WorkflowStepTypes.TimeLimitOf(new WorkflowStep { Name = "map", Type = "graphify-codebase", TimeoutMinutes = 5 }));
+        Assert.Null(WorkflowStepTypes.TimeLimitOf(new WorkflowStep { Name = "compile", Type = "build" }));
+        Assert.Equal(7, WorkflowStepTypes.TimeLimitOf(new WorkflowStep { Name = "compile", Type = "build", TimeoutMinutes = 7 }));
+        Assert.Null(WorkflowStepTypes.TimeLimitOf(new WorkflowStep { Name = "group" }));
+        Assert.Equal(["graphify-codebase"], WorkflowStepTypes.All.Where(type => type.DefaultTimeoutMinutes is not null).Select(type => type.Type));
     }
 }

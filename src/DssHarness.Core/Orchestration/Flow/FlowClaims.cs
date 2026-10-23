@@ -91,6 +91,9 @@ public static class FlowClaims
                 case "read main":
                     claims.Add(new(Main, FlowClaimKind.Read));
                     break;
+                case "read the agent's tree where in names one" when step.In is not null && tree is not null:
+                    claims.Add(new(tree, FlowClaimKind.Read));
+                    break;
                 case "write main":
                     claims.Add(new(Main, FlowClaimKind.Write));
                     break;

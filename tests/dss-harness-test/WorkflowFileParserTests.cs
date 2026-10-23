@@ -246,7 +246,7 @@ public sealed class WorkflowFileParserTests
             """);
 
         Assert.Equal(
-            ["line 2, column 1: 'maximReasoningAgents' is not a key of the file's top level. Known: 'name', 'description', 'maxReasoningAgents', 'maxParallelProcesses', 'maxOpenAgents', 'maxRetries', 'backoffSeconds', 'maxInstances', 'pushCheckpoints', 'handoffSeconds', 'budget', 'recommendations', 'advisor', 'reporter', 'amend', 'answers', 'inputs', 'params', 'outputs', 'steps', 'recover'."],
+            ["line 2, column 1: 'maximReasoningAgents' is not a key of the file's top level. Known: 'name', 'description', 'maxReasoningAgents', 'maxParallelProcesses', 'maxOpenAgents', 'maxRetries', 'backoffSeconds', 'maxInstances', 'pushCheckpoints', 'handoffSeconds', 'budget', 'recommendations', 'advisor', 'reporter', 'amend', 'answers', 'inputs', 'params', 'outputs', 'steps', 'recover', 'codebaseGraph'."],
             problems);
     }
 
@@ -542,7 +542,7 @@ public sealed class WorkflowFileParserTests
             """);
 
         Assert.Equal(
-            ["line 4, column 11: 'tests' is not a step type. Known: 'orient', 'reason', 'build', 'test', 'run', 'check-mutations', 'create-agent', 'fold', 'delete-agent', 'refresh', 'rebase', 'validate-plan', 'anchor-balance', 'anchor-citations', 'ci-read', 'ci-wait', 'commit', 'push', 'pull-request', 'pause'."],
+            ["line 4, column 11: 'tests' is not a step type. Known: 'orient', 'graphify-codebase', 'reason', 'build', 'test', 'run', 'check-mutations', 'create-agent', 'fold', 'delete-agent', 'refresh', 'rebase', 'validate-plan', 'anchor-balance', 'anchor-citations', 'ci-read', 'ci-wait', 'commit', 'push', 'pull-request', 'pause'."],
             problems);
     }
 
@@ -1179,5 +1179,91 @@ public sealed class WorkflowFileParserTests
                       new: 'draft.rows'
                       settled: ['{input.settled}']
                 """));
+    }
+
+    /// <summary>
+    /// A workflow's codebaseGraph is read as written - each list kept as given, an empty one too, for the check to say
+    /// what it means - and refused where it is not a mapping, names a key it has not, or gives a value of the wrong shape.
+    /// </summary>
+    [Fact]
+    public void ACodebaseGraph_IsReadAsWritten_AndRefusedInTheWrongShape()
+    {
+        var read = Parse("""
+            name: flow
+            codebaseGraph:
+              include: ["src/**"]
+              exclude: []
+              languages: [markdown]
+              maxFileBytes: 8192
+              generated: exclude
+              mapTokens: 900
+            steps:
+              - name: map
+                type: graphify-codebase
+                rebuild: true
+            """)!;
+
+        Assert.Equal(["src/**"], read.CodebaseGraph!.Include!);
+        Assert.Empty(read.CodebaseGraph.Exclude!);
+        Assert.Equal(["markdown"], read.CodebaseGraph.Languages!);
+        Assert.Equal((8192, "exclude", 900), (read.CodebaseGraph.MaxFileBytes, read.CodebaseGraph.Generated, read.CodebaseGraph.MapTokens));
+        Assert.True(read.Steps[0].Rebuild);
+        Assert.Equal((8192L, true, 900), (read.CodebaseGraph.Shape.MaxFileBytes, read.CodebaseGraph.Shape.ExcludeGenerated, read.CodebaseGraph.Shape.MapTokens));
+
+        Assert.Single(Problems("""
+            name: flow
+            codebaseGraph: [src]
+            steps:
+              - name: map
+                type: graphify-codebase
+            """), problem => problem.EndsWith("'codebaseGraph' is not a mapping of keys.", StringComparison.Ordinal));
+
+        Assert.Contains(Problems("""
+            name: flow
+            codebaseGraph:
+              includes: ["src/**"]
+            steps:
+              - name: map
+                type: graphify-codebase
+            """), problem => problem.Contains("includes", StringComparison.Ordinal) && problem.Contains("include", StringComparison.Ordinal));
+
+        Assert.Contains(Problems("""
+            name: flow
+            codebaseGraph:
+              maxFileBytes: lots
+            steps:
+              - name: map
+                type: graphify-codebase
+                rebuild: often
+            """), problem => problem.Contains("rebuild", StringComparison.Ordinal));
+    }
+
+    /// <summary>A step's failOn takes its own type's values: incomplete is a graph step's, and a build's is refused it.</summary>
+    [Fact]
+    public void AStepsFailOn_TakesItsTypesValues()
+    {
+        Assert.Equal("incomplete", Parse("""
+            name: flow
+            steps:
+              - name: map
+                type: graphify-codebase
+                failOn: incomplete
+            """)!.Steps[0].FailOn);
+
+        Assert.Contains("'compile.failOn' is 'incomplete', which is none of 'red', 'never'.", Problems("""
+            name: flow
+            steps:
+              - name: compile
+                type: build
+                failOn: incomplete
+            """));
+
+        Assert.Contains("'map.failOn' is 'red', which is none of 'incomplete', 'never'.", Problems("""
+            name: flow
+            steps:
+              - name: map
+                type: graphify-codebase
+                failOn: red
+            """));
     }
 }

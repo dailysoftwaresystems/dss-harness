@@ -16,7 +16,7 @@ Implemented today: `init`, `verify-git`, `create-worktree`, `delete-worktree`,
 `list-worktree`, the orchestrator commands (`create-orchestrator`, `delete-orchestrator`,
 `list-orchestrator`, `create-agent`, `seed-agent`, `refresh-agent`, `rebase-agent`,
 `fold-agent`, `delete-agent`), the run commands (`run-orchestrator`, `resume-orchestrator`,
-`answer-orchestrator`, `pause-orchestrator`, `stop-orchestrator`; the steps `FlowStepRunners.Served` lists are served - `orient`, `validate-plan`, `create-agent`, `build`, `test`, `run`, `check-mutations`, `anchor-balance`, `anchor-citations`, `ci-read`, `ci-wait`, `fold`, `delete-agent`, `refresh`, `rebase` - and a step of any other type fails until its runner lands), `validate-workflow`, `export-workflow`, `list-agent-providers`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
+`answer-orchestrator`, `pause-orchestrator`, `stop-orchestrator`; the steps `FlowStepRunners.Served` lists are served - `orient`, `graphify-codebase`, `validate-plan`, `create-agent`, `build`, `test`, `run`, `check-mutations`, `anchor-balance`, `anchor-citations`, `ci-read`, `ci-wait`, `fold`, `delete-agent`, `refresh`, `rebase` - and a step of any other type fails until its runner lands), `validate-workflow`, `export-workflow`, `list-agent-providers`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
 `read-anchor`, `read-anchors`, `check-anchor-balance`, `check-anchor-citations`),
 `fix-line-endings`, `check-ci-legs`, `legs`, `host-exec`, `install-missing-tools`,
 `update-tool`, `sync`, `build`, `test`, `run`, `check-mutations`, `stop-run`, `clean`, `up`, `down` and
@@ -166,7 +166,9 @@ has the recorded start, or no process carries the id at all: none is given an id
 group still carries, so what a leader killed with the engine's tree handed on is still found by
 it. An id given to a later process ends nothing, and that record simply goes.
 `stop-orchestrator --now` sweeps again once it has ended the engine and its tree, and says what it
-ended. A
+ended: what outlived that end. A tree is ended by stopping each process before killing it, and the
+system hangs up a group that loses its last parent in the session while one of its members is
+stopped, so a leftover may die of that hangup with the engine, and is then not said. A
 record that does not read as one is said and left, and a starter on another machine is never taken
 to have gone. Windows records nothing: its job already ends a killed starter's children.
 
@@ -1491,7 +1493,9 @@ holds the two to each other); a step of a type none serves yet fails, saying no 
 are machine steps, each a thin adapter over the owner of its rule: `OrientRunner` reads the main checkout by
 `FlowCheckout` - the one probe the run's start reads too, over `IGitClient` and `GitRemotes` - and each fact by its owner
 (`LegSelection`, `TestInvocationResolver`, `AnchorCitationService.RootsOf`, `CiSettings.Unset`, `MutationService.Declares`,
-`OrchestrationRules.OpenAgents`, `TreeHolders`); `PlanCheckRunner` holds the items its `items` yields to `PlanValidator`, whose path budget is
+`OrchestrationRules.OpenAgents`, `TreeHolders`); `GraphifyCodebaseRunner` checks the graph's longest path against the
+run's directory and syncs the run's one codebase graph through `ICodebaseGraphService` (`Core.Codebase`, below);
+`PlanCheckRunner` holds the items its `items` yields to `PlanValidator`, whose path budget is
 `FlowRunPaths`'s with the deepest file an item owns; `CreateAgentRunner` makes the agent the coordinator named
 (`OrchestrationRules.NextAgentName` over the run's agent directories, read under the orchestrator's lock by
 `IFlowRecords.NameAgent`, and every name its steps hold) for the model `WorkflowValidator.AgentModels` resolved, both
@@ -1723,6 +1727,72 @@ written to, never an exception that ends the process part way; the run's records
 and a cancellation of the session's token is the second, never a cut-off. A step of a type no
 runner serves yet is given to `NoStepRunner`, `FlowStepRunners`' fallback: it fails, saying no
 runner serves its type (its code 14).
+
+### The codebase graph
+
+A run's `graphify-codebase` step keeps a map of the repository under the run's `graph/` (`Core.Codebase`): every file the
+tree lists is a node, every declaration an implementation reads is one, and the directed edges between them each say how
+sure they are (`exact`, `unique`, `candidates`). Nothing of it names a language. Everything that reads a file's contents
+is an implementation of one contract, `ICodeGraphExtractor` - its `Language`, its `Version`, its `Claims`, whether it
+`Outlines` its files rather than reading a language's declarations, a pure `Extract` and its `Help` - which answers a
+language-neutral `FileExtract`: nodes, the scopes they are put in (open to
+other files or closed), imports by scope, relative path, address or path ending, with their prefixes and filters,
+address roots, references by name with their qualifiers, and four marks - a prototype, a test, generated code with
+why, and each line it saw something it cannot bind (`dynamic`). An implementation is registered by being written:
+`CodeGraphExtractors.Implementations` is the one scan of the core, which `AddDssHarness` registers each type of, and the
+registry built from them refuses two of one name, two claims of one exact name or extension of which either gives no
+content test, no fallback or two, a fallback that claims a name or an extension, a claimed name no file can bear or
+extension no file has, and a version below 1 - so a clash is a red test, never an order. A file goes to the
+claimants of its exact name, else of its extension, else to the fallback (`listed`); their content tests decide among
+several, and none or several saying yes lists it `ambiguous`. Everything else about the graph - `codebaseGraph.languages`,
+V52's names and `help codebase-graph`'s table - is read from the registry. A test keeps the core from mentioning
+anything under `Codebase\Languages\`. An extract is sound by `FileExtract.Problem` - every span inside the file, every
+parent present, holding its child and no cycle, ids unique and of its implementation, text whole UTF-16 - and every
+node's digest is the core's to set (`WithDigests`), whatever the implementation set. An `Extract` or a content test that
+throws lists its one file `unreadable` with why, never the end of a sync. Each implementation's tests derive
+from one kit, `CodeGraphExtractorContractTests<T>`, whose checks (`CodeGraphContract`, each shown red on an
+implementation that breaks it) hold it to fixtures for each claim, determinism whatever the line endings, answers alike
+from many threads, a sound model, tolerance of any cut of a fixture, pure content tests that never both say yes with
+another's, the extracts stored with the tests for its version (`fixtures/codebase-graph/<language>/v<version>/`,
+written where missing with `DSSHARNESS_STORE_EXTRACTS=1`), and the edges its fixtures name through the linker.
+
+The one linker (`CodeGraphLinker`) resolves every reference by the same steps for every language - the qualifier's
+scope, a type and its bases among it; the enclosing scopes from the inside out; the file's imports in order, filters
+applied; the repository by name and arity - and derives `dispatches`, `declares` and `tests` from the `implements` edges
+and the marks. Extracts keep names, not targets, so a sync links the whole tree again and a name a changed file adds
+binds callers in files that did not change. A global import is read from the file that makes it, so a relative one
+names the same file from every file of its language. An interface's member dispatches, for each type that implements it -
+itself or through a base, the interface itself or one extending it - to the member with a body that answers it: the type's
+own, else its nearest base's it inherits or mixes in, never an interface's own, which has none. A dispatch is as sure as
+the least sure edge on its way up, each of several bases that answer alike is one of the candidates (none past
+`CodeConfidences.MostCandidates`), and an edge found more than one way is listed once, as sure as its surest finding.
+A linker that answers otherwise raises `CodeGraphLinker.Revision`,
+which every link result names: a graph linked by another revision is linked again, though no file changed and none is
+read again.
+
+A sync (`ICodebaseGraphService.SyncAsync`) lists the main checkout by three calls of `IGitClient` that take no lock -
+`ListIndexedFilesAsync` (`ls-files -s -t -z`), `ListWorkingFilesAsync` (`status --porcelain=v2 -z --untracked-files=all
+--no-renames`) and `HashWorkingFilesAsync` (`hash-object`, in batches of 200) - leaves out the credential slots and the
+tool's state paths under the run's worktrees root before anything reads, and holds every file to the core's rules
+(`CodeFileText`: a NUL among the first 8,000 bytes - `BinaryContent.Holds`, git's reading rule and its window, which
+the citation scan asks too, where the line-ending rewrite asks git's conversion rule, `BinaryContent.ForConversion`, of a
+file declared `text=auto` alone, as git does -
+or a Git LFS pointer is binary, UTF-8 or UTF-16 by its mark is read,
+anything else is unreadable) before its implementation does. A path marked skip-worktree, as a sparse checkout marks
+it, is hashed and read where its file is there and left out where it is not; a repository inside the tree that git
+lists whole as untracked is not entered. It reads a file again only where its blob, its claimant, its claimant's
+version, or what `maxFileBytes` or `languages` decide of it changed, or where its extract is gone, and tries a file it
+could not read again at every sync; a run with no graph starts from the newest earlier run's manifest
+that reads, its extracts copied as they are reused and a file whose extract that run lacks read again. Its records go
+through `OrchestrationStore`, each strict with its `Problem()` and placed by `OrchestratorLayout`: `graph.json`, the
+manifest with its digest; `symbols.json`, the link result naming the manifest's digest and the linker's revision, made
+again where either does not match; `extracts/<ab>/<blob>-<path>.<language>-<version>.json`, written once, before the manifest that names them;
+and `sync.jsonl`. An extract is named by its path too: an implementation's answer may read the path - its generated
+names, its test directories, a file's own names - so a renamed file is read again. Every sync removes each extract its
+manifest does not name. Syncs of one graph wait for each other; extraction runs on one of every
+`CodebaseGraphService.ReadShare` (2) of the processors. A step that names an agent's worktree with `in` is refused when
+its workflow is checked, and by the runner (13) where it was not: this build syncs the main checkout's graph alone.
+`delete-orchestrator` removes the graph with its run, outside what `--delete-evidence` guards.
 
 ## Anchor registries
 

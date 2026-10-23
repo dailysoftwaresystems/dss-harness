@@ -45,6 +45,7 @@ internal static class TestChild
             "own-group-and-sleep" => OwnGroupAndSleep(arguments),
             "own-session-and-sleep" => OwnSessionAndSleep(arguments),
             "ignore-term-and-sleep" => IgnoreTermAndSleep(arguments),
+            "ignore-hup-and-sleep" => IgnoreHupAndSleep(arguments),
             "note-term-and-sleep" => NoteTermAndSleep(standardOutput, arguments),
             "say-and-exit" => SayAndExit(standardOutput, standardError, arguments),
             "step-reaching-nothing" => StepReachingNothing(standardError),
@@ -586,11 +587,20 @@ internal static class TestChild
     /// does, and sleeps for the milliseconds <c>arguments[0]</c> gives: only the signal that cannot
     /// be refused ends it, and the file says when a test may send the other.
     /// </summary>
-    private static int IgnoreTermAndSleep(string[] arguments)
+    private static int IgnoreTermAndSleep(string[] arguments) => RefuseAndSleep(System.Runtime.InteropServices.PosixSignal.SIGTERM, arguments);
+
+    /// <summary>
+    /// Refuses a hangup, writes the file <c>arguments[1]</c> names once it does, and sleeps for the milliseconds
+    /// <c>arguments[0]</c> gives: a leftover that outlives the end of the process that started its group, as one a build
+    /// left behind does - the system hangs up a group orphaned while a member of it is stopped, and a tree's end stops
+    /// each process before it kills it.
+    /// </summary>
+    private static int IgnoreHupAndSleep(string[] arguments) => RefuseAndSleep(System.Runtime.InteropServices.PosixSignal.SIGHUP, arguments);
+
+    /// <summary>Refuses <paramref name="signal"/>, writes the file <c>arguments[1]</c> names once it does, and sleeps for the milliseconds <c>arguments[0]</c> gives.</summary>
+    private static int RefuseAndSleep(System.Runtime.InteropServices.PosixSignal signal, string[] arguments)
     {
-        using var refusing = System.Runtime.InteropServices.PosixSignalRegistration.Create(
-            System.Runtime.InteropServices.PosixSignal.SIGTERM,
-            context => context.Cancel = true);
+        using var refusing = System.Runtime.InteropServices.PosixSignalRegistration.Create(signal, context => context.Cancel = true);
 
         File.WriteAllText(arguments[1], "ready");
         Thread.Sleep(int.Parse(arguments[0], CultureInfo.InvariantCulture));

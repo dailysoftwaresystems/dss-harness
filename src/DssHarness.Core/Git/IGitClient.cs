@@ -591,6 +591,35 @@ public interface IGitClient
     /// </remarks>
     Task<GitHeadMoved> TakeHistoryAsync(string directory, GitHistoryTaken taken, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Every path the index of the repository at <paramref name="directory"/> lists, once each, with its mode and the object
+    /// its index holds, as <c>ls-files -s -z</c> lists them - without taking the index's lock.
+    /// </summary>
+    /// <param name="directory">The top of the tree.</param>
+    /// <param name="cancellationToken">Cancels the git process.</param>
+    /// <exception cref="HarnessException">git failed, or listed what this build cannot read.</exception>
+    Task<IReadOnlyList<GitListedFile>> ListIndexedFilesAsync(string directory, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Every path of the tree at <paramref name="directory"/> whose working file is not what the index holds - changed,
+    /// gone, conflicted - and every untracked one git does not ignore, as <c>status --porcelain=v2 -z
+    /// --untracked-files=all --no-renames</c> lists them, without taking the index's lock.
+    /// </summary>
+    /// <param name="directory">The top of the tree.</param>
+    /// <param name="cancellationToken">Cancels the git process.</param>
+    /// <exception cref="HarnessException">git failed, or listed what this build cannot read.</exception>
+    Task<IReadOnlyList<GitWorkingFile>> ListWorkingFilesAsync(string directory, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The blob id git would store each of <paramref name="paths"/>' working files as, its filters applied, in the same
+    /// order - nothing written, no lock taken, the paths given in batches of a few hundred.
+    /// </summary>
+    /// <param name="directory">The top of the tree, which the paths are relative to.</param>
+    /// <param name="paths">The files, each there.</param>
+    /// <param name="cancellationToken">Cancels the git processes.</param>
+    /// <exception cref="HarnessException">git failed: a file it was given was not there, among other causes.</exception>
+    Task<IReadOnlyList<string>> HashWorkingFilesAsync(string directory, IReadOnlyList<string> paths, CancellationToken cancellationToken = default);
+
     /// <summary>Runs an arbitrary git subcommand, returning its exit code and output.</summary>
     Task<GitCommandResult> RunAsync(
         string directory,

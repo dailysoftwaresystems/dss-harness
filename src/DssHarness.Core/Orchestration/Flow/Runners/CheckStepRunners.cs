@@ -37,7 +37,7 @@ internal static class CheckResults
 
     /// <summary>The longest each read of the forge a step makes may take: its <c>timeoutMinutes</c>, else <see cref="GhProcess.DefaultLimit"/>.</summary>
     /// <param name="step">The step.</param>
-    public static TimeSpan? ReadLimitOf(WorkflowStep step) => step.TimeoutMinutes is { } minutes ? TimeSpan.FromMinutes(minutes) : null;
+    public static TimeSpan? ReadLimitOf(WorkflowStep step) => WorkflowStepTypes.TimeLimitOf(step) is { } minutes ? TimeSpan.FromMinutes(minutes) : null;
 }
 
 /// <summary>

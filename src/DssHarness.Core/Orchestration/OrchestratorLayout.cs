@@ -22,6 +22,10 @@ namespace DssHarness.Core.Orchestration;
 /// agents/&lt;agent&gt;/sessions/&lt;id&gt;/   API clients only: one conversation with the provider, in the provider's own form
 /// agents/&lt;agent&gt;/steps/&lt;instance&gt;/   one step the agent runs, or that runs in or for its worktree, everything of the step in it
 /// steps/&lt;instance&gt;/          one step of the run that no agent owns, the create-agent that makes an agent included
+/// graph/graph.json            the run's codebase graph: the base's manifest, every file it keeps with its blob, state and extract
+/// graph/symbols.json          the base's link result: every node and edge, with the digest of the manifest it was made from
+/// graph/extracts/&lt;ab&gt;/&lt;name&gt;   one file's extract, written once, named by its blob, its path, its implementation and version
+/// graph/sync.jsonl            one line for each sync of the graph
 /// &lt;step&gt;/children/&lt;id&gt;.json   in either kind of step's directory, on Linux and macOS: a session a contained child of the step leads while it runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what carries a leg to a host leads while anything is in it
 /// </code>
 /// The orchestrator's name and each agent's are the directories they are kept in, and an agent is never named as its
@@ -144,6 +148,24 @@ public sealed record OrchestratorLayout(string Name, string Directory)
 
     /// <summary>The name of the directory a refresh or a rebase of <c>others</c> keeps one directory for each target in, in its own.</summary>
     public const string StepTargetsDirectoryName = "targets";
+
+    /// <summary>The directory a run's codebase graph is kept in: made from the tree, and made again whenever asked.</summary>
+    public const string GraphDirectoryName = "graph";
+
+    /// <summary>The name of the file the base's manifest is kept in, in the graph's directory.</summary>
+    public const string GraphManifestFileName = "graph.json";
+
+    /// <summary>The name of the file the base's link result is kept in, in the graph's directory.</summary>
+    public const string GraphSymbolsFileName = "symbols.json";
+
+    /// <summary>The name of the directory every file's extract is kept in, once, in the graph's directory.</summary>
+    public const string GraphExtractsDirectoryName = "extracts";
+
+    /// <summary>The name of the file one line is appended to for each sync of the graph, in its directory.</summary>
+    public const string GraphSyncFileName = "sync.jsonl";
+
+    /// <summary>The extension of a file's extract.</summary>
+    public const string GraphExtractExtension = ".json";
 
     /// <summary>Where the orchestrator named <paramref name="name"/> of the repository at <paramref name="layout"/> is kept.</summary>
     /// <param name="layout">The repository.</param>
@@ -307,6 +329,29 @@ public sealed record OrchestratorLayout(string Name, string Directory)
 
     /// <summary>The run's write-ahead ledger of its folds: each path a fold means to write, the digest it held before and the one the fold left.</summary>
     public string FoldsFile => Path.Combine(Directory, FoldsFileName);
+
+    /// <summary>The run's codebase graph: derived from the tree, so removed with the run and kept by nothing else.</summary>
+    public string GraphDirectory => Path.Combine(Directory, GraphDirectoryName);
+
+    /// <summary>The base's manifest: every file the graph keeps, with its blob, its state and its extract's name.</summary>
+    public string GraphManifestFile => Path.Combine(GraphDirectory, GraphManifestFileName);
+
+    /// <summary>The base's link result: every node and edge, with the digest of the manifest it was made from.</summary>
+    public string GraphSymbolsFile => Path.Combine(GraphDirectory, GraphSymbolsFileName);
+
+    /// <summary>Where every file's extract is kept, once, each named by <see cref="DssHarness.Core.Codebase.CodeGraphIds.ExtractName"/>.</summary>
+    public string GraphExtractsDirectory => Path.Combine(GraphDirectory, GraphExtractsDirectoryName);
+
+    /// <summary>One line for each sync of the graph: when, which view, why, and what it listed, read and reused.</summary>
+    public string GraphSyncFile => Path.Combine(GraphDirectory, GraphSyncFileName);
+
+    /// <summary>The extract named <paramref name="name"/> (<see cref="DssHarness.Core.Codebase.CodeGraphIds.ExtractName"/>).</summary>
+    /// <param name="name">Its name, under the extracts directory.</param>
+    public string GraphExtractFile(string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        return Path.Combine(GraphExtractsDirectory, name.Replace('/', Path.DirectorySeparatorChar));
+    }
 
     /// <summary>What another process asked of the running engine: a safe pause, or a stop. Read by the engine at its poll, and taken.</summary>
     public string StopFile => Path.Combine(Directory, StopFileName);

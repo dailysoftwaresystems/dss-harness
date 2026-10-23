@@ -49,6 +49,7 @@ them.
 | `Anchors` | Anchor registry rows, balance and citations (`IAnchorRegistryService`, `AnchorBalanceService`, `AnchorCitationService`) |
 | `Build` | Build adapters and CMake/Ninja inspection (`BuildService`, `BuildDirectoryGuard`, `CMakeToolchainReader`) |
 | `Ci` | `check-ci-legs` (`CiLegsService`) |
+| `Codebase` | A run's codebase graph: the one contract and its registry (`ICodeGraphExtractor`, `CodeGraphExtractors`), the extract model (`FileExtract`), the one linker (`CodeGraphLinker`), the sync and its records (`CodebaseGraphService`, `CodebaseGraphRecords`); each implementation in `Languages/`, which nothing else names |
 | `Commands` | Services for commands with no domain folder (`InitService`, `VerifyGitService`) |
 | `Configuration` | `config.json`: model, load, validation, key lists (`HarnessConfig`, `HarnessConfigValidator`, `ConfigKeys`, `DefaultConfigFactory`) |
 | `Execution` | A leg's run: phases, locks, ledgers, verdicts, admission, input watch (`LegExecutor`, `PhaseRunner`, `RunLock`, `LegLedger`, `LegVerdict`, `LegAdmission`) |

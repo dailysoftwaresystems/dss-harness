@@ -381,7 +381,8 @@ public sealed class WorkflowExportServiceTests
                 harness.ContextLoader,
                 files,
                 harness.Platform,
-                new DssHarness.Core.Secrets.AgentKeyStore(files, harness.FilePermissions, harness.Platform)),
+                new DssHarness.Core.Secrets.AgentKeyStore(files, harness.FilePermissions, harness.Platform),
+                DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild),
             files,
             process ?? new FixedProcessContext());
     }

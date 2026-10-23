@@ -83,7 +83,8 @@ public sealed class WorkflowValidationService(
     IHarnessContextLoader contextLoader,
     IFileSystem fileSystem,
     IHostPlatform platform,
-    DssHarness.Core.Secrets.AgentKeyStore keys) : IWorkflowValidationService
+    DssHarness.Core.Secrets.AgentKeyStore keys,
+    Codebase.CodeGraphExtractors extractors) : IWorkflowValidationService
 {
     /// <summary>The command this service reports under.</summary>
     public const string CommandName = "validate-workflow";
@@ -92,6 +93,9 @@ public sealed class WorkflowValidationService(
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly IHostPlatform _platform = platform;
     private readonly DssHarness.Core.Secrets.AgentKeyStore _keys = keys;
+
+    /// <summary>The implementations of the codebase graph's contract, whose names V52 holds <c>codebaseGraph.languages</c> to.</summary>
+    private readonly Codebase.CodeGraphExtractors _extractors = extractors;
 
     /// <inheritdoc/>
     public async Task<WorkflowValidationReport> CheckAsync(
@@ -158,7 +162,8 @@ public sealed class WorkflowValidationService(
             definition,
             context.Config.Commit.Template is not null,
             named => Text(named, directory, name),
-            resolved.Providers));
+            resolved.Providers,
+            _extractors.Languages));
         problems.AddRange(Files(definition, directory, name, context.Config));
 
         // The key slot's own problems - a name declared twice, a line that defines nothing - are the configuration's,

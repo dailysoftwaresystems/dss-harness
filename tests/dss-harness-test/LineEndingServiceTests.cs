@@ -282,6 +282,55 @@ public sealed class LineEndingServiceTests
         public string? FindExecutable(string command) => inner.FindExecutable(command);
     }
 
+    /// <summary>
+    /// Every file ends as git stores it: declared <c>text=auto</c>, one git's own detection calls binary - a NUL past the
+    /// first 8,000 bytes, a carriage return no line feed follows, more than one control byte for every 128 that print - is
+    /// left as it is and counted binary; declared <c>text</c>, or given an <c>eol</c> alone, the same bytes are converted
+    /// whatever they hold, as git converts them.
+    /// </summary>
+    [Fact]
+    public async Task EveryFile_EndsAsGitStoresIt_LeftByContentUnderTextAuto_ConvertedUnderText()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        File.AppendAllText(temp.Combine(".gitattributes"), "*.auto text=auto eol=lf\n*.set text eol=lf\n*.eol eol=lf\n");
+
+        var contents = new Dictionary<string, byte[]>(StringComparer.Ordinal)
+        {
+            ["late"] = [.. Encoding.ASCII.GetBytes(string.Concat(Enumerable.Repeat("a\r\n", 3000))), 0, (byte)'\r', (byte)'\n'],
+            ["lone"] = [.. "a\rb\r\nc\r\n"u8],
+            ["controls"] = [.. Enumerable.Repeat((byte)1, 10), .. "abc\r\n"u8],
+            ["plain"] = [.. "a\r\nb\r\n"u8],
+        };
+        var files = contents.SelectMany(content => new[] { "auto", "set", "eol" }.Select(declared => (Name: $"{content.Key}.{declared}", Bytes: content.Value))).ToList();
+
+        foreach (var (name, bytes) in files)
+        {
+            File.WriteAllBytes(temp.Combine(name), bytes);
+        }
+
+        await harness.RunGitAsync(temp.Path, ["add", "-A"], cancellationToken);
+
+        var report = await Service(harness).ApplyAsync(temp.Path, new LineEndingRequest(LineEndingScope.All, CheckOnly: false), cancellationToken);
+
+        Assert.Equal(
+            ["controls.eol", "controls.set", "declared.txt", "declared.win", "late.eol", "late.set", "lone.eol", "lone.set", "plain.auto", "plain.eol", "plain.set"],
+            report.Changed.Select(change => change.Path).Order(StringComparer.Ordinal));
+        Assert.Equal(1 + 3, report.Binary);
+
+        // What the rewrite left on disk, byte for byte, against what git's own add stored of the same file.
+        string[] names = [.. files.Select(file => file.Name)];
+        var written = (await harness.RunGitAsync(temp.Path, ["hash-object", "--no-filters", "--", .. names], cancellationToken)).StandardOutput
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var stored = (await harness.RunGitAsync(temp.Path, ["rev-parse", .. names.Select(name => $":{name}")], cancellationToken)).StandardOutput
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        Assert.Equal(names.Length, written.Length);
+        Assert.Equal(names.Length, stored.Length);
+        Assert.All(names.Select((name, at) => (Name: name, At: at)), file => Assert.True(written[file.At] == stored[file.At], $"{file.Name}: written {written[file.At]}, git stores {stored[file.At]}"));
+    }
+
     private static LineEndingService Service(HarnessFactory harness)
         => new(harness.ContextLoader, harness.GitClient, harness.FileSystem);
 

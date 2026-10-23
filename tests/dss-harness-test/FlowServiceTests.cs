@@ -82,7 +82,7 @@ public sealed class FlowServiceTests
             store,
             engines,
             new FlowSessions(store, files, engines),
-            new WorkflowValidationService(harness.ContextLoader, harness.FileSystem, harness.Platform, new DssHarness.Core.Secrets.AgentKeyStore(harness.FileSystem, harness.FilePermissions, harness.Platform)),
+            new WorkflowValidationService(harness.ContextLoader, harness.FileSystem, harness.Platform, new DssHarness.Core.Secrets.AgentKeyStore(harness.FileSystem, harness.FilePermissions, harness.Platform), DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild),
             runner,
             harness.OrchestrationLog,
             children ?? harness.ChildSessions,
@@ -1049,8 +1049,10 @@ public sealed class FlowServiceTests
 
     /// <summary>
     /// <c>--now</c> ends what the engine's steps left running once it has ended the engine where it stood - the engine's
-    /// whole tree, its leg's phase among it: here what the phase handed on, no one's child and still in the phase's group,
-    /// ended by the sweep that follows though the phase that led the group is gone, and a contained child's session the
+    /// whole tree, its leg's phase among it: here what the phase handed on, no one's child and still in the phase's group -
+    /// refusing a hangup, as a build's leftover that outlives its engine does: a tree is ended by stopping each process
+    /// before killing it, and the system hangs up a group orphaned while a member of it is stopped - ended by the sweep
+    /// that follows though the phase that led the group is gone, and a contained child's session the
     /// engine recorded; said in the answer by kind, their records removed. An engine found gone already - a crash, which
     /// ends nothing it started - is nothing to stop, and the sweep every verb over the run starts with has ended what it
     /// left all the same, its phase still leading its group, said in its lines.
@@ -1074,11 +1076,13 @@ public sealed class FlowServiceTests
         var said = new TaskCompletionSource<(LearnedProcess Engine, LearnedProcess HandedOn)>(TaskCreationOptions.RunContinuationsAsynchronously);
         (LearnedProcess Engine, LearnedProcess HandedOn) ids = default;
         using var contained = Process.Start(TestHost.StartOf(TestHost.ChildRequest("own-session-and-sleep", "300000")))!;
+        using var signals = new TempDirectory();
+        var ready = signals.Combine("ready");
 
         // The engine starts its leg's phase as a machine step does - bound, under a process scope that records its group
         // in the step's directory - and the phase hands on a process of its own, no one's child, still in its group.
         var engineRun = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram).RunAsync(
-            TestHost.ChildRequest("scoped-recorded-and-wait", CliRunner.CliProgram, step, "spawn-orphan-and-sleep", "300000") with
+            TestHost.ChildRequest("scoped-recorded-and-wait", CliRunner.CliProgram, step, "spawn-orphan-and-sleep", "300000", "300000", "ignore-hup-and-sleep", ready) with
             {
                 Timeout = Bound,
                 OnOutputLine = line =>
@@ -1092,6 +1096,7 @@ public sealed class FlowServiceTests
         try
         {
             ids = await said.Task.WaitAsync(Bound, Token);
+            Assert.True(SpinWait.SpinUntil(() => File.Exists(ready), Bound), $"what the phase handed on, {ids.HandedOn}, never came to refuse a hangup");
 
             var groupRecord = Assert.Single(Directory.GetFiles(OrchestratorLayout.ChildrenDirectory(step)));
             var phase = LearnedProcess.Of(JsonNode.Parse(File.ReadAllText(groupRecord))!["session"]!.GetValue<int>());
@@ -3184,5 +3189,38 @@ public sealed class FlowServiceTests
 
         /// <inheritdoc/>
         public void Dispose() => Tree.Dispose();
+    }
+
+    /// <summary>
+    /// A run's codebase graph goes with the run when it is deleted, and is never counted among what --delete-evidence
+    /// guards: it is made from the tree, and made again whenever asked.
+    /// </summary>
+    [Fact]
+    public async Task ARunsCodebaseGraph_GoesWithItsRun_WithoutDeleteEvidence()
+    {
+        var (repository, service, runner) = await ServiceAsync();
+        using var disposed = repository;
+
+        runner.OnEvery(FlowStepResult.Ended(passed: true, 0));
+        _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
+
+        var run = RunOf(repository);
+        var harness = repository.Harness;
+        var guarded = await harness.OrchestratorService.DeleteAsync(repository.Path, "r1", deleteEvidence: false, Token);
+        var graph = new DssHarness.Core.Codebase.CodebaseGraphService(harness.GitClient, harness.FileSystem, harness.OrchestrationStore, DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild, harness.Platform, new RunningToolDouble(), harness.Output, TimeProvider.System);
+        _ = await graph.SyncAsync(new DssHarness.Core.Codebase.CodebaseGraphSync(new DssHarness.Core.Repository.HarnessLayout(repository.Path, repository.Path), run, DssHarness.Core.Codebase.CodebaseGraphShape.Default, "worktrees", Rebuild: false, "test"), Token);
+        Assert.True(File.Exists(run.GraphManifestFile));
+        Assert.NotEmpty(Directory.EnumerateFiles(run.GraphExtractsDirectory, "*", SearchOption.AllDirectories));
+
+        // The run's own records are what --delete-evidence guards, the same with its graph as without it.
+        var refused = await harness.OrchestratorService.DeleteAsync(repository.Path, "r1", deleteEvidence: false, Token);
+
+        Assert.Equal((HarnessExit.Refused, guarded.Message), (refused.ExitCode, refused.Message));
+        Assert.True(File.Exists(run.GraphManifestFile));
+
+        var deleted = await harness.OrchestratorService.DeleteAsync(repository.Path, "r1", deleteEvidence: true, Token);
+
+        Assert.Equal(HarnessExit.Success, deleted.ExitCode);
+        Assert.False(Directory.Exists(run.Directory));
     }
 }

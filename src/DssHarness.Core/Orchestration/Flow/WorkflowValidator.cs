@@ -150,11 +150,21 @@ public static class WorkflowValidator
     /// given, which leaves V38's config half unchecked - a definition is never checked against a configuration the
     /// caller did not choose.
     /// </param>
-    public static IReadOnlyList<string> Validate(WorkflowDefinition definition, bool hasCommitTemplate, Func<string, string?>? files, DssHarness.Core.Agents.AgentProviders? providers = null)
+    /// <param name="languages">
+    /// The names <c>codebaseGraph.languages</c> may hold, as the extractors' registry gives them
+    /// (<see cref="Codebase.CodeGraphExtractors.Languages"/>) - this check keeps no list of its own; or
+    /// <see langword="null"/> where the caller has no registry, which leaves that one rule of V52 unchecked.
+    /// </param>
+    public static IReadOnlyList<string> Validate(
+        WorkflowDefinition definition,
+        bool hasCommitTemplate,
+        Func<string, string?>? files,
+        DssHarness.Core.Agents.AgentProviders? providers = null,
+        IReadOnlyList<string>? languages = null)
     {
         ArgumentNullException.ThrowIfNull(definition);
 
-        var check = new Check(definition, hasCommitTemplate, files, providers);
+        var check = new Check(definition, hasCommitTemplate, files, providers, languages);
         return check.Problems;
     }
 
@@ -262,12 +272,18 @@ public static class WorkflowValidator
         /// </summary>
         private readonly HashSet<string> _refusedForEach = new(StringComparer.Ordinal);
 
-        internal Check(WorkflowDefinition definition, bool hasCommitTemplate, Func<string, string?>? files, DssHarness.Core.Agents.AgentProviders? providers = null)
+        internal Check(
+            WorkflowDefinition definition,
+            bool hasCommitTemplate,
+            Func<string, string?>? files,
+            DssHarness.Core.Agents.AgentProviders? providers = null,
+            IReadOnlyList<string>? languages = null)
         {
             _definition = definition;
             _hasCommitTemplate = hasCommitTemplate;
             _files = files;
             _providers = providers;
+            _languages = languages;
 
             DefinitionRules();
             Index(definition.Steps, parent: null);
@@ -277,6 +293,7 @@ public static class WorkflowValidator
             Cycle();
             WorkflowAnswers();
             Steps();
+            CodebaseGraph();
             Amend();
             Checkpoints();
             SharedEndings();
@@ -551,6 +568,14 @@ public static class WorkflowValidator
                         if (entry.Step.In is not null)
                         {
                             WorksIn(entry, entry.Step.In);
+                        }
+
+                        break;
+
+                    case "graphify-codebase":
+                        if (entry.Step.In is { } view)
+                        {
+                            _problems.Add($"step '{entry.Path}' names in: '{view}', and {WorkflowStepTypes.GraphViewsLater}");
                         }
 
                         break;
@@ -2038,6 +2063,66 @@ public static class WorkflowValidator
         private IEnumerable<Entry> Triages()
             => _entries.Where(entry => entry.ParentPath is null && entry != _recover && entry.Step.Raised == WorkflowStep.RaisedByPreExisting);
 
+        /// <summary>
+        /// V52: the workflow's <c>codebaseGraph</c> shapes the graph its <c>graphify-codebase</c> steps make, so it stands
+        /// only beside one; its patterns are patterns, its lists not given empty, its languages the registry's, each once,
+        /// and its values in their ranges. A graphify step's <c>in</c> is checked with every machine step's.
+        /// </summary>
+        private void CodebaseGraph()
+        {
+            if (_definition.CodebaseGraph is not { } graph)
+            {
+                return;
+            }
+
+            if (!_entries.Any(entry => entry.Step.Type == "graphify-codebase"))
+            {
+                _problems.Add("codebaseGraph shapes the run's graph, and no step of the workflow is a graphify-codebase step: say where the graph is made, or leave the block out");
+            }
+
+            foreach (var (key, patterns, leftOut) in new[] { ("include", graph.Include, "every path graphed"), ("exclude", graph.Exclude, "no path left out") })
+            {
+                if (patterns is { Count: 0 })
+                {
+                    _problems.Add($"codebaseGraph.{key} is given empty, which is never read as {leftOut}: name its patterns, or leave the key out for {leftOut}");
+                }
+
+                foreach (var pattern in patterns ?? [])
+                {
+                    if (GlobPattern.Problem(pattern) is { } typo)
+                    {
+                        _problems.Add($"codebaseGraph.{key} names the pattern '{pattern}', and it {typo}");
+                    }
+                }
+            }
+
+            if (graph.Languages is { Count: 0 })
+            {
+                _problems.Add("codebaseGraph.languages is given empty, which is never read as every one used: name the implementations, or leave the key out for every one");
+            }
+
+            foreach (var twice in (graph.Languages ?? []).GroupBy(language => language, StringComparer.Ordinal).Where(group => group.Count() > 1))
+            {
+                _problems.Add($"codebaseGraph.languages names '{twice.Key}' more than once");
+            }
+
+            if (_languages is { } known)
+            {
+                foreach (var unknown in (graph.Languages ?? []).Where(language => !known.Contains(language, StringComparer.Ordinal)).Distinct(StringComparer.Ordinal))
+                {
+                    _problems.Add($"codebaseGraph extracts '{unknown}', which this tool has no extractor for; it extracts: {string.Join(", ", known)}");
+                }
+            }
+
+            Within(graph.MaxFileBytes, Codebase.CodebaseGraphShape.LeastMaxFileBytes, Codebase.CodebaseGraphShape.MostMaxFileBytes, "codebaseGraph.maxFileBytes");
+            Within(graph.MapTokens, 0, Codebase.CodebaseGraphShape.MostMapTokens, "codebaseGraph.mapTokens");
+
+            if (graph.Generated is { } generated && !Codebase.CodebaseGraphShape.GeneratedValues.Contains(generated, StringComparer.Ordinal))
+            {
+                _problems.Add($"codebaseGraph.generated is '{generated}', which is none of {string.Join(", ", Codebase.CodebaseGraphShape.GeneratedValues.Select(value => $"'{value}'"))}: generated code's declarations are kept and ranked last, or left out with the file listed");
+            }
+        }
+
         /// <summary>Refuses <paramref name="value"/> outside <paramref name="least"/> to <paramref name="most"/>; whether it holds, absent among them.</summary>
         private bool Within(int? value, int least, int most, string what)
         {
@@ -3027,6 +3112,9 @@ public static class WorkflowValidator
 
         /// <summary>The configuration's providers and tiers, where the caller gave them: V38's config half is checked only under a configuration the caller chose.</summary>
         private readonly DssHarness.Core.Agents.AgentProviders? _providers;
+
+        /// <summary>The names <c>codebaseGraph.languages</c> may hold, where the caller gave the registry's; <see langword="null"/> where it gave none.</summary>
+        private readonly IReadOnlyList<string>? _languages;
 
         /// <summary>Each reason step's schema as a reading, by the path its <c>outputs</c> names; <see langword="null"/> where it types nothing.</summary>
         private readonly Dictionary<string, JsonSchemaSubset.Reading?> _schemas = new(StringComparer.Ordinal);

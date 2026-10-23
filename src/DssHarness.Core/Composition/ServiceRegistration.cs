@@ -169,6 +169,7 @@ public static class ServiceRegistration
         services.AddSingleton<PlanValidator>();
         services.AddSingleton<CreateAgentRunner>();
         services.AddSingleton<IFlowStepTypeRunner, OrientRunner>();
+        services.AddSingleton<IFlowStepTypeRunner, GraphifyCodebaseRunner>();
         services.AddSingleton<IFlowStepTypeRunner, PlanCheckRunner>();
         services.AddSingleton<IFlowStepTypeRunner>(provider => provider.GetRequiredService<CreateAgentRunner>());
         services.AddSingleton<IFlowStepTypeRunner, BuildStepRunner>();
@@ -185,6 +186,16 @@ public static class ServiceRegistration
         services.AddSingleton<IFlowStepTypeRunner, RefreshStepRunner>();
         services.AddSingleton<IFlowStepTypeRunner, RebaseStepRunner>();
         services.AddSingleton<IFlowStepRunner, FlowStepRunners>();
+
+        // The codebase graph: every implementation of its contract the core holds, found by the one scan, so a new language
+        // is registered by being written; the registry built from them refuses two that would claim one file by order.
+        foreach (var extractor in Codebase.CodeGraphExtractors.Implementations)
+        {
+            services.AddSingleton(typeof(Codebase.ICodeGraphExtractor), extractor);
+        }
+
+        services.AddSingleton<Codebase.CodeGraphExtractors>();
+        services.AddSingleton<Codebase.ICodebaseGraphService, Codebase.CodebaseGraphService>();
 
         // The one way an agent's step is worked, whatever the client is: each client built in is registered here as its
         // slice lands - claude-code first - and a test registers its fake the same way.

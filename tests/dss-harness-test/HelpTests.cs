@@ -2753,7 +2753,8 @@ public sealed partial class HelpTests
                 + "below its directory, nor any directory holding a .git of its own that git records no worktree at - until then it "
                 + $"refuses ({HarnessExit.Refused}), naming each - and the evidence, transcripts, steps and sessions its agents kept, "
                 + "whatever their kind or state, only with --delete-evidence; an agent with no worktree holds nothing but records, "
-                + "and goes with it, deleted or not.",
+                + "and goes with it, deleted or not, and a run's codebase graph - made from the tree, and made again whenever asked - "
+                + "goes with it and is never counted among what --delete-evidence guards.",
             Prose.Words(result.StandardOutput),
             StringComparison.Ordinal);
     }
@@ -2819,7 +2820,7 @@ public sealed partial class HelpTests
             orchestrators,
             StringComparison.Ordinal);
         Assert.Contains(
-            "The steps served so far are orient, validate-plan, create-agent, build, test, run, check-mutations, anchor-balance, anchor-citations, ci-read, ci-wait, fold, delete-agent, refresh, rebase ('dssharness help workflows'): a step of any other type fails, saying no runner serves its type.",
+            "The steps served so far are orient, graphify-codebase, validate-plan, create-agent, build, test, run, check-mutations, anchor-balance, anchor-citations, ci-read, ci-wait, fold, delete-agent, refresh, rebase ('dssharness help workflows'): a step of any other type fails, saying no runner serves its type.",
             orchestrators,
             StringComparison.Ordinal);
     }
@@ -3234,7 +3235,7 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains(
             "This build checks a workflow's definition, with 'dssharness validate-workflow <name>', and starts and drives a run of one with "
-                + "'dssharness run-orchestrator <name>' (see 'help orchestrators'). The steps served so far are orient, validate-plan, "
+                + "'dssharness run-orchestrator <name>' (see 'help orchestrators'). The steps served so far are orient, graphify-codebase, validate-plan, "
                 + "create-agent, build, test, run, check-mutations, anchor-balance, anchor-citations, ci-read, ci-wait, fold, delete-agent, "
                 + "refresh, rebase, each below; a step of "
                 + "any other type fails, saying no runner serves its type.",
@@ -3391,9 +3392,13 @@ public sealed partial class HelpTests
                 + $"runs again as an incomplete step does; one whose runner does not end within {PointOfNoReturn.SafePauseDrain.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s "
                 + "of that stop fails all the same, goes to what handles its failure and is not retried. A reasoning step's handoff turn at a "
                 + "pause is bounded by handoffSeconds, not by this. A ci-wait's is always more than its waitMinutes (absent, "
-                + $"{WorkflowStep.DefaultWaitMinutes}); a group and a pause step take none, running nothing of their own.",
+                + $"{WorkflowStep.DefaultWaitMinutes}); a group and a pause step take none, running nothing of their own; a type whose step "
+                + "has a limit of its own where it says none says so beside its name below.",
             prose,
             StringComparison.Ordinal);
+
+        // The type that has one says it beside its name, from the table.
+        Assert.Contains("graphify-codebase (timeoutMinutes 30 by default)", result.StandardOutput, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -3432,4 +3437,51 @@ public sealed partial class HelpTests
     /// <summary>A step key shown as it is written, then what it does: '  outputs: [&lt;path&gt;, ...]  what it writes'.</summary>
     [GeneratedRegex(@"^  (?<key>[A-Za-z]+): \S.*?  +(?<meaning>\S.*)$")]
     private static partial Regex SpeltKeyLine();
+
+    /// <summary>
+    /// The codebase-graph topic, under each of its names, says every implementation this build holds - its version, what it
+    /// claims, what it reads and what it does not see - every key of codebaseGraph, the graph's files, the step's output,
+    /// its failOn and its time limit, each read from the code; and the orchestrators topic lists the graph's files.
+    /// </summary>
+    [Fact]
+    public void TheCodebaseGraphTopic_SaysEveryImplementationKeyAndFile_FromTheCode()
+    {
+        var topic = HelpText.Of("codebase-graph").StandardOutput;
+        var prose = Prose.Words(topic);
+
+        Assert.Equal(topic, HelpText.Of("graph").StandardOutput);
+        Assert.Equal(topic, HelpText.Of("graphify-codebase").StandardOutput);
+
+        foreach (var extractor in DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild.All)
+        {
+            Assert.Contains($"{extractor.Language} (version {extractor.Version.ToString(CultureInfo.InvariantCulture)};", topic, StringComparison.Ordinal);
+            Assert.Contains(Prose.Words($"reads {extractor.Help.Reads}."), prose, StringComparison.Ordinal);
+            Assert.All(extractor.Help.DoesNotSee, unseen => Assert.Contains(Prose.Words($"does not see {unseen}."), prose, StringComparison.Ordinal));
+        }
+
+        Assert.Contains("listed (version 1; every file no other claims)", topic, StringComparison.Ordinal);
+        Assert.Contains("markdown (version 1; .md)", topic, StringComparison.Ordinal);
+        Assert.All(WorkflowKeys.CodebaseGraph, key => Assert.Contains(key.Name, topic, StringComparison.Ordinal));
+        Assert.Contains($"failOn: {WorkflowStepTypes.GraphIncomplete}, which fails it ({HarnessExit.CommandFailed.ToString(CultureInfo.InvariantCulture)})", prose, StringComparison.Ordinal);
+        Assert.Contains("30 minutes where it says no timeoutMinutes", prose, StringComparison.Ordinal);
+        Assert.Contains($"{HarnessLayout.OrchestratorsDirectoryName}/<run>/{OrchestratorLayout.GraphDirectoryName}/", prose, StringComparison.Ordinal);
+        Assert.Contains(OrchestratorLayout.GraphManifestFileName, prose, StringComparison.Ordinal);
+        Assert.Contains(OrchestratorLayout.GraphSyncFileName, prose, StringComparison.Ordinal);
+        var answers = System.Text.Json.Nodes.JsonNode.Parse(WorkflowStepTypes.Find("graphify-codebase")!.Output!)!["properties"]!.AsObject().Select(member => member.Key).ToList();
+        Assert.Contains("seconds", answers);
+        Assert.Contains($"A graphify-codebase step answers {string.Join(", ", answers)}:", prose, StringComparison.Ordinal);
+        Assert.Contains($"one of every {DssHarness.Core.Codebase.CodebaseGraphService.ReadShare.ToString(CultureInfo.InvariantCulture)} of the machine's processors", prose, StringComparison.Ordinal);
+        Assert.Contains($"first {DssHarness.Core.FileSystem.BinaryContent.Window.ToString("N0", CultureInfo.InvariantCulture)} bytes - git's own window", prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words(WorkflowStepTypes.GraphViewsLater), prose, StringComparison.Ordinal);
+        Assert.All(DssHarness.Core.Codebase.CodeEdgeKinds.Described, described => Assert.Contains(Prose.Words($"{described.Kind}, {described.Meaning}"), prose, StringComparison.Ordinal));
+        Assert.Contains(Prose.Words("a file it could not read is tried again at every sync"), prose, StringComparison.Ordinal);
+        Assert.Contains(HelpTopics.Described, described => described.Name == "codebase-graph");
+
+        var layout = HelpText.Of("orchestrators").StandardOutput;
+
+        foreach (var file in new[] { OrchestratorLayout.GraphManifestFileName, OrchestratorLayout.GraphSymbolsFileName, OrchestratorLayout.GraphExtractsDirectoryName, OrchestratorLayout.GraphSyncFileName })
+        {
+            Assert.Contains($"{OrchestratorLayout.GraphDirectoryName}/{file}", layout, StringComparison.Ordinal);
+        }
+    }
 }

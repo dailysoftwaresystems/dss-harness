@@ -13,7 +13,8 @@ purpose: find a member by name. Sentences of `README.md` and `docs/architecture.
 - 6. What `init` writes into a repository
 - 7. Records a command writes
 - 8. A workflow
-- 9. Before calling any change done
+- 9. A language of the codebase graph
+- 10. Before calling any change done
 
 ## 1. A command
 
@@ -122,7 +123,25 @@ records live" and "Reporting".
 See [release-and-ci.md](release-and-ci.md) §7. Only `test.yml`, `pipeline-pkg.yml` and `deploy.yml` are embedded
 and tested; embedding another takes one `EmbeddedResource` line in the test project.
 
-## 9. Before calling any change done
+## 9. A language of the codebase graph
+
+1. **One class** in `src/DssHarness.Core/Codebase/Languages/` implementing `ICodeGraphExtractor`, made with no
+   argument: its `Language` (lower-case letters and digits), `Version` 1, its `Claims` (exact names, extensions with
+   their dot, a content test on each claim another implementation shares), `Outlines`, `Help` and a pure `Extract`
+   that answers any text, a cut of one included, and never throws. Nothing registers it: the registry's one scan finds
+   it, and nothing outside `Languages/` may name it (`CodeGraphExtractorsTests`).
+2. **Its tests** — `tests/dss-harness-test/<Name>ExtractorTests.cs` deriving from
+   `CodeGraphExtractorContractTests<T>`, with fixtures covering each claim, the nodes each must hold (with lines) and
+   the edges linking them must give. Run them once with `DSSHARNESS_STORE_EXTRACTS=1` to write the stored extracts
+   under `tests/dss-harness-test/fixtures/codebase-graph/<language>/v1/`, read them, and commit them.
+3. **A change of what it answers** for any file raises its `Version` and stores the extracts again under the new
+   version; the stored ones of the old version stay as they are. A change of what the linker answers raises
+   `CodeGraphLinker.Revision` instead.
+4. Help, `codebaseGraph.languages`, V52 and the step read the registry: nothing else changes. Docs: what the
+   language reads and does not see is its `Help`, which `help codebase-graph` prints; `docs/architecture.md` "The
+   codebase graph" names no language but the fallback.
+
+## 10. Before calling any change done
 
 1. The whole suite passes on Windows and on Linux ([testing-and-conventions.md](testing-and-conventions.md) §1).
 2. Each new test goes red with the change reverted.

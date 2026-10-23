@@ -557,11 +557,19 @@ public static partial class OrchestrationRules
             ? null
             : $"'{session}' is not a Claude session's id: letters, digits, hyphens and underscores, at most 128, beginning with a letter or a digit";
 
+    /// <summary>Whether <paramref name="id"/> is an id git gives an object - a commit's, a blob's: forty or sixty-four lower-case hexadecimal characters.</summary>
+    /// <param name="id">The id.</param>
+    public static bool IsObjectId(string? id) => id is not null && CommitPattern().IsMatch(id);
+
+    /// <summary>Whether <paramref name="digest"/> is a SHA-256 digest: sixty-four lower-case hexadecimal characters.</summary>
+    /// <param name="digest">The digest.</param>
+    public static bool IsDigest(string? digest) => digest is not null && DigestPattern().IsMatch(digest);
+
     /// <summary>What is wrong with a commit's id; null where it is one, or where none is recorded.</summary>
     /// <param name="commit">The id.</param>
     /// <param name="what">What it is, for the reason.</param>
     public static string? CommitProblem(string? commit, string what)
-        => commit is null || CommitPattern().IsMatch(commit) ? null : $"its {what}, '{commit}', is not a commit's id";
+        => commit is null || IsObjectId(commit) ? null : $"its {what}, '{commit}', is not a commit's id";
 
     /// <summary>What is wrong with a SHA-256 digest; null where it is one, or, where <paramref name="allowNone"/>, where it is null.</summary>
     /// <param name="digest">The digest.</param>
@@ -569,7 +577,7 @@ public static partial class OrchestrationRules
     /// <param name="allowNone">Whether null - no file there - is allowed.</param>
     public static string? DigestProblem(string? digest, string path, bool allowNone)
         => digest is null ? (allowNone ? null : $"'{path}' has no digest")
-            : DigestPattern().IsMatch(digest) ? null
+            : IsDigest(digest) ? null
             : $"'{path}' has '{digest}', which is not a SHA-256 digest";
 
     /// <summary>

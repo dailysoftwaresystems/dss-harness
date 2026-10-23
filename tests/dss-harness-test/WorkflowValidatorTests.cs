@@ -4510,4 +4510,131 @@ public sealed class WorkflowValidatorTests
 
         Assert.Empty(Problems(definition));
     }
+
+    /// <summary>
+    /// V52: a workflow's codebaseGraph is held to its bounds - each list named or left out, never given empty; patterns as
+    /// a path pattern reads them; languages named once each and each one this tool extracts; maxFileBytes and mapTokens
+    /// within their ranges; generated one of its values - and to a step that makes the graph.
+    /// </summary>
+    [Fact]
+    public void V52_ACodebaseGraph_IsHeldToItsBounds_AndToAStepThatMakesIt()
+    {
+        Assert.Empty(Problems("""
+            name: flow
+            codebaseGraph:
+              include: ["src/**", "docs/**"]
+              exclude: ["src/gen/**"]
+              languages: [markdown]
+              maxFileBytes: 4096
+              generated: exclude
+              mapTokens: 0
+            steps:
+              - name: map
+                type: graphify-codebase
+            """));
+
+        Assert.Equal(
+            ["codebaseGraph shapes the run's graph, and no step of the workflow is a graphify-codebase step: say where the graph is made, or leave the block out"],
+            Problems("""
+                name: flow
+                codebaseGraph:
+                  generated: low
+                steps:
+                  - name: look
+                    type: orient
+                """));
+
+        Assert.Equal(
+            [
+                "codebaseGraph.include is given empty, which is never read as every path graphed: name its patterns, or leave the key out for every path graphed",
+                "codebaseGraph.exclude names the pattern '../out/**', and it holds a '..' segment, which no path inside the tree holds, so it would name nothing; name the path from the tree's root",
+                "codebaseGraph.languages names 'markdown' more than once",
+                "codebaseGraph.maxFileBytes must be from 4,096 to 16,777,216, found 4095",
+                "codebaseGraph.mapTokens must be from 0 to 2,000, found 2001",
+                "codebaseGraph.generated is 'drop', which is none of 'low', 'exclude': generated code's declarations are kept and ranked last, or left out with the file listed",
+            ],
+            Problems("""
+                name: flow
+                codebaseGraph:
+                  include: []
+                  exclude: ["../out/**"]
+                  languages: [markdown, markdown]
+                  maxFileBytes: 4095
+                  mapTokens: 2001
+                  generated: drop
+                steps:
+                  - name: map
+                    type: graphify-codebase
+                """));
+
+        Assert.Equal(
+            [
+                "codebaseGraph.exclude is given empty, which is never read as no path left out: name its patterns, or leave the key out for no path left out",
+                "codebaseGraph.languages is given empty, which is never read as every one used: name the implementations, or leave the key out for every one",
+                "codebaseGraph.maxFileBytes must be from 4,096 to 16,777,216, found 16777217",
+            ],
+            Problems("""
+                name: flow
+                codebaseGraph:
+                  exclude: []
+                  languages: []
+                  maxFileBytes: 16777217
+                steps:
+                  - name: map
+                    type: graphify-codebase
+                """));
+    }
+
+    /// <summary>V52: a language the workflow names is one this build extracts, said with every one it does.</summary>
+    [Fact]
+    public void V52_ALanguageThisToolDoesNotExtract_IsRefused_NamingEveryOneItDoes()
+    {
+        var definition = Parse("""
+            name: flow
+            codebaseGraph:
+              languages: [markdown, cobol, cobol]
+            steps:
+              - name: map
+                type: graphify-codebase
+            """);
+
+        Assert.Equal(
+            [
+                "codebaseGraph.languages names 'cobol' more than once",
+                $"codebaseGraph extracts 'cobol', which this tool has no extractor for; it extracts: {string.Join(", ", DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild.Languages)}",
+            ],
+            WorkflowValidator.Validate(definition, hasCommitTemplate: false, files: null, languages: DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild.Languages));
+    }
+
+    /// <summary>A graph step that names any step with <c>in</c> is refused when its workflow is checked: this build syncs the main checkout's graph alone.</summary>
+    [Fact]
+    public void AGraphStepsIn_IsRefused_ForAnAgentsViewIsALaterPartOfTheGraph()
+    {
+        Assert.Equal(
+            [$"step 'map' names in: 'make', and {WorkflowStepTypes.GraphViewsLater}"],
+            Problems("""
+            name: flow
+            steps:
+              - name: make
+                type: create-agent
+                agent: worker
+              - name: map
+                type: graphify-codebase
+                in: make
+                dependsOn: [make]
+            """));
+
+        Assert.Equal(
+            [$"step 'map' names in: 'look', and {WorkflowStepTypes.GraphViewsLater}"],
+            Problems("""
+                name: flow
+                steps:
+                  - name: look
+                    type: orient
+                  - name: map
+                    type: graphify-codebase
+                    in: look
+                    dependsOn: [look]
+                """));
+    }
 }

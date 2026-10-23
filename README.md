@@ -107,7 +107,7 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `up <name> [--input name=value] [--json]` | Bring a set-up up on this machine: run the `up` command line `setUp` declares for it, at the root of the tree - a program and its arguments, no shell, a line per platform where they differ, its declared inputs filled in with what `--input` gives over their defaults (`help setups`) |
 | `down <name> [--input name=value] [--json]` | Bring a set-up down: run its `down` command line there, with the values it was brought up with; refused (13) while a leg of a run on this machine still uses it in that tree - in any of the repository's, for one the machine shares - whose last leg brings it down |
 | `host-exec --ssh <name> \| --wsl [<distro>] -- <command>` | Run a DssHarness command on an ssh host or in a WSL distribution |
-| `help [topic]` | Explain exit codes, configuration, legs, disk space, heavy-leg admission, worktrees, orchestrators, workflows, agent clients, anchors, layout, secrets, tools, runners, set-ups, verdicts, mutation testing and CI legs |
+| `help [topic]` | Explain exit codes, configuration, legs, disk space, heavy-leg admission, worktrees, orchestrators, workflows, the codebase graph, agent clients, anchors, layout, secrets, tools, runners, set-ups, verdicts, mutation testing and CI legs |
 
 Every command takes `-C, --directory <dir>` and `-v, --verbose`.
 
@@ -641,9 +641,14 @@ update (`cause`, `since`, `work`) and a piece (`kind`, `changed`, `keep`, `undo`
 rest), which a template reads and an expression does not. The engine starts and drives a run of a workflow
 (`run-orchestrator`, `dssharness help orchestrators`), from the main checkout's HEAD on a branch of its own: a start is
 refused where HEAD is detached, where the checkout is on the branch the run's pull request goes to, where a merge is under
-way and where changes are staged. Fifteen steps are served so far: `orient`, which reads what the repository is and has once
+way and where changes are staged. Sixteen steps are served so far: `orient`, which reads what the repository is and has once
 (its branch and the pull request's base branch, the commit the run started on, a remote, legs and how each tests, anchors,
-CI, mutation arms, what is dirty, the open agents and who holds the tree); `validate-plan`, the machine's check of a plan's
+CI, mutation arms, what is dirty, the open agents and who holds the tree); `graphify-codebase`, which syncs the run's one map
+of the repository - every file a node, each declaration a language's implementation reads with its lines, its header and
+the first sentence the code writes of itself, and the edges between them, each saying how sure it is - under the run's
+`graph/`, reading again only the files whose content, reader, reader's version, size limit or languages changed and those it could not read, and starting a run's first
+graph from the newest earlier run's (`dssharness help codebase-graph`; the workflow's `codebaseGraph` shapes it);
+`validate-plan`, the machine's check of a plan's
 work items; `create-agent`, which makes the agent the engine named for it (`a<N>`, never twice) for the model its
 first reason step runs on, both recorded before the agent is made so a step run again asks for the same one; and the leg
 steps `build`, `test`, `run` and `check-mutations`, which run their legs as the commands do, in the worktree of the agent

@@ -112,12 +112,6 @@ public sealed class AnchorCitationService(
     IGitClient gitClient,
     IFileSystem fileSystem) : IAnchorCitationService
 {
-    /// <summary>
-    /// Bytes of a file examined for a NUL before it is scanned, the window git's own text detection
-    /// uses. A binary file read as text produces id-shaped noise that resolves nowhere.
-    /// </summary>
-    private const int BinaryProbeLength = 8000;
-
     private readonly IHarnessContextLoader _contextLoader = contextLoader;
     private readonly IAnchorRegistryService _registryService = registryService;
     private readonly IGitClient _gitClient = gitClient;
@@ -239,8 +233,8 @@ public sealed class AnchorCitationService(
     private static bool IsInsideARoot(string path, IReadOnlyList<string> roots)
         => Repository.PathPatterns.Matches(roots, path);
 
-    private static bool IsBinary(string text)
-        => text.AsSpan(0, Math.Min(text.Length, BinaryProbeLength)).IndexOf('\0') >= 0;
+    /// <summary>Whether <paramref name="text"/> is binary (<see cref="BinaryContent"/>): read as text it gives id-shaped noise that resolves nowhere.</summary>
+    private static bool IsBinary(string text) => BinaryContent.Holds(text);
 
     private async Task<AnchorCitationSelection> SelectAsync(
         string root,

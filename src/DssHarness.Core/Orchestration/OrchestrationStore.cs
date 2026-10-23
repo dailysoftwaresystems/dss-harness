@@ -68,6 +68,15 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
     /// <summary>What a fold family step's record is, as its refusals and <see cref="RecordWritten"/> name it.</summary>
     public const string FoldRecordKind = "a fold family step's record";
 
+    /// <summary>What the base's manifest of a run's codebase graph is, as its refusals and <see cref="RecordWritten"/> name it.</summary>
+    public const string GraphManifestKind = "the manifest of the run's codebase graph";
+
+    /// <summary>What the link result of a run's codebase graph is, as its refusals and <see cref="RecordWritten"/> name it.</summary>
+    public const string GraphSymbolsKind = "the link result of the run's codebase graph";
+
+    /// <summary>What one file's extract of a run's codebase graph is, as its refusals name it.</summary>
+    public const string GraphExtractKind = "a file's extract of the run's codebase graph";
+
     /// <summary>How long one read-decide-write waits for another process's.</summary>
     private static readonly TimeSpan Window = TimeSpan.FromSeconds(30);
 
@@ -582,6 +591,86 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
         Write(Path.Combine(directory, OrchestratorLayout.StepFoldFileName), FoldRecordKind, record, record.Problem());
     }
 
+    /// <summary>The base's manifest of the run's codebase graph, or null where it has none.</summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    /// <exception cref="HarnessException">The manifest cannot be read as one, or as one of this build's schema (<see cref="HarnessExit.Refused"/>).</exception>
+    public Codebase.CodeGraphManifest? ReadGraphManifest(OrchestratorLayout orchestrator)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+        return Read<Codebase.CodeGraphManifest>(orchestrator.GraphManifestFile, GraphManifestKind, manifest => manifest.Problem());
+    }
+
+    /// <summary>Writes the base's manifest of the run's codebase graph whole, after every extract it names.</summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    /// <param name="manifest">The manifest, which must be one.</param>
+    public void WriteGraphManifest(OrchestratorLayout orchestrator, Codebase.CodeGraphManifest manifest)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+        ArgumentNullException.ThrowIfNull(manifest);
+        Write(orchestrator.GraphManifestFile, GraphManifestKind, manifest, manifest.Problem());
+    }
+
+    /// <summary>The link result of the run's codebase graph, or null where it has none.</summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    /// <exception cref="HarnessException">The link result cannot be read as one (<see cref="HarnessExit.Refused"/>).</exception>
+    public Codebase.CodeGraphSymbolsFile? ReadGraphSymbols(OrchestratorLayout orchestrator)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+        return Read<Codebase.CodeGraphSymbolsFile>(orchestrator.GraphSymbolsFile, GraphSymbolsKind, symbols => symbols.Problem());
+    }
+
+    /// <summary>Writes the link result of the run's codebase graph whole, on one line, after the manifest it was made from.</summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    /// <param name="symbols">The link result, which must be one.</param>
+    public void WriteGraphSymbols(OrchestratorLayout orchestrator, Codebase.CodeGraphSymbolsFile symbols)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+        ArgumentNullException.ThrowIfNull(symbols);
+        Write(orchestrator.GraphSymbolsFile, GraphSymbolsKind, symbols, symbols.Problem(), compact: true);
+    }
+
+    /// <summary>One file's extract, kept at <paramref name="path"/>, or null where none is there.</summary>
+    /// <param name="path">The extract's file (<see cref="OrchestratorLayout.GraphExtractFile"/>).</param>
+    /// <exception cref="HarnessException">The extract cannot be read as one (<see cref="HarnessExit.Refused"/>).</exception>
+    public Codebase.CodeGraphStoredExtract? ReadGraphExtract(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        return Read<Codebase.CodeGraphStoredExtract>(path, GraphExtractKind, extract => extract.Problem());
+    }
+
+    /// <summary>
+    /// Writes one file's extract, on one line: to a temporary name and renamed, so a reader finds it whole or not at all.
+    /// Told to no front end one by one - a first sync writes one for every file - since the manifest written after them names
+    /// every one.
+    /// </summary>
+    /// <param name="path">The extract's file (<see cref="OrchestratorLayout.GraphExtractFile"/>).</param>
+    /// <param name="extract">The extract, which must be one.</param>
+    public void WriteGraphExtract(string path, Codebase.CodeGraphStoredExtract extract)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentNullException.ThrowIfNull(extract);
+        Write(path, GraphExtractKind, extract, extract.Problem(), compact: true, told: false);
+    }
+
+    /// <summary>Appends one sync's line to the graph's <c>sync.jsonl</c>, whole and on the disk before it returns.</summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    /// <param name="line">The sync.</param>
+    public void AppendGraphSync(OrchestratorLayout orchestrator, Codebase.CodeGraphSyncLine line)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+        ArgumentNullException.ThrowIfNull(line);
+
+        if (line.Problem() is { } problem)
+        {
+            throw new InvalidOperationException($"Refusing to append to '{orchestrator.GraphSyncFile}' a line that would not read back: {problem}.");
+        }
+
+        _fileSystem.CreateDirectory(orchestrator.GraphDirectory);
+
+        using var log = DssHarness.Core.Agents.AppendLog.Open(_fileSystem, orchestrator.GraphSyncFile);
+        log.Append(JsonSerializer.Serialize(line, JsonStateFile.LineOptions));
+    }
+
     private T? Read<T>(string path, string what, Func<T, string?> problemOf)
         where T : class
     {
@@ -611,16 +700,23 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
             : record;
     }
 
-    /// <summary>Writes a record whole, and tells a front end what it wrote and where.</summary>
-    private void Write<T>(string path, string what, T record, string? problem)
+    /// <summary>
+    /// Writes a record whole - indented for a person to read, or on one line where it is <paramref name="compact"/> - and,
+    /// where it is <paramref name="told"/>, tells a front end what it wrote and where.
+    /// </summary>
+    private void Write<T>(string path, string what, T record, string? problem, bool compact = false, bool told = true)
     {
         if (problem is not null)
         {
             throw new InvalidOperationException($"Refusing to write '{path}', which would not read back: {problem}.");
         }
 
-        _fileSystem.WriteAllTextAtomic(path, JsonSerializer.Serialize(record, JsonStateFile.Options) + "\n");
-        _output.Publish(new RecordWritten(what, path));
+        _fileSystem.WriteAllTextAtomic(path, JsonSerializer.Serialize(record, compact ? JsonStateFile.LineOptions : JsonStateFile.Options) + "\n");
+
+        if (told)
+        {
+            _output.Publish(new RecordWritten(what, path));
+        }
     }
 
     /// <summary>What is at a record's path; refused as a failure where that cannot be told.</summary>

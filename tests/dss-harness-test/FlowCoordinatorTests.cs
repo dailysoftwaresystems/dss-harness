@@ -3017,4 +3017,46 @@ public sealed class FlowCoordinatorTests
         Assert.Equal(5, runner.Started.Count);
         Assert.Empty(coordinator.Questions);
     }
+
+    /// <summary>
+    /// A step whose type has a time limit of its own and that names none is held to its type's: stopped past it, run again
+    /// as an incomplete step is, and failing past its retries saying the limit was its type's.
+    /// </summary>
+    [Fact]
+    public async Task AStepThatNamesNoTimeLimit_IsHeldToItsTypes()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: map
+                type: graphify-codebase
+                retries: 1
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var runner = new FakeRunner();
+        _ = runner.OnAsync("map", async run =>
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, TokenOf(runner, run.Instance));
+            return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+        });
+        var clock = new TimerClock();
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), clock);
+
+        var session = coordinator.RunAsync(cancel);
+        await clock.WaitingAsync().WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        clock.Advance(TimeSpan.FromMinutes(29));
+        Assert.Equal([1], runner.Runs.Select(run => run.Attempt));
+        clock.Advance(TimeSpan.FromMinutes(1));
+
+        await clock.WaitingAsync(2).WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        clock.Advance(TimeSpan.FromMinutes(30));
+
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        var map = coordinator.Instances["map"];
+
+        Assert.Equal(FlowRunStatus.Failed, end.Status);
+        Assert.Equal((FlowInstanceState.Failed, HarnessExit.Incomplete), (map.State, map.Exit));
+        Assert.Equal("passed its timeoutMinutes (30, its type's), and still so after 2 attempts", map.Error);
+        Assert.Equal([1, 2], runner.Runs.Select(run => run.Attempt));
+    }
 }

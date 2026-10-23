@@ -69,6 +69,18 @@ public static class WorkflowStepTypes
 
         /// <summary>What a step of the type holds while it runs; empty where it holds nothing.</summary>
         public IReadOnlyList<string> ClaimsOf => Claims ?? [];
+
+        /// <summary>
+        /// What the type's <c>failOn</c> key takes, where it takes one: a check's <c>red</c> or <c>never</c>, unless the type
+        /// says its own - a graph, which is no check, fails on what it could not read.
+        /// </summary>
+        public IReadOnlyList<string> FailOnValues { get; init; } = ["red", "never"];
+
+        /// <summary>
+        /// The time limit of a step of the type that says no <c>timeoutMinutes</c>, in minutes; <see langword="null"/> where
+        /// such a step has none.
+        /// </summary>
+        public int? DefaultTimeoutMinutes { get; init; }
     }
 
     /// <summary>The keys every step takes, group or typed step alike.</summary>
@@ -98,7 +110,7 @@ public static class WorkflowStepTypes
     [
         new(
             "timeoutMinutes",
-            $"the longest one attempt of the step may take, in whole minutes from 1 to {WorkflowStep.MostTimeoutMinutes.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)}; absent, none; how it is counted and how a step past it ends is the time limit's paragraph above"),
+            $"the longest one attempt of the step may take, in whole minutes from 1 to {WorkflowStep.MostTimeoutMinutes.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)}; absent, its type's own where the type says one beside its name, and none otherwise; how it is counted and how a step past it ends is the time limit's paragraph above"),
     ];
 
     /// <summary>
@@ -117,6 +129,23 @@ public static class WorkflowStepTypes
     public static IReadOnlyList<StepType> All { get; } =
     [
         new("orient", [], [], null, "OrientRunner: FlowCheckout over IGitClient and GitRemotes, LegSelection.Resolve, TestInvocationResolver, AnchorCitationService.RootsOf, CiSettings.Unset, MutationService.Declares, OrchestrationRules.OpenAgents, TreeHolders", ["read main"], null, Output: OrientOutput),
+        new(
+            "graphify-codebase",
+            [
+                new("in", $"the create-agent step whose agent's worktree it would sync the view of; refused, since {GraphViewsLater}"),
+                new("rebuild", "extract every file of the tree it syncs again, reusing no extract"),
+                new("failOn", "what a graph with files it could not read does: never (the default), the step ends done and lists them, or incomplete, it fails"),
+            ],
+            [],
+            null,
+            "GraphifyCodebaseRunner: ICodebaseGraphService.SyncAsync over IGitClient, CodeGraphExtractors and CodeGraphLinker, through OrchestrationStore",
+            ["read main", "read the agent's tree where in names one"],
+            null,
+            GraphifyOutput)
+        {
+            FailOnValues = [GraphIncomplete, "never"],
+            DefaultTimeoutMinutes = 30,
+        },
         new(
             "reason",
             [
@@ -325,6 +354,23 @@ public static class WorkflowStepTypes
     public static IReadOnlyList<string> ListOrExpressionKeys { get; } =
         ["writes", "within", "paths", "except", "stale", "merge", "rows", "allow.new", "allow.merge"];
 
+    /// <summary>The <c>failOn</c> a <c>graphify-codebase</c> step fails under where its graph has files it could not read.</summary>
+    public const string GraphIncomplete = "incomplete";
+
+    /// <summary>Why a <c>graphify-codebase</c> step that names an agent's worktree with <c>in</c> is refused: the one place it is said.</summary>
+    public const string GraphViewsLater = "this build syncs the main checkout's graph alone, and an agent's view of it is a later part of the graph: leave 'in' out";
+
+    /// <summary>
+    /// The time limit of one attempt of <paramref name="step"/>, in minutes: its own <c>timeoutMinutes</c>, else its type's
+    /// (<see cref="StepType.DefaultTimeoutMinutes"/>); <see langword="null"/> where it has none.
+    /// </summary>
+    /// <param name="step">A step of a workflow.</param>
+    public static int? TimeLimitOf(WorkflowStep step)
+    {
+        ArgumentNullException.ThrowIfNull(step);
+        return step.TimeoutMinutes ?? (step.Type is { } type ? Find(type)?.DefaultTimeoutMinutes : null);
+    }
+
     /// <summary>The type <paramref name="type"/> names, or <see langword="null"/> where none does.</summary>
     /// <param name="type">The value of a step's <c>type</c> key.</param>
     /// <remarks>
@@ -475,6 +521,26 @@ public static class WorkflowStepTypes
     /// <summary>What a fold and a deletion answer: the paths written and deleted, the registries changed, and the ids of the rows applied.</summary>
     private static string FoldOutput => ObjectOf(("written", ListOf(Text)), ("deleted", ListOf(Text)), ("registries", ListOf(Text)), ("rows", ListOf(Text)));
 
+    /// <summary>
+    /// What a sync of the codebase graph answers: the graph's directory, the view it synced and the commit and dirtiness
+    /// of its tree, how many files it keeps, read, reused and removed, the nodes and edges, each implementation's part,
+    /// every file it holds no declaration of with its state and why, and how long it took.
+    /// </summary>
+    private static string GraphifyOutput => ObjectOf(
+        ("graph", Text),
+        ("view", Text),
+        ("commit", TextOrNull),
+        ("dirty", Flag),
+        ("files", WholeNumber),
+        ("extracted", WholeNumber),
+        ("reused", WholeNumber),
+        ("removed", WholeNumber),
+        ("nodes", WholeNumber),
+        ("edges", WholeNumber),
+        ("languages", ListOf(ObjectOf(("language", Text), ("files", WholeNumber), ("nodes", WholeNumber)))),
+        ("skipped", ListOf(ObjectOf(("path", Text), ("state", Text), ("why", TextOrNull)))),
+        ("seconds", Number));
+
     /// <summary>What an anchor check answers: whether it passed, and each finding as a line the check prints.</summary>
     private static string AnchorOutput => ObjectOf(("passed", Flag), ("findings", ListOf(Text)));
 
@@ -498,6 +564,9 @@ public static class WorkflowStepTypes
 
     /// <summary>A schema of a whole number.</summary>
     private static string WholeNumber => """{"type":"integer"}""";
+
+    /// <summary>A schema of a number, whole or not.</summary>
+    private static string Number => """{"type":"number"}""";
 
     /// <summary>A schema of a list whose items nothing types.</summary>
     private static string UntypedList => """{"type":"array"}""";
