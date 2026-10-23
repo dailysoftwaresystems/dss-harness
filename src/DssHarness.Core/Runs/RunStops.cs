@@ -56,7 +56,7 @@ public sealed record RunStopTaken(int Schema, DateTimeOffset TakenUtc, RunStopRe
 /// <remarks>
 /// <para>
 /// The run's dispatcher looks for its request every <see cref="StopCadence.PollEvery"/> from the moment it claims its directory to the
-/// moment it gives it up (<see cref="Watch"/>), takes it - recorded taken in the run's own directory, and the request
+/// moment its legs end (<see cref="Watch"/>, <see cref="RunStopWatch.EndAsync"/>), takes it - recorded taken in the run's own directory, and the request
 /// removed - and stops as an interrupt stops it: each leg stopped where it stands, the ledger written with what was
 /// reached, and the run ending interrupted. The record is the run's, not an asker's: every process that asked reads it
 /// once the run's owner has gone (<see cref="TakenBack"/>), however many asked and whenever, and a run that ended on its

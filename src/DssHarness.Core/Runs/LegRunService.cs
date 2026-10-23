@@ -335,7 +335,7 @@ public sealed class LegRunService(
         request.Watch?.Placed([.. placed.Select(leg => new LegPlace(leg.Name, leg.Synced))]);
 
         // A stop another process asks of the run (stop-run) is looked for from here, where the run owns its directory, to
-        // where it gives it up, and stops the run as an interrupt does: the run's own token is the one both cancel.
+        // where its legs end, and stops the run as an interrupt does: the run's own token is the one both cancel.
         var stop = _stops.Watch(runDirectory, commandName, cancellationToken);
         using var stopping = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, stop.Stopping);
 
@@ -411,8 +411,14 @@ public sealed class LegRunService(
             }
 
             // The legs have ended: the watch ends before the report is made, so a stop asked while it is made is taken
-            // back, never taken by a run whose work is done, nor said to have stopped it.
+            // back, never taken by a run whose work is done, nor said to have stopped it. One the watch took as the legs
+            // ended - after the executor saw its token for the last time - is recorded taken, so the run reports it so.
             await stop.EndAsync().ConfigureAwait(false);
+
+            if (stop.Taken is not null && !execution.Cancelled)
+            {
+                execution = execution with { Cancelled = true };
+            }
 
             return Report(commandName, context, ledger, execution, runId, runDirectory, placed, request.MutationRecord);
         }

@@ -3759,7 +3759,8 @@ trees contend over is the lock above, which stays in the main checkout.
 
 A run is stopped from another terminal by `stop-run <run id>`, typed in the tree that ran it: it
 writes `<run id>.stop.json` beside the run's directory, as its owner file is (`<run id>.owner.json`),
-which the run's dispatcher looks for every `StopCadence.PollEvery` while it owns the directory, takes -
+which the run's dispatcher looks for every `StopCadence.PollEvery` while it owns the directory, until its
+legs end, takes -
 recorded taken among the run's own records (`stopped.json`, `RunStopTaken`, `RunStops.TakenFileOf`)
 and only then the request removed - and stops on as an interrupt stops it: every leg stopped where it
 stands, its ledger written with what was reached, exit 130, a line naming who asked. A stop is taken
@@ -3772,9 +3773,11 @@ dispatcher to give its directory up, and reads the run's record: there, the run 
 it; not there, the run ended on its own before its dispatcher took a stop, so nothing was stopped
 (13). Every exit names the stop record that stands - the request while it is asked, the run's record
 once taken - and never a request the command took back. The record is the run's, not an asker's,
-so two terminals asking at once, or one asking again while the run stops, all hear the same. The dispatcher's watch ends before its directory is given
-up, and gives it up however it ends (`RunStopWatch.EndThenAsync`), taking back a request it never
-took, so no stop is ever taken by a run that has ended. Not
+so two terminals asking at once, or one asking again while the run stops, all hear the same. The dispatcher's watch ends as its legs end, before its
+report is made (`RunStopWatch.EndAsync`), taking back a request it never took - one it took as the
+legs ended is reported as the stop it is - and before its directory is given up it takes back what
+was asked since, giving the directory up however it ends (`RunStopWatch.EndThenAsync`), so no stop
+is ever taken by a run whose work is done. Not
 stopped in time, the request stays asked (13), and `--now` ends the dispatcher's process where it
 stands with its whole tree - only one of this machine, and only the process its owner file names by
 its start - and releases its claim; its ledger is never written. A run that has ended, or whose
