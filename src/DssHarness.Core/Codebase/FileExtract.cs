@@ -181,7 +181,7 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
 
     /// <summary>Every text the extract holds, each of which a store writes.</summary>
     private IEnumerable<string> Texts()
-        => (Nodes ?? []).SelectMany(node => (string?[])[node.Id, node.Kind, node.Name, node.Qualified, node.Signature, node.SubKind, node.Scope, node.Parent, node.Summary, .. node.Modifiers ?? []])
+        => (Nodes ?? []).SelectMany(node => (string?[])[node.Id, node.Kind, node.Name, node.Qualified, node.Signature, node.SubKind, node.Scope, node.Parent, node.Summary, node.ValueType, node.Extends, .. node.Modifiers ?? []])
             .Concat((Scopes ?? []).SelectMany(scope => (string?[])[scope.Name, scope.Parent]))
             .Concat((Imports ?? []).SelectMany(import => (string?[])[import.Form, import.Target, import.Prefix, .. import.Show ?? [], .. import.Hide ?? []]))
             .Concat((AddressRoots ?? []).SelectMany(root => (string?[])[root.Prefix, root.Directory]))
@@ -240,6 +240,19 @@ public sealed record ExtractNode(string Id, string Kind, string Name, string Qua
     public bool Test { get; init; }
 
     /// <summary>
+    /// The type a value of it is declared with - a field's, a property's, an event's - as a type qualifier names it, where
+    /// the code says one: what a call on that value is looked for through.
+    /// </summary>
+    public string? ValueType { get; init; }
+
+    /// <summary>
+    /// The type it is declared to be called on though that type does not declare it - an extension method's receiver - as a
+    /// type qualifier names it from its own file: a call on a value of that type, or of a type built on it, finds it where
+    /// the call's file reaches it.
+    /// </summary>
+    public string? Extends { get; init; }
+
+    /// <summary>
     /// The SHA-256 of its lines (<see cref="CodeGraphIds.Digest"/>): set by the core once the implementation has answered,
     /// never by it, and what says whether the bytes served are the ones extracted.
     /// </summary>
@@ -261,6 +274,8 @@ public sealed record ExtractNode(string Id, string Kind, string Name, string Qua
             : Signature is null || Signature.Length > FileExtract.MostSignature || Signature.AsSpan().IndexOfAny('\r', '\n') >= 0 ? $"its signature is not one line of at most {FileExtract.MostSignature} characters"
             : Summary is { } summary && (summary.Length > FileExtract.MostSummary || summary.AsSpan().IndexOfAny('\r', '\n') >= 0) ? $"its summary is not one line of at most {FileExtract.MostSummary} characters"
             : MinArity is < 0 || (MaxArity is { } most && (MinArity is not { } least || most < least)) ? "its arity is no range of argument counts"
+            : ValueType is { } valueType && string.IsNullOrWhiteSpace(valueType) ? "its value's type is empty"
+            : Extends is { } extends && string.IsNullOrWhiteSpace(extends) ? "the type it extends is empty"
             : Digest is { } digest && !OrchestrationRules.IsDigest(digest) ? "its digest is no SHA-256"
             : null;
 }
@@ -269,7 +284,8 @@ public sealed record ExtractNode(string Id, string Kind, string Name, string Qua
 /// <param name="Name">Its qualified name.</param>
 /// <param name="Open">
 /// Whether other files contribute to it - a namespace, a library and its parts - so that its name is one scope for every
-/// file that declares it; a closed scope is its file's alone, and what is declared in it is seen from no other file.
+/// file that declares it; a closed scope is its file's alone, and what is declared in it - and the type or scope it is
+/// the scope of - is seen from no other file.
 /// </param>
 public sealed record ExtractScope(string Name, bool Open)
 {
@@ -283,7 +299,10 @@ public sealed record ExtractScope(string Name, bool Open)
 /// <param name="Line">The line it is written on.</param>
 public sealed record ExtractImport(string Form, string Target, int Line)
 {
-    /// <summary>The name the import is reached by, where it has one (<c>as p</c>, an alias): its names are then seen only through it.</summary>
+    /// <summary>
+    /// The name the import is reached by, where it has one (<c>as p</c>, an alias): its names are then seen only through it,
+    /// and an import of a scope by it is that scope wherever its prefix is written as a type's or a scope's name.
+    /// </summary>
     public string? Prefix { get; init; }
 
     /// <summary>The only names it makes visible, where it names some (<c>show</c>).</summary>
@@ -344,7 +363,7 @@ public sealed record ExtractReference(string From, string Kind, string Name, int
     /// <summary>How many arguments a call gives; <see langword="null"/> where it is no call, or that is not known.</summary>
     public int? Arity { get; init; }
 
-    /// <summary>Where the name is looked for first, where the code says: a receiver's type, a type's name, <c>this</c>, an import's prefix.</summary>
+    /// <summary>Where the name is looked for, and nowhere else, where the code says: a receiver's type or value, a type's name, <c>this</c>, an import's prefix.</summary>
     public ExtractQualifier? Qualifier { get; init; }
 
     /// <summary>What is wrong with this reference; <see langword="null"/> where nothing is.</summary>
@@ -354,13 +373,14 @@ public sealed record ExtractReference(string From, string Kind, string Name, int
             : !FileExtract.Within(Line, lineCount) ? string.Create(CultureInfo.InvariantCulture, $"it is on line {Line}, outside the file's {lineCount}")
             : Arity is < 0 ? "its arity is below zero"
             : Qualifier is { } qualifier && !CodeQualifierKinds.All.Contains(qualifier.Kind, StringComparer.Ordinal) ? $"its qualifier's kind is '{qualifier.Kind}', which is none of {string.Join(", ", CodeQualifierKinds.All)}"
-            : Qualifier is { Kind: CodeQualifierKinds.Named or CodeQualifierKinds.Prefix, Name: null or "" } ? "its qualifier names nothing"
+            : Qualifier is { Kind: CodeQualifierKinds.Named or CodeQualifierKinds.Type or CodeQualifierKinds.Prefix } named && string.IsNullOrWhiteSpace(named.Name) ? "its qualifier names nothing"
+            : Qualifier is { Kind: CodeQualifierKinds.Value, Name: { } value } && string.IsNullOrWhiteSpace(value) ? "its qualifier's name is empty"
             : null;
 }
 
 /// <summary>Where a reference's name is looked for first.</summary>
 /// <param name="Kind">One of <see cref="CodeQualifierKinds"/>.</param>
-/// <param name="Name">The type, scope or prefix it names, where its kind names one.</param>
+/// <param name="Name">The type, scope, prefix, value or chain of names it names, where its kind names one.</param>
 public sealed record ExtractQualifier(string Kind, string? Name = null);
 
 /// <summary>The kinds of qualifier.</summary>
@@ -372,14 +392,33 @@ public static class CodeQualifierKinds
     /// <summary>The bases of the type the reference is written in, and not the type itself.</summary>
     public const string Base = "base";
 
-    /// <summary>A type or a scope, by its name as the code writes it: a receiver's declared type, a type's name before a static call.</summary>
+    /// <summary>
+    /// A name the code writes before a member that may be a type's, a scope's or a value's - a type's name before a static
+    /// call, a member of a base by its name: a value the scopes hold nearer than any type or scope of its name, and the
+    /// call through its type, a chain of names through each one's in turn; else a type or a scope found as a name is.
+    /// </summary>
     public const string Named = "named";
+
+    /// <summary>
+    /// A type, by its name as the code writes it where the code says it is a type's - a variable's declared type, a type
+    /// made or cast, a type named in a declaration: looked for as a type or a scope alone, never as a value.
+    /// </summary>
+    public const string Type = "type";
 
     /// <summary>An import's prefix: the name is looked for in what that import makes visible, and nowhere else.</summary>
     public const string Prefix = "prefix";
 
+    /// <summary>
+    /// A value whose type the code does not say where the call is written - a variable given a call's result, a member of
+    /// another file - by the name it is written as, where it is a name: the name is looked for as a member of the scopes the
+    /// call is written in, nearest first, and its call through the type that member is declared with - a chain of names
+    /// through each one's type in turn, a type the repository does not declare holding nothing it declares - else in the
+    /// repository by name and arity alone, where nothing is known of its type - never in those scopes as a call of their own.
+    /// </summary>
+    public const string Value = "value";
+
     /// <summary>Every kind.</summary>
-    public static IReadOnlyList<string> All { get; } = [This, Base, Named, Prefix];
+    public static IReadOnlyList<string> All { get; } = [This, Base, Named, Type, Prefix, Value];
 }
 
 /// <summary>A place an implementation saw something it cannot bind.</summary>

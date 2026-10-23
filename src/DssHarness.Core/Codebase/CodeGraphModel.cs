@@ -195,6 +195,10 @@ public static class CodeGraphIds
     /// <param name="path">The file's path, relative to the tree's root with forward separators.</param>
     public static string FileId(string path) => $"{CodeNodeKinds.File}:{path}";
 
+    /// <summary>The name of the file <paramref name="path"/> names: its last part, which an exact claim and an import by a path's ending read.</summary>
+    /// <param name="path">A path, relative to the tree's root with forward separators.</param>
+    public static string FileName(string path) => path[(path.LastIndexOf('/') + 1)..];
+
     /// <summary>
     /// Each of <paramref name="ids"/>'s handle: the first <see cref="HandleLength"/> hexadecimal characters of its
     /// SHA-256, lengthened, for every id that shares them, until no two of the given ids share one.

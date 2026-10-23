@@ -131,7 +131,7 @@ public sealed class CodeGraphExtractors
     {
         ArgumentNullException.ThrowIfNull(path);
 
-        var name = path[(path.LastIndexOf('/') + 1)..];
+        var name = CodeGraphIds.FileName(path);
         var byName = Claiming(extractor => extractor.Claims.Names, claim => string.Equals(claim.Value, name, StringComparison.OrdinalIgnoreCase));
 
         if (byName.Count > 0)

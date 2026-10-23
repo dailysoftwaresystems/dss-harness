@@ -104,10 +104,12 @@ From [`docs/architecture.md`](../../../../docs/architecture.md) "Layering", whic
 - [`Directory.Build.props`](../../../../Directory.Build.props) applies to every project: `net10.0`, nullable on,
   implicit usings, `TreatWarningsAsErrors`, `GenerateDocumentationFile` (so a stale `<param>` fails the build; only
   CS1591 is suppressed), the NuGet audit on every advisory, and **`InvariantGlobalization`** — culture-aware APIs
-  answer invariantly, and `string.Normalize` changes nothing, so never rely on Unicode normalization.
+  answer invariantly, and `string.Normalize` changes nothing, so never rely on Unicode normalization; and
+  `SatelliteResourceLanguages` `en`, so no package's resources of another language are shipped.
 - **Everything a build writes lands under `build/`** (`UseArtifactsOutput`): `build/bin/<Project>/<debug|release>/`,
   `build/obj/...`, packages in `build/package`. Deleting `build/` is a complete clean.
-- **Dependencies:** YamlDotNet, System.CommandLine and Microsoft.Extensions.DependencyInjection (Core; the Cli builds no container), xunit v3
+- **Dependencies:** YamlDotNet, System.CommandLine, Microsoft.Extensions.DependencyInjection (Core; the Cli builds no container) and
+  Microsoft.CodeAnalysis.CSharp (Core: the codebase graph's C# implementation reads its syntax trees alone, nothing compiled), xunit v3
   and NSubstitute (tests). No new package without the maintainer's approval.
 - Every file is stored and checked out with LF line endings ([`.gitattributes`](../../../../.gitattributes)); there
   is no CRLF exception.

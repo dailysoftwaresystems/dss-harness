@@ -3239,8 +3239,8 @@ public static class HelpTopics
             builder,
             "A run's graphify-codebase step maps the repository and keeps the map in the run's directory, "
             + $"{HarnessLayout.OrchestratorsDirectoryName}/<run>/{OrchestratorLayout.GraphDirectoryName}/: every file the tree lists is a node, "
-            + "and each file an implementation reads gives the declarations in it - namespaces, types, members, a document's "
-            + "sections - each with its lines, its header on one line and the first sentence the code writes of itself, and the "
+            + "and each file an implementation reads gives the declarations in it - projects, namespaces, types, members, a "
+            + "document's sections - each with its lines, its header on one line and the first sentence the code writes of itself, and the "
             + $"directed edges between them, each of one kind: {string.Join("; ", CodeEdgeKinds.Described.Select(described => $"{described.Kind}, {described.Meaning}"))}. "
             + $"An edge says how sure it is: {CodeConfidences.Exact} where the code itself says where to look, "
             + $"{CodeConfidences.Unique} where one declaration has that name and arity, {CodeConfidences.Candidates} where two to "

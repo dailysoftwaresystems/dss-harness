@@ -216,12 +216,13 @@ public sealed class CodeGraphExtractorsTests
     /// <summary>
     /// Nothing of the tool outside the implementations' own folder names one of them or their namespace: the store, the
     /// sync, the linker, the step, help and the validator know no language by name, so a new one is one class and its tests.
+    /// A type nested in one is its own alone, which no code outside it can name.
     /// </summary>
     [Fact]
     public void NothingOutsideTheImplementationsFolder_NamesOneOfThem()
     {
         var languages = typeof(ICodeGraphExtractor).Assembly.GetTypes()
-            .Where(type => type.Namespace == typeof(MarkdownExtractor).Namespace && !type.Name.StartsWith('<'))
+            .Where(type => type.Namespace == typeof(MarkdownExtractor).Namespace && !type.IsNested && !type.Name.StartsWith('<'))
             .Select(type => type.Name)
             .Append(typeof(MarkdownExtractor).Namespace!)
             .ToList();

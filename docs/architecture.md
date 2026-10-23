@@ -1735,8 +1735,9 @@ tree lists is a node, every declaration an implementation reads is one, and the 
 sure they are (`exact`, `unique`, `candidates`). Nothing of it names a language. Everything that reads a file's contents
 is an implementation of one contract, `ICodeGraphExtractor` - its `Language`, its `Version`, its `Claims`, whether it
 `Outlines` its files rather than reading a language's declarations, a pure `Extract` and its `Help` - which answers a
-language-neutral `FileExtract`: nodes, the scopes they are put in (open to
-other files or closed), imports by scope, relative path, address or path ending, with their prefixes and filters,
+language-neutral `FileExtract`: nodes - a value's type (`ValueType`) and the type an extension extends (`Extends`)
+among what they say - the scopes they are put in (open to
+other files or closed: what a closed one declares, and the type or scope it is the scope of, its file's alone), imports by scope, relative path, address or path ending, with their prefixes and filters,
 address roots, references by name with their qualifiers, and four marks - a prototype, a test, generated code with
 why, and each line it saw something it cannot bind (`dynamic`). An implementation is registered by being written:
 `CodeGraphExtractors.Implementations` is the one scan of the core, which `AddDssHarness` registers each type of, and the
@@ -1746,7 +1747,9 @@ extension no file has, and a version below 1 - so a clash is a red test, never a
 claimants of its exact name, else of its extension, else to the fallback (`listed`); their content tests decide among
 several, and none or several saying yes lists it `ambiguous`. Everything else about the graph - `codebaseGraph.languages`,
 V52's names and `help codebase-graph`'s table - is read from the registry. A test keeps the core from mentioning
-anything under `Codebase\Languages\`. An extract is sound by `FileExtract.Problem` - every span inside the file, every
+anything under `Codebase\Languages\`. Every span counts lines as `CodeFileText.Lines` cuts them - CR LF, LF and CR
+alone, as an editor and git count - and an implementation that reads a parser's positions turns each into a line by
+`CodeFileText.LineIndex`, since a parser may also break lines at NEL and the Unicode separators. An extract is sound by `FileExtract.Problem` - every span inside the file, every
 parent present, holding its child and no cycle, ids unique and of its implementation, text whole UTF-16 - and every
 node's digest is the core's to set (`WithDigests`), whatever the implementation set. An `Extract` or a content test that
 throws lists its one file `unreadable` with why, never the end of a sync. Each implementation's tests derive
@@ -1757,9 +1760,21 @@ another's, the extracts stored with the tests for its version (`fixtures/codebas
 written where missing with `DSSHARNESS_STORE_EXTRACTS=1`), and the edges its fixtures name through the linker.
 
 The one linker (`CodeGraphLinker`) resolves every reference by the same steps for every language - the qualifier's
-scope, a type and its bases among it; the enclosing scopes from the inside out; the file's imports in order, filters
-applied; the repository by name and arity - and derives `dispatches`, `declares` and `tests` from the `implements` edges
-and the marks. Extracts keep names, not targets, so a sync links the whole tree again and a name a changed file adds
+scope, a type and its bases among it; the enclosing scopes from the inside out; a scope import's prefix (an alias),
+for what that import stands for; the file's imports in order, filters applied; the repository by name and arity - a
+qualifier being read as such a prefix too where no type or scope has it as its whole qualified name, from the file
+that makes the import or, made global, from every file of its language - and derives `dispatches`, `declares` and `tests` from the `implements` edges
+and the marks. A qualified reference is looked for where its qualifier says alone. A `type` qualifier is a type or
+scope found as a name is - nearest first in the scopes it is written in, then the container of its whole qualified
+name, an alias, an import's, the repository's - else every container its name ends; a `named` one is that too, unless
+a value a scope it is written in holds (a base's among them) is nearer. A value - and a `value` qualifier - is
+followed through its member's `ValueType`, each name of a chain, from a value or from a type, through the one before's
+type, a type the repository does not declare holding nothing it declares; a call on a value of no said type goes by
+its name in the repository, never to a type and never to the caller's own scopes. A call a type does not hold goes,
+`unique`, to a member that `Extends` that type or a base of it, as the extension's own file names the type - or a type
+the repository lacks, by its written name - where the call's file reaches it: the scope of the extension's type, or
+the one holding that, is one the call is written in or its file imports, or is the top, or the call's file imports the
+extension's by path; one in a closed scope is reached from its own file alone, and no override is an extension. Extracts keep names, not targets, so a sync links the whole tree again and a name a changed file adds
 binds callers in files that did not change. A global import is read from the file that makes it, so a relative one
 names the same file from every file of its language. An interface's member dispatches, for each type that implements it -
 itself or through a base, the interface itself or one extending it - to the member with a body that answers it: the type's

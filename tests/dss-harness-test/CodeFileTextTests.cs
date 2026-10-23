@@ -100,6 +100,21 @@ public sealed class CodeFileTextTests
         Assert.Equal(expected.Split('|'), lines);
     }
 
+    /// <summary>
+    /// A position is on the line <see cref="CodeFileText.Lines"/> puts it on: an ending is its line's, a separator a parser
+    /// may break at is inside one, and the text's end is on its last line.
+    /// </summary>
+    [Fact]
+    public void APosition_IsOnTheLineLinesPutsItOn_ItsEndingAmongIt()
+    {
+        var text = $"a\r\nb\nc\rd{(char)0x2028}e{(char)0x85}f";
+        var index = CodeFileText.LineIndex(text);
+
+        Assert.Equal(CodeFileText.Lines(text).Count, index.Starts.Count);
+        Assert.Equal([1, 1, 1, 2, 2, 3, 3, 4, 4, 4, 4, 4, 4], Enumerable.Range(0, text.Length + 1).Select(index.LineAt));
+        Assert.Equal(1, CodeFileText.LineIndex(string.Empty).LineAt(0));
+    }
+
     /// <summary>A probe is a text's first characters as near its first bytes as a text is cut, never inside a surrogate pair.</summary>
     [Fact]
     public void AProbe_IsTheTextsFirstCharacters_NeverInsideASurrogatePair()

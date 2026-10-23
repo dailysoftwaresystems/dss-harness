@@ -77,6 +77,9 @@ public sealed class CodebaseGraphRecordsTests
             (sound with { Nodes = [Node with { MinArity = 2, MaxArity = 1 }] }, "its arity is no range"),
             (sound with { Nodes = [Node with { MinArity = null, MaxArity = 1 }] }, "its arity is no range"),
             (sound with { Nodes = [Node with { Digest = "ABC" }] }, "its digest is no SHA-256"),
+            (sound with { Nodes = [Node with { ValueType = " " }] }, "its value's type is empty"),
+            (sound with { Nodes = [Node with { Extends = "" }] }, "the type it extends is empty"),
+            (sound with { Nodes = [Node with { ValueType = "x\uD83D" }] }, "a surrogate cut from its pair"),
             (sound with { Nodes = [Node, Node with { Id = "toy:B", Parent = "toy:Z" }] }, "is declared inside 'toy:Z', which it holds no node of"),
             (sound with { Nodes = [Node with { End = 2 }, Node with { Id = "toy:B", Start = 2, End = 3, Parent = "toy:A" }] }, "whose lines do not hold it"),
             (sound with { Nodes = [Node with { Parent = "toy:A" }] }, "its node 'toy:A' is declared inside itself, through 'toy:A'"),
@@ -98,6 +101,9 @@ public sealed class CodebaseGraphRecordsTests
             (sound with { References = [new ExtractReference("toy:A", CodeEdgeKinds.Calls, "Go", 1) { Arity = -1 }] }, "its arity is below zero"),
             (sound with { References = [new ExtractReference("toy:A", CodeEdgeKinds.Calls, "Go", 1) { Qualifier = new ExtractQualifier("super") }] }, "its qualifier's kind is 'super'"),
             (sound with { References = [new ExtractReference("toy:A", CodeEdgeKinds.Calls, "Go", 1) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Prefix) }] }, "its qualifier names nothing"),
+            (sound with { References = [new ExtractReference("toy:A", CodeEdgeKinds.Calls, "Go", 1) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Named, " ") }] }, "its qualifier names nothing"),
+            (sound with { References = [new ExtractReference("toy:A", CodeEdgeKinds.Calls, "Go", 1) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Type) }] }, "its qualifier names nothing"),
+            (sound with { References = [new ExtractReference("toy:A", CodeEdgeKinds.Calls, "Go", 1) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Value, "") }] }, "its qualifier's name is empty"),
             (sound with { Generated = " " }, "it says it is generated and not why"),
             (sound with { Dynamic = [new ExtractDynamic(1, "")] }, "it marks a line dynamic and not why"),
             (sound with { Dynamic = [new ExtractDynamic(9, "macro")] }, "it marks line 9 dynamic, outside its 3 lines"),
@@ -166,12 +172,16 @@ public sealed class CodebaseGraphRecordsTests
         using var directory = new TempDirectory();
         var (store, layout) = Store(directory);
         var lines = CodeFileText.Lines("class A\n  go\nend\n");
-        var extract = new FileExtract([Node with { SubKind = "class", Scope = "app", Modifiers = ["public", "static"], Prototype = true, Test = true, Summary = "An \U0001F600 A." }, Node with { Id = "toy:A.b", Kind = CodeNodeKinds.Member, Name = "b", Qualified = "A.b", Start = 2, End = 3, Parent = "toy:A", BodyStart = null, MinArity = null, MaxArity = null }])
+        var extract = new FileExtract([Node with { SubKind = "class", Scope = "app", Modifiers = ["public", "static"], Prototype = true, Test = true, Summary = "An \U0001F600 A." }, Node with { Id = "toy:A.b", Kind = CodeNodeKinds.Member, Name = "b", Qualified = "A.b", Start = 2, End = 3, Parent = "toy:A", BodyStart = null, MinArity = null, MaxArity = null, ValueType = "Repo", Extends = "A" }])
         {
             Scopes = [new ExtractScope("app", Open: true) { Parent = "root" }, new ExtractScope("root", Open: false)],
             Imports = [new ExtractImport(CodeImportForms.Scope, "lib", 1) { Prefix = "l", Show = ["X"], Hide = ["Y"], Global = true }],
             AddressRoots = [new ExtractAddressRoot("package:x/", "lib")],
-            References = [new ExtractReference("toy:A", CodeEdgeKinds.Calls, "Go", 2) { Arity = 1, Qualifier = new ExtractQualifier(CodeQualifierKinds.Named, "B") }],
+            References =
+            [
+                new ExtractReference("toy:A", CodeEdgeKinds.Calls, "Go", 2) { Arity = 1, Qualifier = new ExtractQualifier(CodeQualifierKinds.Named, "B") },
+                new ExtractReference("toy:A", CodeEdgeKinds.Calls, "Save", 3) { Arity = 0, Qualifier = new ExtractQualifier(CodeQualifierKinds.Value, "repo.Store") },
+            ],
             Generated = "a generator wrote it",
             Dynamic = [new ExtractDynamic(3, "a call through a pointer")],
         }.WithDigests(lines);

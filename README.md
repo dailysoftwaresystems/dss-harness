@@ -645,7 +645,8 @@ way and where changes are staged. Sixteen steps are served so far: `orient`, whi
 (its branch and the pull request's base branch, the commit the run started on, a remote, legs and how each tests, anchors,
 CI, mutation arms, what is dirty, the open agents and who holds the tree); `graphify-codebase`, which syncs the run's one map
 of the repository - every file a node, each declaration a language's implementation reads with its lines, its header and
-the first sentence the code writes of itself, and the edges between them, each saying how sure it is - under the run's
+the first sentence the code writes of itself (C# through the compiler's own parser, MSBuild's projects and solutions,
+Markdown's headings; every other file by its name and size), and the edges between them, each saying how sure it is - under the run's
 `graph/`, reading again only the files whose content, reader, reader's version, size limit or languages changed and those it could not read, and starting a run's first
 graph from the newest earlier run's (`dssharness help codebase-graph`; the workflow's `codebaseGraph` shapes it);
 `validate-plan`, the machine's check of a plan's

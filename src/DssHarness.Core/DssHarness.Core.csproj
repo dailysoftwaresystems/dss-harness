@@ -20,23 +20,26 @@
     <!-- For CommandLineParser.SplitCommandLine, which turns one command line - of an action file, or a
          set-up's up or down - into a program and its arguments without a shell (CommandLineText). The CLI
          project already depends on this package; the splitter is needed here, where those lines are read. -->
-    <PackageReference Include="System.CommandLine" Version="2.0.12" />
+    <PackageReference Include="System.CommandLine" Version="2.0.13" />
 
     <!-- The composition root: every service is assembled in Core (Composition\ServiceRegistration), so
          a graphical front end begins the same operations the command line does without the command
          line. The front end supplies the output and the prompt; the registrations are the tool's. -->
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.12" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.13" />
+
+    <!-- The codebase graph's C# implementation (Codebase\Languages\CSharpExtractor) reads a file through the
+         compiler's own parser: a full syntax tree of any file, tolerant of errors, with exact spans. Its syntax
+         alone - no compilation, no references, no restore - so nothing of a repository is built to graph it. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.9.0" />
   </ItemGroup>
 
   <ItemGroup>
     <!-- The skeleton init writes for a new anchor registry. Embedded so it travels inside the
          assembly and can never be missing or out of step with the code that reads it. -->
     <None Remove="Anchors/Templates/anchor-registry.md" />
-    <EmbeddedResource Include="Anchors/Templates/anchor-registry.md"
-                      LogicalName="DssHarness.Core.Anchors.Templates.anchor-registry.md" />
+    <EmbeddedResource Include="Anchors/Templates/anchor-registry.md" LogicalName="DssHarness.Core.Anchors.Templates.anchor-registry.md" />
     <None Remove="Agents/Templates/agent-providers.json" />
-    <EmbeddedResource Include="Agents/Templates/agent-providers.json"
-                      LogicalName="DssHarness.Core.AgentProviders" />
+    <EmbeddedResource Include="Agents/Templates/agent-providers.json" LogicalName="DssHarness.Core.AgentProviders" />
   </ItemGroup>
 
   <ItemGroup>
@@ -44,16 +47,14 @@
          agent files, prompts, schemas, the bar for recommendations - kept beside the engine that
          reads them, embedded whole under the workflow's own layout, so every build of the tool
          carries the very workflow its own tests validate. -->
-    <EmbeddedResource Include="Orchestration/Flow/Templates/**/*"
-                      LogicalName="DssHarness.Core.WorkflowTemplates/%(RecursiveDir)%(Filename)%(Extension)" />
+    <EmbeddedResource Include="Orchestration/Flow/Templates/**/*" LogicalName="DssHarness.Core.WorkflowTemplates/%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 
   <ItemGroup>
     <!-- The fixture check-mutations sweeps for its self-test, and the end-to-end tests sweep: kept
          beside the tests, and embedded whole, each file under its path in the fixture, so every
          build of the tool carries the very fixture its own tests swept. -->
-    <EmbeddedResource Include="../../tests/mutation-fixture/**/*"
-                      LogicalName="DssHarness.Core.MutationFixture/%(RecursiveDir)%(Filename)%(Extension)" />
+    <EmbeddedResource Include="../../tests/mutation-fixture/**/*" LogicalName="DssHarness.Core.MutationFixture/%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 
 </Project>

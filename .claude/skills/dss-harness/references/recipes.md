@@ -129,7 +129,9 @@ and tested; embedding another takes one `EmbeddedResource` line in the test proj
    argument: its `Language` (lower-case letters and digits), `Version` 1, its `Claims` (exact names, extensions with
    their dot, a content test on each claim another implementation shares), `Outlines`, `Help` and a pure `Extract`
    that answers any text, a cut of one included, and never throws. Nothing registers it: the registry's one scan finds
-   it, and nothing outside `Languages/` may name it (`CodeGraphExtractorsTests`).
+   it, and nothing outside `Languages/` may name it (`CodeGraphExtractorsTests`). Lines are the core's: one that reads
+   a parser's positions turns them into lines by `CodeFileText.LineIndex`; signatures and summaries are cut by
+   `ExtractText`, beside the implementations.
 2. **Its tests** — `tests/dss-harness-test/<Name>ExtractorTests.cs` deriving from
    `CodeGraphExtractorContractTests<T>`, with fixtures covering each claim, the nodes each must hold (with lines) and
    the edges linking them must give. Run them once with `DSSHARNESS_STORE_EXTRACTS=1` to write the stored extracts

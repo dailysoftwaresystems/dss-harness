@@ -84,15 +84,32 @@ public static class CodeFileText
     public static IReadOnlyList<string> Lines(string text)
     {
         ArgumentNullException.ThrowIfNull(text);
+        return [.. Spans(text).Select(line => text[line.Start..line.End])];
+    }
 
-        var lines = new List<string>();
+    /// <summary>
+    /// Where each of <paramref name="text"/>'s lines begins, as <see cref="Lines"/> cuts them: an implementation that reads
+    /// a parser's positions turns each into a line by it, so its spans count the lines the core counts - a parser's own
+    /// lines also break where this does not, at NEL and the Unicode separators.
+    /// </summary>
+    /// <param name="text">A file's text.</param>
+    public static CodeLineIndex LineIndex(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        return new CodeLineIndex([.. Spans(text).Select(line => line.Start)]);
+    }
+
+    /// <summary>Each line of <paramref name="text"/>: where it begins, and where its text ends before its ending.</summary>
+    private static List<(int Start, int End)> Spans(string text)
+    {
+        var lines = new List<(int Start, int End)>();
         var start = 0;
 
         for (var at = 0; at < text.Length; at++)
         {
             if (text[at] is '\r' or '\n')
             {
-                lines.Add(text[start..at]);
+                lines.Add((start, at));
 
                 if (text[at] == '\r' && at + 1 < text.Length && text[at + 1] == '\n')
                 {
@@ -105,7 +122,7 @@ public static class CodeFileText
 
         if (start < text.Length || lines.Count == 0)
         {
-            lines.Add(text[start..]);
+            lines.Add((start, text.Length));
         }
 
         return lines;
@@ -126,6 +143,36 @@ public static class CodeFileText
         }
 
         return text[..length];
+    }
+}
+
+/// <summary>Where a text's lines begin (<see cref="CodeFileText.LineIndex"/>): a position in it told as the line it is on.</summary>
+/// <param name="Starts">Where each line begins, in order; the first at 0.</param>
+public sealed record CodeLineIndex(IReadOnlyList<int> Starts)
+{
+    /// <summary>The line, from 1, that <paramref name="position"/> - a character of the text, or its end - is on.</summary>
+    /// <param name="position">A position in the text.</param>
+    public int LineAt(int position)
+    {
+        var low = 0;
+        var high = Starts.Count - 1;
+
+        // The last line that begins at or before the position.
+        while (low < high)
+        {
+            var middle = (low + high + 1) / 2;
+
+            if (Starts[middle] <= position)
+            {
+                low = middle;
+            }
+            else
+            {
+                high = middle - 1;
+            }
+        }
+
+        return low + 1;
     }
 }
 

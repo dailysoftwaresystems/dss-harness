@@ -40,7 +40,7 @@ public sealed partial class MarkdownExtractor : ICodeGraphExtractor
         var headings = Headings(lines);
         var nodes = new List<ExtractNode>();
         var open = new List<(int Level, ExtractNode Node, string Title)>();
-        var taken = new Dictionary<string, int>(StringComparer.Ordinal);
+        var ids = new ExtractIds();
 
         for (var at = 0; at < headings.Count; at++)
         {
@@ -56,13 +56,10 @@ public sealed partial class MarkdownExtractor : ICodeGraphExtractor
             }
 
             var path = string.Join('/', open.Select(section => section.Title).Append(title));
-            var id = $"{Language}:{input.Path}#{path}";
-
             // Two headings of one path in one file - two "Usage" under one parent - are told apart by their order.
-            var seen = taken[id] = taken.GetValueOrDefault(id) + 1;
-            id = seen == 1 ? id : $"{id}~{seen.ToString(CultureInfo.InvariantCulture)}";
+            var id = ids.Next($"{Language}:{input.Path}#{path}");
 
-            var node = new ExtractNode(id, CodeNodeKinds.Section, title, $"{input.Path}#{path}", start, end, Cut(signature, FileExtract.MostSignature))
+            var node = new ExtractNode(id, CodeNodeKinds.Section, title, $"{input.Path}#{path}", start, end, ExtractText.Signature(signature))
             {
                 SubKind = $"h{level.ToString(CultureInfo.InvariantCulture)}",
                 Parent = open.Count > 0 ? open[^1].Node.Id : null,
@@ -173,26 +170,10 @@ public sealed partial class MarkdownExtractor : ICodeGraphExtractor
                 return null;
             }
 
-            var stop = Sentence().Match(text);
-            return Cut(stop.Success ? text[..(stop.Index + 1)] : text, FileExtract.MostSummary);
+            return ExtractText.Summary(text);
         }
 
         return null;
-    }
-
-    /// <summary><paramref name="text"/> cut, where it is longer than <paramref name="most"/>, at a word before it with an ellipsis - never inside a surrogate pair.</summary>
-    private static string Cut(string text, int most)
-    {
-        if (text.Length <= most)
-        {
-            return text;
-        }
-
-        var cut = text[..(most - 1)];
-        cut = char.IsHighSurrogate(cut[^1]) ? cut[..^1] : cut;
-        var space = cut.LastIndexOf(' ');
-
-        return (space > most / 2 ? cut[..space] : cut).TrimEnd() + "…";
     }
 
     private static bool IsUnderline(string line) => Underline().IsMatch(line);
@@ -224,9 +205,6 @@ public sealed partial class MarkdownExtractor : ICodeGraphExtractor
 
     [GeneratedRegex(@"^ {0,3}(?<marks>`{3,}|~{3,})(?<info>.*)$", RegexOptions.CultureInvariant)]
     private static partial Regex Fence();
-
-    [GeneratedRegex(@"[.!?](?=\s|$)", RegexOptions.CultureInvariant)]
-    private static partial Regex Sentence();
 
     /// <summary>A rule: three or more of one of <c>-</c>, <c>*</c> or <c>_</c>, spaces between them allowed.</summary>
     [GeneratedRegex(@"^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$", RegexOptions.CultureInvariant)]

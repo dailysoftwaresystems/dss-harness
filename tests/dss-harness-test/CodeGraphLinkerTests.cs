@@ -246,6 +246,325 @@ public sealed class CodeGraphLinkerTests
     }
 
     /// <summary>
+    /// A scope import's prefix - an alias - stands for what it imports wherever a type's or a scope's name is written:
+    /// alone, and as a qualifier no type or scope has as its whole name; exact, from its own file and, made global, from
+    /// every file of its language, and from no other.
+    /// </summary>
+    [Fact]
+    public void AScopeImportsPrefix_StandsForWhatItImports_AloneOrAsAQualifier()
+    {
+        var linked = Link(
+            File("lib.t", [Type("lib.Tool"), Member("lib.Tool.Run", 0)], scopes: [Open("lib")]),
+            File("usings.t", [], imports: [Import(CodeImportForms.Scope, "lib.Tool") with { Prefix = "Gadget", Global = true }]),
+            File("use.t", [Type("app.A"), Member("app.A.Go", 0)],
+                [
+                    Ref("app.A.Go", CodeEdgeKinds.References, "Kit"),
+                    Call("app.A.Go", "Run", 0, Named("Kit")) with { Line = 2 },
+                    Ref("app.A.Go", CodeEdgeKinds.References, "Gadget") with { Line = 3 },
+                    Call("app.A.Go", "Run", 0, Named("Gadget")) with { Line = 4 },
+                ],
+                [Open("app")],
+                [Import(CodeImportForms.Scope, "lib.Tool") with { Prefix = "Kit" }]),
+            new CodeGraphFile("other.u", "u", Extract([new ExtractNode("u:Go", CodeNodeKinds.Member, "Go", "Go", 1, 1, "Go")]) with
+            {
+                References = [new ExtractReference("u:Go", CodeEdgeKinds.References, "Gadget", 1), new ExtractReference("u:Go", CodeEdgeKinds.References, "Kit", 2)],
+            }));
+
+        Assert.Contains(new CodeEdge("t:app.A.Go", "t:lib.Tool", CodeEdgeKinds.References, 1, CodeConfidences.Exact), linked.Edges);
+        Assert.Contains(new CodeEdge("t:app.A.Go", "t:lib.Tool.Run", CodeEdgeKinds.Calls, 2, CodeConfidences.Exact), linked.Edges);
+        Assert.Contains(new CodeEdge("t:app.A.Go", "t:lib.Tool", CodeEdgeKinds.References, 3, CodeConfidences.Exact), linked.Edges);
+        Assert.Contains(new CodeEdge("t:app.A.Go", "t:lib.Tool.Run", CodeEdgeKinds.Calls, 4, CodeConfidences.Exact), linked.Edges);
+        Assert.DoesNotContain(linked.Edges, edge => edge.From == "u:Go");
+        Assert.Equal(2, linked.External["u:Go"]);
+    }
+
+    /// <summary>
+    /// A dotted name that begins with an alias is that alias's target and the rest, from its own file; a type or a scope
+    /// of a written name is found before an alias of it, as a name written alone is in the scopes before the aliases.
+    /// </summary>
+    [Fact]
+    public void ADottedNameBeginningWithAnAlias_IsItsTarget_AndAWholeNameOrAScopesTypeComesFirst()
+    {
+        var linked = Link(
+            File("lib.t", [Type("lib.Tool"), Member("lib.Tool.Run", 0), Type("lib.Kit"), Member("lib.Kit.Run", 0)], scopes: [Open("lib")]),
+            File("use.t", [Type("app.Kit"), Member("app.Kit.Run", 0), Type("app.A"), Member("app.A.Go", 0)],
+                [
+                    Call("app.A.Go", "Run", 0, Named("L.Tool")),
+                    Call("app.A.Go", "Run", 0, Named("Kit")) with { Line = 2 },
+                    Call("app.A.Go", "Run", 0, Named("lib.Kit")) with { Line = 3 },
+                ],
+                [Open("app")],
+                [Import(CodeImportForms.Scope, "lib") with { Prefix = "L" }, Import(CodeImportForms.Scope, "lib.Kit") with { Prefix = "Kit" }]));
+
+        Assert.Contains(new CodeEdge("t:app.A.Go", "t:lib.Tool.Run", CodeEdgeKinds.Calls, 1, CodeConfidences.Exact), linked.Edges);
+        Assert.Contains(new CodeEdge("t:app.A.Go", "t:app.Kit.Run", CodeEdgeKinds.Calls, 2, CodeConfidences.Exact), linked.Edges);
+        Assert.Contains(new CodeEdge("t:app.A.Go", "t:lib.Kit.Run", CodeEdgeKinds.Calls, 3, CodeConfidences.Exact), linked.Edges);
+        Assert.DoesNotContain(linked.Edges, edge => edge is { From: "t:app.A.Go", To: "t:lib.Kit.Run", Line: 2 });
+    }
+
+    /// <summary>
+    /// A value of a type the code does not say is found through the member it is - its type's member, exact - and else by
+    /// its name alone in the repository, never in the scopes the call is written in as though it were a call of theirs.
+    /// </summary>
+    [Fact]
+    public void AValueOfNoSaidType_IsFoundThroughTheMemberItIs_ElseByItsNameAlone()
+    {
+        var linked = Link(
+            File("a.t",
+                [Type("app.A"), Member("app.A.Save", 0), Value("app.A.repo", "Repo"), Value("app.A.loose", null), Member("app.A.Go", 0), Type("app.Repo"), Member("app.Repo.Save", 0)],
+                [
+                    Call("app.A.Go", "Save", 0, new ExtractQualifier(CodeQualifierKinds.Value)),
+                    Call("app.A.Go", "Save", 0, new ExtractQualifier(CodeQualifierKinds.Value, "repo")) with { Line = 2 },
+                    Call("app.A.Go", "Save", 0, new ExtractQualifier(CodeQualifierKinds.Value, "loose")) with { Line = 3 },
+                    Call("app.A.Go", "Save", 0) with { Line = 4 },
+                ],
+                [Open("app")]));
+
+        Assert.Contains(new CodeEdge("t:app.A.Go", "t:app.A.Save", CodeEdgeKinds.Calls, 1, CodeConfidences.Candidates), linked.Edges);
+        Assert.Contains(new CodeEdge("t:app.A.Go", "t:app.Repo.Save", CodeEdgeKinds.Calls, 1, CodeConfidences.Candidates), linked.Edges);
+        Assert.Contains(new CodeEdge("t:app.A.Go", "t:app.Repo.Save", CodeEdgeKinds.Calls, 2, CodeConfidences.Exact), linked.Edges);
+        Assert.DoesNotContain(linked.Edges, edge => edge is { From: "t:app.A.Go", To: "t:app.A.Save", Line: 2 });
+        Assert.Contains(new CodeEdge("t:app.A.Go", "t:app.A.Save", CodeEdgeKinds.Calls, 3, CodeConfidences.Candidates), linked.Edges);
+        Assert.Contains(new CodeEdge("t:app.A.Go", "t:app.A.Save", CodeEdgeKinds.Calls, 4, CodeConfidences.Exact), linked.Edges);
+    }
+
+    /// <summary>
+    /// A named qualifier no type or scope has is a value where a member the scopes hold - a base's among them - has it, and
+    /// the call goes through that member's type, as its own file names it; a chain of names, from a value or a type, goes
+    /// through each one's type in turn; one that is neither stays external.
+    /// </summary>
+    [Fact]
+    public void ANamedQualifierNamingNoType_IsAValue_AndAChainGoesThroughEachType()
+    {
+        var linked = Link(
+            File("base.t", [Type("app.Base"), Value("app.Base.Repository", "Repo"), Type("app.Repo"), Member("app.Repo.Save", 0), Type("app.Cache"), Value("app.Cache.Instance", "Cache"), Value("app.Cache.Store", "Repo")], scopes: [Open("app")]),
+            File("derived.t", [Type("app.Derived"), Member("app.Derived.Go", 0), Value("app.Derived.cache", "Cache")],
+                [
+                    Ref("app.Derived", CodeEdgeKinds.Inherits, "Base"),
+                    Call("app.Derived.Go", "Save", 0, Named("Repository")),
+                    Call("app.Derived.Go", "Save", 0, Named("Cache.Instance.Store")) with { Line = 2 },
+                    Call("app.Derived.Go", "Save", 0, new ExtractQualifier(CodeQualifierKinds.Value, "cache.Store")) with { Line = 3 },
+                    Call("app.Derived.Go", "Save", 0, Named("Console")) with { Line = 4 },
+                ],
+                [Open("app")]));
+
+        Assert.Contains(new CodeEdge("t:app.Derived.Go", "t:app.Repo.Save", CodeEdgeKinds.Calls, 1, CodeConfidences.Exact), linked.Edges);
+        Assert.Contains(new CodeEdge("t:app.Derived.Go", "t:app.Repo.Save", CodeEdgeKinds.Calls, 2, CodeConfidences.Exact), linked.Edges);
+        Assert.Contains(new CodeEdge("t:app.Derived.Go", "t:app.Repo.Save", CodeEdgeKinds.Calls, 3, CodeConfidences.Exact), linked.Edges);
+        Assert.DoesNotContain(linked.Edges, edge => edge is { From: "t:app.Derived.Go", Line: 4 });
+        Assert.Equal(1, linked.External["t:app.Derived.Go"]);
+    }
+
+    /// <summary>
+    /// A value the scopes hold is the qualifier where no nearer scope declares a type or a scope of its name, before a type
+    /// an import has of it; a type a nearer scope declares is the qualifier before the type at the top of that name; a
+    /// chain that comes to a type the repository does not declare holds nothing it declares, though the repository has a
+    /// member of the call's name, and one through a value of no said type is looked for by the call's name alone.
+    /// </summary>
+    [Fact]
+    public void TheNearestOfAValueOrAType_IsTheQualifier_AndAChainThroughATypeTheRepositoryLacks_FindsNothing()
+    {
+        var linked = Link(
+            File("lib.t", [Type("lib.Log"), Member("lib.Log.Info", 0)], scopes: [Open("lib")]),
+            File("top.t", [Type("Inner"), Member("Inner.Make", 0)]),
+            File("app.t",
+                [
+                    Type("app.ILog"), Member("app.ILog.Info", 0),
+                    Type("app.Base"), Value("app.Base.Log", "ILog"), Value("app.Base.map", "Dictionary`2"), Value("app.Base.loose", null),
+                    Type("app.D"), Member("app.D.Go", 0), Type("app.D.Inner"), Member("app.D.Inner.Make", 0),
+                    Type("app.Keys"), Member("app.Keys.Contains", 1),
+                    Type("app.D.Cfg"), Member("app.D.Cfg.Load", 0), Value("app.Base.Cfg", "Settings"), Type("app.Settings"), Member("app.Settings.Load", 0),
+                ],
+                [
+                    Ref("app.D", CodeEdgeKinds.Inherits, "Base"),
+                    Call("app.D.Go", "Info", 0, Named("Log")),
+                    Call("app.D.Go", "Make", 0, Named("Inner")) with { Line = 2 },
+                    Call("app.D.Go", "Contains", 1, new ExtractQualifier(CodeQualifierKinds.Value, "map.Keys")) with { Line = 3 },
+                    Call("app.D.Go", "Contains", 1, Named("map.Keys")) with { Line = 4 },
+                    Call("app.D.Go", "Contains", 1, new ExtractQualifier(CodeQualifierKinds.Value, "loose.Keys")) with { Line = 5 },
+                    Call("app.D.Go", "Load", 0, Named("Cfg")) with { Line = 6 },
+                ],
+                [Open("app")],
+                [Import(CodeImportForms.Scope, "lib")]));
+
+        Assert.Equal(
+            [
+                ("t:app.ILog.Info", 1, CodeConfidences.Exact),
+                ("t:app.D.Inner.Make", 2, CodeConfidences.Exact),
+                ("t:app.Keys.Contains", 5, CodeConfidences.Unique),
+                ("t:app.D.Cfg.Load", 6, CodeConfidences.Exact),
+            ],
+            linked.Edges.Where(edge => edge is { From: "t:app.D.Go", Kind: CodeEdgeKinds.Calls }).Select(edge => (edge.To, edge.Line, edge.Confidence)));
+        Assert.Equal(2, linked.External["t:app.D.Go"]);
+    }
+
+    /// <summary>
+    /// A type qualifier is a type or a scope alone, though a value of its first name is nearer, which a named one is; a
+    /// named chain through a value of no said type is looked for by the call's name alone, as a value qualifier's is, and
+    /// a call on a value found by its name alone never makes a type.
+    /// </summary>
+    [Fact]
+    public void ATypeQualifier_IsNeverAValue_AndACallOnAValueOfNoSaidType_NeverMakesAType()
+    {
+        var linked = Link(
+            File("orders.t",
+                [new ExtractNode("t:App.Orders", CodeNodeKinds.Namespace, "Orders", "App.Orders", 1, 1, "namespace App.Orders") { Scope = "App" }, Type("App.Orders.OrderLine"), Member("App.Orders.OrderLine.Make", 0)],
+                scopes: [Open("App"), Open("App.Orders")]),
+            File("shop.t",
+                [Type("App.Shop"), Value("App.Shop.Orders", "List`1"), Value("App.Shop.Loose", null), Member("App.Shop.Add", 0), Type("App.Order"), Member("App.Stock.Order", 0)],
+                [
+                    Call("App.Shop.Add", "Make", 0, new ExtractQualifier(CodeQualifierKinds.Type, "Orders.OrderLine")),
+                    Ref("App.Shop.Add", CodeEdgeKinds.References, "OrderLine") with { Line = 2, Qualifier = new ExtractQualifier(CodeQualifierKinds.Type, "Orders") },
+                    Call("App.Shop.Add", "Make", 0, Named("Orders.OrderLine")) with { Line = 3 },
+                    Call("App.Shop.Add", "Order", 0, Named("Loose.Inner")) with { Line = 4 },
+                ],
+                [Open("App")]));
+
+        Assert.Equal(
+            [
+                ("t:App.Orders.OrderLine.Make", 1, CodeEdgeKinds.Calls, CodeConfidences.Exact),
+                ("t:App.Orders.OrderLine", 2, CodeEdgeKinds.References, CodeConfidences.Exact),
+                ("t:App.Stock.Order", 4, CodeEdgeKinds.Calls, CodeConfidences.Unique),
+            ],
+            linked.Edges.Where(edge => edge.From == "t:App.Shop.Add").Select(edge => (edge.To, edge.Line, edge.Kind, edge.Confidence)));
+        Assert.Equal(1, linked.External["t:App.Shop.Add"]);
+    }
+
+    /// <summary>
+    /// A member declared to extend a type is found, <c>unique</c>, for a call on a value of that type - <c>this</c> among
+    /// them - or of a type built on it, or of a type the repository does not declare named alike, where the call's file
+    /// reaches it - through an import of its scope or its file, from its own file where it is closed, or from the top -
+    /// never as what an override overrides; the type it extends the one its own file names, so a
+    /// type of that name elsewhere finds nothing, and a type that holds the name itself comes first; <c>base</c> reaches
+    /// one of a base alone, and a value's type is as sure as the extension found through it.
+    /// </summary>
+    [Fact]
+    public void AnExtension_IsFoundWhereReached_ForItsOwnType_ATypeBuiltOnIt_AndATypeTheRepositoryLacks()
+    {
+        var linked = Link(
+            File("ext.t",
+                [
+                    Type("lib.Ext"),
+                    Member("lib.Ext.Describe", 0) with { Extends = "IShape" },
+                    Member("lib.Ext.AddAll", 1) with { Extends = "lib.IServices" },
+                    Member("lib.Ext.Paint", 0) with { Extends = "app.Shape" },
+                    Member("lib.Ext.Spin", 0) with { Extends = "app.Circle" },
+                ],
+                scopes: [Open("lib")]),
+            File("far.t", [Type("far.Hidden"), Member("far.Hidden.Describe", 0) with { Extends = "IShape" }], scopes: [Open("far")]),
+            File("other.t", [Type("other.Shape")], scopes: [Open("other")]),
+            File("top.t", [Type("Top"), Member("Top.Wrap", 0) with { Extends = "app.Shape" }]),
+            File("deep.t", [Type("deep.PathExt"), Member("deep.PathExt.Shine", 0) with { Extends = "app.Shape" }], scopes: [Open("deep")]),
+            File("app.t",
+                [
+                    Type("app.IShape"), Type("app.Shape"), Type("app.Circle"), Member("app.Circle.Go", 0) with { Parent = "t:app.Circle" }, Type("app.Other"),
+                    Type("app.Own"), Member("app.Own.Describe", 0), Type("app.Loop"), Type("app.Back"), Value("app.Circle.next", "Circle"),
+                    Type("app.LocalExt"), Member("app.LocalExt.Glow", 0) with { Extends = "Shape" },
+                ],
+                [
+                    Ref("app.Shape", CodeEdgeKinds.Implements, "IShape"),
+                    Ref("app.Circle", CodeEdgeKinds.Inherits, "Shape"),
+                    Ref("app.Own", CodeEdgeKinds.Implements, "IShape"),
+                    Ref("app.Loop", CodeEdgeKinds.Inherits, "Back"),
+                    Ref("app.Back", CodeEdgeKinds.Inherits, "Loop"),
+                    Call("app.Circle.Go", "Describe", 0, Named("Circle")),
+                    Call("app.Circle.Go", "AddAll", 1, Named("IServices")) with { Line = 2 },
+                    Call("app.Circle.Go", "Describe", 0, Named("Other")) with { Line = 3 },
+                    Call("app.Circle.Go", "Paint", 0, Named("other.Shape")) with { Line = 4 },
+                    Call("app.Circle.Go", "Paint", 0, new ExtractQualifier(CodeQualifierKinds.This)) with { Line = 5 },
+                    Call("app.Circle.Go", "Describe", 0, Named("Own")) with { Line = 6 },
+                    Call("app.Circle.Go", "Describe", 0, Named("Loop")) with { Line = 7 },
+                    Call("app.Circle.Go", "Spin", 0, new ExtractQualifier(CodeQualifierKinds.Base)) with { Line = 8 },
+                    Call("app.Circle.Go", "Paint", 0, new ExtractQualifier(CodeQualifierKinds.Base)) with { Line = 9 },
+                    Call("app.Circle.Go", "Paint", 0, new ExtractQualifier(CodeQualifierKinds.Value, "next")) with { Line = 10 },
+                    Call("app.Circle.Go", "Wrap", 0, Named("Circle")) with { Line = 11 },
+                    Call("app.Circle.Go", "Shine", 0, Named("Circle")) with { Line = 12 },
+                    Call("app.Circle.Go", "Glow", 0, Named("Circle")) with { Line = 13 },
+                    new ExtractReference("t:app.Circle.Go", CodeEdgeKinds.Overrides, "Paint", 14) { Arity = 0, Qualifier = new ExtractQualifier(CodeQualifierKinds.Base) },
+                ],
+                [Open("app"), new ExtractScope("app.LocalExt", Open: false) { Parent = "app" }],
+                [Import(CodeImportForms.Scope, "lib"), Import(CodeImportForms.Relative, "deep.t")]));
+
+        Assert.Equal(
+            [
+                ("t:lib.Ext.Describe", 1, CodeConfidences.Unique),
+                ("t:lib.Ext.AddAll", 2, CodeConfidences.Unique),
+                ("t:lib.Ext.Paint", 5, CodeConfidences.Unique),
+                ("t:app.Own.Describe", 6, CodeConfidences.Exact),
+                ("t:lib.Ext.Paint", 9, CodeConfidences.Unique),
+                ("t:lib.Ext.Paint", 10, CodeConfidences.Unique),
+                ("t:Top.Wrap", 11, CodeConfidences.Unique),
+                ("t:deep.PathExt.Shine", 12, CodeConfidences.Unique),
+                ("t:app.LocalExt.Glow", 13, CodeConfidences.Unique),
+            ],
+            linked.Edges.Where(edge => edge is { From: "t:app.Circle.Go", Kind: CodeEdgeKinds.Calls }).Select(edge => (edge.To, edge.Line, edge.Confidence)));
+        Assert.DoesNotContain(linked.Edges, edge => edge.Kind == CodeEdgeKinds.Overrides);
+    }
+
+    /// <summary>
+    /// A type whose own scope is closed is its file's alone, as what it declares is: a call in its file finds it, and one
+    /// in another file - by its name, its whole qualified name, as the ending of one or as a type it names - finds none,
+    /// nor an extension of it.
+    /// </summary>
+    [Fact]
+    public void ATypeWhoseOwnScopeIsClosed_IsItsFilesAlone()
+    {
+        static CodeGraphFile Local(string path, IReadOnlyList<ExtractReference>? references = null, IReadOnlyList<ExtractNode>? more = null)
+            => File(path,
+                [Type("app.Helpers") with { Id = $"t:{path}:app.Helpers" }, Member("app.Helpers.Run", 0) with { Id = $"t:{path}:app.Helpers.Run" }, Type($"app.{path[0]}"), Member($"app.{path[0]}.Go", 0), .. more ?? []],
+                references,
+                [Open("app"), new ExtractScope("app.Helpers", Open: false) { Parent = "app" }],
+                [Import(CodeImportForms.Scope, "app.Helpers")]);
+
+        var linked = Link(
+            Local("a.t",
+                [Call("app.a.Go", "Run", 0, Named("Helpers")), Call("app.a.Go", "Describe", 0, Named("Helpers")) with { Line = 2 }],
+                [Type("app.AExt"), Member("app.AExt.Describe", 0) with { Extends = "Helpers" }]),
+            Local("b.t"),
+            File("c.t", [Type("app.C"), Member("app.C.Go", 0)],
+                [
+                    Call("app.C.Go", "Run", 0, Named("Helpers")),
+                    Call("app.C.Go", "Run", 0, Named("app.Helpers")) with { Line = 2 },
+                    Call("app.C.Go", "Run", 0) with { Line = 3 },
+                    Ref("app.C.Go", CodeEdgeKinds.References, "Helpers") with { Line = 4 },
+                    Call("app.C.Go", "Describe", 0, Named("app.Helpers")) with { Line = 5 },
+                    Call("app.C.Go", "Describe", 0, Named("Helpers")) with { Line = 6 },
+                ],
+                [Open("app")],
+                [Import(CodeImportForms.Scope, "app.Helpers")]));
+
+        Assert.Equal(
+            [("t:a.t:app.Helpers.Run", 1, CodeConfidences.Exact), ("t:app.AExt.Describe", 2, CodeConfidences.Unique)],
+            linked.Edges.Where(edge => edge is { From: "t:app.a.Go", Kind: CodeEdgeKinds.Calls }).Select(edge => (edge.To, edge.Line, edge.Confidence)));
+        Assert.DoesNotContain(linked.Edges, edge => edge is { From: "t:app.C.Go", Kind: CodeEdgeKinds.Calls });
+        Assert.Equal(6, linked.External["t:app.C.Go"]);
+        Assert.Equal(
+            [("file:a.t", "t:a.t:app.Helpers"), ("file:b.t", "t:b.t:app.Helpers")],
+            linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Imports).Select(edge => (edge.From, edge.To)));
+    }
+
+    /// <summary>
+    /// A member answers an interface's and a body declares its prototype where they take the same parameters, as far as
+    /// their counts say: a default one gives and the other does not changes no parameter, a different most does.
+    /// </summary>
+    [Fact]
+    public void ADefaultGivenInOneAlone_ChangesNoParameter_ForADispatchOrADeclaration()
+    {
+        var linked = Link(File("a.t",
+            [
+                Type("I"), Member("I.Run", 1) with { MinArity = 0 },
+                Type("C"), Member("C.Run", 1),
+                Type("D"), Member("D.Run", 2),
+                Member("Work", 2) with { Prototype = true, MinArity = 1 }, Member("Work", 2) with { Id = "t:Work~2" },
+            ],
+            [Ref("C", CodeEdgeKinds.Implements, "I"), Ref("D", CodeEdgeKinds.Implements, "I")]));
+
+        Assert.Contains(linked.Edges, edge => edge is { From: "t:I.Run", To: "t:C.Run", Kind: CodeEdgeKinds.Dispatches });
+        Assert.DoesNotContain(linked.Edges, edge => edge is { From: "t:I.Run", To: "t:D.Run" });
+        Assert.Contains(linked.Edges, edge => edge is { From: "t:Work", To: "t:Work~2", Kind: CodeEdgeKinds.Declares });
+    }
+
+    /// <summary>
     /// An interface's member dispatches to the member of the same name and arity of each type that implements it, and of
     /// each type derived from one, as sure as the implementing edge.
     /// </summary>
@@ -628,6 +947,10 @@ public sealed class CodeGraphLinkerTests
     /// <summary>A member of <paramref name="qualified"/> name taking exactly <paramref name="arity"/> arguments, in the scope its name holds before its last part.</summary>
     private static ExtractNode Member(string qualified, int arity)
         => new($"t:{qualified}", CodeNodeKinds.Member, Last(qualified), qualified, 1, 1, qualified) { Scope = ScopeOf(qualified), MinArity = arity, MaxArity = arity };
+
+    /// <summary>A value of <paramref name="qualified"/> name - a member no call takes arguments of - declared as <paramref name="type"/> where one is said.</summary>
+    private static ExtractNode Value(string qualified, string? type)
+        => new($"t:{qualified}", CodeNodeKinds.Member, Last(qualified), qualified, 1, 1, qualified) { Scope = ScopeOf(qualified), ValueType = type };
 
     private static ExtractReference Call(string from, string name, int arity, ExtractQualifier? qualifier = null)
         => new($"t:{from}", CodeEdgeKinds.Calls, name, 1) { Arity = arity, Qualifier = qualifier };
