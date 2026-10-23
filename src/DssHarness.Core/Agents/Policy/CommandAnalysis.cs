@@ -742,18 +742,19 @@ public static partial class CommandAnalysis
     }
 
     /// <summary>
-    /// The command line a git setting's value is: an alias's <c>!</c> line without it, for git runs it through the shell,
-    /// and any other alias the git command it names.
+    /// The command line a git setting's value is: a value with <c>!</c> before it - an alias's, a submodule's update -
+    /// without it, for git runs what follows through the shell, and any other alias the git command it names.
     /// </summary>
     private static string SettingScript(string key, string value)
-        => !key.StartsWith("alias.", StringComparison.OrdinalIgnoreCase) ? value
-            : value.StartsWith('!') ? value[1..]
-            : "git " + value;
+        => value.StartsWith('!') ? value[1..]
+            : key.StartsWith("alias.", StringComparison.OrdinalIgnoreCase) ? "git " + value
+            : value;
 
     /// <summary>
-    /// Whether git runs the value of <paramref name="key"/> as a command line: its pager, editors, ssh, askpass, monitor,
-    /// proxy and credential helpers, an external diff and a diff driver's, a merge driver, a filter's clean, smudge and
-    /// process, a tool's or a browser's command, a signing program, a remote's upload and receive packs, and an alias -
+    /// Whether git runs the value of <paramref name="key"/> as a command line or a program: its pager, editors, ssh,
+    /// askpass, monitor, proxy and credential helpers, an external diff and a diff driver's, a merge driver, a filter's
+    /// clean, smudge and process, a tool's, a browser's or a trailer's command and a tool's path, a signing program and
+    /// the command that gives its key, a mailer, a remote's upload and receive packs, a submodule's update, and an alias -
     /// keys compared in any case, as git compares them.
     /// </summary>
     private static bool RunsProgram(string key)
@@ -771,7 +772,8 @@ public static partial class CommandAnalysis
     [
         "core.pager", "core.editor", "core.sshcommand", "core.askpass", "core.fsmonitor", "core.gitproxy",
         "core.alternaterefscommand", "sequence.editor", "credential.helper", "diff.external", "gpg.program",
-        "interactive.difffilter", "uploadpack.packobjectshook", "sendemail.sendmailcmd",
+        "interactive.difffilter", "uploadpack.packobjectshook", "sendemail.sendmailcmd", "sendemail.smtpserver",
+        "gpg.ssh.defaultkeycommand",
     ];
 
     /// <summary>
@@ -779,7 +781,8 @@ public static partial class CommandAnalysis
     /// command line.
     /// </summary>
     private static readonly string[] ProgramKeyEnds =
-        [".textconv", ".command", ".driver", ".clean", ".smudge", ".process", ".cmd", ".helper", ".program", ".uploadpack", ".receivepack"];
+        [".textconv", ".command", ".driver", ".clean", ".smudge", ".process", ".cmd", ".path", ".helper", ".program",
+         ".sendmailcmd", ".smtpserver", ".uploadpack", ".receivepack", ".update"];
 
     /// <summary>
     /// PowerShell's setting of a variable of the environment - <c>$env:NAME=value</c> or

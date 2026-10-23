@@ -699,6 +699,9 @@ public sealed class AgentPolicyTests
             "git -c alias.x='!sudo id' x",
             "P='sudo id' git --config-env=core.pager=P log",
             "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.pager GIT_CONFIG_VALUE_0='sudo id' git log",
+            "git -c difftool.x.path=/usr/bin/sudo difftool",
+            "git -c submodule.s.update='!sudo id' submodule update",
+            "git -c gpg.ssh.defaultKeyCommand='sudo id' commit -S",
         })
         {
             Assert.True(policy.Run(command) is AgentPolicyAnswer.Denied { Rule: "the root actions" }, $"'{command}' was not refused as a root action");
