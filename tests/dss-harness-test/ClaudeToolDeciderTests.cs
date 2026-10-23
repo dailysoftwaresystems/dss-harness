@@ -15,7 +15,7 @@ namespace DssHarness.Tests;
 /// </summary>
 public sealed class ClaudeToolDeciderTests : IDisposable
 {
-    private static readonly IReadOnlyList<string> All = ClaudeCodeTools.Of(AgentStepRequest.AllCapabilities, reporter: false);
+    private static readonly IReadOnlyList<string> All = ClaudeCodeTools.Of(AgentPolicyGround.EveryCapability, reporter: false);
 
     private readonly TempDirectory _temp = new();
 
@@ -35,7 +35,7 @@ public sealed class ClaudeToolDeciderTests : IDisposable
         _policy = new AgentPolicy(
             new PassThroughFileSystem(new PhysicalFileSystem(FilePermissionsFactory.Create())),
             new HostPlatform(),
-            new AgentPolicyGround(_worktree, [_worktree], [_worktree], [_slot], [], []));
+            PolicyGrounds.Of(_worktree, [_worktree], [_worktree], [_slot], [], []));
     }
 
     public void Dispose() => _temp.Dispose();
@@ -190,7 +190,7 @@ public sealed class ClaudeToolDeciderTests : IDisposable
         Assert.Equal(["Read", "Grep", "Glob", "Write", "Edit", "NotebookEdit", "Bash"], All);
         Assert.Equal(["Read", "Grep", "Glob", "Bash"], ClaudeCodeTools.Of([AgentCapability.Run, AgentCapability.Read], reporter: false));
         Assert.Empty(ClaudeCodeTools.Of([AgentCapability.Web], reporter: false));
-        Assert.Equal(["Read", "Grep", "Glob"], ClaudeCodeTools.Of(AgentStepRequest.AllCapabilities, reporter: true));
+        Assert.Equal(["Read", "Grep", "Glob"], ClaudeCodeTools.Of(AgentPolicyGround.EveryCapability, reporter: true));
         Assert.Equal(ClaudeCodeTools.Reporter, ClaudeCodeTools.Table.Single(row => row.Capability == AgentCapability.Read).Tools.Select(tool => tool.Name));
     }
 

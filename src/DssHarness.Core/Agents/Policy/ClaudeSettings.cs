@@ -109,7 +109,7 @@ public static class ClaudeSettings
     /// </summary>
     private static IEnumerable<string> DenyRules(AgentPolicyGround ground, StringComparison comparison)
     {
-        var roots = ground.ReadRoots.Concat(ground.WritableRoots)
+        var roots = ground.Roots(comparison)
             .Select(root => root.Replace('\\', '/'))
             .Distinct(StringComparer.FromComparison(comparison))
             .ToList();

@@ -329,7 +329,6 @@ public sealed class AgentMessages
 /// <param name="Limits">The bounds it is held to.</param>
 /// <param name="MayAsk">Whether it may ask the person.</param>
 /// <param name="AskRounds">How many times it may ask.</param>
-/// <param name="Restrictions">The extra restrictions its step or definition names.</param>
 /// <param name="Mask">What masks the secrets its lines may carry; null where the step carries none.</param>
 public sealed record AgentStepRequest(
     string Run,
@@ -353,14 +352,13 @@ public sealed record AgentStepRequest(
     AgentLimits Limits,
     bool MayAsk,
     int AskRounds,
-    IReadOnlyList<string> Restrictions,
     ILineMask? Mask)
 {
-    /// <summary>What the agent's policy is decided against; null where the step was given none, and nothing then runs.</summary>
+    /// <summary>
+    /// What the agent's policy is decided against - its restrictions and its capabilities among it; null where the step
+    /// was given none, and nothing then runs.
+    /// </summary>
     public Policy.AgentPolicyGround? Ground { get; init; }
-
-    /// <summary>What the agent may do, as its definition's <c>capabilities</c> name it; all four unless given.</summary>
-    public IReadOnlyList<AgentCapability> Capabilities { get; init; } = AllCapabilities;
 
     /// <summary>The credential the run signs in with, where its client signs in; null for the machine's login.</summary>
     public AgentCredential? Credential { get; init; }
@@ -382,9 +380,6 @@ public sealed record AgentStepRequest(
 
     /// <summary>What the engine tells the agent while it works; one of the runner's own where the engine gives none.</summary>
     public AgentMessages? Messages { get; init; }
-
-    /// <summary>Every capability, in the order a definition names them.</summary>
-    public static IReadOnlyList<AgentCapability> AllCapabilities { get; } = [AgentCapability.Read, AgentCapability.Write, AgentCapability.Run, AgentCapability.Web];
 }
 
 /// <summary>
@@ -432,11 +427,11 @@ public sealed record AgentRun(
     AgentHandoffSignal Handoff,
     AgentMessages Messages)
 {
-    /// <summary>What the agent's policy is decided against; null where the step was given none, and a client that asks it runs nothing.</summary>
+    /// <summary>
+    /// What the agent's policy is decided against - its capabilities among it, which name the tools a launch offers; null
+    /// where the step was given none, and a client that asks it runs nothing.
+    /// </summary>
     public Policy.AgentPolicyGround? Ground { get; init; }
-
-    /// <summary>What the agent may do, as its definition's <c>capabilities</c> name it.</summary>
-    public IReadOnlyList<AgentCapability> Capabilities { get; init; } = AgentStepRequest.AllCapabilities;
 
     /// <summary>The credential the run signs in with, where its client signs in; null for the machine's login.</summary>
     public AgentCredential? Credential { get; init; }

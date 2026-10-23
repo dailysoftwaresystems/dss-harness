@@ -41,7 +41,9 @@ namespace DssHarness.Core.Agents;
 /// Every launch of every client passes here, so this is where no agent starts while this tool itself runs elevated: such
 /// a step is recorded <see cref="AgentNotStartedBecause.Elevated"/> before any client is taken, in the words of the
 /// policy's own refusal (<see cref="AgentPolicy.RefusedWhileElevated"/>), for every rule of that policy assumes a user's
-/// powers.
+/// powers. So is where a step whose policy resolves the agent's paths from another directory than the one it starts in
+/// is recorded <see cref="AgentNotStartedBecause.ConfigurationWrong"/>: that policy would decide for places it is not
+/// asked about.
 /// </para>
 /// <para>
 /// A result is what <c>result.json</c> says and what the engine reads: one a client answers that does not hold together
@@ -50,7 +52,7 @@ namespace DssHarness.Core.Agents;
 /// </remarks>
 /// <param name="clients">The clients registered, one of which works each step.</param>
 /// <param name="fileSystem">The file system the step's records are kept on.</param>
-/// <param name="platform">Whether this tool itself runs elevated, which no agent starts under.</param>
+/// <param name="platform">Whether this tool itself runs elevated, which no agent starts under, and how it compares names.</param>
 /// <param name="clock">When each event happened.</param>
 public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem fileSystem, IHostPlatform platform, TimeProvider clock) : IAgentRunner
 {
@@ -260,6 +262,18 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                 null);
         }
 
+        if (step.Ground is { } ground && !PathContainment.AreSame(ground.WorkingDirectory, step.Workspace.WorkingDirectory, _platform.PathComparison))
+        {
+            // Never begun: a policy that resolves the agent's paths from one directory while it starts in another decides
+            // for places it is not asked about.
+            return (new AgentRunResult(
+                AgentRunStatus.NotStarted,
+                AgentNotStartedBecause.ConfigurationWrong,
+                Model: step.Model,
+                Error: $"The step's policy resolves the agent's paths from '{ground.WorkingDirectory}', but the agent starts in '{step.Workspace.WorkingDirectory}'."),
+                null);
+        }
+
         if (Client(step) is not { } client)
         {
             // Never begun, and the configuration is why: a record of the step exists all the same, saying so.
@@ -350,7 +364,6 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
             messages)
         {
             Ground = step.Ground,
-            Capabilities = step.Capabilities,
             Credential = step.Credential,
             Program = step.Program,
             ProgramVersion = step.ProgramVersion,

@@ -140,7 +140,7 @@ public sealed class ClaudeCodeClient(
         }
 
         var totals = new Totals();
-        var tools = ClaudeCodeTools.Of(run.Capabilities, ground.ReporterRoot is not null);
+        var tools = ClaudeCodeTools.Of(ground.Capabilities, ground.ReporterRoot is not null);
         var policy = new AgentPolicy(_fileSystem, _platform, ground);
 
         for (var entry = 0; ; entry++)
@@ -338,9 +338,8 @@ public sealed class ClaudeCodeClient(
 
             var working = run.Workspace.WorkingDirectory;
             var comparison = StringComparer.FromComparison(client._platform.PathComparison);
-            var roots = run.Ground!.ReadRoots.Concat(run.Ground.WritableRoots)
+            var roots = run.Ground!.Roots(client._platform.PathComparison)
                 .Where(root => !comparison.Equals(root, working))
-                .Distinct(comparison)
                 .ToList();
 
             using var control = _control = AppendLog.Open(files, Path.Combine(directory, ClaudeLaunch.ControlFileName));

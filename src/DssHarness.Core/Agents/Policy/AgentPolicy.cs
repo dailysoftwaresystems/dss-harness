@@ -162,10 +162,10 @@ public sealed partial class AgentPolicy
 
         // The places a refusal names, one by any case of its spelling, as every path asked is compared.
         _refusalReadRoots = [.. _readRoots.Distinct(StringComparer.OrdinalIgnoreCase)];
-        _allRoots = [.. _readRoots.Concat(_writableRoots).Distinct(StringComparer.OrdinalIgnoreCase)];
+        _allRoots = [.. Resolve(ground.Roots(platform.PathComparison)).Distinct(StringComparer.OrdinalIgnoreCase)];
         _slots = Resolve(ground.SlotDirectories);
         _claudeDirectories = Resolve(ground.ClaudeCodeDirectories);
-        _state = Resolve(ground.StateDirectories ?? []);
+        _state = Resolve(ground.StateDirectories);
         _rules = [.. ground.Restrictions.Select(declared => (AgentRule.Parse(declared.Text), declared))];
 
         // A domain is held as the configuration's check reads it: trimmed, its root dot gone, as a

@@ -23,7 +23,7 @@ public sealed class AgentPolicyShortNamesTests
         var policy = new AgentPolicy(
             new PassThroughFileSystem(new PhysicalFileSystem(FilePermissionsFactory.Create())),
             HostDoubles.Platform(PlatformId.Windows),
-            new AgentPolicyGround(worktree, [worktree], [worktree], [slot], [], []));
+            PolicyGrounds.Of(worktree, [worktree], [worktree], [slot], [], []));
 
         Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Read(named)).Rule);
         Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run($"type \"{named}\"")).Rule);

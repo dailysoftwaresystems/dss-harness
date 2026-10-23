@@ -873,6 +873,34 @@ public sealed class AgentRunnerTests
     }
 
     /// <summary>
+    /// A step whose policy resolves the agent's paths from another directory than the one it starts in is never begun:
+    /// that policy would decide for places it is not asked about. No client is taken, and the record says why.
+    /// </summary>
+    [Fact]
+    public async Task AStepWhosePolicyResolvesFromAnotherDirectory_IsNeverStarted()
+    {
+        using var temp = new TempDirectory();
+        var client = new FakeClient();
+        var elsewhere = temp.Combine("elsewhere");
+        var step = Step(temp) with { Ground = PolicyGrounds.Of(elsewhere, [elsewhere], [WorkDirectory(temp)], [], [], []) };
+
+        var result = await Runner(client).RunAsync(step, events: null, TestContext.Current.CancellationToken);
+
+        var said = $"The step's policy resolves the agent's paths from '{elsewhere}', but the agent starts in '{WorkDirectory(temp)}'.";
+        Assert.Equal((AgentRunStatus.NotStarted, AgentNotStartedBecause.ConfigurationWrong, said), (result.Status, result.NotStartedBecause, result.Error));
+        Assert.Null(client.Run);
+        Assert.Equal((AgentRunStatus.NotStarted, said), (ReadResult(temp).Status, ReadResult(temp).Error));
+
+        // The same directory spelled as the platform folds it is the same: the step is begun.
+        var same = await Runner(new FakeClient()).RunAsync(
+            Step(temp) with { Ground = PolicyGrounds.Of(WorkDirectory(temp) + Path.DirectorySeparatorChar, [], [WorkDirectory(temp)], [], [], []) },
+            events: null,
+            TestContext.Current.CancellationToken);
+
+        Assert.NotEqual(AgentRunStatus.NotStarted, same.Status);
+    }
+
+    /// <summary>
     /// A result a client answers that does not hold together is no ending the engine could read: the run fails, naming
     /// the client and what is wrong, and <c>result.json</c> says that - never the result as the client answered it.
     /// </summary>
@@ -1101,7 +1129,6 @@ public sealed class AgentRunnerTests
             new AgentLimits(MaxTurns: 10, MaxBudgetUsd: null, MaxDuration: null, StallSeconds: 7, HandoffSeconds: handoffSeconds),
             MayAsk: false,
             AskRounds: 0,
-            Restrictions: [],
             Mask: null);
 
     /// <summary>The agent's work directory, the only place it writes.</summary>

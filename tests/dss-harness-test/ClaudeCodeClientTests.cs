@@ -1729,7 +1729,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
         kit.Own["ZAI_API_KEY"] = "zk-ambient";
         var step = kit.Step() with
         {
-            Capabilities = [AgentCapability.Read],
+            Ground = kit.Ground() with { Capabilities = [AgentCapability.Read] },
             Credential = new AgentCredential(AgentAuth.ApiKey, [new AgentKey("WORK_KEY", "sk-work")]),
             Withheld = ["ZAI_API_KEY", "WORK_KEY"],
         };
@@ -2258,7 +2258,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
         public AgentRunner StepRunner() => new([Client()], Harness.FileSystem, Elevation.User, TimeProvider.System);
 
         public AgentPolicyGround Ground()
-            => new(Worktree, [Worktree, WorkDirectory, Temp.Path], [Worktree, WorkDirectory], [], [], []);
+            => PolicyGrounds.Of(Worktree, [Worktree, WorkDirectory, Temp.Path], [Worktree, WorkDirectory], [], [], []);
 
         public AgentWorkspace Workspace()
             => new(Worktree, WorkDirectory, Temp.Path, [], Worktree, Path.Combine(Temp.Path, ".orchestrators", "r1"));
@@ -2310,7 +2310,6 @@ public sealed class ClaudeCodeClientTests : IDisposable
                 new AgentLimits(30, 2.5m, null, null),
                 MayAsk: false,
                 AskRounds: 0,
-                [],
                 null)
             {
                 Ground = Ground(),

@@ -25,7 +25,7 @@ public sealed class ClaudeSettingsTests
     }
 
     private static AgentPolicyGround SettingsGround((string Main, string Worktree, string Work) ground, IReadOnlyList<AgentRestriction> restrictions)
-        => new(
+        => PolicyGrounds.Of(
             ground.Worktree,
             [ground.Main],
             [ground.Worktree, ground.Work],
@@ -84,7 +84,7 @@ public sealed class ClaudeSettingsTests
 
         var rendered = ClaudeSettings.Render(
             ["Read", "Grep"],
-            new AgentPolicyGround(worktree, [main], [worktree, work], [slot], [claude], []),
+            PolicyGrounds.Of(worktree, [main], [worktree, work], [slot], [claude], []),
             StringComparison.OrdinalIgnoreCase);
 
         Assert.Contains($"\"Read({Absolute(slot)}/**)\"", rendered, StringComparison.Ordinal);
@@ -114,6 +114,23 @@ public sealed class ClaudeSettingsTests
         // absolute in the one grammar Claude Code's own deny rules read.
         Assert.Contains($"\"Write({Absolute(worktree)}/.github/**)\"", rendered, StringComparison.Ordinal);
         Assert.Contains($"\"Write({Absolute(main)}/.github/**)\"", rendered, StringComparison.Ordinal);
+        Assert.Contains($"\"Read({Absolute(main)}/secrets/**)\"", rendered, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The working directory is a root of the launch's though no list of roots names it: a rule is written for it as for
+    /// each root the policy decides over, from the one list of them.
+    /// </summary>
+    [Fact]
+    public void TheWorkingDirectory_IsARootTheRulesAreWrittenFor_ThoughNoListNamesIt()
+    {
+        var (main, worktree, _) = Ground();
+        var rendered = ClaudeSettings.Render(
+            ["Read"],
+            PolicyGrounds.Of(worktree, [main], [], [], [], [new("Read(secrets/**)", AgentPolicySource.Config)]),
+            StringComparison.OrdinalIgnoreCase);
+
+        Assert.Contains($"\"Read({Absolute(worktree)}/secrets/**)\"", rendered, StringComparison.Ordinal);
         Assert.Contains($"\"Read({Absolute(main)}/secrets/**)\"", rendered, StringComparison.Ordinal);
     }
 

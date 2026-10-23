@@ -1,3 +1,4 @@
+using DssHarness.Core.Agents;
 using DssHarness.Core.Agents.Policy;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.FileSystem;
@@ -272,12 +273,30 @@ public sealed class AgentPolicyTests
         var policy = new AgentPolicy(
             new RefusesOn(new PhysicalFileSystem(FilePermissionsFactory.Create()), "locked.txt"),
             HostDoubles.Platform(),
-            new AgentPolicyGround(ground.Worktree, [ground.Main], [ground.Worktree], [ground.Slot], [ground.ClaudeDirectory], []));
+            PolicyGrounds.Of(ground.Worktree, [ground.Main], [ground.Worktree], [ground.Slot], [ground.ClaudeDirectory], []));
 
         foreach (var answer in new[] { policy.Read("locked.txt"), policy.Write("locked.txt"), policy.Search("locked.txt"), policy.Run("cat locked.txt") })
         {
             Assert.Equal("undecided", Assert.IsType<AgentPolicyAnswer.Denied>(answer).Rule);
         }
+    }
+
+    /// <summary>
+    /// A list that narrows is null where it narrows nothing and never empty: an empty one would read as no list, so the
+    /// ground refuses it however it is given - built, or copied with one.
+    /// </summary>
+    [Fact]
+    public void AGroundGivenAnEmptyListThatNarrows_IsRefused()
+    {
+        Assert.Equal("WebDomains", Assert.Throws<ArgumentException>(() => PolicyGrounds.Of("w", [], [], [], [], [], webDomains: [])).ParamName);
+        Assert.Equal("Writes", Assert.Throws<ArgumentException>(() => PolicyGrounds.Of("w", [], [], [], [], [], writes: [])).ParamName);
+
+        var ground = PolicyGrounds.Of("w", [], [], [], [], [], webDomains: ["example.com"], writes: ["a/**"]);
+
+        Assert.Equal("WebDomains", Assert.Throws<ArgumentException>(() => ground with { WebDomains = [] }).ParamName);
+        Assert.Equal("Writes", Assert.Throws<ArgumentException>(() => ground with { Writes = [] }).ParamName);
+        Assert.Equal((null, null), ((ground with { WebDomains = null }).WebDomains, (ground with { Writes = null }).Writes));
+        Assert.Equal(["example.com"], ground.WebDomains!);
     }
 
     [Fact]
@@ -1163,20 +1182,20 @@ public sealed class AgentPolicyTests
             => new(
                 new PassThroughFileSystem(new PhysicalFileSystem(FilePermissionsFactory.Create())),
                 HostDoubles.Platform(platform, home: home),
-                new AgentPolicyGround(
+                PolicyGrounds.Of(
                     Worktree,
                     [Main],
                     [Worktree, WorkDirectory],
                     [Slot],
                     [ClaudeDirectory],
                     restrictions ?? [],
-                    Web: web,
-                    WebDomains: webDomains,
-                    Writes: writes,
-                    ReporterRoot: reporterRoot,
-                    WorktreeRules: worktreeRules,
-                    ProtectedPaths: protectedPaths,
-                    StateDirectories: stateDirectories));
+                    capabilities: web ? null : [AgentCapability.Read, AgentCapability.Write, AgentCapability.Run],
+                    webDomains: webDomains,
+                    writes: writes,
+                    reporterRoot: reporterRoot,
+                    worktreeRules: worktreeRules,
+                    protectedPaths: protectedPaths,
+                    stateDirectories: stateDirectories));
 
         public void Dispose()
         {
@@ -1194,7 +1213,7 @@ public sealed class AgentPolicyTests
             => new(
                 new UnresolvablePaths(new PhysicalFileSystem(FilePermissionsFactory.Create())),
                 HostDoubles.Platform(),
-                new AgentPolicyGround(
+                PolicyGrounds.Of(
                     Path.Combine(Path.GetTempPath(), "nowhere"),
                     [],
                     [],
