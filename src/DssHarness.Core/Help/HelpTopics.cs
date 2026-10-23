@@ -1748,7 +1748,7 @@ public static class HelpTopics
         builder.AppendLine();
         builder.AppendLine("Every call of gh, whoever makes it, is started so that it cannot ask anything");
         builder.AppendLine("(GH_PROMPT_DISABLED, GCM_INTERACTIVE, GIT_TERMINAL_PROMPT) and is ended where it has");
-        builder.AppendLine($"not answered within {GhProcess.DefaultLimit.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes, or with the workflow step that made it, where that");
+        builder.AppendLine($"not answered within {GhProcess.Limit.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes, or with the workflow step that made it, where that");
         builder.AppendLine("step passes its timeoutMinutes first: a read that did not answer in time is not done");
         builder.AppendLine($"({HarnessExit.Incomplete}), and asked again it may answer.");
         builder.AppendLine();
@@ -3612,7 +3612,7 @@ public static class HelpTopics
             + "ci-read's, never - it fails with its check's code "
             + $"(an anchor finding {AnchorExit.Findings}, a red CI leg {CiExit.LegRed} and no matrix run {CiExit.MatrixDidNotRun}, a red "
             + $"check {CiExit.LegRed}), and under never it is done, its passed false. Every read of the forge is given "
-            + $"{GhProcess.DefaultLimit.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes - the step's timeoutMinutes bounds "
+            + $"{GhProcess.Limit.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes - the step's timeoutMinutes bounds "
             + "its attempt, and a read in flight ends with it - and one past "
             + $"it ends the step incomplete ({HarnessExit.Incomplete}), which runs it again; a ci-wait reads again at its next poll where "
             + $"a read failed or passed it, and ends with that read's code only where {CiChecksService.FailedReadsInARow} did running "

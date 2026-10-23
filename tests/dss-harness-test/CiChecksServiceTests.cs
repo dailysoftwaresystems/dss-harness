@@ -238,7 +238,7 @@ public sealed class CiChecksServiceTests : IDisposable
             FailedLogs = new Dictionary<long, Exception> { [71] = new HarnessException(HarnessExit.CommandFailed, "log 71 gone") },
         };
         var legs = Substitute.For<ICiLegsService>();
-        legs.ClassifyRunAsync(Arg.Any<string>(), 7, Arg.Any<TimeSpan?>(), Arg.Any<CancellationToken>())
+        legs.ClassifyRunAsync(Arg.Any<string>(), 7, Arg.Any<CancellationToken>())
             .Returns(Task.FromException<CiRunReport>(new HarnessException(HarnessExit.CommandFailed, "run 7 not read")));
         var (service, _) = await ServiceAsync(source, legs);
 
@@ -251,7 +251,7 @@ public sealed class CiChecksServiceTests : IDisposable
                 ("test (macos)", null, null, null, "Its run could not be read or classified: run 7 not read log 71 gone"),
             ],
             reading.Red.Select(red => (red.Job, red.Workflow, red.Step, red.Log, red.Unread)));
-        await legs.Received(1).ClassifyRunAsync(Arg.Any<string>(), 7, Arg.Any<TimeSpan?>(), Arg.Any<CancellationToken>());
+        await legs.Received(1).ClassifyRunAsync(Arg.Any<string>(), 7, Arg.Any<CancellationToken>());
     }
 
     /// <summary>
@@ -278,7 +278,7 @@ public sealed class CiChecksServiceTests : IDisposable
                 new CiJob("lint", "failure", [new CiStep("Lint", "failure", null, null)]),
             ]);
         var legs = Substitute.For<ICiLegsService>();
-        legs.ClassifyRunAsync(Arg.Any<string>(), 7, Arg.Any<TimeSpan?>(), Arg.Any<CancellationToken>()).Returns(new CiRunReport(run, "pipeline", false, [], []));
+        legs.ClassifyRunAsync(Arg.Any<string>(), 7, Arg.Any<CancellationToken>()).Returns(new CiRunReport(run, "pipeline", false, [], []));
         var (service, _) = await ServiceAsync(source, legs);
 
         var reading = await service.WaitAsync(_repository.Path, new CiChecksRequest(Commit), Token);
@@ -355,11 +355,11 @@ public sealed class CiChecksServiceTests : IDisposable
                 new CiJob("test (macos)", "failure", [new CiStep("Build", "failure", null, null)]) { Id = 71 },
             ]);
         var legs = Substitute.For<ICiLegsService>();
-        legs.ClassifyRunAsync(Arg.Any<string>(), 7, Arg.Any<TimeSpan?>(), Arg.Any<CancellationToken>())
+        legs.ClassifyRunAsync(Arg.Any<string>(), 7, Arg.Any<CancellationToken>())
             .Returns(new CiRunReport(run, "pipeline", true, [], [new CiLegOutcome("linux", "test (linux)", false, ["failed"], true, false, [], 50, 45, "job name")]));
         var (service, clock) = await ServiceAsync(source, legs);
 
-        var reading = await service.WaitAsync(_repository.Path, new CiChecksRequest(Commit) { ReadLimit = TimeSpan.FromMinutes(9) }, Token);
+        var reading = await service.WaitAsync(_repository.Path, new CiChecksRequest(Commit), Token);
 
         Assert.Equal(CiChecksFound.Red, reading.Found);
         Assert.Empty(clock.Waits);
@@ -372,8 +372,7 @@ public sealed class CiChecksServiceTests : IDisposable
             ],
             reading.Red.Select(red => (red.Check.Name, red.Job, red.Workflow, red.Step, red.Leg, red.Overran, red.Log)));
         Assert.Equal("no license header", reading.Red[2].Check.Description);
-        await legs.Received(1).ClassifyRunAsync(_repository.Path, 7, TimeSpan.FromMinutes(9), Arg.Any<CancellationToken>());
-        Assert.All(source.ReadLimits, limit => Assert.Equal(TimeSpan.FromMinutes(9), limit));
+        await legs.Received(1).ClassifyRunAsync(_repository.Path, 7, Arg.Any<CancellationToken>());
     }
 
     /// <summary>No check appearing within the time it waits for the first ends the wait with none, read at each poll till then.</summary>

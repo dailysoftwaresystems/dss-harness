@@ -32,8 +32,6 @@ public sealed record CiChecksRequest(string Commit)
     /// <summary>The checks it does not count, by name, each written out or with <c>*</c> for any run of characters.</summary>
     public IReadOnlyList<string> Ignore { get; init; } = [];
 
-    /// <summary>The longest each read of the forge may take; <see cref="GhProcess.DefaultLimit"/> where null.</summary>
-    public TimeSpan? ReadLimit { get; init; }
 
     /// <summary>
     /// Whether it reads the checks once, waiting for none to appear or end - what was reached taken as it stands, as a
@@ -206,7 +204,7 @@ public sealed class CiChecksService(
             // A red check is red whatever the others come to: the step that mends it need not wait for them.
             if (checks.Any(check => check.State == CiCheckState.Red))
             {
-                return new CiChecksReading(request.Commit, CiChecksFound.Red, checks, await RedAsync(startDirectory, root, checks, request.ReadLimit, cancellationToken).ConfigureAwait(false));
+                return new CiChecksReading(request.Commit, CiChecksFound.Red, checks, await RedAsync(startDirectory, root, checks, cancellationToken).ConfigureAwait(false));
             }
 
             if (checks.Count == 0)
@@ -256,8 +254,8 @@ public sealed class CiChecksService(
     /// <summary>Every check run and commit status of the commit, as one list of checks, less those the request ignores.</summary>
     private async Task<IReadOnlyList<CiCheck>> ReadAsync(string root, CiChecksRequest request, CancellationToken cancellationToken)
     {
-        var runs = await jobSource.ListCheckRunsAsync(root, request.Commit, request.ReadLimit, cancellationToken).ConfigureAwait(false);
-        var statuses = await jobSource.ListStatusesAsync(root, request.Commit, request.ReadLimit, cancellationToken).ConfigureAwait(false);
+        var runs = await jobSource.ListCheckRunsAsync(root, request.Commit, cancellationToken).ConfigureAwait(false);
+        var statuses = await jobSource.ListStatusesAsync(root, request.Commit, cancellationToken).ConfigureAwait(false);
 
         IEnumerable<CiCheck> read =
         [
@@ -285,7 +283,6 @@ public sealed class CiChecksService(
         string startDirectory,
         string root,
         IReadOnlyList<CiCheck> checks,
-        TimeSpan? readLimit,
         CancellationToken cancellationToken)
     {
         var runs = new Dictionary<long, (CiRunReport? Report, string? Unread)>();
@@ -303,7 +300,7 @@ public sealed class CiChecksService(
             {
                 try
                 {
-                    classified = (await legs.ClassifyRunAsync(startDirectory, runId, readLimit, cancellationToken).ConfigureAwait(false), null);
+                    classified = (await legs.ClassifyRunAsync(startDirectory, runId, cancellationToken).ConfigureAwait(false), null);
                 }
                 catch (HarnessException ex)
                 {
@@ -321,7 +318,7 @@ public sealed class CiChecksService(
 
             try
             {
-                log = await jobSource.ReadJobLogAsync(root, jobId, readLimit, cancellationToken).ConfigureAwait(false);
+                log = await jobSource.ReadJobLogAsync(root, jobId, cancellationToken).ConfigureAwait(false);
             }
             catch (HarnessException ex)
             {

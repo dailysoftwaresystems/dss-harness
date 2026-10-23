@@ -17,16 +17,16 @@ public sealed class GhCiJobSourceTests
 
     /// <summary>
     /// Every call is started so that it cannot ask - gh, a credential manager, git - without any variable git reads a
-    /// repository from, and with its caller's limit, five minutes where it names none.
+    /// repository from, and with the one limit of every call, five minutes.
     /// </summary>
     [Fact]
-    public async Task EveryCall_CannotAsk_AndIsGivenItsLimit()
+    public async Task EveryCall_CannotAsk_AndIsGivenTheLimit()
     {
         var requests = new List<ProcessRequest>();
         var gh = Gh(requests, Exited(0, "ok"));
 
-        _ = await gh.RunAsync("/repo", ["api", "x"], limit: null, "so nothing was read", Token);
-        _ = await gh.RunAsync("/repo", ["api", "y"], TimeSpan.FromMinutes(12), "so nothing was read", Token);
+        _ = await gh.RunAsync("/repo", ["api", "x"], "so nothing was read", Token);
+        _ = await gh.RunAsync("/repo", ["api", "y"], "so nothing was read", Token);
 
         Assert.All(requests, request =>
         {
@@ -36,7 +36,7 @@ public sealed class GhCiJobSourceTests
             Assert.True(request.Environment.TryGetValue("GIT_DIR", out var dir) && dir is null);
             Assert.Equal("/repo", request.WorkingDirectory);
         });
-        Assert.Equal([GhProcess.DefaultLimit, TimeSpan.FromMinutes(12)], requests.Select(request => request.Timeout));
+        Assert.Equal([TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(5)], requests.Select(request => request.Timeout));
     }
 
     /// <summary>
@@ -47,14 +47,14 @@ public sealed class GhCiJobSourceTests
     public async Task ACallPastItsLimit_IsIncomplete_AFailedOne20_AndNoGh14()
     {
         var late = await Assert.ThrowsAsync<HarnessException>(
-            () => Gh([], new ProcessResult(-1, string.Empty, string.Empty, TimeSpan.FromMinutes(5), TimedOut: true)).RunAsync("/repo", ["api", "x"], null, "so CI was NOT read", Token));
+            () => Gh([], new ProcessResult(-1, string.Empty, string.Empty, TimeSpan.FromMinutes(5), TimedOut: true)).RunAsync("/repo", ["api", "x"], "so CI was NOT read", Token));
         var failed = await Assert.ThrowsAsync<HarnessException>(
-            () => Gh([], Exited(1, stderr: "HTTP 404: Not Found\n")).RunAsync("/repo", ["api", "x"], null, "so CI was NOT read", Token));
+            () => Gh([], Exited(1, stderr: "HTTP 404: Not Found\n")).RunAsync("/repo", ["api", "x"], "so CI was NOT read", Token));
 
         var runner = Substitute.For<IProcessRunner>();
         runner.FindExecutable(GhProcess.Executable).Returns((string?)null);
         var missing = await Assert.ThrowsAsync<HarnessException>(
-            () => new GhProcess(runner, GitLocalVariables.Fixed([]), NoVariables).RunAsync("/repo", ["api", "x"], null, "so CI was NOT read", Token));
+            () => new GhProcess(runner, GitLocalVariables.Fixed([]), NoVariables).RunAsync("/repo", ["api", "x"], "so CI was NOT read", Token));
 
         Assert.Equal(
             (HarnessExit.Incomplete, "gh api x did not answer within 5 minutes, so CI was NOT read. Asked again, it may answer: a forge that is slow or a network that dropped says nothing of the code."),
@@ -74,7 +74,7 @@ public sealed class GhCiJobSourceTests
         var runner = Substitute.For<IProcessRunner>();
         var gh = new GhProcess(runner, GitLocalVariables.Fixed([]), name => name == GhProcess.RepositoryOverrideVariable ? "other/repo" : null);
 
-        var refused = await Assert.ThrowsAsync<HarnessException>(() => gh.RunAsync("/repo", ["api", "x"], null, "so CI was NOT read", Token));
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => gh.RunAsync("/repo", ["api", "x"], "so CI was NOT read", Token));
 
         Assert.Equal(
             (HarnessExit.Refused, "GH_REPO is set (other/repo), so gh would answer for THAT repository, not the tree it was pointed at, so CI was NOT read. Unset it for this call."),
@@ -98,7 +98,7 @@ public sealed class GhCiJobSourceTests
             Exited(0, $$"""{"total_count":101,"check_runs":[{{first}}]}"""),
             Exited(0, """{"total_count":101,"check_runs":[{"name":"license","status":"queued","conclusion":null,"html_url":"https://checks/license","details_url":"https://elsewhere/license"}]}"""));
 
-        var checks = await new GhCiJobSource(gh).ListCheckRunsAsync("/repo", "abc123", TimeSpan.FromMinutes(3), Token);
+        var checks = await new GhCiJobSource(gh).ListCheckRunsAsync("/repo", "abc123", Token);
 
         Assert.Equal(101, checks.Count);
         Assert.Equal(new CiCheckRun("test (1)", "completed", "success", "https://github.com/o/r/runs/1", 7, 1), checks[0]);
@@ -109,7 +109,7 @@ public sealed class GhCiJobSourceTests
                 ["api", "repos/:owner/:repo/commits/abc123/check-runs?per_page=100&page=2"],
             ],
             requests.Select(request => request.Arguments.ToArray()));
-        Assert.All(requests, request => Assert.Equal(TimeSpan.FromMinutes(3), request.Timeout));
+        Assert.All(requests, request => Assert.Equal(GhProcess.Limit, request.Timeout));
     }
 
     /// <summary>
@@ -133,9 +133,9 @@ public sealed class GhCiJobSourceTests
 
         var short_ = await Assert.ThrowsAsync<HarnessException>(() => listing switch
         {
-            "check runs" => source.ListCheckRunsAsync("/repo", "abc123", null, Token),
-            "statuses" => source.ListStatusesAsync("/repo", "abc123", null, Token),
-            _ => source.ReadRunAsync("/repo", 7, null, Token),
+            "check runs" => source.ListCheckRunsAsync("/repo", "abc123", Token),
+            "statuses" => source.ListStatusesAsync("/repo", "abc123", Token),
+            _ => source.ReadRunAsync("/repo", 7, Token),
         });
 
         Assert.Equal((HarnessExit.CommandFailed, message), (short_.ExitCode, short_.Message));
@@ -148,10 +148,10 @@ public sealed class GhCiJobSourceTests
     [Fact]
     public async Task AnAnswerNotAListing_FailsTheRead_AndALogNotReadSaysSo()
     {
-        var noRuns = await Assert.ThrowsAsync<HarnessException>(() => new GhCiJobSource(Gh([], Exited(0, """{"total_count":0}"""))).ListCheckRunsAsync("/repo", "abc123", null, Token));
-        var noStatuses = await Assert.ThrowsAsync<HarnessException>(() => new GhCiJobSource(Gh([], Exited(0, """{"message":"Not Found"}"""))).ListStatusesAsync("/repo", "abc123", null, Token));
-        var notJson = await Assert.ThrowsAsync<HarnessException>(() => new GhCiJobSource(Gh([], Exited(0, "<html>busy</html>"))).ListCheckRunsAsync("/repo", "abc123", null, Token));
-        var noLog = await Assert.ThrowsAsync<HarnessException>(() => new GhCiJobSource(Gh([], Exited(1, stderr: "HTTP 410: Gone\n"))).ReadJobLogAsync("/repo", 456, null, Token));
+        var noRuns = await Assert.ThrowsAsync<HarnessException>(() => new GhCiJobSource(Gh([], Exited(0, """{"total_count":0}"""))).ListCheckRunsAsync("/repo", "abc123", Token));
+        var noStatuses = await Assert.ThrowsAsync<HarnessException>(() => new GhCiJobSource(Gh([], Exited(0, """{"message":"Not Found"}"""))).ListStatusesAsync("/repo", "abc123", Token));
+        var notJson = await Assert.ThrowsAsync<HarnessException>(() => new GhCiJobSource(Gh([], Exited(0, "<html>busy</html>"))).ListCheckRunsAsync("/repo", "abc123", Token));
+        var noLog = await Assert.ThrowsAsync<HarnessException>(() => new GhCiJobSource(Gh([], Exited(1, stderr: "HTTP 410: Gone\n"))).ReadJobLogAsync("/repo", 456, Token));
 
         Assert.Equal((HarnessExit.CommandFailed, "gh answered no 'check_runs' list for the check runs of abc123, so CI was NOT read (this is not a pass)."), (noRuns.ExitCode, noRuns.Message));
         Assert.Equal((HarnessExit.CommandFailed, "gh answered no 'statuses' list for the statuses of abc123, so CI was NOT read (this is not a pass)."), (noStatuses.ExitCode, noStatuses.Message));
@@ -171,8 +171,8 @@ public sealed class GhCiJobSourceTests
             Exited(0, "2026-10-22T10:00:00Z line one\n2026-10-22T10:00:01Z line two\n"));
         var source = new GhCiJobSource(gh);
 
-        var statuses = await source.ListStatusesAsync("/repo", "abc123", null, Token);
-        var log = await source.ReadJobLogAsync("/repo", 456, null, Token);
+        var statuses = await source.ListStatusesAsync("/repo", "abc123", Token);
+        var log = await source.ReadJobLogAsync("/repo", 456, Token);
 
         Assert.Equal([new CiCommitStatus("deploy", "error", "https://ci/d", "it broke"), new CiCommitStatus("docs", "success", string.Empty, null)], statuses);
         Assert.Equal("2026-10-22T10:00:00Z line one\n2026-10-22T10:00:01Z line two\n", log);
@@ -193,7 +193,7 @@ public sealed class GhCiJobSourceTests
             Exited(0, """{"head_sha":"abc","head_branch":"work","created_at":"now","conclusion":"failure","name":"pipeline","path":".github/workflows/pipeline.yml"}"""),
             Exited(0, """{"total_count":1,"jobs":[{"id":70,"name":"test (linux)","conclusion":"failure","steps":[{"name":"Test","conclusion":"failure"}]}]}"""));
 
-        var run = await new GhCiJobSource(gh).ReadRunAsync("/repo", 7, null, Token);
+        var run = await new GhCiJobSource(gh).ReadRunAsync("/repo", 7, Token);
 
         Assert.Equal(("pipeline", ".github/workflows/pipeline.yml"), (run.Workflow, run.WorkflowPath));
         Assert.Equal(70, Assert.Single(run.Jobs).Id);

@@ -429,12 +429,11 @@ public sealed class CiLegsServiceTests
         var jobs = new StubCiJobSource([Run(new CiJob("unit (mac-arm)", CiConclusions.Failure, [new CiStep("Test", CiConclusions.Failure, Moment(0), Moment(200))]) { Id = 9 }) with { Workflow = "Pipeline", WorkflowPath = workflowPath }]);
 
         var report = await new CiLegsService(harness.ContextLoader, jobs, harness.GitClient, harness.FileSystem)
-            .ClassifyRunAsync(temp.Path, 4242, TimeSpan.FromMinutes(4), cancellationToken);
+            .ClassifyRunAsync(temp.Path, 4242, cancellationToken);
 
         var leg = Assert.Single(report.Legs);
         Assert.Equal(("mac-arm", budget, source), (leg.Leg, leg.BudgetSeconds, leg.BudgetSource));
         Assert.Equal([4242L], jobs.RunsRead);
-        Assert.Equal([TimeSpan.FromMinutes(4)], jobs.ReadLimits);
     }
 
     /// <summary>A repository whose ci settings do not say which jobs are legs has none to classify: the run's jobs are all there is, and nothing is refused.</summary>
@@ -447,7 +446,7 @@ public sealed class CiLegsServiceTests
         var jobs = new StubCiJobSource([Run(new CiJob("unit (mac-arm)", CiConclusions.Failure, []))]);
 
         var report = await new CiLegsService(harness.ContextLoader, jobs, harness.GitClient, harness.FileSystem)
-            .ClassifyRunAsync(temp.Path, 4242, null, cancellationToken);
+            .ClassifyRunAsync(temp.Path, 4242, cancellationToken);
 
         Assert.Empty(report.Legs);
         Assert.False(report.MatrixRan);

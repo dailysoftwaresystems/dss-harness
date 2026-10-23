@@ -34,8 +34,8 @@ public sealed class GhProcess(IProcessRunner processRunner, GitLocalVariables? l
     /// <summary>The forge's command line. The one dependency, and there is no fallback to a second.</summary>
     public const string Executable = "gh";
 
-    /// <summary>How long one call may take where its caller names no limit: five minutes.</summary>
-    public static readonly TimeSpan DefaultLimit = TimeSpan.FromMinutes(5);
+    /// <summary>How long one call may take: five minutes.</summary>
+    public static readonly TimeSpan Limit = TimeSpan.FromMinutes(5);
 
     /// <summary>
     /// The variable that makes the forge's tool answer for a repository somebody else named. Refused rather than cleared:
@@ -59,7 +59,6 @@ public sealed class GhProcess(IProcessRunner processRunner, GitLocalVariables? l
     /// <summary>Runs <c>gh</c> with <paramref name="arguments"/> in <paramref name="repositoryRoot"/> and answers what it printed.</summary>
     /// <param name="repositoryRoot">The repository the call answers for.</param>
     /// <param name="arguments">Its arguments.</param>
-    /// <param name="limit">The longest it may take; <see cref="DefaultLimit"/> where null.</param>
     /// <param name="notDone">What a call that did not answer leaves undone, as each refusal ends: "so CI was NOT read (this is not a pass)".</param>
     /// <param name="cancellationToken">Stops the call.</param>
     /// <exception cref="HarnessException">
@@ -69,7 +68,6 @@ public sealed class GhProcess(IProcessRunner processRunner, GitLocalVariables? l
     public async Task<string> RunAsync(
         string repositoryRoot,
         IReadOnlyList<string> arguments,
-        TimeSpan? limit,
         string notDone,
         CancellationToken cancellationToken)
     {
@@ -100,7 +98,7 @@ public sealed class GhProcess(IProcessRunner processRunner, GitLocalVariables? l
             environment[name] = value;
         }
 
-        var budget = limit ?? DefaultLimit;
+        var budget = Limit;
         var result = await _processRunner.RunAsync(
             new ProcessRequest
             {

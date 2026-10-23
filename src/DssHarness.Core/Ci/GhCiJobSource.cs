@@ -8,8 +8,8 @@ namespace DssHarness.Core.Ci;
 
 /// <summary>Reads CI run and job metadata, and the checks of a commit, for the repository a command is standing in.</summary>
 /// <remarks>
-/// Every read is given <c>limit</c>, the longest it may take: <see cref="GhProcess.DefaultLimit"/> where null, and a
-/// read past it is not done (21), which a caller may ask again.
+/// Every read may take <see cref="GhProcess.Limit"/>, and a read past it is not done (21), which a caller may ask
+/// again.
 /// </remarks>
 public interface ICiJobSource
 {
@@ -18,7 +18,6 @@ public interface ICiJobSource
     /// <param name="workflow">The workflow's name or file name.</param>
     /// <param name="branch">The branch.</param>
     /// <param name="limit">How many runs, newest first.</param>
-    /// <param name="readLimit">The longest the read may take.</param>
     /// <param name="cancellationToken">Stops the child process.</param>
     /// <exception cref="HarnessException">The forge could not be asked, so CI was not read.</exception>
     Task<IReadOnlyList<long>> ListRunsAsync(
@@ -26,40 +25,35 @@ public interface ICiJobSource
         string workflow,
         string branch,
         int limit,
-        TimeSpan? readLimit,
         CancellationToken cancellationToken = default);
 
     /// <summary>One run, with every job and step it recorded.</summary>
     /// <param name="repositoryRoot">The repository to ask about.</param>
     /// <param name="runId">The run.</param>
-    /// <param name="readLimit">The longest each read may take.</param>
     /// <param name="cancellationToken">Stops the child processes.</param>
     /// <exception cref="HarnessException">The run could not be read, so CI was not read.</exception>
-    Task<CiRun> ReadRunAsync(string repositoryRoot, long runId, TimeSpan? readLimit, CancellationToken cancellationToken = default);
+    Task<CiRun> ReadRunAsync(string repositoryRoot, long runId, CancellationToken cancellationToken = default);
 
     /// <summary>Every check run the forge lists for <paramref name="commit"/>, the latest of each.</summary>
     /// <param name="repositoryRoot">The repository to ask about.</param>
     /// <param name="commit">The commit.</param>
-    /// <param name="readLimit">The longest each read may take.</param>
     /// <param name="cancellationToken">Stops the child processes.</param>
     /// <exception cref="HarnessException">The checks could not be read, so CI was not read.</exception>
-    Task<IReadOnlyList<CiCheckRun>> ListCheckRunsAsync(string repositoryRoot, string commit, TimeSpan? readLimit, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<CiCheckRun>> ListCheckRunsAsync(string repositoryRoot, string commit, CancellationToken cancellationToken = default);
 
     /// <summary>Every commit status the forge lists for <paramref name="commit"/>, the newest of each context.</summary>
     /// <param name="repositoryRoot">The repository to ask about.</param>
     /// <param name="commit">The commit.</param>
-    /// <param name="readLimit">The longest each read may take.</param>
     /// <param name="cancellationToken">Stops the child processes.</param>
     /// <exception cref="HarnessException">The statuses could not be read, so CI was not read.</exception>
-    Task<IReadOnlyList<CiCommitStatus>> ListStatusesAsync(string repositoryRoot, string commit, TimeSpan? readLimit, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<CiCommitStatus>> ListStatusesAsync(string repositoryRoot, string commit, CancellationToken cancellationToken = default);
 
     /// <summary>The whole log of one job, as the forge keeps it.</summary>
     /// <param name="repositoryRoot">The repository to ask about.</param>
     /// <param name="jobId">The job.</param>
-    /// <param name="readLimit">The longest the read may take.</param>
     /// <param name="cancellationToken">Stops the child process.</param>
     /// <exception cref="HarnessException">The log could not be read.</exception>
-    Task<string> ReadJobLogAsync(string repositoryRoot, long jobId, TimeSpan? readLimit, CancellationToken cancellationToken = default);
+    Task<string> ReadJobLogAsync(string repositoryRoot, long jobId, CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc cref="ICiJobSource"/>
@@ -87,7 +81,6 @@ public sealed class GhCiJobSource(GhProcess gh) : ICiJobSource
         string workflow,
         string branch,
         int limit,
-        TimeSpan? readLimit,
         CancellationToken cancellationToken = default)
     {
         var output = await RunAsync(
@@ -99,7 +92,6 @@ public sealed class GhCiJobSource(GhProcess gh) : ICiJobSource
                 "--limit", limit.ToString(CultureInfo.InvariantCulture),
                 "--json", "databaseId",
             ],
-            readLimit,
             cancellationToken).ConfigureAwait(false);
 
         using var document = Parse(output, $"the run list for '{workflow}' on {branch}");
@@ -113,7 +105,6 @@ public sealed class GhCiJobSource(GhProcess gh) : ICiJobSource
     public async Task<CiRun> ReadRunAsync(
         string repositoryRoot,
         long runId,
-        TimeSpan? readLimit,
         CancellationToken cancellationToken = default)
     {
         var id = runId.ToString(CultureInfo.InvariantCulture);
@@ -121,7 +112,6 @@ public sealed class GhCiJobSource(GhProcess gh) : ICiJobSource
         var runOutput = await RunAsync(
             repositoryRoot,
             ["api", $"repos/:owner/:repo/actions/runs/{id}"],
-            readLimit,
             cancellationToken).ConfigureAwait(false);
 
         using var run = Parse(runOutput, $"run {id}");
@@ -133,7 +123,6 @@ public sealed class GhCiJobSource(GhProcess gh) : ICiJobSource
             $"the jobs of run {id}",
             "job",
             ReadJob,
-            readLimit,
             cancellationToken).ConfigureAwait(false);
 
         return new CiRun(
@@ -152,7 +141,6 @@ public sealed class GhCiJobSource(GhProcess gh) : ICiJobSource
     public Task<IReadOnlyList<CiCheckRun>> ListCheckRunsAsync(
         string repositoryRoot,
         string commit,
-        TimeSpan? readLimit,
         CancellationToken cancellationToken = default)
         => ReadAllAsync(
             repositoryRoot,
@@ -161,13 +149,11 @@ public sealed class GhCiJobSource(GhProcess gh) : ICiJobSource
             $"the check runs of {commit}",
             "check run",
             ReadCheckRun,
-            readLimit,
             cancellationToken);
 
     public Task<IReadOnlyList<CiCommitStatus>> ListStatusesAsync(
         string repositoryRoot,
         string commit,
-        TimeSpan? readLimit,
         CancellationToken cancellationToken = default)
         => ReadAllAsync(
             repositoryRoot,
@@ -176,18 +162,15 @@ public sealed class GhCiJobSource(GhProcess gh) : ICiJobSource
             $"the statuses of {commit}",
             "status",
             ReadStatus,
-            readLimit,
             cancellationToken);
 
     public Task<string> ReadJobLogAsync(
         string repositoryRoot,
         long jobId,
-        TimeSpan? readLimit,
         CancellationToken cancellationToken = default)
         => _gh.RunAsync(
             repositoryRoot,
             ["api", $"repos/:owner/:repo/actions/jobs/{jobId.ToString(CultureInfo.InvariantCulture)}/logs"],
-            readLimit,
             $"so the log of job {jobId.ToString(CultureInfo.InvariantCulture)} was NOT read",
             cancellationToken);
 
@@ -200,7 +183,6 @@ public sealed class GhCiJobSource(GhProcess gh) : ICiJobSource
     /// <param name="subject">What is read, as a refusal names it.</param>
     /// <param name="entry">What one entry is, as a refusal counts them.</param>
     /// <param name="read">Reads one entry.</param>
-    /// <param name="readLimit">The longest each read may take.</param>
     /// <param name="cancellationToken">Stops the requests.</param>
     /// <exception cref="HarnessException">
     /// Fewer entries came back than the listing says it has, or a page holds no list of them. A page that was never
@@ -215,7 +197,6 @@ public sealed class GhCiJobSource(GhProcess gh) : ICiJobSource
         string subject,
         string entry,
         Func<JsonElement, T> read,
-        TimeSpan? readLimit,
         CancellationToken cancellationToken)
     {
         var collected = new List<T>();
@@ -228,7 +209,6 @@ public sealed class GhCiJobSource(GhProcess gh) : ICiJobSource
             var output = await RunAsync(
                 repositoryRoot,
                 ["api", $"{address}?per_page={PageSize}&page={page}"],
-                readLimit,
                 cancellationToken).ConfigureAwait(false);
 
             using var listed = Parse(output, subject);
@@ -340,6 +320,6 @@ public sealed class GhCiJobSource(GhProcess gh) : ICiJobSource
         }
     }
 
-    private Task<string> RunAsync(string repositoryRoot, IReadOnlyList<string> arguments, TimeSpan? readLimit, CancellationToken cancellationToken)
-        => _gh.RunAsync(repositoryRoot, arguments, readLimit, NotRead, cancellationToken);
+    private Task<string> RunAsync(string repositoryRoot, IReadOnlyList<string> arguments, CancellationToken cancellationToken)
+        => _gh.RunAsync(repositoryRoot, arguments, NotRead, cancellationToken);
 }

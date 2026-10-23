@@ -138,7 +138,7 @@ public sealed class CheckStepRunnerTests : IDisposable
 
         await legs.Received(3).CheckAsync(
             repository.Path,
-            Arg.Is<CiLegsRequest>(request => request.Branch == "release" && request.Limit == 3 && request.Runs.Count == 0 && request.ReadLimit == null),
+            Arg.Is<CiLegsRequest>(request => request.Branch == "release" && request.Limit == 3 && request.Runs.Count == 0),
             Arg.Any<CancellationToken>());
         Assert.Equal((true, CiExit.LegRed), (redLeg.Red, redLeg.Exit));
         Assert.Equal(["linux"], redLeg.Output!["red"]!.AsArray().Select(leg => leg!["leg"]!.GetValue<string>()));
@@ -197,7 +197,6 @@ public sealed class CheckStepRunnerTests : IDisposable
                 && request.Wait == TimeSpan.FromMinutes(20)
                 && request.Poll == TimeSpan.FromSeconds(15)
                 && request.Ignore.SequenceEqual(new[] { "lint" })
-                && request.ReadLimit == null
                 && !request.Once),
             Arg.Any<CancellationToken>());
         Assert.Equal(

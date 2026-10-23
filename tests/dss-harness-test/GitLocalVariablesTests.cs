@@ -81,7 +81,7 @@ public sealed class GitLocalVariablesTests
         string[] names = ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY"];
 
         var runs = await new GhCiJobSource(new GhProcess(runner, GitLocalVariables.Fixed(names), _ => null))
-            .ListRunsAsync("/repo", "test.yml", "main", 1, readLimit: null, TestContext.Current.CancellationToken);
+            .ListRunsAsync("/repo", "test.yml", "main", 1, TestContext.Current.CancellationToken);
 
         Assert.Equal([7L], runs);
         var environment = Assert.Single(requests).Environment;

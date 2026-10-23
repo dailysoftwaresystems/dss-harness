@@ -1577,7 +1577,7 @@ checks print (`AnchorReports.BalanceFindings`, `AnchorCitationReports.Line`); `C
 statuses through `ICiJobSource` until one is red - classified by `ICiLegsService.ClassifyRunAsync`, its job's log read
 whole - every one has ended, none appeared, or its time is spent, with `CiConclusions` the one place that says what a
 conclusion came to. Every call of `gh` goes through `GhProcess`: the repository it answers for, never asking, ended at its
-limit (21) - a step's read at `GhProcess.DefaultLimit`, never at the step's time limit, which bounds the attempt and ends
+limit (21) - a step's read at `GhProcess.Limit`, never at the step's time limit, which bounds the attempt and ends
 a read in flight with it, so a `ci-wait` whose read stalls reads again at its next poll. The fold family - `FoldStepRunner`, `DeleteAgentStepRunner`, `RefreshStepRunner` and `RebaseStepRunner`, over
 `FoldFamilyStepRunner` - calls the verbs' typed use cases and reads their `AgentVerbFacts`, never an exit code:
 `FoldStandings.Read` says whether a dry run ends the step, asks or applies; `FlowQuestions.FoldQuestionOf` is the one rule
