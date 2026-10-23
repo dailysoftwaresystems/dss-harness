@@ -176,7 +176,7 @@ public sealed partial class HelpTests
             "agentPolicy what an agent may do beyond the rules built into the tool: restrictions, each one rule string, that only ever refuse - "
                 + "Run(git push *), Write(.github/**), Read(secrets/**), Web(pastebin.com) - applied to every agent of every run under this "
                 + "configuration, beside a workflow's definitions and steps; webDomains, the allow list of every web request (left out, any "
-                + "public address); worktreeRules (true where nothing is said) and protectedPaths (true too), the switches of the rule sets "
+                + "address); worktreeRules (true where nothing is said) and protectedPaths (true too), the switches of the rule sets "
                 + "'help agent-clients' names ('help agent-clients')",
             config,
             StringComparison.Ordinal);
@@ -281,11 +281,18 @@ public sealed partial class HelpTests
         Assert.Contains("the root actions (sudo, su, doas, pkexec, run0, gsudo, sudoedit, runas,", prose, StringComparison.Ordinal);
         Assert.Contains("psexec, PowerShell's -Verb RunAs, wsl -u root, systemd-run, schtasks with /ru, wherever", prose, StringComparison.Ordinal);
         Assert.Contains("writes outside an agent's writable roots, every read and write of a", prose, StringComparison.Ordinal);
-        Assert.Contains("this tool's own verbs and run-side-task, whatever any switch says: an agent", prose, StringComparison.Ordinal);
+        Assert.Contains("this tool's own verbs and run-side-task, run by any program or from a response file, whatever any switch says: an agent", prose, StringComparison.Ordinal);
+        Assert.Contains("every read and write of a credential slot or a Claude Code directory of the run's and every search over one", prose, StringComparison.Ordinal);
+        Assert.Contains("a refusal's places compare in any case on every system, a Windows short name read as its long one", prose, StringComparison.Ordinal);
         Assert.Contains("No agent starts while this tool itself runs elevated.", prose, StringComparison.Ordinal);
         Assert.Contains(
-            "wrappers (env, nohup, time, timeout, nice, xargs, command, builtin, exec, eval) stripped, and it goes into "
-                + "sh -c, cmd /c, powershell -Command and a decoded -EncodedCommand, to four levels",
+            "wrappers (env, nohup, time, timeout, nice, xargs, command, builtin, exec, eval, Invoke-Expression) stripped, and it goes into "
+                + "sh -c, cmd /c, powershell -Command and a decoded -EncodedCommand, by each shell's own quoting, to four levels",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "What it cannot read whole it denies, said here, not guessed at: a script nested past four levels, a shell that reads its "
+                + "script from its input (curl ... | sh), and a program named by a variable, a substitution, a pattern or a brace",
             prose,
             StringComparison.Ordinal);
         Assert.Contains("the inside of a script file a command runs", prose, StringComparison.Ordinal);
@@ -295,7 +302,7 @@ public sealed partial class HelpTests
                 + "cherry-pick, revert, pull, push, am, worktree, branch, tag, update-ref, config, gc) are refused",
             prose,
             StringComparison.Ordinal);
-        Assert.Contains("gh pr merge, gh workflow run and gh run rerun, for never merges,", prose, StringComparison.Ordinal);
+        Assert.Contains("gh pr merge, gh workflow run and gh run rerun, the gh api endpoints and GraphQL mutations that merge or start CI, and gh alias set, for never merges,", prose, StringComparison.Ordinal);
         Assert.Contains("whatever protectedPaths says", prose, StringComparison.Ordinal);
         Assert.Contains("an agent does not edit its own policy or what the next launch loads", prose, StringComparison.Ordinal);
         Assert.Contains("The protected paths (agentPolicy.protectedPaths, true where nothing is said)", prose, StringComparison.Ordinal);

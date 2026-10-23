@@ -10,8 +10,9 @@ namespace DssHarness.Core.Agents.Policy;
 /// <remarks>
 /// <para>
 /// An ask rule for every tool the launch has, so no call is allowed by a rule or a mode before the
-/// engine has seen it; the restriction rules as Claude Code's own deny rules, a second layer behind
-/// the engine's answers, never the one relied on; <c>"fallbackModel": []</c> and
+/// engine has seen it; the restriction rules as Claude Code's own deny rules, and a read of every
+/// credential slot and Claude Code directory of the run's beside them - which Claude Code applies to
+/// its searches too - a second layer behind the engine's answers, never the one relied on; <c>"fallbackModel": []</c> and
 /// <c>"switchModelsOnFlag": false</c>, for the engine's fallback is the only one; Claude Code's own
 /// output style, because its prompt is kept; an <c>env</c> holding every name the engine controls,
 /// so the user's own <c>env</c> cannot turn one back; and the user's hooks off in every launch.
@@ -20,9 +21,9 @@ namespace DssHarness.Core.Agents.Policy;
 /// <para>
 /// Every path in a deny rule is written as an absolute path, once for each root the launch has, so
 /// no rule is read against a working directory it was not meant for. Claude Code's deny rules know
-/// no exception, so a rule whose path would cover a root the launch writes - the main checkout's
-/// <c>.orchestrators/**</c> holds the agent's own work directory - is not written as one: the engine
-/// holds it alone, as it holds every rule first.
+/// no exception, so a rule is not written for a root where its pattern there would cover a root the
+/// launch writes - the main checkout's <c>.orchestrators/**</c> holds the agent's own work
+/// directory: the engine holds it alone there, as it holds every rule first.
 /// </para>
 /// </remarks>
 public static class ClaudeSettings
@@ -100,10 +101,11 @@ public static class ClaudeSettings
     }
 
     /// <summary>
-    /// The deny rules of one ground: each restriction as Claude Code spells its own - a
-    /// <c>Run</c> rule a <c>Bash</c> prefix rule, a path rule absolute once for each root that is
-    /// not a root the launch writes inside, a <c>Web</c> rule a <c>WebFetch</c> domain rule and,
-    /// where it refuses the web whole, <c>WebSearch</c> beside it.
+    /// The deny rules of one ground: a read of each credential slot and Claude Code directory, and
+    /// each restriction as Claude Code spells its own - a <c>Run</c> rule a <c>Bash</c> prefix rule,
+    /// a path rule absolute once for each root of the launch, but where its pattern there would
+    /// cover a root the launch writes, a <c>Web</c> rule a <c>WebFetch</c> domain rule and, where it
+    /// refuses the web whole, <c>WebSearch</c> beside it.
     /// </summary>
     private static IEnumerable<string> DenyRules(AgentPolicyGround ground, StringComparison comparison)
     {
@@ -116,6 +118,13 @@ public static class ClaudeSettings
             .Select(root => root.Replace('\\', '/'))
             .Distinct(StringComparer.FromComparison(comparison))
             .ToList();
+
+        // The places no file tool of an agent reads, whole: a search over a directory above one is
+        // left without what it holds.
+        foreach (var place in ground.SlotDirectories.Concat(ground.ClaudeCodeDirectories).Select(place => place.Replace('\\', '/')).Distinct(StringComparer.FromComparison(comparison)))
+        {
+            yield return $"Read({Absolute(place)}/**)";
+        }
 
         foreach (var declared in ground.Restrictions)
         {
@@ -152,7 +161,7 @@ public static class ClaudeSettings
         }
     }
 
-    /// <summary>One path rule as Claude Code's own, absolute once for each root that covers no root the launch writes.</summary>
+    /// <summary>One path rule as Claude Code's own, absolute once for each root, but where its pattern there would cover a root the launch writes.</summary>
     private static IEnumerable<string> PathDenyRules(AgentRule rule, IReadOnlyList<string> roots, IReadOnlyList<string> writable, StringComparison comparison)
     {
         foreach (var root in roots)
@@ -164,7 +173,7 @@ public static class ClaudeSettings
 
             foreach (var writeRoot in writable)
             {
-                var relative = Relative(root, writeRoot);
+                var relative = AgentPolicy.Beneath(root, writeRoot, comparison);
 
                 if (relative is null)
                 {
@@ -191,22 +200,15 @@ public static class ClaudeSettings
                 continue;
             }
 
-            // Claude Code's own absolute rules begin with two slashes whatever the system spells
-            // beneath them: '//C:/x/y' on Windows, '//home/x/y' on Linux - the root's own leading
-            // slash is one of the two.
-            var absolute = root.StartsWith('/') ? "/" + root.TrimEnd('/') : "//" + root.TrimEnd('/');
-
-            yield return $"{rule.Verb}({absolute}/{rule.Pattern})";
+            yield return $"{rule.Verb}({Absolute(root)}/{rule.Pattern})";
         }
     }
 
-    /// <summary>The path of <paramref name="path"/> relative to <paramref name="root"/>, with forward separators, or null where it is not under it or is the root itself.</summary>
-    private static string? Relative(string root, string path)
-    {
-        var relative = System.IO.Path.GetRelativePath(root, path);
-
-        return relative == ".." || relative == "." || relative.StartsWith("../", StringComparison.Ordinal) || relative.StartsWith("..\\", StringComparison.Ordinal)
-            || System.IO.Path.IsPathRooted(relative) ? null
-            : relative.Replace('\\', '/');
-    }
+    /// <summary>
+    /// A directory as Claude Code's own absolute rules begin: with two slashes whatever the system
+    /// spells beneath them - '//C:/x/y' on Windows, '//home/x/y' on Linux, the root's own leading
+    /// slash one of the two.
+    /// </summary>
+    private static string Absolute(string directory)
+        => directory.StartsWith('/') ? "/" + directory.TrimEnd('/') : "//" + directory.TrimEnd('/');
 }

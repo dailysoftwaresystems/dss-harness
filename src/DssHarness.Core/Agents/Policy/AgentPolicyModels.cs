@@ -48,7 +48,8 @@ public sealed record AgentRestriction(string Text, AgentPolicySource Source);
 
 /// <summary>
 /// What one agent's policy is decided against: where it works, what it may write, and the places no
-/// action of any agent reaches. The engine hands each step's own; a test hands one directly.
+/// action of any agent reaches. The engine is to hand each step's own once the agent step lands;
+/// until then nothing builds one but a test.
 /// </summary>
 /// <param name="WorkingDirectory">
 /// Where the agent's commands and relative paths resolve: its worktree, its work directory, or the
@@ -81,7 +82,8 @@ public sealed record AgentRestriction(string Text, AgentPolicySource Source);
 /// </param>
 /// <param name="WebDomains">
 /// <c>agentPolicy.webDomains</c>: the allow list every request's host must stand under. Null where
-/// every public address is allowed; never empty, for the configuration is refused one.
+/// every address is allowed, the machine's own and its network's among them; never empty, for the
+/// configuration is refused one.
 /// </param>
 /// <param name="Writes">
 /// The step's <c>writes</c>, its patterns relative to its worktree: the one source that narrows,

@@ -530,30 +530,43 @@ gitignore reads them, matched against the path as it stands under each of the ag
 `Web` one domain, the domain and every name under it, or `Web(*)` the web whole. A repository
 declares them under `agentPolicy.restrictions`, and a workflow's definitions and steps add their
 own to them, all applied together; `agentPolicy.webDomains` is the allow list beside them (left
-out, any public address), and a command that runs a program which fetches from the network -
-`curl`, `wget`, `Invoke-WebRequest`, `Invoke-RestMethod`, `iwr`, `irm`, `http`, `https`,
-`gh api` - is decided as a web request too, by each address it names. Refused always, not
-configurable: the root actions (`sudo`,
-`su`, `doas`, `pkexec`, `run0`, `gsudo`, `sudoedit`, `runas`, `psexec`, PowerShell's
-`-Verb RunAs`, `wsl -u root`, `systemd-run`, `schtasks` with `/ru`, wherever a command names one),
-writes outside an agent's writable roots, every read and write of a credential slot, any
-command naming one or a Claude Code directory of the run's, and this tool's own verbs and
-`run-side-task`, whatever any switch says. No agent starts while this tool
-itself runs elevated. A shell command is read whole before it is matched - split on `;`, `&&`,
-`||`, `|`, `&` and line ends, its `$(...)`, backticks, subshells and loop and branch bodies read
-as commands of their own, wrappers (`env`, `nohup`, `time`, `timeout`, `nice`, `xargs`,
-`command`, `builtin`, `exec`, `eval`) stripped, and it goes into `sh -c`, `cmd /c`,
-`powershell -Command` and a decoded `-EncodedCommand`, to four levels - so `git -C x push` is
-`git push`, and `env A=1 git push` is too. What it cannot read is said in help, not guessed at:
-the inside of a script file a command runs. The worktree rules (`agentPolicy.worktreeRules`, on
-unless turned off) keep an agent's worktree a thing the engine can measure: git's state-writing
-verbs and `gh pr merge`, `gh workflow run` and `gh run rerun` are refused (reading git stays
-allowed), git's own files are not written by a tool whatever `protectedPaths` says, an agent
-does not edit its own policy or what the next launch loads (`.harness-config/config.json`,
-`.harness-config/orchestrators/**`, `.harness-config/skills/**` - but for a step whose `writes`
-names that directory itself - `.harness-config/runner/**`, `.claude/settings*.json`, `.mcp.json`),
-and the tool's own state is written by its verbs alone, the agent's own work directory the one
-exception. The protected paths (`agentPolicy.protectedPaths`, on unless turned off) are the
+out, any address, the machine's own and its network's among them), and a command that runs a
+program which fetches from the network - `curl`, `wget`, `Invoke-WebRequest`, `Invoke-RestMethod`,
+`iwr`, `irm`, `http`, `https`, `gh api` - is decided as a web request too, by each address it
+names, a proxy, a `curl --connect-to`'s or `--resolve`'s target and the proxy its environment names
+among them; one that reads what it reaches from a file (`curl --config`, `wget --input-file` or
+`--execute`) is refused where the web is held to any rule. Refused always, not configurable: the
+root actions (`sudo`, `su`, `doas`, `pkexec`, `run0`, `gsudo`, `sudoedit`, `runas`, `psexec`,
+PowerShell's `-Verb RunAs`, `wsl -u root`, `systemd-run`, `schtasks` with `/ru`, wherever a command
+names one), writes outside an agent's writable roots, every read and write of a credential slot or
+a Claude Code directory of the run's and every search over one, any command naming one - by `~` or
+`$HOME`, as a redirect's file or an option's value too - and this tool's own verbs and
+`run-side-task`, run by any program or from a response file, whatever any switch says. No agent
+starts while this tool itself runs elevated. A path is decided as asked and as resolved, and a
+refusal's places compare in any case on every system, a Windows short name read as its long one. A
+shell command is read whole before it is matched - split on `;`, `&&`, `||`, `|`, `&` and line
+ends, its `$(...)`, backticks, subshells and loop and branch bodies read as commands of their own,
+the `NAME=value` words before a program kept as its environment, wrappers (`env`, `nohup`, `time`,
+`timeout`, `nice`, `xargs`, `command`, `builtin`, `exec`, `eval`, `Invoke-Expression`) stripped,
+and it goes into `sh -c`, `cmd /c`, `powershell -Command` and a decoded `-EncodedCommand`, by each
+shell's own quoting, to four levels, and into a shell another program runs with its script
+(`find -exec sh -c`) - so `git -C x push` is `git push`, and `env A=1 git push` and
+`A=1 /usr/bin/git push` are too; every word of a command is tried as the program of the words
+after it, a program read by its name. What it cannot read whole it denies, said in help, not guessed at: a script
+nested past four levels, a shell that reads its script from its input (`curl ... | sh`), and a
+program named by a variable, a substitution, a pattern or a brace; what it does not see is the
+inside of a script file a command runs. The worktree rules (`agentPolicy.worktreeRules`, on unless
+turned off) keep an agent's worktree a thing the engine can measure: git's state-writing verbs - a
+git configured where it runs, by `-c`, `--config-env` or its environment, the `git config` it is -
+and `gh pr merge`, `gh workflow run`, `gh run rerun`, the `gh api` endpoints and GraphQL mutations
+that merge or start CI and `gh alias set` are refused (reading git stays allowed), git's own files
+are not written by a tool whatever `protectedPaths` says, and an agent does not edit its own policy
+or what the next launch loads (`.harness-config/config.json`, `.harness-config/orchestrators/**`,
+`.harness-config/skills/**` - but for a step whose `writes` names one skill's own directory by
+name, `.harness-config/skills/<name>/...`, which opens that skill alone -
+`.harness-config/runner/**`, `.claude/settings*.json`, `.mcp.json`). Whatever any switch says, the
+tool's own state is written by its verbs alone, a place of the agent's own within it, as its work
+directory is, the one exception. The protected paths (`agentPolicy.protectedPaths`, on unless turned off) are the
 writes Claude Code guards - `.git/**`, `.vscode/**`, `.husky/**` and the rest of its list, which
 `help agent-clients` prints and a test pins - refused on every client, so a role is not stopped
 on one where it passes on another; turning them off takes this tool's refusal away, and Claude
@@ -562,10 +575,10 @@ step has them, a write under its worktree that matches none of their patterns is
 reporter's reads are narrowed to the run's directory alone, with no command, no write and no web
 at all. For Claude Code the same policy is rendered, never re-decided, into the launch's
 settings: an ask rule for every tool, and the restrictions as deny rules, absolute once for each
-root. This is policy, not a sandbox - a program an agent
-runs opens files as the user it runs as, a file of the credential slot among them; what it is
-never given is a key in its environment, and what no file tool of an agent touches is the slot
-itself, in any root. Where this tool cannot decide a call it denies it, never allows: nothing
+root, a read of each credential slot and Claude Code directory beside them. This is policy, not
+a sandbox - a program an agent runs opens files as the user it runs as, a file of the credential
+slot among them; what it is never given is a key in its environment, and what no file tool of an
+agent touches is the slot itself, in any root. Where this tool cannot decide a call it denies it, never allows: nothing
 runs while the host that would answer is silent or gone. The policy is built and holds every
 action behind it; the `claude-code` client asks it of every call, the API clients are what comes
 next, and no command of this build runs an agent yet.

@@ -191,7 +191,8 @@ public sealed class AgentRule
 
     /// <summary>
     /// Whether the command <paramref name="words"/> is refused by this <see cref="AgentRuleVerb.Run"/>
-    /// rule: each word of the pattern matches the command's word in turn, and a trailing
+    /// rule: each word of the pattern matches the command's word in turn - the program by its name,
+    /// so <c>/usr/bin/gh</c> and <c>gh.exe</c> are the <c>gh</c> a rule names - and a trailing
     /// <c>*</c> the rest of the command, the empty rest included.
     /// </summary>
     /// <param name="words">The command's words, as <see cref="CommandAnalysis"/> flattened them.</param>
@@ -223,7 +224,11 @@ public sealed class AgentRule
 
         for (var at = 0; at < taken; at++)
         {
-            if (!string.Equals(patternWords[at], words[at], comparison))
+            var matched = at == 0
+                ? string.Equals(CommandAnalysis.Name(patternWords[at]), CommandAnalysis.Name(words[at]), comparison)
+                : string.Equals(patternWords[at], words[at], comparison);
+
+            if (!matched)
             {
                 return false;
             }

@@ -76,6 +76,22 @@ public sealed class ClaudeSettingsTests
     }
 
     [Fact]
+    public void EachCredentialSlotAndClaudeCodeDirectory_IsAReadDenyRule_ThatClaudeCodeAppliesToItsSearches()
+    {
+        var (main, worktree, work) = Ground();
+        var slot = Path.Combine(main, ".harness-config", "workflows", ".env");
+        var claude = Path.Combine(Path.GetTempPath(), "dssharness-main", "claude");
+
+        var rendered = ClaudeSettings.Render(
+            ["Read", "Grep"],
+            new AgentPolicyGround(worktree, [main], [worktree, work], [slot], [claude], []),
+            StringComparison.OrdinalIgnoreCase);
+
+        Assert.Contains($"\"Read({Absolute(slot)}/**)\"", rendered, StringComparison.Ordinal);
+        Assert.Contains($"\"Read({Absolute(claude)}/**)\"", rendered, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void TheRestrictionsAreDenyRules_AbsoluteOnceForEachRoot()
     {
         var (main, worktree, work) = Ground();

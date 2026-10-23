@@ -56,8 +56,8 @@ public sealed class ClaudeToolDeciderTests : IDisposable
             ("Read", "file_path", inside, _policy.Read),
             ("Read", "file_path", away, _policy.Read),
             ("Read", "file_path", Path.Combine(_slot, "API_KEY"), _policy.Read),
-            ("Grep", "path", _slot, _policy.Read),
-            ("Glob", "path", inside, _policy.Read),
+            ("Grep", "path", _slot, _policy.Search),
+            ("Glob", "path", inside, _policy.Search),
             ("Write", "file_path", away, _policy.Write),
             ("Edit", "file_path", inside, _policy.Write),
             ("NotebookEdit", "notebook_path", away, _policy.Write),
@@ -72,13 +72,27 @@ public sealed class ClaudeToolDeciderTests : IDisposable
         Assert.Equal(AgentPolicyAnswer.Allow, Decide("Read", new JsonObject { ["file_path"] = inside }));
     }
 
-    /// <summary>A search that names no path searches the working directory, and is decided as a read of it.</summary>
+    /// <summary>A search that names no path searches the working directory, and is decided as a search of it.</summary>
     [Fact]
-    public void ASearchThatNamesNoPath_IsAReadOfTheWorkingDirectory()
+    public void ASearchThatNamesNoPath_IsASearchOfTheWorkingDirectory()
     {
         Assert.Equal(AgentPolicyAnswer.Allow, Decide("Grep", new JsonObject { ["pattern"] = "x" }));
-        Assert.Equal(_policy.Read(_slot), ClaudeToolDecider.Decide(_policy, All, "Glob", new JsonObject { ["pattern"] = "*" }, _slot));
+        Assert.Equal(_policy.Search(_slot), ClaudeToolDecider.Decide(_policy, All, "Glob", new JsonObject { ["pattern"] = "*" }, _slot));
         Assert.IsType<AgentPolicyAnswer.Denied>(ClaudeToolDecider.Decide(_policy, All, "Glob", new JsonObject { ["pattern"] = "*" }, _slot));
+    }
+
+    /// <summary>
+    /// A search over a directory a credential slot lies beneath reads the slot, so it is refused, where a read of the
+    /// directory itself names nothing in it.
+    /// </summary>
+    [Fact]
+    public void ASearchOverADirectoryHoldingASlot_IsRefused_AReadOfItIsNot()
+    {
+        var denied = Assert.IsType<AgentPolicyAnswer.Denied>(Decide("Grep", new JsonObject { ["path"] = _temp.Path, ["pattern"] = "KEY" }));
+
+        Assert.Equal("the credential slots", denied.Rule);
+        Assert.IsType<AgentPolicyAnswer.Denied>(Decide("Glob", new JsonObject { ["path"] = _temp.Path, ["pattern"] = "**" }));
+        Assert.Equal(AgentPolicyAnswer.Allow, _policy.Read(_temp.Path));
     }
 
     /// <summary>A tool the launch was not given is refused by name, naming what it was given, whatever its input.</summary>

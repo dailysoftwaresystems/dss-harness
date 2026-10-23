@@ -1452,34 +1452,56 @@ through a link past a rule written for where it lands; and `Web(pastebin.com)`, 
 domain and every name under it, or `Web(*)` the web whole). Built in, not configurable: the root
 actions (`sudo`, `su`, `doas`, `pkexec`, `run0`, `gsudo`, `sudoedit`, `runas`, `psexec`,
 PowerShell's `-Verb RunAs`, `wsl -u root`, `systemd-run`, `schtasks` with `/ru`, wherever a command
-names one), writes outside an agent's writable roots, every read and write of a credential slot,
-and any command naming one or a Claude Code directory of the run's; no agent starts while the tool
-itself runs elevated (`IHostPlatform.IsPrivilegedProcess`, the runtime's own answer). A command is
-read whole before it is matched, `Agents\Policy\CommandAnalysis`: a shell string split on `;`,
-`&&`, `||`, `|`, `&` and line ends, its command substitutions, subshells and loop and branch
-bodies read as commands of their own, wrappers (`env`, `nohup`, `time`, `timeout`, `nice`,
-`xargs`, `command`, `builtin`, `exec`, `eval`) stripped with their own options, and it goes into
-`sh -c`, `cmd /c`, `powershell -Command` and a decoded `-EncodedCommand`, to four levels;
-git's own options are dropped before its subcommand, and a `git -c` that names an alias or a key
-naming a program git runs is the `git config` it is; and a command that runs a program which
-fetches from the network (`curl`, `wget`, `Invoke-WebRequest` and `Invoke-RestMethod` with `iwr`
-and `irm`, `http`, `https`, `gh api`) is decided as a web request too, by each address it names,
-under the `Web(...)` rules and `agentPolicy.webDomains`, refused where the step has no web. What it
-cannot read is said in help: the
-inside of a script file a command runs. The worktree rules (`agentPolicy.worktreeRules`, on unless
-turned off) refuse git's state-writing verbs and the merges and CI starts of `gh`, keep git's own
-files unwritten whatever `protectedPaths` says, and hold the tool's own policy, what the next
-launch loads, and its own state (`HarnessLayout.StatePaths`, the one owner of where that state is)
-unwritten by any agent - its own work directory the one exception; the tool's own verbs and
-`run-side-task` are refused whatever the switch says. The protected paths
-(`agentPolicy.protectedPaths`) are Claude Code's own list written out once as rules
-(`AgentPolicy.ProtectedPathRules`), pinned by a test and printed by `help agent-clients`, refused
-on every client; a step's `writes` is the one source that narrows, and the reporter's reads are
-narrowed to the run's directory alone (`AgentPolicyGround.ReporterRoot`: no command, no write, no
-web). For Claude Code the policy is rendered, never re-decided, into the launch's settings
-(`Agents\Policy\ClaudeSettings`): an ask rule for every tool the launch has, and the restriction
-rules as deny rules, absolute once for each root that covers no root the launch writes - a second
-layer, for the engine is asked about every call and answers from the same policy in its own
+names one), writes outside an agent's writable roots, every read and write of a credential slot or a
+Claude Code directory of the run's and every search over one (`AgentPolicy.Search`), and any command
+naming one - by `~` or `$HOME`, as a redirect's file or an option's value, against every directory a
+`cd` of it reached; no agent starts while the tool itself runs elevated
+(`IHostPlatform.IsPrivilegedProcess`, the runtime's own answer). A path is decided as asked and as
+resolved, its device prefix dropped and its home expanded, and a refusal's places compare in any
+case on every system, each Windows short name read as its long one (as `Path.GetFullPath` spells it); what a
+refusal allows - a writable root, the step's `writes` - compares as the platform does. A command is
+read whole before it is matched, `Agents\Policy\CommandAnalysis`: a shell string split on `;`, `&&`,
+`||`, `|`, `&`, line ends and a closing parenthesis nothing opened, its command substitutions,
+subshells and loop and branch bodies read as commands of their own, a continued line joined and
+`$'...'` decoded, the `NAME=value` words before a program kept as its environment and carried to
+what it runs, wrappers (`env`, `nohup`, `time`, `timeout`, `nice`, `xargs`, `command`, `builtin`,
+`exec`, `eval`, `Invoke-Expression`) stripped with their own options, and it goes into `sh -c` (the
+words after its script read as scripts too), `cmd /c` and `powershell -Command` and a decoded
+`-EncodedCommand` - by any prefix PowerShell takes - each by its own shell's quoting, to four
+levels, and into a shell another program runs with its script among its words. What it cannot read
+whole it refuses, and the policy denies: a script nested past four levels, parentheses past 32, a
+shell that reads its script from its input, an `xargs` handing a shell its script, and a program
+named by a variable, a substitution, a pattern or a brace. Every word of a command is tried as the
+program of the words after it, a program matched by its name (`CommandAnalysis.Name`), so a command
+another program runs meets the rules on its own program; git's own options are dropped before its
+subcommand, and a git configured where it runs - a `-c` or `--config-env` that names an alias or a
+key naming a program git runs, `--exec-path`, the `GIT_CONFIG` and program names of its environment
+- is the `git config` it is; and a command that runs a program which fetches from the network
+(`curl`, `wget`, `Invoke-WebRequest` and `Invoke-RestMethod` with `iwr` and `irm`, `http`, `https`,
+`gh api`) is decided as a web request too, by each address it names and each host it reaches (a
+proxy, curl's `--connect-to` and `--resolve` targets, the proxy of its environment), under the
+`Web(...)` rules and `agentPolicy.webDomains`, refused where the step has no web, and refused where
+the web is held to any rule when it reads what it reaches from a file. What it does not see is said
+in help: the inside of a script file a command runs. The worktree rules
+(`agentPolicy.worktreeRules`, on unless turned off) refuse git's state-writing verbs and the merges
+and CI starts of `gh` - `gh pr merge`, `gh workflow run`, `gh run rerun`, the `gh api` endpoints and
+GraphQL mutations of the same (`AgentPolicy.GhApiEndpoints`, `AgentPolicy.GhApiMutations`) and `gh
+alias set` - keep git's own files unwritten whatever `protectedPaths` says, and hold the tool's own
+policy and what the next launch loads unwritten by any agent; its own state
+(`HarnessLayout.StatePaths`, the one owner of where that state is) is held so whatever any switch
+says, a writable root standing inside it - the agent's own work directory - the one exception; the
+tool's own verbs (`AgentPolicy.ToolVerbs`, each the command's own name as its service declares it)
+and `run-side-task` are refused, run by any program or from a response file, whatever the switch
+says. The protected paths (`agentPolicy.protectedPaths`) are Claude Code's own list written out once
+as rules (`AgentPolicy.ProtectedPathRules`), pinned by a test and printed by `help agent-clients`,
+refused on every client; a step's `writes` is the one source that narrows, and the reporter's reads
+are narrowed to the run's directory alone (`AgentPolicyGround.ReporterRoot`: no command, no write,
+no web). For Claude Code the policy is rendered, never re-decided, into the launch's settings
+(`Agents\Policy\ClaudeSettings`): an ask rule for every tool the launch has, a read of each
+credential slot and Claude Code directory as a deny rule - which Claude Code applies to its searches
+too - and the restriction rules as deny rules, absolute once for each root, but where a rule's
+pattern there would cover a root the launch writes - a second layer, for the engine is asked about
+every call and answers from the same policy in its own
 process. Where the policy cannot decide a call it denies it, never
 allows - nothing runs while the host that would answer is silent or gone. The first client that
 asks it is `Agents\ClaudeCode\ClaudeCodeClient`, the `IAgentClient` of `claude-code`: each

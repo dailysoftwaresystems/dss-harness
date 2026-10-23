@@ -15,11 +15,12 @@ public static class ClaudeCodeTools
     /// <summary>
     /// Each capability with the tools it names, in the order a definition names the capabilities; each tool with the
     /// member of its input that names what a call of it is of - the path it reads or writes, the command it runs - and
-    /// whether a call that names none is of the agent's working directory, as a search that names no path is.
+    /// whether it searches, reading what lies beneath the directory it names - the agent's working directory where it
+    /// names none.
     /// </summary>
     public static IReadOnlyList<(AgentCapability Capability, IReadOnlyList<ClaudeCodeTool> Tools)> Table { get; } =
     [
-        (AgentCapability.Read, [new("Read", "file_path"), new("Grep", "path", WorkingDirectoryWhereNone: true), new("Glob", "path", WorkingDirectoryWhereNone: true)]),
+        (AgentCapability.Read, [new("Read", "file_path"), new("Grep", "path", Searches: true), new("Glob", "path", Searches: true)]),
         (AgentCapability.Write, [new("Write", "file_path"), new("Edit", "file_path"), new("NotebookEdit", "notebook_path")]),
         (AgentCapability.Run, [new("Bash", "command")]),
         (AgentCapability.Web, []),
@@ -72,5 +73,8 @@ public static class ClaudeCodeTools
 /// <summary>One of Claude Code's tools the table gives, and what a call of it is of.</summary>
 /// <param name="Name">The tool, as Claude Code names it.</param>
 /// <param name="Subject">The member of a call's input that names the path or the command its action is decided by.</param>
-/// <param name="WorkingDirectoryWhereNone">Whether a call that names none is of the agent's working directory.</param>
-public sealed record ClaudeCodeTool(string Name, string Subject, bool WorkingDirectoryWhereNone = false);
+/// <param name="Searches">
+/// Whether the tool searches: a call of it reads what lies beneath the directory it names, and one that names none
+/// searches the agent's working directory.
+/// </param>
+public sealed record ClaudeCodeTool(string Name, string Subject, bool Searches = false);

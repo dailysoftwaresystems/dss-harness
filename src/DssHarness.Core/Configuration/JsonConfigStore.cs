@@ -56,18 +56,13 @@ public sealed class JsonConfigStore(IFileSystem fileSystem) : IConfigStore
             throw new ConfigException($"'{path}' is empty.");
         }
 
-        // The agent sections' own refusals, made where the file is read: a config that loads is one the tool can use.
+        // The agent sections' own refusals and the agent policy's, made where the file is read and said together: a
+        // config that loads is one the tool can use, and a restriction that loads is a restriction the tool reads.
         var (_, problems) = DssHarness.Core.Agents.AgentProviders.Resolve(config);
 
-        if (problems is [_, ..])
+        if ((IReadOnlyList<string>)[.. problems, .. DssHarness.Core.Agents.Policy.AgentPolicy.RuleProblems(config)] is [_, ..] refused)
         {
-            throw new ConfigException($"'{path}' could not be read: {string.Join(" ", problems)}");
-        }
-
-        // The agent policy's own, the same way: a restriction that loads is a restriction the tool reads.
-        if (DssHarness.Core.Agents.Policy.AgentPolicy.RuleProblems(config) is [_, ..] restrictions)
-        {
-            throw new ConfigException($"'{path}' could not be read: {string.Join(" ", restrictions)}");
+            throw new ConfigException($"'{path}' could not be read: {string.Join(" ", refused)}");
         }
 
         HarnessConfigValidator.ThrowIfInvalid(config, path);

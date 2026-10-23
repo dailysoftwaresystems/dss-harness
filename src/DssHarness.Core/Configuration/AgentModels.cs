@@ -62,7 +62,7 @@ public sealed class AgentPolicyConfig
 
     /// <summary>
     /// The allow list of every web request an agent makes: each entry one domain, and a request is allowed only to
-    /// a domain on the list or a name under it. Left out where every public address is allowed, which is the
+    /// a domain on the list or a name under it. Left out where every address is allowed, which is the
     /// default; given empty it is refused - leave the key out instead. A <c>Web(...)</c> restriction refuses
     /// beside it whatever this allows.
     /// </summary>

@@ -1625,11 +1625,14 @@ public sealed class ClaudeCodeClientTests : IDisposable
         }
     }
 
-    /// <summary>A file system whose reading of the links of one file fails as no policy expects it to.</summary>
+    /// <summary>
+    /// A file system whose reading of the links of one file fails as no policy expects it to: a fault of the engine's own,
+    /// not a path it cannot read, which the policy answers undecided.
+    /// </summary>
     private sealed class FaultsOn(DssHarness.Core.FileSystem.IFileSystem inner, string file) : PassThroughFileSystem(inner)
     {
         public override string ResolveLinks(string path)
-            => Path.GetFileName(path) == file ? throw new UnauthorizedAccessException($"'{path}' cannot be looked at") : base.ResolveLinks(path);
+            => Path.GetFileName(path) == file ? throw new InvalidOperationException($"'{path}' cannot be looked at") : base.ResolveLinks(path);
     }
 
     /// <summary>A mask that masks nothing.</summary>

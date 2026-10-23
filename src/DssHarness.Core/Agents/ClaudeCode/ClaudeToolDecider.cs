@@ -5,7 +5,7 @@ namespace DssHarness.Core.Agents.ClaudeCode;
 
 /// <summary>
 /// What the engine answers a call Claude Code asks it about (<c>can_use_tool</c>): the call read as the action its
-/// tool's capability is - a read, a write, a command - of what its input names, by the one table of
+/// tool's capability is - a read, a search, a write, a command - of what its input names, by the one table of
 /// <see cref="ClaudeCodeTools"/>, and decided by the same <see cref="AgentPolicy"/> every client asks, never re-decided here.
 /// </summary>
 /// <remarks>
@@ -46,7 +46,7 @@ public static class ClaudeToolDecider
 
         return row.Capability switch
         {
-            AgentCapability.Read => policy.Read(subject),
+            AgentCapability.Read => row.Tool.Searches ? policy.Search(subject) : policy.Read(subject),
             AgentCapability.Write => policy.Write(subject),
             AgentCapability.Run => policy.Run(subject),
             _ => Refused($"'{tool}' is a tool whose calls this tool cannot read, so none of them runs"),
@@ -65,7 +65,7 @@ public static class ClaudeToolDecider
         => ClaudeCodeTools.Find(tool) is { Tool: var named }
             ? input is JsonObject holding && holding[named.Subject] is JsonValue value && value.TryGetValue<string>(out var text) && text.Length > 0
                 ? text
-                : named.WorkingDirectoryWhereNone ? workingDirectory : null
+                : named.Searches ? workingDirectory : null
             : null;
 
     /// <summary>A refusal of this decider's own.</summary>
