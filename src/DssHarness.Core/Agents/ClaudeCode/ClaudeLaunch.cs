@@ -175,8 +175,11 @@ public static class ClaudeLaunch
 
         var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
 
-        // A host session's own names would outrank the launch's settings, the probe found: none of them is inherited.
-        foreach (var name in own.Where(name => name == SessionVariable || (name.StartsWith(SessionPrefix, StringComparison.Ordinal) && !KeptNames.Contains(name, StringComparer.Ordinal))))
+        // A host session's own names would outrank the launch's settings, the probe found: none of them is inherited. Told
+        // in any case, as every environment this tool hands a child names its variables and as the runner takes a name
+        // away in every spelling: on Windows a name in another case is the same variable to the program that reads it.
+        foreach (var name in own.Where(name => string.Equals(name, SessionVariable, StringComparison.OrdinalIgnoreCase)
+            || (name.StartsWith(SessionPrefix, StringComparison.OrdinalIgnoreCase) && !KeptNames.Contains(name, StringComparer.OrdinalIgnoreCase))))
         {
             environment[name] = null;
         }

@@ -515,7 +515,7 @@ public sealed partial class AgentProviders
     /// that signs each request with its provider's key (<c>claude-api</c>, <c>glm</c>) and on one that signs in with a
     /// key (<c>auth: apiKey</c>); the token's one name on one that signs in with a token; none on one that signs in
     /// with the machine's login. The one place that says what a step's model needs of the slot: <c>validate-workflow</c>
-    /// asks it of every step, and so does a launch that is given its key.
+    /// asks it of every step, and so will the engine once the agent step lands, for the key a launch is given.
     /// </summary>
     /// <param name="provider">The provider that lists the model.</param>
     /// <param name="client">The client the step names, or null where it names none.</param>

@@ -429,7 +429,7 @@ public sealed class AgentRunnerTests
             },
         };
 
-        var result = await new AgentRunner([client], disk, TimeProvider.System)
+        var result = await new AgentRunner([client], disk, Elevation.User, TimeProvider.System)
             .RunAsync(Step(temp), new Collecting(seen), TestContext.Current.CancellationToken)
             .WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
@@ -455,7 +455,7 @@ public sealed class AgentRunnerTests
         var seen = new List<AgentEvent>();
         var client = new FakeClient { Script = async (_, events, _) => await Scripted(events) };
 
-        var result = await new AgentRunner([client], disk, TimeProvider.System).RunAsync(Step(temp), new Collecting(seen), TestContext.Current.CancellationToken);
+        var result = await new AgentRunner([client], disk, Elevation.User, TimeProvider.System).RunAsync(Step(temp), new Collecting(seen), TestContext.Current.CancellationToken);
 
         var error = $"The step's stored stream '{StreamFile(temp)}' could not be written, so the run was stopped: {SlowToFail.Why}";
 
@@ -477,7 +477,7 @@ public sealed class AgentRunnerTests
         var disk = new WillNotClose(Disk(), failing: 3);
         var client = new FakeClient { Script = async (_, events, _) => await Scripted(events) };
 
-        var result = await new AgentRunner([client], disk, TimeProvider.System).RunAsync(Step(temp), events: null, TestContext.Current.CancellationToken);
+        var result = await new AgentRunner([client], disk, Elevation.User, TimeProvider.System).RunAsync(Step(temp), events: null, TestContext.Current.CancellationToken);
 
         var error = $"The step's stored stream '{StreamFile(temp)}' could not be written, so the run was stopped: {WillNotClose.Unwritten}";
 
@@ -500,7 +500,7 @@ public sealed class AgentRunnerTests
         var disk = new WillNotClose(Disk(), failing: null);
         var client = new FakeClient { Script = async (_, events, _) => await Scripted(events) };
 
-        var result = await new AgentRunner([client], disk, TimeProvider.System).RunAsync(Step(temp), events: null, TestContext.Current.CancellationToken);
+        var result = await new AgentRunner([client], disk, Elevation.User, TimeProvider.System).RunAsync(Step(temp), events: null, TestContext.Current.CancellationToken);
 
         var error = $"The step's stored stream '{StreamFile(temp)}' could not be closed whole, so its last lines may not be on the disk: {WillNotClose.Unclosed}";
 
@@ -533,7 +533,7 @@ public sealed class AgentRunnerTests
         };
 
         var raised = await Assert.ThrowsAsync<AggregateException>(
-            () => new AgentRunner([client], disk, TimeProvider.System)
+            () => new AgentRunner([client], disk, Elevation.User, TimeProvider.System)
                 .RunAsync(Step(temp), events: null, TestContext.Current.CancellationToken)
                 .WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken));
 
@@ -584,7 +584,7 @@ public sealed class AgentRunnerTests
         var disk = new RecordingDisk(Disk());
         var client = new FakeClient { Script = async (_, events, _) => await Scripted(events) };
 
-        await new AgentRunner([client], disk, TimeProvider.System).RunAsync(Step(temp), events: null, TestContext.Current.CancellationToken);
+        await new AgentRunner([client], disk, Elevation.User, TimeProvider.System).RunAsync(Step(temp), events: null, TestContext.Current.CancellationToken);
 
         Assert.Equal([StreamFile(temp)], disk.Appended);
         Assert.Equal([ResultFile(temp)], disk.Written);
@@ -746,7 +746,8 @@ public sealed class AgentRunnerTests
               "served": [],
               "files": [],
               "keysRefused": [],
-              "sessionFilesRemoved": []
+              "sessionFilesRemoved": [],
+              "uncontained": []
             }
 
             """,
@@ -764,7 +765,7 @@ public sealed class AgentRunnerTests
         var first = new FakeClient();
         var second = new FakeClient { Name = "other" };
 
-        var result = await new AgentRunner([first, second], Disk(), TimeProvider.System).RunAsync(Step(temp), events: null, TestContext.Current.CancellationToken);
+        var result = await new AgentRunner([first, second], Disk(), Elevation.User, TimeProvider.System).RunAsync(Step(temp), events: null, TestContext.Current.CancellationToken);
 
         Assert.Equal(AgentRunStatus.NotStarted, result.Status);
         Assert.Equal(AgentNotStartedBecause.ConfigurationWrong, result.NotStartedBecause);
@@ -831,13 +832,136 @@ public sealed class AgentRunnerTests
     public void HowARunEnded_IsTheExitCodeItsTableGives(AgentRunStatus status, int exitCode)
         => Assert.Equal(exitCode, new AgentRunResult(status) { Served = [new AgentServedModel("model-x", 1)] }.ToOutcome().ExitCode);
 
-    /// <summary>Where it never began, the exit code says which of the three it was.</summary>
+    /// <summary>
+    /// Where it never began, the exit code says why: a program missing is a tool missing, a key missing and an elevated
+    /// tool are refusals, and a configuration that is wrong is one. Every reason there is has its row.
+    /// </summary>
     [Theory]
-    [InlineData(AgentNotStartedBecause.ProgramMissing, 14)]
-    [InlineData(AgentNotStartedBecause.KeyMissing, 13)]
-    [InlineData(AgentNotStartedBecause.ConfigurationWrong, 12)]
-    public void WhereItNeverBegan_TheExitCodeSaysWhichOfTheThreeItWas(AgentNotStartedBecause because, int exitCode)
-        => Assert.Equal(exitCode, new AgentRunResult(AgentRunStatus.NotStarted, because).ToOutcome().ExitCode);
+    [InlineData(AgentNotStartedBecause.ProgramMissing, HarnessExit.ToolMissing)]
+    [InlineData(AgentNotStartedBecause.KeyMissing, HarnessExit.Refused)]
+    [InlineData(AgentNotStartedBecause.ConfigurationWrong, HarnessExit.ConfigInvalid)]
+    [InlineData(AgentNotStartedBecause.Elevated, HarnessExit.Refused)]
+    public void WhereItNeverBegan_TheExitCodeSaysWhy(AgentNotStartedBecause because, int exitCode)
+    {
+        Assert.Equal(exitCode, new AgentRunResult(AgentRunStatus.NotStarted, because).ToOutcome().ExitCode);
+        Assert.Equal(4, Enum.GetValues<AgentNotStartedBecause>().Length);
+    }
+
+    /// <summary>
+    /// No agent starts while this tool itself runs elevated: the step is recorded never started before any client is
+    /// taken - the client is never handed the run - in the policy's own words, its stream's end and <c>result.json</c>
+    /// alike, and its exit is a refusal.
+    /// </summary>
+    [Fact]
+    public async Task WhileTheToolRunsElevated_NoClientIsTaken_AndTheStepIsRecordedNeverStarted()
+    {
+        using var temp = new TempDirectory();
+        var client = new FakeClient();
+
+        var result = await new AgentRunner([client], Disk(), new Elevation(elevated: true), TimeProvider.System)
+            .RunAsync(Step(temp), events: null, TestContext.Current.CancellationToken);
+
+        const string Said = "The step's agent was not started: this tool itself is running elevated, as root or an administrator: no agent starts while it does.";
+        Assert.Equal((AgentRunStatus.NotStarted, AgentNotStartedBecause.Elevated, Said), (result.Status, result.NotStartedBecause, result.Error));
+        Assert.Null(client.Run);
+        Assert.Equal(HarnessExit.Refused, result.ToOutcome().ExitCode);
+        Assert.Equal(["runStarted", "runFinished"], Lines(temp).Select(LineKind));
+        Assert.Equal($$"""{"kind":"runFinished","status":"NotStarted","error":"{{Said}}"}""", WithoutWhenAndWhere(Lines(temp)[^1]));
+
+        var recorded = ReadResult(temp);
+        Assert.Equal((AgentRunStatus.NotStarted, AgentNotStartedBecause.Elevated, Said), (recorded.Status, recorded.NotStartedBecause, recorded.Error));
+    }
+
+    /// <summary>
+    /// A result a client answers that does not hold together is no ending the engine could read: the run fails, naming
+    /// the client and what is wrong, and <c>result.json</c> says that - never the result as the client answered it.
+    /// </summary>
+    [Fact]
+    public async Task AResultThatDoesNotHoldTogether_FailsTheRun_NamingWhy()
+    {
+        using var temp = new TempDirectory();
+        var client = new FakeClient
+        {
+            Script = (_, _, _) => Task.FromResult(new AgentRunResult(AgentRunStatus.Completed, FinalText: "done") { Limit = new AgentAccountLimit(BalanceSpent: true) }),
+        };
+
+        var result = await Runner(client).RunAsync(Step(temp), events: null, TestContext.Current.CancellationToken);
+
+        const string Said = "Client 'fake' answered a result that does not hold together: it ended Completed, and names an account's limit, which only a run that ended RateLimited does.";
+        Assert.Equal((AgentRunStatus.Failed, Said, null, null), (result.Status, result.Error, result.Limit, result.FinalText));
+        Assert.Equal((AgentRunStatus.Failed, Said), (ReadResult(temp).Status, ReadResult(temp).Error));
+    }
+
+    /// <summary>
+    /// A run whose record is lost fails however it ended, and what only its own ending carried goes with that ending: a
+    /// run that handed off fails with no handoff, so its result still holds together and is written.
+    /// </summary>
+    [Fact]
+    public async Task WhereTheRecordIsLost_ARunThatHandedOff_FailsWithoutItsHandoff()
+    {
+        using var temp = new TempDirectory();
+        var disk = new SlowToFail(Disk(), failing: 3, after: TimeSpan.FromMilliseconds(500));
+        var client = new FakeClient
+        {
+            Script = async (_, events, _) =>
+            {
+                await Scripted(events);
+                return new AgentRunResult(AgentRunStatus.HandedOff, Turns: 1, Handoff: new AgentHandoff("Done: the form."));
+            },
+        };
+
+        var result = await new AgentRunner([client], disk, Elevation.User, TimeProvider.System).RunAsync(Step(temp), events: null, TestContext.Current.CancellationToken);
+
+        var error = $"The step's stored stream '{StreamFile(temp)}' could not be written, so the run was stopped: {SlowToFail.Why}";
+        Assert.Equal((AgentRunStatus.Failed, error, null, 1), (result.Status, result.Error, result.Handoff, result.Turns));
+        Assert.Equal((AgentRunStatus.Failed, error), (ReadResult(temp).Status, ReadResult(temp).Error));
+    }
+
+    /// <summary>
+    /// A result holds each field to the ending that carries it, and says what is wrong where one does not - each rule its
+    /// own sentence - and a run made failed from any ending holds together.
+    /// </summary>
+    [Fact]
+    public void AResult_HoldsEachFieldToTheEndingThatCarriesIt()
+    {
+        var limit = new AgentAccountLimit(BalanceSpent: false);
+        var cases = new (AgentRunResult Result, string? Problem)[]
+        {
+            (new(AgentRunStatus.Completed, FinalText: "done"), null),
+            (new(AgentRunStatus.NotStarted), "it never began, and says not why"),
+            (new(AgentRunStatus.Failed, AgentNotStartedBecause.KeyMissing, Error: "x"), "it ended Failed, and says why it never began"),
+            (new(AgentRunStatus.RateLimited, Error: "x"), "it ended RateLimited, and names no account's limit"),
+            (new(AgentRunStatus.Failed, Error: "x") { Limit = limit }, "it ended Failed, and names an account's limit, which only a run that ended RateLimited does"),
+            (new(AgentRunStatus.Failed, Error: "x") { DeclinedFor = "cyber" }, "it ended Failed, and names what a declined request was of, which only a run that ended Refused does"),
+            (new(AgentRunStatus.InvalidOutput, StructuredOutput: "{}", Error: "x"), "it ended InvalidOutput, and holds an answer read against its schema, which only a run that completed does"),
+            (new(AgentRunStatus.HandedOff), "it ended HandedOff, and says not whether its agent answered the handoff"),
+            (new(AgentRunStatus.Failed, Handoff: new AgentHandoff("a"), Error: "x"), "it ended Failed, and holds a handoff, which only a run that handed off does"),
+            (new(AgentRunStatus.HandedOff, Handoff: new AgentHandoff()), "its handoff holds neither an answer nor why there is none, and it holds one of them"),
+            (new(AgentRunStatus.HandedOff, Handoff: new AgentHandoff("a", "b")), "its handoff holds both an answer and why there is none, and it holds one of them"),
+            (new(AgentRunStatus.Asked), "it ended Asked, and asks nothing"),
+            (new(AgentRunStatus.Completed) { Questions = [new AgentQuestion("which?", ["a", "b"])] }, "it ended Completed, and asks the person, which only a run that ended Asked does"),
+            (new(AgentRunStatus.Completed, Error: "x"), "it completed, and says why it failed"),
+            (new(AgentRunStatus.Completed, Turns: -1), "its turns is -1, and a count is never below naught"),
+            (new(AgentRunStatus.Completed, Duration: TimeSpan.FromSeconds(-1)), "its duration is -00:00:01, and a run never ran for less than naught"),
+            (new(AgentRunStatus.Completed) { Served = [new AgentServedModel("m", 0)] }, "it names 'm' as serving from turn 0, and turns are counted from one"),
+            (new(AgentRunStatus.Completed) { Files = null! }, "its files is null, and that list is always written"),
+            (new((AgentRunStatus)99), "its status 99 is no ending a run has"),
+        };
+
+        Assert.Equal(cases.Select(@case => @case.Problem), cases.Select(@case => @case.Result.Problem()));
+
+        var endings = new AgentRunResult[]
+        {
+            new(AgentRunStatus.NotStarted, AgentNotStartedBecause.KeyMissing, Error: "x"),
+            new(AgentRunStatus.RateLimited, Error: "x") { Limit = limit },
+            new(AgentRunStatus.Refused, Error: "x") { DeclinedFor = "cyber" },
+            new(AgentRunStatus.Completed, StructuredOutput: "{}"),
+            new(AgentRunStatus.HandedOff, Handoff: new AgentHandoff(WhyNone: "y")),
+        };
+
+        Assert.All(endings, ending => Assert.Null(ending.Problem()));
+        Assert.All(endings, ending => Assert.Equal((AgentRunStatus.Failed, "lost", null), (ending.FailedFor("lost").Status, ending.FailedFor("lost").Error, ending.FailedFor("lost").Problem())));
+    }
 
     /// <summary>
     /// The writer's bounds: a producer that outruns its sinks waits for them - nothing is dropped, nothing faults - and
@@ -912,7 +1036,7 @@ public sealed class AgentRunnerTests
         => new(AgentRunStatus.Completed, FinalText: "work done", Turns: 1) { Served = [new AgentServedModel(run.Model ?? "model-x", 1)] };
 
     /// <summary>A runner over one client, on the real file system and clock.</summary>
-    private static AgentRunner Runner(IAgentClient client) => new([client], Disk(), TimeProvider.System);
+    private static AgentRunner Runner(IAgentClient client) => new([client], Disk(), Elevation.User, TimeProvider.System);
 
     /// <summary>The real file system.</summary>
     private static PhysicalFileSystem Disk() => new(FilePermissionsFactory.Create());
@@ -1006,9 +1130,15 @@ public sealed class AgentRunnerTests
         return reading.ReadToEnd().Split('\n', StringSplitOptions.RemoveEmptyEntries);
     }
 
-    /// <summary><c>result.json</c>, read back by the options it was written with.</summary>
+    /// <summary><c>result.json</c>, read back by the options it was written with, and held together as it reads.</summary>
     private static AgentRunResult ReadResult(TempDirectory temp)
-        => JsonSerializer.Deserialize<AgentRunResult>(File.ReadAllText(ResultFile(temp)), JsonStateFile.Options)!;
+    {
+        var read = JsonSerializer.Deserialize<AgentRunResult>(File.ReadAllText(ResultFile(temp)), JsonStateFile.Options)!;
+
+        Assert.Null(read.Problem());
+
+        return read;
+    }
 
     /// <summary>One line without when it happened and where it falls, which the test cannot know: what it carries, whole.</summary>
     private static string WithoutWhenAndWhere(string line)

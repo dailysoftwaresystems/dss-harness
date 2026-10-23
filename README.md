@@ -538,8 +538,9 @@ configurable: the root actions (`sudo`,
 `-Verb RunAs`, `wsl -u root`, `systemd-run`, `schtasks` with `/ru`, wherever a command names one),
 writes outside an agent's writable roots, every read and write of a credential slot, any
 command naming one or a Claude Code directory of the run's, and this tool's own verbs and
-`run-side-task`, whatever any switch says. No agent starts while this tool
-itself runs elevated. A shell command is read whole before it is matched - split on `;`, `&&`,
+`run-side-task`, whatever any switch says. No agent starts while this tool itself runs elevated:
+its step is recorded never started, saying so, before any client is taken. A shell command is read
+whole before it is matched - split on `;`, `&&`,
 `||`, `|`, `&` and line ends, its `$(...)`, backticks, subshells and loop and branch bodies read
 as commands of their own, wrappers (`env`, `nohup`, `time`, `timeout`, `nice`, `xargs`,
 `command`, `builtin`, `exec`, `eval`) stripped, and it goes into `sh -c`, `cmd /c`,
@@ -571,10 +572,10 @@ action behind it; the `claude-code` client asks it of every call, the API client
 next, and no command of this build runs an agent yet.
 
 The `claude-code` client starts Claude Code once for each launch, a new session every time -
-never resumed or continued, keeping no session file (one a launch leaves all the same is removed,
-and said) - streamed both ways: the step's prompt is the first message on its input, never an
-argument, and the launch runs in the agent's working directory with every other root it reaches
-added. It is given its model and no fallback, the step's effort, turns and budget, and the tools of
+never resumed or continued, keeping no session file (one a launch leaves all the same is removed
+once it has ended, however it ended, and said) - streamed both ways: the step's prompt is the first
+message on its input, never an argument, and the launch runs in the agent's working directory with
+every other root it reaches added. It is given its model and no fallback, the step's effort, turns and budget, and the tools of
 the agent's capabilities and no other (`read`: `Read`, `Grep`, `Glob`; `write`: `Write`, `Edit`,
 `NotebookEdit`; `run`: `Bash`; `web`: none of Claude Code's), never one that starts agents, loads
 skills, asks a person or plans. Every call is asked of the engine before it runs and answered from
@@ -591,10 +592,11 @@ say `disableAllHooks`, and each launch's start names that settings file and its 
 the hooks are off. A settings file that would give a launch a credential - `ANTHROPIC_API_KEY`,
 `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_BASE_URL` in its `env`, or
 `apiKeyHelper` - refuses the run before any launch, naming the file; take it out, or give the
-client a directory of its own (`agentClients.claude-code.configDir`). The client holds every
-launch to the protocol itself: one that does not answer the host's `initialize` request within
-30 s, whose init offers a tool it was not given or names a credential its `auth` did not give, or
-that refuses by itself a call the engine allows never started; a call it ran that the engine was
+client a directory of its own in the slot: `CLAUDE_CONFIG_DIR`, or the name
+`agentClients.claude-code.configDir` gives. The client holds every launch to the protocol itself:
+one that does not answer the host's `initialize` request within 30 s, that works before its init
+says what it runs as, whose init offers a tool it was not given or names a credential its `auth`
+did not give, or that refuses by itself a call the engine allows never started; a call it ran that the engine was
 never asked about, or refused, fails the step by the tool's name; each is ended at once. A message
 no turn takes within the stall bound stalls the step; a declined request ends it `Refused`, and
 an account at its limit `RateLimited`, with when the limit lifts where Claude Code says.

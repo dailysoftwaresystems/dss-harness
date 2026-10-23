@@ -55,7 +55,7 @@ public sealed class ClaudeCodeClientLiveTests
         var slot = temp.WriteFile(Path.Combine("slot", "keys.env"), "NOT_FOR_THE_AGENT=1\n");
         File.WriteAllText(Path.Combine(tree, "a.txt"), "alpha\n");
         var client = new ClaudeCodeClient(harness.ProcessRunner, harness.FileSystem, harness.Platform, harness.ChildSessions, TimeProvider.System);
-        var runner = new AgentRunner([client], harness.FileSystem, TimeProvider.System);
+        var runner = new AgentRunner([client], harness.FileSystem, harness.Platform, TimeProvider.System);
 
         var allowed = new Sink();
         var read = await runner.RunAsync(

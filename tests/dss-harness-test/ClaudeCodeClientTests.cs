@@ -1,11 +1,14 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Agents;
 using DssHarness.Core.Agents.ClaudeCode;
 using DssHarness.Core.Agents.Policy;
 using DssHarness.Core.Execution;
+using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
+using DssHarness.Core.Runners;
 
 namespace DssHarness.Tests;
 
@@ -125,6 +128,8 @@ public sealed class ClaudeCodeClientTests : IDisposable
         kit.Own["CLAUDE_CODE_ENTRYPOINT"] = "claude-desktop";
         kit.Own["CLAUDE_CODE_SSE_PORT"] = "51234";
         kit.Own["CLAUDECODE"] = "1";
+        kit.Own["claude_code_entrypoint_lower"] = "claude-desktop";
+        kit.Own["ClaudeCode"] = "1";
         kit.Own["ZAI_API_KEY"] = "zk-ambient";
         kit.Own["DSSHARNESS_KEPT_NAME"] = "kept";
         var config = Directory.CreateDirectory(kit.Temp.Combine("claude-config")).FullName;
@@ -144,6 +149,10 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.Null(given["CLAUDE_CODE_ENTRYPOINT"]);
         Assert.Null(given["CLAUDE_CODE_SSE_PORT"]);
         Assert.Null(given["CLAUDECODE"]);
+
+        // A host session's name in another case is the same variable on Windows, and is taken away in every spelling.
+        Assert.Null(given["claude_code_entrypoint_lower"]);
+        Assert.Null(given["ClaudeCode"]);
         Assert.Null(given["ZAI_API_KEY"]);
         Assert.False(given.ContainsKey("DSSHARNESS_KEPT_NAME"));
         Assert.Equal("sk-work", given["ANTHROPIC_API_KEY"]);
@@ -161,6 +170,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.False(seen.ContainsKey("CLAUDE_CODE_ENTRYPOINT"), "a host session's name reached the launch");
         Assert.False(seen.ContainsKey("CLAUDE_CODE_SSE_PORT"), "a host session's name reached the launch");
         Assert.False(seen.ContainsKey("CLAUDECODE"), "a host session's name reached the launch");
+        Assert.DoesNotContain(seen.Keys, name => name.Equals("claude_code_entrypoint_lower", StringComparison.OrdinalIgnoreCase) || name.Equals("ClaudeCode", StringComparison.OrdinalIgnoreCase));
         Assert.False(seen.ContainsKey("ZAI_API_KEY"), "a withheld name reached the launch");
         Assert.Equal("kept", seen["DSSHARNESS_KEPT_NAME"]);
         Assert.Equal("sk-work", seen["ANTHROPIC_API_KEY"]);
@@ -286,9 +296,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
     {
         using var kit = new Kit();
         kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = "a.txt" } }) }]);
-        var runner = new AgentRunner([kit.Client()], kit.Harness.FileSystem, TimeProvider.System);
-
-        var result = await runner.RunAsync(kit.Step(), null, Token);
+        var result = await kit.StepRunner().RunAsync(kit.Step(), null, Token);
 
         Assert.Equal(AgentRunStatus.Completed, result.Status);
 
@@ -327,12 +335,16 @@ public sealed class ClaudeCodeClientTests : IDisposable
 
         var repair = Assert.Single(sink.Of<OutputRepair>());
         Assert.Equal(1, repair.Attempt);
-        Assert.Equal(StructuredOutputGate.Problems(new AgentOutput("o", Schema), new JsonObject { ["answers"] = "a" }), repair.Problems);
-        Assert.NotEmpty(repair.Problems);
+        Assert.Equal(["$: 'answer' is required and missing", "$.answers: is said by no property of the schema"], repair.Problems);
 
         var sent = sink.Of<MessageSent>();
         Assert.Equal([AgentMessageKind.FirstPrompt, AgentMessageKind.Repair], sent.Select(message => message.Which));
-        Assert.Equal(StructuredOutputGate.Repair(repair.Problems), sent[1].Text);
+        Assert.Equal(
+            "Your answer does not read against the schema it was asked for:\n"
+                + "- $: 'answer' is required and missing\n"
+                + "- $.answers: is said by no property of the schema\n"
+                + "Answer again, whole, as the schema says.",
+            sent[1].Text);
         Assert.Equal(2, result.Turns);
     }
 
@@ -375,11 +387,11 @@ public sealed class ClaudeCodeClientTests : IDisposable
     /// Each limit a launch ended on is the step's ending: its turns, its budget, its context, each by the status it is.
     /// </summary>
     [Theory]
-    [InlineData("error_max_turns", null, AgentRunStatus.MaxTurns)]
-    [InlineData("error_max_budget_usd", null, AgentRunStatus.BudgetSpent)]
-    [InlineData(null, "prompt_too_long", AgentRunStatus.ContextExhausted)]
-    [InlineData("error_during_execution", null, AgentRunStatus.Failed)]
-    public async Task ALimitALaunchEndedOn_IsTheStepsEnding(string? subtype, string? terminal, AgentRunStatus status)
+    [InlineData("error_max_turns", null, AgentRunStatus.MaxTurns, "error_max_turns")]
+    [InlineData("error_max_budget_usd", null, AgentRunStatus.BudgetSpent, "Claude Code ended the launch on its --max-budget-usd: error_max_budget_usd")]
+    [InlineData(null, "prompt_too_long", AgentRunStatus.ContextExhausted, "done")]
+    [InlineData("error_during_execution", null, AgentRunStatus.Failed, "error_during_execution")]
+    public async Task ALimitALaunchEndedOn_IsTheStepsEnding(string? subtype, string? terminal, AgentRunStatus status, string error)
     {
         using var kit = new Kit();
         var turn = new JsonObject();
@@ -398,7 +410,8 @@ public sealed class ClaudeCodeClientTests : IDisposable
 
         var result = await kit.Client().RunAsync(kit.Run(), new Sink(), Token);
 
-        Assert.Equal(status, result.Status);
+        // What the launch said of its end, as its result's errors or else its text, is what the step's error says.
+        Assert.Equal((status, error), (result.Status, result.Error));
     }
 
     /// <summary>
@@ -695,11 +708,18 @@ public sealed class ClaudeCodeClientTests : IDisposable
         kit.Script([new JsonObject { ["error"] = "authentication_failed" }]);
         var credential = new AgentCredential(AgentAuth.ApiKey, [new AgentKey("KEY_ONE", "sk-one"), new AgentKey("KEY_TWO", "sk-two")]);
 
-        var result = await kit.Client().RunAsync(kit.Run(credential: credential), new Sink(), Token);
+        var sink = new Sink();
+
+        var result = await kit.Client().RunAsync(kit.Run(credential: credential), sink, Token);
 
         Assert.Equal(AgentRunStatus.Failed, result.Status);
+        Assert.Equal("Claude Code reported the key KEY_TWO invalid: Invalid API key · Fix external API key", result.Error);
         Assert.Equal(["KEY_ONE", "KEY_TWO"], result.KeysRefused);
         Assert.Equal(2, kit.Launches().Count);
+
+        // One move, from the first key to the last: nothing is left to move to after it.
+        var moved = Assert.Single(sink.Of<FallbackStarted>());
+        Assert.Equal(("KEY_ONE", "KEY_TWO"), (moved.FromKey, moved.ToKey));
     }
 
     /// <summary>
@@ -761,10 +781,13 @@ public sealed class ClaudeCodeClientTests : IDisposable
         using var kit = new Kit();
         kit.Script(new JsonArray());
 
-        var result = await kit.Client().RunAsync(kit.Run() with { Program = kit.Temp.Combine("no-claude.exe") }, new Sink(), Token);
+        var missing = kit.Temp.Combine("no-claude.exe");
 
-        Assert.Equal(AgentRunStatus.NotStarted, result.Status);
-        Assert.Equal(AgentNotStartedBecause.ProgramMissing, result.NotStartedBecause);
+        var result = await kit.Client().RunAsync(kit.Run() with { Program = missing }, new Sink(), Token);
+
+        Assert.Equal((AgentRunStatus.NotStarted, AgentNotStartedBecause.ProgramMissing), (result.Status, result.NotStartedBecause));
+        Assert.Equal($"client 'claude-code' was not started: Executable '{missing}' does not exist.", result.Error);
+        Assert.Equal(0, result.Turns);
     }
 
     /// <summary>
@@ -788,9 +811,10 @@ public sealed class ClaudeCodeClientTests : IDisposable
 
         var result = await kit.Client().RunAsync(kit.Run(), new Sink(), Token);
 
-        Assert.Equal((AgentRunStatus.NotStarted, AgentNotStartedBecause.ProgramMissing), (result.Status, result.NotStartedBecause));
+        // The program is there and would start: what is wrong is the configuration it would read.
+        Assert.Equal((AgentRunStatus.NotStarted, AgentNotStartedBecause.ConfigurationWrong), (result.Status, result.NotStartedBecause));
         Assert.Equal(
-            $"client 'claude-code' was not started: '{file}', the user's Claude Code settings this launch reads, sets {said}, and this client signs in with the machine's login; a credential is read from the slot alone. Take it out of that file, or give the client a directory of its own (agentClients.claude-code.configDir)",
+            $"client 'claude-code' was not started: '{file}', the user's Claude Code settings this launch reads, sets {said}, and this client signs in with the machine's login; a credential is read from the slot alone. Take it out of that file, or give the client a directory of its own in the slot: CLAUDE_CONFIG_DIR, or the name agentClients.claude-code.configDir gives",
             result.Error);
         Assert.Empty(kit.Runner.Requests);
     }
@@ -813,7 +837,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
 
         var result = await kit.Client().RunAsync(kit.Run(), new Sink(), Token);
 
-        Assert.Equal(AgentRunStatus.NotStarted, result.Status);
+        Assert.Equal((AgentRunStatus.NotStarted, AgentNotStartedBecause.ConfigurationWrong), (result.Status, result.NotStartedBecause));
         Assert.StartsWith($"client 'claude-code' was not started: '{file}', the user's Claude Code settings this launch reads, {said}", result.Error, StringComparison.Ordinal);
         Assert.Empty(kit.Runner.Requests);
     }
@@ -891,7 +915,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
 
         Assert.Equal((AgentRunStatus.NotStarted, AgentNotStartedBecause.ProgramMissing), (result.Status, result.NotStartedBecause));
         Assert.Equal(
-            "client 'claude-code' was not started: claude 2.1.287 did not answer the host's initialize request: this tool runs Claude Code only as its host",
+            "client 'claude-code' was not started: claude 2.1.287 did not answer the host's initialize request within 30 s: this tool runs Claude Code only as its host",
             result.Error);
     }
 
@@ -1035,12 +1059,13 @@ public sealed class ClaudeCodeClientTests : IDisposable
     }
 
     /// <summary>
-    /// Where the engine cannot decide - a request it answers no kind of, a call its own deciding fails on - it answers
-    /// <c>error</c>, never <c>allow</c>: nothing runs, the launch goes on, and both answers are kept with the control
-    /// messages.
+    /// Where the engine cannot decide, it never allows, and the launch goes on: a request it answers no kind of is answered
+    /// <c>error</c>; a call its own deciding fails on is denied by the rule <c>undecided</c>, saying the fault, and recorded
+    /// as every denial is - the model reads why, the events, <c>denials.jsonl</c> and the result count it - so no fault of
+    /// the engine's escapes unrecorded. Both answers are kept with the control messages.
     /// </summary>
     [Fact]
-    public async Task WhereTheEngineCannotDecide_ItAnswersError_AndNothingRuns()
+    public async Task WhereTheEngineCannotDecide_TheCallIsDeniedAndRecorded_AndARequestItAnswersNoKindOfIsAnError()
     {
         using var kit = new Kit();
         kit.Script(
@@ -1058,15 +1083,24 @@ public sealed class ClaudeCodeClientTests : IDisposable
 
         Assert.Equal(AgentRunStatus.Completed, result.Status);
         Assert.False(Assert.Single(sink.Of<ToolCallFinished>()).Ok);
+        Assert.Equal(1, result.Denials);
 
+        var faulty = Path.Combine(kit.Worktree, "faulty.txt");
+        var said = $"the engine could not decide this call ('{faulty}' cannot be looked at): it denies what it cannot decide";
         var answers = Assert.Single(kit.Launches()).Read
-            .Where(line => line["type"]?.GetValue<string>() == "control_response" && line["response"]?["subtype"]?.GetValue<string>() == "error")
-            .Select(line => line["response"]!["error"]!.GetValue<string>())
+            .Where(line => line["type"]?.GetValue<string>() == "control_response")
+            .Select(line => line["response"]!)
             .ToList();
         Assert.Equal(2, answers.Count);
-        Assert.Equal("this host answers no 'hook_callback' request", answers[0]);
-        Assert.StartsWith("the engine could not decide this call: ", answers[1], StringComparison.Ordinal);
-        Assert.Equal(2, File.ReadAllLines(Path.Combine(kit.StepDirectory, ClaudeLaunch.ControlFileName)).Count(line => line.Contains("\"subtype\":\"error\"", StringComparison.Ordinal)));
+        Assert.Equal(("error", "this host answers no 'hook_callback' request"), (answers[0]["subtype"]!.GetValue<string>(), answers[0]["error"]!.GetValue<string>()));
+        Assert.Equal(("deny", said), (answers[1]["response"]!["behavior"]!.GetValue<string>(), answers[1]["response"]!["message"]!.GetValue<string>()));
+
+        var denied = Assert.Single(sink.Of<PermissionDenied>());
+        Assert.Equal(("Read", "faulty.txt", ClaudeCodeClient.UndecidedRule, AgentPermissionSource.Builtin, said), (denied.Tool, denied.Subject, denied.Rule, denied.Source, denied.Reason));
+
+        var recorded = JsonNode.Parse(Assert.Single(File.ReadAllLines(Path.Combine(kit.StepDirectory, ClaudeLaunch.DenialsFileName))))!;
+        Assert.Equal(("Read", "undecided", "Builtin", said), (recorded["tool"]!.GetValue<string>(), recorded["rule"]!.GetValue<string>(), recorded["source"]!.GetValue<string>(), recorded["reason"]!.GetValue<string>()));
+        Assert.Equal(1, File.ReadAllLines(Path.Combine(kit.StepDirectory, ClaudeLaunch.ControlFileName)).Count(line => line.Contains("\"subtype\":\"error\"", StringComparison.Ordinal)));
     }
 
     /// <summary>A call that ran though the engine refused it fails the step by the tool's name.</summary>
@@ -1550,6 +1584,492 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.Equal(new HandoffAnswered(false, result.Error), Assert.Single(sink.Of<HandoffAnswered>()));
     }
 
+    /// <summary>
+    /// A hard stop while a turn runs ends the launch whole - one that would not end by itself included - and comes back as
+    /// a stop, well inside the bound a launch is given to end in by itself: nothing of the launch is waited on.
+    /// </summary>
+    [Fact]
+    public async Task AStopMidTurn_EndsTheLaunchWhole_AndComesBackAsAStop()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject { ["hang"] = true, ["ignoreEof"] = true }]);
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(Token);
+        var sink = new Sink(@event =>
+        {
+            if (@event is TurnStarted)
+            {
+                _ = stop.CancelAsync();
+            }
+        });
+
+        // The kit's launches are given ten minutes to end by themselves: one that came back in a minute was ended whole.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => kit.Client().RunAsync(kit.Run(), sink, stop.Token).WaitAsync(TimeSpan.FromSeconds(60), Token));
+
+        Assert.Single(sink.Of<TurnStarted>());
+        Assert.Empty(sink.Of<TurnFinished>());
+    }
+
+    /// <summary>
+    /// A hard stop while a turn runs, through the runner, is recorded as the run stopped: its stream's end and
+    /// <c>result.json</c> say <see cref="AgentRunStatus.Cancelled"/> and <see cref="AgentRunner.StoppedError"/>, whatever
+    /// the launch's own end raised.
+    /// </summary>
+    [Fact]
+    public async Task AStopMidTurn_ThroughTheRunner_IsRecordedAsTheRunStopped()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject { ["hang"] = true, ["ignoreEof"] = true }]);
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(Token);
+        var sink = new Sink(@event =>
+        {
+            if (@event is TurnStarted)
+            {
+                _ = stop.CancelAsync();
+            }
+        });
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => kit.StepRunner().RunAsync(kit.Step(), sink, stop.Token).WaitAsync(TimeSpan.FromSeconds(60), Token));
+
+        var result = JsonSerializer.Deserialize<AgentRunResult>(File.ReadAllText(Path.Combine(kit.StepDirectory, AgentRunner.ResultFileName)), JsonStateFile.Options)!;
+        Assert.Equal((AgentRunStatus.Cancelled, AgentRunner.StoppedError), (result.Status, result.Error));
+        Assert.Null(result.Problem());
+        Assert.Equal(new RunFinished(AgentRunStatus.Cancelled, AgentRunner.StoppedError) { At = sink.Events[^1].At, Seq = sink.Events[^1].Seq }, sink.Events[^1]);
+    }
+
+    /// <summary>
+    /// A launch is contained and records its session under its step while it runs - on Linux and macOS, where a session
+    /// would outlive the engine that started it - so a killed engine's launch is ended by the next command; the record is
+    /// taken back once the launch has ended.
+    /// </summary>
+    [Fact]
+    public async Task ALaunch_IsContained_AndRecordsItsSessionUnderItsStep()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "a contained child there is held in a job that ends with its starter and nothing is recorded, which ChildSessionsTests.AContainedChild_IsRecordedOnlyWhereItsSessionWouldOutliveItsStarter holds; that a launch asks to be contained with its record under its step, ALaunchsRequest_IsContained_WithItsSessionRecordedUnderItsStep holds everywhere.");
+
+        using var kit = new Kit();
+        kit.Script([new JsonObject { ["hang"] = true }, new JsonObject { ["text"] = "Nothing done yet." }]);
+        var run = kit.Run();
+        var children = OrchestratorLayout.ChildrenDirectory(kit.StepDirectory);
+        string[] whileItRan = [];
+        var sink = new Sink(@event =>
+        {
+            if (@event is TurnStarted { Turn: 1 })
+            {
+                whileItRan = Directory.GetFiles(children);
+                run.Handoff.Ask();
+            }
+        });
+
+        var result = await kit.Client().RunAsync(run, sink, Token);
+
+        Assert.Equal(AgentRunStatus.HandedOff, result.Status);
+
+        var record = JsonNode.Parse(File.ReadAllText(Assert.Single(whileItRan)))!;
+        var session = record["session"]!.GetValue<int>();
+        Assert.Equal(OrchestratorLayout.ChildFile(kit.StepDirectory, session), whileItRan[0]);
+        Assert.Equal((TestHost.AssemblyProgram, Environment.ProcessId), (record["program"]!.GetValue<string>(), record["owner"]!["processId"]!.GetValue<int>()));
+        Assert.Empty(Directory.GetFiles(children));
+    }
+
+    /// <summary>
+    /// A launch asks, on every system, to be contained with its session recorded under its own step: the record its request
+    /// carries, once placed, is the step's own, and is taken back at the launch's end. Where the runner writes one - Linux
+    /// and macOS, not Windows - ALaunch_IsContained_AndRecordsItsSessionUnderItsStep holds it for a launch that runs.
+    /// </summary>
+    [Fact]
+    public async Task ALaunchsRequest_IsContained_WithItsSessionRecordedUnderItsStep()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject()]);
+
+        await kit.Client().RunAsync(kit.Run(), new Sink(), Token);
+
+        var request = Assert.Single(kit.Runner.Requests);
+        Assert.True(request.Contained, "the launch was not asked to be contained");
+
+        var children = OrchestratorLayout.ChildrenDirectory(kit.StepDirectory);
+        var record = request.SessionRecord!;
+        record.Placed(Environment.ProcessId, TestHost.AssemblyProgram, group: false);
+
+        Assert.Equal([OrchestratorLayout.ChildFile(kit.StepDirectory, Environment.ProcessId)], Directory.GetFiles(children));
+
+        record.Ended();
+
+        Assert.Empty(Directory.GetFiles(children));
+    }
+
+    /// <summary>
+    /// A launch that does not end once its input is closed after its answer is ended whole when the bound it is given to
+    /// end in passes, and the step keeps its answer: what the launch did is done, and only its end was waited on.
+    /// </summary>
+    [Fact]
+    public async Task ALaunchThatOutlivesItsAnswer_IsEndedWholeAfterTheEndBound_AndTheStepKeepsItsAnswer()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject { ["ignoreEof"] = true }]);
+        kit.Clock = new BoundsClock((ClaudeCodeClient.EndBound, TimeSpan.FromSeconds(1)));
+
+        var result = await kit.Client().RunAsync(kit.Run(), new Sink(), Token).WaitAsync(TimeSpan.FromSeconds(60), Token);
+
+        Assert.Equal((AgentRunStatus.Completed, "done"), (result.Status, result.FinalText));
+    }
+
+    /// <summary>
+    /// What the step says of what its agent may do and what it signs in with reaches the launch through the runner: the
+    /// tools of its capabilities and no other - a call of another is denied by name - the key its credential gives under
+    /// the name Claude Code reads, and none of the names it withholds, whatever the tool's own environment holds.
+    /// </summary>
+    [Fact]
+    public async Task TheStepsCapabilitiesCredentialAndWithheldNames_ReachTheLaunch()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Bash", ["input"] = new JsonObject { ["command"] = "echo hi" } }) }]);
+        kit.Own["ZAI_API_KEY"] = "zk-ambient";
+        var step = kit.Step() with
+        {
+            Capabilities = [AgentCapability.Read],
+            Credential = new AgentCredential(AgentAuth.ApiKey, [new AgentKey("WORK_KEY", "sk-work")]),
+            Withheld = ["ZAI_API_KEY", "WORK_KEY"],
+        };
+        var sink = new Sink();
+
+        var result = await kit.StepRunner().RunAsync(step, sink, Token);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+
+        var launch = Assert.Single(kit.Launches());
+        Assert.Equal("Read,Grep,Glob", Value(launch.Arguments, "--tools"));
+
+        var denied = Assert.Single(sink.Of<PermissionDenied>());
+        Assert.Equal(
+            ("Bash", ClaudeToolDecider.ToolsRule, "'Bash' is no tool this agent was given; it was given: Read, Grep, Glob"),
+            (denied.Tool, denied.Rule, denied.Reason));
+
+        Assert.Equal("sk-work", launch.Environment["ANTHROPIC_API_KEY"]);
+        Assert.False(launch.Environment.ContainsKey("ZAI_API_KEY"), "a withheld name reached the launch");
+        Assert.False(launch.Environment.ContainsKey("WORK_KEY"), "a withheld name reached the launch");
+    }
+
+    /// <summary>
+    /// A key's value reaches no record of the step. With nothing to mask, the step's records name the key and never hold
+    /// its value; with the step's mask, what the launch echoes of it - on its standard error, in a call's input, in its
+    /// answer, and in the error its exit leaves - lands masked in every record: <c>claude-stderr.log</c>,
+    /// <c>claude-control.jsonl</c>, <c>stream.jsonl</c> and the result.
+    /// </summary>
+    [Fact]
+    public async Task AKeysValue_ReachesNoRecordOfTheStep()
+    {
+        const string Key = "sk-ant-test-0123456789abcdef";
+        var credential = new AgentCredential(AgentAuth.ApiKey, [new AgentKey("WORK_KEY", Key)]);
+
+        using (var bare = new Kit())
+        {
+            bare.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = "a.txt" } }) }]);
+
+            var result = await bare.StepRunner().RunAsync(bare.Step() with { Credential = credential, Withheld = ["WORK_KEY"] }, null, Token);
+
+            Assert.Equal(AgentRunStatus.Completed, result.Status);
+            Assert.Equal(Key, Assert.Single(bare.Launches()).Environment["ANTHROPIC_API_KEY"]);
+            Assert.Contains("WORK_KEY", File.ReadAllText(Path.Combine(bare.StepDirectory, StoredStream.FileName)), StringComparison.Ordinal);
+            Assert.Empty(Holding(bare.StepDirectory, Key));
+        }
+
+        using var kit = new Kit();
+        kit.Script(
+        [
+            new JsonObject
+            {
+                ["stderr"] = $"warning: signing in with {Key}",
+                ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = $"{Key}.txt" } }),
+                ["text"] = $"The key is {Key}.",
+                ["exitAfter"] = 5,
+            },
+        ]);
+        var mask = new ActionValues(new Dictionary<string, string>(), new Dictionary<string, string> { ["WORK_KEY"] = Key });
+
+        var echoed = await kit.StepRunner().RunAsync(kit.Step() with { Mask = mask, Credential = credential, Withheld = ["WORK_KEY"] }, null, Token);
+
+        Assert.Equal(AgentRunStatus.Failed, echoed.Status);
+        Assert.Equal($"Claude Code ended before its turn's result, exit 5: warning: signing in with {ActionValues.Mask}", echoed.Error);
+
+        foreach (var record in new[] { ClaudeLaunch.ErrorFileName, ClaudeLaunch.ControlFileName, StoredStream.FileName, AgentRunner.ResultFileName })
+        {
+            Assert.Contains(ActionValues.Mask, File.ReadAllText(Path.Combine(kit.StepDirectory, record)), StringComparison.Ordinal);
+        }
+
+        Assert.Contains($"The key is {ActionValues.Mask}.", File.ReadAllText(Path.Combine(kit.StepDirectory, StoredStream.FileName)), StringComparison.Ordinal);
+        Assert.Contains($"{ActionValues.Mask}.txt", File.ReadAllText(Path.Combine(kit.StepDirectory, ClaudeLaunch.ControlFileName)), StringComparison.Ordinal);
+        Assert.Empty(Holding(kit.StepDirectory, Key));
+    }
+
+    /// <summary>
+    /// A handoff the agent never answers ends the run <see cref="AgentRunStatus.HandedOff"/> once the handoff's bound
+    /// passes, saying so: a pause is never turned into a wait on an agent that does not answer.
+    /// </summary>
+    [Fact]
+    public async Task AHandoffNeverAnswered_EndsHandedOffAtTheHandoffsBound()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject { ["hang"] = true }, new JsonObject { ["hang"] = true }]);
+        var run = kit.Run() with { Handoff = new AgentHandoffSignal(TimeSpan.FromSeconds(3)) };
+        var sink = new Sink(@event =>
+        {
+            if (@event is TurnStarted { Turn: 1 })
+            {
+                run.Handoff.Ask();
+            }
+        });
+
+        var result = await kit.Client().RunAsync(run, sink, Token).WaitAsync(TimeSpan.FromSeconds(60), Token);
+
+        const string Why = "the bound passed before the agent answered";
+        Assert.Equal((AgentRunStatus.HandedOff, new AgentHandoff(WhyNone: Why)), (result.Status, result.Handoff));
+        Assert.Equal(new HandoffAnswered(false, Why), Assert.Single(sink.Of<HandoffAnswered>()));
+        Assert.Single(sink.Of<MessageSent>(), message => message.Which == AgentMessageKind.HandoffQuestion);
+    }
+
+    /// <summary>
+    /// An interrupt the launch refuses ends the run <see cref="AgentRunStatus.HandedOff"/> at once, saying what it
+    /// answered: the agent is not asked in a turn that was never cut.
+    /// </summary>
+    [Fact]
+    public async Task AnInterruptRefused_EndsHandedOff_SayingSo()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject { ["hang"] = true, ["refuseInterrupt"] = true }]);
+        var run = kit.Run();
+        var sink = new Sink(@event =>
+        {
+            if (@event is TurnStarted)
+            {
+                run.Handoff.Ask();
+            }
+        });
+
+        var result = await kit.Client().RunAsync(run, sink, Token).WaitAsync(TimeSpan.FromSeconds(60), Token);
+
+        const string Why = "Claude Code refused the interrupt: no interrupt is taken here";
+        Assert.Equal((AgentRunStatus.HandedOff, new AgentHandoff(WhyNone: Why)), (result.Status, result.Handoff));
+        Assert.Equal(new HandoffAnswered(false, Why), Assert.Single(sink.Of<HandoffAnswered>()));
+        Assert.DoesNotContain(sink.Of<MessageSent>(), message => message.Which == AgentMessageKind.HandoffQuestion);
+    }
+
+    /// <summary>
+    /// A handoff turn that answers nothing is asked again, up to the most answers one asking may take, and then the run
+    /// ends <see cref="AgentRunStatus.HandedOff"/> without one, saying how many: a pause is never turned into a loop.
+    /// </summary>
+    [Fact]
+    public async Task AHandoffAnsweredEmpty_IsAskedAgainUpToItsMostAnswers_AndEndsWithoutOne()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject { ["hang"] = true }, new JsonObject { ["text"] = string.Empty }, new JsonObject { ["text"] = string.Empty }]);
+        var run = kit.Run() with { Handoff = new AgentHandoffSignal(TimeSpan.FromSeconds(60), MaxAnswers: 2) };
+        var sink = new Sink(@event =>
+        {
+            if (@event is TurnStarted { Turn: 1 })
+            {
+                run.Handoff.Ask();
+            }
+        });
+
+        var result = await kit.Client().RunAsync(run, sink, Token).WaitAsync(TimeSpan.FromSeconds(60), Token);
+
+        const string Why = "the agent gave no handoff in 2 answers";
+        Assert.Equal((AgentRunStatus.HandedOff, new AgentHandoff(WhyNone: Why), 3), (result.Status, result.Handoff, result.Turns));
+        Assert.Equal(2, sink.Of<MessageSent>().Count(message => message.Which == AgentMessageKind.HandoffQuestion));
+        Assert.Equal(new HandoffAnswered(false, Why), Assert.Single(sink.Of<HandoffAnswered>()));
+    }
+
+    /// <summary>
+    /// A launch that ends while it is asked for its handoff ends the run <see cref="AgentRunStatus.HandedOff"/> at once,
+    /// with no answer and why: nothing waits on a launch that has gone.
+    /// </summary>
+    [Fact]
+    public async Task ALaunchThatEndsWhileAskedForItsHandoff_EndsHandedOff_SayingItHadEnded()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject { ["hang"] = true }, new JsonObject { ["exit"] = 3 }]);
+        var run = kit.Run();
+        var sink = new Sink(@event =>
+        {
+            if (@event is TurnStarted { Turn: 1 })
+            {
+                run.Handoff.Ask();
+            }
+        });
+
+        var result = await kit.Client().RunAsync(run, sink, Token).WaitAsync(TimeSpan.FromSeconds(60), Token);
+
+        const string Why = "the client had already ended";
+        Assert.Equal((AgentRunStatus.HandedOff, new AgentHandoff(WhyNone: Why)), (result.Status, result.Handoff));
+        Assert.Equal(new HandoffAnswered(false, Why), Assert.Single(sink.Of<HandoffAnswered>()));
+    }
+
+    /// <summary>
+    /// What a launch's turns cost is its last result's running total, never their sum: two turns of one launch, the
+    /// second reporting the launch's total as the first and the second's together, cost that total.
+    /// </summary>
+    [Fact]
+    public async Task TwoTurnsOfOneLaunch_CostWhatItsLastResultSays()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject { ["text"] = "first" }, new JsonObject { ["text"] = "second" }]);
+        var run = kit.Run();
+        run.Messages.Post("Also say second.");
+
+        var result = await kit.Client().RunAsync(run, new Sink(), Token);
+
+        Assert.Equal((AgentRunStatus.Completed, 2), (result.Status, result.Turns));
+        Assert.Equal(new AgentCost(Reported: 0.02m), result.Usage?.Cost);
+    }
+
+    /// <summary>
+    /// A run the client cannot launch never began, saying why, and nothing is started: no model to name, no program, no
+    /// policy to decide its calls by, and no value for the key its way of signing in takes.
+    /// </summary>
+    [Theory]
+    [InlineData("model", AgentNotStartedBecause.ConfigurationWrong, "the step names no model, and a launch is told its model by its id")]
+    [InlineData("program", AgentNotStartedBecause.ProgramMissing, "no Claude Code program was found ready for this launch")]
+    [InlineData("ground", AgentNotStartedBecause.ConfigurationWrong, "the step was given no policy to decide its calls by, and no call runs undecided")]
+    [InlineData("keys", AgentNotStartedBecause.KeyMissing, "the launch signs in with auth: apiKey, and the slot holds no value for it")]
+    public async Task ARunTheClientCannotLaunch_NeverBegan_SayingWhy(string missing, AgentNotStartedBecause because, string why)
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject()]);
+        var run = missing switch
+        {
+            "model" => kit.Run() with { Model = null },
+            "program" => kit.Run() with { Program = null },
+            "ground" => kit.Run() with { Ground = null },
+            _ => kit.Run(credential: new AgentCredential(AgentAuth.ApiKey, [])),
+        };
+
+        var result = await kit.Client().RunAsync(run, new Sink(), Token);
+
+        Assert.Equal((AgentRunStatus.NotStarted, because, $"client 'claude-code' was not started: {why}"), (result.Status, result.NotStartedBecause, result.Error));
+        Assert.Empty(kit.Runner.Requests);
+    }
+
+    /// <summary>
+    /// A turn of a step held to a schema that gives no answer of it is sent back as any answer that does not read is, and
+    /// ends <see cref="AgentRunStatus.InvalidOutput"/> once its repairs are spent, saying it gave none.
+    /// </summary>
+    [Fact]
+    public async Task ATurnThatGivesNoAnswerToItsSchema_IsSentBack_AndEndsInvalidOutput()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject { ["answer"] = null }, new JsonObject { ["answer"] = null }, new JsonObject { ["answer"] = null }]);
+        var sink = new Sink();
+
+        var result = await kit.Client().RunAsync(kit.Run(new AgentOutput("o", Schema)), sink, Token);
+
+        Assert.Equal(
+            (AgentRunStatus.InvalidOutput, "the answer did not read against its schema after 2 repairs: $: the answer holds no output held to the schema; answer with one"),
+            (result.Status, result.Error));
+        Assert.Null(result.StructuredOutput);
+        Assert.Equal(2, sink.Of<OutputRepair>().Count);
+    }
+
+    /// <summary>
+    /// A launch that works before its init says what it runs as never started, and is ended at once - one that would not
+    /// end by itself included: its tools and its credential were never held to the launch's, so nothing it did is taken.
+    /// </summary>
+    [Fact]
+    public async Task ALaunchThatWorksBeforeItsInit_NeverStarted_AndIsEndedAtOnce()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject { ["noInit"] = true, ["ignoreEof"] = true }]);
+        var sink = new Sink();
+
+        var result = await kit.Client().RunAsync(kit.Run(), sink, Token).WaitAsync(TimeSpan.FromSeconds(60), Token);
+
+        Assert.Equal((AgentRunStatus.NotStarted, AgentNotStartedBecause.ProgramMissing), (result.Status, result.NotStartedBecause));
+        Assert.Equal(
+            "client 'claude-code' was not started: claude began its work before its init said what it runs as, so its tools and its credential were never held to this launch's: this tool runs Claude Code only as its host",
+            result.Error);
+        Assert.Empty(sink.Of<SessionStarted>());
+        Assert.Empty(sink.Of<TurnStarted>());
+    }
+
+    /// <summary>
+    /// A session file a launch kept is removed however the launch ended - a hard stop among the ends - and said, once the
+    /// launch has gone.
+    /// </summary>
+    [Fact]
+    public async Task ASessionFileTheLaunchLeft_IsRemovedThoughTheRunWasStopped()
+    {
+        using var kit = new Kit();
+        var config = kit.Temp.Combine("claude-config");
+        kit.Script([new JsonObject { ["sessionFile"] = "proj", ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = "a.txt" } }), ["hang"] = true }]);
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(Token);
+        var sink = new Sink(@event =>
+        {
+            if (@event is ToolCallFinished)
+            {
+                _ = stop.CancelAsync();
+            }
+        });
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => kit.Client().RunAsync(kit.Run(credential: new AgentCredential(AgentAuth.Login, [], ConfigDirectory: config)), sink, stop.Token).WaitAsync(TimeSpan.FromSeconds(60), Token));
+
+        var session = Value(Assert.Single(kit.Launches()).Arguments, "--session-id");
+        var file = Path.Combine(config, "projects", "proj", session + ".jsonl");
+        Assert.False(File.Exists(file), "the session file the launch kept is still there");
+        Assert.Equal($"Claude Code kept a session file though told to keep none, and it was removed: '{file}'", Assert.Single(sink.Of<Notice>()).Text);
+    }
+
+    /// <summary>
+    /// A directory a session file could not be looked for in is said, for a file the launch kept may be in it; the step's
+    /// work stands.
+    /// </summary>
+    [Fact]
+    public async Task ADirectoryASessionFileCouldNotBeLookedForIn_IsSaid()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject()]);
+        var projects = Directory.CreateDirectory(Path.Combine(kit.ClaudeDirectory, "projects")).FullName;
+        kit.FileSystem = new UnlistableFileSystem(kit.Harness.FileSystem, projects);
+        var sink = new Sink();
+
+        var result = await kit.Client().RunAsync(kit.Run(), sink, Token);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal(
+            $"A session file Claude Code may have kept though told to keep none could not be looked for in '{projects}': Access to the path '{projects}' is denied",
+            Assert.Single(sink.Of<Notice>()).Text);
+    }
+
+    /// <summary>
+    /// What a launch's container could not reach when the launch ended is said - in the stream and in the result - for
+    /// what the launch started may still run.
+    /// </summary>
+    [Fact]
+    public async Task WhatALaunchsContainerCouldNotReach_IsSaid_AndKeptInTheResult()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject()]);
+        const string Unreached = "the process table could not be read to end its session (no table here): its group was ended, and what it started outside the group was not reached";
+        var sink = new Sink();
+
+        var result = await kit.Client(new Unreaching(kit.Runner, Unreached)).RunAsync(kit.Run(), sink, Token);
+
+        const string Said = $"Claude Code's launch ended, and {Unreached}";
+        Assert.Equal((AgentRunStatus.Completed, Said), (result.Status, Assert.Single(result.Uncontained)));
+        Assert.Equal(Said, Assert.Single(sink.Of<Notice>()).Text);
+    }
+
+    /// <summary>The files under <paramref name="directory"/> that hold <paramref name="text"/>, read beside any writer.</summary>
+    private static List<string> Holding(string directory, string text)
+        => [.. Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories).Where(file =>
+        {
+            using var beside = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reading = new StreamReader(beside);
+            return reading.ReadToEnd().Contains(text, StringComparison.Ordinal);
+        })];
+
     /// <summary>The value after <paramref name="name"/> in an argument list.</summary>
     private static string Value(IReadOnlyList<string> argv, string name)
         => argv[argv.ToList().IndexOf(name) + 1];
@@ -1606,6 +2126,38 @@ public sealed class ClaudeCodeClientTests : IDisposable
     }
 
     /// <summary>
+    /// The client, but for each result it answers, which is held together (<see cref="AgentRunResult.Problem"/>) before a
+    /// test reads it: no ending of the client's is one the runner would refuse to write.
+    /// </summary>
+    private sealed class HeldTogether(IAgentClient inner) : IAgentClient
+    {
+        public string Name => inner.Name;
+
+        public AgentClientCapabilities Capabilities => inner.Capabilities;
+
+        public async Task<AgentRunResult> RunAsync(AgentRun run, IAgentEventSink events, CancellationToken cancellationToken)
+        {
+            var result = await inner.RunAsync(run, events, cancellationToken);
+
+            Assert.Null(result.Problem());
+
+            return result;
+        }
+    }
+
+    /// <summary>
+    /// The kit's process runner, but for a launch whose container could not reach all it held when the launch ended, as a
+    /// session ended on Linux or macOS without its process table is: its result says so, and what.
+    /// </summary>
+    private sealed class Unreaching(IProcessRunner inner, string unreached) : IProcessRunner
+    {
+        public async Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default)
+            => await inner.RunAsync(request, cancellationToken) with { Uncontained = unreached };
+
+        public string? FindExecutable(string command) => inner.FindExecutable(command);
+    }
+
+    /// <summary>
     /// The machine's clock, but for the bounds a test gives others: a wait of a bound named here waits its other span
     /// instead, so a bound of 30 s is reached in one and a bound that would end a launch is never reached in a test.
     /// </summary>
@@ -1625,11 +2177,11 @@ public sealed class ClaudeCodeClientTests : IDisposable
         }
     }
 
-    /// <summary>A file system whose reading of the links of one file fails as no policy expects it to.</summary>
+    /// <summary>A file system whose reading of the links of one file fails as no policy expects it to: a fault, and no answer of the disk's.</summary>
     private sealed class FaultsOn(DssHarness.Core.FileSystem.IFileSystem inner, string file) : PassThroughFileSystem(inner)
     {
         public override string ResolveLinks(string path)
-            => Path.GetFileName(path) == file ? throw new UnauthorizedAccessException($"'{path}' cannot be looked at") : base.ResolveLinks(path);
+            => Path.GetFileName(path) == file ? throw new InvalidOperationException($"'{path}' cannot be looked at.") : base.ResolveLinks(path);
     }
 
     /// <summary>A mask that masks nothing.</summary>
@@ -1692,8 +2244,15 @@ public sealed class ClaudeCodeClientTests : IDisposable
 
         public void Script(JsonObject[] turns) => Script(new JsonArray([.. turns]));
 
-        public ClaudeCodeClient Client()
-            => new(Runner, FileSystem ?? Harness.FileSystem, Harness.Platform, Harness.ChildSessions, Clock, () => Own);
+        /// <summary>
+        /// The client under test, starting its launches through <paramref name="processes"/> - the kit's own runner where
+        /// none is given - and every result it answers held together as the runner holds it.
+        /// </summary>
+        public IAgentClient Client(IProcessRunner? processes = null)
+            => new HeldTogether(new ClaudeCodeClient(processes ?? Runner, FileSystem ?? Harness.FileSystem, Harness.Platform, Harness.ChildSessions, Clock, () => Own));
+
+        /// <summary>The agent runner over the kit's client, its records on the machine's disk, run as a user's process.</summary>
+        public AgentRunner StepRunner() => new([Client()], Harness.FileSystem, Elevation.User, TimeProvider.System);
 
         public AgentPolicyGround Ground()
             => new(Worktree, [Worktree, WorkDirectory, Temp.Path], [Worktree, WorkDirectory], [], [], []);

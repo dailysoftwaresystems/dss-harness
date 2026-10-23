@@ -2487,7 +2487,8 @@ public static class HelpTopics
         builder.AppendLine("write of a credential slot, any command naming one or a Claude Code directory of the");
         builder.AppendLine("run's, and this tool's own verbs and run-side-task, whatever any switch says: an agent");
         builder.AppendLine("does not move its own run, nor leave its step's limits. No agent starts while this tool");
-        builder.AppendLine("itself runs elevated. A shell command is read whole before it is matched: split on ;,");
+        builder.AppendLine("itself runs elevated: its step is recorded never started, saying so, before any client");
+        builder.AppendLine("is taken. A shell command is read whole before it is matched: split on ;,");
         builder.AppendLine("&&, ||, |, & and line ends, its $(...) and backticks, subshells, loop and branch bodies");
         builder.AppendLine("read as commands of their own, wrappers (env, nohup, time, timeout, nice, xargs,");
         builder.AppendLine("command, builtin, exec, eval) stripped, and it goes into sh -c, cmd /c, powershell");
@@ -2554,7 +2555,8 @@ public static class HelpTopics
         var output = new Agents.AgentOutput("o", "{}");
 
         return "The claude-code client starts Claude Code once for each launch, a new session every time: never resumed "
-            + "and never continued, keeping no session file (one a launch leaves all the same is removed, and said), streamed "
+            + "and never continued, keeping no session file (one a launch leaves all the same is removed once it has ended, "
+            + "however it ended, and said), streamed "
             + "both ways - the step's prompt is the first message on its input, never an argument - in the agent's working "
             + "directory, with every other root it reaches added. It is given its model and no fallback, the step's effort, "
             + "turns and budget, and the tools of the agent's capabilities and no other - "
@@ -2580,9 +2582,11 @@ public static class HelpTopics
             + "disableAllHooks - and each launch's start names that settings file and its SHA-256 and says the hooks are off. A "
             + $"settings file that would give a launch a credential ({string.Join(", ", Agents.ClaudeCode.ClaudeLaunch.IdentityNames)} in its env, in any "
             + $"case, or {Agents.ClaudeCode.ClaudeUserSettings.KeyHelper}) refuses the run before any launch, naming the file: a credential is read from the "
-            + $"slot alone - take it out of that file, or give the client a directory of its own (agentClients.claude-code.{Agents.AgentClientSetting.ConfigDirKey}). "
+            + $"slot alone - take it out of that file, or give the client a directory of its own in the slot: {Orchestration.ClaudeTranscripts.ConfigDirectoryVariable}, "
+            + $"or the name agentClients.claude-code.{Agents.AgentClientSetting.ConfigDirKey} gives. "
             + "The client holds every launch to the protocol itself, so a version on which it does not hold names itself: a "
-            + $"launch that does not answer the host's initialize request within {Agents.ClaudeCode.ClaudeCodeClient.InitializeBound.TotalSeconds:0} s, whose init offers a tool it was not "
+            + $"launch that does not answer the host's initialize request within {Agents.ClaudeCode.ClaudeCodeClient.InitializeBound.TotalSeconds:0} s, that works before its init says "
+            + "what it runs as, whose init offers a tool it was not "
             + "given or names a credential its auth did not give, or that refuses by itself a call the engine allows - as one "
             + "started without --permission-prompt-tool stdio does - never started; a call it ran that the engine was never asked "
             + "about, or refused, fails the step by the tool's name (before Claude Code 2.1.303 a call that ran unasked and failed "

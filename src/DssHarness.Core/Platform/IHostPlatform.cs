@@ -35,7 +35,8 @@ public interface IHostPlatform
     /// Whether this process itself runs elevated - as root or as an administrator - which is the
     /// runtime's own answer. No agent of this tool starts while it does: every rule of the agents'
     /// policy assumes a user's powers, so a tool elevated past them refuses to start one rather than
-    /// hand an agent powers no rule of its run was written for.
+    /// hand an agent powers no rule of its run was written for - the agent runner, which every
+    /// client's launch passes, records such a step never started before it takes a client.
     /// </summary>
     bool IsPrivilegedProcess { get; }
 

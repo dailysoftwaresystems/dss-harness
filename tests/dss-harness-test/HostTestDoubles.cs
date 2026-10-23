@@ -727,3 +727,35 @@ internal sealed class RecordingLauncher : IDetachedProcessLauncher
         }
     }
 }
+
+/// <summary>
+/// This machine as it is, but for whether this process runs elevated, which it answers as <paramref name="elevated"/>:
+/// whatever account runs the suite - an administrator's on a hosted Windows runner - a test of what an elevated tool
+/// refuses holds the answer it was given, and every other test runs its agents as a user's.
+/// </summary>
+/// <param name="elevated">Whether this process is to be taken as running elevated.</param>
+internal sealed class Elevation(bool elevated) : IHostPlatform
+{
+    /// <summary>This machine, as a user's process on it.</summary>
+    public static readonly Elevation User = new(elevated: false);
+
+    private readonly HostPlatform _machine = new();
+
+    public PlatformId Current => _machine.Current;
+
+    public string PlatformKey => _machine.PlatformKey;
+
+    public string Processor => _machine.Processor;
+
+    public string HomeDirectory => _machine.HomeDirectory;
+
+    public bool IsPrivilegedProcess => elevated;
+
+    public StringComparison PathComparison => _machine.PathComparison;
+
+    public int? MaxPathLength => _machine.MaxPathLength;
+
+    public MachineIdentity MachineId => _machine.MachineId;
+
+    public string ExecutableName(string command) => _machine.ExecutableName(command);
+}
