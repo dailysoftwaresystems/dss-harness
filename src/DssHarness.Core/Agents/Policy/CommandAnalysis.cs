@@ -105,47 +105,68 @@ public static partial class CommandAnalysis
     }
 
     /// <summary>
-    /// The words of a command the rules are matched against: its environment left out; git's own
-    /// options dropped before its subcommand, so <c>git -C x push</c> meets a rule on
-    /// <c>git push</c>, and gh's own flags before its command's path, so <c>gh pr -R o/r merge</c>
-    /// meets one on <c>gh pr merge</c> - and a git command whose configuration is set where it runs
-    /// is the <c>git config</c> it is: a <c>-c</c> or a <c>--config-env</c> of any key but the ones
-    /// that only shape what git prints (<see cref="ShowingKeys"/>), <c>--exec-path</c> given a
-    /// directory, and any command that sets git's configuration through the environment
-    /// (<c>GIT_CONFIG_COUNT</c> and its pairs, <c>GIT_EXEC_PATH</c>, <c>GIT_TEMPLATE_DIR</c>), for
-    /// <c>git -c alias.x=commit x</c> would otherwise pass every rule on <c>commit</c>.
+    /// The readings of a command the rules are matched against, a rule that meets any of them meeting
+    /// the command: its words with its environment left out; git's own options dropped before its
+    /// subcommand, so <c>git -C x push</c> meets a rule on <c>git push</c>, and gh's own flags before
+    /// its command's path, so <c>gh pr -R o/r merge</c> meets one on <c>gh pr merge</c> - and, before
+    /// that reading, a git command whose configuration is set where it runs read as the
+    /// <c>git config</c> it is too: a <c>-c</c> or a <c>--config-env</c> of any key but the ones that
+    /// only shape what git prints (<see cref="ShowingKeys"/>), <c>--exec-path</c> given a directory,
+    /// and any command that sets git's configuration through the environment
+    /// (<c>GIT_CONFIG_COUNT</c> and its pairs, <c>GIT_EXEC_PATH</c>, <c>GIT_TEMPLATE_DIR</c>) - for
+    /// <c>git -c alias.x=commit x</c> would otherwise pass every rule on <c>commit</c>, and
+    /// <c>git -c core.pager=less push</c> still meets every rule on <c>git push</c>.
     /// </summary>
     /// <param name="words">One command's words, its environment first where it has one.</param>
     /// <param name="comparison">How git's own name compares: names compare as this platform compares paths.</param>
     /// <exception cref="NotSupportedException">git or gh is given an option before its subcommand this does not know, which may take the word after it.</exception>
-    public static IReadOnlyList<string> ForRules(IReadOnlyList<string> words, StringComparison comparison)
+    public static IReadOnlyList<IReadOnlyList<string>> ForRules(IReadOnlyList<string> words, StringComparison comparison)
     {
         ArgumentNullException.ThrowIfNull(words);
 
+        var readings = new List<IReadOnlyList<string>>();
+
         // Setting git's configuration through the environment is configuring git, whatever runs
         // with it: an export alone, an env, the words before git itself.
-        if (words.FirstOrDefault(SetsGitConfiguration) is { } setting && words.Count > 0)
+        if (words.FirstOrDefault(SetsGitConfiguration) is { } setting)
         {
-            var name = setting.TrimStart('$').Split('=', 2)[0];
-
-            return ["git", "config", name, .. words.Skip(EnvironmentOf(words))];
+            readings.Add(["git", "config", setting.TrimStart('$').Split('=', 2)[0], .. words.Skip(EnvironmentOf(words))]);
         }
 
+        var (command, configured) = Plain(words, comparison);
+
+        if (configured)
+        {
+            readings.Add(["git", "config", .. command.Skip(1)]);
+        }
+
+        readings.Add(command);
+
+        return readings;
+    }
+
+    /// <summary>
+    /// A command's words as the rules read them (<see cref="ForRules"/>) - its environment left out,
+    /// git's and gh's own options before their command dropped - and whether git's configuration is
+    /// set on its command line.
+    /// </summary>
+    private static (IReadOnlyList<string> Command, bool Configured) Plain(IReadOnlyList<string> words, StringComparison comparison)
+    {
         var environment = EnvironmentOf(words);
 
         if (environment == words.Count)
         {
-            return environment == 0 ? words : [.. words.Skip(environment)];
+            return (environment == 0 ? words : [.. words.Skip(environment)], false);
         }
 
         if (string.Equals(Name(words[environment]), "gh", comparison))
         {
-            return GhForRules([.. words.Skip(environment)]);
+            return (GhForRules([.. words.Skip(environment)]), false);
         }
 
         if (!string.Equals(Name(words[environment]), "git", comparison))
         {
-            return environment == 0 ? words : [.. words.Skip(environment)];
+            return (environment == 0 ? words : [.. words.Skip(environment)], false);
         }
 
         var config = false;
@@ -204,9 +225,7 @@ public static partial class CommandAnalysis
             throw new NotSupportedException($"'{option}' is an option of git's own this does not read, which may take the word after it as its value");
         }
 
-        return at >= words.Count ? [.. words.Skip(environment)]
-            : config ? ["git", "config", .. words.Skip(at)]
-            : ["git", .. words.Skip(at)];
+        return at >= words.Count ? ([.. words.Skip(environment)], false) : (["git", .. words.Skip(at)], config);
     }
 
     /// <summary>
@@ -580,6 +599,16 @@ public static partial class CommandAnalysis
             yield return command;
         }
 
+        // A program git's own settings name, which git runs through the shell: core.pager, core.sshCommand, an
+        // alias's '!' line, as the variables above are read.
+        if (Is(Name(words[0]), "git") && GitSettingScripts(words, environment) is { Count: > 0 } settings)
+        {
+            foreach (var command in GoneInto(settings, depth, environment))
+            {
+                yield return command;
+            }
+        }
+
         // A shell another program runs with its script among the command's words - find -exec,
         // ssh, watch - is gone into too: what it runs is a command of its own.
         for (var at = 1; at < words.Count; at++)
@@ -614,17 +643,100 @@ public static partial class CommandAnalysis
         "GIT_EXTERNAL_DIFF", "PAGER", "EDITOR", "VISUAL", "SSH_ASKPASS", "MANPAGER",
     ];
 
-    /// <summary>The commands the program-valued names among <paramref name="assignments"/> run, each value read as a script.</summary>
+    /// <summary>
+    /// The commands the program-valued names among <paramref name="assignments"/> run, each value read as a script - and
+    /// what git's configuration through the environment sets, which git may run so too: each <c>GIT_CONFIG_VALUE_n</c>
+    /// of a key but the ones that only shape what git prints, and each such setting <c>GIT_CONFIG_PARAMETERS</c> holds.
+    /// </summary>
     private static IEnumerable<IReadOnlyList<string>> ProgramsNamed(IReadOnlyList<string> assignments, int depth, IReadOnlyList<string> environment)
     {
-        var values = assignments
-            .Select(assignment => assignment.Split('=', 2))
-            .Where(pair => ProgramValued.Contains(pair[0], StringComparer.OrdinalIgnoreCase) && pair[1].Trim().Length > 0)
-            .Select(pair => pair[1])
-            .ToList();
+        var pairs = assignments.Select(assignment => assignment.Split('=', 2)).Where(pair => pair[1].Trim().Length > 0).ToList();
+        var values = new List<string>();
+
+        foreach (var pair in pairs)
+        {
+            if (ProgramValued.Contains(pair[0], StringComparer.OrdinalIgnoreCase))
+            {
+                values.Add(pair[1]);
+            }
+            else if (pair[0].StartsWith("GIT_CONFIG_VALUE_", StringComparison.OrdinalIgnoreCase))
+            {
+                var key = pairs.LastOrDefault(other => other[0].Equals("GIT_CONFIG_KEY_" + pair[0]["GIT_CONFIG_VALUE_".Length..], StringComparison.OrdinalIgnoreCase));
+
+                if (key is null || Configures(key[1]))
+                {
+                    values.Add(SettingScript(key?[1] ?? string.Empty, pair[1]));
+                }
+            }
+            else if (pair[0].Equals("GIT_CONFIG_PARAMETERS", StringComparison.OrdinalIgnoreCase))
+            {
+                values.AddRange(Script(pair[1], 0)
+                    .SelectMany(command => command)
+                    .Where(setting => setting.Contains('=', StringComparison.Ordinal) && Configures(setting))
+                    .Select(setting => SettingScript(setting.Split('=', 2)[0], setting.Split('=', 2)[1])));
+            }
+        }
 
         return values.Count == 0 ? [] : GoneInto(values, depth, environment);
     }
+
+    /// <summary>
+    /// The scripts a git command's own settings may run: the value of each <c>-c</c> before its subcommand of a key but
+    /// the ones that only shape what git prints (<see cref="Configures"/>) - <c>core.pager</c>, <c>core.sshCommand</c>,
+    /// an alias's <c>!</c> line among them - and of each <c>--config-env</c> whose variable the command's environment
+    /// sets. A value that is no command line (<c>core.hooksPath=.githooks</c>) is read as a command that runs nothing
+    /// this refuses.
+    /// </summary>
+    private static List<string> GitSettingScripts(IReadOnlyList<string> words, IReadOnlyList<string> environment)
+    {
+        var scripts = new List<string>();
+
+        for (var at = 1; at < words.Count && words[at].StartsWith('-'); at++)
+        {
+            var option = words[at];
+            var fromEnvironment = option.StartsWith("--config-env", StringComparison.Ordinal);
+            string? setting = null;
+
+            if (option is "-c" or "--config-env")
+            {
+                setting = at + 1 < words.Count ? words[++at] : null;
+            }
+            else if (option.StartsWith("--config-env=", StringComparison.Ordinal))
+            {
+                setting = option["--config-env=".Length..];
+            }
+            else if (option.StartsWith("-c", StringComparison.Ordinal) && option.Length > 2)
+            {
+                setting = option[2..];
+            }
+            else if (option == "-C" || GitTakesValue(option))
+            {
+                at++;
+            }
+
+            if (setting is null || !setting.Contains('=', StringComparison.Ordinal) || !Configures(setting))
+            {
+                continue;
+            }
+
+            var (key, value) = (setting.Split('=', 2)[0], setting.Split('=', 2)[1]);
+
+            if (!fromEnvironment)
+            {
+                scripts.Add(SettingScript(key, value));
+            }
+            else if (environment.Select(assignment => assignment.Split('=', 2)).LastOrDefault(pair => pair[0] == value) is { Length: 2 } named)
+            {
+                scripts.Add(SettingScript(key, named[1]));
+            }
+        }
+
+        return scripts;
+    }
+
+    /// <summary>The command line a git setting's value is: an alias's <c>!</c> taken off, for git runs what follows it through the shell.</summary>
+    private static string SettingScript(string key, string value)
+        => key.StartsWith("alias.", StringComparison.OrdinalIgnoreCase) && value.StartsWith('!') ? value[1..] : value;
 
     /// <summary>
     /// PowerShell's setting of a variable of the environment - <c>$env:NAME=value</c> or

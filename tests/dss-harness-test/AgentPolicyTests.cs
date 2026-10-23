@@ -177,6 +177,10 @@ public sealed class AgentPolicyTests
             ["git", "push", "origin", "main"],
             ["git", "-C", "..", "push", "origin"],
             ["env", "A=1", "git", "push"],
+
+            // Configured where it runs, it is the git config it is and still the push it is.
+            ["git", "-c", "core.pager=less", "push"],
+            ["GIT_CONFIG_COUNT=0", "git", "push"],
         })
         {
             var denied = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(command));
@@ -686,6 +690,24 @@ public sealed class AgentPolicyTests
         Assert.Equal("Run(git push *)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("export GIT_EDITOR='git push'")).Rule);
         Assert.Equal("the root actions", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("GIT_PAGER='sudo id' git log")).Rule);
         Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("GIT_PAGER=cat git log"));
+
+        // git's own settings name programs git runs too: on its command line, by a variable, or through the environment.
+        foreach (var command in new[]
+        {
+            "git -c core.pager='sudo id' log",
+            "git -ccore.sshCommand='sudo id' fetch",
+            "git -c alias.x='!sudo id' x",
+            "P='sudo id' git --config-env=core.pager=P log",
+            "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.pager GIT_CONFIG_VALUE_0='sudo id' git log",
+        })
+        {
+            Assert.True(policy.Run(command) is AgentPolicyAnswer.Denied { Rule: "the root actions" }, $"'{command}' was not refused as a root action");
+        }
+
+        Assert.Equal("Run(git push *)", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("GIT_CONFIG_PARAMETERS=\"'core.pager'='git push'\" git log")).Rule);
+
+        // A key that only shapes what git prints holds no program, whatever its value spells.
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("git -c user.name=\"O'Brien\" -c color.ui=always log"));
     }
 
     [Fact]

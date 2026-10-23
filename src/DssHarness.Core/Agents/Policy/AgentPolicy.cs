@@ -686,18 +686,22 @@ public sealed partial class AgentPolicy
                 "'run-side-task' is refused: an agent does not leave its step's limits");
         }
 
-        // The Run rules, against the command's own words: git's options dropped before its
-        // subcommand, and git configured where it runs the git config it is.
-        var forRules = CommandAnalysis.ForRules(words, comparison);
+        // The Run rules, against each reading of the command's own words in turn: git configured
+        // where it runs the git config it is first, then the command with git's options dropped
+        // before its subcommand.
+        var readings = CommandAnalysis.ForRules(words, comparison);
 
-        foreach (var (rule, declared) in _rules.Where(pair => pair.Rule.Verb is AgentRuleVerb.Run))
+        foreach (var reading in readings)
         {
-            switch (rule.Match(forRules, comparison))
+            foreach (var (rule, declared) in _rules.Where(pair => pair.Rule.Verb is AgentRuleVerb.Run))
             {
-                case AgentRuleMatch.Yes:
-                    return DeniedBy(declared, whole);
-                case AgentRuleMatch.Expanded:
-                    return MayBe(rule.Text, declared.Source, whole);
+                switch (rule.Match(reading, comparison))
+                {
+                    case AgentRuleMatch.Yes:
+                        return DeniedBy(declared, whole);
+                    case AgentRuleMatch.Expanded:
+                        return MayBe(rule.Text, declared.Source, whole);
+                }
             }
         }
 
@@ -705,9 +709,9 @@ public sealed partial class AgentPolicy
         // gh, which keep an agent's worktree a thing the engine can measure.
         if (_ground.WorktreeRules)
         {
-            foreach (var rule in _worktreeRunRules)
+            foreach (var (reading, rule) in readings.SelectMany(reading => _worktreeRunRules.Select(rule => (reading, rule))))
             {
-                switch (rule.Match(forRules, comparison))
+                switch (rule.Match(reading, comparison))
                 {
                     case AgentRuleMatch.Yes:
                         return new AgentPolicyAnswer.Denied(
@@ -719,7 +723,7 @@ public sealed partial class AgentPolicy
                 }
             }
 
-            if (MergesOrStartsCi(forRules) is { } reached)
+            if (readings.Select(MergesOrStartsCi).OfType<string>().FirstOrDefault() is { } reached)
             {
                 return new AgentPolicyAnswer.Denied(
                     "the merges and CI starts of gh",

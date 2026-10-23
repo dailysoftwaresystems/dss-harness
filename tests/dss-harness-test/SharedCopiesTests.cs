@@ -375,7 +375,14 @@ public sealed class SharedCopiesTests
         Assert.Equal(HarnessExit.Incomplete, seeded.ExitCode);
         NamesShared(kit, "ag", seeded, succeeded: false);
 
+        // A making whose hand-over stopped is finished by a seed that finishes, before a refresh is taken; the refresh then
+        // stops part way on its own.
+        var finished = await kit.Harness.AgentService.SeedAsync(kit.Main, "o1", "ag", empty: false, force: true, Token);
+
+        Assert.True(finished.Succeeded, OrchestrationKit.Describe(finished));
+
         OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit again\n");
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\nmain edit again\n");
         var refreshed = await stopping.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("a.txt", "b.txt"), apply: true, Token);
 
         Assert.Equal(HarnessExit.Incomplete, refreshed.ExitCode);

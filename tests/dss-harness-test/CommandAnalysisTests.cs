@@ -268,46 +268,46 @@ public sealed class CommandAnalysisTests
     [Fact]
     public void ForRules_DropsGitsOwnOptionsBeforeItsSubcommand()
     {
-        Assert.Equal(["git", "push"], CommandAnalysis.ForRules(["git", "-C", "x", "push"], StringComparison.Ordinal));
-        Assert.Equal(["git", "push"], CommandAnalysis.ForRules(["git", "-Cfoo", "push"], StringComparison.Ordinal));
-        Assert.Equal(["git", "push"], CommandAnalysis.ForRules(["git", "--git-dir=y", "push"], StringComparison.Ordinal));
-        Assert.Equal(["git", "push"], CommandAnalysis.ForRules(["git", "--no-pager", "push"], StringComparison.Ordinal));
-        Assert.Equal(["git", "push", "origin"], CommandAnalysis.ForRules(["git", "-p", "push", "origin"], StringComparison.Ordinal));
-        Assert.Equal(["git", "push"], CommandAnalysis.ForRules(["git", "push"], StringComparison.Ordinal));
-        Assert.Equal(["dotnet", "test"], CommandAnalysis.ForRules(["dotnet", "test"], StringComparison.Ordinal));
+        Assert.Equal([["git", "push"]], CommandAnalysis.ForRules(["git", "-C", "x", "push"], StringComparison.Ordinal));
+        Assert.Equal([["git", "push"]], CommandAnalysis.ForRules(["git", "-Cfoo", "push"], StringComparison.Ordinal));
+        Assert.Equal([["git", "push"]], CommandAnalysis.ForRules(["git", "--git-dir=y", "push"], StringComparison.Ordinal));
+        Assert.Equal([["git", "push"]], CommandAnalysis.ForRules(["git", "--no-pager", "push"], StringComparison.Ordinal));
+        Assert.Equal([["git", "push", "origin"]], CommandAnalysis.ForRules(["git", "-p", "push", "origin"], StringComparison.Ordinal));
+        Assert.Equal([["git", "push"]], CommandAnalysis.ForRules(["git", "push"], StringComparison.Ordinal));
+        Assert.Equal([["dotnet", "test"]], CommandAnalysis.ForRules(["dotnet", "test"], StringComparison.Ordinal));
     }
 
     [Fact]
     public void ForRules_OnceItsOptionsAreDropped_TheCommandKeepsItsArguments()
     {
-        Assert.Equal(["git", "push", "origin", "main"], CommandAnalysis.ForRules(["git", "-C", "..", "push", "origin", "main"], StringComparison.Ordinal));
-        Assert.Equal(["git", "commit", "-m", "x"], CommandAnalysis.ForRules(["git", "-c", "user.email=a@b", "commit", "-m", "x"], StringComparison.Ordinal));
+        Assert.Equal([["git", "push", "origin", "main"]], CommandAnalysis.ForRules(["git", "-C", "..", "push", "origin", "main"], StringComparison.Ordinal));
+        Assert.Equal([["git", "commit", "-m", "x"]], CommandAnalysis.ForRules(["git", "-c", "user.email=a@b", "commit", "-m", "x"], StringComparison.Ordinal));
     }
 
     [Fact]
     public void ForRules_AGitCThatNamesAnAliasOrAProgramGitRuns_IsTheGitConfigItIs()
     {
-        Assert.Equal(["git", "config", "x"], CommandAnalysis.ForRules(["git", "-c", "alias.x=commit", "x"], StringComparison.Ordinal));
-        Assert.Equal(["git", "config", "x"], CommandAnalysis.ForRules(["git", "-calias.x=commit", "x"], StringComparison.Ordinal));
-        Assert.Equal(["git", "config", "push"], CommandAnalysis.ForRules(["git", "-c", "core.sshCommand=ssh -i ~/.ssh/other", "push"], StringComparison.Ordinal));
-        Assert.Equal(["git", "config", "status"], CommandAnalysis.ForRules(["git", "-c", "core.hooksPath=.githooks", "status"], StringComparison.Ordinal));
-        Assert.Equal(["git", "config", "x"], CommandAnalysis.ForRules(["git", "--config-env=alias.x=X", "x"], StringComparison.Ordinal));
-        Assert.Equal(["git", "config", "x"], CommandAnalysis.ForRules(["git", "--config-env", "alias.x=X", "x"], StringComparison.Ordinal));
-        Assert.Equal(["git", "config", "push"], CommandAnalysis.ForRules(["git", "--exec-path=/tmp/x", "push"], StringComparison.Ordinal));
+        Assert.Equal([["git", "config", "x"], ["git", "x"]], CommandAnalysis.ForRules(["git", "-c", "alias.x=commit", "x"], StringComparison.Ordinal));
+        Assert.Equal([["git", "config", "x"], ["git", "x"]], CommandAnalysis.ForRules(["git", "-calias.x=commit", "x"], StringComparison.Ordinal));
+        Assert.Equal([["git", "config", "push"], ["git", "push"]], CommandAnalysis.ForRules(["git", "-c", "core.sshCommand=ssh -i ~/.ssh/other", "push"], StringComparison.Ordinal));
+        Assert.Equal([["git", "config", "status"], ["git", "status"]], CommandAnalysis.ForRules(["git", "-c", "core.hooksPath=.githooks", "status"], StringComparison.Ordinal));
+        Assert.Equal([["git", "config", "x"], ["git", "x"]], CommandAnalysis.ForRules(["git", "--config-env=alias.x=X", "x"], StringComparison.Ordinal));
+        Assert.Equal([["git", "config", "x"], ["git", "x"]], CommandAnalysis.ForRules(["git", "--config-env", "alias.x=X", "x"], StringComparison.Ordinal));
+        Assert.Equal([["git", "config", "push"], ["git", "push"]], CommandAnalysis.ForRules(["git", "--exec-path=/tmp/x", "push"], StringComparison.Ordinal));
     }
 
     [Fact]
     public void ForRules_GitConfiguredThroughTheEnvironment_IsTheGitConfigItIs()
     {
-        Assert.Equal(["git", "config", "GIT_CONFIG_COUNT", "git", "x"], CommandAnalysis.ForRules(["GIT_CONFIG_COUNT=1", "git", "x"], StringComparison.Ordinal));
-        Assert.Equal(["git", "config", "GIT_TEMPLATE_DIR", "export", "GIT_TEMPLATE_DIR=x"], CommandAnalysis.ForRules(["export", "GIT_TEMPLATE_DIR=x"], StringComparison.Ordinal));
-        Assert.Equal(["git", "push"], CommandAnalysis.ForRules(["A=1", "git", "push"], StringComparison.Ordinal));
+        Assert.Equal([["git", "config", "GIT_CONFIG_COUNT", "git", "x"], ["git", "x"]], CommandAnalysis.ForRules(["GIT_CONFIG_COUNT=1", "git", "x"], StringComparison.Ordinal));
+        Assert.Equal([["git", "config", "GIT_TEMPLATE_DIR", "export", "GIT_TEMPLATE_DIR=x"], ["export", "GIT_TEMPLATE_DIR=x"]], CommandAnalysis.ForRules(["export", "GIT_TEMPLATE_DIR=x"], StringComparison.Ordinal));
+        Assert.Equal([["git", "push"]], CommandAnalysis.ForRules(["A=1", "git", "push"], StringComparison.Ordinal));
     }
 
     [Fact]
     public void ForRules_LeavesANonGitCommandAlone()
     {
-        Assert.Equal(["echo", "git", "-C", "x", "push"], CommandAnalysis.ForRules(["echo", "git", "-C", "x", "push"], StringComparison.Ordinal));
+        Assert.Equal([["echo", "git", "-C", "x", "push"]], CommandAnalysis.ForRules(["echo", "git", "-C", "x", "push"], StringComparison.Ordinal));
     }
 
     [Fact]

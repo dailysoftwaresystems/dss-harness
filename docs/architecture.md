@@ -1502,7 +1502,10 @@ names, wherever it stood; reserved words read only where a command begins, unquo
 line joined and `$'...'` decoded. The `NAME=value` words before a program are kept as its
 environment and carried to what it runs, and a value that is a program git or another tool runs
 (`CommandAnalysis.ProgramValued`: `GIT_SSH_COMMAND`, `GIT_PAGER`, `EDITOR` and their kind) is read as
-that program's command line, an `export`'s or a declaration's too; wrappers (`env`, `nohup`, `time`,
+that program's command line, an `export`'s or a declaration's too, and so is the value of git's own
+setting of any key but the ones that only shape what it prints - a `-c`, a `--config-env`'s variable,
+`GIT_CONFIG_VALUE_n`, `GIT_CONFIG_PARAMETERS` (`CommandAnalysis.GitSettingScripts`), an alias's `!`
+taken off; wrappers (`env`, `nohup`, `time`,
 `timeout`, `nice`, `xargs`, `command`, `builtin`, `exec`, `eval`, `busybox`, `Invoke-Expression`)
 are stripped with their own options, at most 32 deep, what `xargs` reads standing among the words
 it runs as an expansion; and it goes into `sh -c` and every other shell's (the words after its

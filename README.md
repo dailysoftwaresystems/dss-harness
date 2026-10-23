@@ -557,7 +557,8 @@ bodies of `$(...)`, backticks, `<(...)`, subshells, functions, loops and branche
 of their own, each substitution's word kept as the expansion it is, a `for`'s word list read for
 the paths it hands its body, a redirect kept apart wherever it stands, the `NAME=value` words
 before a program kept as its environment and a variable naming a program git or another tool runs
-(`GIT_SSH_COMMAND`, `GIT_PAGER`, `EDITOR` and their kind) read as that program's command line,
+(`GIT_SSH_COMMAND`, `GIT_PAGER`, `EDITOR` and their kind) read as that program's command line, as
+is the value of git's own setting (`-c`, `--config-env`, `GIT_CONFIG_*`) of a key that may name one,
 wrappers (`env`, `nohup`, `time`, `timeout`, `nice`, `xargs`, `command`, `builtin`, `exec`,
 `eval`, `busybox`, `Invoke-Expression`) stripped, and it goes into `sh -c` and every other
 shell's, a here-string or here-document a shell reads, `cmd /c`, `powershell -Command` and a
